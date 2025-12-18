@@ -98,7 +98,7 @@ fsnative is a focused frontend, not a complete compiler:
 - **No IL generation**: That's what the standard F# compiler does
 - **No MSBuild integration**: Project files are handled by Firefly
 - **No NuGet resolution**: Package management is external
-- **No REPL**: Interactive scripting requires a managed runtime
+- **No REPL**: Interactive scripting requires a managed runtime. We'll be looking into providing a REPL experience similar to Rust's model in Firefly.
 
 fsnative stops at the typed tree. Code generation happens in Firefly via MLIR.
 
