@@ -12,15 +12,17 @@ fsnative is the frontend for the [Fidelity](https://speakez.tech/blog/fidelity-f
 
 ## Why fsnative Exists
 
-The standard F# Compiler Services does an excellent job for .NET development. They are making progress with ahead of time (AOT) compilation but there are many limitations. However, when you're compiling to true native binaries, without a runtime or garbage collection, many of .NET assumptions become obstacles:
+The standard F# Compiler Services does an excellent job for .NET development. Microsoft is making progress with ahead-of-time (AOT) compilation, but there are fundamental limitations. When you're compiling to true native binaries without a runtime or garbage collector, many .NET assumptions become obstacles:
 
-**String literals become `System.String`**: a UTF-16, garbage-collected, heap-allocated object. Native compilation needs UTF-8 strings with deterministic lifetimes.
+**Strings are garbage-collected UTF-16 objects.** Native compilation needs UTF-8 strings with deterministic lifetimes. When a string goes out of scope, its memory should be freed immediately.
 
-**In .NET, option types are reference types**, allocated on the managed heap. Native compilation needs value option types on the stack.
+**Option types are heap-allocated reference types.** Native compilation needs value options that live on the stack and cost nothing when they're `None`.
 
-**SRTP resolves against .NET method tables**, searching `System.Int32.op_Addition` for arithmetic. Native compilation needs resolution against native witness hierarchies.
+**Memory has no notion of ownership or regions.** Native compilation needs to distinguish stack memory from heap memory, peripheral registers from RAM, read-only flash from writable SRAM. The type system should enforce these distinctions at compile time.
 
-These aren't bugs to work around. They're fundamental assumptions baked into the type system. fsnative replaces those assumptions with native-first semantics. And the end result is that the developer writing F# code in a Fidelity application will experience the substantially similar design-time APIs.
+**The runtime manages all memory.** Native compilation needs explicit control. Pointers should carry lifetime information. The compiler should track whether memory is borrowed or owned, mutable or immutable.
+
+These aren't bugs to work around. They're fundamental assumptions baked into the type system. fsnative replaces those assumptions with native-first semantics while preserving the F# developer experience.
 
 ## The Vision
 
