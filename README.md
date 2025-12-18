@@ -6,19 +6,19 @@
 
 ## What is fsnative?
 
-fsnative is F# Native Compiler Services (FNCS) — a specialized fork of [Microsoft's F# compiler](https://github.com/dotnet/fsharp) designed for native compilation. Where the standard F# compiler assumes a managed runtime with garbage collection and BCL types, fsnative understands native types, deterministic memory, and statically resolved operations from the ground up.
+fsnative is F# Native Compiler Services (FNCS), a specialized fork of [Microsoft's F# compiler](https://github.com/dotnet/fsharp) designed for native compilation. Where the standard F# compiler assumes a managed runtime with garbage collection and BCL types, fsnative understands native types, deterministic memory, and statically resolved operations from the ground up.
 
-fsnative is the frontend for the [Fidelity](https://speakez.tech/blog/fidelity-framework-a-primer/) native compilation framework. It parses F# code, performs type checking, and produces a typed abstract syntax tree that flows directly into native code generation — no .NET runtime required.
+fsnative is the frontend for the [Fidelity](https://speakez.tech/blog/fidelity-framework-a-primer/) native compilation framework. It parses F# code, performs type checking, and produces a typed abstract syntax tree that flows directly into native code generation. No .NET runtime required.
 
 ## Why fsnative Exists
 
 The standard F# Compiler Services does an excellent job for .NET development. They are making progress with ahead of time (AOT) compilation but there are many limitations. When you're compiling to true native binaries, many of .NET assumptions become obstacles:
 
-**String literals become `System.String`** — a UTF-16, garbage-collected, heap-allocated object. By contrast, native compilation needs UTF-8 strings with deterministic lifetimes.
+**String literals become `System.String`**: a UTF-16, garbage-collected, heap-allocated object. Native compilation needs UTF-8 strings with deterministic lifetimes.
 
-**In .NET, option types are reference types** — allocated on the managed heap. Native compilation needs value option types on the stack.
+**In .NET, option types are reference types**, allocated on the managed heap. Native compilation needs value option types on the stack.
 
-**SRTP resolves against .NET method tables** — searching `System.Int32.op_Addition` for arithmetic. Native compilation needs resolution against native witness hierarchies.
+**SRTP resolves against .NET method tables**, searching `System.Int32.op_Addition` for arithmetic. Native compilation needs resolution against native witness hierarchies.
 
 These aren't bugs to work around. They're fundamental assumptions baked into the type system. fsnative replaces those assumptions with native-first semantics. And the end result is that the developer writing F# code in a Fidelity application will experience the substantially similar design-time APIs.
 
@@ -50,7 +50,7 @@ let inline add a b = a + b
 // fsnative:    resolves against Alloy.BasicOps witness hierarchy
 ```
 
-The compiler *knows* these types. It doesn't discover them by reading assembly metadata. It understands their layout, their semantics, their operations. When fsnative produces a typed tree, the types are already native — ready for direct translation to MLIR and LLVM.
+The compiler *knows* these types. It doesn't discover them by reading assembly metadata. It understands their layout, their semantics, their operations. When fsnative produces a typed tree, the types are already native, ready for direct translation to MLIR and LLVM.
 
 ## The Fidelity Pipeline
 
@@ -72,26 +72,26 @@ Native Binary
 
 **[Firefly](https://github.com/speakez-tech/Firefly)** builds the Program Semantic Graph and generates MLIR.
 
-**[Alloy](https://github.com/speakez-tech/Alloy)** provides the native standard library — BCL-sympathetic APIs without BCL runtime dependencies.
+**[Alloy](https://github.com/speakez-tech/Alloy)** provides the native standard library: BCL-sympathetic APIs without BCL runtime dependencies.
 
 Together, they compile F# to efficient, standalone native binaries that run without any runtime.
 
 ## What fsnative Provides
 
-- **Parsing** — Full F# syntax support via the battle-tested FCS lexer and parser
-- **Native Type Resolution** — String literals, options, and arrays resolve to native types
-- **Native SRTP** — Statically resolved type parameters resolve against the Alloy witness hierarchy
-- **Typed Tree** — Complete `FSharpExpr` output for downstream code generation
-- **IDE Services** — Symbol resolution, type information, and semantic classification for tooling
+- **Parsing**: Full F# syntax support via the battle-tested FCS lexer and parser
+- **Native Type Resolution**: String literals, options, and arrays resolve to native types
+- **Native SRTP**: Statically resolved type parameters resolve against the Alloy witness hierarchy
+- **Typed Tree**: Complete `FSharpExpr` output for downstream code generation
+- **IDE Services**: Symbol resolution, type information, and semantic classification for tooling
 
 ## What fsnative Does Not Provide
 
 fsnative is a focused frontend, not a complete compiler:
 
-- **No IL generation** — That's what the standard F# compiler does
-- **No MSBuild integration** — Project files are handled by Firefly
-- **No NuGet resolution** — Package management is external
-- **No REPL** — Interactive scripting requires a managed runtime
+- **No IL generation**: That's what the standard F# compiler does
+- **No MSBuild integration**: Project files are handled by Firefly
+- **No NuGet resolution**: Package management is external
+- **No REPL**: Interactive scripting requires a managed runtime
 
 fsnative stops at the typed tree. Code generation happens in Firefly via MLIR.
 
@@ -125,9 +125,9 @@ For the complete Fidelity ecosystem documentation, see the [Firefly docs](https:
 
 fsnative is a fork of Microsoft's [dotnet/fsharp](https://github.com/dotnet/fsharp) repository. We're grateful to the F# team and community for creating and maintaining an excellent compiler.
 
-Our modifications focus on type resolution, not syntax. F# code that parses with the standard compiler will parse identically with fsnative. The difference is in what the types *mean* — and that's exactly the point.
+Our modifications focus on type resolution, not syntax. We aspire to match F# code that parses with the standard compiler to also parse similarly with fsnative. There will be some differences of course, such as the lack of C# interop, and no nullability (we use option exclusively). So while we're not exactly looking for a 1:1 syntactic match, we want all of the norms and conventions to be present.
 
-We maintain the fork as a focused, surgical modification rather than a wholesale rewrite. The parsing, name resolution, and constraint solving machinery remains largely intact. What changes is the type universe those mechanisms operate against.
+We maintain the fork as a focused, surgical modification rather than a wholesale rewrite. The parsing, name resolution, and constraint solving machinery remains largely intact. What changes is the underlying type machinery those mechanisms operate against.
 
 ## Status
 
