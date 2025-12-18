@@ -72,13 +72,13 @@ Native Binary
 
 **fsnative** provides parsing and native-first type checking.
 
-**[Firefly](https://github.com/speakez-tech/Firefly)** builds the Program Semantic Graph and generates MLIR.
+**[Firefly](https://github.com/speakeztech/Firefly)** builds the Program Semantic Graph and generates MLIR.
 
-**[Alloy](https://github.com/speakez-tech/Alloy)** provides the native standard library: BCL-sympathetic APIs without BCL runtime dependencies.
+**[Alloy](https://github.com/speakeztech/Alloy)** provides the native standard library: BCL-sympathetic APIs without BCL runtime dependencies.
 
-**[BAREWire](https://github.com/speakez-tech/BAREWire)** provides zero-copy serialization and memory region abstractions for embedded and systems programming.
+**[BAREWire](https://github.com/speakeztech/BAREWire)** provides zero-copy serialization and memory region abstractions for embedded and systems programming.
 
-**[Farscape](https://github.com/speakez-tech/Farscape)** generates type-safe peripheral descriptors from header files, giving the compiler knowledge of hardware register layouts.
+**[Farscape](https://github.com/speakeztech/Farscape)** generates type-safe peripheral descriptors from header files, giving the compiler knowledge of hardware register layouts.
 
 Together, they compile F# to efficient, standalone native binaries that run without any runtime.
 
@@ -126,7 +126,7 @@ For most use cases, you'll interact with fsnative through Firefly rather than di
 | [docs/fidelity/FNCS_Phase1_Transformation_Plan.md](docs/fidelity/FNCS_Phase1_Transformation_Plan.md) | Detailed transformation roadmap |
 | [docs/fidelity/FNCS_Pruning_Plan.md](docs/fidelity/FNCS_Pruning_Plan.md) | Component pruning strategy |
 
-For the complete Fidelity ecosystem documentation, see the [Firefly docs](https://github.com/speakez-tech/Firefly/tree/main/docs).
+For the complete Fidelity ecosystem documentation, see the [Firefly docs](https://github.com/speakeztech/Firefly/tree/main/docs).
 
 ## Relationship to dotnet/fsharp
 
@@ -157,7 +157,7 @@ See [LICENSE.txt](LICENSE.txt) for details.
 
 fsnative is developed by [SpeakEZ Technologies](https://speakez.tech) as part of the Fidelity native compilation framework.
 
-For questions about fsnative and the Fidelity ecosystem, reach out through the [Firefly repository](https://github.com/speakez-tech/Firefly).
+For questions about fsnative and the Fidelity ecosystem, reach out through the [Firefly repository](https://github.com/speakeztech/Firefly).
 
 ---
 
