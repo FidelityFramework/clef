@@ -12,7 +12,7 @@ fsnative is the frontend for the [Fidelity](https://speakez.tech/blog/fidelity-f
 
 ## Why fsnative Exists
 
-The standard F# Compiler Services does an excellent job for .NET development. They are making progress with ahead of time (AOT) compilation but there are many limitations. When you're compiling to true native binaries, many of .NET assumptions become obstacles:
+The standard F# Compiler Services does an excellent job for .NET development. They are making progress with ahead of time (AOT) compilation but there are many limitations. However, when you're compiling to true native binaries, without a runtime or garbage collection, many of .NET assumptions become obstacles:
 
 **String literals become `System.String`**: a UTF-16, garbage-collected, heap-allocated object. Native compilation needs UTF-8 strings with deterministic lifetimes.
 
