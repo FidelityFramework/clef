@@ -52,7 +52,7 @@ let inline add a b = a + b
 // fsnative:    resolves against Alloy.BasicOps witness hierarchy
 ```
 
-The compiler *knows* these types. It doesn't discover them by reading assembly metadata. It understands their layout, their semantics, their operations. When fsnative produces a typed tree, the types are already native, ready for direct translation to MLIR and LLVM.
+The compiler *knows* these types. It doesn't discover them by reading assembly metadata. It understands their layout, their semantics, their operations. When fsnative produces a typed tree, the types are already native, ready for direct translation to MLIR and (at least initially to) LLVM.
 
 ## The Fidelity Pipeline
 
@@ -76,12 +76,17 @@ Native Binary
 
 **[Alloy](https://github.com/speakez-tech/Alloy)** provides the native standard library: BCL-sympathetic APIs without BCL runtime dependencies.
 
+**[BAREWire](https://github.com/speakez-tech/BAREWire)** provides zero-copy serialization and memory region abstractions for embedded and systems programming.
+
+**[Farscape](https://github.com/speakez-tech/Farscape)** generates type-safe peripheral descriptors from header files, giving the compiler knowledge of hardware register layouts.
+
 Together, they compile F# to efficient, standalone native binaries that run without any runtime.
 
-## What fsnative Provides
+## What fsnative Will Provide
 
 - **Parsing**: Full F# syntax support via the battle-tested FCS lexer and parser
 - **Native Type Resolution**: String literals, options, and arrays resolve to native types
+- **Memory Region Tracking**: Pointers carry region and access-kind information through the type system, distinguishing stack from heap, peripheral registers from RAM, read-only from writable memory
 - **Native SRTP**: Statically resolved type parameters resolve against the Alloy witness hierarchy
 - **Typed Tree**: Complete `FSharpExpr` output for downstream code generation
 - **IDE Services**: Symbol resolution, type information, and semantic classification for tooling
