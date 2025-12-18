@@ -362,11 +362,257 @@ FSharp.Compiler.Symbols.*   → FSharp.Native.Compiler.Symbols.*
 5. **SRTP**: Resolves against Alloy witnesses
 6. **Firefly Integration**: HelloWorld samples compile correctly
 
+## API Exposure Strategy
+
+A key motivation for FNCS is exposing internal FCS APIs that Firefly needs for AST/typed tree correlation. These APIs are currently private in FCS.
+
+### APIs to Expose
+
+| API | Source Location | Purpose |
+|-----|-----------------|---------|
+| Range Correlation | `Exprs.fs` + new service | Map SynExpr ranges to FSharpExpr for Baker |
+| Symbol Context | `CheckDeclarations.fs` | Binding scopes for def-use analysis |
+| SRTP State | `ConstraintSolver.fs` | Witness resolution details for native SRTP |
+
+### Implementation Approach
+
+Create `src/Compiler/Service/FNCSPublicAPI.fs` as a stability layer:
+
+```fsharp
+namespace FSharp.Native.Compiler.Service
+
+/// Correlates source ranges between syntax and typed trees
+type RangeCorrelationService =
+    /// Get the FSharpExpr at a given source range
+    member GetTypedExprAtRange: range -> FSharpExpr option
+
+    /// Build correlation map for entire file
+    member BuildCorrelationMap: FSharpImplementationFileContents -> Map<range, FSharpExpr>
+
+/// Symbol resolution context for def-use analysis
+type SymbolContextService =
+    member GetContextAtPosition: int * int -> SymbolContext
+    member GetDefinitions: unit -> (FSharpSymbol * range) list
+    member GetUses: FSharpSymbol -> range list
+
+/// SRTP resolution details for native witness generation
+type SRTPService =
+    member GetResolutions: FSharpImplementationFileContents -> SRTPResolutionInfo list
+
+type SRTPResolutionInfo = {
+    TraitConstraint: TraitConstraintInfo
+    CallSite: range
+    TypeArguments: FSharpType list
+    ResolvedWitness: FSharpMemberOrFunctionOrValue option
+    IsNativeWitness: bool
+}
+```
+
+### Files to Modify for API Exposure
+
+- `src/Compiler/Symbols/Exprs.fs` - Already has `FSharpExpr.Range`; expose correlation building
+- `src/Compiler/Checking/ConstraintSolver.fsi` - Expose `TraitConstraintInfo` resolution trace
+- `src/Compiler/Service/FSharpCheckerResults.fs` - Add accessors for new services
+
+---
+
+## Native Type System Integration
+
+### TcGlobals.fs Modifications
+
+The type universe is defined in `TcGlobals.fs`. Add native types alongside BCL types:
+
+```
+TcGlobals.fs modifications:
+├── Add nativestr_ty (replaces string_ty for literals)
+├── Add voption_tcr (default option type)
+├── Add nativearray_tcr, nativespan_tcr
+├── Add memory region phantom types (Peripheral, SRAM, Flash, Arena, Stack)
+└── Add access kind phantom types (ReadOnly, WriteOnly, ReadWrite)
+```
+
+### New Files to Create
+
+| File | Purpose |
+|------|---------|
+| `src/Compiler/Checking/NativeTypes.fs` | Native type constructors and definitions |
+| `src/Compiler/Checking/NativeSRTP.fs` | Alloy witness registry and resolution |
+| `src/Compiler/TypedTree/PeripheralTypes.fs` | Farscape peripheral descriptor types |
+| `src/Compiler/Checking/PeripheralAttributes.fs` | Farscape attribute recognition |
+
+### CheckExpressions.fs String Literal Modification
+
+The critical change is at ~line 7342 in `CheckExpressions.fs`:
+
+```fsharp
+// CURRENT (produces System.String)
+| false, LiteralArgumentType.Inline ->
+    TcPropagatingExprLeafThenConvert cenv overallTy g.string_ty env m (fun () ->
+        mkString g m s, tpenv)
+
+// FNCS (produces NativeStr)
+| false, LiteralArgumentType.Inline ->
+    TcPropagatingExprLeafThenConvert cenv overallTy g.nativestr_ty env m (fun () ->
+        mkNativeString g m s, tpenv)
+```
+
+---
+
+## BAREWire/Farscape Integration Architecture
+
+### Memory Region Types
+
+FNCS must understand BAREWire's memory region types as first-class:
+
+```fsharp
+type MemoryRegionKind =
+    | Peripheral    // Memory-mapped I/O (volatile, no cache)
+    | SRAM          // General RAM
+    | Flash         // Read-only at runtime
+    | SystemControl // ARM system registers
+    | Arena         // Compiler-managed temporary
+    | Stack         // Thread-local
+```
+
+These are represented as phantom type parameters using FSharp.UMX measures:
+
+```fsharp
+type Ptr<'T, [<Measure>] 'region, [<Measure>] 'access>
+type Memory<'T, [<Measure>] 'region>
+```
+
+### Access Kind Enforcement
+
+Access kinds constrain operations on memory pointers:
+
+| Kind | Read | Write | CMSIS Equivalent |
+|------|------|-------|------------------|
+| `ReadOnly` | YES | NO | `__I` |
+| `WriteOnly` | NO | YES | `__O` |
+| `ReadWrite` | YES | YES | `__IO` |
+
+**Constraint Solver Integration:**
+- Add `AccessConstraintInfo` alongside `TraitConstraintInfo`
+- `SolveAccessConstraint` checks operation compatibility
+- Error FS8001: Cannot read write-only pointer
+- Error FS8002: Cannot write read-only pointer
+
+### Farscape Peripheral Descriptors
+
+FNCS recognizes Farscape-generated peripheral types:
+
+```fsharp
+type PeripheralTypeInfo = {
+    Family: string                      // e.g., "GPIO"
+    Instances: Map<string, uint64>      // GPIOA -> 0x48000000
+    Registers: Map<string, RegisterInfo>
+    RegionKind: MemoryRegionKind
+}
+
+type RegisterInfo = {
+    Name: string        // "ODR", "IDR", "BSRR"
+    Offset: int         // Byte offset from base
+    Access: AccessKind  // ReadOnly, WriteOnly, ReadWrite
+    Width: int          // Bits (8, 16, 32)
+    IsVolatile: bool
+}
+```
+
+**Attribute Recognition:**
+- `[<PeripheralDescriptor(family, baseAddr)>]` on types
+- `[<Register(name, offset, access)>]` on fields
+- `[<Peripheral(instance, address)>]` on instance values
+
+### Native SRTP Witness Resolution
+
+FNCS resolves SRTP against native witnesses before BCL method tables:
+
+```fsharp
+module NativeSRTP =
+    type NativeWitness =
+        | WritableString    // $ operator on strings
+        | Comparable        // Comparison operators
+        | Arithmetic        // Arithmetic operators
+        | MemoryRegion      // Region-aware operations
+        | PeripheralAccess  // Peripheral register access
+
+    let resolveNativeWitness (g: TcGlobals) (traitInfo: TraitConstraintInfo) =
+        match traitInfo.MemberName, traitInfo.SupportTypes with
+        | "op_Dollar", [ty] when isNativeStrTy g ty ->
+            Some (WritableString, "Alloy.Text.WritableString.op_Dollar")
+        | "LoadVolatile", [ty] when isPeripheralPtrTy g ty ->
+            Some (PeripheralAccess, "Platform.Peripheral.loadVolatile")
+        | _ -> None
+```
+
+---
+
+## Expanded Phased Implementation Timeline
+
+```
+Phase 0 (Weeks 1-2): Foundation
+├── Fork project file, rename namespaces
+├── Remove Category 1 directories (MSBuild, IL gen, FSI)
+└── Create IL stubs for remaining references
+    Target: Build succeeds with stubs
+
+Phase 1 (Weeks 2-4): Core Pruning
+├── Remove heavy Service components
+├── Streamline Driver
+└── Target: Build < 1.5 min
+
+Phase 2 (Weeks 4-7): Native Types
+├── NativeTypes.fs with type constructors
+├── TcGlobals native type integration
+├── CheckExpressions literal typing (line ~7342)
+└── Target: "Hello" types as NativeStr
+
+Phase 3 (Weeks 4-8): API Exposure [Parallel with Phase 2]
+├── RangeCorrelationService
+├── SymbolContextService
+├── SRTPService
+└── FNCSPublicAPI.fs stability layer
+
+Phase 4 (Weeks 7-10): Native SRTP
+├── NativeSRTP.fs witness registry
+├── ConstraintSolver integration
+└── Target: $ resolves to Alloy witnesses
+
+Phase 5 (Weeks 9-14): Memory Semantics
+├── Memory region types in type system
+├── Access kind constraint solving
+├── Coeffect tracking preparation
+├── Farscape attribute recognition
+└── Target: BAREWire types type-check correctly
+
+Phase 6 (Weeks 13-16): Integration Testing
+├── Firefly integration
+├── HelloWorld sample validation
+└── Target: Build < 1 min, all samples pass
+```
+
+### Parallel Work Streams
+
+```
+Week:  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16
+
+Phase 0 (Foundation)     ████
+Phase 1 (Core Pruning)      ██████
+Phase 2 (Native Types)         ████████████
+Phase 3 (API Exposure)         ████████████████  [Parallel]
+Phase 4 (Native SRTP)                ████████████
+Phase 5 (Memory Sem.)                      ████████████████
+Phase 6 (Integration)                                  ████████
+```
+
+---
+
 ## Related Documents
 
-- `/docs/FNCS_Architecture.md` - Firefly's FNCS documentation
-- `fsnative-spec/docs/FNCS_Specification.md` - Language specification for native types
-- `From Bridged To Self Hosted.md` - Long-term extraction strategy
+- `Firefly/docs/FNCS_Architecture.md` - Firefly's FNCS documentation
+- `Firefly/docs/FNCS_Ecosystem.md` - Cross-repository relationships
+- `fsnative-spec/docs/fidelity/FNCS_Specification.md` - Language specification for native types
+- `SpeakEZ/hugo/content/proposals/From Bridged To Self Hosted.md` - Long-term extraction strategy
 
 ## Appendix: Files to Remove
 

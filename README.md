@@ -1,144 +1,157 @@
-# The F# compiler, F# core library, and F# editor tools
-[![Build Status](https://dev.azure.com/dnceng-public/public/_apis/build/status/dotnet/fsharp/fsharp-ci?branchName=main)](https://dev.azure.com/dnceng-public/public/_build/latest?definitionId=90&branchName=main)
-[![Help Wanted](https://img.shields.io/github/issues/dotnet/fsharp/help%20wanted?style=flat-square&color=%232EA043&label=help%20wanted)](https://github.com/dotnet/fsharp/labels/help%20wanted)
+# F# Native Compiler Services
 
+**Native-first type resolution for F# ahead-of-time compilation.**
 
-You're invited to contribute to future releases of the F# compiler, core library, and tools. Development of this repository can be done on any OS supported by [.NET](https://dotnet.microsoft.com/).
+---
 
-You will also need .NET SDK installed from [here](https://dotnet.microsoft.com/download/dotnet), exact version can be found in the global.json file in the root of the repository.
+## What is fsnative?
 
-## Contributing
+fsnative is F# Native Compiler Services (FNCS) — a specialized fork of [Microsoft's F# compiler](https://github.com/dotnet/fsharp) designed for native compilation. Where the standard F# compiler assumes a managed runtime with garbage collection and BCL types, fsnative understands native types, deterministic memory, and statically resolved operations from the ground up.
 
-### Quickstart on Windows
+fsnative is the frontend for the [Fidelity](https://speakez.tech/blog/fidelity-framework-a-primer/) native compilation framework. It parses F# code, performs type checking, and produces a typed abstract syntax tree that flows directly into native code generation — no .NET runtime required.
 
-Build from the command line:
+## Why fsnative Exists
 
-```shell
-build.cmd
+The standard F# Compiler Services does an excellent job for .NET development. They are making progress with ahead of time (AOT) compilation but there are many limitations. When you're compiling to true native binaries, many of .NET assumptions become obstacles:
+
+**String literals become `System.String`** — a UTF-16, garbage-collected, heap-allocated object. By contrast, native compilation needs UTF-8 strings with deterministic lifetimes.
+
+**In .NET, option types are reference types** — allocated on the managed heap. Native compilation needs value option types on the stack.
+
+**SRTP resolves against .NET method tables** — searching `System.Int32.op_Addition` for arithmetic. Native compilation needs resolution against native witness hierarchies.
+
+These aren't bugs to work around. They're fundamental assumptions baked into the type system. fsnative replaces those assumptions with native-first semantics. And the end result is that the developer writing F# code in a Fidelity application will experience the substantially similar design-time APIs.
+
+## The Vision
+
+fsnative makes native types *intrinsic* to the compiler:
+
+```fsharp
+// What you write
+let greeting = "Hello, World!"
+
+// Standard F#: System.String (UTF-16, GC-managed)
+// fsnative:    NativeStr (UTF-8, deterministic lifetime)
 ```
 
-The build depends on an installation of Visual Studio. To build the compiler without this dependency use:
+```fsharp
+// What you write
+let maybeValue = Some 42
 
-```shell
-build.cmd -noVisualStudio
+// Standard F#: int option (reference type, heap allocated)
+// fsnative:    int voption (value type, stack allocated)
 ```
 
-After it's finished, open either `FSharp.sln` or `VisualFSharp.sln` in your editor of choice. The latter solution is larger but includes the F# tools for Visual Studio and its associated infrastructure.
+```fsharp
+// What you write
+let inline add a b = a + b
 
-### Quickstart on Linux or macOS
-
-Build from the command line:
-
-```shell
-./build.sh
+// Standard F#: resolves against System.Int32.op_Addition
+// fsnative:    resolves against Alloy.BasicOps witness hierarchy
 ```
 
-After it's finished, open `FSharp.sln` in your editor of choice.
+The compiler *knows* these types. It doesn't discover them by reading assembly metadata. It understands their layout, their semantics, their operations. When fsnative produces a typed tree, the types are already native — ready for direct translation to MLIR and LLVM.
 
-### Documentation for contributors
+## The Fidelity Pipeline
 
-* The [Compiler Documentation](docs/index.md) is essential reading for any larger contributions to the F# compiler codebase and contains links to learning videos, architecture diagrams, and other resources.
+fsnative is one piece of a larger native compilation story:
 
-* The same docs are also published as [The F# Compiler Guide](https://fsharp.github.io/fsharp-compiler-docs/). It also contains the public searchable docs for FSharp.Compiler.Service component.
-
-* See [DEVGUIDE.md](DEVGUIDE.md) for more details on configurations for building the codebase. In practice, you only need to run `build.cmd`/`build.sh`.
-
-* See [TESTGUIDE.md](TESTGUIDE.md) for information about the various test suites in this codebase and how to run them individually.
-
-### Documentation for F# community
-
-* [The F# Documentation](https://learn.microsoft.com/dotnet/fsharp/) is the primary documentation for F#. The source for the content is [here](https://github.com/dotnet/docs/tree/main/docs/fsharp).
-
-* [The F# Language Design Process](https://github.com/fsharp/fslang-design/) is the fundamental design process for the language, from [suggestions](https://github.com/fsharp/fslang-suggestions) to completed RFCs.  There are also [tooling RFCs](https://github.com/fsharp/fslang-design/tree/main/tooling) for some topics where cross-community co-operation and visibility are most useful.
-
-* [The F# Language Specification](https://fsharp.org/specs/language-spec/) is an in-depth description of the F# language. This is essential for understanding some behaviors of the F# compiler and some of the rules within the compiler codebase. For example, the order and way name resolution happens are specified here, which greatly impacts how the code in Name Resolutions works and why certain decisions are made.
-
-### No contribution is too small
-
-Even if you find a single-character typo, we're happy to take the change! Although the codebase can feel daunting for beginners, we and other contributors are happy to help you along.
-
-Not sure where to contribute?
-Look at the [curated list of issues asking for help](https://github.com/dotnet/fsharp/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22help%20wanted%22). If you want to tackle any of those, use the comments section of the chosen issue to indicate interest and feel free to ask for initial guidance. We are happy to help with resolving outstanding issues while making a successful PR addressing the issue.
-
-The issues in this repository can have big differences in the complexity for fixing them.
-Are you getting started? We do have a label for [good first issues](https://github.com/dotnet/fsharp/issues?q=is%3Aissue%20state%3Aopen%20label%3A%22good%20first%20issue%22) as well.
-
-## Per-build NuGet packages
-
-### 7.0.40x series
-
-[FSharp.Compiler.Service 43.7.400-preview](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet7/NuGet/FSharp.Compiler.Service/versions/)
-
-```xml
-<add key="fsharp-prerelease" value="https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet7/nuget/v3/index.json" />
+```
+F# Source
+    ↓
+fsnative (FNCS)     ← You are here
+    ↓
+Program Semantic Graph (PSG)
+    ↓
+Alex → MLIR → LLVM
+    ↓
+Native Binary
 ```
 
-### 8.0.10x series
+**fsnative** provides parsing and native-first type checking.
 
-[FSharp.Compiler.Service 43.8.100-preview](https://dev.azure.com/dnceng/public/_artifacts/feed/dotnet8/NuGet/FSharp.Compiler.Service/versions/)
+**[Firefly](https://github.com/speakez-tech/Firefly)** builds the Program Semantic Graph and generates MLIR.
 
-```xml
-<add key="fsharp-prerelease" value="https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet8/nuget/v3/index.json" />
+**[Alloy](https://github.com/speakez-tech/Alloy)** provides the native standard library — BCL-sympathetic APIs without BCL runtime dependencies.
+
+Together, they compile F# to efficient, standalone native binaries that run without any runtime.
+
+## What fsnative Provides
+
+- **Parsing** — Full F# syntax support via the battle-tested FCS lexer and parser
+- **Native Type Resolution** — String literals, options, and arrays resolve to native types
+- **Native SRTP** — Statically resolved type parameters resolve against the Alloy witness hierarchy
+- **Typed Tree** — Complete `FSharpExpr` output for downstream code generation
+- **IDE Services** — Symbol resolution, type information, and semantic classification for tooling
+
+## What fsnative Does Not Provide
+
+fsnative is a focused frontend, not a complete compiler:
+
+- **No IL generation** — That's what the standard F# compiler does
+- **No MSBuild integration** — Project files are handled by Firefly
+- **No NuGet resolution** — Package management is external
+- **No REPL** — Interactive scripting requires a managed runtime
+
+fsnative stops at the typed tree. Code generation happens in Firefly via MLIR.
+
+## Getting Started
+
+fsnative is consumed as a library by the Firefly compiler:
+
+```fsharp
+// Firefly uses fsnative for type checking
+let checker = FNCSChecker.Create()
+let results = checker.ParseAndCheck(sourceFiles, config)
+
+// Results contain the typed tree with native type resolution
+let typedTree = results.TypedTree
+let srtpResolutions = results.SRTPResolutions
 ```
 
-**NOTE:** Official NuGet releases of FCS and FSharp.Core are synched with SDK releases (on purpose - we want to be in sync). Nightly packages release to Azure feeds on every successful insertion.
+For most use cases, you'll interact with fsnative through Firefly rather than directly.
 
-## Branches
+## Documentation
 
-These are the branches in use:
+| Document | Description |
+|----------|-------------|
+| [docs/fidelity/README.md](docs/fidelity/README.md) | FNCS overview and architecture |
+| [docs/fidelity/FNCS_Phase1_Transformation_Plan.md](docs/fidelity/FNCS_Phase1_Transformation_Plan.md) | Detailed transformation roadmap |
+| [docs/fidelity/FNCS_Pruning_Plan.md](docs/fidelity/FNCS_Pruning_Plan.md) | Component pruning strategy |
 
-* `main`
-  * Almost all contributions go here.
-  * Able to be built, installed and used in the latest public Visual Studio release.
-  * May contain updated F# features and logic.
-  * Used to build nightly VSIX (see above).
+For the complete Fidelity ecosystem documentation, see the [Firefly docs](https://github.com/speakez-tech/Firefly/tree/main/docs).
 
-* `release/dev15.9`
-  * Long-term servicing branch for VS 2017 update 15.9.x. We do not expect to service that release, but if we do, that's where the changes will go.
+## Relationship to dotnet/fsharp
 
-* `release/dev17.x`
-  * Latest release branch for the particular point release of Visual Studio.
-  * Incorporates features and fixes from main up to a particular branch point, then selective cherry-picks.
-  * May contain new features that depend on new things or fixes in the corresponding forthcoming Visual Studio release.
-  * Gets integrated back into main once the corresponding Visual Studio release is made.
+fsnative is a fork of Microsoft's [dotnet/fsharp](https://github.com/dotnet/fsharp) repository. We're grateful to the F# team and community for creating and maintaining an excellent compiler.
 
-## F# language and core library evolution
+Our modifications focus on type resolution, not syntax. F# code that parses with the standard compiler will parse identically with fsnative. The difference is in what the types *mean* — and that's exactly the point.
 
-Evolution of the F# language and core library follows a process spanning two additional repositories. The process is as follows:
+We maintain the fork as a focused, surgical modification rather than a wholesale rewrite. The parsing, name resolution, and constraint solving machinery remains largely intact. What changes is the type universe those mechanisms operate against.
 
-1. Use the [F# language suggestions repo](https://github.com/fsharp/fslang-suggestions/) to search for ideas, vote on ones you like, submit new ideas, and discuss details with the F# community.
-2. Ideas that are "approved in principle" are eligible for a new RFC in the [F# language design repo](https://github.com/fsharp/fslang-design). This is where the technical specification and discussion of approved suggestions go.
-3. Implementations and testing of an RFC are submitted to this repository.
+## Status
+
+fsnative is under active development as part of the Fidelity framework. The current focus is:
+
+- [ ] Phase 1: Structural pruning and namespace transformation
+- [ ] Phase 2: Native type integration
+- [ ] Phase 3: SRTP resolution against Alloy witnesses
+- [ ] Phase 4: Memory region and access kind measures
+
+See [FNCS_Phase1_Transformation_Plan.md](docs/fidelity/FNCS_Phase1_Transformation_Plan.md) for detailed status.
 
 ## License
 
-This project is subject to the MIT License. A copy of this license is in [License.txt](License.txt).
+This project is subject to the MIT License. Original work is copyright Microsoft Corporation. Modifications are copyright SpeakEZ Technologies.
 
-## Code of Conduct
+See [LICENSE.txt](LICENSE.txt) for details.
 
-This project has adopted the [Contributor Covenant](https://contributor-covenant.org/) code of conduct to clarify expected behavior in our community. You can read it at [CODE_OF_CONDUCT](CODE_OF_CONDUCT.md).
+## Contact
 
-## Get In Touch
+fsnative is developed by [SpeakEZ Technologies](https://speakez.tech) as part of the Fidelity native compilation framework.
 
-Members of the [F# Software Foundation](https://fsharp.org) are invited to the [FSSF Slack](https://fsharp.org/guides/slack/). You can find support from other contributors in the `#compiler` and `#editor-support` channels.
+For questions about fsnative and the Fidelity ecosystem, reach out through the [Firefly repository](https://github.com/speakez-tech/Firefly).
 
-Additionally, you can use the `#fsharp` tag on Twitter if you have general F# questions, including about this repository. Chances are you'll get multiple responses.
+---
 
-## About F\#
-
-If you're curious about F# itself, check out these links:
-
-* [What is F#](https://learn.microsoft.com/dotnet/fsharp/what-is-fsharp)
-* [Get started with F#](https://learn.microsoft.com/dotnet/fsharp/get-started/)
-* [F# Software Foundation](https://fsharp.org)
-* [F# Testimonials](https://fsharp.org/testimonials)
-
-## Contributors ✨
-
-F# exists because of these wonderful people:
-
-<a href="https://github.com/dotnet/fsharp/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=dotnet/fsharp" />
-</a>
-
-Made with [contrib.rocks](https://contrib.rocks).
+*F# syntax you know. Native semantics you need.*
