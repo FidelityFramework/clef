@@ -151,7 +151,7 @@ See [FNCS_Phase1_Transformation_Plan.md](docs/fidelity/FNCS_Phase1_Transformatio
 
 This project is subject to the MIT License. Original work is copyright Microsoft Corporation. Modifications are copyright SpeakEZ Technologies.
 
-See [LICENSE.txt](/LICENSE.txt) for details.
+See [LICENSE.txt](/LICENSE) for details.
 
 ## Contact
 
