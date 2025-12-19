@@ -21,13 +21,13 @@ FNCS is part of the **Fidelity** native F# compilation ecosystem:
 
 | Project | Role |
 |---------|------|
-| **[Firefly](https://github.com/speakez-llc/firefly)** | AOT compiler: F# → PSG → MLIR → Native binary |
-| **[Alloy](https://github.com/speakez-llc/alloy)** | Native standard library with platform bindings |
-| **[BAREWire](https://github.com/speakez-llc/barewire)** | Binary encoding, memory mapping, zero-copy IPC |
-| **[Farscape](https://github.com/speakez-llc/farscape)** | C/C++ header parsing for native library bindings |
-| **[XParsec](https://github.com/speakez-llc/xparsec)** | Parser combinators powering PSG traversal and header parsing |
+| **[Firefly](https://github.com/speakeztech/firefly)** | AOT compiler: F# → PSG → MLIR → Native binary |
+| **[Alloy](https://github.com/speakeztech/alloy)** | Native standard library with platform bindings |
+| **[BAREWire](https://github.com/speakeztech/barewire)** | Binary encoding, memory mapping, zero-copy IPC |
+| **[Farscape](https://github.com/speakeztech/farscape)** | C/C++ header parsing for native library bindings |
+| **[XParsec](https://github.com/speakeztech/xparsec)** | Parser combinators powering PSG traversal and header parsing |
 | **fsnative** | F# Native Compiler Services (this repository) |
-| **[fsnative-spec](https://github.com/speakez-llc/fsnative-spec)** | F# Native language specification |
+| **[fsnative-spec](https://github.com/speakeztech/fsnative-spec)** | F# Native language specification |
 
 The name "Fidelity" reflects the framework's core mission: **preserving type and memory safety** from source code through compilation to native execution.
 
@@ -147,7 +147,7 @@ See [docs/fidelity/FNCS_Phase1_Transformation_Plan.md](docs/fidelity/FNCS_Phase1
 | [docs/fidelity/README.md](docs/fidelity/README.md) | FNCS overview and architecture |
 | [docs/fidelity/FNCS_Phase1_Transformation_Plan.md](docs/fidelity/FNCS_Phase1_Transformation_Plan.md) | Detailed transformation roadmap |
 | [docs/fidelity/FNCS_Pruning_Plan.md](docs/fidelity/FNCS_Pruning_Plan.md) | Component pruning strategy |
-| [fsnative-spec](https://github.com/speakez-llc/fsnative-spec) | Normative language specification |
+| [fsnative-spec](https://github.com/speakeztech/fsnative-spec) | Normative language specification |
 
 ## Relationship to dotnet/fsharp
 
