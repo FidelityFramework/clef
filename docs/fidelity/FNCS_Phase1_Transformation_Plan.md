@@ -18,7 +18,7 @@ This document provides the complete, detailed transformation plan for **Phase 1*
 3. **Replacing TcGlobals type registry** contents with intrinsic native types
 4. **Establishing housekeeping standards** (copyright, namespaces, build configuration)
 
-Phase 1 does NOT include the deeper semantic changes (fsil/UMX pattern absorption, FidType implementation) - those belong to Phase 2+. Phase 1 creates a clean, buildable foundation that can still function in "bridged" mode with Firefly while the native type machinery is developed.
+Phase 1 does NOT include the deeper semantic changes (fsil/UMX pattern absorption, intrinsic type implementation) - those belong to Phase 2+. Phase 1 creates a clean, buildable foundation that can still function in "bridged" mode with Firefly while the native type machinery is developed.
 
 ---
 
@@ -50,8 +50,8 @@ The current F# Compiler Services (FCS) makes hardcoded assumptions about the BCL
 
 For Fidelity/Firefly, this creates **semantic impedance**:
 
-- FCS produces a typed tree where `"Hello"` is `System.String`
-- Firefly needs it to be `NativeStr` (UTF-8, deterministic lifetime)
+- FCS produces a typed tree where `"Hello"` is `System.String` (UTF-16, GC-managed)
+- Firefly needs `string` to mean something different (UTF-8, deterministic lifetime)
 - The "Baker" layer currently bridges this gap by ignoring FCS semantics
 - This is wasteful - we type-check twice (once in FCS, once in Firefly)
 
@@ -61,17 +61,17 @@ The strategic document ["Firefly: From Bridged to Self Hosted"](~/repos/SpeakEZ/
 
 > "fsil and UMX patterns don't just inform FNCS; they *become* FNCS. The inline ceremony disappears. The measure annotation workarounds disappear. What remains is a type system where these capabilities are reflexive."
 
-**Key insight**: The type machinery currently defined in Alloy (NativeStr, voption, NativeArray, memory regions, access kinds) **moves INTO fsnative** as compiler intrinsics. This is NOT:
+**Key insight**: The type semantics currently defined in Alloy **move INTO fsnative** as compiler intrinsics. Users continue to write `string`, `option`, `array` - the same F# types they always use. What changes is what those types *mean*. This is NOT:
 
-- Adding parallel native types alongside BCL types
+- Adding new type names that users must learn
 - Pointing fslibCcu at Alloy as an external library
 - Creating dual codepaths or mode switches
 
 It IS:
 
-- Making `string_ty` BE the native string (UTF-8, deterministic lifetime)
-- Making `voption` BE the default option type
-- Having the compiler KNOW these types intrinsically
+- Making `string` intrinsically mean UTF-8 encoded, deterministic lifetime
+- Making `option` intrinsically mean value type, zero-cost None
+- Having the compiler KNOW native semantics for all standard types
 
 ### Phase 1 Scope
 
@@ -102,27 +102,27 @@ TcGlobals.fs:
 When FCS sees "Hello":
   → CheckExpressions.fs line ~7383
   → TcPropagatingExprLeafThenConvert ... g.string_ty ...
-  → Types as System.String
+  → Types as System.String (UTF-16, GC-managed)
 
 When Firefly receives this:
-  → Baker ignores the type
-  → Firefly re-resolves to NativeStr
+  → Baker ignores the BCL type semantics
+  → Firefly re-resolves to native semantics
 ```
 
 #### Target State (FNCS/Absorbed)
 
 ```
 TcGlobals.fs:
-  v_nativestr_ty → FidType.NativeStr  (intrinsic, no CCU lookup)
-  string_ty → v_nativestr_ty  (alias for compatibility)
+  string_ty → Intrinsic definition (no CCU lookup)
+             Native semantics: UTF-8, deterministic lifetime
 
 When FNCS sees "Hello":
   → CheckExpressions.fs
-  → TcPropagatingExprLeafThenConvert ... g.nativestr_ty ...
-  → Types as NativeStr directly
+  → TcPropagatingExprLeafThenConvert ... g.string_ty ...
+  → Types as string with native semantics
 
 When Firefly receives this:
-  → PSG receives NativeStr
+  → PSG receives string with native semantics already attached
   → No re-resolution needed
 ```
 
@@ -130,20 +130,20 @@ When Firefly receives this:
 
 From the strategic document section "What Moves Into FNCS":
 
-| Component | Current Location | After Absorption |
-|-----------|-----------------|------------------|
-| `NativeStr` | Alloy.Text | FNCS intrinsic (string literals type as this) |
-| `voption<'T>` | Alloy.Core | FNCS intrinsic |
-| `NativeArray<'T>` | Alloy.Memory | FNCS intrinsic |
-| `NativePtr<'T, 'region, 'access>` | Alloy.Memory | FNCS intrinsic (with measures) |
-| Inline semantics | fsil library | FNCS default behavior |
-| Measure types for non-numerics | UMX library | FNCS intrinsic |
-| Memory region measures | Not expressible | FNCS intrinsic |
-| Access kind measures | Not expressible | FNCS intrinsic |
+| F# Type | Current Semantics | After Absorption |
+|---------|------------------|------------------|
+| `string` | System.String (UTF-16, GC) | UTF-8 encoded, deterministic lifetime |
+| `option<'T>` | Reference type, heap allocated | Value type, zero-cost None |
+| `array<'T>` | System.Array (GC, boxed elements) | Contiguous memory, compile-time or runtime size |
+| `nativeptr<'T>` | Bare pointer, no safety | Region-tracked, access-kind constrained |
+| Inline semantics | Requires explicit attributes | Default behavior |
+| Measure types for non-numerics | UMX workaround patterns | First-class support |
+| Memory region measures | Not expressible | First-class support |
+| Access kind measures | Not expressible | First-class support |
 
 ### What Remains in Alloy
 
-After absorption, Alloy becomes lighter:
+After absorption, Alloy becomes a pure function library:
 
 | Component | Purpose |
 |-----------|---------|
@@ -153,7 +153,7 @@ After absorption, Alloy becomes lighter:
 | Platform.Bindings | Module convention for syscall surface (Alex provides implementations) |
 | BAREWire integration | Zero-copy serialization |
 
-The key difference: after absorption, Alloy's functions USE types that the compiler knows intrinsically. Alloy no longer DEFINES what `NativeStr` is - the compiler knows.
+The key difference: after absorption, Alloy's functions operate on types that the compiler defines intrinsically. Alloy provides *functions*, not *types*. When you write `Console.WriteLine "Hello"`, Alloy provides `WriteLine`, but the compiler intrinsically knows what `string` means.
 
 ---
 
@@ -339,7 +339,7 @@ Lines 424-453: v_*_ty - actual type instances
 Lines 500+:    Intrinsic operators and functions
 ```
 
-**Transformation Strategy**: Keep file structure, replace CCU-based lookups with intrinsic FidType definitions. See [TcGlobals Transformation](#tcglobals-transformation) section.
+**Transformation Strategy**: Keep file structure, replace CCU-based lookups with intrinsic type definitions. See [TcGlobals Transformation](#tcglobals-transformation) section.
 
 ---
 
@@ -397,8 +397,8 @@ Lines 500+:    Intrinsic operators and functions
 
 | File | Purpose | Priority |
 |------|---------|----------|
-| `src/Compiler/TypedTree/FidType.fs` | Native type representation (stub initially) | High |
-| `src/Compiler/Checking/NativeTypes.fs` | Native type constructors (stub initially) | High |
+| `src/Compiler/TypedTree/IntrinsicTypes.fs` | Intrinsic type definitions (stub initially) | High |
+| `src/Compiler/Checking/NativeSemantics.fs` | Native semantic definitions (stub initially) | High |
 | `src/Compiler/Service/FNCSPublicAPI.fs` | Public API stability layer | High |
 | `Directory.Build.props` | Updated build configuration | High |
 
@@ -408,9 +408,9 @@ These are documented here for context but implemented later:
 
 | File | Purpose | Phase |
 |------|---------|-------|
-| `src/Compiler/Checking/NativeSRTP.fs` | Alloy witness resolution | Phase 2 |
+| `src/Compiler/Checking/IntrinsicSRTP.fs` | SRTP resolution against intrinsic types | Phase 2 |
 | `src/Compiler/TypedTree/MemoryMeasures.fs` | Region/access measures | Phase 3 |
-| `src/Compiler/Checking/CollectionProtocol.fs` | fsil pattern absorption | Phase 3 |
+| `src/Compiler/Checking/CollectionProtocol.fs` | Transparent iteration patterns | Phase 3 |
 
 ---
 
@@ -715,55 +715,36 @@ This is fundamentally a **late-binding** approach - the compiler discovers types
 #### Target Architecture
 
 The target pattern is:
-1. **FidType** is a discriminated union defined IN fsnative
-2. Types are **known at compile time** as cases of FidType
-3. No CCU lookup needed - the compiler IS the type definition
+1. Types are **known at compile time** with intrinsic native semantics
+2. No CCU lookup needed - the compiler defines type semantics directly
+3. User-facing type names remain the same (`string`, `option`, `int`)
 
 ```fsharp
-// NEW: FidType discriminated union (defined in src/Compiler/TypedTree/FidType.fs)
-[<RequireQualifiedAccess>]
-type FidType =
-    | Unit
-    | Bool
-    | Int8 | Int16 | Int32 | Int64 | Int128
-    | UInt8 | UInt16 | UInt32 | UInt64 | UInt128
-    | Float32 | Float64
-    | NativeInt | NativeUInt
-    | Char
-    | NativeStr    // THE string type
-    | VOption of element: FidType
-    | NativeArray of element: FidType * region: MemoryRegion
-    | FatPtr of pointee: FidType * alignment: Alignment * region: MemoryRegion * access: AccessKind
-    | Span of element: FidType * lifetime: Lifetime * region: MemoryRegion
-    | Tuple of elements: FidType list * layout: TupleLayout
-    | Record of entity: FidEntity * fields: FidField list * layout: RecordLayout
-    | Union of entity: FidEntity * cases: FidUnionCase list * layout: UnionLayout
-    | Function of arg: FidType * ret: FidType * coeffect: Coeffect * transparency: Transparency
-    | TypeVar of typar: FidTypar
-    | App of tycon: FidTycon * args: FidType list
-    | Owned of inner: FidType
-    | Borrowed of inner: FidType * lifetime: Lifetime * mutability: Mutability
-    | Shared of inner: FidType * refCounting: RefCountStrategy option
-    | Measure of baseType: FidType * measure: FidMeasure
+// MODIFIED: TcGlobals defines types intrinsically
+type TcGlobals(...) =  // No fslibCcu parameter needed for core types
 
-// MODIFIED: TcGlobals uses intrinsic types
-type TcGlobals(...) =  // No fslibCcu parameter
+    // Types are intrinsic with native semantics, not looked up from external CCU
+    // User writes "string" → compiler knows it means UTF-8, deterministic lifetime
+    let v_string_ty = IntrinsicType.String  // Native string semantics
 
-    // Types are intrinsic, not looked up
-    let v_nativestr_ty = FidType.NativeStr
-    let v_int32_ty = FidType.Int32
-    let v_bool_ty = FidType.Bool
+    // User writes "option" → compiler knows it means value type, zero-cost None
+    let v_option_tcr = IntrinsicType.Option  // Native option semantics
 
-    // Backward compatibility alias
-    let v_string_ty = v_nativestr_ty
+    // User writes "int" → compiler knows native machine representation
+    let v_int32_ty = IntrinsicType.Int32
+
+    // User writes "bool" → compiler knows single-bit representation
+    let v_bool_ty = IntrinsicType.Bool
 ```
+
+The internal representation (whether it's called `IntrinsicType`, `FidType`, or something else) is an implementation detail. What matters is that when users write standard F# types, the compiler intrinsically knows their native semantics without consulting external assembly metadata.
 
 ### Phase 1 TcGlobals Work
 
 In Phase 1, we:
 
 1. **Document** the complete structure of TcGlobals (done above)
-2. **Create stub** `FidType.fs` with the discriminated union skeleton
+2. **Create stub** for intrinsic type infrastructure (implementation detail TBD)
 3. **Do NOT yet replace** the CCU-based mechanism (that's Phase 2)
 4. **Prepare** for the transformation by understanding all call sites
 
@@ -782,147 +763,99 @@ These will need updates in Phase 2 when the type system changes.
 
 ## Cross-References to Alloy
 
-### Type Correspondence
+### Semantic Correspondence
 
-This section documents the correspondence between Alloy types and their FNCS intrinsic equivalents. This is essential for understanding what "absorption" means concretely.
+This section documents what absorption means for the standard F# types. The key principle: **users write the same types they always have** (`string`, `option`, `array`). What changes is the semantic definition the compiler uses internally.
 
-#### Alloy/src/Core/Text.fs → FidType.NativeStr
+#### `string` - Native String Semantics
 
-**Alloy Definition** (current):
+**Current Semantics** (FCS/BCL):
+- `System.String` - UTF-16 encoded, garbage collected, immutable reference type
 
-```fsharp
-// ~/repos/Alloy/src/Core/Text.fs
-[<Struct>]
-type NativeStr =
-    val mutable private buffer: nativeptr<byte>
-    val mutable private length: int
-    // UTF-8 encoded, null-terminated, deterministic lifetime
-```
+**Target Semantics** (FNCS):
+- UTF-8 encoded, null-terminated, deterministic lifetime
+- When binding goes out of scope, memory is freed
+- String literals have static lifetime (live in `.rodata`)
 
-**FNCS Absorption** (target):
-
-```fsharp
-// fsnative/src/Compiler/TypedTree/FidType.fs
-type FidType =
-    // ...
-    | NativeStr  // Compiler knows this IS the string type
-    // ...
-```
-
-**Key Insight**: After absorption, the compiler doesn't look up "what is NativeStr" from Alloy metadata. The compiler KNOWS NativeStr intrinsically - its layout, semantics, and operations are built-in.
+**User Experience**: No change. You write `"Hello"` and get a `string`. The difference is what `string` *means*.
 
 ---
 
-#### Alloy/src/Core/Core.fs → FidType.VOption
+#### `option<'T>` - Value Option Semantics
 
-**Alloy Definition** (current):
+**Current Semantics** (FCS/BCL):
+- Reference type, heap-allocated
+- `None` is typically null, `Some x` allocates a wrapper object
 
-```fsharp
-// ~/repos/Alloy/src/Core/Core.fs
-[<Struct>]
-type voption<'T> =
-    | ValueNone
-    | ValueSome of 'T
-    // Value type, stack-allocated
-```
+**Target Semantics** (FNCS):
+- Value type, stack-allocated by default
+- `None` has zero runtime cost (just a tag)
+- No heap allocation for simple option values
 
-**FNCS Absorption** (target):
-
-```fsharp
-// fsnative/src/Compiler/TypedTree/FidType.fs
-type FidType =
-    // ...
-    | VOption of element: FidType
-    // ...
-```
-
-**Semantic Difference from FCS**:
-- FCS `option<'T>` is a reference type (heap-allocated)
-- FNCS `voption<'T>` is a value type (stack-allocated)
-- After absorption, `Some 42` types as `VOption Int32`, not `Option Int32`
+**User Experience**: No change. You write `Some 42` and `None`. The difference is that `option` is now a value type with zero-cost `None`.
 
 ---
 
-#### Alloy/src/Core/Memory.fs → FidType.NativeArray, FidType.FatPtr
+#### `array<'T>` - Native Array Semantics
 
-**Alloy Definition** (current):
+**Current Semantics** (FCS/BCL):
+- `System.Array` - GC-managed, bounds-checked at runtime, boxed header
 
-```fsharp
-// ~/repos/Alloy/src/Core/Memory.fs
-[<Struct>]
-type NativeArray<'T> =
-    val mutable private buffer: nativeptr<'T>
-    val mutable private length: int
-    val mutable private capacity: int
+**Target Semantics** (FNCS):
+- Contiguous memory, no boxed header
+- Compile-time size tracking when size is known
+- Region-aware (stack, heap, arena)
 
-[<Struct>]
-type FatPtr<'T, 'Align, 'Owner> =
-    val Pointer: nativeptr<'T>
-    val Length: int
-    val Capacity: int
-```
-
-**FNCS Absorption** (target):
-
-```fsharp
-type FidType =
-    // ...
-    | NativeArray of element: FidType * bounds: ArrayBounds * region: MemoryRegion
-    | FatPtr of pointee: FidType * alignment: Alignment * region: MemoryRegion * access: AccessKind
-    // ...
-```
+**User Experience**: No change. You write `[| 1; 2; 3 |]` and get an `array`. The difference is the memory representation and lifetime management.
 
 ---
 
-#### fsil Patterns → Default Transparency
+#### Inline Semantics - Default Transparency
 
-**fsil Pattern** (current):
+**Current State** (fsil library workaround):
 
 ```fsharp
-// ~/repos/fsil - library requires explicit [<InlineIfLambda>]
+// Requires explicit [<InlineIfLambda>] ceremony
 let inline iter ([<InlineIfLambda>] f) (x: _) : unit =
     Internal.Iterate.Invoke(x, f)
 ```
 
-**FNCS Absorption** (target):
+**Target Semantics** (FNCS):
 
 ```fsharp
-// Functions are transparent by default
-let iter f x = Internal.Iterate.Invoke(x, f)  // No 'inline' needed
+// Functions are transparent by default - no ceremony needed
+let iter f x = Internal.Iterate.Invoke(x, f)
 
-// Opt-out via [<Opaque>] attribute when opacity is desired
+// Opt-out via [<Opaque>] when opacity is desired
 [<Opaque>]
 let opaqueFunction x = ...
 ```
 
+**User Experience**: Less boilerplate. The `inline` keyword and `[<InlineIfLambda>]` ceremony become unnecessary for most code.
+
 ---
 
-#### UMX Patterns → First-Class Measures
+#### Measures on Non-Numeric Types
 
-**UMX Pattern** (current):
+**Current State** (UMX library workaround):
 
 ```fsharp
-// ~/repos/FSharp.UMX - workaround for non-numeric measures
+// UMX provides workaround for measures on strings, etc.
 [<MeasureAnnotatedAbbreviation>] type string<[<Measure>] 'm> = string
 let customerId: string<customerId> = %"cust-123"
 ```
 
-**FNCS Absorption** (target):
+**Target Semantics** (FNCS):
 
 ```fsharp
-// Native types defined WITH measure parameters
-type NativePtr<'T, [<Measure>] 'region, [<Measure>] 'access>
+// Measures work naturally on any type
+let customerId: string<customerId> = "cust-123"  // No % operator needed
 
-// Memory regions as first-class measures
-[<Measure>] type peripheral
-[<Measure>] type sram
-[<Measure>] type flash
-
-// Access kinds as first-class measures
-[<Measure>] type readOnly
-[<Measure>] type writeOnly
-[<Measure>] type readWrite
+// Memory regions and access kinds as measures
+let ptr: nativeptr<byte, sram, readWrite> = ...
 ```
+
+**User Experience**: Measures become first-class on all types, not just numeric. The UMX workarounds become unnecessary.
 
 ---
 
@@ -931,9 +864,9 @@ type NativePtr<'T, [<Measure>] 'region, [<Measure>] 'access>
 | Document | Location | Purpose |
 |----------|----------|---------|
 | Strategic Proposal | `~/repos/SpeakEZ/hugo/content/proposals/Firefly Compiler From Bridged To Self Hosted.md` | High-level absorption strategy |
-| Alloy Source | `~/repos/Alloy/src/` | Native type implementations |
-| fsil Source | `~/repos/fsil/` | Inline-by-default patterns |
-| UMX Source | `~/repos/FSharp.UMX/` | Phantom type patterns |
+| Alloy Source | `~/repos/Alloy/src/` | Function library (reference for API surface) |
+| fsil Source | `~/repos/fsil/` | Inline-by-default patterns (to be absorbed) |
+| UMX Source | `~/repos/FSharp.UMX/` | Phantom type patterns (to be absorbed) |
 | Firefly CLAUDE.md | `~/repos/Firefly/CLAUDE.md` | Architecture principles |
 
 ---
@@ -981,8 +914,8 @@ type NativePtr<'T, [<Measure>] 'region, [<Measure>] 'access>
 
 ### New Files
 
-- [ ] Create `src/Compiler/TypedTree/FidType.fs` (stub)
-- [ ] Create `src/Compiler/Checking/NativeTypes.fs` (stub)
+- [ ] Create `src/Compiler/TypedTree/IntrinsicTypes.fs` (stub)
+- [ ] Create `src/Compiler/Checking/NativeSemantics.fs` (stub)
 - [ ] Create `src/Compiler/Service/FNCSPublicAPI.fs`
 
 ### Validation
