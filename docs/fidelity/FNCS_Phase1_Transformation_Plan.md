@@ -18,7 +18,7 @@ This document provides the complete, detailed transformation plan for **Phase 1*
 3. **Replacing TcGlobals type registry** contents with intrinsic native types
 4. **Establishing housekeeping standards** (copyright, namespaces, build configuration)
 
-Phase 1 does NOT include the deeper semantic changes (fsil/UMX pattern absorption, intrinsic type implementation) - those belong to Phase 2+. Phase 1 creates a clean, buildable foundation that can still function in "bridged" mode with Firefly while the native type machinery is developed.
+Phase 1 creates a clean, buildable foundation that can function in "bridged" mode with Firefly while the native type machinery is developed.
 
 ---
 
@@ -48,7 +48,7 @@ Phase 1 does NOT include the deeper semantic changes (fsil/UMX pattern absorptio
 
 The current F# Compiler Services (FCS) makes hardcoded assumptions about the BCL (Base Class Library) type universe. When FCS encounters a string literal `"Hello"`, it types it as `System.String`. When it resolves `a + b`, it searches .NET method tables for `op_Addition`. These assumptions are baked into the type system at a fundamental level.
 
-For Fidelity/Firefly, this creates **semantic impedance**:
+For Fidelity/Firefly, this creates significant **semantic impedance mismatches**:
 
 - FCS produces a typed tree where `"Hello"` is `System.String` (UTF-16, GC-managed)
 - Firefly needs `string` to mean something different (UTF-8, deterministic lifetime)
@@ -82,7 +82,7 @@ Phase 1 prepares the foundation by:
 3. **Preparing TcGlobals** - Understanding and documenting the type registry
 4. **Establishing patterns** - Housekeeping standards for ongoing work
 
-Phase 1 is deliberately **non-breaking for bridged mode**. After Phase 1, Firefly can still use fsnative through Baker, with the same semantics as before. The deep type absorption happens in Phase 2+.
+Phase 1 is deliberately **non-breaking for bridged mode**. After Phase 1, Firefly can still use fsnative through Baker, with the same semantics as before. If we see reason to keep those zipper mechanics for merging AST and typed trees we will likely move them in a later phase of transformation.
 
 ---
 
@@ -90,7 +90,7 @@ Phase 1 is deliberately **non-breaking for bridged mode**. After Phase 1, Firefl
 
 ### What "Absorption" Means
 
-The strategic document defines absorption as library patterns becoming language intrinsics. To understand this concretely, consider the current vs. target state:
+Currently we define absorption as Alloy/fsil/UMX library patterns becoming fsnative language intrinsics. To understand this concretely, consider the current vs. target state:
 
 #### Current State (FCS/Bridged)
 
