@@ -6,7 +6,9 @@ This document addresses the experienced .NET developer who has invested years in
 
 The transition from F# on .NET to F# Native is not merely a technical migration; it is a conceptual shift in how we think about memory, types, and the relationship between our source code and the machine that executes it. This document walks through that shift systematically, beginning with familiar ground and progressing toward the new mental model that F# Native demands.
 
-A note on how we arrived here: the F# Native type system was not designed from first principles. It emerged from engineering necessity. The initial goal was simply to compile F# to native code, and the approach involved creating "shadow types" in the Alloy library to mask BCL types during Baker type resolution. What we discovered, through iteration and experimentation, was that the types we needed bore a striking resemblance to OCaml's native types. This accidental sympathy with OCaml revealed something fundamental about ML-family languages: when you strip away the managed runtime, the natural semantics that emerge are value-oriented, UTF-8 native, and explicitly memory-aware. The journey described in this document reflects that discovery.
+A note on how we arrived here: the F# Native type system was not designed from some level of academic remove and then implemented. It emerged from engineering necessity. The initial goal was simply to compile F# to native code, and the approach involved creating "shadow types" in the Alloy library to mask BCL types during Baker type resolution. To give credit where it is due, FSharp.Core already contained some primitive types that proved invaluable in this early work: the `voption` type existed beyond the standard `option` type's null representation, and `NativeInterop.nativeptr` remained central to much of what we accomplished before making the "full break" to create fsnative.
+
+What we discovered, through iteration and experimentation, was that the types we needed bore a striking resemblance to OCaml's native types. This accidental sympathy with OCaml revealed something fundamental about ML-family languages: when you strip away the managed runtime, the natural semantics that emerge are value-oriented, UTF-8 native, and explicitly memory-aware. The sympathies to principled design are certainly part of the full picture, and those elements serve to further inform how the framework will develop as requirements grow and opportunities to target new platforms emerge. The journey described in this document reflects that discovery.
 
 ## Part I: Understanding What the CLR Has Been Doing for You
 
@@ -96,15 +98,17 @@ Native compilation removes the CLR from the execution environment. The compiled 
 3. **No BCL**: The Base Class Library is unavailable; alternative implementations are required
 4. **Direct hardware access**: The program can interact with memory-mapped peripherals
 
-The question F# Native answers is this: can we retain F#'s expressive type system and functional programming model while targeting this runtime-free environment?
+The question F# Native answers is this: can we retain F#'s expressive type system and functional programming model while targeting this runtime-free environment? In our case, for the purposes of fsnative, this is exactly our *opportunity*.
+
+This is no small task. There are many considerations to account for, not simply for the presumed OS-based world of Windows, macOS, and Linux. There are memory mapping concerns around GPU, NPU, and other accelerators that are just as much a target for the Fidelity framework. Simply considering the constrained environment of microcontrollers, there are specific patterns that are allowed and others that would not work at all. These are all concerns that fsnative has to account for and allow in order for the full range of options to be available to realize the platform's vision.
 
 ### 2.2 The OCaml Precedent
 
 F# descends from the ML family of languages, sharing ancestry with OCaml and Standard ML. OCaml compiles natively without requiring a managed runtime, yet it offers many of the same programming constructs: algebraic data types, pattern matching, type inference, and higher-order functions.
 
-The F* programming language, developed for verified systems programming, extracts to OCaml with high fidelity. Each F* type has a precise OCaml representation, and the extraction preserves type safety without requiring a runtime. This precedent demonstrates that ML-family languages can target native code while preserving their essential character.
+The F* programming language, developed for verified systems programming, extracts to OCaml with high fidelity. Each F* type has a precise OCaml representation, and the extraction preserves type safety without requiring a runtime. This precedent demonstrates that ML-family languages can target native code while preserving their essential character. F* also provides the HyperStack memory model that again corresponds to what we arrived at for fsnative's region system; the correspondence was discovered, not copied.
 
-F# Native found accidental sympathy in this path. Despite using F# syntax, it was found after some hand-jamming native types into Alloy that what would become F# Native semantics align more closely with OCaml than with .NET F#:
+F# Native found accidental sympathy in this path. Despite using F# syntax, it was found after some hand-jamming native types into Alloy that what would become F# Native semantics align more closely with OCaml than with .NET F#. To give credit where it is due, FSharp.Core already contained some primitive types that proved essential: the `voption` type existed beyond the standard `option` type's null representation, and `NativeInterop.nativeptr` remained central to much of what we accomplished before making the "full break" to create fsnative:
 
 | Concept | .NET F# | OCaml | F# Native |
 |---------|---------|-------|-----------|
@@ -164,6 +168,8 @@ It resolves the type as `NativeArray<int>` rather than `System.Int32[]`. The syn
 This transformation is systematic. FNCS does not attempt to translate BCL code to native equivalents at runtime. Instead, it establishes a parallel type universe where native types are the primitive types, and BCL types do not exist.
 
 The path to FNCS itself illustrates the engineering-driven nature of this work. The original approach attempted to intercept type resolution at the Baker phase in Firefly, substituting native types for BCL types after the fact. This proved fragile; the type system assumptions of the standard compiler leaked through in unexpected ways. The realization that a cleaner approach required modifying type resolution at its source, in the compiler services themselves, came from debugging these failures rather than from architectural foresight. Sometimes the right abstraction reveals itself only after the wrong ones have been tried.
+
+Arriving at a generalized pattern for memory layout that adheres to the goals of the Fidelity framework while providing maximum degrees of freedom to target different processors is going to be a non-trivial challenge. We expect to start with some relatively straightforward hard-coded patterns and develop a proper abstraction pattern later. Our sense is that a plug-in system will need to be developed that will have some coupling to project-level declaration of the targeted hardware, but that story has yet to develop at this early stage. We are willing to live with some brittle implementations to help us target early wins and avoid over-engineering in the abstract.
 
 ## Part III: Memory as a First-Class Concern
 
@@ -413,6 +419,12 @@ let writeData (data: NativeArray<byte>) : unit =
 
 The coeffect system (described in Part VI) ensures that unsafe operations are explicitly visible in the type system.
 
+### 5.5 Native Library Integration
+
+One of the major areas of interest is how to expand a "native library system" for the Fidelity framework that can preserve all of the advantages of its operating mechanics. Many .NET libraries that "wrap" low-level C and C++ libraries offered some insight, so we are starting with a clean approach through our "Farscape" binding generator. This requires "hooks" to integrate F# wrappers into the library system of the Fidelity framework, and that means integrating those primitives into the pipeline in a way that native F# function wrappers can provide safe harbor for their integration, either as dynamic syscall external references or as pipelined targets for static binding in the LLVM LTO layer of compilation.
+
+C and C++ provide the low-level hardware access patterns that systems programming requires. F# Native incorporates CMSIS conventions for volatile qualifiers, structure layout control through `[<Struct>]` with packing and alignment, explicit type-safe pointer operations, and reserves space for inline assembly where platform-specific optimization demands it. All of this is documented while maintaining F#'s type safety guarantees.
+
 ## Part VI: Coeffects and Effect Tracking
 
 ### 6.1 What Are Coeffects?
@@ -548,7 +560,7 @@ let processBuffer (buf: Borrowed<NativeArray<byte>>) : unit = ...
 let newOwner = move existingBuffer
 ```
 
-This system, inspired by Rust's ownership model but adapted to F#'s syntax and idioms, provides compile-time memory safety without garbage collection.
+The relationship to Rust is one of inspiration, not imitation. Rust pioneered compile-time ownership tracking for memory safety, and F# Native will adapt these concepts to F#'s idioms rather than adopting Rust's syntax directly. The point is to have the compiler deal with these concerns without the design-time "interference" that Rust developers experience with having to deal with the borrow checker at every turn. We plan to provide options for managing this directly at design time where it is performance-critical, but for now our emphasis is on keeping the design-time experience relatively consistent with F# idioms.
 
 ## Part VIII: The RAII Pattern
 
@@ -605,7 +617,9 @@ This predictability is essential for systems programming, where resource lifetim
 
 ### 9.1 The F* Connection
 
-F* is a verification-oriented programming language that can prove properties about programs. F# Native integrates with F* for design-time verification of memory properties.
+F* is a verification-oriented programming language that can prove properties about programs. F# Native integrates with F* for design-time verification of memory properties. Key F* concepts that fsnative respects and in certain cases adopts include region identifiers as phantom type parameters, containment hierarchies with tree structures of stack frames and heap regions, preorders constraining how values in regions may evolve, and witnessed predicates tracking resource availability across code boundaries.
+
+This correspondence will continue to develop as Fidelity's continuation patterns with actors and arenas begins to become a more coherent part of the framework.
 
 ### 9.2 Decidable Properties
 
