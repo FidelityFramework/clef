@@ -46,9 +46,9 @@
       <AdditionalProperties>TargetFramework=netstandard2.0</AdditionalProperties>
     </ProjectReference>
 
-    <ProjectReference Include="$(FSharpSourcesRoot)\Compiler\FSharp.Compiler.Service.fsproj">
+    <ProjectReference Include="$(FSharpSourcesRoot)\Compiler\FSharpNative.Compiler.Service.fsproj">
       <Project>{A59DB8AE-8044-41A5-848A-800A7FF31C93}</Project>
-      <Name>FSharp.Compiler.Service</Name>
+      <Name>FSharpNative.Compiler.Service</Name>
       <IncludeOutputGroupsInVSIX>BuiltProjectOutputGroup%3bGetCopyToOutputDirectoryItems%3bSatelliteDllsProjectOutputGroup%3b</IncludeOutputGroupsInVSIX>
       <IncludeOutputGroupsInVSIXLocalOnly>DebugSymbolsProjectOutputGroup%3b</IncludeOutputGroupsInVSIXLocalOnly>
       <Ngen>true</Ngen>

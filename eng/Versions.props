@@ -32,7 +32,7 @@
     <FSCoreVersion>$(FSMajorVersion).$(FSMinorVersion).0.0</FSCoreVersion>
     <FSCoreShippedVersion>10.0.100.0</FSCoreShippedVersion>
     <!-- -->
-    <!-- FSharp.Compiler.Service version -->
+    <!-- FSharpNative.Compiler.Service version -->
     <FCSMajorVersion>43</FCSMajorVersion>
     <FCSMinorVersion>11</FCSMinorVersion>
     <FCSBuildVersion>$(FSBuildVersion)</FCSBuildVersion>

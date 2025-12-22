@@ -11,7 +11,7 @@
     <NoWarn>$(NoWarn);1204</NoWarn> <!-- This construct is for use in the FSharp.Core library and should not be used directly -->
     <NoWarn>$(NoWarn);NU5125</NoWarn>
     <NoWarn>$(NoWarn);64;1204</NoWarn>         <!--Temporary fix for sourcebuild -->
-    <AssemblyName>FSharp.Compiler.Service</AssemblyName>
+    <AssemblyName>FSharpNative.Compiler.Service</AssemblyName>
     <AllowCrossTargeting>true</AllowCrossTargeting>
     <DefineConstants>$(DefineConstants);COMPILER</DefineConstants>
 	<Nullable>enable</Nullable>
@@ -41,7 +41,7 @@
     <Configurations>Debug;Release</Configurations>
   </PropertyGroup>
 
-  <!--  The FSharp.Compiler.Service dll provides a referencable public interface for tool builders -->
+  <!--  The FSharpNative.Compiler.Service dll provides a referencable public interface for tool builders -->
   <PropertyGroup Condition="'$(Configuration)' != 'Proto'">
     <NoOptimizationData>false</NoOptimizationData>
     <NoInterfaceData>false</NoInterfaceData>
@@ -49,11 +49,11 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <PackageId>FSharp.Compiler.Service</PackageId>
-    <NuspecFile>FSharp.Compiler.Service.nuspec</NuspecFile>
+    <PackageId>FSharpNative.Compiler.Service</PackageId>
+    <NuspecFile>FSharpNative.Compiler.Service.nuspec</NuspecFile>
     <IsPackable>true</IsPackable>
     <PackageDescription>The F# Compiler Services package for F# $(FSLanguageVersion) exposes additional functionality for implementing F# language bindings, additional tools based on the compiler or refactoring tools. The package also includes F# interactive service that can be used for embedding F# scripting into your applications.  Contains code from the F# Software Foundation.</PackageDescription>
-    <PackageReleaseNotes>/blob/main/docs/release-notes/.FSharp.Compiler.Service/$(FSharpLibrariesChangelogVersion).md</PackageReleaseNotes>
+    <PackageReleaseNotes>/blob/main/docs/release-notes/.FSharpNative.Compiler.Service/$(FSharpLibrariesChangelogVersion).md</PackageReleaseNotes>
     <PackageTags>F#, fsharp, interactive, compiler, editor</PackageTags>
     <PackageIconFullPath>$(MSBuildThisFileDirectory)logo.png</PackageIconFullPath>
   </PropertyGroup>
@@ -88,7 +88,7 @@
     <InternalsVisibleTo Include="VisualFSharp.Salsa" />
     <InternalsVisibleTo Include="VisualFSharp.UnitTests" />
     <InternalsVisibleTo Include="FSharp.Compiler.ComponentTests" />
-    <InternalsVisibleTo Include="FSharp.Compiler.Service.Tests" />
+    <InternalsVisibleTo Include="FSharpNative.Compiler.Service.Tests" />
     <InternalsVisibleTo Include="HostedCompilerServer" />
     <InternalsVisibleTo Include="FSharp.Tests.FSharpSuite" />
     <InternalsVisibleTo Include="LanguageServiceProfiling" />

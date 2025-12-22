@@ -50,7 +50,7 @@
 
 
   <ItemGroup>
-    <ProjectReference Include="$(FSharpSourcesRoot)\Compiler\FSharp.Compiler.Service.fsproj" />
+    <ProjectReference Include="$(FSharpSourcesRoot)\Compiler\FSharpNative.Compiler.Service.fsproj" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(FSHARPCORE_USE_PACKAGE)' != 'true'">
@@ -90,7 +90,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="VisualFSharp.UnitTests" />
     <InternalsVisibleTo Include="FSharp.Compiler.ComponentTests" />
-    <InternalsVisibleTo Include="FSharp.Compiler.Service.Tests" />
+    <InternalsVisibleTo Include="FSharpNative.Compiler.Service.Tests" />
     <InternalsVisibleTo Include="FSharp.Tests.FSharpSuite" />
     <InternalsVisibleTo Include="LanguageServiceProfiling" />
     <InternalsVisibleTo Include="FSharp.Compiler.Benchmarks" />

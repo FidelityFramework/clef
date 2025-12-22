@@ -5,14 +5,16 @@
     <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
+    <DefineConstants>$(DefineConstants);RESIDENT_COMPILER</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="Program.fs" />
+    <Compile Include="FscMain.fs" />
     <None Include="App.config" />
   </ItemGroup>
   <ItemGroup>
+    <Reference Include="System.Runtime.Remoting" />
     <PackageReference Include="FSharp.Core" Version="$(FcsFSharpCorePkgVersion)" />
-    <ProjectReference Include="..\..\Compiler\FSharp.Compiler.Service.fsproj" />
+    <ProjectReference Include="..\..\Compiler\FSharpNative.Compiler.Service.fsproj" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == '$(FcsTargetNetFxFramework)'">
     <Reference Include="System.Runtime" />

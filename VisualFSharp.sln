@@ -25,7 +25,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Libraries", "Libraries", "{
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ItemTemplates", "ItemTemplates", "{F6DAEE9A-8BE1-4C4A-BC83-09215517C7DA}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "FSharp.Compiler.Service.tests Support", "FSharp.Compiler.Service.tests Support", "{35636A82-401A-4C3A-B2AB-EB7DC5E9C268}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "FSharpNative.Compiler.Service.tests Support", "FSharpNative.Compiler.Service.tests Support", "{35636A82-401A-4C3A-B2AB-EB7DC5E9C268}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Legacy", "Legacy", "{CCAB6E50-34C6-42AF-A6B0-567C29FCD91B}"
 EndProject
@@ -143,9 +143,9 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TutorialProject", "vsintegr
 EndProject
 Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharp.Compiler.ComponentTests", "tests\FSharp.Compiler.ComponentTests\FSharp.Compiler.ComponentTests.fsproj", "{0610FB97-7C15-422A-86FD-32335C6DF14D}"
 EndProject
-Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharp.Compiler.Service", "src\Compiler\FSharp.Compiler.Service.fsproj", "{B5A9BBD9-2F45-4722-A6CA-BAE3C64CD4E2}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharpNative.Compiler.Service", "src\Compiler\FSharpNative.Compiler.Service.fsproj", "{B5A9BBD9-2F45-4722-A6CA-BAE3C64CD4E2}"
 EndProject
-Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharp.Compiler.Service.Tests", "tests\FSharp.Compiler.Service.Tests\FSharp.Compiler.Service.Tests.fsproj", "{14F3D3D6-5C8E-43C2-98A2-17EA704D4DEA}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharpNative.Compiler.Service.Tests", "tests\FSharpNative.Compiler.Service.Tests\FSharpNative.Compiler.Service.Tests.fsproj", "{14F3D3D6-5C8E-43C2-98A2-17EA704D4DEA}"
 	ProjectSection(ProjectDependencies) = postProject
 		{887630A3-4B1D-40EA-B8B3-2D842E9C40DB} = {887630A3-4B1D-40EA-B8B3-2D842E9C40DB}
 		{FF76BD3C-5E0A-4752-B6C3-044F6E15719B} = {FF76BD3C-5E0A-4752-B6C3-044F6E15719B}
@@ -158,7 +158,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Benchmarks", "Benchmarks", 
 		tests\benchmarks\README.md = tests\benchmarks\README.md
 	EndProjectSection
 EndProject
-Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharp.Compiler.Benchmarks", "tests\benchmarks\FCSBenchmarks\CompilerServiceBenchmarks\FSharp.Compiler.Benchmarks.fsproj", "{564E7DC5-11CB-4FCF-ABDD-23AD93AF3A61}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharp.Compiler.Benchmarks", "tests\benchmarks\FNCSBenchmarks\CompilerServiceBenchmarks\FSharp.Compiler.Benchmarks.fsproj", "{564E7DC5-11CB-4FCF-ABDD-23AD93AF3A61}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "shims", "vsintegration\shims\shims.csproj", "{B1E30F2C-894F-47A9-9C8A-3324831E7D26}"
 EndProject
@@ -174,13 +174,13 @@ Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "fsiAnyCpu", "src\fsi\fsiAny
 EndProject
 Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "fsiArm64", "src\fsi\fsiArm64Project\fsiArm64.fsproj", "{EB015235-1E07-4CDA-9CC6-3FBCC27910D1}"
 EndProject
-Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "HistoricalBenchmark", "tests\benchmarks\FCSBenchmarks\BenchmarkComparison\HistoricalBenchmark.fsproj", "{583182E1-3484-4A8F-AC06-7C0D232C0CA4}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "HistoricalBenchmark", "tests\benchmarks\FNCSBenchmarks\BenchmarkComparison\HistoricalBenchmark.fsproj", "{583182E1-3484-4A8F-AC06-7C0D232C0CA4}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "FCSBenchmarks", "FCSBenchmarks", "{39CDF34B-FB23-49AE-AB27-0975DA379BB5}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "FNCSBenchmarks", "FNCSBenchmarks", "{39CDF34B-FB23-49AE-AB27-0975DA379BB5}"
 	ProjectSection(SolutionItems) = preProject
-		tests\benchmarks\FCSBenchmarks\decentlySizedStandAloneFile.fs = tests\benchmarks\FCSBenchmarks\decentlySizedStandAloneFile.fs
-		tests\benchmarks\FCSBenchmarks\README.md = tests\benchmarks\FCSBenchmarks\README.md
-		tests\benchmarks\FCSBenchmarks\SmokeTestAllBenchmarks.ps1 = tests\benchmarks\FCSBenchmarks\SmokeTestAllBenchmarks.ps1
+		tests\benchmarks\FNCSBenchmarks\decentlySizedStandAloneFile.fs = tests\benchmarks\FNCSBenchmarks\decentlySizedStandAloneFile.fs
+		tests\benchmarks\FNCSBenchmarks\README.md = tests\benchmarks\FNCSBenchmarks\README.md
+		tests\benchmarks\FNCSBenchmarks\SmokeTestAllBenchmarks.ps1 = tests\benchmarks\FNCSBenchmarks\SmokeTestAllBenchmarks.ps1
 	EndProjectSection
 EndProject
 Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharp.Editor.Tests", "vsintegration\tests\FSharp.Editor.Tests\FSharp.Editor.Tests.fsproj", "{CBC96CC7-65AB-46EA-A82E-F6A788DABF80}"

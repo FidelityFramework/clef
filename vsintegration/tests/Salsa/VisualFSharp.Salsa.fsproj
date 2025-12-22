@@ -36,7 +36,7 @@
   <ItemGroup>
     <ProjectReference Include="$(FSharpSourcesRoot)\FSharp.Core\FSharp.Core.fsproj" />
     <ProjectReference Include="$(FSharpSourcesRoot)\FSharp.Build\FSharp.Build.fsproj" />
-    <ProjectReference Include="$(FSharpSourcesRoot)\Compiler\FSharp.Compiler.Service.fsproj" />
+    <ProjectReference Include="$(FSharpSourcesRoot)\Compiler\FSharpNative.Compiler.Service.fsproj" />
     <ProjectReference Include="..\..\src\FSharp.Editor\FSharp.Editor.fsproj" />
     <ProjectReference Include="..\..\src\FSharp.LanguageService.Base\FSharp.LanguageService.Base.csproj" />
     <ProjectReference Include="..\..\src\FSharp.LanguageService\FSharp.LanguageService.fsproj" />

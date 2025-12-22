@@ -7,12 +7,16 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="Program.fs" />
+    <Compile Include="console.fs" />
+    <Compile Include="fsiserver.fs" />
+    <Compile Include="fsimain.fs" />
     <None Include="App.config" />
   </ItemGroup>
   <ItemGroup>
+    <Reference Include="System.Runtime.Remoting" />
+    <Reference Include="System.Windows.Forms" />
     <PackageReference Include="FSharp.Core" Version="$(FcsFSharpCorePkgVersion)" />
-    <ProjectReference Include="..\..\Compiler\FSharp.Compiler.Service.fsproj" />
+    <ProjectReference Include="..\..\Compiler\FSharpNative.Compiler.Service.fsproj" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == '$(FcsTargetNetFxFramework)'">
     <Reference Include="System.Runtime" />
