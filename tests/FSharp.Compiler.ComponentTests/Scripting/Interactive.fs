@@ -7,8 +7,8 @@ open Xunit
 open System
 open FSharp.Test.Compiler
 open FSharp.Test.ScriptHelpers
-open FSharp.Compiler.Interactive.Shell
-open FSharp.Compiler.Diagnostics
+open FSharp.Native.Compiler.Interactive.Shell
+open FSharp.Native.Compiler.Diagnostics
 open FSharp.Test.CompilerAssertHelpers
 
 module ``Interactive tests`` =

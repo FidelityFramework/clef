@@ -2,13 +2,13 @@
 
 // This file is compiled twice in the codebase
 //    - as the internal implementation of printf '%A' formatting in FSharp.Core
-//    - as the implementation of structured formatting in the compiler, F# Interactive and FSharp.Compiler.Service.
+//    - as the implementation of structured formatting in the compiler, F# Interactive and FSharp.Native.Compiler.Service.
 //
 // The one implementation file is used because we keep the implementations of
 // structured formatting the same for fsi.exe and '%A' printing. However F# Interactive has
 // a richer feature set.
 #if COMPILER
-namespace FSharp.Compiler.Text
+namespace FSharp.Native.Compiler.Text
 #else
 // FSharp.Core.dll:
 namespace Microsoft.FSharp.Text.StructuredPrintfImpl

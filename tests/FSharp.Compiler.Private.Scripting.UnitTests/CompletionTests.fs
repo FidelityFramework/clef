@@ -1,6 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Compiler.Scripting.UnitTests
+namespace FSharp.Native.Compiler.Scripting.UnitTests
 
 open System
 open System.Threading.Tasks

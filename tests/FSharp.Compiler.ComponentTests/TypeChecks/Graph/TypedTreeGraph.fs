@@ -4,11 +4,11 @@ open System
 open System.Collections.Concurrent
 open System.Collections.Generic
 open System.IO
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.Text
-open FSharp.Compiler.Symbols
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Symbols
 open Xunit
-open FSharp.Compiler.GraphChecking
+open FSharp.Native.Compiler.GraphChecking
 open TypeChecks.TestUtils
 
 let localProjects = CompilationFromCmdlineArgsTests.localProjects

@@ -4,7 +4,7 @@ VisualStudioVersion = 17.1.32113.165
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MicroPerfCSharp", "tests\benchmarks\CompiledCodeBenchmarks\MicroPerf\CS\MicroPerfCSharp.csproj", "{CA98804B-E371-45AB-814F-AC4996579B6F}"
 EndProject
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharpNative.Compiler.Service", "src\Compiler\FSharpNative.Compiler.Service.fsproj", "{9B4528F6-8883-475C-AAF0-4F646233D30A}"
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.Native.Compiler.Service", "src\Compiler\FSharp.Native.Compiler.Service.fsproj", "{9B4528F6-8883-475C-AAF0-4F646233D30A}"
 EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.Core", "src\FSharp.Core\FSharp.Core.fsproj", "{ADB51E6C-2D63-4AB1-9F2C-8E869FEFD170}"
 EndProject

@@ -27,16 +27,16 @@ Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharp.Compiler.Private.Scr
 EndProject
 Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharp.Compiler.ComponentTests", "tests\FSharp.Compiler.ComponentTests\FSharp.Compiler.ComponentTests.fsproj", "{FAC5A3BF-C0D6-437A-868A-E962AA00B418}"
 EndProject
-Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharpNative.Compiler.Service.Tests", "tests\FSharpNative.Compiler.Service.Tests\FSharpNative.Compiler.Service.Tests.fsproj", "{DDFD06DC-D7F2-417F-9177-107764EEBCD8}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharp.Native.Compiler.Service.Tests", "tests\FSharp.Native.Compiler.Service.Tests\FSharp.Native.Compiler.Service.Tests.fsproj", "{DDFD06DC-D7F2-417F-9177-107764EEBCD8}"
 EndProject
-Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharpNative.Compiler.Service", "src\Compiler\FSharpNative.Compiler.Service.fsproj", "{9B4CF83C-C215-4EA0-9F8B-B5A77090F634}"
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "FSharp.Native.Compiler.Service", "src\Compiler\FSharp.Native.Compiler.Service.fsproj", "{9B4CF83C-C215-4EA0-9F8B-B5A77090F634}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Benchmarks", "Benchmarks", "{CE70D631-C5DC-417E-9CDA-B16097BEF1AC}"
 	ProjectSection(SolutionItems) = preProject
 		tests\benchmarks\README.md = tests\benchmarks\README.md
 	EndProjectSection
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "FSharpNative.Compiler.Service.Tests support", "FSharpNative.Compiler.Service.Tests support", "{452EED3C-AA87-471F-B9AC-0F4479C5820C}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "FSharp.Native.Compiler.Service.Tests support", "FSharp.Native.Compiler.Service.Tests support", "{452EED3C-AA87-471F-B9AC-0F4479C5820C}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CSharp_Analysis", "tests\service\data\CSharp_Analysis\CSharp_Analysis.csproj", "{F8743670-C8D4-41B3-86BE-BBB1226C352F}"
 EndProject
@@ -123,7 +123,7 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "release-notes", "release-notes", "{C28ABF2D-6B43-4B0F-A12B-38570C5D9A81}"
 	ProjectSection(SolutionItems) = preProject
 		docs\release-notes\About.md = docs\release-notes\About.md
-		docs\release-notes\FSharpNative.Compiler.Service.fsx = docs\release-notes\FSharpNative.Compiler.Service.fsx
+		docs\release-notes\FSharp.Native.Compiler.Service.fsx = docs\release-notes\FSharp.Native.Compiler.Service.fsx
 		docs\release-notes\FSharp.Core.fsx = docs\release-notes\FSharp.Core.fsx
 		docs\release-notes\Language.fsx = docs\release-notes\Language.fsx
 	EndProjectSection
@@ -133,15 +133,15 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".aux", ".aux", "{F1DADFB8-F
 		docs\release-notes\.aux\Common.fsx = docs\release-notes\.aux\Common.fsx
 	EndProjectSection
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".FSharpNative.Compiler.Service", ".FSharpNative.Compiler.Service", "{01C43145-5289-47BF-A19B-B9F0FB66254D}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".FSharp.Native.Compiler.Service", ".FSharp.Native.Compiler.Service", "{01C43145-5289-47BF-A19B-B9F0FB66254D}"
 	ProjectSection(SolutionItems) = preProject
-		docs\release-notes\.FSharpNative.Compiler.Service\8.0.100.md = docs\release-notes\.FSharpNative.Compiler.Service\8.0.100.md
-		docs\release-notes\.FSharpNative.Compiler.Service\8.0.200.md = docs\release-notes\.FSharpNative.Compiler.Service\8.0.200.md
-		docs\release-notes\.FSharpNative.Compiler.Service\8.0.202.md = docs\release-notes\.FSharpNative.Compiler.Service\8.0.202.md
-		docs\release-notes\.FSharpNative.Compiler.Service\8.0.300.md = docs\release-notes\.FSharpNative.Compiler.Service\8.0.300.md
-		docs\release-notes\.FSharpNative.Compiler.Service\8.0.400.md = docs\release-notes\.FSharpNative.Compiler.Service\8.0.400.md
-		docs\release-notes\.FSharpNative.Compiler.Service\9.0.100.md = docs\release-notes\.FSharpNative.Compiler.Service\9.0.100.md
-		docs\release-notes\.FSharpNative.Compiler.Service\9.0.200.md = docs\release-notes\.FSharpNative.Compiler.Service\9.0.200.md
+		docs\release-notes\.FSharp.Native.Compiler.Service\8.0.100.md = docs\release-notes\.FSharp.Native.Compiler.Service\8.0.100.md
+		docs\release-notes\.FSharp.Native.Compiler.Service\8.0.200.md = docs\release-notes\.FSharp.Native.Compiler.Service\8.0.200.md
+		docs\release-notes\.FSharp.Native.Compiler.Service\8.0.202.md = docs\release-notes\.FSharp.Native.Compiler.Service\8.0.202.md
+		docs\release-notes\.FSharp.Native.Compiler.Service\8.0.300.md = docs\release-notes\.FSharp.Native.Compiler.Service\8.0.300.md
+		docs\release-notes\.FSharp.Native.Compiler.Service\8.0.400.md = docs\release-notes\.FSharp.Native.Compiler.Service\8.0.400.md
+		docs\release-notes\.FSharp.Native.Compiler.Service\9.0.100.md = docs\release-notes\.FSharp.Native.Compiler.Service\9.0.100.md
+		docs\release-notes\.FSharp.Native.Compiler.Service\9.0.200.md = docs\release-notes\.FSharp.Native.Compiler.Service\9.0.200.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".FSharp.Core", ".FSharp.Core", "{23798638-A1E9-4DAE-9C9C-F5D87499ADD6}"

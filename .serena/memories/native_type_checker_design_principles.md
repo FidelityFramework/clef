@@ -14,6 +14,25 @@ In Fidelity, **types are not erased early** - they carry semantic meaning throug
 
 For FNCS, we want **Rust-like type-to-layout correlation** with **ML-like type inference**.
 
+## The "Fidelity" Principle
+
+> **CRITICAL**: The entire point of Fidelity is that **the F# compiler controls memory layout - not MLIR, not LLVM**.
+
+Types (memory regions, access kinds, etc.) carry semantic meaning through the ENTIRE compilation pipeline, guiding every decision. They ARE erased - but at the **LAST possible lowering stage**, after Fidelity has made all decisions. **Fidelity dictates; LLVM implements.**
+
+### Optimization Philosophy
+
+Semantic optimizations happen in the SEMANTIC LAYER:
+- **FNCS**: Inlining decisions, SRTP resolution, monomorphization
+- **Firefly**: Tree-shaking, dead code elimination, memory layout decisions
+
+MLIR/LLVM are **deterministic carriers** that implement what Fidelity dictates. They perform only:
+- Target-specific instruction selection
+- Register allocation
+- Machine-level optimizations (that don't change semantics)
+
+**NEVER defer semantic decisions to MLIR/LLVM.** The compute graph integrity must be preserved by the semantic layer.
+
 ## Architectural Principles
 
 ### 1. Unified Representation (No Separate AST/Typed Tree)

@@ -1,6 +1,6 @@
 module Miscellaneous.FileIndex
 
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.Text
 open System.Threading.Tasks
 open Xunit
 

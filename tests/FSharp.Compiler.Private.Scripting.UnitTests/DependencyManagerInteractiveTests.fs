@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Compiler.Scripting.DependencyManager.UnitTests
+namespace FSharp.Native.Compiler.Scripting.DependencyManager.UnitTests
 
 open System
 open System.IO
@@ -8,9 +8,9 @@ open System.Reflection
 open System.Runtime.InteropServices
 open System.Threading
 
-open FSharp.Compiler.Interactive.Shell
-open FSharp.Compiler.DependencyManager
-open FSharp.Compiler.Diagnostics
+open FSharp.Native.Compiler.Interactive.Shell
+open FSharp.Native.Compiler.DependencyManager
+open FSharp.Native.Compiler.Diagnostics
 open FSharp.DependencyManager.Nuget
 open FSharp.Test.ScriptHelpers
 open FSharp.Test

@@ -1,7 +1,7 @@
-﻿module internal FSharp.Compiler.GraphChecking.GraphProcessing
+﻿module internal FSharp.Native.Compiler.GraphChecking.GraphProcessing
 
 open System.Threading
-open FSharp.Compiler.GraphChecking
+open FSharp.Native.Compiler.GraphChecking
 open System.Threading.Tasks
 open System
 

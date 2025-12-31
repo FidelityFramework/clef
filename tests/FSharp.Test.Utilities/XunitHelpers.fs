@@ -10,8 +10,8 @@ open Xunit.Abstractions
 
 open TestFramework
 
-open FSharp.Compiler.Caches
-open FSharp.Compiler.Diagnostics
+open FSharp.Native.Compiler.Caches
+open FSharp.Native.Compiler.Diagnostics
 
 open OpenTelemetry.Resources
 open OpenTelemetry.Trace

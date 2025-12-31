@@ -6,8 +6,8 @@ open Internal.Utilities.Collections
 open System.Threading.Tasks
 open System.Diagnostics
 
-open FSharp.Compiler.DiagnosticsLogger
-open FSharp.Compiler.Diagnostics
+open FSharp.Native.Compiler.DiagnosticsLogger
+open FSharp.Native.Compiler.Diagnostics
 
 open Xunit
 

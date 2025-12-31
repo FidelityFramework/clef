@@ -6,7 +6,7 @@ open System.Reflection
 
 open Xunit.Sdk
 
-open FSharp.Compiler.IO
+open FSharp.Native.Compiler.IO
 open FSharp.Test.Compiler
 open FSharp.Test.Utilities
 open TestFramework

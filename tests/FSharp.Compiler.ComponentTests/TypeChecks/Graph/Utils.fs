@@ -1,9 +1,9 @@
 ﻿module TypeChecks.TestUtils
 
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.GraphChecking
-open FSharp.Compiler.Text
-open FSharp.Compiler.Syntax
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.GraphChecking
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Syntax
 
 open FSharp.Test
 

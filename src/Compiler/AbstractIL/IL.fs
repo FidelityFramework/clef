@@ -4,7 +4,7 @@
 /// Native scaffolding implementation for the Abstract IL type system.
 /// See IL.fsi for design principles and documentation.
 
-module FSharp.Compiler.AbstractIL.IL
+module FSharp.Native.Compiler.AbstractIL.IL
 
 open System
 open System.Collections.Concurrent

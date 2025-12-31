@@ -14,7 +14,7 @@
   <ItemGroup>
     <Reference Include="System.Runtime.Remoting" />
     <PackageReference Include="FSharp.Core" Version="$(FcsFSharpCorePkgVersion)" />
-    <ProjectReference Include="..\..\Compiler\FSharpNative.Compiler.Service.fsproj" />
+    <ProjectReference Include="..\..\Compiler\FSharp.Native.Compiler.Service.fsproj" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == '$(FcsTargetNetFxFramework)'">
     <Reference Include="System.Runtime" />

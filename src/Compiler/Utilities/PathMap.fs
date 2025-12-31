@@ -6,7 +6,7 @@ namespace Internal.Utilities
 open System.IO
 
 open Internal.Utilities.Library
-open FSharp.Compiler.IO
+open FSharp.Native.Compiler.IO
 
 type PathMap = PathMap of Map<string, string>
 

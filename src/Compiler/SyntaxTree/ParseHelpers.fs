@@ -1,22 +1,22 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module FSharp.Compiler.ParseHelpers
+module FSharp.Native.Compiler.ParseHelpers
 
-open FSharp.Compiler.AbstractIL
-open FSharp.Compiler.DiagnosticsLogger
-open FSharp.Compiler.Features
-open FSharp.Compiler.Syntax
-open FSharp.Compiler.SyntaxTrivia
-open FSharp.Compiler.SyntaxTreeOps
-open FSharp.Compiler.UnicodeLexing
-open FSharp.Compiler.Text
-open FSharp.Compiler.Text.Position
-open FSharp.Compiler.Text.Range
-open FSharp.Compiler.Xml
+open FSharp.Native.Compiler.AbstractIL
+open FSharp.Native.Compiler.DiagnosticsLogger
+open FSharp.Native.Compiler.Features
+open FSharp.Native.Compiler.Syntax
+open FSharp.Native.Compiler.SyntaxTrivia
+open FSharp.Native.Compiler.SyntaxTreeOps
+open FSharp.Native.Compiler.UnicodeLexing
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Text.Position
+open FSharp.Native.Compiler.Text.Range
+open FSharp.Native.Compiler.Xml
 open Internal.Utilities.Library
 open Internal.Utilities.Text.Lexing
 open Internal.Utilities.Text.Parsing
-open FSharp.Compiler.LexerStore
+open FSharp.Native.Compiler.LexerStore
 
 //------------------------------------------------------------------------
 // Parsing: Error recovery exception for fsyacc

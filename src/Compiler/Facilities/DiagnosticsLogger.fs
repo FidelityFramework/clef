@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module FSharp.Compiler.DiagnosticsLogger
+module FSharp.Native.Compiler.DiagnosticsLogger
 
-open FSharp.Compiler.Diagnostics
-open FSharp.Compiler.Features
-open FSharp.Compiler.Text.Range
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.Diagnostics
+open FSharp.Native.Compiler.Features
+open FSharp.Native.Compiler.Text.Range
+open FSharp.Native.Compiler.Text
 open System
 open System.Diagnostics
 open System.Reflection
@@ -871,7 +871,7 @@ let internal languageFeatureNotSupportedInLibraryError (langFeature: LanguageFea
 
 module StackGuardMetrics =
 
-    let meter = FSharp.Compiler.Diagnostics.Metrics.Meter
+    let meter = FSharp.Native.Compiler.Diagnostics.Metrics.Meter
 
     let jumpCounter =
         meter.CreateCounter<int64>(

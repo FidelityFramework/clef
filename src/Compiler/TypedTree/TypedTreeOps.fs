@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All Rights Reserved. See License.txt in the project root for license information.
 
 /// Defines derived expression manipulation and construction functions.
-module internal FSharp.Compiler.TypedTreeOps
+module internal FSharp.Native.Compiler.TypedTreeOps
 
 open System
 open System.CodeDom.Compiler
@@ -13,25 +13,25 @@ open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
 open Internal.Utilities.Rational
 
-open FSharp.Compiler.IO
-open FSharp.Compiler.AbstractIL.IL
-open FSharp.Compiler.CompilerGlobalState
-open FSharp.Compiler.DiagnosticsLogger
-open FSharp.Compiler.Features
-open FSharp.Compiler.Syntax
-open FSharp.Compiler.Syntax.PrettyNaming
-open FSharp.Compiler.SyntaxTreeOps
-open FSharp.Compiler.TcGlobals
-open FSharp.Compiler.Text
-open FSharp.Compiler.Text.Range
-open FSharp.Compiler.Text.Layout
-open FSharp.Compiler.Text.LayoutRender
-open FSharp.Compiler.Text.TaggedText
-open FSharp.Compiler.Xml
-open FSharp.Compiler.TypedTree
-open FSharp.Compiler.TypedTreeBasics
+open FSharp.Native.Compiler.IO
+open FSharp.Native.Compiler.AbstractIL.IL
+open FSharp.Native.Compiler.CompilerGlobalState
+open FSharp.Native.Compiler.DiagnosticsLogger
+open FSharp.Native.Compiler.Features
+open FSharp.Native.Compiler.Syntax
+open FSharp.Native.Compiler.Syntax.PrettyNaming
+open FSharp.Native.Compiler.SyntaxTreeOps
+open FSharp.Native.Compiler.TcGlobals
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Text.Range
+open FSharp.Native.Compiler.Text.Layout
+open FSharp.Native.Compiler.Text.LayoutRender
+open FSharp.Native.Compiler.Text.TaggedText
+open FSharp.Native.Compiler.Xml
+open FSharp.Native.Compiler.TypedTree
+open FSharp.Native.Compiler.TypedTreeBasics
 #if !NO_TYPEPROVIDERS
-open FSharp.Compiler.TypeProviders
+open FSharp.Native.Compiler.TypeProviders
 #endif
 
 let inline compareBy (x: 'T MaybeNull) (y: 'T MaybeNull) ([<InlineIfLambda>]func: 'T -> 'K)  = 

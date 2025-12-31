@@ -4,7 +4,7 @@
 /// Diagnostics utilities scaffolding for FNCS.
 /// Provides minimal diagnostic output functionality.
 
-module FSharp.Compiler.AbstractIL.Diagnostics
+module FSharp.Native.Compiler.AbstractIL.Diagnostics
 
 open System.IO
 

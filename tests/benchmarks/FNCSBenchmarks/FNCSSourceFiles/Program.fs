@@ -1,8 +1,8 @@
 ﻿open System
 open System.Diagnostics
 open System.IO
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.Text
 open BenchmarkDotNet.Attributes
 open BenchmarkDotNet.Running
 open FSharp.Benchmarks.Common.Categories
@@ -466,14 +466,14 @@ module Project =
         )
         
     let FSharpCompilerService =
-        { ProjectFileName = __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\FSharp.Compiler.Service.fsproj"
+        { ProjectFileName = __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\FSharp.Native.Compiler.Service.fsproj"
           ProjectId = None
           SourceFiles =
-            [| __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Compiler.Service\Debug\net472\FSComp.fs"
-               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Compiler.Service\Debug\net472\FSIstrings.fs"
-               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Compiler.Service\Debug\net472\UtilsStrings.fs"
-               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Compiler.Service\Debug\net472\FSharp.Compiler.Service.InternalsVisibleTo.fs"
-               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Compiler.Service\Debug\net472\FSharp.Compiler.Service.AssemblyInfo.fs"
+            [| __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Native.Compiler.Service\Debug\net472\FSComp.fs"
+               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Native.Compiler.Service\Debug\net472\FSIstrings.fs"
+               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Native.Compiler.Service\Debug\net472\UtilsStrings.fs"
+               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Native.Compiler.Service\Debug\net472\FSharp.Native.Compiler.Service.InternalsVisibleTo.fs"
+               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Native.Compiler.Service\Debug\net472\FSharp.Native.Compiler.Service.AssemblyInfo.fs"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\Utilities\sformat.fsi"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\Utilities\sformat.fs"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\Utilities\sr.fsi"
@@ -541,8 +541,8 @@ module Project =
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\AbstractIL\ilx.fs"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\AbstractIL\ilascii.fsi"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\AbstractIL\ilascii.fs"
-               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Compiler.Service\Debug\net472\ilpars.fs"
-               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Compiler.Service\Debug\net472\illex.fs"
+               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Native.Compiler.Service\Debug\net472\ilpars.fs"
+               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Native.Compiler.Service\Debug\net472\illex.fs"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\AbstractIL\ilprint.fsi"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\AbstractIL\ilprint.fs"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\AbstractIL\ilmorph.fsi"
@@ -579,12 +579,12 @@ module Project =
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\SyntaxTree\SyntaxTreeOps.fs"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\SyntaxTree\ParseHelpers.fsi"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\SyntaxTree\ParseHelpers.fs"
-               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Compiler.Service\Debug\net472\pppars.fs"
-               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Compiler.Service\Debug\net472\pars.fs"
+               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Native.Compiler.Service\Debug\net472\pppars.fs"
+               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Native.Compiler.Service\Debug\net472\pars.fs"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\SyntaxTree\LexHelpers.fsi"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\SyntaxTree\LexHelpers.fs"
-               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Compiler.Service\Debug\net472\pplex.fs"
-               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Compiler.Service\Debug\net472\lex.fs"
+               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Native.Compiler.Service\Debug\net472\pplex.fs"
+               __SOURCE_DIRECTORY__ + @"\..\..\..\..\artifacts\obj\FSharp.Native.Compiler.Service\Debug\net472\lex.fs"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\SyntaxTree\LexFilter.fsi"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\SyntaxTree\LexFilter.fs"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\TypedTree\tainted.fsi"
@@ -764,7 +764,7 @@ module Project =
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\Legacy\LegacyMSBuildReferenceResolver.fs"
                __SOURCE_DIRECTORY__ + @"\..\..\..\..\src\Compiler\Legacy\LegacyHostedCompilerForTesting.fs" |]
           OtherOptions =
-            [| sprintf "-o:%s%s" __SOURCE_DIRECTORY__ @"\..\..\..\..\artifacts\obj\FSharp.Compiler.Service\Debug\net472\FSharp.Compiler.Service.dll"
+            [| sprintf "-o:%s%s" __SOURCE_DIRECTORY__ @"\..\..\..\..\artifacts\obj\FSharp.Native.Compiler.Service\Debug\net472\FSharp.Native.Compiler.Service.dll"
                @"-g"
                @"--debug:embedded"
                @"--noframework"
@@ -788,7 +788,7 @@ module Project =
                @"--define:NET47_OR_GREATER"
                @"--define:NET471_OR_GREATER"
                @"--define:NET472_OR_GREATER"
-               sprintf "-doc:%s%s" __SOURCE_DIRECTORY__ @"\..\..\..\..\artifacts\obj\FSharp.Compiler.Service\Debug\net472\FSharp.Compiler.Service.xml"
+               sprintf "-doc:%s%s" __SOURCE_DIRECTORY__ @"\..\..\..\..\artifacts\obj\FSharp.Native.Compiler.Service\Debug\net472\FSharp.Native.Compiler.Service.xml"
                @"--publicsign+"
                @"--optimize-"
                sprintf "-r:%s%s" nugetCache @"fsharp.core\6.0.1\lib\netstandard2.0\FSharp.Core.dll"

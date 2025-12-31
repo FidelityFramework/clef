@@ -58,7 +58,7 @@ namespace Fantomas.Core
 module Context =
     type Context = { SourceCode: string }
 
-namespace FSharp.Compiler
+namespace FSharp.Native.Compiler
 
 module Syntax =
 
@@ -79,9 +79,9 @@ namespace Fantomas.Core
 
 module internal CodePrinter =
 
-    open FSharp.Compiler
-    open FSharp.Compiler.Syntax
-    open FSharp.Compiler.Text
+    open FSharp.Native.Compiler
+    open FSharp.Native.Compiler.Syntax
+    open FSharp.Native.Compiler.Text
     open Fantomas.Core.Context
 
     type ASTContext =
@@ -106,7 +106,7 @@ namespace Fantomas.Core
 
     type Context =
       { SourceCode: string }
-namespace FSharp.Compiler
+namespace FSharp.Native.Compiler
 
   module Syntax =
 
@@ -135,9 +135,9 @@ namespace Fantomas.Core
 
       static member Default: ASTContext
 
-    val genExpr: e: FSharp.Compiler.Syntax.SynExpr -> ctx: Context.Context -> Context.Context
+    val genExpr: e: FSharp.Native.Compiler.Syntax.SynExpr -> ctx: Context.Context -> Context.Context
 
-    val genLambdaArrowWithTrivia: bodyExpr: (FSharp.Compiler.Syntax.SynExpr -> Context.Context -> Context.Context) -> body: FSharp.Compiler.Syntax.SynExpr -> arrowRange: FSharp.Compiler.Text.Range option -> (Context.Context -> Context.Context)"""
+    val genLambdaArrowWithTrivia: bodyExpr: (FSharp.Native.Compiler.Syntax.SynExpr -> Context.Context -> Context.Context) -> body: FSharp.Native.Compiler.Syntax.SynExpr -> arrowRange: FSharp.Native.Compiler.Text.Range option -> (Context.Context -> Context.Context)"""
 
 [<Fact>]
 let ``Empty namespace`` () =

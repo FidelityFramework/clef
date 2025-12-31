@@ -1,7 +1,7 @@
 ﻿module TypeChecks.GraphProcessingTests
 
 open System.Threading
-open FSharp.Compiler.GraphChecking.GraphProcessing
+open FSharp.Native.Compiler.GraphChecking.GraphProcessing
 open Xunit
 
 [<Fact>]

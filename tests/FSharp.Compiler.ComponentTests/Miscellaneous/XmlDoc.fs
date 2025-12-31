@@ -4,7 +4,7 @@ module Miscellaneous.XmlDoc
 
 open System.IO
 open Xunit
-open FSharp.Compiler.Xml
+open FSharp.Native.Compiler.Xml
 open TestFramework
 
 

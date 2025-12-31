@@ -6,7 +6,7 @@
 /// into the compiler.  This lets the compiler perform particular optimizations
 /// for these types and values, for example emitting optimized calls for
 /// comparison and hashing functions.
-module internal FSharp.Compiler.TcGlobals
+module internal FSharp.Native.Compiler.TcGlobals
 
 open System.Collections.Concurrent
 open System.Linq
@@ -14,15 +14,15 @@ open System.Diagnostics
 
 open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
-open FSharp.Compiler.AbstractIL.IL
-open FSharp.Compiler.CompilerGlobalState
-open FSharp.Compiler.Features
-open FSharp.Compiler.IO
-open FSharp.Compiler.Syntax.PrettyNaming
-open FSharp.Compiler.Text.FileIndex
-open FSharp.Compiler.Text.Range
-open FSharp.Compiler.TypedTree
-open FSharp.Compiler.TypedTreeBasics
+open FSharp.Native.Compiler.AbstractIL.IL
+open FSharp.Native.Compiler.CompilerGlobalState
+open FSharp.Native.Compiler.Features
+open FSharp.Native.Compiler.IO
+open FSharp.Native.Compiler.Syntax.PrettyNaming
+open FSharp.Native.Compiler.Text.FileIndex
+open FSharp.Native.Compiler.Text.Range
+open FSharp.Native.Compiler.TypedTree
+open FSharp.Native.Compiler.TypedTreeBasics
 open Internal.Utilities
 
 let internal DummyFileNameForRangesWithoutASpecificLocation = startupFileName
@@ -373,7 +373,7 @@ type TcGlobals(
                   taccessInternal,
                   TyparKind.Type,
                   LazyWithContext.NotLazy [],
-                  FSharp.Compiler.Xml.XmlDoc.Empty,
+                  FSharp.Native.Compiler.Xml.XmlDoc.Empty,
                   false,
                   false,
                   false,

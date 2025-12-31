@@ -1,9 +1,9 @@
 ﻿// Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal FSharp.Compiler.XmlDocFileWriter
+module internal FSharp.Native.Compiler.XmlDocFileWriter
 
-open FSharp.Compiler.TypedTree
-open FSharp.Compiler.TcGlobals
+open FSharp.Native.Compiler.TypedTree
+open FSharp.Native.Compiler.TcGlobals
 
 module XmlDocWriter =
 

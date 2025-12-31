@@ -1,5 +1,5 @@
 
-module internal FSharp.Compiler.ParseHelpers
+module internal FSharp.Native.Compiler.ParseHelpers
 
 // The error raised by the parse_error_rich function, which is called by the parser engine
 [<NoEquality; NoComparison>]

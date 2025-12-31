@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal FSharp.Compiler.ParseHelpers
+module internal FSharp.Native.Compiler.ParseHelpers
 
-open FSharp.Compiler.AbstractIL.IL
-open FSharp.Compiler.Syntax
-open FSharp.Compiler.SyntaxTrivia
-open FSharp.Compiler.Features
-open FSharp.Compiler.Text
-open FSharp.Compiler.Xml
+open FSharp.Native.Compiler.AbstractIL.IL
+open FSharp.Native.Compiler.Syntax
+open FSharp.Native.Compiler.SyntaxTrivia
+open FSharp.Native.Compiler.Features
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Xml
 open Internal.Utilities.Text.Lexing
 open Internal.Utilities.Text.Parsing
 

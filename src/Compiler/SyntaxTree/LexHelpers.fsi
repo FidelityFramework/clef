@@ -1,17 +1,17 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal FSharp.Compiler.Lexhelp
+module internal FSharp.Native.Compiler.Lexhelp
 
 open System.Text
-open FSharp.Compiler.IO
+open FSharp.Native.Compiler.IO
 open Internal.Utilities
 open Internal.Utilities.Text
 
-open FSharp.Compiler.DiagnosticsLogger
-open FSharp.Compiler.ParseHelpers
-open FSharp.Compiler.UnicodeLexing
-open FSharp.Compiler.Parser
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.DiagnosticsLogger
+open FSharp.Native.Compiler.ParseHelpers
+open FSharp.Native.Compiler.UnicodeLexing
+open FSharp.Native.Compiler.Parser
+open FSharp.Native.Compiler.Text
 
 /// Lexer args: status of #light processing.  Mutated when a #light
 /// directive is processed. This alters the behaviour of the lexfilter.

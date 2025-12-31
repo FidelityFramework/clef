@@ -67,7 +67,7 @@ module Helper =
 
     type R = { A : int; mutable B : int }
 
-open FSharp.Compiler.Service.Tests
+open FSharp.Native.Compiler.Service.Tests
 
 [<TypeProvider>]
 type BasicProvider (config : TypeProviderConfig) as this =

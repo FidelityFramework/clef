@@ -1,7 +1,7 @@
 ﻿module FSharpChecker.FindReferences
 
 open Xunit
-open FSharp.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.CodeAnalysis
 open FSharp.Test.ProjectGeneration
 open FSharp.Test.ProjectGeneration.Helpers
 
@@ -56,7 +56,7 @@ let ``Finding usage of type via FindReference should also find it's constructors
     createProject().Workflow
         {        
             placeCursor "First" 7 11 "type MyType() =" ["MyType"]     
-            findAllReferencesInFile "First" (fun (ranges:list<FSharp.Compiler.Text.range>) ->
+            findAllReferencesInFile "First" (fun (ranges:list<FSharp.Native.Compiler.Text.range>) ->
                 let ranges = 
                     ranges 
                     |> List.sortBy (fun r -> r.StartLine)
@@ -85,7 +85,7 @@ secondA.DoNothing(secondB)
     project.Workflow
         {        
             placeCursor "First" 7 11 "type MyType() =" ["MyType"]     
-            findAllReferencesInFile "Second" (fun (ranges:list<FSharp.Compiler.Text.range>) ->
+            findAllReferencesInFile "Second" (fun (ranges:list<FSharp.Native.Compiler.Text.range>) ->
                 let ranges = 
                     ranges 
                     |> List.sortBy (fun r -> r.StartLine)

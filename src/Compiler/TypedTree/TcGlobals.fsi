@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal FSharp.Compiler.TcGlobals
+module internal FSharp.Native.Compiler.TcGlobals
 
 /// Signals how checker/compiler was invoked - from FSC task/process (a one-off compilation), from tooling or from interactive session.
 /// This is used to determine if we want to use certain features in the pipeline, for example, type subsumption cache is only used in one-off compilation now.
@@ -86,7 +86,7 @@ module internal FSharpLib =
 
 [<NoEquality; NoComparison; StructuredFormatDisplay("{DebugText}")>]
 type internal BuiltinAttribInfo =
-    | AttribInfo of FSharp.Compiler.AbstractIL.IL.ILTypeRef * TypedTree.TyconRef
+    | AttribInfo of FSharp.Native.Compiler.AbstractIL.IL.ILTypeRef * TypedTree.TyconRef
 
     /// For debugging
     override ToString: unit -> string
@@ -97,7 +97,7 @@ type internal BuiltinAttribInfo =
 
     member TyconRef: TypedTree.TyconRef
 
-    member TypeRef: FSharp.Compiler.AbstractIL.IL.ILTypeRef
+    member TypeRef: FSharp.Native.Compiler.AbstractIL.IL.ILTypeRef
 
 [<Literal>]
 val internal tname_InternalsVisibleToAttribute: string = "System.Runtime.CompilerServices.InternalsVisibleToAttribute"
@@ -139,7 +139,7 @@ type internal TcGlobals =
 
     new:
         compilingFSharpCore: bool *
-        ilg: FSharp.Compiler.AbstractIL.IL.ILGlobals *
+        ilg: FSharp.Native.Compiler.AbstractIL.IL.ILGlobals *
         fslibCcu: TypedTree.CcuThunk *
         directoryToResolveRelativePaths: string *
         mlCompatibility: bool *
@@ -164,28 +164,28 @@ type internal TcGlobals =
     member tryFindSysTypeCcuHelper: (string list -> string -> bool -> TypedTree.CcuThunk option) with get
 
     member AddFieldGeneratedAttributes:
-        mdef: FSharp.Compiler.AbstractIL.IL.ILFieldDef -> FSharp.Compiler.AbstractIL.IL.ILFieldDef
+        mdef: FSharp.Native.Compiler.AbstractIL.IL.ILFieldDef -> FSharp.Native.Compiler.AbstractIL.IL.ILFieldDef
 
     member AddFieldNeverAttributes:
-        mdef: FSharp.Compiler.AbstractIL.IL.ILFieldDef -> FSharp.Compiler.AbstractIL.IL.ILFieldDef
+        mdef: FSharp.Native.Compiler.AbstractIL.IL.ILFieldDef -> FSharp.Native.Compiler.AbstractIL.IL.ILFieldDef
 
     member AddGeneratedAttributes:
-        attrs: FSharp.Compiler.AbstractIL.IL.ILAttributes -> FSharp.Compiler.AbstractIL.IL.ILAttributes
+        attrs: FSharp.Native.Compiler.AbstractIL.IL.ILAttributes -> FSharp.Native.Compiler.AbstractIL.IL.ILAttributes
 
     member AddMethodGeneratedAttributes:
-        mdef: FSharp.Compiler.AbstractIL.IL.ILMethodDef -> FSharp.Compiler.AbstractIL.IL.ILMethodDef
+        mdef: FSharp.Native.Compiler.AbstractIL.IL.ILMethodDef -> FSharp.Native.Compiler.AbstractIL.IL.ILMethodDef
 
     member AddPropertyGeneratedAttributes:
-        mdef: FSharp.Compiler.AbstractIL.IL.ILPropertyDef -> FSharp.Compiler.AbstractIL.IL.ILPropertyDef
+        mdef: FSharp.Native.Compiler.AbstractIL.IL.ILPropertyDef -> FSharp.Native.Compiler.AbstractIL.IL.ILPropertyDef
 
     member AddPropertyNeverAttributes:
-        mdef: FSharp.Compiler.AbstractIL.IL.ILPropertyDef -> FSharp.Compiler.AbstractIL.IL.ILPropertyDef
+        mdef: FSharp.Native.Compiler.AbstractIL.IL.ILPropertyDef -> FSharp.Native.Compiler.AbstractIL.IL.ILPropertyDef
 
-    member AddValGeneratedAttributes: v: TypedTree.Val -> (FSharp.Compiler.Text.range -> unit)
+    member AddValGeneratedAttributes: v: TypedTree.Val -> (FSharp.Native.Compiler.Text.range -> unit)
 
     member FindSysAttrib: nm: string -> BuiltinAttribInfo
 
-    member FindSysILTypeRef: nm: string -> FSharp.Compiler.AbstractIL.IL.ILTypeRef
+    member FindSysILTypeRef: nm: string -> FSharp.Native.Compiler.AbstractIL.IL.ILTypeRef
 
     member isSpliceOperator: TypedTree.ValRef -> bool
 
@@ -197,19 +197,19 @@ type internal TcGlobals =
     /// AdditionDynamic for op_Addition.  Also work out the type instantiation of the dynamic function.
     member MakeBuiltInWitnessInfo: t: TypedTree.TraitConstraintInfo -> IntrinsicValRef * TypedTree.TType list
 
-    member MakeInternalsVisibleToAttribute: simpleAssemName: string -> FSharp.Compiler.AbstractIL.IL.ILAttribute
+    member MakeInternalsVisibleToAttribute: simpleAssemName: string -> FSharp.Native.Compiler.AbstractIL.IL.ILAttribute
 
     member MkDebuggerTypeProxyAttribute:
-        ty: FSharp.Compiler.AbstractIL.IL.ILType -> FSharp.Compiler.AbstractIL.IL.ILAttribute
+        ty: FSharp.Native.Compiler.AbstractIL.IL.ILType -> FSharp.Native.Compiler.AbstractIL.IL.ILAttribute
 
     member TryEmbedILType:
-        tref: FSharp.Compiler.AbstractIL.IL.ILTypeRef *
-        mkEmbeddableType: (unit -> FSharp.Compiler.AbstractIL.IL.ILTypeDef) ->
+        tref: FSharp.Native.Compiler.AbstractIL.IL.ILTypeRef *
+        mkEmbeddableType: (unit -> FSharp.Native.Compiler.AbstractIL.IL.ILTypeDef) ->
             unit
 
     member TryFindSysAttrib: nm: string -> BuiltinAttribInfo option
 
-    member TryFindSysILTypeRef: nm: string -> FSharp.Compiler.AbstractIL.IL.ILTypeRef option
+    member TryFindSysILTypeRef: nm: string -> FSharp.Native.Compiler.AbstractIL.IL.ILTypeRef option
 
     member TryFindSysTyconRef: path: string list -> nm: string -> TypedTree.EntityRef option
 
@@ -228,12 +228,12 @@ type internal TcGlobals =
         tcref: TypedTree.EntityRef -> tinst: TypedTree.TType list -> (TypedTree.Nullness -> TypedTree.TType)
 
     /// Memoization table to help minimize the number of ILSourceDocument objects we create
-    member memoize_file: x: int -> FSharp.Compiler.AbstractIL.IL.ILSourceDocument
+    member memoize_file: x: int -> FSharp.Native.Compiler.AbstractIL.IL.ILSourceDocument
 
     member mkDebuggableAttributeV2:
-        jitTracking: bool * jitOptimizerDisabled: bool -> FSharp.Compiler.AbstractIL.IL.ILAttribute
+        jitTracking: bool * jitOptimizerDisabled: bool -> FSharp.Native.Compiler.AbstractIL.IL.ILAttribute
 
-    member mkDebuggerDisplayAttribute: s: string -> FSharp.Compiler.AbstractIL.IL.ILAttribute
+    member mkDebuggerDisplayAttribute: s: string -> FSharp.Native.Compiler.AbstractIL.IL.ILAttribute
 
     member mk_ArrayCollector_ty: seqElemTy: TypedTree.TType -> TypedTree.TType
 
@@ -245,19 +245,19 @@ type internal TcGlobals =
 
     member mk_ResumableStateMachine_ty: dataTy: TypedTree.TType -> TypedTree.TType
 
-    member tryRemoveEmbeddedILTypeDefs: unit -> FSharp.Compiler.AbstractIL.IL.ILTypeDef list
+    member tryRemoveEmbeddedILTypeDefs: unit -> FSharp.Native.Compiler.AbstractIL.IL.ILTypeDef list
 
     member unionCaseRefEq: x: TypedTree.UnionCaseRef -> y: TypedTree.UnionCaseRef -> bool
 
     member valRefEq: x: TypedTree.ValRef -> y: TypedTree.ValRef -> bool
 
-    member CompilerGeneratedAttribute: FSharp.Compiler.AbstractIL.IL.ILAttribute
+    member CompilerGeneratedAttribute: FSharp.Native.Compiler.AbstractIL.IL.ILAttribute
 
     member CompilerGlobalState: CompilerGlobalState.CompilerGlobalState option
 
-    member DebuggerBrowsableNeverAttribute: FSharp.Compiler.AbstractIL.IL.ILAttribute
+    member DebuggerBrowsableNeverAttribute: FSharp.Native.Compiler.AbstractIL.IL.ILAttribute
 
-    member DebuggerNonUserCodeAttribute: FSharp.Compiler.AbstractIL.IL.ILAttribute
+    member DebuggerNonUserCodeAttribute: FSharp.Native.Compiler.AbstractIL.IL.ILAttribute
 
     member IComparer_ty: TypedTree.TType
 
@@ -745,35 +745,35 @@ type internal TcGlobals =
 
     member il_arr_tcr_map: TypedTree.EntityRef array
 
-    member ilg: FSharp.Compiler.AbstractIL.IL.ILGlobals
+    member ilg: FSharp.Native.Compiler.AbstractIL.IL.ILGlobals
 
     member ilsigptr_tcr: TypedTree.EntityRef
 
-    member iltyp_AsyncCallback: FSharp.Compiler.AbstractIL.IL.ILType
+    member iltyp_AsyncCallback: FSharp.Native.Compiler.AbstractIL.IL.ILType
 
-    member iltyp_Exception: FSharp.Compiler.AbstractIL.IL.ILType
+    member iltyp_Exception: FSharp.Native.Compiler.AbstractIL.IL.ILType
 
-    member iltyp_IAsyncResult: FSharp.Compiler.AbstractIL.IL.ILType
+    member iltyp_IAsyncResult: FSharp.Native.Compiler.AbstractIL.IL.ILType
 
-    member iltyp_IComparable: FSharp.Compiler.AbstractIL.IL.ILType
+    member iltyp_IComparable: FSharp.Native.Compiler.AbstractIL.IL.ILType
 
-    member iltyp_Missing: FSharp.Compiler.AbstractIL.IL.ILType
+    member iltyp_Missing: FSharp.Native.Compiler.AbstractIL.IL.ILType
 
-    member iltyp_ReferenceAssemblyAttributeOpt: FSharp.Compiler.AbstractIL.IL.ILType option
+    member iltyp_ReferenceAssemblyAttributeOpt: FSharp.Native.Compiler.AbstractIL.IL.ILType option
 
-    member iltyp_RuntimeFieldHandle: FSharp.Compiler.AbstractIL.IL.ILType
+    member iltyp_RuntimeFieldHandle: FSharp.Native.Compiler.AbstractIL.IL.ILType
 
-    member iltyp_RuntimeMethodHandle: FSharp.Compiler.AbstractIL.IL.ILType
+    member iltyp_RuntimeMethodHandle: FSharp.Native.Compiler.AbstractIL.IL.ILType
 
-    member iltyp_RuntimeTypeHandle: FSharp.Compiler.AbstractIL.IL.ILType
+    member iltyp_RuntimeTypeHandle: FSharp.Native.Compiler.AbstractIL.IL.ILType
 
-    member iltyp_SerializationInfo: FSharp.Compiler.AbstractIL.IL.ILType option
+    member iltyp_SerializationInfo: FSharp.Native.Compiler.AbstractIL.IL.ILType option
 
-    member iltyp_StreamingContext: FSharp.Compiler.AbstractIL.IL.ILType option
+    member iltyp_StreamingContext: FSharp.Native.Compiler.AbstractIL.IL.ILType option
 
-    member iltyp_UnmanagedType: FSharp.Compiler.AbstractIL.IL.ILType
+    member iltyp_UnmanagedType: FSharp.Native.Compiler.AbstractIL.IL.ILType
 
-    member iltyp_ValueType: FSharp.Compiler.AbstractIL.IL.ILType
+    member iltyp_ValueType: FSharp.Native.Compiler.AbstractIL.IL.ILType
 
     member inref_tcr: TypedTree.EntityRef
 

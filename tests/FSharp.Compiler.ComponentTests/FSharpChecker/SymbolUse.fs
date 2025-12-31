@@ -1,13 +1,13 @@
 ﻿module FSharpChecker.SymbolUse
 
 
-open FSharp.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.CodeAnalysis
 open Xunit
 open FSharp.Test.ProjectGeneration
-open FSharp.Compiler.Symbols
+open FSharp.Native.Compiler.Symbols
 
-open FSharp.Compiler.EditorServices
-open FSharp.Compiler.NameResolution
+open FSharp.Native.Compiler.EditorServices
+open FSharp.Native.Compiler.NameResolution
 
 
 module IsPrivateToFile =

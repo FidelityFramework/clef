@@ -1,5 +1,5 @@
 // LinkedList uses nulls, so we need to disable the nullability warnings for this file.
-namespace FSharp.Compiler.Caches
+namespace FSharp.Native.Compiler.Caches
 
 open System
 open System.Collections.Generic
@@ -9,7 +9,7 @@ open System.Diagnostics
 open System.Diagnostics.Metrics
 
 module CacheMetrics =
-    let Meter = FSharp.Compiler.Diagnostics.Metrics.Meter
+    let Meter = FSharp.Native.Compiler.Diagnostics.Metrics.Meter
     let adds = Meter.CreateCounter<int64>("adds", "count")
     let updates = Meter.CreateCounter<int64>("updates", "count")
     let hits = Meter.CreateCounter<int64>("hits", "count")
@@ -112,7 +112,7 @@ module CacheMetrics =
                     ]
             ]
 
-        FSharp.Compiler.Diagnostics.Metrics.printTable headers rows
+        FSharp.Native.Compiler.Diagnostics.Metrics.printTable headers rows
 
     let CaptureStatsAndWriteToConsole () =
         let listener = ListenToAll()

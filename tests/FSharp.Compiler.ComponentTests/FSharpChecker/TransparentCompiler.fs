@@ -3,14 +3,14 @@ module FSharpChecker.TransparentCompiler
 
 open System.Collections.Concurrent
 open System.Diagnostics
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.IO
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.IO
+open FSharp.Native.Compiler.Text
 open Internal.Utilities.Collections
-open FSharp.Compiler.CodeAnalysis.TransparentCompiler
+open FSharp.Native.Compiler.CodeAnalysis.TransparentCompiler
 open Internal.Utilities.Library.Extras
-open FSharp.Compiler.GraphChecking.GraphProcessing
-open FSharp.Compiler.Diagnostics
+open FSharp.Native.Compiler.GraphChecking.GraphProcessing
+open FSharp.Native.Compiler.Diagnostics
 
 open Xunit
 

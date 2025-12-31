@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal FSharp.Compiler.LexerStore
+module internal FSharp.Native.Compiler.LexerStore
 
-open FSharp.Compiler.SyntaxTreeOps
-open FSharp.Compiler.SyntaxTrivia
-open FSharp.Compiler.Text
-open FSharp.Compiler.UnicodeLexing
-open FSharp.Compiler.Xml
+open FSharp.Native.Compiler.SyntaxTreeOps
+open FSharp.Native.Compiler.SyntaxTrivia
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.UnicodeLexing
+open FSharp.Native.Compiler.Xml
 
 val getSynArgNameGenerator: Lexbuf -> SynArgNameGenerator
 

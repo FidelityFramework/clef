@@ -2,7 +2,7 @@
 
 /// Configurable Diagnostics channel for the Abstract IL library
 
-module internal FSharp.Compiler.AbstractIL.Diagnostics
+module internal FSharp.Native.Compiler.AbstractIL.Diagnostics
 
 let mutable diagnosticsLog = Some stdout
 

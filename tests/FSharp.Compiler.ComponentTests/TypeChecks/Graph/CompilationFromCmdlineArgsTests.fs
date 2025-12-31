@@ -4,7 +4,7 @@ module CompilationFromCmdlineArgsTests =
 
     open System
     open System.IO
-    open FSharp.Compiler.CodeAnalysis
+    open FSharp.Native.Compiler.CodeAnalysis
     open Xunit
     open CompilationTests
 
@@ -15,8 +15,8 @@ module CompilationFromCmdlineArgsTests =
         [
             @"C:\Projects\fantomas\src\Fantomas.Core\Fantomas.Core.args.txt"
             @"C:\Projects\FsAutoComplete\src\FsAutoComplete\FsAutoComplete.args.txt"
-            @"C:\Projects\fsharp\src\Compiler\FSharp.Compiler.Service.args.txt"
-            @"C:\Projects\fsharp\tests\FSharp.Compiler.ComponentTests\FSharp.Compiler.ComponentTests.args.txt"
+            @"C:\Projects\fsharp\src\Compiler\FSharp.Native.Compiler.Service.args.txt"
+            @"C:\Projects\fsharp\tests\FSharp.Native.Compiler.ComponentTests\FSharp.Native.Compiler.ComponentTests.args.txt"
         ] |> Seq.map (fun p -> [| box p |])
 
     let checker = FSharpChecker.Create()

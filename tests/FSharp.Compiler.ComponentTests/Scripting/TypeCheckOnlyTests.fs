@@ -1,4 +1,4 @@
-module FSharp.Compiler.ComponentTests.Scripting.TypeCheckOnlyTests
+module FSharp.Native.Compiler.ComponentTests.Scripting.TypeCheckOnlyTests
 
 open System
 open System.IO

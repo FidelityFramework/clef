@@ -2,7 +2,7 @@
 
 #nowarn "47" // recursive initialization of LexBuffer
 
-namespace FSharp.Compiler.Text
+namespace FSharp.Native.Compiler.Text
 
 open System
 open System.IO
@@ -200,10 +200,10 @@ module SourceTextNew =
 
 namespace Internal.Utilities.Text.Lexing
 
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.Text
 open Microsoft.FSharp.Core
 open Microsoft.FSharp.Collections
-open FSharp.Compiler.Features
+open FSharp.Native.Compiler.Features
 open System.Collections.Generic
 
 [<Struct>]
@@ -347,7 +347,7 @@ and [<Sealed>] internal LexBuffer<'Char>
     member _.StrictIndentation = strictIndentation
 
     member _.CheckLanguageFeatureAndRecover featureId range =
-        FSharp.Compiler.DiagnosticsLogger.checkLanguageFeatureAndRecover langVersion featureId range
+        FSharp.Native.Compiler.DiagnosticsLogger.checkLanguageFeatureAndRecover langVersion featureId range
 
     static member FromFunction
         (reportLibraryOnlyFeatures, langVersion, strictIndentation, f: 'Char[] * int * int -> int)

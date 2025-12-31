@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 #if INTERACTIVE
-//#r @"../../release/net40/bin/FSharp.Compiler.dll"
+//#r @"../../release/net40/bin/FSharp.Native.Compiler.dll"
 #r @"../../packages/xunit.assert/2.9.0/lib/net6.0/xunit.assert.dll"
 #load "../../src/scripts/scriptlib.fsx"
 #load "../FSharp.Test.Utilities/TestFramework.fs"
@@ -18,7 +18,7 @@ open TestFramework
 open Scripting
 open SingleTest
 
-open FSharp.Compiler.IO
+open FSharp.Native.Compiler.IO
 
 #if !NETCOREAPP
 // All tests which do a manual invoke of the F# compiler are disabled

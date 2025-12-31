@@ -3,14 +3,14 @@ namespace CompilerDirectives
 open Microsoft.FSharp.Control
 open Xunit
 open Internal.Utilities
-open FSharp.Compiler
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.DiagnosticsLogger
-open FSharp.Compiler.Features
-open FSharp.Compiler.Lexhelp
-open FSharp.Compiler.Syntax
-open FSharp.Compiler.Text
-open FSharp.Compiler.UnicodeLexing
+open FSharp.Native.Compiler
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.DiagnosticsLogger
+open FSharp.Native.Compiler.Features
+open FSharp.Native.Compiler.Lexhelp
+open FSharp.Native.Compiler.Syntax
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.UnicodeLexing
 open FSharp.Test.Compiler
 open System.IO
 

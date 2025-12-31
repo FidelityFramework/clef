@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Compiler.Scripting.UnitTests
+namespace FSharp.Native.Compiler.Scripting.UnitTests
 
 open System
 open System.Text
@@ -10,8 +10,8 @@ open System.Reflection
 open System.Runtime.InteropServices
 open System.Threading
 open System.Threading.Tasks
-open FSharp.Compiler.Interactive
-open FSharp.Compiler.Interactive.Shell
+open FSharp.Native.Compiler.Interactive
+open FSharp.Native.Compiler.Interactive.Shell
 open FSharp.Test
 open FSharp.Test.ScriptHelpers
 
@@ -51,7 +51,7 @@ type InteractiveTests() =
 
     [<Fact>]
     member _.``ExecuteScript with host providing ControlledExecution should succeed with --noninteractive``() =
-        let ce = new FSharp.Compiler.Interactive.ControlledExecution(true)
+        let ce = new FSharp.Native.Compiler.Interactive.ControlledExecution(true)
         ce.Run(fun () ->
             use script = new FSharpScript([|"--noninteractive"|])
             let opt =

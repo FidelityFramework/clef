@@ -7,7 +7,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Compiler", "Compiler", "{87D01E8D-2580-81A2-8FDB-46C6008C302D}"
 EndProject
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharpNative.Compiler.Service", "src\Compiler\FSharpNative.Compiler.Service.fsproj", "{876C64E7-1131-48AD-BD7B-CB3E17CB0E93}"
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.Native.Compiler.Service", "src\Compiler\FSharp.Native.Compiler.Service.fsproj", "{876C64E7-1131-48AD-BD7B-CB3E17CB0E93}"
 EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.DependencyManager.Nuget", "src\FSharp.DependencyManager.Nuget\FSharp.DependencyManager.Nuget.fsproj", "{BD632E2B-6A64-458A-B236-37D5B35F3ACD}"
 EndProject

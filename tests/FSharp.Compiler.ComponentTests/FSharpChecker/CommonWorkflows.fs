@@ -7,9 +7,9 @@ open System.Diagnostics
 open Xunit
 
 open FSharp.Test.ProjectGeneration
-open FSharp.Compiler.Text
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.Diagnostics
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.Diagnostics
 
 open OpenTelemetry
 open OpenTelemetry.Resources

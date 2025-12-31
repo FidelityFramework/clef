@@ -1,5 +1,5 @@
 ﻿open BenchmarkDotNet.Running
-open FSharp.Compiler.Benchmarks
+open FSharp.Native.Compiler.Benchmarks
 open BenchmarkDotNet.Configs
 
 [<EntryPoint>]

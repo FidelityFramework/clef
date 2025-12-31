@@ -11,7 +11,7 @@ open System.Threading
 open System.Threading.Tasks
 open System.Runtime.CompilerServices
 
-open FSharp.Compiler.Caches
+open FSharp.Native.Compiler.Caches
 
 [<Class>]
 type InterruptibleLazy<'T> private (value, valueFactory: unit -> 'T) =
@@ -129,7 +129,7 @@ module internal PervasiveAutoOpens =
                 tPrev <- null
 
             if descr <> "Finish" then
-                tPrev <- FSharp.Compiler.Diagnostics.Activity.Profiling.startAndMeasureEnvironmentStats descr
+                tPrev <- FSharp.Native.Compiler.Diagnostics.Activity.Profiling.startAndMeasureEnvironmentStats descr
 
     let foldOn p f z x = f z (p x)
 

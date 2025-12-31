@@ -2,7 +2,7 @@
 
 open TypeChecks.TestUtils
 open Xunit
-open FSharp.Compiler.GraphChecking
+open FSharp.Native.Compiler.GraphChecking
 open Scenarios
 
 let scenarios = scenarios |> Seq.map (fun p -> [| box p |])

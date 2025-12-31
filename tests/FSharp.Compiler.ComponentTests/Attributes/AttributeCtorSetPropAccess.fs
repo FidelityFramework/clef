@@ -1,4 +1,4 @@
-﻿namespace FSharp.Compiler.ComponentTests.Attributes
+﻿namespace FSharp.Native.Compiler.ComponentTests.Attributes
 
 open Xunit
 open FSharp.Test.Compiler

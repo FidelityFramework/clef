@@ -5,7 +5,7 @@ VisualStudioVersion = 17.1.32113.165
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.Editor.Tests", "vsintegration\tests\FSharp.Editor.Tests\FSharp.Editor.Tests.fsproj", "{321F47BC-8148-4C8D-B340-08B7BF07D31D}"
 EndProject
-Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharpNative.Compiler.Service", "src\Compiler\FSharpNative.Compiler.Service.fsproj", "{AD603EF2-FAC6-48D1-AAEB-A6CF898062A9}"
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.Native.Compiler.Service", "src\Compiler\FSharp.Native.Compiler.Service.fsproj", "{AD603EF2-FAC6-48D1-AAEB-A6CF898062A9}"
 EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "FSharp.Core", "src\FSharp.Core\FSharp.Core.fsproj", "{67DA0BF3-AAD3-47F4-9EC6-AD8EC532B5A9}"
 EndProject

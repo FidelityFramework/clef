@@ -5,7 +5,7 @@
 /// Native compilation uses DWARF debug info, not PDB.
 /// This is minimal scaffolding.
 
-module FSharp.Compiler.AbstractIL.ILPdbWriter
+module FSharp.Native.Compiler.AbstractIL.ILPdbWriter
 
 /// PDB document data (scaffolding)
 type PdbDocumentData =

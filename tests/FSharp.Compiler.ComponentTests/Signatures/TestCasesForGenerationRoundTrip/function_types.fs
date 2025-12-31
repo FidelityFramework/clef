@@ -3,7 +3,7 @@ namespace Fantomas.Core
 module Context =
     type Context = { SourceCode: string }
 
-namespace FSharp.Compiler
+namespace FSharp.Native.Compiler
 
 module Syntax =
 
@@ -24,9 +24,9 @@ namespace Fantomas.Core
 
 module internal CodePrinter =
 
-    open FSharp.Compiler
-    open FSharp.Compiler.Syntax
-    open FSharp.Compiler.Text
+    open FSharp.Native.Compiler
+    open FSharp.Native.Compiler.Syntax
+    open FSharp.Native.Compiler.Text
     open Fantomas.Core.Context
 
     type ASTContext =

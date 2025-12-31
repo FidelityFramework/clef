@@ -2,7 +2,7 @@
 
 // Extension typing, validation of extension types, etc.
 
-module internal rec FSharp.Compiler.TypeProviders
+module internal rec FSharp.Native.Compiler.TypeProviders
 
 #if !NO_TYPEPROVIDERS
 
@@ -11,8 +11,8 @@ open System.Collections.Concurrent
 open System.Collections.Generic
 open Internal.Utilities.Library
 open FSharp.Core.CompilerServices
-open FSharp.Compiler.AbstractIL.IL
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.AbstractIL.IL
+open FSharp.Native.Compiler.Text
 
 type TypeProviderDesignation = TypeProviderDesignation of string
 type 'a ProvidedArray = 'a[] MaybeNull

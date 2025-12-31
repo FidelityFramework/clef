@@ -2,7 +2,7 @@
 
 // Type providers, validation of provided types, etc.
 
-module internal rec FSharp.Compiler.TypeProviders
+module internal rec FSharp.Native.Compiler.TypeProviders
 
 #if !NO_TYPEPROVIDERS
 
@@ -15,11 +15,11 @@ open Internal.Utilities.Library
 open Internal.Utilities.FSharpEnvironment  
 open FSharp.Core.CompilerServices
 open FSharp.Quotations
-open FSharp.Compiler.AbstractIL.IL
-open FSharp.Compiler.DiagnosticsLogger
-open FSharp.Compiler.Syntax
-open FSharp.Compiler.Text
-open FSharp.Compiler.Text.Range
+open FSharp.Native.Compiler.AbstractIL.IL
+open FSharp.Native.Compiler.DiagnosticsLogger
+open FSharp.Native.Compiler.Syntax
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Text.Range
 
 type TypeProviderDesignation = TypeProviderDesignation of string
 type 'a ProvidedArray= 'a[] MaybeNull

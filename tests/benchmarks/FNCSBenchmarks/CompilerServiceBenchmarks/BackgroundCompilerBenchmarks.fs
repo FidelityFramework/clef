@@ -2,9 +2,9 @@
 
 open System.IO
 open BenchmarkDotNet.Attributes
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.Text
-open FSharp.Compiler.Diagnostics
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Diagnostics
 open FSharp.Test.ProjectGeneration
 open BenchmarkDotNet.Engines
 open FSharp.Benchmarks.Common.Categories

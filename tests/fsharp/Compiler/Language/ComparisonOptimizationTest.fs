@@ -1,4 +1,4 @@
-﻿namespace FSharp.Compiler.UnitTests
+﻿namespace FSharp.Native.Compiler.UnitTests
 
 open System
 open Xunit

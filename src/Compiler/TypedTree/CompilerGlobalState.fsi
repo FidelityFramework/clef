@@ -2,9 +2,9 @@
 
 /// Defines the global environment for all type checking.
 
-module internal FSharp.Compiler.CompilerGlobalState
+module internal FSharp.Native.Compiler.CompilerGlobalState
 
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.Text
 
 /// Generates compiler-generated names. Each name generated also includes the StartLine number of the range passed in
 /// at the point of first generation.

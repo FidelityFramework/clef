@@ -1,6 +1,6 @@
 module internal CompilerService.Caches
 
-open FSharp.Compiler.Caches
+open FSharp.Native.Compiler.Caches
 open Xunit
 open FSharp.Test.Assert
 open System.Threading.Tasks

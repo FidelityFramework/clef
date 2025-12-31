@@ -1,5 +1,5 @@
 
-module internal FSharp.Compiler.ParseHelpers
+module internal FSharp.Native.Compiler.ParseHelpers
 
 exception SyntaxError of obj * range: range with
     member Meh : string -> int

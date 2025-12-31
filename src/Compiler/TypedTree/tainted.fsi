@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Compiler
+namespace FSharp.Native.Compiler
 
 #if !NO_TYPEPROVIDERS
 
 open Internal.Utilities.Library
 open FSharp.Core.CompilerServices
-open FSharp.Compiler.AbstractIL.IL
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.AbstractIL.IL
+open FSharp.Native.Compiler.Text
 
 [<Sealed>]
 type internal TypeProviderToken =

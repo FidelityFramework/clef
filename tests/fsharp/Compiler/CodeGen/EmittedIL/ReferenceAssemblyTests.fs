@@ -1,10 +1,10 @@
 ﻿// Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Compiler.UnitTests.CodeGen.EmittedIL
+namespace FSharp.Native.Compiler.UnitTests.CodeGen.EmittedIL
 
 open FSharp.Test.Compiler
 open Xunit
-open FSharp.Compiler.IO
+open FSharp.Native.Compiler.IO
 
 
 module ReferenceAssemblyTests =

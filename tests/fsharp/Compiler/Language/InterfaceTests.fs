@@ -1,8 +1,8 @@
 ﻿// Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Compiler.UnitTests
+namespace FSharp.Native.Compiler.UnitTests
 
-open FSharp.Compiler.Diagnostics
+open FSharp.Native.Compiler.Diagnostics
 open Xunit
 open FSharp.Test
 open FSharp.Test.Utilities

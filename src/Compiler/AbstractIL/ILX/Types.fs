@@ -5,9 +5,9 @@
 /// ILX was an extended IL representation for F#-specific constructs.
 /// FNCS provides minimal scaffolding since we don't emit IL.
 
-module FSharp.Compiler.AbstractIL.ILX.Types
+module FSharp.Native.Compiler.AbstractIL.ILX.Types
 
-open FSharp.Compiler.AbstractIL.IL
+open FSharp.Native.Compiler.AbstractIL.IL
 
 /// Reference to an ILX union representation.
 /// In FCS, this held information about how to compile discriminated unions to IL.

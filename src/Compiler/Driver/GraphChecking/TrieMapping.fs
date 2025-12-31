@@ -1,11 +1,11 @@
-﻿module internal FSharp.Compiler.GraphChecking.TrieMapping
+﻿module internal FSharp.Native.Compiler.GraphChecking.TrieMapping
 
 open System.Collections.Generic
 open System.Collections.Immutable
 open System.Text
-open FSharp.Compiler.IO
-open FSharp.Compiler.Syntax
-open FSharp.Compiler.SyntaxTreeOps
+open FSharp.Native.Compiler.IO
+open FSharp.Native.Compiler.Syntax
+open FSharp.Native.Compiler.SyntaxTreeOps
 
 [<RequireQualifiedAccess>]
 module private ImmutableHashSet =

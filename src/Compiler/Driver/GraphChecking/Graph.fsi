@@ -1,4 +1,4 @@
-namespace FSharp.Compiler.GraphChecking
+namespace FSharp.Native.Compiler.GraphChecking
 
 open System.Collections.Generic
 

@@ -1,13 +1,13 @@
 module internal Internal.Utilities.TypeHashing
 
 open Internal.Utilities.Rational
-open FSharp.Compiler.AbstractIL.IL
-open FSharp.Compiler.Syntax
-open FSharp.Compiler.TcGlobals
-open FSharp.Compiler.Text
-open FSharp.Compiler.TypedTree
-open FSharp.Compiler.TypedTreeBasics
-open FSharp.Compiler.TypedTreeOps
+open FSharp.Native.Compiler.AbstractIL.IL
+open FSharp.Native.Compiler.Syntax
+open FSharp.Native.Compiler.TcGlobals
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.TypedTree
+open FSharp.Native.Compiler.TypedTreeBasics
+open FSharp.Native.Compiler.TypedTreeOps
 
 type ObserverVisibility =
     | PublicOnly

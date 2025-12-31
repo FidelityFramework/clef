@@ -1,7 +1,7 @@
 ﻿module TypeChecks.FileContentMappingTests
 
 open Xunit
-open FSharp.Compiler.GraphChecking
+open FSharp.Native.Compiler.GraphChecking
 open TestUtils
 
 let private getContent isSignature sourceCode =

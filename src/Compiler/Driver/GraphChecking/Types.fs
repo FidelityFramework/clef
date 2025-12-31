@@ -1,7 +1,7 @@
-﻿namespace FSharp.Compiler.GraphChecking
+﻿namespace FSharp.Native.Compiler.GraphChecking
 
 open System.Collections.Immutable
-open FSharp.Compiler.Syntax
+open FSharp.Native.Compiler.Syntax
 open System
 
 /// The index of a file inside a project.

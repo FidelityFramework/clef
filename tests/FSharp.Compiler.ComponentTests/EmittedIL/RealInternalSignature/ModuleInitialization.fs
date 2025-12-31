@@ -552,7 +552,7 @@ module internal PrintfImpl
     let ``Class Type visibility in module - public type - private ctor`` (realSig) =
 
         FSharp """
-module FSharp.Compiler.CodeAnalysis
+module FSharp.Native.Compiler.CodeAnalysis
 
 open System
 open System.IO

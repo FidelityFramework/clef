@@ -3,7 +3,7 @@ namespace EmittedIL
 open System.Reflection
 open Microsoft.FSharp.NativeInterop
 open Xunit
-open FSharp.Compiler.Diagnostics
+open FSharp.Native.Compiler.Diagnostics
 open FSharp.Test
 open FSharp.Test.Utilities
 open FSharp.Test.Compiler

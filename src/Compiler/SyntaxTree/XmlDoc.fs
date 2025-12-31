@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Compiler.Xml
+namespace FSharp.Native.Compiler.Xml
 
 open System
 open System.Collections.Generic
@@ -9,10 +9,10 @@ open System.Xml
 open System.Xml.Linq
 open Internal.Utilities.Library
 open Internal.Utilities.Collections
-open FSharp.Compiler.DiagnosticsLogger
-open FSharp.Compiler.IO
-open FSharp.Compiler.Text
-open FSharp.Compiler.Text.Range
+open FSharp.Native.Compiler.DiagnosticsLogger
+open FSharp.Native.Compiler.IO
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Text.Range
 
 /// Represents collected XmlDoc lines
 [<RequireQualifiedAccess>]

@@ -4,7 +4,7 @@
 
 FNCS (FSharpNative Compiler Services) provides native-first type checking for the Fidelity framework ecosystem. It is a **ground-up rebuild** of the type-checking layer, not a pruned fork of FCS.
 
-## ARCHITECTURAL DECISION (December 2024)
+## ARCHITECTURAL DECISION (December 2025)
 
 **REBUILD, NOT PRUNE**: Cascade deletion analysis revealed that 3.2MB across 59 files (the entire FCS type-checking layer) depends on IL import assumptions. The type checker must be **rebuilt from scratch** for the native type universe.
 

@@ -15,7 +15,7 @@
 /// This scaffolding enables TypedTree to compile. Over time, it should evolve into
 /// a proper native type metadata layer (NativeTypeDef, NativeScopeRef, etc.)
 
-module FSharp.Compiler.AbstractIL.IL
+module FSharp.Native.Compiler.AbstractIL.IL
 
 open System
 open System.Collections.Generic

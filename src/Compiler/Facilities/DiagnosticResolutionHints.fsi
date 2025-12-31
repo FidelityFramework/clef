@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 /// Functions to format error message details
-module internal FSharp.Compiler.DiagnosticResolutionHints
+module internal FSharp.Native.Compiler.DiagnosticResolutionHints
 
 open System.Collections
 open System.Collections.Generic

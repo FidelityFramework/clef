@@ -1,8 +1,8 @@
-﻿namespace FSharp.Compiler.GraphChecking
+﻿namespace FSharp.Native.Compiler.GraphChecking
 
 open System.Collections.Generic
 open System.Text
-open FSharp.Compiler.IO
+open FSharp.Native.Compiler.IO
 
 /// <summary> Directed Acyclic Graph (DAG) of arbitrary nodes </summary>
 type internal Graph<'Node> = IReadOnlyDictionary<'Node, 'Node array>

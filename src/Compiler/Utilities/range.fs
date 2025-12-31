@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 // Anything to do with special names of identifiers and other lexical rules
-namespace FSharp.Compiler.Text
+namespace FSharp.Native.Compiler.Text
 
 open System
 open System.IO
@@ -11,7 +11,7 @@ open System.Text
 open Microsoft.FSharp.Core.Printf
 open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras.Bits
-open FSharp.Compiler.IO
+open FSharp.Native.Compiler.IO
 open Internal.Utilities.Library.Extras
 
 type FileIndex = int32

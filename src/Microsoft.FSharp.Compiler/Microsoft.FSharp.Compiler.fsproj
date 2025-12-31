@@ -50,10 +50,10 @@
     <DependentProjects Include="$(MSBuildThisFileDirectory)..\FSharp.Core\FSharp.Core.fsproj">
         <AdditionalProperties>TargetFrameworks=netstandard2.1;netstandard2.0</AdditionalProperties>
     </DependentProjects>
-    <DependentProjects Include="$(MSBuildThisFileDirectory)..\Compiler\FSharpNative.Compiler.Service.fsproj">
+    <DependentProjects Include="$(MSBuildThisFileDirectory)..\Compiler\FSharp.Native.Compiler.Service.fsproj">
         <AdditionalProperties>TargetFrameworks=netstandard2.0</AdditionalProperties>
     </DependentProjects>
-    <DependentProjects Include="$(MSBuildThisFileDirectory)..\Compiler\FSharpNative.Compiler.Service.fsproj">
+    <DependentProjects Include="$(MSBuildThisFileDirectory)..\Compiler\FSharp.Native.Compiler.Service.fsproj">
         <AdditionalProperties>TargetFrameworks=netstandard2.0</AdditionalProperties>
     </DependentProjects>
   </ItemGroup>

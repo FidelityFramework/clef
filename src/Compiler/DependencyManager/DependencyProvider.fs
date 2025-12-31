@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Compiler.DependencyManager
+namespace FSharp.Native.Compiler.DependencyManager
 
 open System
 open System.Collections.Generic
@@ -491,7 +491,7 @@ type DependencyProvider
     let assemblyResolveHandler =
         new AssemblyResolveHandler(assemblyProbingPaths) :> IDisposable
 
-    // Resolution Path = Location of FSharp.Compiler.Service.dll
+    // Resolution Path = Location of FSharp.Native.Compiler.Service.dll
     let assemblySearchPaths =
         lazy
             [

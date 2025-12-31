@@ -88,14 +88,14 @@ module Local =
         Build.buildFCS @"..\..\..\..\"
     
     let benchmark (outputDir : string) =
-        let msBuildArgs = Build.MSBuildProps.makeProject @"..\..\..\..\src\Compiler\FSharp.Compiler.Service.fsproj"
+        let msBuildArgs = Build.MSBuildProps.makeProject @"..\..\..\..\src\Compiler\FSharp.Native.Compiler.Service.fsproj"
         Build.runBenchmark outputDir msBuildArgs
 
 /// Benchmarking a version of FCS from Nuget
 [<RequireQualifiedAccess>]
 module NuGet =
     let private source = "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public/nuget/v3/index.json"
-    let private packageId = "FSharp.Compiler.Service"
+    let private packageId = "FSharp.Native.Compiler.Service"
     
     let private getAllVersionsMetadata () =
         let cache = new SourceCacheContext()
@@ -147,7 +147,7 @@ module NuGet =
         downloadPackage v
         let settings = Settings.LoadDefaultSettings(null)
         let globalPackagesFolder = SettingsUtility.GetGlobalPackagesFolder(settings)
-        let path = Path.Combine(globalPackagesFolder, packageId, v.OriginalVersion, "lib", "netstandard2.0", "FSharp.Compiler.Service.dll")
+        let path = Path.Combine(globalPackagesFolder, packageId, v.OriginalVersion, "lib", "netstandard2.0", "FSharp.Native.Compiler.Service.dll")
         let vi = FileVersionInfo.GetVersionInfo(path)
         let pv = vi.ProductVersion
         match Regex.Match(pv, "\+([a-zA-Z0-9]+)$") with
@@ -232,10 +232,10 @@ module Git =
             printfn $"{revision} already checked out in {dir}"
     
     let private fcsDllPath (checkoutDir : string) =
-        Path.Combine(checkoutDir, "artifacts/bin/FSharp.Compiler.Service/Release/netstandard2.0/FSharp.Compiler.Service.dll")
+        Path.Combine(checkoutDir, "artifacts/bin/FSharp.Native.Compiler.Service/Release/netstandard2.0/FSharp.Native.Compiler.Service.dll")
         
     let private fsharpCoreDllPath (rootDir : string) =
-        (fcsDllPath rootDir).Replace("FSharp.Compiler.Service.dll", "FSharp.Core.dll")
+        (fcsDllPath rootDir).Replace("FSharp.Native.Compiler.Service.dll", "FSharp.Core.dll")
     
     let checkoutContainsBuiltFcs (checkoutDir : string) =
         File.Exists(fcsDllPath checkoutDir)

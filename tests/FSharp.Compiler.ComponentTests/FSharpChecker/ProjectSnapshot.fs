@@ -2,7 +2,7 @@ module FSharpChecker.ProjectSnapshot
 
 open Xunit
 open System
-open FSharp.Compiler.CodeAnalysis.ProjectSnapshot
+open FSharp.Native.Compiler.CodeAnalysis.ProjectSnapshot
 
 
 // TODO: restore tests

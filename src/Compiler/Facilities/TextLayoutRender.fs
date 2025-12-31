@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Compiler.Text
+namespace FSharp.Native.Compiler.Text
 
 open System
 open System.IO
-open FSharp.Compiler.Text
-open FSharp.Compiler.Text.Layout
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Text.Layout
 open FSharp.Core.Printf
 
 #nowarn "62" // This construct is for ML compatibility.

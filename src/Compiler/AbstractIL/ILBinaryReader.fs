@@ -5,11 +5,11 @@
 /// In FCS, this reads .NET assemblies. In FNCS, this is minimal scaffolding.
 /// Native compilation uses different metadata sources.
 
-module FSharp.Compiler.AbstractIL.ILBinaryReader
+module FSharp.Native.Compiler.AbstractIL.ILBinaryReader
 
 open System
 open System.IO
-open FSharp.Compiler.AbstractIL.IL
+open FSharp.Native.Compiler.AbstractIL.IL
 
 /// Metadata snapshot for incremental checking
 type ILReaderMetadataSnapshot = obj * nativeint * int

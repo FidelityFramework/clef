@@ -441,7 +441,7 @@ let d (c: CType) =
                 sourceFile
                     "A.fsi"
                     """
-module internal FSharp.Compiler.CheckExpressions
+module internal FSharp.Native.Compiler.CheckExpressions
 
 exception BakedInMemberConstraintName of string
 """
@@ -449,7 +449,7 @@ exception BakedInMemberConstraintName of string
                 sourceFile
                     "A.fs"
                     """
-module internal FSharp.Compiler.CheckExpressions
+module internal FSharp.Native.Compiler.CheckExpressions
 
 exception BakedInMemberConstraintName of string
 """
@@ -457,9 +457,9 @@ exception BakedInMemberConstraintName of string
                 sourceFile
                     "B.fs"
                     """
-namespace FSharp.Compiler.CodeAnalysis
+namespace FSharp.Native.Compiler.CodeAnalysis
 
-open FSharp.Compiler
+open FSharp.Native.Compiler
 
 module Tc = CheckExpressions
 """

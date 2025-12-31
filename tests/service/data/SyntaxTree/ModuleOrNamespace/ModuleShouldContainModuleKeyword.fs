@@ -4,10 +4,10 @@
 
 module FsAutoComplete.FCSPatches
 
-open FSharp.Compiler.Syntax
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.Syntax
+open FSharp.Native.Compiler.Text
 open FsAutoComplete.UntypedAstUtils
-open FSharp.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.CodeAnalysis
 
 module internal SynExprAppLocationsImpl =
     let a = 42

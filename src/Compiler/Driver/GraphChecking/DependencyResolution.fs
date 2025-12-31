@@ -1,6 +1,6 @@
-﻿module internal FSharp.Compiler.GraphChecking.DependencyResolution
+﻿module internal FSharp.Native.Compiler.GraphChecking.DependencyResolution
 
-open FSharp.Compiler.Syntax
+open FSharp.Native.Compiler.Syntax
 
 /// <summary>Find a path from a starting TrieNode and return the end node or None</summary>
 let queryTriePartial (trie: TrieNode) (path: LongIdentifier) : TrieNode option =

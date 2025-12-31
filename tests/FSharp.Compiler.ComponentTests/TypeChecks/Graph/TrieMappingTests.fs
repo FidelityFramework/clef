@@ -1,7 +1,7 @@
 ﻿module TypeChecks.TrieMappingTests
 
 open Xunit
-open FSharp.Compiler.GraphChecking
+open FSharp.Native.Compiler.GraphChecking
 open TestUtils
 
 let private noDependencies = Set.empty<int>
@@ -155,7 +155,7 @@ type B = { Y : int }
                     Idx = 2
                     FileName = "B.fs"
                     // The last file shouldn't be processed
-                    ParsedInput = Unchecked.defaultof<FSharp.Compiler.Syntax.ParsedInput> 
+                    ParsedInput = Unchecked.defaultof<FSharp.Native.Compiler.Syntax.ParsedInput> 
                 }
             |]
 
@@ -198,7 +198,7 @@ type B = { Y : int }
                     Idx = 2
                     FileName = "B.fs"
                     // The last file shouldn't be processed
-                    ParsedInput = Unchecked.defaultof<FSharp.Compiler.Syntax.ParsedInput> 
+                    ParsedInput = Unchecked.defaultof<FSharp.Native.Compiler.Syntax.ParsedInput> 
                 }
             |]
 

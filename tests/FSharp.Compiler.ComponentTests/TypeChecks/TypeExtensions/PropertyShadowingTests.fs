@@ -1,4 +1,4 @@
-module FSharp.Compiler.ComponentTests.TypeChecks.TypeExtensions.Shadowing
+module FSharp.Native.Compiler.ComponentTests.TypeChecks.TypeExtensions.Shadowing
 open Xunit
 open FSharp.Test
 open FSharp.Test.Compiler

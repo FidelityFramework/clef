@@ -1309,7 +1309,7 @@ and ProvidedField(isTgt: bool, fieldName:string, attrs, fieldType:Type, rawConst
     
 and ProvidedMeasureBuilder() =
 
-    // TODO: this shouldn't be hardcoded, but without creating a dependency on FSharp.Compiler.Service
+    // TODO: this shouldn't be hardcoded, but without creating a dependency on FSharp.Native.Compiler.Service
     // there seems to be no way to check if a type abbreviation exists
     static let unitNamesTypeAbbreviations =
         [

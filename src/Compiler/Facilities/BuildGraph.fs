@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module FSharp.Compiler.BuildGraph
+module FSharp.Native.Compiler.BuildGraph
 
 open System.Threading
 open System.Globalization

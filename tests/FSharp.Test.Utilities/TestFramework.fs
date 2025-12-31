@@ -9,7 +9,7 @@ open System.Reflection
 open System.Xml.Linq
 open Scripting
 open Xunit
-open FSharp.Compiler.IO
+open FSharp.Native.Compiler.IO
 
 let getShortId() = Guid.NewGuid().ToString().[..7]
 
@@ -330,7 +330,7 @@ let config configurationName envVars =
     let PEVERIFY = "ilverify" //requireArtifact ("PEVerify" ++ configurationName ++ peverifyArchitecture ++ PEVERIFY_EXE)
 //    let FSI_FOR_SCRIPTS = artifactsBinPath ++ "fsi" ++ configurationName ++ fsiArchitecture ++ "fsi.exe"
     let FSharpBuild = requireArtifact ("FSharp.Build" ++ configurationName ++ fsharpBuildArchitecture ++ "FSharp.Build.dll")
-    let FSharpCompilerInteractiveSettings = requireArtifact ("FSharp.Compiler.Interactive.Settings" ++ configurationName ++ fsharpCompilerInteractiveSettingsArchitecture ++ "FSharp.Compiler.Interactive.Settings.dll")
+    let FSharpCompilerInteractiveSettings = requireArtifact ("FSharp.Native.Compiler.Interactive.Settings" ++ configurationName ++ fsharpCompilerInteractiveSettingsArchitecture ++ "FSharp.Native.Compiler.Interactive.Settings.dll")
 
     let dotNetExe =
         // first look for {repoRoot}\.dotnet\dotnet.exe, otherwise fallback to %PATH%

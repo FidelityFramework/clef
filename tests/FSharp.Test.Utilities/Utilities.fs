@@ -15,7 +15,7 @@ open Microsoft.CodeAnalysis.CSharp
 open TestFramework
 open Xunit
 open System.Collections.Generic
-open FSharp.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.CodeAnalysis
 open Newtonsoft.Json
 open Newtonsoft.Json.Linq
 open Xunit.Sdk

@@ -1,7 +1,7 @@
 module ErrorMessages.FSharpDiagnosticTests
 
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.Diagnostics
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.Diagnostics
 open FSharp.Test.Assert
 open FSharp.Test.Compiler
 open Xunit

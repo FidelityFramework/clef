@@ -122,7 +122,7 @@ module MyModule =
     let ``Public type - public ctor`` (realSig) =
 
         FSharp """
-namespace FSharp.Compiler.CodeAnalysis
+namespace FSharp.Native.Compiler.CodeAnalysis
 
 open System
 open System.IO
@@ -165,7 +165,7 @@ module doit =
     let ``Public type - internal ctor`` (realSig) =
 
         FSharp """
-namespace FSharp.Compiler.CodeAnalysis
+namespace FSharp.Native.Compiler.CodeAnalysis
 
 open System
 open System.IO
@@ -208,7 +208,7 @@ module doit =
     let ``Public type - private ctor`` (realSig) =
 
         FSharp """
-namespace FSharp.Compiler.CodeAnalysis
+namespace FSharp.Native.Compiler.CodeAnalysis
 
 open System
 open System.IO
@@ -250,7 +250,7 @@ module doit =
     let ``Public type - unspecified ctor`` (realSig) =
 
         FSharp """
-namespace FSharp.Compiler.CodeAnalysis
+namespace FSharp.Native.Compiler.CodeAnalysis
 
 open System
 open System.IO
@@ -292,7 +292,7 @@ module doit =
     let ``Private type - public ctor`` (realSig) =
 
         FSharp """
-namespace FSharp.Compiler.CodeAnalysis
+namespace FSharp.Native.Compiler.CodeAnalysis
 
 open System
 open System.IO
@@ -334,7 +334,7 @@ module doit =
     let ``Private type - internal ctor`` (realSig) =
 
         FSharp """
-namespace FSharp.Compiler.CodeAnalysis
+namespace FSharp.Native.Compiler.CodeAnalysis
 
 open System
 open System.IO
@@ -376,7 +376,7 @@ module doit =
     let ``Private type - private ctor`` (realSig) =
 
         FSharp """
-namespace FSharp.Compiler.CodeAnalysis
+namespace FSharp.Native.Compiler.CodeAnalysis
 
 open System
 open System.IO
@@ -425,7 +425,7 @@ module doit =
     let ``Private type - unspecified ctor`` (realSig) =
 
         FSharp """
-namespace FSharp.Compiler.CodeAnalysis
+namespace FSharp.Native.Compiler.CodeAnalysis
 
 open System
 open System.IO
@@ -467,7 +467,7 @@ module doit =
     let ``Static Initialization - don't inline when method includes a private field`` (realSig) =
 
         FSharp """
-module FSharp.Compiler.CodeAnalysis
+module FSharp.Native.Compiler.CodeAnalysis
 
 open System
 open System.IO

@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Compiler
+namespace FSharp.Native.Compiler
 
 module internal SR =
     val GetString: string -> string

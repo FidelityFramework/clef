@@ -3,7 +3,7 @@ module LanguageServer.Protocol
 open System
 open Xunit
 
-open FSharp.Compiler.LanguageServer
+open FSharp.Native.Compiler.LanguageServer
 open StreamJsonRpc
 open System.IO
 open System.Diagnostics
@@ -12,8 +12,8 @@ open Microsoft.VisualStudio.LanguageServer.Protocol
 open Nerdbank.Streams
 
 open FSharp.Test.ProjectGeneration.WorkspaceHelpers
-open FSharp.Compiler.CodeAnalysis.Workspace
-open FSharp.Compiler.CodeAnalysis.ProjectSnapshot
+open FSharp.Native.Compiler.CodeAnalysis.Workspace
+open FSharp.Native.Compiler.CodeAnalysis.ProjectSnapshot
 
 #nowarn "57"
 

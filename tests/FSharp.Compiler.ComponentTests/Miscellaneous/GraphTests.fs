@@ -1,7 +1,7 @@
 ﻿module Miscellaneous.GraphTests
 
 open Xunit
-open FSharp.Compiler.GraphChecking
+open FSharp.Native.Compiler.GraphChecking
 
 [<Fact>]
 let ``Create graph from sequence`` () =

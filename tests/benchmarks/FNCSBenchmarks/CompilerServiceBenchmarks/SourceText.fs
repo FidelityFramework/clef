@@ -1,8 +1,8 @@
-﻿namespace FSharp.Compiler.Benchmarks
+﻿namespace FSharp.Native.Compiler.Benchmarks
 
 open System
 open Microsoft.CodeAnalysis.Text
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.Text
 
 module internal SourceText =
 

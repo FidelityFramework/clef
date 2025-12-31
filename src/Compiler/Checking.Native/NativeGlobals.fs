@@ -1,0 +1,393 @@
+// Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
+
+/// Built-in types with native semantics.
+/// These define the type universe for native F# compilation.
+///
+/// KEY DESIGN: Units of measure work on ANY type in fsnative (not just numerics).
+/// This enables memory region tracking, access control, and type-safe hardware access.
+module FSharp.Native.Compiler.Checking.Native.NativeGlobals
+
+open FSharp.Native.Compiler.Checking.Native.NativeTypes
+
+//-------------------------------------------------------------------------
+// Memory Region Measures
+//-------------------------------------------------------------------------
+
+/// Memory region measures - track where data lives.
+/// These are measure types that can be applied to pointers and references.
+module MemoryRegions =
+    /// Stack memory - automatically freed on scope exit
+    let stack = MCon("stack", ["Fidelity"; "Memory"])
+
+    /// Arena/heap memory - managed by allocator
+    let arena = MCon("arena", ["Fidelity"; "Memory"])
+
+    /// SRAM - fast on-chip RAM (embedded)
+    let sram = MCon("sram", ["Fidelity"; "Memory"])
+
+    /// Flash memory - persistent storage (embedded)
+    let flash = MCon("flash", ["Fidelity"; "Memory"])
+
+    /// Peripheral memory - memory-mapped I/O registers
+    let peripheral = MCon("peripheral", ["Fidelity"; "Memory"])
+
+    /// DMA memory - accessible by DMA controller
+    let dma = MCon("dma", ["Fidelity"; "Memory"])
+
+    /// External memory (e.g., off-chip SDRAM)
+    let external' = MCon("external", ["Fidelity"; "Memory"])
+
+//-------------------------------------------------------------------------
+// Access Mode Measures
+//-------------------------------------------------------------------------
+
+/// Access mode measures - track read/write permissions.
+/// Applied to pointers to enforce access control at compile time.
+module AccessModes =
+    /// Read-only access
+    let readOnly = MCon("ro", ["Fidelity"; "Access"])
+
+    /// Write-only access
+    let writeOnly = MCon("wo", ["Fidelity"; "Access"])
+
+    /// Read-write access
+    let readWrite = MCon("rw", ["Fidelity"; "Access"])
+
+//-------------------------------------------------------------------------
+// Built-in Type Constructors
+//-------------------------------------------------------------------------
+
+/// Primitive type constructors (arity 0)
+module Primitives =
+    /// UTF-8 string: fat pointer (ptr: 8 bytes, length: 8 bytes)
+    let stringTyCon = mkTypeConRef "string" 0 (TypeLayout.Inline(16, 8))
+    
+    /// 32-bit signed integer
+    let intTyCon = mkTypeConRef "int" 0 (TypeLayout.Inline(4, 4))
+    
+    /// 64-bit signed integer
+    let int64TyCon = mkTypeConRef "int64" 0 (TypeLayout.Inline(8, 8))
+    
+    /// 32-bit unsigned integer
+    let uintTyCon = mkTypeConRef "uint" 0 (TypeLayout.Inline(4, 4))
+    
+    /// 64-bit unsigned integer
+    let uint64TyCon = mkTypeConRef "uint64" 0 (TypeLayout.Inline(8, 8))
+    
+    /// 8-bit signed integer
+    let int8TyCon = mkTypeConRef "int8" 0 (TypeLayout.Inline(1, 1))
+    
+    /// 8-bit unsigned integer
+    let uint8TyCon = mkTypeConRef "uint8" 0 (TypeLayout.Inline(1, 1))
+    
+    /// 16-bit signed integer
+    let int16TyCon = mkTypeConRef "int16" 0 (TypeLayout.Inline(2, 2))
+    
+    /// 16-bit unsigned integer
+    let uint16TyCon = mkTypeConRef "uint16" 0 (TypeLayout.Inline(2, 2))
+    
+    /// Native-size signed integer
+    let nintTyCon = mkTypeConRef "nativeint" 0 (TypeLayout.Inline(8, 8))
+    
+    /// Native-size unsigned integer
+    let unintTyCon = mkTypeConRef "unativeint" 0 (TypeLayout.Inline(8, 8))
+    
+    /// 64-bit floating point (IEEE 754 double)
+    let floatTyCon = mkTypeConRef "float" 0 (TypeLayout.Inline(8, 8))
+    
+    /// 32-bit floating point (IEEE 754 single)
+    let float32TyCon = mkTypeConRef "float32" 0 (TypeLayout.Inline(4, 4))
+    
+    /// Boolean: 1 byte
+    let boolTyCon = mkTypeConRef "bool" 0 (TypeLayout.Inline(1, 1))
+    
+    /// Unicode code point (UTF-32): 4 bytes
+    let charTyCon = mkTypeConRef "char" 0 (TypeLayout.Inline(4, 4))
+    
+    /// Unit type: zero-sized type
+    let unitTyCon = mkTypeConRef "unit" 0 (TypeLayout.Inline(0, 1))
+    
+    /// Decimal: 16 bytes
+    let decimalTyCon = mkTypeConRef "decimal" 0 (TypeLayout.Inline(16, 8))
+
+    /// Exception type: native exception representation
+    /// Layout: tagged union with string message + optional data
+    let exnTyCon = mkTypeConRef "exn" 0 (TypeLayout.Reference ArenaAffinity.CurrentActor)
+
+/// Parameterized type constructors (arity > 0)
+module Parameterized =
+    /// Option type: VALUE TYPE (not reference!)
+    /// Layout: tag (1 byte) + padding + value
+    /// Size depends on 'T
+    let optionTyCon = mkTypeConRef "option" 1 (TypeLayout.Inline(-1, -1))
+
+    /// Value option type: explicitly value-typed option
+    let voptionTyCon = mkTypeConRef "voption" 1 (TypeLayout.Inline(-1, -1))
+
+    /// Result type: VALUE TYPE
+    /// Either Ok of 'T or Error of 'TError
+    let resultTyCon = mkTypeConRef "result" 2 (TypeLayout.Inline(-1, -1))
+
+    /// Array type: fat pointer (ptr: 8 bytes, length: 8 bytes)
+    let arrayTyCon = mkTypeConRef "array" 1 (TypeLayout.Inline(16, 8))
+
+    /// List type: linked list (arena-allocated nodes)
+    let listTyCon = mkTypeConRef "list" 1 (TypeLayout.Reference ArenaAffinity.CurrentActor)
+
+    /// Sequence type: lazy enumeration
+    let seqTyCon = mkTypeConRef "seq" 1 (TypeLayout.Reference ArenaAffinity.CurrentActor)
+
+    /// Reference cell type: mutable reference
+    let refTyCon = mkTypeConRef "ref" 1 (TypeLayout.Reference ArenaAffinity.CurrentActor)
+
+    /// Lazy type: deferred computation
+    let lazyTyCon = mkTypeConRef "lazy" 1 (TypeLayout.Reference ArenaAffinity.CurrentActor)
+
+    /// Quotation type: Expr<'T> (code-as-data)
+    let exprTyCon = mkTypeConRef "Expr" 1 (TypeLayout.Reference ArenaAffinity.CurrentActor)
+
+    //-------------------------------------------------------------------------
+    // Pointer Types with Memory Region and Access Measures
+    //-------------------------------------------------------------------------
+
+    /// Native pointer with region and access measures: Ptr<'T, 'region, 'access>
+    /// This is the core abstraction for type-safe memory access.
+    /// 'region: where the memory lives (stack, arena, peripheral, etc.)
+    /// 'access: what operations are allowed (ro, wo, rw)
+    let ptrTyCon =
+        mkTypeConRefWithMeasures "Ptr"
+            [TypeParamKind.Type; TypeParamKind.Measure; TypeParamKind.Measure]
+            (TypeLayout.Inline(8, 8))
+
+    /// Read-only reference with region measure: Ref<'T, 'region>
+    /// Like byref but with region tracking
+    let refWithRegionTyCon =
+        mkTypeConRefWithMeasures "Ref"
+            [TypeParamKind.Type; TypeParamKind.Measure]
+            (TypeLayout.Inline(8, 8))
+
+    /// Span with region and access measures: Span<'T, 'region, 'access>
+    /// Fat pointer (ptr + length) with memory safety
+    let spanTyCon =
+        mkTypeConRefWithMeasures "Span"
+            [TypeParamKind.Type; TypeParamKind.Measure; TypeParamKind.Measure]
+            (TypeLayout.Inline(16, 8))
+
+//-------------------------------------------------------------------------
+// Built-in Types (pre-constructed)
+//-------------------------------------------------------------------------
+
+/// Pre-constructed types for common use
+module Types =
+    let stringType = mkSimpleType Primitives.stringTyCon
+    let intType = mkSimpleType Primitives.intTyCon
+    let int64Type = mkSimpleType Primitives.int64TyCon
+    let uintType = mkSimpleType Primitives.uintTyCon
+    let uint64Type = mkSimpleType Primitives.uint64TyCon
+    let int8Type = mkSimpleType Primitives.int8TyCon
+    let uint8Type = mkSimpleType Primitives.uint8TyCon
+    let int16Type = mkSimpleType Primitives.int16TyCon
+    let uint16Type = mkSimpleType Primitives.uint16TyCon
+    let nintType = mkSimpleType Primitives.nintTyCon
+    let unintType = mkSimpleType Primitives.unintTyCon
+    let floatType = mkSimpleType Primitives.floatTyCon
+    let float32Type = mkSimpleType Primitives.float32TyCon
+    let boolType = mkSimpleType Primitives.boolTyCon
+    let charType = mkSimpleType Primitives.charTyCon
+    let unitType = mkSimpleType Primitives.unitTyCon
+    let decimalType = mkSimpleType Primitives.decimalTyCon
+    let exnType = mkSimpleType Primitives.exnTyCon
+
+//-------------------------------------------------------------------------
+// Type Constructor Lookup
+//-------------------------------------------------------------------------
+
+/// Map from type names to their constructors
+let private primitiveTyConsByName =
+    [ ("string", Primitives.stringTyCon)
+      ("int", Primitives.intTyCon)
+      ("int32", Primitives.intTyCon)  // Alias
+      ("int64", Primitives.int64TyCon)
+      ("uint", Primitives.uintTyCon)
+      ("uint32", Primitives.uintTyCon)  // Alias
+      ("uint64", Primitives.uint64TyCon)
+      ("int8", Primitives.int8TyCon)
+      ("sbyte", Primitives.int8TyCon)  // Alias
+      ("uint8", Primitives.uint8TyCon)
+      ("byte", Primitives.uint8TyCon)  // Alias
+      ("int16", Primitives.int16TyCon)
+      ("uint16", Primitives.uint16TyCon)
+      ("nativeint", Primitives.nintTyCon)
+      ("unativeint", Primitives.unintTyCon)
+      ("float", Primitives.floatTyCon)
+      ("double", Primitives.floatTyCon)  // Alias
+      ("float32", Primitives.float32TyCon)
+      ("single", Primitives.float32TyCon)  // Alias
+      ("bool", Primitives.boolTyCon)
+      ("char", Primitives.charTyCon)
+      ("unit", Primitives.unitTyCon)
+      ("decimal", Primitives.decimalTyCon)
+      ("exn", Primitives.exnTyCon)
+      ("Exception", Primitives.exnTyCon) ]  // Alias
+    |> Map.ofList
+
+let private parameterizedTyConsByName =
+    [ ("option", Parameterized.optionTyCon)
+      ("voption", Parameterized.voptionTyCon)
+      ("ValueOption", Parameterized.voptionTyCon)  // Alias
+      ("result", Parameterized.resultTyCon)
+      ("Result", Parameterized.resultTyCon)  // Alias
+      ("array", Parameterized.arrayTyCon)
+      ("list", Parameterized.listTyCon)
+      ("seq", Parameterized.seqTyCon)
+      ("ref", Parameterized.refTyCon)
+      ("Lazy", Parameterized.lazyTyCon)
+      ("Expr", Parameterized.exprTyCon) ]
+    |> Map.ofList
+
+/// Try to find a primitive type constructor by name
+let tryFindPrimitiveTyCon name = Map.tryFind name primitiveTyConsByName
+
+/// Try to find a parameterized type constructor by name
+let tryFindParameterizedTyCon name = Map.tryFind name parameterizedTyConsByName
+
+/// Try to find any built-in type constructor by name
+let tryFindBuiltinTyCon name =
+    match tryFindPrimitiveTyCon name with
+    | Some tc -> Some tc
+    | None -> tryFindParameterizedTyCon name
+
+//-------------------------------------------------------------------------
+// Type Construction Helpers
+//-------------------------------------------------------------------------
+
+/// Create an option type: 'T option
+let mkOptionType elemType = NativeType.TApp(Parameterized.optionTyCon, [elemType])
+
+/// Create a value option type: 'T voption
+let mkValueOptionType elemType = NativeType.TApp(Parameterized.voptionTyCon, [elemType])
+
+/// Create a result type: Result<'T, 'TError>
+let mkResultType okType errorType = NativeType.TApp(Parameterized.resultTyCon, [okType; errorType])
+
+/// Create an array type: 'T array
+let mkArrayType elemType = NativeType.TApp(Parameterized.arrayTyCon, [elemType])
+
+/// Create a list type: 'T list
+let mkListType elemType = NativeType.TApp(Parameterized.listTyCon, [elemType])
+
+/// Create a sequence type: seq<'T>
+let mkSeqType elemType = NativeType.TApp(Parameterized.seqTyCon, [elemType])
+
+/// Create a ref type: 'T ref
+let mkRefType elemType = NativeType.TApp(Parameterized.refTyCon, [elemType])
+
+/// Create a quotation type: Expr<'T>
+let mkExprType elemType = NativeType.TApp(Parameterized.exprTyCon, [elemType])
+
+//-------------------------------------------------------------------------
+// Native Globals Container
+//-------------------------------------------------------------------------
+
+/// Container for all native global type information.
+/// This is passed through the type checker as the environment.
+[<NoComparison; NoEquality>]
+type NativeGlobals = {
+    /// Primitive type constructors
+    Primitives: Map<string, TypeConRef>
+    
+    /// Parameterized type constructors
+    Parameterized: Map<string, TypeConRef>
+    
+    /// Pre-constructed common types
+    StringType: NativeType
+    IntType: NativeType
+    Int64Type: NativeType
+    FloatType: NativeType
+    BoolType: NativeType
+    CharType: NativeType
+    UnitType: NativeType
+    ExnType: NativeType
+}
+
+/// Create the native globals environment
+let createNativeGlobals() : NativeGlobals = {
+    Primitives = primitiveTyConsByName
+    Parameterized = parameterizedTyConsByName
+    StringType = Types.stringType
+    IntType = Types.intType
+    Int64Type = Types.int64Type
+    FloatType = Types.floatType
+    BoolType = Types.boolType
+    CharType = Types.charType
+    UnitType = Types.unitType
+    ExnType = Types.exnType
+}
+
+//-------------------------------------------------------------------------
+// Type Checking Helpers
+//-------------------------------------------------------------------------
+
+/// Check if a type is the unit type
+let isUnitType ty =
+    match ty with
+    | NativeType.TApp(tc, []) when tc.Name = "unit" -> true
+    | _ -> false
+
+/// Check if a type is a numeric type
+let isNumericType ty =
+    match ty with
+    | NativeType.TApp(tc, []) ->
+        match tc.Name with
+        | "int" | "int8" | "int16" | "int64"
+        | "uint" | "uint8" | "uint16" | "uint64"
+        | "nativeint" | "unativeint"
+        | "float" | "float32" | "decimal" -> true
+        | _ -> false
+    | _ -> false
+
+/// Check if a type is an integer type
+let isIntegerType ty =
+    match ty with
+    | NativeType.TApp(tc, []) ->
+        match tc.Name with
+        | "int" | "int8" | "int16" | "int64"
+        | "uint" | "uint8" | "uint16" | "uint64"
+        | "nativeint" | "unativeint" -> true
+        | _ -> false
+    | _ -> false
+
+/// Check if a type is a floating point type
+let isFloatType ty =
+    match ty with
+    | NativeType.TApp(tc, []) ->
+        match tc.Name with
+        | "float" | "float32" | "decimal" -> true
+        | _ -> false
+    | _ -> false
+
+/// Check if a type is a value type (stack-allocated)
+let rec isValueType ty =
+    match ty with
+    | NativeType.TApp(tc, _) ->
+        match tc.Layout with
+        | TypeLayout.Inline _ -> true
+        | TypeLayout.Reference _ -> false
+        | TypeLayout.Opaque -> false  // Conservative
+    | NativeType.TTuple(_, isStruct) -> isStruct
+    | NativeType.TFun _ -> false  // Functions are closures
+    | NativeType.TVar _ -> false  // Unknown until solved
+    | NativeType.TByref _ -> true  // Byrefs are value types
+    | NativeType.TNativePtr _ -> true  // Pointers are value types
+    | NativeType.TForall(_, body) -> isValueType body
+    | NativeType.TMeasure _ -> true  // Phantom type
+    | NativeType.TAnon _ -> false  // Anonymous records are reference
+    | NativeType.TRecord(tc, _) -> 
+        match tc.Layout with
+        | TypeLayout.Inline _ -> true
+        | _ -> false
+    | NativeType.TUnion(tc, _) ->
+        match tc.Layout with
+        | TypeLayout.Inline _ -> true
+        | _ -> false
+    | NativeType.TError _ -> false

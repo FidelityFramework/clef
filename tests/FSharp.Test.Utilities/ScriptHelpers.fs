@@ -6,10 +6,10 @@ open System
 open System.IO
 open System.Text
 open System.Threading
-open FSharp.Compiler
-open FSharp.Compiler.Interactive.Shell
-open FSharp.Compiler.Diagnostics
-open FSharp.Compiler.EditorServices
+open FSharp.Native.Compiler
+open FSharp.Native.Compiler.Interactive.Shell
+open FSharp.Native.Compiler.Diagnostics
+open FSharp.Native.Compiler.EditorServices
 open FSharp.Test
 
 [<RequireQualifiedAccess>]

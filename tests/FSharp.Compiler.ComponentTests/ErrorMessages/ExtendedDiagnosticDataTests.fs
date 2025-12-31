@@ -1,9 +1,9 @@
 ﻿module ErrorMessages.ExtendedDiagnosticData
 #nowarn "57"
 
-open FSharp.Compiler.Text
-open FSharp.Compiler.Diagnostics
-open FSharp.Compiler.Diagnostics.ExtendedData
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Diagnostics
+open FSharp.Native.Compiler.Diagnostics.ExtendedData
 open FSharp.Test.Assert
 open FSharp.Test.Compiler
 open Xunit

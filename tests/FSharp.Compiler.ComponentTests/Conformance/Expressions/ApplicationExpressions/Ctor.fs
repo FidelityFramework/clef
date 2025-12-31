@@ -1,4 +1,4 @@
-﻿module FSharp.Compiler.ComponentTests.Conformance.Expressions.ApplicationExpressions.Ctor
+﻿module FSharp.Native.Compiler.ComponentTests.Conformance.Expressions.ApplicationExpressions.Ctor
 
 open FSharp.Test.Compiler
 open Xunit

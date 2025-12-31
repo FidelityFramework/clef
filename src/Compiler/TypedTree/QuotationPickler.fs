@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal FSharp.Compiler.QuotationPickler
+module internal FSharp.Native.Compiler.QuotationPickler
 
 open System
 open System.Text
-open FSharp.Compiler.IO
+open FSharp.Native.Compiler.IO
 open Internal.Utilities.Collections
 open Internal.Utilities.Library.Extras
 

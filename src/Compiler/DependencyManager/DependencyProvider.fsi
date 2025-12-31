@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 // Helper members to integrate DependencyManagers into F# codebase
-namespace FSharp.Compiler.DependencyManager
+namespace FSharp.Native.Compiler.DependencyManager
 
 open System
 open System.Runtime.InteropServices

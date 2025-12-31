@@ -1,16 +1,16 @@
-﻿namespace FSharp.Compiler.Benchmarks
+﻿namespace FSharp.Native.Compiler.Benchmarks
 
 open System
 open System.IO
 open System.Text
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.Diagnostics
-open FSharp.Compiler.EditorServices
-open FSharp.Compiler.Text
-open FSharp.Compiler.AbstractIL.IL
-open FSharp.Compiler.AbstractIL.ILBinaryReader
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.Diagnostics
+open FSharp.Native.Compiler.EditorServices
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.AbstractIL.IL
+open FSharp.Native.Compiler.AbstractIL.ILBinaryReader
 open BenchmarkDotNet.Attributes
-open FSharp.Compiler.Benchmarks
+open FSharp.Native.Compiler.Benchmarks
 open Microsoft.CodeAnalysis.Text
 open FSharp.Benchmarks.Common.Categories
 

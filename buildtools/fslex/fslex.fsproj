@@ -3,7 +3,7 @@
     FsLex - F# Lexer Generator
 
     Build tool for generating lexers from .fsl files.
-    Must be built before FSharpNative.Compiler.Service.
+    Must be built before FSharp.Native.Compiler.Service.
   -->
 
   <PropertyGroup>

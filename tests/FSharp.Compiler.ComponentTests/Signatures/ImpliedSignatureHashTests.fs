@@ -1,4 +1,4 @@
-﻿module FSharp.Compiler.ComponentTests.Signatures.ImpliedSignatureHashTests
+﻿module FSharp.Native.Compiler.ComponentTests.Signatures.ImpliedSignatureHashTests
 
 open Xunit
 open FSharp.Test

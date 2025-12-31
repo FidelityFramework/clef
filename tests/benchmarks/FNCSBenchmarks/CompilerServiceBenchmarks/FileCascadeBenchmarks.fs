@@ -1,11 +1,11 @@
-﻿namespace FSharp.Compiler.Benchmarks
+﻿namespace FSharp.Native.Compiler.Benchmarks
 
 open System
 open System.IO
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.Text
 open BenchmarkDotNet.Attributes
-open FSharp.Compiler.Benchmarks
+open FSharp.Native.Compiler.Benchmarks
 open BenchmarkDotNet.Order
 open BenchmarkDotNet.Mathematics
 open FSharp.Benchmarks.Common.Categories

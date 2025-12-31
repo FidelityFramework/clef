@@ -1548,7 +1548,7 @@ module CoreTests =
 
         peverifyWithArgs cfg "/nologo" (cfg.FSharpBuild)
 
-       // peverifyWithArgs cfg "/nologo /MD" (getDirectoryName(cfg.FSC) ++ "FSharp.Compiler.dll")
+       // peverifyWithArgs cfg "/nologo /MD" (getDirectoryName(cfg.FSC) ++ "FSharp.Native.Compiler.dll")
 
         peverifyWithArgs cfg "/nologo" (cfg.FSI)
 

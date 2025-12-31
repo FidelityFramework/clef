@@ -1,5 +1,5 @@
 /// Logic for constructing a file dependency graph for the purposes of parallel type-checking.
-module internal FSharp.Compiler.GraphChecking.DependencyResolution
+module internal FSharp.Native.Compiler.GraphChecking.DependencyResolution
 
 /// <summary>
 /// Query a TrieNode to find a certain path.

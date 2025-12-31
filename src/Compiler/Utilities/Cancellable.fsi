@@ -1,4 +1,4 @@
-namespace FSharp.Compiler
+namespace FSharp.Native.Compiler
 
 open System
 open System.Threading

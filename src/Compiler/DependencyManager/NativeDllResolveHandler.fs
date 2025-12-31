@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Compiler.DependencyManager
+namespace FSharp.Native.Compiler.DependencyManager
 
 open System
 open System.Collections.Concurrent
@@ -10,7 +10,7 @@ open System.Runtime.InteropServices
 open Internal.Utilities
 open Internal.Utilities.Library
 open Internal.Utilities.FSharpEnvironment
-open FSharp.Compiler.IO
+open FSharp.Native.Compiler.IO
 
 type internal ProbingPathsStore() =
 

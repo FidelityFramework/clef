@@ -2,14 +2,14 @@
 
 open System.IO
 #if SERVICE_13_0_0
-open Microsoft.FSharp.Compiler.SourceCodeServices
+open Microsoft.FSharp.Native.Compiler.SourceCodeServices
 #else
 #if SERVICE_30_0_0
-open FSharp.Compiler.SourceCodeServices
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.SourceCodeServices
+open FSharp.Native.Compiler.Text
 #else
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.Text
 #endif
 #endif
 

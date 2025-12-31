@@ -2,11 +2,11 @@
 
 namespace FSharp.Test
 
-open FSharp.Compiler.Interactive.Shell
-open FSharp.Compiler.IO
-open FSharp.Compiler.Diagnostics
-open FSharp.Compiler.Symbols
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.Interactive.Shell
+open FSharp.Native.Compiler.IO
+open FSharp.Native.Compiler.Diagnostics
+open FSharp.Native.Compiler.Symbols
+open FSharp.Native.Compiler.Text
 open FSharp.Test.Assert
 open FSharp.Test.Utilities
 open FSharp.Test.ScriptHelpers
@@ -28,7 +28,7 @@ open TestFramework
 
 open System.Runtime.CompilerServices
 open System.Runtime.InteropServices
-open FSharp.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.CodeAnalysis
 
 module rec Compiler =
 
@@ -170,7 +170,7 @@ module rec Compiler =
     type ErrorInfo =
         { Error:   ErrorType
           Range:   Range
-          NativeRange : FSharp.Compiler.Text.range
+          NativeRange : FSharp.Native.Compiler.Text.range
           Message: string
           SubCategory: string }
 
@@ -328,10 +328,10 @@ module rec Compiler =
         // The subdirectory will be relative to the source directory containing the test source file,
         // E.g
         //    When the source code is in:
-        //        $(repo-root)\tests\FSharp.Compiler.ComponentTests\Conformance\PseudoCustomAttributes
-        //    and the test is running in the FSharp.Compiler.ComponentTeststest library
+        //        $(repo-root)\tests\FSharp.Native.Compiler.ComponentTests\Conformance\PseudoCustomAttributes
+        //    and the test is running in the FSharp.Native.Compiler.ComponentTeststest library
         //    The output directory will be:
-        //        artifacts\bin\FSharp.Compiler.ComponentTests\$(Flavour)\$(TargetFramework)\tests\FSharp.Compiler.ComponentTests\Conformance\PseudoCustomAttributes
+        //        artifacts\bin\FSharp.Native.Compiler.ComponentTests\$(Flavour)\$(TargetFramework)\tests\FSharp.Native.Compiler.ComponentTests\Conformance\PseudoCustomAttributes
         //
         //    If we can't find anything then we execute in the directory containing the source
         //
@@ -542,9 +542,9 @@ module rec Compiler =
         | IL _ -> failwith "IL Compilation cannot be named."
 
     let withReferenceFSharpCompilerService (cUnit: CompilationUnit) : CompilationUnit =
-        // Compute the location of the FSharp.Compiler.Service dll that matches the target framework used to build this test assembly
+        // Compute the location of the FSharp.Native.Compiler.Service dll that matches the target framework used to build this test assembly
         let compilerServiceAssemblyLocation =
-            typeof<FSharp.Compiler.Text.Range>.Assembly.Location
+            typeof<FSharp.Native.Compiler.Text.Range>.Assembly.Location
         withOptionsHelper [ $"-r:{compilerServiceAssemblyLocation}" ] "withReferenceFSharpCompilerService is only supported for F#" cUnit
 
     let withReferences (references: CompilationUnit list) (cUnit: CompilationUnit) : CompilationUnit =
@@ -1046,7 +1046,7 @@ module rec Compiler =
         | FS fs -> typecheckFSharp fs
         | _ -> failwith "Typecheck only supports F#"
 
-    let typecheckResults (cUnit: CompilationUnit) : FSharp.Compiler.CodeAnalysis.FSharpCheckFileResults =
+    let typecheckResults (cUnit: CompilationUnit) : FSharp.Native.Compiler.CodeAnalysis.FSharpCheckFileResults =
         match cUnit with
         | FS fsSource ->
             let source = fsSource.Source.GetSourceText |> Option.defaultValue ""
@@ -1075,7 +1075,7 @@ module rec Compiler =
             CompilerAssert.TypeCheck(options, fileName, source)
         | _ -> failwith "Typecheck only supports F#"
 
-    let typecheckProject enablePartialTypeChecking useTransparentCompiler (cUnit: CompilationUnit) : FSharp.Compiler.CodeAnalysis.FSharpCheckProjectResults =
+    let typecheckProject enablePartialTypeChecking useTransparentCompiler (cUnit: CompilationUnit) : FSharp.Native.Compiler.CodeAnalysis.FSharpCheckProjectResults =
         match cUnit with
         | FS fsSource ->
             let options = fsSource.Options |> Array.ofList
@@ -1805,7 +1805,7 @@ Actual:
                 withResults [expectedResult] result
 
         module TextBasedDiagnosticAsserts =
-            open FSharp.Compiler.Text.Range
+            open FSharp.Native.Compiler.Text.Range
 
             let private messageAndNumber errorType=
                 match errorType with
@@ -2053,7 +2053,7 @@ Actual:
         let withEvalTypeEquals t (result: CompilationResult) : CompilationResult =
             assertEvalOutput (fun (x: FsiValue) -> x.ReflectionType) t result
 
-    let signatureText (pageWidth: int option) (checkResults: FSharp.Compiler.CodeAnalysis.FSharpCheckFileResults) =
+    let signatureText (pageWidth: int option) (checkResults: FSharp.Native.Compiler.CodeAnalysis.FSharpCheckFileResults) =
         checkResults.GenerateSignature(?pageWidth = pageWidth)
         |> Option.defaultWith (fun _ -> failwith "Unable to generate signature text.")
 

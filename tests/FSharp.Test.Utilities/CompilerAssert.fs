@@ -11,12 +11,12 @@ open System.Globalization
 open System.IO
 open System.Text
 open System.Reflection
-open FSharp.Compiler.Interactive.Shell
-open FSharp.Compiler.IO
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.CodeAnalysis.ProjectSnapshot
-open FSharp.Compiler.Diagnostics
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.Interactive.Shell
+open FSharp.Native.Compiler.IO
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.CodeAnalysis.ProjectSnapshot
+open FSharp.Native.Compiler.Diagnostics
+open FSharp.Native.Compiler.Text
 #if NETCOREAPP
 open System.Runtime.Loader
 #endif
@@ -314,7 +314,7 @@ module CompilerAssertHelpers =
         fun (ext: string) -> $"test%x{Interlocked.Increment &counter}{ext}"
 
     let UseTransparentCompiler =
-        FSharp.Compiler.CompilerConfig.FSharpExperimentalFeaturesEnabledAutomatically ||
+        FSharp.Native.Compiler.CompilerConfig.FSharpExperimentalFeaturesEnabledAutomatically ||
         not (String.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("TEST_TRANSPARENT_COMPILER")))
 
     let checker = FSharpChecker.Create(suggestNamesForErrors=true, useTransparentCompiler = UseTransparentCompiler)

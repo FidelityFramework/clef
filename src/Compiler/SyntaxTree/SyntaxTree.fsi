@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace rec FSharp.Compiler.Syntax
+namespace rec FSharp.Native.Compiler.Syntax
 
 open System
-open FSharp.Compiler.Syntax
-open FSharp.Compiler.Text
-open FSharp.Compiler.Xml
-open FSharp.Compiler.SyntaxTrivia
+open FSharp.Native.Compiler.Syntax
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Xml
+open FSharp.Native.Compiler.SyntaxTrivia
 
 /// Represents an identifier in F# code
 [<Struct; NoEquality; NoComparison>]

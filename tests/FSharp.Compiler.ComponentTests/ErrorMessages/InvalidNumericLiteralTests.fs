@@ -5,8 +5,8 @@ namespace ErrorMessages
 open Xunit
 open FSharp.Test
 open FSharp.Test.Compiler
-open FSharp.Compiler.Diagnostics
-open FSharp.Compiler.AbstractIL
+open FSharp.Native.Compiler.Diagnostics
+open FSharp.Native.Compiler.AbstractIL
 
 module ``Numeric Literals`` =
 

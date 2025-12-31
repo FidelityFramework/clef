@@ -3,7 +3,7 @@
 module Miscellaneous.SemanticClassificationKeyStoreBuilder
 
 open Xunit
-open FSharp.Compiler.EditorServices
+open FSharp.Native.Compiler.EditorServices
 
 [<Fact>]
 let ``Build empty`` () =

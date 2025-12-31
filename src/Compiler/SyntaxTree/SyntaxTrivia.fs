@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Compiler.SyntaxTrivia
+namespace FSharp.Native.Compiler.SyntaxTrivia
 
-open FSharp.Compiler.Text
-open FSharp.Compiler.Text.Range
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Text.Range
 
 [<RequireQualifiedAccess; NoEquality; NoComparison>]
 type IdentTrivia =

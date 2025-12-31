@@ -1,6 +1,6 @@
 ﻿module Signatures.TypeTests
 
-open FSharp.Compiler.Symbols
+open FSharp.Native.Compiler.Symbols
 open Xunit
 open FSharp.Test.Compiler
 open Signatures.TestHelpers

@@ -4,9 +4,9 @@ open System
 
 open Xunit
 
-open FSharp.Compiler.CodeAnalysis.ProjectSnapshot
-open FSharp.Compiler.CodeAnalysis.Workspace
-open FSharp.Compiler.Diagnostics
+open FSharp.Native.Compiler.CodeAnalysis.ProjectSnapshot
+open FSharp.Native.Compiler.CodeAnalysis.Workspace
+open FSharp.Native.Compiler.Diagnostics
 open FSharp.Test.ProjectGeneration.WorkspaceHelpers
 open OpenTelemetry
 open OpenTelemetry.Resources

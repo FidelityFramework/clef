@@ -3,7 +3,7 @@
     FsYacc - F# Parser Generator
 
     Build tool for generating parsers from .fsy files.
-    Must be built before FSharpNative.Compiler.Service.
+    Must be built before FSharp.Native.Compiler.Service.
   -->
 
   <PropertyGroup>

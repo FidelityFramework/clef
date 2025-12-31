@@ -5,7 +5,7 @@ open System.IO
 open System.Reflection
 open TestFramework
 open HandleExpects
-open FSharp.Compiler.IO
+open FSharp.Native.Compiler.IO
 
 let testConfig = testConfig __SOURCE_DIRECTORY__
 

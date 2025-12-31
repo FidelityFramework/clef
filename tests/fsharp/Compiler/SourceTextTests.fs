@@ -1,12 +1,12 @@
 ﻿// Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Compiler.UnitTests
+namespace FSharp.Native.Compiler.UnitTests
 
 open System
 open Xunit
 
-open FSharp.Compiler.Diagnostics
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.Diagnostics
+open FSharp.Native.Compiler.Text
 
 
 module SourceTextTests =

@@ -12,7 +12,7 @@ module RangeModule =
         let exceptionMessage = """raise (new Exception($"Error round tripping '{label}': expected: '{expected}' actual: '{actual}'\n        arguments: startline '{startline}' startcolumn '{startcolumn}' endline '{endline}' endcolumn '{endcolumn}\n        Range Object: {r.ToString()}\n        Range Properties: r.StartLine '{r.StartLine}'  r.StartColumn '{r.StartColumn}' r.EndLine '{r.EndLine}' r.EndColumn '{r.EndColumn}'\n"))"""
         FSharp $"""
 open System
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.Text
 open Range
 open Position
 

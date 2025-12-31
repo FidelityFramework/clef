@@ -2,7 +2,7 @@
 
 module TyparNameTests =
 
-    open FSharp.Compiler.Symbols
+    open FSharp.Native.Compiler.Symbols
     open Xunit
     open FSharp.Test
     open FSharp.Test.Compiler

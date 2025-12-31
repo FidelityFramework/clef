@@ -1,4 +1,4 @@
-namespace FSharp.Compiler.ComponentTests.ConstraintSolver
+namespace FSharp.Native.Compiler.ComponentTests.ConstraintSolver
 
 open Xunit
 open FSharp.Test.Compiler

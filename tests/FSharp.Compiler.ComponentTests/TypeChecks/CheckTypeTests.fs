@@ -1,7 +1,7 @@
 ﻿module TypeChecks.CheckTypeTests
 
 open ErrorMessages.ExtendedDiagnosticData
-open FSharp.Compiler.Diagnostics.ExtendedData
+open FSharp.Native.Compiler.Diagnostics.ExtendedData
 open FSharp.Test.Assert
 open Xunit
 open FSharp.Test.Compiler

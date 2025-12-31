@@ -25,10 +25,10 @@ open System.Threading.Tasks
 open System.Xml
 
 open Internal.Utilities.Library.Extras
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.CodeAnalysis.ProjectSnapshot
-open FSharp.Compiler.Diagnostics
-open FSharp.Compiler.Text
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.CodeAnalysis.ProjectSnapshot
+open FSharp.Native.Compiler.Diagnostics
+open FSharp.Native.Compiler.Text
 
 open Xunit
 open FSharp.Test.Utilities
@@ -38,10 +38,10 @@ open OpenTelemetry
 open OpenTelemetry.Resources
 open OpenTelemetry.Trace
 open TestFramework
-open FSharp.Compiler.IO
-open FSharp.Compiler.CodeAnalysis.Workspace.FSharpWorkspaceState
-open FSharp.Compiler.CodeAnalysis.Workspace.FSharpWorkspaceQuery
-open FSharp.Compiler.CodeAnalysis.Workspace
+open FSharp.Native.Compiler.IO
+open FSharp.Native.Compiler.CodeAnalysis.Workspace.FSharpWorkspaceState
+open FSharp.Native.Compiler.CodeAnalysis.Workspace.FSharpWorkspaceQuery
+open FSharp.Native.Compiler.CodeAnalysis.Workspace
 
 #nowarn "57" // Experimental feature use
 

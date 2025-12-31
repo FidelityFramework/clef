@@ -4,8 +4,8 @@ open System
 open System.Net
 open System.Net.Sockets
 open System.Text
-open FSharp.Compiler.CodeAnalysis
-open FSharp.Compiler.CodeAnalysis.Hosted
+open FSharp.Native.Compiler.CodeAnalysis
+open FSharp.Native.Compiler.CodeAnalysis.Hosted
 
 [<AutoOpen>]
 module Log =

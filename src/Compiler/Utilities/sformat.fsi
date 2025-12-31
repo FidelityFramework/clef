@@ -2,7 +2,7 @@
 
 // This file is compiled twice in the codebase
 //    - as the internal implementation of printf '%A' formatting
-//    - as the internal implementation of structured formatting in FSharp.Compiler.Service/Private.dll
+//    - as the internal implementation of structured formatting in FSharp.Native.Compiler.Service/Private.dll
 //           defines: COMPILER
 //           NOTE: this implementation is used by fsi.exe.
 //
@@ -13,7 +13,7 @@
 // Note no layout objects are ever transferred between the above implementations.
 
 #if COMPILER
-namespace FSharp.Compiler.Text
+namespace FSharp.Native.Compiler.Text
 #else
 namespace Microsoft.FSharp.Text.StructuredPrintfImpl
 #endif

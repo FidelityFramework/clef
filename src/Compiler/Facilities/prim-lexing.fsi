@@ -3,7 +3,7 @@
 // LexBuffers are for use with automatically generated lexical analyzers,
 // in particular those produced by 'fslex'.
 
-namespace FSharp.Compiler.Text
+namespace FSharp.Native.Compiler.Text
 
 /// Represents an input to the F# compiler
 type ISourceText =
@@ -63,8 +63,8 @@ module SourceTextNew =
 namespace Internal.Utilities.Text.Lexing
 
 open System.Collections.Generic
-open FSharp.Compiler.Text
-open FSharp.Compiler.Features
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Features
 
 /// Position information stored for lexing tokens
 [<Struct>]

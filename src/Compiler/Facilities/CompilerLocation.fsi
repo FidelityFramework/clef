@@ -21,7 +21,7 @@ module internal FSharpEnvironment =
 
     // The default location of FSharp.Core.dll and fsc.exe based on the version of fsc.exe that is running
     // Used for
-    //     - location of design-time copies of FSharp.Core.dll and FSharp.Compiler.Interactive.Settings.dll for the default assumed environment for scripts
+    //     - location of design-time copies of FSharp.Core.dll and FSharp.Native.Compiler.Interactive.Settings.dll for the default assumed environment for scripts
     //     - default ToolPath in tasks in FSharp.Build.dll (for Fsc tasks, but note a probe location is given)
     //     - default F# binaries directory in service.fs (REVIEW: check this)
     //     - default location of fsi.exe in FSharp.VS.FSI.dll (REVIEW: check this)

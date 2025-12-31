@@ -1,13 +1,13 @@
-module internal FSharp.Compiler.PPLexer
+module internal FSharp.Native.Compiler.PPLexer
 
-open FSharp.Compiler.Lexhelp
+open FSharp.Native.Compiler.Lexhelp
 open Internal.Utilities.Text.Lexing
-open FSharp.Compiler.PPParser
+open FSharp.Native.Compiler.PPParser
 
 # 3 "pplex.fsl"
  
-open FSharp.Compiler.DiagnosticsLogger
-open FSharp.Compiler.ParseHelpers
+open FSharp.Native.Compiler.DiagnosticsLogger
+open FSharp.Native.Compiler.ParseHelpers
 
 let lexeme (lexbuf : UnicodeLexing.Lexbuf) = UnicodeLexing.Lexbuf.LexemeString lexbuf
 

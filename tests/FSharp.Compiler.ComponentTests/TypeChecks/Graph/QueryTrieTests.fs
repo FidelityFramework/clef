@@ -3,8 +3,8 @@
 open System.Collections.Generic
 open System.Collections.Immutable
 open Xunit
-open FSharp.Compiler.GraphChecking
-open FSharp.Compiler.GraphChecking.DependencyResolution
+open FSharp.Native.Compiler.GraphChecking
+open FSharp.Native.Compiler.GraphChecking.DependencyResolution
 
 // This file contains some hard coded data to easily debug the various aspects of the dependency resolution.
 
@@ -64,7 +64,7 @@ let private files =
                         "Fantomas.Core.ISourceTextExtensions"
                         [
                             openSt "System.Text"
-                            openSt "FSharp.Compiler.Text"
+                            openSt "FSharp.Native.Compiler.Text"
                             prefIdent "range.StartLine"
                             prefIdent "this.GetLineString"
                             prefIdent "range.StartLine"
@@ -85,7 +85,7 @@ let private files =
                     topLevelNS
                         "Fantomas.Core"
                         [
-                            openSt "FSharp.Compiler.Text"
+                            openSt "FSharp.Native.Compiler.Text"
                             nestedModule
                                 "RangeHelpers"
                                 [
@@ -131,7 +131,7 @@ let private files =
             Idx = 3
             Content =
                 [|
-                    topLevelMod "Fantomas.Core.AstExtensions" [ openSt "FSharp.Compiler.Text"; openSt "FSharp.Compiler.Syntax" ]
+                    topLevelMod "Fantomas.Core.AstExtensions" [ openSt "FSharp.Native.Compiler.Text"; openSt "FSharp.Native.Compiler.Syntax" ]
                 |]
         }
         {
@@ -142,10 +142,10 @@ let private files =
                     topLevelMod
                         "Fantomas.Core.AstExtensions"
                         [
-                            openSt "FSharp.Compiler.SyntaxTrivia"
-                            openSt "FSharp.Compiler.Text"
-                            openSt "FSharp.Compiler.Text.Range"
-                            openSt "FSharp.Compiler.Syntax"
+                            openSt "FSharp.Native.Compiler.SyntaxTrivia"
+                            openSt "FSharp.Native.Compiler.Text"
+                            openSt "FSharp.Native.Compiler.Text.Range"
+                            openSt "FSharp.Native.Compiler.Syntax"
                             prefIdent "range.Zero"
                             prefIdent "h.idRange"
                             prefIdent "List.last"
@@ -215,7 +215,7 @@ let private files =
             Idx = 5
             Content =
                 [|
-                    topLevelMod "Fantomas.Core.TriviaTypes" [ openSt "FSharp.Compiler.Text"; openSt "FSharp.Compiler.Syntax" ]
+                    topLevelMod "Fantomas.Core.TriviaTypes" [ openSt "FSharp.Native.Compiler.Text"; openSt "FSharp.Native.Compiler.Syntax" ]
                 |]
         }
         {
@@ -294,11 +294,11 @@ let private files =
                         "Fantomas.Core.SourceParser"
                         [
                             openSt "System"
-                            openSt "FSharp.Compiler.Syntax"
-                            openSt "FSharp.Compiler.Syntax.PrettyNaming"
-                            openSt "FSharp.Compiler.SyntaxTrivia"
-                            openSt "FSharp.Compiler.Text"
-                            openSt "FSharp.Compiler.Xml"
+                            openSt "FSharp.Native.Compiler.Syntax"
+                            openSt "FSharp.Native.Compiler.Syntax.PrettyNaming"
+                            openSt "FSharp.Native.Compiler.SyntaxTrivia"
+                            openSt "FSharp.Native.Compiler.Text"
+                            openSt "FSharp.Native.Compiler.Xml"
                             openSt "Fantomas.Core"
                             openSt "Fantomas.Core.AstExtensions"
                             openSt "Fantomas.Core.TriviaTypes"
