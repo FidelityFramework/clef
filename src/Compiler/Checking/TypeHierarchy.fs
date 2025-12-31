@@ -43,15 +43,6 @@ let GetSuperTypeOfType g amap m ty =
             | None -> None
             | Some super -> Some(ImportProvidedType amap m super)
 #endif
-        | ILTypeMetadata (TILObjectReprData(scoref, _, tdef)) ->
-            let tinst = argsOfAppTy g ty
-            match tdef.Extends.Value with
-            | None -> None
-            | Some ilTy ->   // 'inherit' can refer to a type which has nullable type arguments (e.g. List<string?>)
-                let typeAttrs = AttributesFromIL(tdef.MetadataIndex,tdef.CustomAttrsStored)
-                let nullness = {DirectAttributes = typeAttrs; Fallback = FromClass typeAttrs}
-                Some (RescopeAndImportILType scoref amap m tinst nullness ilTy)
-
         | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata ->
             if isFSharpObjModelTy g ty || isFSharpExceptionTy g ty then
                 let tcref = tcrefOfAppTy g ty
@@ -100,24 +91,6 @@ let GetImmediateInterfacesOfMetadataType g amap m skipUnref ty (tcref: TyconRef)
             for intfTy in info.ProvidedType.PApplyArray((fun st -> st.GetInterfaces()), "GetInterfaces", m) do
                 ImportProvidedType amap m intfTy
 #endif
-        | ILTypeMetadata (TILObjectReprData(scoref, _, tdef)) ->
-            // ImportILType may fail for an interface if the assembly load set is incomplete and the interface
-            // comes from another assembly. In this case we simply skip the interface:
-            // if we don't skip it, then compilation will just fail here, and if type checking
-            // succeeds with fewer non-dereferencable interfaces reported then it would have
-            // succeeded with more reported. There are pathological corner cases where this
-            // doesn't apply: e.g. for mscorlib interfaces like IComparable, but we can always
-            // assume those are present.
-            let checkNullness = g.langFeatureNullness && g.checkNullness
-            for {Idx = attrsIdx; Type = intfTy; CustomAttrsStored = attrs} in tdef.Implements.Value do
-                if skipUnref = SkipUnrefInterfaces.No || CanRescopeAndImportILType scoref amap m intfTy then
-                    if checkNullness then
-                        let typeAttrs = AttributesFromIL(attrsIdx,attrs)
-                        let nullness = {DirectAttributes = typeAttrs; Fallback = FromClass typeAttrs}
-                        RescopeAndImportILType scoref amap m tinst nullness intfTy
-                    else
-                        RescopeAndImportILTypeSkipNullness scoref amap m tinst intfTy
-
         | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata ->
             for intfTy in tcref.ImmediateInterfaceTypesOfFSharpTycon do
                instType (mkInstForAppTy g ty) intfTy ]

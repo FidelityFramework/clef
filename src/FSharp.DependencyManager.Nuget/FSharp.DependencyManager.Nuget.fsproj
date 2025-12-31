@@ -1,63 +1,48 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information. -->
+<!--
+  FSharp.DependencyManager.Nuget - NuGet dependency resolution for FSI
+
+  Provides #r directive resolution for F# Interactive.
+  Required by FNCS for script/interactive scenarios.
+-->
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
     <OutputType>Library</OutputType>
-    <TargetFrameworks>netstandard2.0</TargetFrameworks>
     <AssemblyName>FSharp.DependencyManager.Nuget</AssemblyName>
-    <AllowCrossTargeting>true</AllowCrossTargeting>
     <DefineConstants>$(DefineConstants);COMPILER</DefineConstants>
-    <Tailcalls>true</Tailcalls> <!-- .tail annotations always emitted for this binary, even in debug mode -->
-    <Configurations>Debug;Release</Configurations>
+    <Tailcalls>true</Tailcalls>
+    <!-- Disable nullable for legacy code - these files predate nullable annotations -->
+    <Nullable>disable</Nullable>
+    <NoWarn>$(NoWarn);3261</NoWarn>
   </PropertyGroup>
 
-  <!--  The FSharp.DependencyManager.Nuget dll does not provide a referencable public interface although it's used for testing -->
   <PropertyGroup>
     <NoOptimizationData>true</NoOptimizationData>
     <NoInterfaceData>false</NoInterfaceData>
     <CompressMetadata>true</CompressMetadata>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(BUILDING_USING_DOTNET)' == 'true'">
-    <OutputPath>$(ArtifactsDir)/bin/$(MSBuildProjectName)/$(Configuration)/</OutputPath>
-    <IntermediateOutputPath>$(ArtifactsDir)obj/$(MSBuildProjectName)/$(Configuration)/</IntermediateOutputPath>
-  </PropertyGroup>
-
-  <Target Name="CopyToBuiltBin" BeforeTargets="BuiltProjectOutputGroup" AfterTargets="CoreCompile">
-    <PropertyGroup>
-      <BuildOutputGroupLocation>$(BaseOutputPath)\$(Configuration)\$(TargetFramework)</BuildOutputGroupLocation>
-    </PropertyGroup>
-  </Target>
-
   <ItemGroup>
-    <Compile Include="$(FSharpSourcesRoot)\Compiler\Utilities\NullnessShims.fs" />
+    <Compile Include="$(RepoRoot)src/Compiler/Utilities/NullnessShims.fs" Link="NullnessShims.fs" />
     <EmbeddedText Include="FSDependencyManager.txt" />
-    <EmbeddedText Include="$(FSharpSourcesRoot)\Compiler\Facilities\UtilsStrings.txt" />
-    <Compile Include="$(FSharpSourcesRoot)\Compiler\Facilities\CompilerLocation.fsi" />
-    <Compile Include="$(FSharpSourcesRoot)\Compiler\Facilities\CompilerLocation.fs" />
-    <Compile Include="$(FSharpSourcesRoot)\FSharp.DependencyManager.Nuget\FSharp.DependencyManager.ProjectFile.fs" />
-    <Compile Include="$(FSharpSourcesRoot)\FSharp.DependencyManager.Nuget\FSharp.DependencyManager.Utilities.fs" />
-    <Compile Include="$(FSharpSourcesRoot)\FSharp.DependencyManager.Nuget\FSharp.DependencyManager.fsi" />
-    <Compile Include="$(FSharpSourcesRoot)\FSharp.DependencyManager.Nuget\FSharp.DependencyManager.fs" />
+    <EmbeddedText Include="$(RepoRoot)src/Compiler/Facilities/UtilsStrings.txt" Link="UtilsStrings.txt" />
+    <Compile Include="$(RepoRoot)src/Compiler/Facilities/CompilerLocation.fsi" Link="CompilerLocation.fsi" />
+    <Compile Include="$(RepoRoot)src/Compiler/Facilities/CompilerLocation.fs" Link="CompilerLocation.fs" />
+    <Compile Include="FSharp.DependencyManager.ProjectFile.fs" />
+    <Compile Include="FSharp.DependencyManager.Utilities.fs" />
+    <Compile Include="FSharp.DependencyManager.fsi" />
+    <Compile Include="FSharp.DependencyManager.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="FSharp.Compiler.Private.Scripting.UnitTests" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(FSHARPCORE_USE_PACKAGE)' != 'true'">
-    <ProjectReference Include="$(MSBuildThisFileDirectory)..\FSharp.Core\FSharp.Core.fsproj" />
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(FSHARPCORE_USE_PACKAGE)' == 'true'">
-    <PackageReference Include="FSharp.Core" Version="$(FSharpCoreShippedPackageVersionValue)" />
-  </ItemGroup>
-
   <ItemGroup>
-    <PackageReference Include="System.Reflection.Emit" Version="$(SystemReflectionEmitVersion)" />
-    <PackageReference Include="System.Reflection.Metadata" Version="$(SystemReflectionMetadataVersion)" />
-    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="$(SystemRuntimeCompilerServicesUnsafeVersion)" />
+    <PackageReference Include="FSharp.Core" Version="9.0.100" />
+    <PackageReference Include="System.Reflection.Metadata" Version="8.0.0" />
   </ItemGroup>
 
 </Project>

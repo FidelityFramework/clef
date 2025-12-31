@@ -1720,7 +1720,7 @@ let decoders =
         itag_ldsflda, u_ILFieldSpec >> I_ldsflda
         itag_stfld, u_tup2 u_ILVolatility u_ILFieldSpec >> (fun (b, c) -> I_stfld(Aligned, b, c))
         itag_stsfld, u_tup2 u_ILVolatility u_ILFieldSpec >> I_stsfld
-        itag_ldtoken, u_ILType >> (ILToken.ILType >> I_ldtoken)
+        itag_ldtoken, u_ILType >> (ILToken_type >> I_ldtoken)
         itag_ldstr, u_string >> I_ldstr
         itag_box, u_ILType >> I_box
         itag_unbox, u_ILType >> I_unbox
@@ -1764,7 +1764,7 @@ let p_ILInstr x st =
     | I_ldvirtftn mspec ->
         p_byte itag_ldvirtftn st
         p_ILMethodSpec mspec st
-    | I_ldarg x ->
+    | AI_ldarg x ->
         p_byte itag_ldarg st
         p_uint16 x st
     | AI_conv a ->
@@ -1794,7 +1794,7 @@ let p_ILInstr x st =
     | I_ldsflda a ->
         p_byte itag_ldsflda st
         p_ILFieldSpec a st
-    | I_ldtoken(ILToken.ILType ty) ->
+    | I_ldtoken(ILToken_type ty) ->
         p_byte itag_ldtoken st
         p_ILType ty st
     | I_ldstr s ->

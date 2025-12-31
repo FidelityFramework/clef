@@ -68,12 +68,6 @@ let rec GetImmediateIntrinsicMethInfosOfTypeAux (optFilter, ad) g amap m withExp
                 | None -> st.PApplyArray ((fun st -> st.GetMethods()), "GetMethods", m)
             [   for mi in meths -> ProvidedMeth(amap, mi.Coerce(m), None, m) ]
 #endif
-        | ILTypeMetadata _ -> 
-            let tinfo = ILTypeInfo.FromType g origTy
-            let mdefs = tinfo.RawMetadata.Methods
-            let mdefs = match optFilter with None -> mdefs.AsList() | Some nm -> mdefs.FindByName nm
-            mdefs |> List.map (fun mdef -> MethInfo.CreateILMeth(amap, m, origTy, mdef)) 
-
         | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata -> 
             // Tuple types also support the methods get_Item1-8, get_Rest from the compiled tuple type.
             // In this case convert to the .NET Tuple type that carries metadata and try again

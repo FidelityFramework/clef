@@ -1911,52 +1911,42 @@ let isOutByrefTy g ty =
 let extensionInfoOfTy g ty = ty |> stripTyEqns g |> (function TType_app(tcref, _, _) -> tcref.TypeReprInfo | _ -> TNoRepr) 
 #endif
 
-type TypeDefMetadata = 
-     | ILTypeMetadata of TILObjectReprData
-     | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata 
+type TypeDefMetadata =
+     | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata
 #if !NO_TYPEPROVIDERS
      | ProvidedTypeMetadata of TProvidedTypeInfo
 #endif
 
-let metadataOfTycon (tycon: Tycon) = 
+let metadataOfTycon (tycon: Tycon) =
 #if !NO_TYPEPROVIDERS
-    match tycon.TypeReprInfo with 
+    match tycon.TypeReprInfo with
     | TProvidedTypeRepr info -> ProvidedTypeMetadata info
-    | _ -> 
+    | _ ->
 #endif
-    if tycon.IsILTycon then 
-       ILTypeMetadata tycon.ILTyconInfo
-    else 
-       FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata 
+    FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata
 
 
-let metadataOfTy g ty = 
+let metadataOfTy g ty =
 #if !NO_TYPEPROVIDERS
-    match extensionInfoOfTy g ty with 
+    match extensionInfoOfTy g ty with
     | TProvidedTypeRepr info -> ProvidedTypeMetadata info
-    | _ -> 
+    | _ ->
 #endif
-    if isILAppTy g ty then 
-        let tcref = tcrefOfAppTy g ty
-        ILTypeMetadata tcref.ILTyconInfo
-    else 
-        FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata 
+    FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata 
 
 
-let isILReferenceTy g ty = 
-    match metadataOfTy g ty with 
+let isILReferenceTy g ty =
+    match metadataOfTy g ty with
 #if !NO_TYPEPROVIDERS
     | ProvidedTypeMetadata info -> not info.IsStructOrEnum
 #endif
-    | ILTypeMetadata (TILObjectReprData(_, _, td)) -> not td.IsStructOrEnum
     | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata -> isArrayTy g ty
 
-let isILInterfaceTycon (tycon: Tycon) = 
-    match metadataOfTycon tycon with 
+let isILInterfaceTycon (tycon: Tycon) =
+    match metadataOfTycon tycon with
 #if !NO_TYPEPROVIDERS
     | ProvidedTypeMetadata info -> info.IsInterface
 #endif
-    | ILTypeMetadata (TILObjectReprData(_, _, td)) -> td.IsInterface
     | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata -> false
 
 let rankOfArrayTy g ty = rankOfArrayTyconRef g (tcrefOfAppTy g ty)
@@ -1983,33 +1973,30 @@ let isFSharpInterfaceTy g ty =
     | ValueSome tcref -> tcref.Deref.IsFSharpInterfaceTycon
     | _ -> false
 
-let isDelegateTy g ty = 
-    match metadataOfTy g ty with 
+let isDelegateTy g ty =
+    match metadataOfTy g ty with
 #if !NO_TYPEPROVIDERS
     | ProvidedTypeMetadata info -> info.IsDelegate ()
 #endif
-    | ILTypeMetadata (TILObjectReprData(_, _, td)) -> td.IsDelegate
     | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata ->
         match tryTcrefOfAppTy g ty with
         | ValueSome tcref -> tcref.Deref.IsFSharpDelegateTycon
         | _ -> false
 
-let isInterfaceTy g ty = 
-    match metadataOfTy g ty with 
+let isInterfaceTy g ty =
+    match metadataOfTy g ty with
 #if !NO_TYPEPROVIDERS
     | ProvidedTypeMetadata info -> info.IsInterface
 #endif
-    | ILTypeMetadata (TILObjectReprData(_, _, td)) -> td.IsInterface
     | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata -> isFSharpInterfaceTy g ty
 
 let isFSharpDelegateTy g ty = isDelegateTy g ty && isFSharpObjModelTy g ty
 
-let isClassTy g ty = 
-    match metadataOfTy g ty with 
+let isClassTy g ty =
+    match metadataOfTy g ty with
 #if !NO_TYPEPROVIDERS
     | ProvidedTypeMetadata info -> info.IsClass
 #endif
-    | ILTypeMetadata (TILObjectReprData(_, _, td)) -> td.IsClass
     | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata -> isFSharpClassTy g ty
 
 let isStructOrEnumTyconTy g ty = 
@@ -3597,20 +3584,16 @@ let IsILAttrib  (AttribInfo (builtInAttrRef, _)) attr = isILAttrib builtInAttrRe
 // This is used for AttributeUsageAttribute, DefaultMemberAttribute and ConditionalAttribute (on attribute types)
 let TryBindTyconRefAttribute g (m: range) (AttribInfo (atref, _) as args) (tcref: TyconRef) f1 f2 (f3: obj option list * (string * obj option) list -> 'a option) : 'a option = 
     ignore m; ignore f3
-    match metadataOfTycon tcref.Deref with 
+    match metadataOfTycon tcref.Deref with
 #if !NO_TYPEPROVIDERS
-    | ProvidedTypeMetadata info -> 
+    | ProvidedTypeMetadata info ->
         let provAttribs = info.ProvidedType.PApply((fun a -> (a :> IProvidedCustomAttributeProvider)), m)
         match provAttribs.PUntaint((fun a -> a.GetAttributeConstructorArgs(provAttribs.TypeProvider.PUntaintNoFailure id, atref.FullName)), m) with
         | Some args -> f3 args
         | None -> None
 #endif
-    | ILTypeMetadata (TILObjectReprData(_, _, tdef)) -> 
-        match TryDecodeILAttribute atref tdef.CustomAttrs with 
-        | Some attr -> f1 attr
-        | _ -> None
-    | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata -> 
-        match TryFindFSharpAttribute g args tcref.Attribs with 
+    | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata ->
+        match TryFindFSharpAttribute g args tcref.Attribs with
         | Some attr -> f2 attr
         | _ -> None
 
@@ -3666,18 +3649,15 @@ let HasDefaultAugmentationAttribute g (tcref: TyconRef) =
     | _ -> true
 
 /// Check if a type definition has an attribute with a specific full name
-let TyconRefHasAttributeByName (m: range) attrFullName (tcref: TyconRef) = 
+let TyconRefHasAttributeByName (m: range) attrFullName (tcref: TyconRef) =
     ignore m
-    match metadataOfTycon tcref.Deref with 
+    match metadataOfTycon tcref.Deref with
 #if !NO_TYPEPROVIDERS
-    | ProvidedTypeMetadata info -> 
+    | ProvidedTypeMetadata info ->
         let provAttribs = info.ProvidedType.PApply((fun a -> (a :> IProvidedCustomAttributeProvider)), m)
         provAttribs.PUntaint((fun a ->
             a.GetAttributeConstructorArgs(provAttribs.TypeProvider.PUntaintNoFailure id, attrFullName)), m).IsSome
 #endif
-    | ILTypeMetadata (TILObjectReprData(_, _, tdef)) ->
-        tdef.CustomAttrs.AsArray()
-        |> Array.exists (fun attr -> isILAttribByName ([], attrFullName) attr)
     | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata ->
         tcref.Attribs
         |> List.exists (fun attr ->
@@ -5749,30 +5729,12 @@ let InferValReprInfoOfBinding g allowTypeDirectedDetupling (v: Val) expr =
 // implementations
 //------------------------------------------------------------------------- 
 
-let underlyingTypeOfEnumTy (g: TcGlobals) ty = 
+let underlyingTypeOfEnumTy (g: TcGlobals) ty =
     assert(isEnumTy g ty)
-    match metadataOfTy g ty with 
+    match metadataOfTy g ty with
 #if !NO_TYPEPROVIDERS
     | ProvidedTypeMetadata info -> info.UnderlyingTypeOfEnum()
 #endif
-    | ILTypeMetadata (TILObjectReprData(_, _, tdef)) -> 
-
-        let info = computeILEnumInfo (tdef.Name, tdef.Fields)
-        let ilTy = getTyOfILEnumInfo info
-        match ilTy.TypeSpec.Name with 
-        | "System.Byte" -> g.byte_ty
-        | "System.SByte" -> g.sbyte_ty
-        | "System.Int16" -> g.int16_ty
-        | "System.Int32" -> g.int32_ty
-        | "System.Int64" -> g.int64_ty
-        | "System.UInt16" -> g.uint16_ty
-        | "System.UInt32" -> g.uint32_ty
-        | "System.UInt64" -> g.uint64_ty
-        | "System.Single" -> g.float32_ty
-        | "System.Double" -> g.float_ty
-        | "System.Char" -> g.char_ty
-        | "System.Boolean" -> g.bool_ty
-        | _ -> g.int32_ty
     | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata ->
         let tycon = (tcrefOfAppTy g ty).Deref
         match tycon.GetFieldByName "value__" with 
@@ -7832,30 +7794,24 @@ let mkBox ty e m = mkAsmExpr ([box], [], [e], [ty], m)
 
 let mkIsInst ty e m = mkAsmExpr ([ isinst ], [ty], [e], [ ty ], m)
 
-let mspec_Type_GetTypeFromHandle (g: TcGlobals) = mkILNonGenericStaticMethSpecInTy(g.ilg.typ_Type, "GetTypeFromHandle", [g.iltyp_RuntimeTypeHandle], g.ilg.typ_Type)
+// NOTE: BCL-dependent IL code generation helpers removed from FNCS:
+// - mspec_Type_GetTypeFromHandle: uses typ_Type (System.Type)
+// - mspec_String_Concat_Array: uses mkILArr1DTy (System.Array)
+// - fspec_Missing_Value: uses iltyp_Missing (System.Reflection.Missing)
+// - mkInitializeArrayMethSpec: uses typ_Array (System.Array)
+// - mkInvalidCastExnNewobj: uses System.InvalidCastException
+// These are IL code generation primitives. FNCS is for type checking, not IL generation.
 
 let mspec_String_Length (g: TcGlobals) = mkILNonGenericInstanceMethSpecInTy (g.ilg.typ_String, "get_Length", [], g.ilg.typ_Int32)
 
-let mspec_String_Concat2 (g: TcGlobals) = 
+let mspec_String_Concat2 (g: TcGlobals) =
     mkILNonGenericStaticMethSpecInTy (g.ilg.typ_String, "Concat", [ g.ilg.typ_String; g.ilg.typ_String ], g.ilg.typ_String)
 
-let mspec_String_Concat3 (g: TcGlobals) = 
+let mspec_String_Concat3 (g: TcGlobals) =
     mkILNonGenericStaticMethSpecInTy (g.ilg.typ_String, "Concat", [ g.ilg.typ_String; g.ilg.typ_String; g.ilg.typ_String ], g.ilg.typ_String)
 
-let mspec_String_Concat4 (g: TcGlobals) = 
+let mspec_String_Concat4 (g: TcGlobals) =
     mkILNonGenericStaticMethSpecInTy (g.ilg.typ_String, "Concat", [ g.ilg.typ_String; g.ilg.typ_String; g.ilg.typ_String; g.ilg.typ_String ], g.ilg.typ_String)
-
-let mspec_String_Concat_Array (g: TcGlobals) = 
-    mkILNonGenericStaticMethSpecInTy (g.ilg.typ_String, "Concat", [ mkILArr1DTy g.ilg.typ_String ], g.ilg.typ_String)
-
-let fspec_Missing_Value (g: TcGlobals) = mkILFieldSpecInTy(g.iltyp_Missing, "Value", g.iltyp_Missing)
-
-let mkInitializeArrayMethSpec (g: TcGlobals) = 
-  let tref = g.FindSysILTypeRef "System.Runtime.CompilerServices.RuntimeHelpers"
-  mkILNonGenericStaticMethSpecInTy(mkILNonGenericBoxedTy tref, "InitializeArray", [g.ilg.typ_Array;g.iltyp_RuntimeFieldHandle], ILType.Void)
-
-let mkInvalidCastExnNewobj (g: TcGlobals) = 
-  mkNormalNewobj (mkILCtorMethSpecForTy (mkILNonGenericBoxedTy (g.FindSysILTypeRef "System.InvalidCastException"), []))
 
 let typedExprForIntrinsic _g m (IntrinsicValRef(_, _, _, ty, _) as i) =
     let vref = ValRefForIntrinsic i
@@ -8183,9 +8139,7 @@ let mkStaticCall_String_Concat4 g m arg1 arg2 arg3 arg4 =
     let mspec = mspec_String_Concat4 g
     Expr.Op (TOp.ILCall (false, false, false, false, ValUseFlag.NormalValUse, false, false, mspec.MethodRef, [], [], [g.string_ty]), [], [arg1; arg2; arg3; arg4], m)
 
-let mkStaticCall_String_Concat_Array g m arg =
-    let mspec = mspec_String_Concat_Array g
-    Expr.Op (TOp.ILCall (false, false, false, false, ValUseFlag.NormalValUse, false, false, mspec.MethodRef, [], [], [g.string_ty]), [], [arg], m)
+// NOTE: mkStaticCall_String_Concat_Array removed - uses BCL array types (mkILArr1DTy)
 
 // Quotations can't contain any IL.
 // As a result, we aim to get rid of all IL generation in the typechecker and pattern match
@@ -8259,20 +8213,12 @@ let mkCompilationMappingAttrWithSeqNum g kind seqNum = mkCompilationMappingAttrP
 
 let mkCompilationMappingAttrWithVariantNumAndSeqNum g kind varNum seqNum = mkCompilationMappingAttrPrim g kind [varNum;seqNum]
 
-let mkCompilationArgumentCountsAttr (g: TcGlobals) nums = 
-    mkILCustomAttribute (tref_CompilationArgumentCountsAttr g, [ mkILArr1DTy g.ilg.typ_Int32 ], 
-                               [ILAttribElem.Array (g.ilg.typ_Int32, List.map ILAttribElem.Int32 nums)], 
-                               [])
+// NOTE: mkCompilationArgumentCountsAttr removed - uses mkILArr1DTy (BCL array types)
+// NOTE: mkCompilationMappingAttrForQuotationResource removed - uses mkILArr1DTy and typ_Type
 
-let mkCompilationSourceNameAttr (g: TcGlobals) n = 
-    mkILCustomAttribute (tref_CompilationSourceNameAttr g, [ g.ilg.typ_String ], 
-                               [ILAttribElem.String(Some n)], 
-                               [])
-
-let mkCompilationMappingAttrForQuotationResource (g: TcGlobals) (nm, tys: ILTypeRef list) = 
-    mkILCustomAttribute (tref_CompilationMappingAttr g, 
-                               [ g.ilg.typ_String; mkILArr1DTy g.ilg.typ_Type ], 
-                               [ ILAttribElem.String (Some nm); ILAttribElem.Array (g.ilg.typ_Type, [ for ty in tys -> ILAttribElem.TypeRef (Some ty) ]) ], 
+let mkCompilationSourceNameAttr (g: TcGlobals) n =
+    mkILCustomAttribute (tref_CompilationSourceNameAttr g, [ g.ilg.typ_String ],
+                               [ILAttribElem.String(Some n)],
                                [])
 
 //----------------------------------------------------------------------------
@@ -9535,16 +9481,15 @@ let isSealedTy g ty =
     isUnitTy g ty || 
     isArrayTy g ty || 
 
-    match metadataOfTy g ty with 
+    match metadataOfTy g ty with
 #if !NO_TYPEPROVIDERS
     | ProvidedTypeMetadata st -> st.IsSealed
 #endif
-    | ILTypeMetadata (TILObjectReprData(_, _, td)) -> td.IsSealed
     | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata ->
-       if (isFSharpInterfaceTy g ty || isFSharpClassTy g ty) then 
+       if (isFSharpInterfaceTy g ty || isFSharpClassTy g ty) then
           let tcref = tcrefOfAppTy g ty
           TryFindFSharpBoolAttribute g g.attrib_SealedAttribute tcref.Attribs = Some true
-       else 
+       else
           // All other F# types, array, byref, tuple types are sealed
           true
    

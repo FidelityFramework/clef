@@ -1,99 +1,85 @@
 <Project>
+  <!--
+    FNCS (F# Native Compiler Services) - Arcade-Free Build Infrastructure
 
+    This is a principled simplification from upstream dotnet/fsharp:
+    - Removed: Arcade SDK, complex multi-targeting, .NET Framework support, CI/CD integration
+    - Preserved: NuGet packaging, FsLex/FsYacc integration, functional compiler flags
+
+    FNCS is a library that Firefly references during the "bridge period" where
+    Firefly itself runs on .NET while producing native binaries.
+  -->
+
+  <!-- Core Configuration -->
   <PropertyGroup>
-    <PackageProjectUrl>https://github.com/dotnet/fsharp</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/dotnet/fsharp</RepositoryUrl>
-    <LangVersion Condition="'$(FSharpLangVersion)' != ''">$(FSharpLangVersion)</LangVersion>
     <RepoRoot Condition="'$(RepoRoot)' == ''">$(MSBuildThisFileDirectory)</RepoRoot>
-    <AccelerateBuildsInVisualStudio>true</AccelerateBuildsInVisualStudio>
-    <FSharpNetCoreProductDefaultTargetFramework>net10.0</FSharpNetCoreProductDefaultTargetFramework>
-    <IgnoreMibc Condition="'$(IgnoreMibc)' == ''">$(DotNetBuildSourceOnly)</IgnoreMibc>
-    <!-- When building the .NET product, there's no need to publish Windows PDBs. Any conversion to Windows PDBs will be done during staging, if necessary. -->
-    <PublishWindowsPdb Condition="'$(DotNetBuild)' == 'true'">false</PublishWindowsPdb>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- Artifacts Layout -->
+  <PropertyGroup>
+    <ArtifactsDir>$(RepoRoot)artifacts/</ArtifactsDir>
+    <BaseOutputPath>$(ArtifactsDir)bin/$(MSBuildProjectName)/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(ArtifactsDir)obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
+    <PackageOutputPath>$(ArtifactsDir)packages/$(Configuration)/</PackageOutputPath>
+  </PropertyGroup>
+
+  <!-- FsLex/FsYacc Tool Paths -->
+  <PropertyGroup>
+    <FsLexPath>$(ArtifactsDir)bin/fslex/$(Configuration)/net9.0/fslex.dll</FsLexPath>
+    <FsYaccPath>$(ArtifactsDir)bin/fsyacc/$(Configuration)/net9.0/fsyacc.dll</FsYaccPath>
   </PropertyGroup>
 
   <!--
-   When developers load the FSharpNative.Compiler.Service solution we set FSHARPCORE_USE_PACKAGE to true if it hasn't already been set to a value.
-   This option ensures that building and testing uses the specified FSharp.Core nuget package instead of the local FSharp.Core project.
-   We also disable arcade and reset certain artifacts and compiler paths to use default ones.
-   All settings below can be overridden via CLI switches if needed. -->
+    Version Information
 
-  <PropertyGroup Condition="'$(SolutionName)' == 'FSharpNative.Compiler.Service' and '$(BUILDING_USING_DOTNET)' != 'false'">
-      <BUILDING_USING_DOTNET>true</BUILDING_USING_DOTNET>
-  </PropertyGroup>
-
-  <PropertyGroup Condition="'$(SolutionName)' == 'FSharp.Benchmarks' and '$(BUILDING_USING_DOTNET)' != 'false'">
-      <BUILDING_USING_DOTNET>true</BUILDING_USING_DOTNET>
-  </PropertyGroup>
-
-  <!-- Temporary workaround if proj-info is used, allows Ionide's evaluation to work correctly. -->
-  <PropertyGroup Condition="'$(BUILDING_USING_DOTNET)' != 'false' and '$(DotnetProjInfo)' == 'true'">
-      <BUILDING_USING_DOTNET>true</BUILDING_USING_DOTNET>
-  </PropertyGroup>
-
-  <!-- pick realsig value -->
-  <PropertyGroup Condition="'$(BUILDING_USING_DOTNET)' != 'true' and '$(Configuration)' != 'Proto'">
-    <OtherFlags Condition="'$(BuildNoRealsig)' == 'true'">$(OtherFlags) --realsig-</OtherFlags>
-    <OtherFlags Condition="'$(BuildNoRealsig)' != 'true'">$(OtherFlags) --realsig+</OtherFlags>
-  </PropertyGroup>
-
+    FNCS version tracks upstream F# version for compatibility reference,
+    plus its own version for native-specific changes.
+  -->
   <PropertyGroup>
-    <!-- Set PublishReadyToRun to speed up the build. -->
-    <EnablePublishReadyToRun>true</EnablePublishReadyToRun>
-    <!-- Crossgen2 is not built with source-built Mono-based .NET SDKs. -->
-    <EnablePublishReadyToRun Condition="'$(DotNetBuildUseMonoRuntime)' == 'true'">false</EnablePublishReadyToRun>
+    <!-- Upstream F# version we're based on -->
+    <FSMajorVersion>9</FSMajorVersion>
+    <FSMinorVersion>0</FSMinorVersion>
+    <FSBuildVersion>300</FSBuildVersion>
+    <FSLanguageVersion>$(FSMajorVersion).$(FSMinorVersion)</FSLanguageVersion>
+
+    <!-- FNCS package version -->
+    <VersionPrefix>1.0.0</VersionPrefix>
+    <VersionSuffix>alpha</VersionSuffix>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+
+    <!-- For NuGet packaging -->
+    <Authors>SpeakEZ</Authors>
+    <Company>SpeakEZ, Inc.</Company>
+    <Copyright>Copyright (c) SpeakEZ, Inc. and Microsoft Corporation</Copyright>
   </PropertyGroup>
 
-  <Import Project="$(RepoRoot)/Directory.Build.props.user" Condition="Exists('$(RepoRoot)/Directory.Build.props.user')" />
+  <!--
+    Compiler Flags
 
-  <PropertyGroup Condition="'$(BUILDING_USING_DOTNET)' == 'true'">
-    <DisableAutoSetFscCompilerPath>false</DisableAutoSetFscCompilerPath>
-
-    <FSHARPCORE_USE_PACKAGE Condition="'$(FSHARPCORE_USE_PACKAGE)' == ''">true</FSHARPCORE_USE_PACKAGE>
-
-    <DISABLE_ARCADE Condition="'$(DISABLE_ARCADE)' == ''">true</DISABLE_ARCADE>
-    <ArtifactsDir>$(MSBuildThisFileDirectory)artifacts/</ArtifactsDir>
-    <OutputPath>$(ArtifactsDir)/bin/$(MSBuildProjectName)/$(Configuration)/</OutputPath>
-    <IntermediateOutputPath>$(ArtifactsDir)obj/$(MSBuildProjectName)/$(Configuration)/</IntermediateOutputPath>
-    <!-- Note, that default framework is used here (the one we use for development in the current cycle),
-         since it's a non-arcade and non-sourcebuild scenario -->
-    <FsLexPath>$(ArtifactsDir)/bin/fslex/$(Configuration)/$(FSharpNetCoreProductDefaultTargetFramework)/$(RuntimeIdentifier)/fslex.dll</FsLexPath>
-    <FsYaccPath>$(ArtifactsDir)/bin/fsyacc/$(Configuration)/$(FSharpNetCoreProductDefaultTargetFramework)/$(RuntimeIdentifier)/fsyacc.dll</FsYaccPath>
-    <DefineConstants>BUILDING_WITH_LKG;$(DefineConstants)</DefineConstants>
+    These are functional requirements, not infrastructure:
+    - nowarn:3384 - XML doc warnings in generated code
+    - nowarn:75 - InternalCommandLineOption usage
+    - generate-filter-blocks - prevents stack overflow in type checking
+  -->
+  <PropertyGroup>
+    <OtherFlags>$(OtherFlags) --nowarn:3384</OtherFlags>
+    <OtherFlags>$(OtherFlags) --nowarn:75</OtherFlags>
+    <NoCompilerStandardLib>true</NoCompilerStandardLib>
+    <DebugType>embedded</DebugType>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
 
-  <Import Project="$(MSBuildThisFileDirectory)/eng/Versions.props" Condition="'$(DISABLE_ARCADE)' == 'true'" />
+  <!-- Centralized Package Versions -->
+  <PropertyGroup>
+    <FSharpCorePackageVersion>9.0.100</FSharpCorePackageVersion>
+    <SystemCollectionsImmutableVersion>8.0.0</SystemCollectionsImmutableVersion>
+    <SystemReflectionMetadataVersion>8.0.0</SystemReflectionMetadataVersion>
+  </PropertyGroup>
 
-  <Import Project="FSharpBuild.Directory.Build.props" Condition=" '$(FSharpTestCompilerVersion)' == '' " />
-  <!-- To support source-build for the "next" version of .NET without forcing this repo to use it,
-       we can utilize arcade's $(NetCurrent) property, and set it ourselves in the arcade-less scenarios.
-       For FCS solution, we set it to one for current dev cycle.
-       When used with arcade, and inserting/building for net8 branches, it will set it to net8.0, for net9 branches to net9.0 and so on. -->
-  <Choose>
-    <!-- Once we move to OOP in VS, and major dependants of FCS will move to netcore (not netstandard),
-         we should also support $(NetPrevious) for all releases.
-         This will likely include FCS and FSharp.Core as well as shipped products.
-         Right now, it only covers products we ship (FSC and FSI), not NuGet packages. -->
-    <When Condition="'$(DotNetBuildSourceOnly)' == 'true' AND '$(DotNetBuildFromVMR)' == 'true'">
-      <PropertyGroup>
-        <FSharpNetCoreProductTargetFramework>$(NetCurrent)</FSharpNetCoreProductTargetFramework>
-      </PropertyGroup>
-    </When>
-    <Otherwise>
-      <PropertyGroup>
-        <FSharpNetCoreProductTargetFramework>$(FSharpNetCoreProductDefaultTargetFramework)</FSharpNetCoreProductTargetFramework>
-      </PropertyGroup>
-    </Otherwise>
-  </Choose>
-
-  <!-- It's important we set TFM before this, since FSharpTests.Directory.Build.props uses it.
-       TODO(vlza): this build props looks outdated, since we only use $(FSharpTestCompilerVersion) in TP tests or cambridge suite (which we slowly want to migrate to xUnit).
-                   We probably should remove or revisit it. -->
-  <Import Project="FSharpTests.Directory.Build.props" Condition=" '$(FSharpTestCompilerVersion)' != '' " />
-
-  <ItemGroup>
-    <!-- If there is a README.md next to a project file, include it (for easier access in the IDE) -->
-    <None Include="README.md" Condition="Exists('README.md')" />
-  </ItemGroup>
+  <!-- Import additional build props -->
+  <Import Project="FSharpBuild.Directory.Build.props" />
 
 </Project>

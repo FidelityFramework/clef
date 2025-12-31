@@ -1,68 +1,31 @@
 <Project>
+  <!--
+    FNCS Build Targets - Arcade-free
 
-  <Import Project="Sdk.targets" Sdk="Microsoft.DotNet.Arcade.Sdk" Condition="'$(DISABLE_ARCADE)' != 'true'"/>
-  <Import Project="eng\targets\Imports.targets" Condition="'$(DISABLE_ARCADE)' != 'true'"/>
-  <Import Project="eng\targets\NuGet.targets" Condition="'$(DISABLE_ARCADE)' != 'true'"/>
-  <Import Project="FSharp.Profiles.props" />
+    Minimal build targets for F# Native Compiler Services.
+    Preserves essential functionality, removes Arcade dependencies.
+  -->
+
+  <!-- No Arcade imports -->
+
+  <!-- FsLex/FsYacc targets integration -->
+  <Import Project="FSharp.Profiles.props" Condition="Exists('FSharp.Profiles.props')" />
 
   <PropertyGroup>
-    <DefineConstants Condition="'$(Configuration)'=='release'">$(DefineConstants);Release</DefineConstants>
-    <DefineConstants Condition="'$(Configuration)'=='debug'">$(DefineConstants);Debug</DefineConstants>
+    <DefineConstants Condition="'$(Configuration)'=='Release'">$(DefineConstants);Release</DefineConstants>
+    <DefineConstants Condition="'$(Configuration)'=='Debug'">$(DefineConstants);Debug</DefineConstants>
   </PropertyGroup>
 
-  <ItemDefinitionGroup>
-    <NoneSubstituteText>
-      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
-      <Pattern1></Pattern1>
-      <Pattern2></Pattern2>
-      <Pattern3></Pattern3>
-      <Replacement1></Replacement1>
-      <Replacement2></Replacement2>
-      <Replacement3></Replacement3>
-      <_ReplacementText></_ReplacementText>
-      <IncludeInVsix>false</IncludeInVsix>
-      <Link></Link>
-      <SubDir></SubDir>
-    </NoneSubstituteText>
-  </ItemDefinitionGroup>
-
-  <Target Name="NoneSubstituteTextFiles"
-          Inputs="@(NoneSubstituteText)"
-          Outputs="@(NoneSubstituteText->'$(IntermediateOutputPath)%(Filename)%(Extension)')"
-          BeforeTargets="AssignTargetPaths;BeforeBuild;GenerateFSharpTextResources">
-
-    <ItemGroup>
-        <NoneSubstituteText Update="@(NoneSubstituteText)">
-            <__TargetFilePath>$(IntermediateOutputPath)%(Subdir)%(Filename)%(Extension)</__TargetFilePath>
-            <__TargetFileName>%(Filename)%(Extension)</__TargetFileName>
-            <_ReplacementText>$([System.IO.File]::ReadAllText('%(FullPath)'))</_ReplacementText>
-        </NoneSubstituteText>
-        <NoneSubstituteText Update="@(NoneSubstituteText)">
-            <_ReplacementText Condition="'%(Pattern1)' != ''">$([System.Text.RegularExpressions.Regex]::Replace('%(_ReplacementText)', '%(Pattern1)', '%(Replacement1)'))</_ReplacementText>
-        </NoneSubstituteText>
-        <NoneSubstituteText Update="@(NoneSubstituteText)">
-            <_ReplacementText Condition="'%(Pattern2)' != ''">$([System.Text.RegularExpressions.Regex]::Replace('%(_ReplacementText)', '%(Pattern2)', '%(Replacement2)'))</_ReplacementText>
-        </NoneSubstituteText>
-        <NoneSubstituteText Update="@(NoneSubstituteText)">
-            <_ReplacementText Condition="'%(Pattern3)' != ''">$([System.Text.RegularExpressions.Regex]::Replace('%(_ReplacementText)', '%(Pattern3)', '%(Replacement3)'))</_ReplacementText>
-        </NoneSubstituteText>
-    </ItemGroup>
-
-    <MakeDir Directories="$(IntermediateOutputPath)" Condition="!Exists('$(IntermediateOutputPath)')" />
-    <WriteLinesToFile File="%(NoneSubstituteText.__TargetFilePath)" Lines="%(NoneSubstituteText._ReplacementText)" Overwrite="true" WriteOnlyWhenDifferent="true" />
-
-    <ItemGroup>
-      <None Include="%(NoneSubstituteText.__TargetFilePath)" CopyToOutputDirectory="%(NoneSubstituteText.CopyToOutputDirectory)" Condition="'%(NoneSubstituteText.SubDir)'==''" />
-      <_NoneWithTargetPath Include="%(NoneSubstituteText.__TargetFilePath)" CopyToOutputDirectory="%(NoneSubstituteText.CopyToOutputDirectory)" TargetPath="%(SubDir)%(__TargetFileName)" Condition="'%(NoneSubstituteText.SubDir)'!=''"/>
-      <FileWrites Include="%(NoneSubstituteText.__TargetFilePath)" Condition="'%(NoneSubstituteText.__TargetFileName)' != 'App.config'" />
-      <Content Include="%(NoneSubstituteText.__TargetFilePath)" CopyToOutputDirectory="Always" IncludeInVsix="true" Link="%(NoneSubstituteText.Link)" Condition="'%(NoneSubstituteText.IncludeInVsix)'=='true'" />
-    </ItemGroup>
-  </Target>
-
+  <!-- Generate build properties file -->
   <Target Name="_GenerateBuildPropertiesFile"
           Outputs="$(IntermediateOutputPath)buildproperties.fs"
           BeforeTargets="BeforeBuild"
           Condition="'$(Language)'=='F#'">
+
+    <PropertyGroup>
+      <FSPRODUCTVERSION Condition="'$(FSPRODUCTVERSION)' == ''">$(VersionPrefix)</FSPRODUCTVERSION>
+      <FSLANGUAGEVERSION Condition="'$(FSLANGUAGEVERSION)' == ''">9.0</FSLANGUAGEVERSION>
+    </PropertyGroup>
 
     <ItemGroup>
       <_BuildPropertyLines Remove="@(_BuildPropertyLines)" />
@@ -80,83 +43,11 @@
       Condition="!Exists('$(IntermediateOutputPath)')" />
     <WriteLinesToFile File="$(IntermediateOutputPath)buildproperties.fs" Lines="@(_BuildPropertyLines)" Overwrite="true" WriteOnlyWhenDifferent="true" />
 
-    <!-- Make sure it will get cleaned  -->
     <ItemGroup>
       <CompileBefore Include="$(IntermediateOutputPath)buildproperties.fs" />
       <FsGeneratedSource Include="$(IntermediateOutputPath)buildproperties.fs" />
       <FileWrites Include="$(IntermediateOutputPath)buildproperties.fs" />
     </ItemGroup>
-  </Target>
-
-      <!-- SDK targets override -->
-  <PropertyGroup Condition="'$(Configuration)' != 'Proto' AND '$(DisableCompilerRedirection)'!='true' AND Exists('$(ProtoOutputPath)')">
-    <FSharpBuildAssemblyFileOverride>$(ProtoOutputPath)\fsc\FSharp.Build.dll</FSharpBuildAssemblyFileOverride>
-  </PropertyGroup>  
-  <UsingTask TaskName="FSharpEmbedResourceText" AssemblyFile="$(FSharpBuildAssemblyFileOverride)" Override="true" Condition="'$(Configuration)' != 'Proto' AND '$(DisableCompilerRedirection)'!='true' AND Exists('$(ProtoOutputPath)')" />
-  <UsingTask TaskName="FSharpEmbedResXSource" AssemblyFile="$(FSharpBuildAssemblyFileOverride)" Override="true" Condition="'$(Configuration)' != 'Proto' AND '$(DisableCompilerRedirection)'!='true' AND Exists('$(ProtoOutputPath)')" />   
-
-
-  <Target Name="BeforeResGen"
-          Inputs="@(EmbeddedResource->'$(IntermediateOutputPath)%(Filename)%(Extension)')"
-          Outputs="@(EmbeddedResource->'$(IntermediateOutputPath)resources\%(Filename)%(Extension)')"
-          Condition="'$(Configuration)' != 'Proto' and '$(Language)'=='F#' and '$(DisableCompilerRedirection)' != 'true' ">
-
-    <MakeDir Directories="$(IntermediateOutputPath)" Condition="!Exists('$(IntermediateOutputPath)')" />
-    <MakeDir Directories="$(IntermediateOutputPath)resources\" Condition="!Exists('$(IntermediateOutputPath)resources\')" />
-
-    <SubstituteText EmbeddedResources="@(EmbeddedResource)">
-      <Output TaskParameter="CopiedFiles" ItemName="CopiedFiles" />
-    </SubstituteText>
-
-    <ItemGroup>
-      <IntermediateFiles Include="$(IntermediateOutputPath)\*.resx" />
-      <IntermediateResourcesFiles Include="$(IntermediateOutputPath)resources\*.resx" />
-    </ItemGroup>
-
-    <!-- IntermediateFiles Hashes -->
-    <GetFileHash Files="@(IntermediateFiles)">
-      <Output
-          TaskParameter="Items"
-          ItemName="IntermediateFilesHashes" />
-    </GetFileHash>
-
-    <Hash ItemsToHash="@(IntermediateFilesHashes->'%(FileHash)')">
-      <Output TaskParameter="HashResult" PropertyName="IntermediateFilesHash" />
-    </Hash>
-
-    <!-- CopiedFilesForHash Hashes -->
-    <GetFileHash Files="@(IntermediateResourceFilesForHash)">
-      <Output
-          TaskParameter="Items"
-          ItemName="IntermediateResourceFilesHashes" />
-    </GetFileHash>
-
-    <Hash ItemsToHash="@(IntermediateResourceFilesHashes->'%(FileHash)')">
-      <Output TaskParameter="HashResult" PropertyName="IntermediateResourceFilesHash" />
-    </Hash>
-
-    <!-- Update EmbeddedResources -->
-    <ItemGroup Condition="'$(IntermediateFilesHash)' != '$(IntermediateResourceFilesHash)'">
-        <EmbeddedResource Remove="@(EmbeddedResource)"/>
-        <EmbeddedResource Include="@(CopiedFiles)"/>
-    </ItemGroup>
-
-    <Copy SourceFiles="@(CopyVsixResources)" DestinationFolder="$(IntermediateOutputPath)\resources\Resources" Condition="'$(IntermediateFilesHash)' != '$(IntermediateResourceFilesHash)'" />
-  </Target>
-
-  <PropertyGroup>
-    <CoreBuildDependsOn>$(CoreBuildDependsOn);PrefixRepoToReleaseNotes</CoreBuildDependsOn>
-  </PropertyGroup>
-
-  <Target Name="PrefixRepoToReleaseNotes"
-          AfterTargets="InitializeSourceControlInformationFromSourceControlManager"
-          BeforeTargets="InitializeStandardNuspecProperties"
-          Condition="'$(IsPackable)'=='true'">
-
-    <PropertyGroup>
-      <_GitUrl>https://github.com/dotnet/fsharp</_GitUrl>
-      <PackageReleaseNotes>$(_GitUrl)$(PackageReleaseNotes)</PackageReleaseNotes>
-    </PropertyGroup>
   </Target>
 
 </Project>

@@ -1667,7 +1667,6 @@ val mkPrintfFormatTy: TcGlobals -> TType -> TType -> TType -> TType -> TType -> 
 
 /// Represents metadata extracted from a nominal type
 type TypeDefMetadata =
-    | ILTypeMetadata of TILObjectReprData
     | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata
 #if !NO_TYPEPROVIDERS
     | ProvidedTypeMetadata of TProvidedTypeInfo
@@ -2084,18 +2083,13 @@ val mkQuotedExprTy: TcGlobals -> TType -> TType
 val mkRawQuotedExprTy: TcGlobals -> TType
 
 //-------------------------------------------------------------------------
-// Primitives associated with IL code gen
+// NOTE: IL code gen primitives removed from FNCS
+// FNCS is for type checking, not IL generation. IL code gen helpers
+// (mspec_Type_GetTypeFromHandle, mkInitializeArrayMethSpec, etc.)
+// have been removed as they depend on BCL types (System.Type, System.Array).
 //-------------------------------------------------------------------------
 
-val mspec_Type_GetTypeFromHandle: TcGlobals -> ILMethodSpec
-
-val fspec_Missing_Value: TcGlobals -> ILFieldSpec
-
-val mkInitializeArrayMethSpec: TcGlobals -> ILMethodSpec
-
 val mkByteArrayTy: TcGlobals -> TType
-
-val mkInvalidCastExnNewobj: TcGlobals -> ILInstr
 
 //-------------------------------------------------------------------------
 // Construct calls to some intrinsic functions
@@ -2328,7 +2322,7 @@ val mkStaticCall_String_Concat3: TcGlobals -> range -> Expr -> Expr -> Expr -> E
 
 val mkStaticCall_String_Concat4: TcGlobals -> range -> Expr -> Expr -> Expr -> Expr -> Expr
 
-val mkStaticCall_String_Concat_Array: TcGlobals -> range -> Expr -> Expr
+// NOTE: mkStaticCall_String_Concat_Array removed - uses BCL array types
 
 /// Use a witness in BuiltInWitnesses
 val tryMkCallBuiltInWitness: TcGlobals -> TraitConstraintInfo -> Expr list -> range -> Expr option
@@ -2420,9 +2414,8 @@ val mkCompilationMappingAttrWithSeqNum: TcGlobals -> int -> int -> ILAttribute
 
 val mkCompilationMappingAttrWithVariantNumAndSeqNum: TcGlobals -> int -> int -> int -> ILAttribute
 
-val mkCompilationMappingAttrForQuotationResource: TcGlobals -> string * ILTypeRef list -> ILAttribute
-
-val mkCompilationArgumentCountsAttr: TcGlobals -> int list -> ILAttribute
+// NOTE: mkCompilationMappingAttrForQuotationResource removed - uses BCL array types (mkILArr1DTy, typ_Type)
+// NOTE: mkCompilationArgumentCountsAttr removed - uses BCL array types (mkILArr1DTy)
 
 val mkCompilationSourceNameAttr: TcGlobals -> string -> ILAttribute
 

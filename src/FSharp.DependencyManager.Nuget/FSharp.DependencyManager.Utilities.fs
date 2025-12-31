@@ -207,7 +207,7 @@ module internal Utilities =
                 p.BeginOutputReadLine()
                 p.BeginErrorReadLine()
 
-                if not (p.WaitForExit(timeout)) then
+                if not (p.WaitForExit(timeout: int)) then
                     // Timed out resolving throw a diagnostic.
                     raise (TimeoutException(SR.timedoutResolvingPackages (psi.FileName, psi.Arguments)))
                 else
@@ -224,7 +224,7 @@ module internal Utilities =
                 let path =
                     match path with
                     | Some path -> path // specific file
-                    | None -> Path.Combine(Path.GetDirectoryName(projectPath), "msbuild.binlog") // auto-generated file
+                    | None -> Path.Combine(Path.GetDirectoryName(projectPath: string), "msbuild.binlog") // auto-generated file
 
                 sprintf "/bl:\"%s\"" path
             | None -> ""

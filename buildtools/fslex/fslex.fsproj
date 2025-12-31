@@ -1,22 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    FsLex - F# Lexer Generator
+
+    Build tool for generating lexers from .fsl files.
+    Must be built before FSharpNative.Compiler.Service.
+  -->
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>$(FSharpNetCoreProductTargetFramework)</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
-    <RollForward Condition="'$(BUILDING_USING_DOTNET)' == 'true'">LatestMajor</RollForward>
-    <NoWarn>$(NoWarn);64;1204</NoWarn>  <!--Temporary fix for sourcebuild -->
+    <RollForward>LatestMajor</RollForward>
+    <NoWarn>$(NoWarn);64;1204;3261</NoWarn>
     <TolerateUnusedBindings>true</TolerateUnusedBindings>
-  </PropertyGroup>
-
-  <PropertyGroup>
-    <PublishReadyToRun>$(EnablePublishReadyToRun)</PublishReadyToRun>
-    <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
-  </PropertyGroup>
-
-  <PropertyGroup Condition="'$(BUILDING_USING_DOTNET)' == 'true'">
-    <OutputPath>$(ArtifactsDir)/bin/$(MSBuildProjectName)/$(Configuration)/</OutputPath>
-    <IntermediateOutputPath>$(ArtifactsDir)obj/$(MSBuildProjectName)/$(Configuration)/</IntermediateOutputPath>
+    <!-- Disable nullable for legacy/generated code -->
+    <Nullable>disable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>
@@ -33,12 +31,8 @@
     <Compile Include="fslex.fs" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(FSHARPCORE_USE_PACKAGE)' != 'true'">
-    <ProjectReference Include="$(MSBuildThisFileDirectory)..\..\src\FSharp.Core\FSharp.Core.fsproj" />
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(FSHARPCORE_USE_PACKAGE)' == 'true'">
-    <PackageReference Include="FSharp.Core" Version="$(FSharpCoreShippedPackageVersionValue)" />
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" Version="9.0.100" />
   </ItemGroup>
 
 </Project>
