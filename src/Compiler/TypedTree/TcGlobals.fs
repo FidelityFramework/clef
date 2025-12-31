@@ -453,6 +453,7 @@ type TcGlobals(
   let v_unit_ty         = mkNonGenericTy v_unit_tcr_nice 
   let v_system_Type_ty = mkSysNonGenericTy sys "Type" 
   let v_Array_tcref = findSysTyconRef sys "Array"
+  let _ = v_Array_tcref  // Suppress unused warning - used conceptually but not for IL emission
 
   let v_system_Reflection_MethodInfo_ty = mkSysNonGenericTy ["System";"Reflection"] "MethodInfo"
   let v_nullable_tcr = findSysTyconRef sys "Nullable`1"
@@ -943,11 +944,10 @@ type TcGlobals(
           | [] -> v.SetAttribs attrs
           | _ -> v.SetAttribs (attrs @ v.Attribs)
 
-  let addMethodGeneratedAttrs (mdef:ILMethodDef)   = mdef.With(customAttrs = addGeneratedAttrs mdef.CustomAttrs)
-
-  let addPropertyGeneratedAttrs (pdef:ILPropertyDef) = pdef.With(customAttrs = addGeneratedAttrs pdef.CustomAttrs)
-
-  let addFieldGeneratedAttrs (fdef:ILFieldDef) = fdef.With(customAttrs = addGeneratedAttrs fdef.CustomAttrs)
+  // Native compiler doesn't generate IL definitions, stub these functions
+  let addMethodGeneratedAttrs (mdef:ILMethodDef) = mdef
+  let addPropertyGeneratedAttrs (pdef:ILPropertyDef) = pdef
+  let addFieldGeneratedAttrs (fdef:ILFieldDef) = fdef
 
   let tref_DebuggerBrowsableAttribute n =
         let typ_DebuggerBrowsableState =
@@ -959,11 +959,12 @@ type TcGlobals(
 
   let addNeverAttrs (attrs: ILAttributes) = mkILCustomAttrsFromArray (Array.append (attrs.AsArray()) [| debuggerBrowsableNeverAttribute |])
 
-  let addPropertyNeverAttrs (pdef:ILPropertyDef) = pdef.With(customAttrs = addNeverAttrs pdef.CustomAttrs)
-
-  let addFieldNeverAttrs (fdef:ILFieldDef) = fdef.With(customAttrs = addNeverAttrs fdef.CustomAttrs)
-
-  let mkDebuggerTypeProxyAttribute (ty : ILType) = mkILCustomAttribute (findSysILTypeRef tname_DebuggerTypeProxyAttribute,  [ilg.typ_Type], [ILAttribElem.TypeRef (Some ty.TypeRef)], [])
+  // Native compiler doesn't need debugger attributes
+  let addPropertyNeverAttrs (pdef:ILPropertyDef) = pdef
+  let addFieldNeverAttrs (fdef:ILFieldDef) = fdef
+  let mkDebuggerTypeProxyAttribute (ty : ILType) =
+    ignore ty  // Native compiler doesn't have System.Type
+    mkILCustomAttribute (findSysILTypeRef tname_DebuggerTypeProxyAttribute, [], [], [])
 
   let betterTyconEntries =
      [| yield sys, "Int32"    , v_int_tcr
@@ -1856,7 +1857,8 @@ type TcGlobals(
       ((ValRefForIntrinsic g.call_with_witnesses_info).TryDeref.IsSome && langVersion.SupportsFeature LanguageFeature.WitnessPassing)
 
   /// Indicates if we can use System.Array.Empty when emitting IL for empty array literals
-  member val isArrayEmptyAvailable = v_Array_tcref.ILTyconRawMetadata.Methods.FindByName "Empty" |> List.isEmpty |> not
+  /// Native compiler doesn't emit IL, so this is always false
+  member val isArrayEmptyAvailable = false
 
   member g.isSpliceOperator v =
     primValRefEq g.compilingFSharpCore g.fslibCcu v g.splice_expr_vref ||

@@ -303,12 +303,9 @@
     <Compile Include="DependencyManager/DependencyProvider.fs">
       <Link>Driver\DependencyProvider.fs</Link>
     </Compile>
-    <Compile Include="Driver\CompilerConfig.fsi" />
-    <Compile Include="Driver\CompilerConfig.fs" />
-    <Compile Include="Driver\CompilerImports.fsi" />
-    <Compile Include="Driver\CompilerImports.fs" />
-    <Compile Include="Driver\CompilerDiagnostics.fsi" />
-    <Compile Include="Driver\CompilerDiagnostics.fs" />
+    <!-- CompilerConfig removed - BCL-dependent, no longer referenced -->
+    <!-- CompilerImports removed - .NET assembly imports not needed for native -->
+    <!-- CompilerDiagnostics removed - depends on deleted type checking modules -->
     <Compile Include="Driver\GraphChecking\Continuation.fsi" />
     <Compile Include="Driver\GraphChecking\Continuation.fs" />
     <Compile Include="Driver\GraphChecking\Types.fsi" />
@@ -324,94 +321,18 @@
     <Compile Include="Driver\GraphChecking\GraphProcessing.fsi" />
     <Compile Include="Driver\GraphChecking\GraphProcessing.fs" />
     <Content Include="Driver\GraphChecking\Docs.md" />
-    <Compile Include="Driver\ParseAndCheckInputs.fsi" />
-    <Compile Include="Driver\ParseAndCheckInputs.fs" />
+    <!-- ParseAndCheckInputs removed - old type checking orchestration -->
     <!-- ScriptClosure removed - script handling for FSI not needed -->
-    <Compile Include="Driver\CompilerOptions.fsi" />
-    <Compile Include="Driver\CompilerOptions.fs" />
+    <!-- CompilerOptions removed - depends on deleted Optimizer -->
     <!-- OptimizeInputs, BinaryResourceFormats, StaticLinking, CreateILModule removed - IL generation not needed -->
     <Compile Include="Driver\XmlDocFileWriter.fsi" />
     <Compile Include="Driver\XmlDocFileWriter.fs" />
-    <Compile Include="Driver\fsc.fsi" />
-    <Compile Include="Driver\fsc.fs" />
+    <!-- fsc.fs removed - old driver, will be replaced with native driver -->
 
-    <!-- the symbol API. -->
-    <Compile Include="Symbols\SymbolHelpers.fsi" />
-    <Compile Include="Symbols\SymbolHelpers.fs" />
-    <Compile Include="Symbols\Symbols.fsi" />
-    <Compile Include="Symbols\Symbols.fs" />
-    <Compile Include="Symbols\FSharpDiagnostic.fsi" />
-    <Compile Include="Symbols\FSharpDiagnostic.fs" />
-    <Compile Include="Symbols\Exprs.fsi" />
-    <Compile Include="Symbols\Exprs.fs" />
-    <Compile Include="Symbols\SymbolPatterns.fsi" />
-    <Compile Include="Symbols\SymbolPatterns.fs" />
+    <!-- Symbols API removed - depends on deleted type checking infrastructure -->
 
-    <!-- the incremental builder and service . -->
-    <Compile Include="Service\SemanticClassification.fsi" />
-    <Compile Include="Service\SemanticClassification.fs" />
-    <Compile Include="Service\ItemKey.fsi" />
-    <Compile Include="Service\ItemKey.fs" />
-    <Compile Include="Service\SemanticClassificationKey.fsi" />
-    <Compile Include="Service\SemanticClassificationKey.fs" />
-    <Compile Include="Service\FSharpSource.fsi" />
-    <Compile Include="Service\FSharpSource.fs" />
-    <Compile Include="Service\IncrementalBuild.fsi" />
-    <Compile Include="Service\IncrementalBuild.fs" />
-    <Compile Include="Service\ServiceCompilerDiagnostics.fsi" />
-    <Compile Include="Service\ServiceCompilerDiagnostics.fs" />
-    <Compile Include="Service\ServiceConstants.fs" />
-    <Compile Include="Service\ServiceDeclarationLists.fsi" />
-    <Compile Include="Service\ServiceDeclarationLists.fs" />
-    <Compile Include="Service\ServiceLexing.fsi" />
-    <Compile Include="Service\ServiceLexing.fs" />
-    <Compile Include="Service\ServiceParseTreeWalk.fsi" />
-    <Compile Include="Service\ServiceParseTreeWalk.fs" />
-    <Compile Include="Service\SynExpr.fsi" />
-    <Compile Include="Service\SynExpr.fs" />
-    <Compile Include="Service\SynPat.fsi" />
-    <Compile Include="Service\SynPat.fs" />
-    <Compile Include="Service\ServiceNavigation.fsi" />
-    <Compile Include="Service\ServiceNavigation.fs" />
-    <Compile Include="Service\ServiceParamInfoLocations.fsi" />
-    <Compile Include="Service\ServiceParamInfoLocations.fs" />
-    <Compile Include="Service\FSharpParseFileResults.fsi" />
-    <Compile Include="Service\FSharpParseFileResults.fs" />
-    <Compile Include="Service\ServiceParsedInputOps.fsi" />
-    <Compile Include="Service\ServiceParsedInputOps.fs" />
-    <Compile Include="Service\ServiceAssemblyContent.fsi" />
-    <Compile Include="Service\ServiceAssemblyContent.fs" />
-    <Compile Include="Service\ServiceXmlDocParser.fsi" />
-    <Compile Include="Service\ServiceXmlDocParser.fs" />
-    <Compile Include="Service\ExternalSymbol.fsi" />
-    <Compile Include="Service\ExternalSymbol.fs" />
-    <Compile Include="Service\QuickParse.fsi" />
-    <Compile Include="Service\QuickParse.fs" />
-    <Compile Include="Service\FSharpCheckerResults.fsi" />
-    <Compile Include="Service\FSharpCheckerResults.fs" />
-    <Compile Include="Service\FSharpProjectSnapshot.fs" />
-    <Compile Include="Service\BackgroundCompiler.fsi" />
-    <Compile Include="Service\BackgroundCompiler.fs" />
-    <Compile Include="Service\TransparentCompiler.fsi" />
-    <Compile Include="Service\TransparentCompiler.fs" />
-    <Compile Include="Service\service.fsi" />
-    <Compile Include="Service\service.fs" />
-    <Compile Include="Service\FSharpWorkspaceState.fs" />
-    <Compile Include="Service\FSharpWorkspaceQuery.fs" />
-    <Compile Include="Service\FSharpWorkspace.fs" />
-    <Compile Include="Service\ServiceInterfaceStubGenerator.fsi" />
-    <Compile Include="Service\ServiceInterfaceStubGenerator.fs" />
-    <Compile Include="Service\ServiceStructure.fsi" />
-    <Compile Include="Service\ServiceStructure.fs" />
-    <Compile Include="Service\ServiceAnalysis.fsi" />
-    <Compile Include="Service\ServiceAnalysis.fs" />
-    <Compile Include="Interactive\FSharpInteractiveServer.fsi" />
-    <Compile Include="Interactive\FSharpInteractiveServer.fs" />
-    <Compile Include="Interactive\ControlledExecution.fs" />
-    <Compile Include="Interactive\fsihelp.fsi" />
-    <Compile Include="Interactive\fsihelp.fs" />
-    <Compile Include="Interactive\fsi.fsi" />
-    <Compile Include="Interactive\fsi.fs" />
+    <!-- Service API removed - depends on deleted type checking infrastructure -->
+    <!-- Interactive (FSI) removed - not needed for native compilation -->
     <!-- Legacy removed -->
   </ItemGroup>
 

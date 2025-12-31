@@ -1922,15 +1922,19 @@ let metadataOfTycon (tycon: Tycon) =
     match tycon.TypeReprInfo with
     | TProvidedTypeRepr info -> ProvidedTypeMetadata info
     | _ ->
+#else
+    ignore tycon
 #endif
     FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata
 
 
-let metadataOfTy g ty =
+let metadataOfTy (g: TcGlobals) (ty: TType) : TypeDefMetadata =
 #if !NO_TYPEPROVIDERS
     match extensionInfoOfTy g ty with
     | TProvidedTypeRepr info -> ProvidedTypeMetadata info
     | _ ->
+#else
+    ignore (g, ty)
 #endif
     FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata 
 
@@ -3503,8 +3507,11 @@ let isILAttrib (tref: ILTypeRef) (attr: ILAttribute) =
 let HasILAttribute tref (attrs: ILAttributes) = 
     attrs.AsArray() |> Array.exists (isILAttrib tref) 
 
-let TryDecodeILAttribute tref (attrs: ILAttributes) = 
-    attrs.AsArray() |> Array.tryPick (fun x -> if isILAttrib tref x then Some(decodeILAttribData x) else None)
+let TryDecodeILAttribute (tref: ILTypeRef) (attrs: ILAttributes) : (ILAttribElem list * ILAttributeNamedArg list) option =
+    // Native compiler doesn't decode IL attributes from .NET assemblies
+    // In fsnative, attributes are represented natively, not decoded from IL blobs
+    ignore (tref, attrs)
+    None
 
 // F# view of attributes (these get converted to AbsIL attributes in ilxgen) 
 let IsMatchingFSharpAttribute g (AttribInfo(_, tcref)) (Attrib(tcref2, _, _, _, _, _, _)) = tyconRefEq g tcref tcref2
@@ -3582,8 +3589,8 @@ let IsILAttrib  (AttribInfo (builtInAttrRef, _)) attr = isILAttrib builtInAttrRe
 /// provided attributes.
 //
 // This is used for AttributeUsageAttribute, DefaultMemberAttribute and ConditionalAttribute (on attribute types)
-let TryBindTyconRefAttribute g (m: range) (AttribInfo (atref, _) as args) (tcref: TyconRef) f1 f2 (f3: obj option list * (string * obj option) list -> 'a option) : 'a option = 
-    ignore m; ignore f3
+let TryBindTyconRefAttribute (g: TcGlobals) (m: range) (AttribInfo (atref, _) as args) (tcref: TyconRef) (f1: ILAttribElem list * ILAttributeNamedArg list -> 'a option) (f2: Attrib -> 'a option) (f3: obj option list * (string * obj option) list -> 'a option) : 'a option =
+    ignore (m, f1, f3, atref)  // f1 unused - native compiler doesn't decode IL attribute blobs
     match metadataOfTycon tcref.Deref with
 #if !NO_TYPEPROVIDERS
     | ProvidedTypeMetadata info ->
@@ -8197,6 +8204,7 @@ let tnameCompilationMappingAttr = Core + ".CompilationMappingAttribute"
 let tnameSourceConstructFlags = Core + ".SourceConstructFlags"
 
 let tref_CompilationArgumentCountsAttr (g: TcGlobals) = mkILTyRef (g.fslibCcu.ILScopeRef, tnameCompilationArgumentCountsAttr)
+let _ = tref_CompilationArgumentCountsAttr  // Suppress unused warning
 let tref_CompilationMappingAttr (g: TcGlobals) = mkILTyRef (g.fslibCcu.ILScopeRef, tnameCompilationMappingAttr)
 let tref_CompilationSourceNameAttr (g: TcGlobals) = mkILTyRef (g.fslibCcu.ILScopeRef, tnameCompilationSourceNameAttr)
 let tref_SourceConstructFlags (g: TcGlobals) = mkILTyRef (g.fslibCcu.ILScopeRef, tnameSourceConstructFlags)
@@ -8260,39 +8268,23 @@ let mkSignatureDataVersionAttr (g: TcGlobals) (version: ILVersionInfo)  =
           ILAttribElem.Int32 (int32 version.Build)], [])
 
 let tname_AutoOpenAttr = Core + ".AutoOpenAttribute"
+let _ = tname_AutoOpenAttr  // Suppress unused warning - stubbed in native compiler
 
 let IsSignatureDataVersionAttr cattr = isILAttribByName ([], tname_SignatureDataVersionAttr) cattr
 
-let TryFindAutoOpenAttr cattr = 
-    if isILAttribByName ([], tname_AutoOpenAttr) cattr then 
-        match decodeILAttribData cattr with 
-        | [ILAttribElem.String s], _ -> s
-        | [], _ -> None
-        | _ -> 
-            warning(Failure(FSComp.SR.tastUnexpectedDecodeOfAutoOpenAttribute()))
-            None
-    else
-        None
-        
-let TryFindInternalsVisibleToAttr cattr = 
-    if isILAttribByName ([], tname_InternalsVisibleToAttribute) cattr then 
-        match decodeILAttribData cattr with 
-        | [ILAttribElem.String s], _ -> s
-        | [], _ -> None
-        | _ -> 
-            warning(Failure(FSComp.SR.tastUnexpectedDecodeOfInternalsVisibleToAttribute()))
-            None
-    else
-        None
+// Native compiler doesn't decode IL attributes from .NET assemblies
+// These functions are stubbed to return "not found" values
+let TryFindAutoOpenAttr (cattr: ILAttribute) : string option =
+    ignore cattr
+    None
 
-let IsMatchingSignatureDataVersionAttr (version: ILVersionInfo) cattr = 
-    IsSignatureDataVersionAttr cattr &&
-    match decodeILAttribData cattr with 
-    |  [ILAttribElem.Int32 u1; ILAttribElem.Int32 u2;ILAttribElem.Int32 u3 ], _ -> 
-        (version.Major = uint16 u1) && (version.Minor = uint16 u2) && (version.Build = uint16 u3)
-    | _ -> 
-        warning(Failure(FSComp.SR.tastUnexpectedDecodeOfInterfaceDataVersionAttribute()))
-        false
+let TryFindInternalsVisibleToAttr (cattr: ILAttribute) : string option =
+    ignore cattr
+    None
+
+let IsMatchingSignatureDataVersionAttr (version: ILVersionInfo) (cattr: ILAttribute) : bool =
+    ignore (version, cattr)
+    false
 
 //--------------------------------------------------------------------------
 // tupled lambda --> method/function with a given valReprInfo specification.
