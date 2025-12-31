@@ -204,12 +204,6 @@ let rec GetImmediateIntrinsicPropInfosOfTypeAux (optFilter, ad) g amap m withExp
             |> List.ofSeq
 #endif
 
-        | ILTypeMetadata _ -> 
-            let tinfo = ILTypeInfo.FromType g origTy
-            let pdefs = tinfo.RawMetadata.Properties
-            let pdefs = match optFilter with None -> pdefs.AsList() | Some nm -> pdefs.LookupByName nm
-            pdefs |> List.map (fun pdef -> ILProp(ILPropInfo(tinfo, pdef))) 
-
         | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata -> 
             // Tuple types also support the properties Item1-8, Rest from the compiled tuple type
             // In this case convert to the .NET Tuple type that carries metadata and try again
@@ -363,11 +357,6 @@ type InfoReader(g: TcGlobals, amap: ImportMap) as this =
                         | Tainted.Null -> []
                         | Tainted.NonNull fi -> [  ProvidedField(amap, fi, m) ]
 #endif
-            | ILTypeMetadata _ -> 
-                let tinfo = ILTypeInfo.FromType g ty
-                let fdefs = tinfo.RawMetadata.Fields
-                let fdefs = match optFilter with None -> fdefs.AsList() | Some nm -> fdefs.LookupByName nm
-                fdefs |> List.map (fun pd -> ILFieldInfo(tinfo, pd)) 
             | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata -> 
                 []
         let infos = infos |> List.filter (IsILFieldInfoAccessible g amap m  ad)
@@ -388,14 +377,6 @@ type InfoReader(g: TcGlobals, amap: ImportMap) as this =
                         | Tainted.Null -> []
                         | Tainted.NonNull ei -> [  ProvidedEvent(amap, ei, m) ]
 #endif
-            | ILTypeMetadata _ -> 
-                let tinfo = ILTypeInfo.FromType g ty
-                let edefs = tinfo.RawMetadata.Events
-                let edefs = match optFilter with None -> edefs.AsList() | Some nm -> edefs.LookupByName nm
-                [ for edef in edefs   do
-                    let ileinfo = ILEventInfo(tinfo, edef)
-                    if IsILEventInfoAccessible g amap m ad ileinfo then 
-                        yield ILEvent ileinfo ]
             | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata -> 
                 []
         infos 
@@ -904,12 +885,6 @@ type InfoReader(g: TcGlobals, amap: ImportMap) as this =
             [ for ci in st.PApplyArray((fun st -> st.GetConstructors()), "GetConstructors", m) do
                     yield ProvidedMeth(amap, ci.Coerce(m), None, m) ]
     #endif
-        | ILTypeMetadata _ -> 
-            let tinfo = ILTypeInfo.FromType g origTy
-            tinfo.RawMetadata.Methods.FindByName ".ctor" 
-            |> List.filter (fun md -> md.IsConstructor) 
-            |> List.map (fun mdef -> MethInfo.CreateILMeth (amap, m, origTy, mdef)) 
-
         | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata -> 
             // Tuple types also support constructors. In this case convert to the .NET Tuple type that carries metadata and try again
             // Function types also support constructors. In this case convert to the FSharpFunc type that carries metadata and try again

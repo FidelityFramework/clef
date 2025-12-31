@@ -1405,8 +1405,8 @@ let p_ILVolatility x st =
 let p_ILReadonly x st =
     p_int
         (match x with
-         | ReadonlyAddress -> 0
-         | NormalAddress -> 1)
+         | ILReadonlyPrefix.ReadOnly -> 0
+         | ILReadonlyPrefix.NormalAddress -> 1)
         st
 
 let u_ILMethodRef st =
@@ -1458,8 +1458,8 @@ let u_ILVolatility st =
 
 let u_ILReadonly st =
     (match u_int st with
-     | 0 -> ReadonlyAddress
-     | 1 -> NormalAddress
+     | 0 -> ILReadonlyPrefix.ReadOnly
+     | 1 -> ILReadonlyPrefix.NormalAddress
      | _ -> ufailwith st "u_ILReadonly")
 
 [<Literal>]
@@ -3551,9 +3551,7 @@ and p_op x st =
         else
             p_byte 11 st
             p_int a st
-    | TOp.ILAsm(a, b) ->
-        p_byte 12 st
-        p_tup2 (p_list p_ILInstr) p_tys (a, b) st
+    // TOp.ILAsm removed - not part of native type universe
     | TOp.RefAddrGet _ -> p_byte 13 st
     | TOp.UnionCaseProof a ->
         p_byte 14 st
@@ -3565,23 +3563,7 @@ and p_op x st =
     | TOp.LValueOp(a, b) ->
         p_byte 17 st
         p_tup2 p_lval_op_kind (p_vref "lval") (a, b) st
-    | TOp.ILCall(a1, a2, a3, a4, a5, a7, a8, a9, b, c, d) ->
-        p_byte 18 st
-
-        p_tup11
-            p_bool
-            p_bool
-            p_bool
-            p_bool
-            p_vrefFlags
-            p_bool
-            p_bool
-            p_ILMethodRef
-            p_tys
-            p_tys
-            p_tys
-            (a1, a2, a3, a4, a5, a7, a8, a9, b, c, d)
-            st
+    // TOp.ILCall removed - not part of native type universe
     | TOp.Array -> p_byte 19 st
     | TOp.While _ -> p_byte 20 st
     | TOp.IntegerForLoop(_, _, dir) ->
@@ -3665,10 +3647,7 @@ and u_op st =
     | 11 ->
         let a = u_int st
         TOp.TupleFieldGet(tupInfoRef, a)
-    | 12 ->
-        let a = (u_list u_ILInstr) st
-        let b = u_tys st
-        TOp.ILAsm(a, b)
+    // Case 12 (TOp.ILAsm) removed - not part of native type universe
     | 13 -> TOp.RefAddrGet false // ok to set the 'readonly' flag on these operands to false on re-read since the flag is only used for typechecking purposes
     | 14 ->
         let a = u_ucref st
@@ -3681,14 +3660,7 @@ and u_op st =
         let a = u_lval_op_kind st
         let b = u_vref st
         TOp.LValueOp(a, b)
-    | 18 ->
-        let a1, a2, a3, a4, a5, a7, a8, a9 =
-            (u_tup8 u_bool u_bool u_bool u_bool u_vrefFlags u_bool u_bool u_ILMethodRef) st
-
-        let b = u_tys st
-        let c = u_tys st
-        let d = u_tys st
-        TOp.ILCall(a1, a2, a3, a4, a5, a7, a8, a9, b, c, d)
+    // Case 18 (TOp.ILCall) removed - not part of native type universe
     | 19 -> TOp.Array
     | 20 -> TOp.While(DebugPointAtWhile.No, NoSpecialWhileLoopMarker)
     | 21 ->

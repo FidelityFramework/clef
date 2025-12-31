@@ -252,70 +252,36 @@
     <Compile Include="TypedTree\TcGlobals.fs" />
     <Compile Include="TypedTree\TypedTreeOps.fsi" />
     <Compile Include="TypedTree\TypedTreeOps.fs" />
-    <Compile Include="TypedTree\TypedTreePickle.fsi" />
-    <Compile Include="TypedTree\TypedTreePickle.fs" />
+    <!-- TypedTreePickle.fsi/fs REMOVED - BCL machinery for .NET assembly metadata, not needed for native compilation -->
     <Compile Include="TypedTree\UpdatePrettyTyparNames.fsi" />
     <Compile Include="TypedTree\UpdatePrettyTyparNames.fs" />
     <Compile Include="Utilities\TypeHashing.fs" />
-    <Compile Include="Checking\import.fsi" />
-    <Compile Include="Checking\import.fs" />
-    <Compile Include="Checking\TypeHierarchy.fsi" />
-    <Compile Include="Checking\TypeHierarchy.fs" />
-    <Compile Include="Checking\infos.fsi" />
-    <Compile Include="Checking\infos.fs" />
-    <Compile Include="Checking\AccessibilityLogic.fsi" />
-    <Compile Include="Checking\AccessibilityLogic.fs" />
-    <Compile Include="Checking\AttributeChecking.fsi" />
-    <Compile Include="Checking\AttributeChecking.fs" />
-    <Compile Include="Checking\TypeRelations.fsi" />
-    <Compile Include="Checking\TypeRelations.fs" />
-    <Compile Include="Checking\InfoReader.fsi" />
-    <Compile Include="Checking\InfoReader.fs" />
-    <Compile Include="Checking\NicePrint.fsi" />
-    <Compile Include="Checking\NicePrint.fs" />
-    <Compile Include="Checking\AugmentWithHashCompare.fsi" />
-    <Compile Include="Checking\AugmentWithHashCompare.fs" />
-    <Compile Include="Checking\NameResolution.fsi" />
-    <Compile Include="Checking\NameResolution.fs" />
-    <Compile Include="Checking\SignatureConformance.fsi" />
-    <Compile Include="Checking\SignatureConformance.fs" />
-    <Compile Include="Checking\MethodOverrides.fsi" />
-    <Compile Include="Checking\MethodOverrides.fs" />
-    <Compile Include="Checking\MethodCalls.fsi" />
-    <Compile Include="Checking\MethodCalls.fs" />
-    <Compile Include="Checking\PatternMatchCompilation.fsi" />
-    <Compile Include="Checking\PatternMatchCompilation.fs" />
-    <Compile Include="Checking\ConstraintSolver.fsi" />
-    <Compile Include="Checking\ConstraintSolver.fs" />
-    <Compile Include="Checking\CheckFormatStrings.fsi" />
-    <Compile Include="Checking\CheckFormatStrings.fs" />
-    <Compile Include="Checking\FindUnsolved.fsi" />
-    <Compile Include="Checking\FindUnsolved.fs" />
-    <Compile Include="Checking\QuotationTranslator.fsi" />
-    <Compile Include="Checking\QuotationTranslator.fs" />
-    <Compile Include="Checking\PostInferenceChecks.fsi" />
-    <Compile Include="Checking\PostInferenceChecks.fs" />
-    <Compile Include="Checking\TailCallChecks.fsi" />
-    <Compile Include="Checking\TailCallChecks.fs" />
-    <Compile Include="Checking\CheckBasics.fsi" />
-    <Compile Include="Checking\CheckBasics.fs" />
-    <Compile Include="Checking\CheckRecordSyntaxHelpers.fsi" />
-    <Compile Include="Checking\CheckRecordSyntaxHelpers.fs" />
-    <Compile Include="Checking\Expressions\CheckExpressionsOps.fs" />
-    <Compile Include="Checking\Expressions\CheckExpressions.fsi" />
-    <Compile Include="Checking\Expressions\CheckExpressions.fs" />
-    <Compile Include="Checking\CheckPatterns.fsi" />
-    <Compile Include="Checking\CheckPatterns.fs" />
-    <Compile Include="Checking\Expressions\CheckComputationExpressions.fsi" />
-    <Compile Include="Checking\Expressions\CheckComputationExpressions.fs" />
-    <Compile Include="Checking\Expressions\CheckSequenceExpressions.fs" />
-    <Compile Include="Checking\Expressions\CheckArrayOrListComputedExpressions.fs" />
-    <Compile Include="Checking\CheckIncrementalClasses.fsi" />
-    <Compile Include="Checking\CheckIncrementalClasses.fs" />
-    <Compile Include="Checking\CheckDeclarations.fsi" />
-    <Compile Include="Checking\CheckDeclarations.fs" />
-    <Compile Include="Checking\SignatureHash.fsi" />
-    <Compile Include="Checking\SignatureHash.fs" />
+    <!-- import.fsi/fs REMOVED - "Functions to import .NET binary metadata as TAST objects" - BCL cruft -->
+    <!-- TypeHierarchy.fsi/fs REMOVED - Type hierarchy via ImportMap indirection layer -->
+    <!-- infos.fsi/fs REMOVED - MethInfo/PropInfo/EventInfo unification layer for IL+F# - pure indirection for native -->
+    <!-- AccessibilityLogic.fsi/fs REMOVED - IL+F# accessibility unification, entangled with infos types -->
+    <!-- InfoReader.fsi/fs REMOVED - Reads Info types to select members, depends on removed modules -->
+    <!-- AttributeChecking.fsi/fs REMOVED - Attribute checking on IL-unified member types -->
+    <!-- TypeRelations.fsi/fs REMOVED - Type subsumption via ImportMap -->
+    <!-- NicePrint.fsi/fs REMOVED - Pretty printing via IL-unified member types -->
+    <!-- AugmentWithHashCompare.fsi/fs REMOVED - Hash/Equals augmentation (Import.ImportMap dependency) -->
+    <!-- NameResolution.fsi/fs REMOVED - Name resolution via InfoReader -->
+    <!-- SignatureConformance.fsi/fs REMOVED - InfoReader dependency -->
+    <!-- MethodOverrides.fsi/fs REMOVED - InfoReader, NameResolution, Infos dependencies -->
+    <!-- MethodCalls.fsi/fs REMOVED - Method resolution via InfoReader, NameResolution, Infos -->
+    <!-- PatternMatchCompilation.fsi/fs REMOVED - InfoReader dependency -->
+    <!-- ConstraintSolver.fsi/fs REMOVED - Core of type inference, depends on InfoReader, MethodCalls, Infos -->
+    <!--
+    ENTIRE CHECKING FOLDER REMOVED - All type-checking depends on IL indirection layer:
+    - CheckFormatStrings, FindUnsolved, QuotationTranslator, PostInferenceChecks
+    - TailCallChecks, CheckBasics, CheckRecordSyntaxHelpers
+    - CheckExpressions, CheckExpressionsOps, CheckPatterns
+    - CheckComputationExpressions, CheckSequenceExpressions, CheckArrayOrListComputedExpressions
+    - CheckIncrementalClasses, CheckDeclarations, SignatureHash
+
+    This reveals that the IL import assumption permeates the ENTIRE type-checking layer.
+    For FNCS, the type-checking layer needs to be rebuilt without IL import dependency.
+    -->
     <!-- Optimize removed - FNCS defers optimization to MLIR/LLVM -->
     <!-- CodeGen removed - FNCS uses Alex for code generation to MLIR -->
     <!-- FxResolver removed - .NET Framework resolution not needed -->

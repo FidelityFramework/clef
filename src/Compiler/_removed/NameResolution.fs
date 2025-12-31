@@ -525,10 +525,8 @@ let NextExtensionMethodPriority() = uint64 (newStamp())
 /// Checks if the type is used for C# style extension members.
 let IsTyconRefUsedForCSharpStyleExtensionMembers g m (tcref: TyconRef) =
     // Type must be non-generic and have 'Extension' attribute
-    match metadataOfTycon tcref.Deref with
-    | ILTypeMetadata(TILObjectReprData(_, _, tdef)) -> tdef.CanContainExtensionMethods
-    | _ -> true
-    && isNil(tcref.Typars m) && TyconRefHasAttribute g m g.attrib_ExtensionAttribute tcref
+    // In native F#, we only check F# types (no IL metadata)
+    isNil(tcref.Typars m) && TyconRefHasAttribute g m g.attrib_ExtensionAttribute tcref
 
 /// Checks if the type is used for C# style extension members.
 let IsTypeUsedForCSharpStyleExtensionMembers g m ty =
@@ -545,34 +543,14 @@ let IsMethInfoPlainCSharpStyleExtensionMember g m isEnclExtTy (minfo: MethInfo) 
     (match minfo.NumArgs with [x] when x >= 1 -> true | _ -> false) &&
     MethInfoHasAttribute g m g.attrib_ExtensionAttribute minfo
     
-let GetTyconRefForExtensionMembers minfo (deref: Entity) amap m g =                
-    try
-        let rs =
-            match metadataOfTycon deref, minfo with
-            | ILTypeMetadata (TILObjectReprData(scope=scoref)), ILMeth(ilMethInfo=ILMethInfo(ilMethodDef=ilMethod)) ->
-                match ilMethod.ParameterTypes with
-                | firstTy :: _ ->
-                    match firstTy with
-                    | ILType.Boxed  tspec | ILType.Value tspec ->
-                        let tref = (tspec |> rescopeILTypeSpec scoref).TypeRef
-                        if Import.CanImportILTypeRef amap m tref then
-                            let tcref = tref |> Import.ImportILTypeRef amap m
-                            if isCompiledTupleTyconRef g tcref || tyconRefEq g tcref g.fastFunc_tcr then None
-                            else Some tcref
-                        else None
-                    | _ -> None
-                | _ -> None
-            | _ ->
-                // The results are indexed by the TyconRef of the first 'this' argument, if any.
-                // So we need to go and crack the type of the 'this' argument.
-                let thisTy = minfo.GetParamTypes(amap, m, generalizeTypars minfo.FormalMethodTypars).Head.Head
-                match thisTy with
-                | AppTy g (tcrefOfTypeExtended, _) when not (isByrefTy g thisTy) -> Some tcrefOfTypeExtended
-                | _ -> None
-        Some rs
-    with RecoverableException e -> // Import of the ILType may fail, if so report the error and skip on
-        errorRecovery e m
-        None
+let GetTyconRefForExtensionMembers minfo (_deref: Entity) amap m g =
+    // In native F#, we only handle F# types (no IL metadata import)
+    // The results are indexed by the TyconRef of the first 'this' argument, if any.
+    // So we need to go and crack the type of the 'this' argument.
+    let thisTy = minfo.GetParamTypes(amap, m, generalizeTypars minfo.FormalMethodTypars).Head.Head
+    match thisTy with
+    | AppTy g (tcrefOfTypeExtended, _) when not (isByrefTy g thisTy) -> Some (Some tcrefOfTypeExtended)
+    | _ -> Some None
 
 /// Get the info for all the .NET-style extension members listed as static members in the type.
 let private GetCSharpStyleIndexedExtensionMembersForTyconRef (amap: Import.ImportMap) m  (tcrefOfStaticClass: TyconRef) =

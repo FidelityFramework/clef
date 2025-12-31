@@ -354,7 +354,7 @@ val mkExnCaseFieldSet: Expr * TyconRef * int * Expr * range -> Expr
 
 /// Make an expression that gets the address of an element in an array
 val mkArrayElemAddress:
-    TcGlobals -> readonly: bool * ILReadonly * bool * ILArrayShape * TType * Expr list * range -> Expr
+    TcGlobals -> readonly: bool * ILReadonlyPrefix * bool * ILArrayShape * TType * Expr list * range -> Expr
 
 /// The largest tuple before we start encoding, i.e. 7
 val maxTuple: int

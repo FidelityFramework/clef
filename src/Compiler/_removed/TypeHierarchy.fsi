@@ -1,20 +1,18 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
+/// Type hierarchy operations for F# types.
+/// FNCS: Removed ImportMap dependency - native compilation doesn't import from .NET assemblies.
+/// FNCS: Removed ImportILTypeFromMetadata* functions - BCL cruft for reading .NET assembly metadata.
 module internal FSharp.Compiler.TypeHierarchy
 
-open FSharp.Compiler.AbstractIL.IL
-open FSharp.Compiler.Import
 open FSharp.Compiler.TcGlobals
 open FSharp.Compiler.Text
 open FSharp.Compiler.TypedTree
 open FSharp.Compiler.TypedTreeOps
 
-#if !NO_TYPEPROVIDERS
-#endif
-
 /// Get the base type of a type, taking into account type instantiations. Return None if the
 /// type has no base type.
-val GetSuperTypeOfType: g: TcGlobals -> amap: ImportMap -> m: range -> ty: TType -> TType option
+val GetSuperTypeOfType: g: TcGlobals -> m: range -> ty: TType -> TType option
 
 /// Indicates whether we can skip interface types that lie outside the reference set
 [<RequireQualifiedAccess>]
@@ -25,7 +23,7 @@ type SkipUnrefInterfaces =
 /// Collect the set of immediate declared interface types for an F# type, but do not
 /// traverse the type hierarchy to collect further interfaces.
 val GetImmediateInterfacesOfType:
-    skipUnref: SkipUnrefInterfaces -> g: TcGlobals -> amap: ImportMap -> m: range -> ty: TType -> TType list
+    skipUnref: SkipUnrefInterfaces -> g: TcGlobals -> m: range -> ty: TType -> TType list
 
 /// Indicates whether we should visit multiple instantiations of the same generic interface or not
 [<RequireQualifiedAccess>]
@@ -37,7 +35,6 @@ type AllowMultiIntfInstantiations =
 val FoldPrimaryHierarchyOfType:
     f: (TType -> 'a -> 'a) ->
     g: TcGlobals ->
-    amap: ImportMap ->
     m: range ->
     allowMultiIntfInst: AllowMultiIntfInstantiations ->
     ty: TType ->
@@ -48,7 +45,6 @@ val FoldPrimaryHierarchyOfType:
 val FoldEntireHierarchyOfType:
     f: (TType -> 'a -> 'a) ->
     g: TcGlobals ->
-    amap: ImportMap ->
     m: range ->
     allowMultiIntfInst: AllowMultiIntfInstantiations ->
     ty: TType ->
@@ -59,7 +55,6 @@ val FoldEntireHierarchyOfType:
 val IterateEntireHierarchyOfType:
     f: (TType -> unit) ->
     g: TcGlobals ->
-    amap: ImportMap ->
     m: range ->
     allowMultiIntfInst: AllowMultiIntfInstantiations ->
     ty: TType ->
@@ -69,7 +64,6 @@ val IterateEntireHierarchyOfType:
 val ExistsInEntireHierarchyOfType:
     f: (TType -> bool) ->
     g: TcGlobals ->
-    amap: ImportMap ->
     m: range ->
     allowMultiIntfInst: AllowMultiIntfInstantiations ->
     ty: TType ->
@@ -77,12 +71,11 @@ val ExistsInEntireHierarchyOfType:
 
 /// Search for one element where a function returns a 'Some' result, following interfaces
 val SearchEntireHierarchyOfType:
-    f: (TType -> bool) -> g: TcGlobals -> amap: ImportMap -> m: range -> ty: TType -> TType option
+    f: (TType -> bool) -> g: TcGlobals -> m: range -> ty: TType -> TType option
 
 /// Get all super types of the type, including the type itself
 val AllSuperTypesOfType:
     g: TcGlobals ->
-    amap: ImportMap ->
     m: range ->
     allowMultiIntfInst: AllowMultiIntfInstantiations ->
     ty: TType ->
@@ -91,7 +84,6 @@ val AllSuperTypesOfType:
 /// Get all interfaces of a type, including the type itself if it is an interface
 val AllInterfacesOfType:
     g: TcGlobals ->
-    amap: ImportMap ->
     m: range ->
     allowMultiIntfInst: AllowMultiIntfInstantiations ->
     ty: TType ->
@@ -105,60 +97,15 @@ val HasHeadType: g: TcGlobals -> tcref: TyconRef -> ty2: TType -> bool
 
 /// Check if a type exists somewhere in the hierarchy which has the same head type as the given type (note, the given type need not have a head type at all)
 val ExistsSameHeadTypeInHierarchy:
-    g: TcGlobals -> amap: ImportMap -> m: range -> typeToSearchFrom: TType -> typeToLookFor: TType -> bool
+    g: TcGlobals -> m: range -> typeToSearchFrom: TType -> typeToLookFor: TType -> bool
 
 /// Check if a type exists somewhere in the hierarchy which has the given head type.
 val ExistsHeadTypeInEntireHierarchy:
-    g: TcGlobals -> amap: ImportMap -> m: range -> typeToSearchFrom: TType -> tcrefToLookFor: TyconRef -> bool
+    g: TcGlobals -> m: range -> typeToSearchFrom: TType -> tcrefToLookFor: TyconRef -> bool
 
-/// Read an Abstract IL type from metadata and convert to an F# type.
-val ImportILTypeFromMetadata:
-    amap: ImportMap ->
-    m: range ->
-    scoref: ILScopeRef ->
-    tinst: TType list ->
-    minst: TType list ->
-    nullnessSource: Nullness.NullableAttributesSource ->
-    ilTy: ILType ->
-        TType
-
-/// Read an Abstract IL type from metadata and convert to an F# type, ignoring nullness checking.
-val ImportILTypeFromMetadataSkipNullness:
-    amap: ImportMap -> m: range -> scoref: ILScopeRef -> tinst: TType list -> minst: TType list -> ilTy: ILType -> TType
-
-/// Read an Abstract IL type from metadata, including any attributes that may affect the type itself, and convert to an F# type.
-val ImportILTypeFromMetadataWithAttributes:
-    amap: ImportMap ->
-    m: range ->
-    scoref: ILScopeRef ->
-    tinst: TType list ->
-    minst: TType list ->
-    nullnessSource: Nullness.NullableAttributesSource ->
-    ilTy: ILType ->
-        TType
-
-/// Get the parameter type of an IL method.
-val ImportParameterTypeFromMetadata:
-    amap: ImportMap ->
-    m: range ->
-    nullnessSource: Nullness.NullableAttributesSource ->
-    ilTy: ILType ->
-    scoref: ILScopeRef ->
-    tinst: TType list ->
-    mist: TType list ->
-        TType
-
-/// Get the return type of an IL method, taking into account instantiations for type, return attributes and method generic parameters, and
-/// translating 'void' to 'None'.
-val ImportReturnTypeFromMetadata:
-    amap: ImportMap ->
-    m: range ->
-    nullnessSource: Nullness.NullableAttributesSource ->
-    ilTy: ILType ->
-    scoref: ILScopeRef ->
-    tinst: TType list ->
-    minst: TType list ->
-        TType option
+// FNCS: DELETED - ImportILTypeFromMetadata, ImportILTypeFromMetadataSkipNullness,
+// ImportILTypeFromMetadataWithAttributes, ImportParameterTypeFromMetadata, ImportReturnTypeFromMetadata
+// These were for importing IL types from .NET assembly metadata - not needed for native compilation.
 
 /// Copy constraints.  If the constraint comes from a type parameter associated
 /// with a type constructor then we are simply renaming type variables.  If it comes

@@ -173,6 +173,58 @@ The path to FNCS itself illustrates the engineering-driven nature of this work. 
 
 Arriving at a generalized pattern for memory layout that adheres to the goals of the Fidelity framework while providing maximum degrees of freedom to target different processors is going to be a non-trivial challenge. We expect to start with some relatively straightforward hard-coded patterns and develop a proper abstraction pattern later. Our sense is that a plug-in system will need to be developed that will have some coupling to project-level declaration of the targeted hardware, but that story has yet to develop at this early stage. We are willing to live with some brittle implementations to help us target early wins and avoid over-engineering in the abstract.
 
+### 2.5 Reducing the Compiler's Surface Area
+
+The transformation from FCS to FNCS involves systematic removal of .NET assembly import machinery. This work reveals an important insight about compiler architecture: what appears to be foundational infrastructure is often unnecessary indirection.
+
+Consider `ImportMap`, a type that permeated the standard F# compiler with 268 uses across the codebase. Its stated purpose was "converting AbstractIL .NET and provided types to F# internal compiler data structures." The type held two things:
+
+1. **`TcGlobals`**: The compiler's global type-checking context
+2. **`AssemblyLoader`**: Infrastructure for loading .NET assemblies
+
+For native compilation, the second capability is unnecessary - FNCS reads F# source directly, not .NET assemblies. But the pervasive use of `ImportMap` obscured this fact. Functions throughout the compiler accepted `amap: ImportMap` as a parameter, even when they only needed access to `TcGlobals` via `amap.g`.
+
+The principled approach is not to create a "native-friendly" `ImportMap` wrapper that preserves the interface while gutting the implementation. That would preserve unnecessary abstraction. Instead, FNCS removes `ImportMap` entirely and refactors all 268 call sites to use `TcGlobals` directly:
+
+- ~96 functions took only `amap` → now take `g: TcGlobals`
+- ~172 functions took both `g` and `amap` → redundant `amap` parameter removed
+
+This refactoring illustrates a broader principle: **when building a native type universe, question every abstraction that exists to bridge managed and native worlds**. If the bridge is no longer needed, remove it entirely rather than hollowing it out.
+
+The same principle applies to other "IL" prefixed machinery in the compiler. Some of it (like `import.fs` - "Functions to import .NET binary metadata") is pure BCL cruft that should be deleted. But some infrastructure that happens to be named "IL*" represents useful type metadata concepts - method signatures, parameter info, type hierarchy operations - that native compilation still needs. The key distinction:
+
+- **Does it read from .NET assemblies?** → DELETE
+- **Does it represent type structure that F# source also has?** → RENAME/CONVERT for native type universe
+
+The errors from deleting BCL import machinery serve as a roadmap. Each missing type or function points to more machinery that either needs removal (if it's pure import cruft) or conversion (if it's useful infrastructure with the wrong name).
+
+### 2.6 The IL Dependency Cone
+
+Following the cascade deletion to its conclusion reveals a startling fact: the IL import assumption is not a surface-level concern but permeates the entire type-checking layer of the F# compiler.
+
+Starting from `import.fs` ("Functions to import .NET binary metadata"), the cascade removed:
+
+| Layer | Files | Purpose |
+|-------|-------|---------|
+| Import | import.fs, infos.fs | IL type importing, member info unification |
+| Hierarchy | TypeHierarchy.fs | Type hierarchy via ImportMap |
+| Access | AccessibilityLogic.fs, InfoReader.fs | Accessibility checking on unified members |
+| Relations | TypeRelations.fs, AttributeChecking.fs | Type subsumption, attribute checking |
+| Display | NicePrint.fs | Pretty printing via unified members |
+| Resolution | NameResolution.fs, MethodCalls.fs | Name and method resolution |
+| Inference | ConstraintSolver.fs | **Core type inference** |
+| Checking | CheckExpressions.fs, CheckDeclarations.fs, etc. | **Entire type-checking layer** |
+
+**Total: 3.2MB across 59 files** - essentially the compiler's entire middle-end.
+
+This reveals that the F# compiler was architecturally designed around the assumption that types come from two sources: F# source files and .NET assemblies. The `ImportMap` and `MethInfo`/`PropInfo`/`EventInfo` types exist to provide a unified abstraction over both sources. Every downstream consumer depends on this abstraction.
+
+For native compilation, where types come only from F# source, this unification layer is pure indirection. But removing it doesn't leave a functioning compiler - it leaves a compiler with no type checker.
+
+**The implication is significant**: FNCS cannot be created by pruning the existing F# compiler. The type-checking layer must be rebuilt for the native type universe - a type checker that operates directly on F# types without the "types might come from IL" assumption baked into every function signature.
+
+This is not a failure of the cascade deletion approach - it's the approach working correctly. By systematically removing indirection, we've identified exactly what needs to be rebuilt: a type checker for native F#.
+
 ## Part III: Memory as a First-Class Concern
 
 ### 3.1 The Memory Region Model

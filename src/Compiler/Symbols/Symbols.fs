@@ -163,13 +163,6 @@ module Impl =
             taccessPublic
 #endif
 
-        | ILTypeMetadata (TILObjectReprData(_, _, td)) -> 
-            match td.Access with 
-            | ILTypeDefAccess.Public 
-            | ILTypeDefAccess.Nested ILMemberAccess.Public -> taccessPublic 
-            | ILTypeDefAccess.Private  -> taccessPrivate  (CompPath(entity.CompilationPath.ILScopeRef, SyntaxAccess.Unknown, []))
-            | ILTypeDefAccess.Nested nested -> getApproxFSharpAccessibilityOfMember entity nested
-
         | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata -> 
             entity.Accessibility
 
@@ -545,7 +538,6 @@ type FSharpEntity(cenv: SymbolEnv, entity: EntityRef, tyargs: TType list) =
 #if !NO_TYPEPROVIDERS 
         | ProvidedTypeMetadata info -> info.IsClass
 #endif
-        | ILTypeMetadata (TILObjectReprData(_, _, td)) -> td.IsClass
         | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata -> entity.Deref.IsFSharpClassTycon
 
     member _.IsByRef = 
@@ -566,7 +558,6 @@ type FSharpEntity(cenv: SymbolEnv, entity: EntityRef, tyargs: TType list) =
 #if !NO_TYPEPROVIDERS
         | ProvidedTypeMetadata info -> info.IsDelegate ()
 #endif
-        | ILTypeMetadata (TILObjectReprData(_, _, td)) -> td.IsDelegate
         | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata -> entity.IsFSharpDelegateTycon
 
     member _.IsEnum = 
