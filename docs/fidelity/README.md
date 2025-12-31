@@ -9,7 +9,7 @@ FNCS (F# Native Compiler Services) is a pruned fork of the F# Compiler Services 
 | Aspect | FCS | FNCS |
 |--------|-----|------|
 | Target | .NET runtime | Native binaries |
-| Type universe | BCL types (System.String, etc.) | Native types (NativeStr, etc.) |
+| Type universe | BCL types (System.String, etc.) | Standard F# types with native semantics |
 | SRTP resolution | .NET method tables | Alloy witness hierarchy |
 | Output | IL generation | Typed tree + SRTP metadata |
 | Dependencies | Full MSBuild, project system | Minimal, no IL generation |
@@ -46,7 +46,7 @@ String literals, option types, and arrays resolve to native types:
 ```fsharp
 // F# syntax
 let greeting = "Hello"        // Standard F#: System.String
-                              // FNCS: NativeStr
+                              // FNCS: string with native semantics (UTF-8 fat pointer)
 
 let maybeValue = Some 42      // Standard F#: int option (reference)
                               // FNCS: int voption (value type)
@@ -144,7 +144,7 @@ See [FNCS_Pruning_Plan.md](FNCS_Pruning_Plan.md) for the phased implementation t
 |-------|-------------|--------|
 | Phase 0 | Foundation (fork, rename, initial pruning) | Pending |
 | Phase 1 | Core Pruning (remove MSBuild, IL gen) | Pending |
-| Phase 2 | Native Types (NativeStr, voption) | Pending |
+| Phase 2 | Native Type Semantics (string, option with native semantics) | Pending |
 | Phase 3 | API Exposure (Range correlation, SRTP) | Pending |
 | Phase 4 | Native SRTP (Alloy witnesses) | Pending |
 | Phase 5 | Memory Semantics (BAREWire/Farscape) | Future |

@@ -358,7 +358,7 @@ FSharp.Compiler.Symbols.*   → FSharp.Native.Compiler.Symbols.*
 1. **Build Time**: Clean build < 1 minute
 2. **Binary Size**: `FSharp.Native.Compiler.Service.dll` < 5 MB
 3. **API Simplicity**: < 10 public types
-4. **Native Types**: String literals type as `NativeStr`
+4. **Native Types**: String literals have native semantics (UTF-8 fat pointer)
 5. **SRTP**: Resolves against Alloy witnesses
 6. **Firefly Integration**: HelloWorld samples compile correctly
 
@@ -424,9 +424,9 @@ The type universe is defined in `TcGlobals.fs`. Add native types alongside BCL t
 
 ```
 TcGlobals.fs modifications:
-├── Add nativestr_ty (replaces string_ty for literals)
-├── Add voption_tcr (default option type)
-├── Add nativearray_tcr, nativespan_tcr
+├── Modify string_ty to have native semantics (UTF-8 fat pointer)
+├── Modify option_tcr to have native semantics (voption: value type, never null)
+├── Modify array_tcr to have native semantics (fat pointer)
 ├── Add memory region phantom types (Peripheral, SRAM, Flash, Arena, Stack)
 └── Add access kind phantom types (ReadOnly, WriteOnly, ReadWrite)
 ```
@@ -450,10 +450,10 @@ The critical change is at ~line 7342 in `CheckExpressions.fs`:
     TcPropagatingExprLeafThenConvert cenv overallTy g.string_ty env m (fun () ->
         mkString g m s, tpenv)
 
-// FNCS (produces NativeStr)
+// FNCS (string with native UTF-8 fat pointer semantics)
 | false, LiteralArgumentType.Inline ->
-    TcPropagatingExprLeafThenConvert cenv overallTy g.nativestr_ty env m (fun () ->
-        mkNativeString g m s, tpenv)
+    TcPropagatingExprLeafThenConvert cenv overallTy g.string_ty env m (fun () ->
+        mkString g m s, tpenv)  // Same API, string_ty now has native semantics
 ```
 
 ---
@@ -538,7 +538,7 @@ module NativeSRTP =
 
     let resolveNativeWitness (g: TcGlobals) (traitInfo: TraitConstraintInfo) =
         match traitInfo.MemberName, traitInfo.SupportTypes with
-        | "op_Dollar", [ty] when isNativeStrTy g ty ->
+        | "op_Dollar", [ty] when isStringTy g ty ->  // string has native semantics
             Some (WritableString, "Alloy.Text.WritableString.op_Dollar")
         | "LoadVolatile", [ty] when isPeripheralPtrTy g ty ->
             Some (PeripheralAccess, "Platform.Peripheral.loadVolatile")
@@ -565,7 +565,7 @@ Phase 2 (Weeks 4-7): Native Types
 ├── NativeTypes.fs with type constructors
 ├── TcGlobals native type integration
 ├── CheckExpressions literal typing (line ~7342)
-└── Target: "Hello" types as NativeStr
+└── Target: "Hello" types as string with native semantics
 
 Phase 3 (Weeks 4-8): API Exposure [Parallel with Phase 2]
 ├── RangeCorrelationService

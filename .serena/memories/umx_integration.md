@@ -18,16 +18,19 @@ let id: string<customerId> = %"cust-123"
 ## What FNCS Provides (intrinsic)
 
 ```fsharp
-// Native types defined WITH measure parameters
-type NativePtr<'T, [<Measure>] 'region, [<Measure>] 'access>
-type NativeStr<[<Measure>] 'encoding>
-type NativeArray<'T, [<Measure>] 'region>
+// Standard F# types with measure parameters for memory semantics
+// Users write familiar type names; FNCS adds measure support
+type Ptr<'T, [<Measure>] 'region, [<Measure>] 'access>  // Pointer with region/access
+// string has native UTF-8 fat pointer semantics (no wrapper type)
+// array<'T> has native semantics with optional region measures
 
 // Memory regions and access kinds as first-class measures
 [<Measure>] type peripheral
 [<Measure>] type readOnly
 [<Measure>] type readWrite
 ```
+
+**Key Principle**: Users write standard F# type names (`string`, `array`, etc.). FNCS provides native semantics. Measure parameters add memory region/access tracking.
 
 ## Implementation Points in FNCS
 
@@ -36,7 +39,7 @@ type NativeArray<'T, [<Measure>] 'region>
 | `TcGlobals.fs` | Native types with measure params, region/access measures |
 | `TypedTree.fs` | Representation for measured non-numeric types |
 | `ConstraintSolver.fs` | Region/access compatibility checking |
-| `NativeTypes.fs` (new) | Native type constructors with measures |
+| Native type semantics | Standard types with measure params |
 | `MemoryMeasures.fs` (new) | Memory region and access kind measures |
 
 ## Error Codes

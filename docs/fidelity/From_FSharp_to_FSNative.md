@@ -123,19 +123,21 @@ F# Native found accidental sympathy in this path. Despite using F# syntax, it wa
 F# Native replaces BCL types with native equivalents from the Alloy library:
 
 ```fsharp
-// In standard F#, this is System.String
+// In standard F#, this is System.String (UTF-16, heap-allocated)
 let greeting = "Hello"
 
-// In F# Native, this is NativeStr
-let greeting = "Hello"  // Type: NativeStr
+// In F# Native, same syntax, native semantics (UTF-8 fat pointer)
+let greeting = "Hello"  // Type: string (native semantics)
 ```
 
-The `NativeStr` type is a fat pointer: a struct containing a pointer to UTF-8 bytes and a length:
+In F# Native, `string` has native semantics - internally a fat pointer struct containing a pointer to UTF-8 bytes and a length:
 
 ```fsharp
+// Internal representation of string in FNCS
+// (Users just write "string" - this is transparent)
 [<Struct>]
-type NativeStr = {
-    Ptr: nativeptr<byte>
+type internal StringRepr = {
+    Pointer: nativeptr<byte>
     Length: int
 }
 ```
@@ -151,8 +153,8 @@ Similar transformations apply to other types:
 
 | F# Syntax | Standard F# | F# Native |
 |-----------|-------------|-----------|
-| `int option` | `option<int>` (heap, nullable) | `voption<int>` (value, non-null) |
-| `int[]` | `System.Int32[]` (heap, GC tracked) | `NativeArray<int>` (fat pointer) |
+| `int option` | `option<int>` (heap, nullable) | `option<int>` with value semantics (voption) |
+| `int[]` | `System.Int32[]` (heap, GC tracked) | `array<int>` with native semantics (fat pointer) |
 | Records without `[<Struct>]` | Heap allocated | Struct by default |
 
 ### 2.4 The FNCS Transformation
@@ -163,7 +165,7 @@ F# Native Compiler Services (FNCS) is a fork of the standard F# compiler that pe
 let numbers = [| 1; 2; 3 |]
 ```
 
-It resolves the type as `NativeArray<int>` rather than `System.Int32[]`. The syntax is identical; the semantics differ.
+It resolves `array<int>` with native semantics (fat pointer) rather than `System.Int32[]` (heap, GC tracked). The syntax is identical; the semantics differ.
 
 This transformation is systematic. FNCS does not attempt to translate BCL code to native equivalents at runtime. Instead, it establishes a parallel type universe where native types are the primitive types, and BCL types do not exist.
 
@@ -324,7 +326,7 @@ Alloy defines operators that do not exist in the BCL. The `$` operator, for exam
 
 ```fsharp
 type WritableString =
-    static member inline ($) (ws: WritableString, s: NativeStr) : unit = ...
+    static member inline ($) (ws: WritableString, s: string) : unit = ...
 
 // Usage
 WritableString $ "Hello"
@@ -412,7 +414,7 @@ This separation allows Alloy to define the interface in pure F#, while Alex prov
 Platform bindings are inherently unsafe: they cross the boundary between verified F# code and the operating system. F# Native tracks this through coeffects:
 
 ```fsharp
-let writeData (data: NativeArray<byte>) : unit =
+let writeData (data: array<byte>) : unit =
     // This function has coeffect [IO, Unsafe]
     Platform.Bindings.writeBytes 1 data.Ptr data.Length |> ignore
 ```
@@ -438,7 +440,7 @@ F# Native introduces coeffects: annotations that describe what resources or effe
 let add (a: int) (b: int) : int = a + b
 
 // IO function: performs console I/O
-let greet (name: NativeStr) : unit =
+let greet (name: string) : unit =
     Console.WriteLine $ "Hello, " $ name
 ```
 
@@ -447,7 +449,7 @@ In the full coeffect syntax (reserved for future implementation):
 ```fsharp
 let add (a: int) (b: int) : int -[Pure]-> int = a + b
 
-let greet (name: NativeStr) : unit -[IO.Console]-> unit =
+let greet (name: string) : unit -[IO.Console]-> unit =
     Console.WriteLine $ "Hello, " $ name
 ```
 
@@ -512,7 +514,7 @@ The default memory strategy in F# Native is stack allocation. Value types live o
 
 ```fsharp
 let point = { X = 1.0; Y = 2.0 }  // Stack allocated
-let buffer = NativeArray.createStack<byte> 1024  // Stack allocated
+let buffer = Array.stackalloc<byte> 1024  // Stack allocated
 ```
 
 Stack allocation requires no explicit management. Memory is automatically reclaimed when the function returns. The compiler verifies that stack-allocated values do not escape their scope.
@@ -523,7 +525,7 @@ For larger or dynamically-sized data, F# Native provides arena allocation:
 
 ```fsharp
 arena {
-    let buffer = NativeArray.create 1_000_000  // Arena allocated
+    let buffer = Array.create 1_000_000  // Arena allocated
     let processed = transform buffer
     return processed.Summary  // Only summary escapes
 }  // Entire arena freed here
@@ -551,10 +553,10 @@ F# Native reserves syntax for explicit ownership tracking:
 
 ```fsharp
 // Owned value: caller receives exclusive ownership
-let createBuffer () : Owned<NativeArray<byte>> = ...
+let createBuffer () : Owned<array<byte>> = ...
 
 // Borrowed reference: caller borrows, does not own
-let processBuffer (buf: Borrowed<NativeArray<byte>>) : unit = ...
+let processBuffer (buf: Borrowed<array<byte>>) : unit = ...
 
 // Move semantics
 let newOwner = move existingBuffer
@@ -640,20 +642,20 @@ For these properties, the compiler can verify correctness without user intervent
 Alloy types can carry F* specifications that the compiler verifies:
 
 ```fstar
-module Alloy.NativeStr.Spec
+module Alloy.String.Spec
 
-// Layout invariants
-val sizeof_nativestr: unit -> Lemma (sizeof nativestr == 16)
-val alignof_nativestr: unit -> Lemma (alignof nativestr == 8)
+// Layout invariants (string has native UTF-8 fat pointer semantics)
+val sizeof_string: unit -> Lemma (sizeof string == 16)
+val alignof_string: unit -> Lemma (alignof string == 8)
 
 // Region invariant
-val nativestr_ptr_readable:
-    s: nativestr ->
+val string_ptr_readable:
+    s: string ->
     Lemma (is_readable (region_of s.ptr))
 
 // Lifetime invariant
-val nativestr_ptr_outlives_str:
-    s: nativestr ->
+val string_ptr_outlives:
+    s: string ->
     Lemma (lifetime s.ptr >= lifetime s)
 ```
 
@@ -699,7 +701,7 @@ let numbers = [| 1; 2; 3 |]
 let items = [ 1; 2; 3 ]
 ```
 
-These will compile under FNCS but with different semantics. The greeting becomes `NativeStr`, the array becomes `NativeArray<int>`, and the list becomes `NativeList<int>`.
+These will compile under FNCS with native semantics. The `string` greeting has UTF-8 fat pointer semantics, the `array<int>` has native array semantics, and the `list<int>` has native list semantics - but users write standard F# type names throughout.
 
 ### 10.3 Semantic Differences to Consider
 

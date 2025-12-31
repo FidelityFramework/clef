@@ -1101,7 +1101,7 @@ Script files (`.fsnx`) follow the same type semantics as compiled modules:
 // script.fsnx
 #require "Alloy"
 
-let greeting : string = "Hello"  // NativeStr, UTF-8
+let greeting : string = "Hello"  // string with native UTF-8 fat pointer semantics
 let maybe : int option = Some 42  // voption<int>, non-null
 ```
 
@@ -1215,8 +1215,8 @@ This tagging allows integers to remain "unboxed" (stored directly without heap a
 |------------|-------------------|---------------------|--------|
 | `Core.fs:15` | `type option<'T> = voption<'T>` | fsnative native `option` | **REMOVE** |
 | `ValueOption.fs` | `type ValueOption<'T> = voption<'T>` | N/A | **DELETE FILE** |
-| `NativeTypes/NativeStr.fs` | `NativeStr` type | fsnative native `string` | **REMOVE** |
-| `NativeTypes/NativeArray.fs` | `NativeArray<'T>` type | fsnative native `array` | **REMOVE** |
+| `NativeTypes/String.fs` | Shadow type workaround (to remove) | fsnative: `string` has native semantics | **REMOVE** |
+| `NativeTypes/Array.fs` | Shadow type workaround (to remove) | fsnative: `array<'T>` has native semantics | **REMOVE** |
 | `NativeTypes/NativeInt.fs` | Checked arithmetic returning `voption` | Keep (library functions) | **KEEP** |
 
 ### Migration Sequence
@@ -1230,7 +1230,7 @@ This tagging allows integers to remain "unboxed" (stored directly without heap a
 2. **Phase 2: Alloy Cleanup**
    - Remove shadow type aliases from `Core.fs`
    - Delete `ValueOption.fs` entirely
-   - Remove `NativeStr`, `NativeArray` wrapper types
+   - Remove shadow type wrappers (users write `string`, `array<'T>`)
    - Keep utility functions (checked arithmetic, etc.)
 
 3. **Phase 3: Alloy as Pure Library**
