@@ -17,6 +17,44 @@ open FSharp.Native.Compiler.Checking.Native.Unify
 open FSharp.Native.Compiler.Checking.Native.SemanticGraph
 
 //-------------------------------------------------------------------------
+// F# Native Diagnostic Codes (FS8xxx series)
+//-------------------------------------------------------------------------
+
+/// Error codes for F# Native specific diagnostics.
+/// These follow the FS8xxx range to distinguish from standard F# errors.
+module DiagnosticCodes =
+    // Type system (FS8000-FS8099)
+    let FS8000_TypeMismatch = "FS8000"
+    let FS8010_NullNotSupported = "FS8010"
+    let FS8011_ObjNotSupported = "FS8011"
+    let FS8012_BoxingNotSupported = "FS8012"
+    let FS8013_DynamicNotSupported = "FS8013"
+    
+    // Null-freedom (FS8100-FS8199)
+    let FS8100_NullLiteral = "FS8100"
+    let FS8101_UninitializedValue = "FS8101"
+    let FS8102_ExceptionPattern = "FS8102"
+    let FS8103_TypeDoesNotSupportNull = "FS8103"
+    let FS8104_UncheckedDefault = "FS8104"
+    
+    // Memory management (FS8200-FS8299)
+    let FS8200_LifetimeError = "FS8200"
+    let FS8201_RegionMismatch = "FS8201"
+    let FS8202_EscapingReference = "FS8202"
+    
+    // Platform bindings (FS8300-FS8399)
+    let FS8300_PlatformBindingError = "FS8300"
+    let FS8301_UnsupportedPlatformOperation = "FS8301"
+    
+    // Code generation (FS8400-FS8499)
+    let FS8400_CodeGenError = "FS8400"
+    let FS8401_UnsupportedConstruct = "FS8401"
+    
+    // Generic/fallback
+    let FS0001_GenericError = "FS0001"
+    let FS0002_GenericWarning = "FS0002"
+
+//-------------------------------------------------------------------------
 // Type Environment
 //-------------------------------------------------------------------------
 
@@ -97,25 +135,52 @@ let rangeToSourceRange (r: range) : SourceRange = {
     End = { Line = r.EndLine; Column = r.EndColumn }
 }
 
-/// Create and add an error diagnostic (must be after rangeToSourceRange)
-let addError (r: range) (message: string) (env: TypeEnv) : unit =
+/// Create and add an error diagnostic with specific code
+let addNativeError (code: string) (r: range) (message: string) (env: TypeEnv) : unit =
     addDiagnostic {
         Severity = NativeDiagnosticSeverity.Error
-        Code = "FS0001"
+        Code = code
         Message = message
         Range = rangeToSourceRange r
         RelatedNodes = []
     } env
 
-/// Create and add a warning diagnostic
-let addWarning (r: range) (message: string) (env: TypeEnv) : unit =
+/// Create and add an error diagnostic (generic fallback - prefer addNativeError with specific code)
+let addError (r: range) (message: string) (env: TypeEnv) : unit =
+    addNativeError DiagnosticCodes.FS0001_GenericError r message env
+
+/// Create and add a warning diagnostic with specific code
+let addNativeWarning (code: string) (r: range) (message: string) (env: TypeEnv) : unit =
     addDiagnostic {
         Severity = NativeDiagnosticSeverity.Warning
-        Code = "FS0002"
+        Code = code
         Message = message
         Range = rangeToSourceRange r
         RelatedNodes = []
     } env
+
+/// Create and add a warning diagnostic (generic fallback)
+let addWarning (r: range) (message: string) (env: TypeEnv) : unit =
+    addNativeWarning DiagnosticCodes.FS0002_GenericWarning r message env
+
+//-------------------------------------------------------------------------
+// Native-Specific Error Helpers
+//-------------------------------------------------------------------------
+
+/// Emit FS8100: Cannot use 'null' in F# Native
+let addNullError (r: range) (env: TypeEnv) : unit =
+    addNativeError DiagnosticCodes.FS8100_NullLiteral r
+        "Cannot use 'null' in F# Native; use 'ValueNone' for optional values" env
+
+/// Emit FS8011: The type 'obj' is not available in F# Native
+let addObjError (r: range) (env: TypeEnv) : unit =
+    addNativeError DiagnosticCodes.FS8011_ObjNotSupported r
+        "The type 'obj' (System.Object) is not available in F# Native; use discriminated unions or SRTP" env
+
+/// Emit FS8012: Boxing is not supported
+let addBoxingError (r: range) (env: TypeEnv) : unit =
+    addNativeError DiagnosticCodes.FS8012_BoxingNotSupported r
+        "Boxing is not supported in F# Native; the native type system does not include 'obj'" env
 
 //-------------------------------------------------------------------------
 // Constant Type Inference
@@ -553,13 +618,14 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
         checkExpr env builder expr
 
     //---------------------------------------------------------------------
-    // Null (should be avoided in native F#)
+    // Null - REJECTED in F# Native (FS8100)
     //---------------------------------------------------------------------
-    | SynExpr.Null _ ->
+    | SynExpr.Null r ->
+        addNullError r env
         builder.Create(
             SemanticKind.Error "null is not supported in native F#",
             NativeType.TError "null not supported",
-            range)
+            rangeToSourceRange r)
 
     //---------------------------------------------------------------------
     // Quote expressions
@@ -1621,17 +1687,26 @@ and checkSynType (env: TypeEnv) (synType: SynType) : NativeType =
     match synType with
     | SynType.LongIdent(longIdent) ->
         let name = longIdent.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
-        match tryFindBuiltinTyCon name with
-        | Some tyCon -> mkSimpleType tyCon
-        | None ->
-            // Try to find in type definitions
-            match Map.tryFind name env.TypeDefs with
+        let range = longIdent.Range
+        
+        // CRITICAL: Reject 'obj' - FS8011
+        // The type 'obj' (System.Object) does not exist in F# Native.
+        // The native type system is closed - no boxing, no runtime type inspection.
+        if name = "obj" || name = "System.Object" || name = "Object" then
+            addObjError range env
+            NativeType.TError "obj not supported"
+        else
+            match tryFindBuiltinTyCon name with
             | Some tyCon -> mkSimpleType tyCon
             | None ->
-                // Try to find in type abbreviations
-                match tryLookupTypeAbbrev name env with
-                | Some ty -> ty
-                | None -> NativeType.TError $"Unknown type: {name}"
+                // Try to find in type definitions
+                match Map.tryFind name env.TypeDefs with
+                | Some tyCon -> mkSimpleType tyCon
+                | None ->
+                    // Try to find in type abbreviations
+                    match tryLookupTypeAbbrev name env with
+                    | Some ty -> ty
+                    | None -> NativeType.TError $"Unknown type: {name}"
 
     | SynType.App(typeName, _, typeArgs, _, _, _, _) ->
         let baseTy = checkSynType env typeName

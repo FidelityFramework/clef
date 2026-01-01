@@ -8,8 +8,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- Single target framework - no multi-targeting complexity -->
-    <TargetFramework>net9.0</TargetFramework>
+    <!-- Target both net9.0 and net10.0 for tooling compatibility -->
+    <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
     <OutputType>Library</OutputType>
     <AssemblyName>FSharp.Native.Compiler.Service</AssemblyName>
 

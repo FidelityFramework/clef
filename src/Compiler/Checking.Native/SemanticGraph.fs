@@ -270,6 +270,25 @@ and MemberKind =
     | Event
 
 //-------------------------------------------------------------------------
+// Typed Metadata (no obj!)
+//-------------------------------------------------------------------------
+
+/// Typed metadata values for semantic nodes.
+/// F# Native does not have 'obj' - all values must be typed.
+[<RequireQualifiedAccess>]
+type MetadataValue =
+    | String of string
+    | Int of int
+    | Int64 of int64
+    | Bool of bool
+    | Float of float
+    | Type of NativeType
+    | NodeId of NodeId
+    | SourceRange of SourceRange
+    | StringList of string list
+    | NodeIdList of NodeId list
+
+//-------------------------------------------------------------------------
 // Semantic Node
 //-------------------------------------------------------------------------
 
@@ -303,8 +322,8 @@ type SemanticNode = {
     /// Parent node (for navigation)
     Parent: NodeId option
     
-    /// Additional metadata
-    Metadata: Map<string, obj>
+    /// Additional typed metadata (no obj - all values are statically typed)
+    Metadata: Map<string, MetadataValue>
 }
 
 //-------------------------------------------------------------------------

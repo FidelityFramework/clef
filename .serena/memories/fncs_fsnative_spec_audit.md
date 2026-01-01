@@ -1,6 +1,20 @@
 # FNCS vs fsnative-spec Audit
 
 ## Audit Date: 2025-01-01
+## **Remediation Date: 2026-01-01 - ALL CRITICAL DIVERGENCES RESOLVED**
+
+### Remediation Summary
+
+| Issue | Resolution |
+|-------|------------|
+| `int`/`uint` size | ✅ Changed to `TypeLayout.Inline(-1, -1)` for platform-dependent. Added `int32`/`uint32` for fixed 32-bit. |
+| Error codes | ✅ Added `DiagnosticCodes` module with FS8xxx range in `CheckExpressions.fs`. |
+| Null rejection | ✅ `SynExpr.Null` now emits FS8100 via `addNullError` helper. |
+| `obj` elimination | ✅ `checkSynType` rejects `obj`/`System.Object` with FS8011. Replaced `Map<string, obj>` with `MetadataValue` union. |
+
+Build verified: `dotnet build` succeeds with 0 errors.
+
+---
 
 ## Purpose
 

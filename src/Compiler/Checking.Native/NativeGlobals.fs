@@ -62,16 +62,30 @@ module Primitives =
     /// UTF-8 string: fat pointer (ptr: 8 bytes, length: 8 bytes)
     let stringTyCon = mkTypeConRef "string" 0 (TypeLayout.Inline(16, 8))
     
-    /// 32-bit signed integer
-    let intTyCon = mkTypeConRef "int" 0 (TypeLayout.Inline(4, 4))
+    /// Platform word signed integer: size determined by target platform
+    /// On 32-bit: 4 bytes, on 64-bit: 8 bytes
+    /// This matches Rust's isize / C's intptr_t
+    /// NOTE: -1 indicates platform-dependent layout, resolved at code generation
+    let intTyCon = mkTypeConRef "int" 0 (TypeLayout.Inline(-1, -1))
     
-    /// 64-bit signed integer
+    /// 64-bit signed integer (fixed size, not platform-dependent)
     let int64TyCon = mkTypeConRef "int64" 0 (TypeLayout.Inline(8, 8))
     
-    /// 32-bit unsigned integer
-    let uintTyCon = mkTypeConRef "uint" 0 (TypeLayout.Inline(4, 4))
+    /// Platform word unsigned integer: size determined by target platform
+    /// On 32-bit: 4 bytes, on 64-bit: 8 bytes
+    /// This matches Rust's usize / C's uintptr_t
+    /// NOTE: -1 indicates platform-dependent layout, resolved at code generation
+    let uintTyCon = mkTypeConRef "uint" 0 (TypeLayout.Inline(-1, -1))
     
-    /// 64-bit unsigned integer
+    /// 32-bit signed integer (fixed size)
+    /// Use this when you need exactly 32 bits, regardless of platform
+    let int32TyCon = mkTypeConRef "int32" 0 (TypeLayout.Inline(4, 4))
+    
+    /// 32-bit unsigned integer (fixed size)
+    /// Use this when you need exactly 32 bits, regardless of platform
+    let uint32TyCon = mkTypeConRef "uint32" 0 (TypeLayout.Inline(4, 4))
+    
+    /// 64-bit unsigned integer (fixed size, not platform-dependent)
     let uint64TyCon = mkTypeConRef "uint64" 0 (TypeLayout.Inline(8, 8))
     
     /// 8-bit signed integer
@@ -180,10 +194,12 @@ module Parameterized =
 /// Pre-constructed types for common use
 module Types =
     let stringType = mkSimpleType Primitives.stringTyCon
-    let intType = mkSimpleType Primitives.intTyCon
-    let int64Type = mkSimpleType Primitives.int64TyCon
-    let uintType = mkSimpleType Primitives.uintTyCon
-    let uint64Type = mkSimpleType Primitives.uint64TyCon
+    let intType = mkSimpleType Primitives.intTyCon     // Platform word
+    let int32Type = mkSimpleType Primitives.int32TyCon // Fixed 32-bit
+    let int64Type = mkSimpleType Primitives.int64TyCon // Fixed 64-bit
+    let uintType = mkSimpleType Primitives.uintTyCon   // Platform word
+    let uint32Type = mkSimpleType Primitives.uint32TyCon // Fixed 32-bit
+    let uint64Type = mkSimpleType Primitives.uint64TyCon // Fixed 64-bit
     let int8Type = mkSimpleType Primitives.int8TyCon
     let uint8Type = mkSimpleType Primitives.uint8TyCon
     let int16Type = mkSimpleType Primitives.int16TyCon
@@ -205,12 +221,12 @@ module Types =
 /// Map from type names to their constructors
 let private primitiveTyConsByName =
     [ ("string", Primitives.stringTyCon)
-      ("int", Primitives.intTyCon)
-      ("int32", Primitives.intTyCon)  // Alias
-      ("int64", Primitives.int64TyCon)
-      ("uint", Primitives.uintTyCon)
-      ("uint32", Primitives.uintTyCon)  // Alias
-      ("uint64", Primitives.uint64TyCon)
+      ("int", Primitives.intTyCon)       // Platform word (isize)
+      ("int32", Primitives.int32TyCon)   // Fixed 32-bit (distinct from int!)
+      ("int64", Primitives.int64TyCon)   // Fixed 64-bit
+      ("uint", Primitives.uintTyCon)     // Platform word (usize)
+      ("uint32", Primitives.uint32TyCon) // Fixed 32-bit (distinct from uint!)
+      ("uint64", Primitives.uint64TyCon) // Fixed 64-bit
       ("int8", Primitives.int8TyCon)
       ("sbyte", Primitives.int8TyCon)  // Alias
       ("uint8", Primitives.uint8TyCon)
