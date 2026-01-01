@@ -118,8 +118,10 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
     | NativeType.TNativePtr elem1, NativeType.TNativePtr elem2 ->
         unify elem1 elem2 range
     
-    // Anonymous record types
-    | NativeType.TAnon fields1, NativeType.TAnon fields2 ->
+    // Anonymous record types - must match on isStruct (struct vs reference)
+    | NativeType.TAnon(fields1, isStruct1), NativeType.TAnon(fields2, isStruct2) ->
+        if isStruct1 <> isStruct2 then
+            raise (UnificationException(TypeMismatch(t1, t2, range)))
         if List.length fields1 <> List.length fields2 then
             raise (UnificationException(TypeMismatch(t1, t2, range)))
         let sorted1 = fields1 |> List.sortBy fst

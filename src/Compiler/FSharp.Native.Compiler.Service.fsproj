@@ -283,7 +283,7 @@
     <Compile Include="Checking.Native\UnionFind.fs" />
     <Compile Include="Checking.Native\Unify.fs" />
     <Compile Include="Checking.Native\SemanticGraph.fs" />
-    <Compile Include="Checking.Native\CheckExpr.fs" />
+    <Compile Include="Checking.Native\CheckExpressions.fs" />
     <Compile Include="Checking.Native\SRTPResolution.fs" />
     <Compile Include="Checking.Native\NativeService.fs" />
     <!-- Optimize.fs removed - IL optimization not applicable to native compilation.

@@ -15,7 +15,7 @@ open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.SemanticGraph
-open FSharp.Native.Compiler.Checking.Native.CheckExpr
+open FSharp.Native.Compiler.Checking.Native.CheckExpressions
 open FSharp.Native.Compiler.Checking.Native.Unify
 open FSharp.Native.Compiler.DiagnosticsLogger
 open FSharp.Native.Compiler.Features
@@ -233,7 +233,7 @@ let private errorsToDiagnostics (errors: UnificationError list) : Diagnostic lis
             | TupleKindMismatch(_, _, r) -> r
             | ByrefKindMismatch(_, _, r) -> r
         {
-            Severity = DiagnosticSeverity.Error
+            Severity = NativeDiagnosticSeverity.Error
             Code = "FS0001"
             Message = formatError e
             Range = range
@@ -365,18 +365,93 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
         (env, [checkExpr env builder expr])
 
     | SynModuleDecl.Types(typeDefns, typesRange) ->
-        // Type definitions
+        // Type definitions - process each and potentially update environment
         let _ = rangeToSourceRange typesRange  // Range for the whole types block
-        let nodes = typeDefns |> List.map (fun typeDef ->
-            let range = rangeToSourceRange typeDef.Range
-            // TODO: Extract actual type name and kind from typeDef
-            builder.Create(
-                SemanticKind.TypeDef("type", TypeDefKind.ClassDef, []),
-                env.Globals.UnitType,
-                range
-            )
-        )
-        (env, nodes)
+
+        // Process each type definition, threading environment for abbreviations
+        let (finalEnv, nodes) =
+            typeDefns |> List.fold (fun (accEnv, accNodes) typeDef ->
+                let (SynTypeDefn(typeInfo, typeRepr, _members, _implicitCtor, typeRange, _trivia)) = typeDef
+                let range = rangeToSourceRange typeRange
+
+                // Extract type name from SynComponentInfo
+                let typeName =
+                    let (SynComponentInfo(_, _, _, longId, _, _, _, _)) = typeInfo
+                    longId |> List.map (fun id -> id.idText) |> String.concat "."
+
+                // Check if this is a type abbreviation
+                match typeRepr with
+                | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.TypeAbbrev(_detail, rhsType, _), _) ->
+                    // Type abbreviation like `type I32 = int32`
+                    // Resolve the target type using the current environment
+                    let targetTy = checkSynType accEnv rhsType
+                    // Add the abbreviation to environment for later lookups
+                    let updatedEnv = addTypeAbbrev typeName targetTy accEnv
+
+                    // Create a TypeDef node for the abbreviation
+                    let node = builder.Create(
+                        SemanticKind.TypeDef(typeName, TypeDefKind.AbbreviationDef targetTy, []),
+                        targetTy,
+                        range
+                    )
+                    (updatedEnv, node :: accNodes)
+
+                | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Union(_, _cases, _), _) ->
+                    // Discriminated union
+                    // TODO: Extract actual union cases
+                    let node = builder.Create(
+                        SemanticKind.TypeDef(typeName, TypeDefKind.UnionDef [], []),
+                        accEnv.Globals.UnitType,  // TODO: Proper union type
+                        range
+                    )
+                    (accEnv, node :: accNodes)
+
+                | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Record(_, _fields, _), _) ->
+                    // Record type
+                    // TODO: Extract actual record fields
+                    let node = builder.Create(
+                        SemanticKind.TypeDef(typeName, TypeDefKind.RecordDef [], []),
+                        accEnv.Globals.UnitType,  // TODO: Proper record type
+                        range
+                    )
+                    (accEnv, node :: accNodes)
+
+                | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Enum(_, _), _) ->
+                    // Enum type
+                    // TODO: Extract actual enum cases
+                    let node = builder.Create(
+                        SemanticKind.TypeDef(typeName, TypeDefKind.EnumDef [], []),
+                        accEnv.Globals.UnitType,  // TODO: Proper enum type
+                        range
+                    )
+                    (accEnv, node :: accNodes)
+
+                | SynTypeDefnRepr.ObjectModel(kind, _members, _) ->
+                    // Class/struct/interface
+                    let defKind =
+                        match kind with
+                        | SynTypeDefnKind.Class -> TypeDefKind.ClassDef
+                        | SynTypeDefnKind.Struct -> TypeDefKind.StructDef
+                        | SynTypeDefnKind.Interface -> TypeDefKind.InterfaceDef
+                        | _ -> TypeDefKind.ClassDef
+                    let node = builder.Create(
+                        SemanticKind.TypeDef(typeName, defKind, []),
+                        accEnv.Globals.UnitType,
+                        range
+                    )
+                    (accEnv, node :: accNodes)
+
+                | _ ->
+                    // Other type definitions (delegates, etc.)
+                    let node = builder.Create(
+                        SemanticKind.TypeDef(typeName, TypeDefKind.ClassDef, []),
+                        accEnv.Globals.UnitType,
+                        range
+                    )
+                    (accEnv, node :: accNodes)
+            ) (env, [])
+
+        (finalEnv, List.rev nodes)
 
     | SynModuleDecl.NestedModule(moduleInfo, isRecursive, nestedDecls, _isContinued, moduleRange, _trivia) ->
         // Nested module - create ModuleDef node wrapping its contents
@@ -545,6 +620,46 @@ let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
 
     buildResult builder allNodes modulePaths diagnostics
 
+/// Check multiple parsed implementation files together.
+/// Files are processed in order, with earlier files' bindings available to later files.
+/// This is essential for multi-file compilation where dependencies must be loaded first.
+/// After checking, reachability analysis prunes the graph to only what's used.
+let checkParsedInputs (inputs: ParsedInput list) : CheckResult =
+    let globals = createNativeGlobals()
+    let initialEnv = createTypeEnv globals
+    let builder = NodeBuilder()
+    NodeId.reset()
+
+    // Process all files in order, threading environment
+    let (_finalEnv, allModuleResults) =
+        inputs |> List.fold (fun (accEnv, accResults) input ->
+            match input with
+            | ParsedInput.ImplFile implFile ->
+                let (ParsedImplFileInput(_, _, _, _, contents, _, _, _)) = implFile
+                // Process each module in this file
+                let (updatedEnv, fileResults) =
+                    contents |> List.fold (fun (env, results) moduleOrNs ->
+                        let (newEnv, path, nodes) = checkModuleOrNamespace env builder moduleOrNs
+                        (newEnv, (path, nodes) :: results)
+                    ) (accEnv, [])
+                (updatedEnv, (List.rev fileResults) @ accResults)
+            | ParsedInput.SigFile _ ->
+                // Skip signature files for now
+                (accEnv, accResults)
+        ) (initialEnv, [])
+
+    // Collect all nodes and build module path mapping
+    let moduleResultsOrdered = List.rev allModuleResults
+    let allNodes = moduleResultsOrdered |> List.collect snd
+    let modulePaths =
+        moduleResultsOrdered
+        |> List.map (fun (path, nodes) -> (path, nodes |> List.map (fun n -> n.Id)))
+        |> Map.ofList
+
+    let diagnostics = solveAndGetDiagnostics initialEnv.Constraints
+
+    buildResult builder allNodes modulePaths diagnostics
+
 /// Check parsed input (implementation or signature file)
 let checkParsedInput (input: ParsedInput) : CheckResult =
     match input with
@@ -554,7 +669,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
         {
             Graph = { Nodes = Map.empty; EntryPoints = []; Modules = Map.empty; Types = Map.empty }
             Diagnostics = [{
-                Severity = DiagnosticSeverity.Warning
+                Severity = NativeDiagnosticSeverity.Warning
                 Code = "FS0000"
                 Message = "Signature files not yet supported in native checker"
                 Range = dummyRange

@@ -177,7 +177,8 @@ and [<RequireQualifiedAccess; NoComparison>] NativeType =
     | TMeasure of measure: Measure
     
     /// Anonymous record type: {| field1: T1; field2: T2 |}
-    | TAnon of fields: (string * NativeType) list
+    /// isStruct: true for struct anonymous records (value type), false for reference type
+    | TAnon of fields: (string * NativeType) list * isStruct: bool
     
     /// Record type with named fields
     | TRecord of tycon: TypeConRef * fields: (string * NativeType) list
@@ -235,7 +236,8 @@ let rec layoutOf (ty: NativeType) : TypeLayout =
     | NativeType.TByref _ -> TypeLayout.Inline(8, 8)  // Pointer size
     | NativeType.TForall(_, body) -> layoutOf body
     | NativeType.TMeasure _ -> TypeLayout.Inline(0, 1)  // Phantom type
-    | NativeType.TAnon _ -> TypeLayout.Reference ArenaAffinity.CurrentActor
+    | NativeType.TAnon(_, isStruct) when isStruct -> TypeLayout.Inline(-1, -1) // Size depends on fields
+    | NativeType.TAnon(_, _) -> TypeLayout.Reference ArenaAffinity.CurrentActor
     | NativeType.TRecord(tycon, _) -> tycon.Layout
     | NativeType.TUnion(tycon, _) -> tycon.Layout
     | NativeType.TError _ -> TypeLayout.Opaque
@@ -277,7 +279,7 @@ let instantiate (typars: TypeParam list) (args: NativeType list) (body: NativeTy
         | NativeType.TForall(tps, body) -> NativeType.TForall(tps, go body)  // Capture-avoiding?
         | NativeType.TByref(elem, kind) -> NativeType.TByref(go elem, kind)
         | NativeType.TNativePtr elem -> NativeType.TNativePtr(go elem)
-        | NativeType.TAnon fields -> NativeType.TAnon(fields |> List.map (fun (n, t) -> (n, go t)))
+        | NativeType.TAnon(fields, isStruct) -> NativeType.TAnon(fields |> List.map (fun (n, t) -> (n, go t)), isStruct)
         | NativeType.TRecord(tc, fields) -> NativeType.TRecord(tc, fields |> List.map (fun (n, t) -> (n, go t)))
         | NativeType.TUnion(tc, cases) -> 
             NativeType.TUnion(tc, cases |> List.map (fun c -> 
@@ -315,9 +317,9 @@ let rec formatType (ty: NativeType) : string =
     | NativeType.TByref(elem, ByrefKind.InOut) -> $"byref<{formatType elem}>"
     | NativeType.TNativePtr elem -> $"nativeptr<{formatType elem}>"
     | NativeType.TMeasure m -> formatMeasure m
-    | NativeType.TAnon fields ->
+    | NativeType.TAnon(fields, isStruct) ->
         let fieldsStr = fields |> List.map (fun (n, t) -> $"{n}: {formatType t}") |> String.concat "; "
-        $"{{| {fieldsStr} |}}"
+        if isStruct then $"struct {{| {fieldsStr} |}}" else $"{{| {fieldsStr} |}}"
     | NativeType.TRecord(tc, fields) ->
         let fieldsStr = fields |> List.map (fun (n, t) -> $"{n}: {formatType t}") |> String.concat "; "
         $"{tc.Name} {{ {fieldsStr} }}"

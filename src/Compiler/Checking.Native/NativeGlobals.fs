@@ -285,6 +285,9 @@ let mkRefType elemType = NativeType.TApp(Parameterized.refTyCon, [elemType])
 /// Create a quotation type: Expr<'T>
 let mkExprType elemType = NativeType.TApp(Parameterized.exprTyCon, [elemType])
 
+/// Create a lazy type: Lazy<'T>
+let mkLazyType elemType = NativeType.TApp(Parameterized.lazyTyCon, [elemType])
+
 //-------------------------------------------------------------------------
 // Native Globals Container
 //-------------------------------------------------------------------------
@@ -381,7 +384,7 @@ let rec isValueType ty =
     | NativeType.TNativePtr _ -> true  // Pointers are value types
     | NativeType.TForall(_, body) -> isValueType body
     | NativeType.TMeasure _ -> true  // Phantom type
-    | NativeType.TAnon _ -> false  // Anonymous records are reference
+    | NativeType.TAnon(_, isStruct) -> isStruct  // Struct anon records are value types
     | NativeType.TRecord(tc, _) -> 
         match tc.Layout with
         | TypeLayout.Inline _ -> true

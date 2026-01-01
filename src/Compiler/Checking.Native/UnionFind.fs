@@ -103,8 +103,8 @@ let rec applySubst (ty: NativeType) : NativeType =
     | NativeType.TNativePtr elem ->
         NativeType.TNativePtr(applySubst elem)
     
-    | NativeType.TAnon fields ->
-        NativeType.TAnon(fields |> List.map (fun (n, t) -> (n, applySubst t)))
+    | NativeType.TAnon(fields, isStruct) ->
+        NativeType.TAnon(fields |> List.map (fun (n, t) -> (n, applySubst t)), isStruct)
     
     | NativeType.TRecord(tc, fields) ->
         NativeType.TRecord(tc, fields |> List.map (fun (n, t) -> (n, applySubst t)))
@@ -155,7 +155,7 @@ let rec occursIn (typar: TypeParam) (ty: NativeType) : bool =
     | NativeType.TNativePtr elem ->
         occursIn typar elem
     
-    | NativeType.TAnon fields ->
+    | NativeType.TAnon(fields, _) ->
         fields |> List.exists (fun (_, t) -> occursIn typar t)
     
     | NativeType.TRecord(_, fields) ->
@@ -210,7 +210,7 @@ let rec freeTypeVars (ty: NativeType) : Set<TypeParamId> =
     | NativeType.TNativePtr elem ->
         freeTypeVars elem
     
-    | NativeType.TAnon fields ->
+    | NativeType.TAnon(fields, _) ->
         fields |> List.map (fun (_, t) -> freeTypeVars t) |> Set.unionMany
     
     | NativeType.TRecord(_, fields) ->

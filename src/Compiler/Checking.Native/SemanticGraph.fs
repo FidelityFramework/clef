@@ -196,7 +196,11 @@ type SemanticKind =
     
     /// Index set: expr.[index] <- value
     | IndexSet of expr: NodeId * index: NodeId * value: NodeId
-    
+
+    /// Named indexed property set: expr.Property[index] <- value
+    /// Distinguished from IndexSet because it accesses a named property
+    | NamedIndexedPropertySet of expr: NodeId * propName: string * index: NodeId * value: NodeId
+
     /// Type annotation: (expr : type)
     | TypeAnnotation of expr: NodeId * annotatedType: NativeType
     
@@ -220,7 +224,12 @@ type SemanticKind =
     
     /// Platform binding marker (for Alex)
     | PlatformBinding of name: string
-    
+
+    /// SRTP trait call: (^T : (member Name : unit -> unit) t)
+    /// In native compilation, SRTP is resolved at compile time (no runtime dispatch).
+    /// The constrainedTypes are the type parameters that must have the member.
+    | TraitCall of memberName: string * constrainedTypes: NativeType list * arg: NodeId
+
     /// Quote expression: <@ expr @> or <@@ expr @@>
     | Quote of expr: NodeId * isTyped: bool
     
@@ -471,14 +480,14 @@ module Traversal =
 //-------------------------------------------------------------------------
 
 /// Diagnostic severity
-type DiagnosticSeverity =
+type NativeDiagnosticSeverity =
     | Error
     | Warning
     | Info
 
 /// A diagnostic message
 type Diagnostic = {
-    Severity: DiagnosticSeverity
+    Severity: NativeDiagnosticSeverity
     Code: string
     Message: string
     Range: SourceRange
@@ -493,10 +502,10 @@ type CheckResult = {
 
 module CheckResult =
     let hasErrors (result: CheckResult) =
-        result.Diagnostics |> List.exists (fun d -> d.Severity = DiagnosticSeverity.Error)
+        result.Diagnostics |> List.exists (fun d -> d.Severity = NativeDiagnosticSeverity.Error)
     
     let errors (result: CheckResult) =
-        result.Diagnostics |> List.filter (fun d -> d.Severity = DiagnosticSeverity.Error)
+        result.Diagnostics |> List.filter (fun d -> d.Severity = NativeDiagnosticSeverity.Error)
     
     let warnings (result: CheckResult) =
-        result.Diagnostics |> List.filter (fun d -> d.Severity = DiagnosticSeverity.Warning)
+        result.Diagnostics |> List.filter (fun d -> d.Severity = NativeDiagnosticSeverity.Warning)
