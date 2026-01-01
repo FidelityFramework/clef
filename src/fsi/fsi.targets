@@ -22,11 +22,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedText Include="$(MSBuildThisFileDirectory)..\LegacyMSBuildResolver\LegacyResolver.txt">
       <Link>LegacyResolver.txt</Link>
     </EmbeddedText>
-    <Compile Include="$(MSBuildThisFileDirectory)..\LegacyMSBuildResolver\LegacyMSBuildReferenceResolver.fsi" />
-    <Compile Include="$(MSBuildThisFileDirectory)..\LegacyMSBuildResolver\LegacyMSBuildReferenceResolver.fs" />
     <Compile Include="$(MSBuildThisFileDirectory)console.fs" />
     <Compile Include="$(MSBuildThisFileDirectory)fsimain.fs" />
     <NoneSubstituteText Include="$(MSBuildThisFileDirectory)App.config">
@@ -44,7 +41,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="$(MSBuildThisFileDirectory)..\Compiler\FSharpNative.Compiler.Service.fsproj" />
+    <ProjectReference Include="$(MSBuildThisFileDirectory)..\Compiler\FSharp.Native.Compiler.Service.fsproj" />
     <ProjectReference Include="$(MSBuildThisFileDirectory)..\FSharp.Compiler.Interactive.Settings\FSharp.Compiler.Interactive.Settings.fsproj" />
   </ItemGroup>
 
