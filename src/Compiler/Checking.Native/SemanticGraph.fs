@@ -83,6 +83,18 @@ type LiteralValue =
     | BigInt of string  // For UserNum with bigint suffix
 
 //-------------------------------------------------------------------------
+// Interpolated Strings
+//-------------------------------------------------------------------------
+
+/// A part of an interpolated string
+[<RequireQualifiedAccess>]
+type InterpolatedPart =
+    /// A literal string segment
+    | StringPart of string
+    /// An expression hole (the {expr} parts)
+    | ExprPart of NodeId
+
+//-------------------------------------------------------------------------
 // Pattern Matching
 //-------------------------------------------------------------------------
 
@@ -223,7 +235,10 @@ type SemanticKind =
     
     /// Member definition (method, property, etc.)
     | MemberDef of name: string * kind: MemberKind * body: NodeId option
-    
+
+    /// Interpolated string: $"prefix{expr1}middle{expr2}suffix"
+    | InterpolatedString of parts: InterpolatedPart list
+
     /// Error node (for recovery)
     | Error of message: string
 

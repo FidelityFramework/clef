@@ -536,6 +536,30 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
             children = [innerNode.Id])
 
     //---------------------------------------------------------------------
+    // Interpolated strings
+    //---------------------------------------------------------------------
+    | SynExpr.InterpolatedString(contents, _synStringKind, _) ->
+        // Process each part of the interpolated string
+        let mutable exprNodeIds = []
+        let parts =
+            contents |> List.map (fun part ->
+                match part with
+                | SynInterpolatedStringPart.String(value, _) ->
+                    InterpolatedPart.StringPart value
+                | SynInterpolatedStringPart.FillExpr(fillExpr, _qualifiers) ->
+                    // Type check the expression in the hole
+                    let exprNode = checkExpr env builder fillExpr
+                    exprNodeIds <- exprNode.Id :: exprNodeIds
+                    InterpolatedPart.ExprPart exprNode.Id
+            )
+
+        builder.Create(
+            SemanticKind.InterpolatedString parts,
+            env.Globals.StringType,
+            range,
+            children = List.rev exprNodeIds)
+
+    //---------------------------------------------------------------------
     // Fallback for unhandled expressions
     //---------------------------------------------------------------------
     | _ ->
@@ -617,19 +641,93 @@ and isBindingMutable (binding: SynBinding) : bool =
     let (SynBinding(_, _, _, isMutable, _, _, _, _, _, _, _, _, _)) = binding
     isMutable
 
+/// Extract function parameters from a LongIdent pattern
+/// For `let f x y = body`, returns Some [(x, ty); (y, ty)]
+/// For `let x = body`, returns None
+and tryGetFunctionParams (headPat: SynPat) (_env: TypeEnv) (range: SourceRange) : (string * NativeType) list option =
+    match headPat with
+    | SynPat.LongIdent(_, _, _, argPats, _, _) ->
+        match argPats with
+        | SynArgPats.Pats pats when not (List.isEmpty pats) ->
+            // Has parameters - this is a function definition
+            let params = pats |> List.collect (fun pat ->
+                match pat with
+                | SynPat.Paren(innerPat, _) ->
+                    // Parenthesized pattern like (x, y) or ()
+                    match innerPat with
+                    | SynPat.Const(SynConst.Unit, _) ->
+                        // () parameter - unit type, no binding name
+                        []  // Don't create a parameter for unit
+                    | SynPat.Named(SynIdent(ident, _), _, _, _) ->
+                        [(ident.idText, freshTypeVar range)]
+                    | SynPat.Tuple(_, pats, _, _) ->
+                        pats |> List.map (fun p ->
+                            match p with
+                            | SynPat.Named(SynIdent(id, _), _, _, _) -> (id.idText, freshTypeVar range)
+                            | _ -> ("_", freshTypeVar range))
+                    | _ -> [("_", freshTypeVar range)]
+                | SynPat.Named(SynIdent(ident, _), _, _, _) ->
+                    [(ident.idText, freshTypeVar range)]
+                | SynPat.Const(SynConst.Unit, _) ->
+                    []  // Unit literal - no parameter binding
+                | _ -> [("_", freshTypeVar range)]
+            )
+            Some params
+        | _ -> None
+    | _ -> None
+
 /// Check a single binding
 and checkBinding (env: TypeEnv) (builder: NodeBuilder) (binding: SynBinding) : SemanticNode =
-    let (SynBinding(_, _, _, isMutable, _, _, _, _, _, expr, bindingRange, _, _)) = binding
+    let (SynBinding(_, _, _, isMutable, _, _, _, headPat, _, expr, bindingRange, _, _)) = binding
     let range = rangeToSourceRange bindingRange
     let name = getBindingName binding
 
-    let exprNode = checkExpr env builder expr
+    // Check if this is a function definition (has parameters)
+    match tryGetFunctionParams headPat env range with
+    | Some paramBindings ->
+        // This is a function definition like `let f x = body` or `let f() = body`
+        // Create a Lambda node wrapping the body
 
-    builder.Create(
-        SemanticKind.Binding(name, isMutable, false),
-        exprNode.Type,
-        range,
-        children = [exprNode.Id])
+        // Add parameters to environment for checking body
+        let bodyEnv =
+            paramBindings
+            |> List.fold (fun env (paramName, paramTy) -> addBinding paramName paramTy false None env) env
+
+        // Check body with extended environment
+        let bodyNode = checkExpr bodyEnv builder expr
+
+        // Build function type
+        let paramTypes = paramBindings |> List.map snd
+        // For unit-parameterized functions like f(), the paramTypes might be empty
+        // but it's still a function: unit -> returnType
+        let funcType =
+            if List.isEmpty paramTypes then
+                mkFunctionType [env.Globals.UnitType] bodyNode.Type
+            else
+                mkFunctionType paramTypes bodyNode.Type
+
+        // Create Lambda node
+        let lambdaNode = builder.Create(
+            SemanticKind.Lambda(paramBindings, bodyNode.Id),
+            funcType,
+            range,
+            children = [bodyNode.Id])
+
+        // Create Binding node wrapping the Lambda
+        builder.Create(
+            SemanticKind.Binding(name, isMutable, false),
+            funcType,
+            range,
+            children = [lambdaNode.Id])
+
+    | None ->
+        // Regular value binding
+        let exprNode = checkExpr env builder expr
+        builder.Create(
+            SemanticKind.Binding(name, isMutable, false),
+            exprNode.Type,
+            range,
+            children = [exprNode.Id])
 
 /// Check a match clause
 and checkMatchClause (env: TypeEnv) (builder: NodeBuilder) (scrutineeTy: NativeType) (resultTy: NativeType) (clause: SynMatchClause) : MatchCase =
