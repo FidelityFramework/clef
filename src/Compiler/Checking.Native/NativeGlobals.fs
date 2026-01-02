@@ -247,6 +247,21 @@ let private primitiveTyConsByName =
       ("Exception", Primitives.exnTyCon) ]  // Alias
     |> Map.ofList
 
+/// Native pointer type: nativeptr<'T>
+let nativeptrTyCon = mkTypeConRef "nativeptr" 1 (TypeLayout.Inline(8, 8))
+
+/// Void pointer type: voidptr
+let voidptrTyCon = mkTypeConRef "voidptr" 0 (TypeLayout.Inline(8, 8))
+
+/// Byref type: byref<'T> - managed reference, maps to pointer in native
+let byrefTyCon = mkTypeConRef "byref" 1 (TypeLayout.Inline(8, 8))
+
+/// Inref type: inref<'T> - read-only byref
+let inrefTyCon = mkTypeConRef "inref" 1 (TypeLayout.Inline(8, 8))
+
+/// Outref type: outref<'T> - write-only byref  
+let outrefTyCon = mkTypeConRef "outref" 1 (TypeLayout.Inline(8, 8))
+
 let private parameterizedTyConsByName =
     [ ("option", Parameterized.optionTyCon)
       ("voption", Parameterized.voptionTyCon)
@@ -258,7 +273,12 @@ let private parameterizedTyConsByName =
       ("seq", Parameterized.seqTyCon)
       ("ref", Parameterized.refTyCon)
       ("Lazy", Parameterized.lazyTyCon)
-      ("Expr", Parameterized.exprTyCon) ]
+      ("Expr", Parameterized.exprTyCon)
+      ("nativeptr", nativeptrTyCon)
+      ("voidptr", voidptrTyCon)
+      ("byref", byrefTyCon)
+      ("inref", inrefTyCon)
+      ("outref", outrefTyCon) ]
     |> Map.ofList
 
 /// Try to find a primitive type constructor by name
@@ -305,6 +325,184 @@ let mkExprType elemType = NativeType.TApp(Parameterized.exprTyCon, [elemType])
 let mkLazyType elemType = NativeType.TApp(Parameterized.lazyTyCon, [elemType])
 
 //-------------------------------------------------------------------------
+// Built-in F# Intrinsic Functions
+//-------------------------------------------------------------------------
+
+/// Built-in F# language functions that must be provided by the type checker.
+/// These are the functions that are normally in FSharp.Core's Operators module.
+module BuiltInFunctions =
+    
+    // Create type variables for polymorphic functions
+    let private freshTyVar name =
+        let tyParam = {
+            Id = -(name.GetHashCode())
+            Name = name
+            Kind = TypeParamKind.Type
+            Constraints = []
+            Parent = TypeParamState.Unbound
+            Range = { File = "<builtin>"; Start = { Line = 0; Column = 0 }; End = { Line = 0; Column = 0 } }
+        }
+        NativeType.TVar tyParam
+
+    /// Conversion function type: 'T -> targetType
+    /// These use SRTP internally but for type checking we model them as simple conversions
+    let mkConversionType targetType =
+        let inputVar = freshTyVar "'a"
+        NativeType.TFun(inputVar, targetType)
+    
+    /// Create all built-in function bindings as (name, type) pairs
+    let getBuiltInBindings () : (string * NativeType) list =
+        [
+            // Integer conversion functions
+            ("int", mkConversionType Types.intType)
+            ("int8", mkConversionType Types.int8Type)
+            ("sbyte", mkConversionType Types.int8Type)  // Alias
+            ("int16", mkConversionType Types.int16Type)
+            ("int32", mkConversionType Types.int32Type)
+            ("int64", mkConversionType Types.int64Type)
+            ("nativeint", mkConversionType Types.nintType)
+            
+            // Unsigned integer conversion functions
+            ("byte", mkConversionType Types.uint8Type)
+            ("uint8", mkConversionType Types.uint8Type)
+            ("uint16", mkConversionType Types.uint16Type)
+            ("uint32", mkConversionType Types.uint32Type)
+            ("uint64", mkConversionType Types.uint64Type)
+            ("unativeint", mkConversionType Types.unintType)
+            
+            // Floating point conversion functions
+            ("float", mkConversionType Types.floatType)
+            ("double", mkConversionType Types.floatType)  // Alias
+            ("float32", mkConversionType Types.float32Type)
+            ("single", mkConversionType Types.float32Type)  // Alias
+            ("decimal", mkConversionType Types.decimalType)
+            
+            // Other conversion functions
+            ("char", mkConversionType Types.charType)
+            ("string", mkConversionType Types.stringType)
+            
+            // Utility functions
+            ("ignore", NativeType.TFun(freshTyVar "'a", Types.unitType))  // 'a -> unit
+            
+            // abs : 'a -> 'a (SRTP-based, returns same type)
+            let absVar = freshTyVar "'a"
+            ("abs", NativeType.TFun(absVar, absVar))
+            
+            // sizeof<'T> : int (type-level function, returns int)
+            // Note: This is a type function, not a value function
+            // For now, model as unit -> int (will be specialized)
+            ("sizeof", NativeType.TFun(Types.unitType, Types.intType))
+            
+            // Floating point special values
+            ("nan", Types.floatType)   // Not a function, a value
+            ("nanf", Types.float32Type)
+            ("infinity", Types.floatType)
+            ("infinityf", Types.float32Type)
+            
+            // ValueOption union case constructors
+            // ValueNone : voption<'a>
+            ("ValueNone", mkValueOptionType (freshTyVar "'a"))
+            // ValueSome : 'a -> voption<'a>
+            let vosomeVar = freshTyVar "'a"
+            ("ValueSome", NativeType.TFun(vosomeVar, mkValueOptionType vosomeVar))
+            
+            // Result union case constructors
+            // Ok : 'T -> Result<'T, 'Error>
+            let okVar = freshTyVar "'T"
+            let okErrVar = freshTyVar "'Error"
+            ("Ok", NativeType.TFun(okVar, mkResultType okVar okErrVar))
+            // Error : 'Error -> Result<'T, 'Error>
+            let errVar = freshTyVar "'T"
+            let errErrVar = freshTyVar "'Error"
+            ("Error", NativeType.TFun(errErrVar, mkResultType errVar errErrVar))
+            
+            // Option union case constructors (for compatibility)
+            // None : option<'a>
+            ("None", mkOptionType (freshTyVar "'a"))
+            // Some : 'a -> option<'a>
+            let someVar = freshTyVar "'a"
+            ("Some", NativeType.TFun(someVar, mkOptionType someVar))
+            
+            // box/unbox - these are BCL-dependent and will emit errors
+            // but we provide types so code type-checks before failing
+            ("box", NativeType.TFun(freshTyVar "'a", freshTyVar "'obj"))
+            ("unbox", NativeType.TFun(freshTyVar "'obj", freshTyVar "'a"))
+            
+            // printf family - format string functions
+            // For now, model as string -> unit (simplified)
+            ("printf", NativeType.TFun(Types.stringType, Types.unitType))
+            ("printfn", NativeType.TFun(Types.stringType, Types.unitType))
+            ("sprintf", NativeType.TFun(Types.stringType, Types.stringType))
+            ("failwith", NativeType.TFun(Types.stringType, freshTyVar "'a"))
+            ("failwithf", NativeType.TFun(Types.stringType, freshTyVar "'a"))
+            
+            // Arithmetic operators (SRTP-based)
+            // op_Addition : 'a -> 'a -> 'a
+            let addVar = freshTyVar "'a"
+            ("op_Addition", NativeType.TFun(addVar, NativeType.TFun(addVar, addVar)))
+            let subVar = freshTyVar "'a"
+            ("op_Subtraction", NativeType.TFun(subVar, NativeType.TFun(subVar, subVar)))
+            let mulVar = freshTyVar "'a"
+            ("op_Multiply", NativeType.TFun(mulVar, NativeType.TFun(mulVar, mulVar)))
+            let divVar = freshTyVar "'a"
+            ("op_Division", NativeType.TFun(divVar, NativeType.TFun(divVar, divVar)))
+            let modVar = freshTyVar "'a"
+            ("op_Modulus", NativeType.TFun(modVar, NativeType.TFun(modVar, modVar)))
+            
+            // Comparison operators
+            let eqVar = freshTyVar "'a"
+            ("op_Equality", NativeType.TFun(eqVar, NativeType.TFun(eqVar, Types.boolType)))
+            let neqVar = freshTyVar "'a"
+            ("op_Inequality", NativeType.TFun(neqVar, NativeType.TFun(neqVar, Types.boolType)))
+            let ltVar = freshTyVar "'a"
+            ("op_LessThan", NativeType.TFun(ltVar, NativeType.TFun(ltVar, Types.boolType)))
+            let gtVar = freshTyVar "'a"
+            ("op_GreaterThan", NativeType.TFun(gtVar, NativeType.TFun(gtVar, Types.boolType)))
+            let leVar = freshTyVar "'a"
+            ("op_LessThanOrEqual", NativeType.TFun(leVar, NativeType.TFun(leVar, Types.boolType)))
+            let geVar = freshTyVar "'a"
+            ("op_GreaterThanOrEqual", NativeType.TFun(geVar, NativeType.TFun(geVar, Types.boolType)))
+            
+            // Bitwise operators
+            let bandVar = freshTyVar "'a"
+            ("op_BitwiseAnd", NativeType.TFun(bandVar, NativeType.TFun(bandVar, bandVar)))
+            let borVar = freshTyVar "'a"
+            ("op_BitwiseOr", NativeType.TFun(borVar, NativeType.TFun(borVar, borVar)))
+            let bxorVar = freshTyVar "'a"
+            ("op_ExclusiveOr", NativeType.TFun(bxorVar, NativeType.TFun(bxorVar, bxorVar)))
+            let shlVar = freshTyVar "'a"
+            ("op_LeftShift", NativeType.TFun(shlVar, NativeType.TFun(Types.intType, shlVar)))
+            let shrVar = freshTyVar "'a"
+            ("op_RightShift", NativeType.TFun(shrVar, NativeType.TFun(Types.intType, shrVar)))
+            
+            // Logical operators
+            ("op_BooleanAnd", NativeType.TFun(Types.boolType, NativeType.TFun(Types.boolType, Types.boolType)))
+            ("op_BooleanOr", NativeType.TFun(Types.boolType, NativeType.TFun(Types.boolType, Types.boolType)))
+            ("not", NativeType.TFun(Types.boolType, Types.boolType))
+            
+            // Unary operators
+            let negVar = freshTyVar "'a"
+            ("op_UnaryNegation", NativeType.TFun(negVar, negVar))
+            ("op_LogicalNot", NativeType.TFun(Types.boolType, Types.boolType))
+            
+            // Pipe operators: 'a -> ('a -> 'b) -> 'b and ('a -> 'b) -> 'a -> 'b
+            let pipeAVar = freshTyVar "'a"
+            let pipeBVar = freshTyVar "'b"
+            let pipeFunc = NativeType.TFun(pipeAVar, pipeBVar)
+            ("op_PipeRight", NativeType.TFun(pipeAVar, NativeType.TFun(pipeFunc, pipeBVar)))  // |>
+            ("op_PipeLeft", NativeType.TFun(pipeFunc, NativeType.TFun(pipeAVar, pipeBVar)))   // <|
+            
+            // Composition operators: ('b -> 'c) -> ('a -> 'b) -> 'a -> 'c
+            let compAVar = freshTyVar "'a"
+            let compBVar = freshTyVar "'b"
+            let compCVar = freshTyVar "'c"
+            ("op_ComposeRight", NativeType.TFun(NativeType.TFun(compAVar, compBVar), 
+                NativeType.TFun(NativeType.TFun(compBVar, compCVar), NativeType.TFun(compAVar, compCVar))))  // >>
+            ("op_ComposeLeft", NativeType.TFun(NativeType.TFun(compBVar, compCVar), 
+                NativeType.TFun(NativeType.TFun(compAVar, compBVar), NativeType.TFun(compAVar, compCVar))))  // <<
+        ]
+
+//-------------------------------------------------------------------------
 // Native Globals Container
 //-------------------------------------------------------------------------
 
@@ -317,6 +515,9 @@ type NativeGlobals = {
     
     /// Parameterized type constructors
     Parameterized: Map<string, TypeConRef>
+    
+    /// Built-in F# function bindings (name -> type)
+    BuiltInBindings: Map<string, NativeType>
     
     /// Pre-constructed common types
     StringType: NativeType
@@ -333,6 +534,7 @@ type NativeGlobals = {
 let createNativeGlobals() : NativeGlobals = {
     Primitives = primitiveTyConsByName
     Parameterized = parameterizedTyConsByName
+    BuiltInBindings = BuiltInFunctions.getBuiltInBindings() |> Map.ofList
     StringType = Types.stringType
     IntType = Types.intType
     Int64Type = Types.int64Type

@@ -8,8 +8,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- Target both net9.0 and net10.0 for tooling compatibility -->
-    <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
+    <!-- Target net10.0 with FSharp.Core 10.x -->
+    <TargetFramework>net10.0</TargetFramework>
     <OutputType>Library</OutputType>
     <AssemblyName>FSharp.Native.Compiler.Service</AssemblyName>
 
@@ -39,8 +39,9 @@
     <Tailcalls>true</Tailcalls>
 
     <!-- FsLex/FsYacc output folders -->
-    <FsYaccOutputFolder>$(IntermediateOutputPath)$(TargetFramework)/</FsYaccOutputFolder>
-    <FsLexOutputFolder>$(IntermediateOutputPath)$(TargetFramework)/</FsLexOutputFolder>
+    <!-- Pre-generated parser files are in source tree per target framework -->
+    <FsYaccOutputFolder>$(MSBuildProjectDirectory)/$(TargetFramework)/</FsYaccOutputFolder>
+    <FsLexOutputFolder>$(MSBuildProjectDirectory)/$(TargetFramework)/</FsLexOutputFolder>
     <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
   </PropertyGroup>
 
@@ -283,9 +284,16 @@
     <Compile Include="Checking.Native\UnionFind.fs" />
     <Compile Include="Checking.Native\Unify.fs" />
     <Compile Include="Checking.Native\SemanticGraph.fs" />
+    <Compile Include="Checking.Native\NameResolution.fs" />
     <Compile Include="Checking.Native\CheckExpressions.fs" />
     <Compile Include="Checking.Native\SRTPResolution.fs" />
     <Compile Include="Checking.Native\NativeService.fs" />
+
+    <!-- Project - Unified project loading and checking (DRY - single source of truth) -->
+    <Compile Include="Project\FidprojLoader.fs" />
+    <Compile Include="Project\SourceResolver.fs" />
+    <Compile Include="Project\ProjectChecker.fs" />
+
     <!-- Optimize.fs removed - IL optimization not applicable to native compilation.
          Semantic optimizations (inlining, SRTP resolution, monomorphization) are performed
          by FNCS and Firefly in the semantic layer. MLIR/LLVM are deterministic carriers
@@ -362,7 +370,7 @@
   <!-- Package Dependencies -->
   <ItemGroup>
     <!-- Core F# runtime -->
-    <PackageReference Include="FSharp.Core" Version="9.0.100" />
+    <PackageReference Include="FSharp.Core" Version="10.0.101" />
 
     <!-- Required for compiler internals -->
     <PackageReference Include="System.Collections.Immutable" Version="8.0.0" />
@@ -375,6 +383,11 @@
   -->
   <ItemGroup>
     <ProjectReference Include="$(RepoRoot)src/FSharp.DependencyManager.Nuget/FSharp.DependencyManager.Nuget.fsproj" />
+  </ItemGroup>
+
+  <!-- Fidelity.Toml - TOML parser for .fidproj loading -->
+  <ItemGroup>
+    <ProjectReference Include="../../../Fidelity.Toml/src/Fidelity.Toml.fsproj" />
   </ItemGroup>
 
 </Project>

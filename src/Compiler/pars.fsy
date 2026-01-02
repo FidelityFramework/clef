@@ -12,21 +12,21 @@ open Internal.Utilities.Text.Parsing
 open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
 
-open FSharp.Compiler
-open FSharp.Compiler.AbstractIL
-open FSharp.Compiler.AbstractIL
-open FSharp.Compiler.DiagnosticsLogger
-open FSharp.Compiler.Features
-open FSharp.Compiler.LexerStore
-open FSharp.Compiler.ParseHelpers
-open FSharp.Compiler.Syntax
-open FSharp.Compiler.SyntaxTrivia
-open FSharp.Compiler.Syntax.PrettyNaming
-open FSharp.Compiler.SyntaxTreeOps
-open FSharp.Compiler.Text
-open FSharp.Compiler.Text.Position
-open FSharp.Compiler.Text.Range
-open FSharp.Compiler.Xml
+open FSharp.Native.Compiler
+open FSharp.Native.Compiler.AbstractIL
+open FSharp.Native.Compiler.AbstractIL
+open FSharp.Native.Compiler.DiagnosticsLogger
+open FSharp.Native.Compiler.Features
+open FSharp.Native.Compiler.LexerStore
+open FSharp.Native.Compiler.ParseHelpers
+open FSharp.Native.Compiler.Syntax
+open FSharp.Native.Compiler.SyntaxTrivia
+open FSharp.Native.Compiler.Syntax.PrettyNaming
+open FSharp.Native.Compiler.SyntaxTreeOps
+open FSharp.Native.Compiler.Text
+open FSharp.Native.Compiler.Text.Position
+open FSharp.Native.Compiler.Text.Range
+open FSharp.Native.Compiler.Xml
 
 // This function is called by the generated parser code. Returning initiates error recovery
 // It must be called precisely "parse_error_rich"

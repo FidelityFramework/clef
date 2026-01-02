@@ -225,6 +225,9 @@ type SemanticKind =
     /// Platform binding marker (for Alex)
     | PlatformBinding of name: string
 
+    /// Compiler intrinsic function (e.g., NativePtr.toNativeInt)
+    | Intrinsic of name: string
+
     /// SRTP trait call: (^T : (member Name : unit -> unit) t)
     /// In native compilation, SRTP is resolved at compile time (no runtime dispatch).
     /// The constrainedTypes are the type parameters that must have the member.
@@ -342,17 +345,36 @@ type SemanticGraph = {
     /// Module structure
     Modules: Map<ModulePath, NodeId list>
     
-    /// Type definitions
-    Types: Map<string, NodeId>
+    /// Type definitions - lazy extraction from witnessed TypeDef nodes (codata pattern)
+    /// Computed on first observation, cached thereafter
+    Types: Lazy<Map<string, NodeId>>
 }
 
 module SemanticGraph =
+    /// Extract types index from witnessed TypeDef nodes (lazy computation)
+    let private extractTypesIndex (nodes: Map<NodeId, SemanticNode>) : Map<string, NodeId> =
+        nodes
+        |> Map.values
+        |> Seq.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.TypeDef(name, _, _) -> Some (name, node.Id)
+            | _ -> None)
+        |> Map.ofSeq
+    
+    /// Create a lazy types index from nodes
+    let mkTypesIndex (nodes: Map<NodeId, SemanticNode>) : Lazy<Map<string, NodeId>> =
+        lazy (extractTypesIndex nodes)
+    
+    /// Recall a type definition by name (codata observation)
+    let recallType (name: string) (graph: SemanticGraph) : NodeId option =
+        graph.Types.Value |> Map.tryFind name
+    
     /// Create an empty semantic graph
     let empty : SemanticGraph = {
         Nodes = Map.empty
         EntryPoints = []
         Modules = Map.empty
-        Types = Map.empty
+        Types = lazy Map.empty
     }
     
     /// Add a node to the graph
@@ -421,7 +443,7 @@ type NodeBuilder() =
         { Nodes = nodes
           EntryPoints = entryPoints
           Modules = Map.empty
-          Types = Map.empty }
+          Types = SemanticGraph.mkTypesIndex nodes }
     
     /// Reset the builder
     member _.Reset() =
@@ -433,7 +455,82 @@ type NodeBuilder() =
 //-------------------------------------------------------------------------
 
 module Reachability =
+    /// Extract semantic references from a node's Kind (call targets, definition refs, etc.)
+    /// Used by traversal to ensure all semantic children are visited
+    let getSemanticReferences (node: SemanticNode) : NodeId list =
+        match node.Kind with
+        // Application: follow function and arguments
+        | SemanticKind.Application (funcId, argIds) ->
+            funcId :: argIds
+        // VarRef with definition: follow to definition
+        | SemanticKind.VarRef (_, Some defId) ->
+            [defId]
+        // Match: follow scrutinee and case bodies
+        | SemanticKind.Match (scrutinee, cases) ->
+            scrutinee :: (cases |> List.collect (fun c ->
+                match c.Guard with
+                | Some g -> [c.Body; g]
+                | None -> [c.Body]))
+        // Sequential: follow all nodes
+        | SemanticKind.Sequential nodes ->
+            nodes
+        // Binding: follow value node (first child usually)
+        | SemanticKind.Binding _ ->
+            node.Children
+        // Lambda: follow body
+        | SemanticKind.Lambda (_, bodyId) ->
+            [bodyId]
+        // Control flow: follow branches
+        | SemanticKind.IfThenElse (guard, thenB, elseB) ->
+            guard :: thenB :: (Option.toList elseB)
+        | SemanticKind.WhileLoop (guard, body) ->
+            [guard; body]
+        | SemanticKind.ForLoop (_, start, finish, _, body) ->
+            [start; finish; body]
+        | SemanticKind.ForEach (_, collection, body) ->
+            [collection; body]
+        | SemanticKind.TryWith (body, handler) ->
+            [body; handler]
+        | SemanticKind.TryFinally (body, cleanup) ->
+            [body; cleanup]
+        // Expressions with sub-expressions
+        | SemanticKind.TupleExpr elements ->
+            elements
+        | SemanticKind.ArrayExpr elements ->
+            elements
+        | SemanticKind.ListExpr elements ->
+            elements
+        | SemanticKind.RecordExpr (fields, copyFrom) ->
+            (fields |> List.map snd) @ (Option.toList copyFrom)
+        | SemanticKind.UnionCase (_, payload) ->
+            Option.toList payload
+        | SemanticKind.FieldGet (expr, _) ->
+            [expr]
+        | SemanticKind.FieldSet (expr, _, value) ->
+            [expr; value]
+        | SemanticKind.IndexGet (expr, index) ->
+            [expr; index]
+        | SemanticKind.IndexSet (expr, index, value) ->
+            [expr; index; value]
+        | SemanticKind.TypeAnnotation (expr, _) ->
+            [expr]
+        | SemanticKind.Upcast (expr, _) ->
+            [expr]
+        | SemanticKind.Downcast (expr, _) ->
+            [expr]
+        | SemanticKind.Set (target, value) ->
+            [target; value]
+        | SemanticKind.AddressOf (expr, _) ->
+            [expr]
+        // ModuleDef: follow member bindings
+        | SemanticKind.ModuleDef (_, memberIds) ->
+            memberIds
+        // Others: use children
+        | _ ->
+            node.Children
+
     /// Compute the set of reachable nodes from given entry points
+    /// Follows both structural children and semantic references (call edges, etc.)
     let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId> =
         let rec walk (visited: Set<NodeId>) (nodeId: NodeId) =
             if Set.contains nodeId visited then
@@ -443,10 +540,13 @@ module Reachability =
                 | None -> visited
                 | Some node ->
                     let visited = Set.add nodeId visited
-                    node.Children |> List.fold walk visited
-        
+                    // Follow both structural children and semantic references
+                    let refs = getSemanticReferences node
+                    let allRefs = List.append node.Children refs |> List.distinct
+                    allRefs |> List.fold walk visited
+
         entries |> List.fold walk Set.empty
-    
+
     /// Hard prune unreachable nodes (not soft-delete!)
     let pruneUnreachable (graph: SemanticGraph) : SemanticGraph =
         let reachable = computeReachable graph graph.EntryPoints
@@ -481,9 +581,63 @@ module Traversal =
             | Some node ->
                 let state = node.Children |> List.fold walk state
                 folder state node
-        
+
         graph.EntryPoints |> List.fold walk state
-    
+
+    /// Fold with pre-order action for Lambda parameters
+    /// The preBind function is called BEFORE children, specifically for binding Lambda params
+    /// The folder function is called AFTER children (post-order style for SSA)
+    ///
+    /// CRITICAL: This traversal follows SEMANTIC dependencies (VarRef.defId), not just
+    /// structural containment (Children). When a VarRef references a definition, that
+    /// definition is visited first. This ensures correct-by-construction ordering where
+    /// definitions are always witnessed before uses.
+    let foldWithLambdaPreBind
+            (preBind: 'State -> SemanticNode -> 'State)  // Called before children (for Lambda params)
+            (folder: 'State -> SemanticNode -> 'State)   // Called after children (for code gen)
+            (state: 'State)
+            (graph: SemanticGraph) : 'State =
+        // Track visited nodes to prevent infinite loops on cyclic references
+        let visited = System.Collections.Generic.HashSet<int>()
+
+        let rec walk state nodeId =
+            let nodeIdVal = NodeId.value nodeId
+            // Skip if already visited (handles cycles and shared references)
+            if visited.Contains(nodeIdVal) then
+                state
+            else
+                visited.Add(nodeIdVal) |> ignore
+                match SemanticGraph.tryGetNode nodeId graph with
+                | None -> state
+                | Some node ->
+                    // FIRST: Follow semantic dependencies (VarRef definitions)
+                    // This ensures definitions are visited before uses
+                    let state =
+                        match node.Kind with
+                        | SemanticKind.VarRef (_, Some defId) ->
+                            // Visit the definition first if not already visited
+                            walk state defId
+                        | _ -> state
+
+                    // Pre-bind Lambda parameters before processing children
+                    let state =
+                        match node.Kind with
+                        | SemanticKind.Lambda _ -> preBind state node
+                        | _ -> state
+
+                    // Process semantic references from the Kind
+                    // This handles TypeAnnotation.expr, Application.args, Sequential.nodes, etc.
+                    let semanticRefs = Reachability.getSemanticReferences node
+                    let state = semanticRefs |> List.fold walk state
+
+                    // Also process structural children if any
+                    let state = node.Children |> List.fold walk state
+
+                    // Apply main folder (post-order)
+                    folder state node
+
+        graph.EntryPoints |> List.fold walk state
+
     /// Map over all nodes
     let map (f: SemanticNode -> SemanticNode) (graph: SemanticGraph) : SemanticGraph =
         { graph with

@@ -6,9 +6,15 @@ FNCS (FSharpNative Compiler Services) provides native-first type checking for th
 
 ## ARCHITECTURAL DECISION (December 2025)
 
-**REBUILD, NOT PRUNE**: Cascade deletion analysis revealed that 3.2MB across 59 files (the entire FCS type-checking layer) depends on IL import assumptions. The type checker must be **rebuilt from scratch** for the native type universe.
+**REBUILD WITH PRESERVATION**: The type checker uses native types instead of BCL, but **FCS design-time infrastructure must be preserved**:
+- Symbol tracking (FSharpSymbol, locations, references)
+- Editor service APIs (GetToolTip, GetDeclaration, GetSymbolUses)
+- Typed tree structure for correlation
+- Source locations for navigation
 
-See: `native_type_checker_architecture` memory for full design.
+**PSG CONSTRUCTION IN FNCS**: FNCS now builds the PSG (Program Semantic Graph). Firefly consumes the PSG as "correct by construction" and focuses on code generation.
+
+See: `native_type_checker_architecture` and `fncs_fcs_preservation` memories for details.
 
 ## Naming Convention
 
@@ -19,13 +25,15 @@ See: `native_type_checker_architecture` memory for full design.
 
 ## Architecture
 
-### The Rebuild Approach
+### The Architecture Approach
 
-The native type checker produces a **unified semantic representation**:
-- Types attached during construction (no separate typed tree)
-- SRTP resolved during type checking (not post-hoc)
-- Hard prune reachability before handoff
-- Baker absorbed (no dual-tree zipper needed)
+FNCS produces a **PSG with native types and design-time capabilities**:
+- Native type universe (UTF-8 strings, voption, no obj)
+- SRTP resolved during type checking
+- Full symbol information preserved for editor navigation
+- PSG construction (moved from Firefly)
+
+Firefly consumes the PSG and focuses on code generation (Alex/Zipper → MLIR → LLVM).
 
 ### Core Modules (New)
 

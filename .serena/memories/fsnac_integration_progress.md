@@ -2,20 +2,32 @@
 
 ## Architectural Mission
 
-**FSNAC is a CLEAN BREAK for Fidelity projects.** It is NOT a dual-mode equal-peer architecture.
+**FSNAC is the UNIFIED F# Language Server** for the Fidelity ecosystem.
 
 ```
-FSNAC (Clean Break for Fidelity)
+FsNativeAutoComplete (Unified Server)
 │
-├── PRIMARY: Native Fidelity support
-│   └── .fidproj/.fsnx → FNCS
+├── Project Detection
+│   ├── .fidproj / .fsnx → Native Path (FNCS)
+│   └── .fsproj / .fsx → Managed Path (FSAC delegation)
+│
+├── Native Path (PRIMARY FOCUS NOW)
+│   ├── FNCS (F# Native Compiler Services)
+│   ├── NativeServerState / AdaptiveFSharpNativeLspServer
 │   └── Full native semantics, FS8xxx codes, native types
-│   └── THIS IS THE FOCUS NOW
 │
-└── FUTURE: Plugin architecture (deferred)
-    └── Re-integrate FSAC for Fable (webview frontends)
-    └── NOT the current priority
+└── Managed Path (FUTURE)
+    ├── Embedded/delegated FSAC ("classic")
+    ├── Forward LSP requests for .fsproj files
+    └── Enables Fable webview frontends in same workspace
 ```
+
+**Key Value Proposition**: A Fidelity project with a Fable-based webview frontend gets ONE language server, ONE Ionide configuration, seamless tooling across native backend + web frontend.
+
+**Development Phases**:
+1. Native path first (current work) - FNCS integration
+2. FSAC delegation later - enables mixed Fidelity+Fable workspaces
+3. Single Ionide extension, no forks needed
 
 The primary goal is making FSNAC a proper representative for fsnative and fsnative-spec, to be used by Serena for building the framework.
 
@@ -26,17 +38,38 @@ The primary goal is making FSNAC a proper representative for fsnative and fsnati
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 1.1 | Add FNCS package reference | DONE |
-| 1.2 | Create ProjectKind.fs | DONE |
-| 1.3 | Create TOML parser (self-contained) | DONE |
-| 1.4 | Create FidprojLoader (with workspace helpers) | DONE |
-| 2 | NativeCompilerServiceInterface (FNCS wrapper) | DONE |
-| 3 | Native workspace management (merged into FidprojLoader) | DONE |
-| 4a | NativeServerState (state management) | DONE |
-| 4b | Wire NativeState into LSP handlers | PENDING |
+| 1.1 | Add FNCS package reference | ✅ DONE |
+| 1.2 | Create ProjectKind.fs | ✅ DONE |
+| 1.3 | Create TOML parser (self-contained) | ✅ DONE |
+| 1.4 | Create FidprojLoader (with workspace helpers) | ✅ DONE |
+| 2 | NativeCompilerServiceInterface (FNCS wrapper) | ✅ DONE |
+| 3 | Native workspace management (merged into FidprojLoader) | ✅ DONE |
+| 4a | NativeServerState (state management) | ✅ DONE |
+| 4b | AdaptiveFSharpNativeLspServer (native LSP handlers) | ✅ DONE |
 | 5 | Script support (.fsnx) | PENDING |
 | 6 | Custom LSP endpoints | PENDING |
 | 7 | Testing | PENDING |
+| 8 | Unified routing in AdaptiveFSharpLspServer | ✅ DONE |
+| 9a | Native completions routing | ✅ DONE |
+| 9b | Native diagnostics publishing | ✅ DONE |
+| 9c | Native go-to-definition | ✅ DONE |
+
+## Unified Server Routing (Completed 2026-01-01)
+
+AdaptiveFSharpLspServer now routes requests to the appropriate backend:
+
+**File Detection Logic**:
+```fsharp
+let isNativeFile (filePath: string) =
+    nativeState.GetProjectForFile(filePath).IsSome ||
+    nativeState.IsScript(filePath)
+```
+
+**Routed Endpoints**:
+- `textDocument/hover` → NativeState.GetHoverInfo or FCS
+- `textDocument/completion` → NativeState.GetCompletions or FCS
+- `textDocument/definition` → NativeState.GetDefinition or FCS
+- `textDocument/publishDiagnostics` → Published on open/change for native files
 
 ## Key Files Created
 
@@ -47,6 +80,7 @@ The primary goal is making FSNAC a proper representative for fsnative and fsnati
 | `FidprojLoader.fs` | Parses .fidproj TOML + workspace helpers |
 | `NativeCompilerServiceInterface.fs` | Wraps FNCS for LSP (conditional compilation) |
 | `NativeServerState.fs` | Native project state management (ConcurrentDictionary-based) |
+| `AdaptiveFSharpNativeLspServer.fs/.fsi` | Native LSP handlers (hover, completions, diagnostics) |
 
 ## Conditional Compilation
 

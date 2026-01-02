@@ -253,22 +253,35 @@ let private solveAndGetDiagnostics (constraints: Constraint list) : Diagnostic l
 //-------------------------------------------------------------------------
 
 /// Determine entry points from checked nodes
-let private findEntryPoints (nodes: SemanticNode list) : NodeId list =
-    let candidates =
-        nodes
+let private findEntryPoints (allNodes: Map<NodeId, SemanticNode>) (topLevelNodes: SemanticNode list) : NodeId list =
+    // Find only bindings named "main" - this is the entry point
+    // TODO: Check for [<EntryPoint>] attribute when available
+
+    // Helper to look up a node by ID
+    let tryGetNode (nodeId: NodeId) =
+        Map.tryFind nodeId allNodes
+
+    // Find modules that contain a "main" binding
+    let mainModules =
+        topLevelNodes
         |> List.filter (fun node ->
             match node.Kind with
+            | SemanticKind.ModuleDef (_, memberIds) ->
+                // Check if this module contains a "main" binding
+                memberIds |> List.exists (fun memberId ->
+                    match tryGetNode memberId with
+                    | Some memberNode ->
+                        match memberNode.Kind with
+                        | SemanticKind.Binding(name, _, _) when name = "main" -> true
+                        | _ -> false
+                    | None -> false)
             | SemanticKind.Binding(name, _, _) when name = "main" -> true
-            | SemanticKind.Application _ -> true
             | _ -> false
         )
         |> List.map (fun n -> n.Id)
 
-    // If no explicit entry points, use all top-level nodes
-    if List.isEmpty candidates then
-        nodes |> List.map (fun n -> n.Id)
-    else
-        candidates
+    // If no main found, this is a library - return empty (no entry points)
+    mainModules
 
 //-------------------------------------------------------------------------
 // Graph Building Helpers
@@ -276,13 +289,14 @@ let private findEntryPoints (nodes: SemanticNode list) : NodeId list =
 
 /// Build a CheckResult from builder state and diagnostics
 let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) : CheckResult =
-    let entryPoints = findEntryPoints topLevelNodes
+    let entryPoints = findEntryPoints builder.Nodes topLevelNodes
 
     let graph = {
         Nodes = builder.Nodes
         EntryPoints = entryPoints
         Modules = modulePaths
-        Types = Map.empty  // TODO: Populate from type definitions
+        // Types extracted lazily from witnessed TypeDef nodes (codata pattern)
+        Types = SemanticGraph.mkTypesIndex builder.Nodes
     }
 
     // Hard prune unreachable nodes (not soft-delete!)
@@ -321,7 +335,7 @@ let checkLetBinding (binding: SynBinding) : CheckResult =
     let builder = NodeBuilder()
     NodeId.reset()
 
-    let node = checkBinding env builder binding
+    let (node, _inlineBody) = checkBinding env builder binding
     let diagnostics = solveAndGetDiagnostics env.Constraints
 
     buildResult builder [node] Map.empty diagnostics
@@ -336,6 +350,16 @@ type private ModuleContext = {
     IsRecursive: bool
 }
 
+/// Check if a type definition has the [<Struct>] attribute
+let private hasStructAttribute (attrs: SynAttributes) : bool =
+    attrs |> List.exists (fun attrList ->
+        attrList.Attributes |> List.exists (fun attr ->
+            match attr.TypeName.LongIdent with
+            | [id] -> id.idText = "Struct" || id.idText = "StructAttribute"
+            | _ -> false
+        )
+    )
+
 /// Check a single module declaration, returning updated environment and nodes
 /// Environment threading is critical so that later declarations can see earlier bindings
 let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: ModuleContext) (decl: SynModuleDecl) : TypeEnv * SemanticNode list =
@@ -346,15 +370,40 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
         let range = rangeToSourceRange bindingRange
         let _ = range  // Range captured in individual bindings
 
+        // Compute qualified name suffixes for bindings (like we do for types)
+        // This enables lookups like "Bindings.getCurrentTicks" for a binding in Platform.Bindings
+        let bindingNameSuffixes simpleName =
+            match ctx.Path with
+            | [] | [_] -> [simpleName]  // No nested module or just namespace
+            | _ :: rest -> 
+                let rec allSuffixes = function
+                    | [] -> [[]]
+                    | x :: xs -> (x :: xs) :: allSuffixes xs
+                rest
+                |> allSuffixes
+                |> List.map (fun modPath ->
+                    match modPath with
+                    | [] -> simpleName
+                    | _ -> (modPath |> String.concat ".") + "." + simpleName)
+
         // For recursive bindings, we should add all names to env first
         // For now, we at least thread the environment through sequentially
+        // FNCS inline-by-default: capture function bodies for transparent expansion
         let (finalEnv, nodes) =
             bindings |> List.fold (fun (accEnv, accNodes) binding ->
                 let _ = isRec  // TODO: Handle recursive bindings properly
-                let node = checkBinding accEnv builder binding
+                let (node, inlineBodyOpt) = checkBinding accEnv builder binding
                 // Add the binding to environment so later bindings can reference it
-                let name = getBindingName binding
-                let updatedEnv = addBinding name node.Type false (Some node.Id) accEnv
+                // Register under all qualified name suffixes (handles AutoOpen modules)
+                let simpleName = getBindingName binding
+                let updatedEnv =
+                    bindingNameSuffixes simpleName
+                    |> List.fold (fun env qname ->
+                        // Use addInlineBinding for functions to capture body for expansion
+                        match inlineBodyOpt with
+                        | Some inlineBody -> addInlineBinding qname node.Type (Some node.Id) inlineBody env
+                        | None -> addBinding qname node.Type false (Some node.Id) env
+                    ) accEnv
                 (updatedEnv, node :: accNodes)
             ) (env, [])
         (finalEnv, List.rev nodes)
@@ -375,9 +424,40 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 let range = rangeToSourceRange typeRange
 
                 // Extract type name from SynComponentInfo
-                let typeName =
+                let simpleTypeName =
                     let (SynComponentInfo(_, _, _, longId, _, _, _, _)) = typeInfo
                     longId |> List.map (fun id -> id.idText) |> String.concat "."
+                
+                // For nested modules, we need to register types with qualified names
+                // so they can be looked up as "ModuleName.TypeName"
+                // The module path relative to namespace (skip the namespace prefix)
+                // For path ["Alloy"; "Internal"] we want to prefix with "Internal."
+                // 
+                // Additionally, for [<AutoOpen>] modules, types inside them should be
+                // accessible without the AutoOpen module prefix. Since we don't track
+                // AutoOpen attributes, we register under ALL suffix variations to be safe.
+                // E.g., for path ["Alloy", "Fsil", "Internal"] and type "Condition":
+                //   - "Fsil.Internal.Condition"
+                //   - "Internal.Condition" 
+                //   - "Condition"
+                let typeNameSuffixes =
+                    match ctx.Path with
+                    | [] | [_] -> [simpleTypeName]  // No nested module or just namespace
+                    | _ :: rest -> 
+                        // Generate all suffix variations of the module path
+                        let rec allSuffixes = function
+                            | [] -> [[]]
+                            | x :: xs -> (x :: xs) :: allSuffixes xs
+                        
+                        rest
+                        |> allSuffixes
+                        |> List.map (fun modPath ->
+                            match modPath with
+                            | [] -> simpleTypeName
+                            | _ -> (modPath |> String.concat ".") + "." + simpleTypeName)
+                
+                // Primary name for semantic graph node (use most qualified)
+                let typeName = List.head typeNameSuffixes
 
                 // Check if this is a type abbreviation
                 match typeRepr with
@@ -385,8 +465,10 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // Type abbreviation like `type I32 = int32`
                     // Resolve the target type using the current environment
                     let targetTy = checkSynType accEnv rhsType
-                    // Add the abbreviation to environment for later lookups
-                    let updatedEnv = addTypeAbbrev typeName targetTy accEnv
+                    // Register under all name suffixes (handles AutoOpen modules)
+                    let updatedEnv = 
+                        typeNameSuffixes 
+                        |> List.fold (fun env name -> addTypeAbbrev name targetTy env) accEnv
 
                     // Create a TypeDef node for the abbreviation
                     let node = builder.Create(
@@ -398,48 +480,82 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
 
                 | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Union(_, _cases, _), _) ->
                     // Discriminated union
-                    // TODO: Extract actual union cases
+                    // Extract type parameters from SynComponentInfo
+                    let (SynComponentInfo(_, typars, _, _, _, _, _, _)) = typeInfo
+                    let arity = match typars with Some tp -> tp.TyparDecls.Length | None -> 0
+                    // Create TypeConRef for lookup
+                    let tyCon = mkTypeConRef typeName arity (TypeLayout.Opaque)
+                    // Register under all name suffixes (handles AutoOpen modules)
+                    let updatedEnv = 
+                        typeNameSuffixes 
+                        |> List.fold (fun env name -> addTypeDef name tyCon env) accEnv
                     let node = builder.Create(
                         SemanticKind.TypeDef(typeName, TypeDefKind.UnionDef [], []),
-                        accEnv.Globals.UnitType,  // TODO: Proper union type
+                        mkSimpleType tyCon,
                         range
                     )
-                    (accEnv, node :: accNodes)
+                    (updatedEnv, node :: accNodes)
 
                 | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Record(_, _fields, _), _) ->
                     // Record type
-                    // TODO: Extract actual record fields
+                    let (SynComponentInfo(_, typars, _, _, _, _, _, _)) = typeInfo
+                    let arity = match typars with Some tp -> tp.TyparDecls.Length | None -> 0
+                    let tyCon = mkTypeConRef typeName arity (TypeLayout.Opaque)
+                    // Register under all name suffixes (handles AutoOpen modules)
+                    let updatedEnv = 
+                        typeNameSuffixes 
+                        |> List.fold (fun env name -> addTypeDef name tyCon env) accEnv
+                    // Also register the record constructor as a binding
+                    // Record constructor takes field values and returns the record type
+                    let recordType = mkSimpleType tyCon
+                    let updatedEnv = addBinding typeName recordType false None updatedEnv
                     let node = builder.Create(
                         SemanticKind.TypeDef(typeName, TypeDefKind.RecordDef [], []),
-                        accEnv.Globals.UnitType,  // TODO: Proper record type
+                        recordType,
                         range
                     )
-                    (accEnv, node :: accNodes)
+                    (updatedEnv, node :: accNodes)
 
                 | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Enum(_, _), _) ->
                     // Enum type
-                    // TODO: Extract actual enum cases
+                    let tyCon = mkTypeConRef typeName 0 (TypeLayout.Inline(4, 4))  // Enums are typically i32
+                    // Register under all name suffixes (handles AutoOpen modules)
+                    let updatedEnv = 
+                        typeNameSuffixes 
+                        |> List.fold (fun env name -> addTypeDef name tyCon env) accEnv
                     let node = builder.Create(
                         SemanticKind.TypeDef(typeName, TypeDefKind.EnumDef [], []),
-                        accEnv.Globals.UnitType,  // TODO: Proper enum type
+                        mkSimpleType tyCon,
                         range
                     )
-                    (accEnv, node :: accNodes)
+                    (updatedEnv, node :: accNodes)
 
                 | SynTypeDefnRepr.ObjectModel(kind, _members, _) ->
                     // Class/struct/interface
+                    let (SynComponentInfo(attrs, typars, _, _, _, _, _, _)) = typeInfo
+                    let arity = match typars with Some tp -> tp.TyparDecls.Length | None -> 0
+                    // Check for [<Struct>] attribute in addition to SynTypeDefnKind.Struct
+                    let isStruct = match kind with SynTypeDefnKind.Struct -> true | _ -> hasStructAttribute attrs
+                    let layout = if isStruct then TypeLayout.Opaque else TypeLayout.Reference ArenaAffinity.CurrentActor
+                    let tyCon = mkTypeConRef typeName arity layout
+                    // Register under all name suffixes (handles AutoOpen modules)
+                    let updatedEnv = 
+                        typeNameSuffixes 
+                        |> List.fold (fun env name -> addTypeDef name tyCon env) accEnv
+                    // For structs (including [<Struct>] attributed), register constructor as binding
+                    let structType = mkSimpleType tyCon
+                    let updatedEnv = if isStruct then addBinding typeName structType false None updatedEnv else updatedEnv
                     let defKind =
-                        match kind with
-                        | SynTypeDefnKind.Class -> TypeDefKind.ClassDef
-                        | SynTypeDefnKind.Struct -> TypeDefKind.StructDef
-                        | SynTypeDefnKind.Interface -> TypeDefKind.InterfaceDef
-                        | _ -> TypeDefKind.ClassDef
+                        if isStruct then TypeDefKind.StructDef
+                        else match kind with
+                             | SynTypeDefnKind.Interface -> TypeDefKind.InterfaceDef
+                             | _ -> TypeDefKind.ClassDef
                     let node = builder.Create(
                         SemanticKind.TypeDef(typeName, defKind, []),
-                        accEnv.Globals.UnitType,
+                        structType,
                         range
                     )
-                    (accEnv, node :: accNodes)
+                    (updatedEnv, node :: accNodes)
 
                 | _ ->
                     // Other type definitions (delegates, etc.)
@@ -480,10 +596,17 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
 
         (nestedEnv, [moduleNode])
 
-    | SynModuleDecl.Open _ ->
-        // Open statements affect name resolution but don't produce semantic nodes
-        // TODO: Track opened namespaces in environment for name resolution
-        (env, [])
+    | SynModuleDecl.Open(target, _) ->
+        // Open statements affect name resolution - compose into resolver
+        let updatedEnv =
+            match target with
+            | SynOpenDeclTarget.ModuleOrNamespace(longId, _) ->
+                let ns = longId.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
+                addOpen ns env
+            | SynOpenDeclTarget.Type _ ->
+                // open type - not currently supported in native
+                env
+        (updatedEnv, [])
 
     | SynModuleDecl.HashDirective _ ->
         // Hash directives (#if, #nowarn, etc.) - preprocessing, no semantic nodes
@@ -656,9 +779,11 @@ let checkParsedInputs (inputs: ParsedInput list) : CheckResult =
         |> List.map (fun (path, nodes) -> (path, nodes |> List.map (fun n -> n.Id)))
         |> Map.ofList
 
-    let diagnostics = solveAndGetDiagnostics initialEnv.Constraints
+    // Combine constraint-solving diagnostics with accumulated type-checking diagnostics
+    let constraintDiags = solveAndGetDiagnostics initialEnv.Constraints
+    let allDiagnostics = constraintDiags @ (List.rev initialEnv.Diagnostics)
 
-    buildResult builder allNodes modulePaths diagnostics
+    buildResult builder allNodes modulePaths allDiagnostics
 
 /// Check parsed input (implementation or signature file)
 let checkParsedInput (input: ParsedInput) : CheckResult =
@@ -667,7 +792,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
     | ParsedInput.SigFile _ ->
         // Signature files not yet supported
         {
-            Graph = { Nodes = Map.empty; EntryPoints = []; Modules = Map.empty; Types = Map.empty }
+            Graph = { Nodes = Map.empty; EntryPoints = []; Modules = Map.empty; Types = lazy Map.empty }
             Diagnostics = [{
                 Severity = NativeDiagnosticSeverity.Warning
                 Code = "FS0000"

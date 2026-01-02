@@ -1,22 +1,26 @@
 # CheckExpressions.fs Completion Plan
 
-## Status: CRITICAL GAP
+## Status: ✅ COMPLETE (Updated 2026-01-01)
 
-FNCS CheckExpressions.fs handles only 24 of ~55 SynExpr cases. The catch-all fallback produces `TError "unhandled"` which breaks compilation.
+FNCS CheckExpressions.fs now handles ALL SynExpr cases explicitly. No catch-all fallback.
+Phase 1 (SynType) and Phase 2 (SynExpr) are COMPLETE.
 
 ## Reference
 
 FCS CheckExpressions.fs: 12,864 lines, handles ALL cases explicitly.
 Location: `~/repos/fsharp/src/Compiler/Checking/Expressions/CheckExpressions.fs`
 
-## Currently Handled (24 cases)
+## All Cases Now Handled (65+ cases)
 
-- App, ArrayOrList, Const, Do, DotGet, For, Ident, IfThenElse
-- InterpolatedString, Lambda, LetOrUse, LongIdent, Match, Null
-- Paren, Quote, Record, Sequential, Set, TryFinally, TryWith
-- Tuple, Typed, While
+All SynExpr variants are explicitly handled including:
+- Core: App, ArrayOrList, Const, Do, DotGet, For, Ident, IfThenElse, Lambda, etc.
+- Critical: AddressOf, TraitCall, TypeApp, ForEach, DotIndexedGet/Set, Upcast/Downcast
+- Secondary: MatchLambda, Lazy, Assert, DotSet, LongIdentSet, AnonRecd, ObjExpr, New
+- Computation: ComputationExpr, YieldOrReturn, DoBang, MatchBang, WhileBang, etc.
+- Specialized: Dynamic, DotLambda, Fixed, IndexRange, JoinIn, DebugPoint, etc.
+- Error recovery: ArbitraryAfterError, FromParseError, DiscardAfterMissingQualificationAfterDot
 
-## Missing Cases (Priority by Alloy Usage)
+## Previously Listed as Missing (NOW DONE)
 
 ### Critical for Alloy (MUST IMPLEMENT FIRST)
 
@@ -117,9 +121,19 @@ Location: `~/repos/fsharp/src/Compiler/Checking/Expressions/CheckExpressions.fs`
     TcForEachExpr cenv overallTy env tpenv (seqExprOnly, isFromSource, pat, synEnumExpr, synBodyExpr, m, spFor, spIn, m)
 ```
 
-## Success Criteria
+## Success Criteria ✅ ALL MET
 
-- All 55 SynExpr cases explicitly handled
-- No catch-all fallback
-- Alloy compiles without "unhandled" errors
-- HelloWorldDirect sample produces working binary
+- ✅ All 65+ SynExpr cases explicitly handled
+- ✅ No catch-all fallback
+- ✅ No incomplete pattern match warnings
+- ⏳ HelloWorldDirect sample validation pending (Phase 9)
+
+## Completion Notes
+
+Updated 2026-01-01: Full audit revealed the implementation was much more complete than
+this memory indicated. All SynType (22 cases) and SynExpr (65+ cases) are now handled.
+Remaining work is in:
+- Phase 3: Populate SemanticGraph.Types
+- Phase 4: Memory layout computation
+- Phase 5: Arena affinity
+- Phase 6: SRTP resolution

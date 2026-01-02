@@ -2,16 +2,44 @@
 
 ## Overview
 
-This document specifies the architecture for FNCS's native type checker - a ground-up implementation that produces a unified semantic graph suitable for native compilation.
+This document specifies the architecture for FNCS's native type checker. The goal is to **change the type universe** (native types instead of BCL) while **preserving FCS's design-time infrastructure**.
+
+## CRITICAL PRINCIPLE: FCS Preservation
+
+FNCS is NOT a complete replacement of FCS. The valuable parts of FCS must be preserved:
+
+### What MUST Be Preserved From FCS
+
+| FCS Component | Purpose | Preservation Strategy |
+|---------------|---------|----------------------|
+| `FSharpSymbol` | Symbol info for navigation | Keep symbol tracking infrastructure |
+| `FSharpCheckFileResults` | Per-file analysis results | Adapt to use native types |
+| `GetToolTip` | Hover information | Preserve API, native type descriptions |
+| `GetDeclarationLocation` | Go to definition | Preserve source location tracking |
+| `GetSymbolUseAtLocation` | Find symbol at cursor | Preserve symbol use tracking |
+| `GetAllUsesOfAllSymbols` | Find all references | Preserve cross-file symbol tracking |
+| `SemanticClassification` | Syntax highlighting | Preserve semantic classification |
+| Parser (SynExpr, SynModule) | Syntax parsing | Use unchanged |
+| Source locations/ranges | Navigation, error reporting | Preserve throughout pipeline |
+
+### What Changes For Native
+
+| Aspect | FCS | FNCS |
+|--------|-----|------|
+| Type source | IL assemblies + source | Source only |
+| String literal | `System.String` | `NativeStr` (UTF-8) |
+| Option type | Reference, nullable | `voption` (value type) |
+| `obj` | Universal base | **Does not exist** |
+| SRTP timing | Post-hoc overlay | During construction |
 
 ## Design Goals
 
-1. **Unified Representation**: Build AST + types together (no separate trees)
+1. **Preserve FCS Design-Time APIs**: Editor services must continue to work
 2. **Native Types Only**: No BCL, no IL imports, no `obj`
 3. **SRTP Intrinsic**: Resolution during type checking, not post-hoc
-4. **Memory Layout Aware**: Types determine representation
-5. **Hard Prune**: Only reachable nodes in output
-6. **Arena Affinity**: Track allocation context for memory management
+4. **PSG Construction**: FNCS builds the PSG, not Firefly
+5. **Full Symbol Information**: PSG carries symbol info for navigation
+6. **Memory Layout Aware**: Types determine representation
 
 ## Architecture Layers
 
@@ -462,10 +490,20 @@ type NativePtr = {
 | String literal | `System.String` | `NativeStr` (UTF-8) |
 | Option type | Reference, nullable | Value type, no null |
 | `obj` | Universal base | **Does not exist** |
-| Separate trees | SynExpr + FSharpExpr | Unified SemanticNode |
+| PSG construction | Firefly builds PSG | **FNCS builds PSG** |
+| Design-time APIs | Full support | **Preserved (critical)** |
 | SRTP timing | Post-hoc overlay | During construction |
-| Reachability | Soft-delete | Hard prune |
 | Memory info | None | Layout + arena affinity |
+
+## PSG Construction (FNCS Responsibility)
+
+FNCS outputs a **Program Semantic Graph (PSG)** that:
+- Contains full type information (native types)
+- Preserves symbol information for editor navigation
+- Has SRTP already resolved
+- Is "correct by construction" for Firefly consumption
+
+Firefly consumes this PSG and focuses purely on code generation (Alex/Zipper → MLIR → LLVM).
 
 ## Success Criteria
 

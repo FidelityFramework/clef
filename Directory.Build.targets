@@ -9,8 +9,8 @@
 
   <!-- FsLex/FsYacc tool paths -->
   <PropertyGroup>
-    <FsLexPath>$(ArtifactsDir)bin/fslex/$(Configuration)/net9.0/fslex.dll</FsLexPath>
-    <FsYaccPath>$(ArtifactsDir)bin/fsyacc/$(Configuration)/net9.0/fsyacc.dll</FsYaccPath>
+    <FsLexPath>$(ArtifactsDir)bin/fslex/$(Configuration)/net10.0/fslex.dll</FsLexPath>
+    <FsYaccPath>$(ArtifactsDir)bin/fsyacc/$(Configuration)/net10.0/fsyacc.dll</FsYaccPath>
   </PropertyGroup>
 
 </Project>

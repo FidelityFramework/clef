@@ -15,6 +15,7 @@ open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.UnionFind
 open FSharp.Native.Compiler.Checking.Native.Unify
 open FSharp.Native.Compiler.Checking.Native.SemanticGraph
+open FSharp.Native.Compiler.Checking.Native.NameResolution
 
 //-------------------------------------------------------------------------
 // F# Native Diagnostic Codes (FS8xxx series)
@@ -50,6 +51,12 @@ module DiagnosticCodes =
     let FS8400_CodeGenError = "FS8400"
     let FS8401_UnsupportedConstruct = "FS8401"
     
+    // BCL rejection (FS8500-FS8599)
+    // BCL types/namespaces are NEVER allowed in F# Native
+    let FS8500_BclReferenceNotAllowed = "FS8500"
+    let FS8501_SystemNamespaceNotAllowed = "FS8501"
+    let FS8502_MicrosoftNamespaceNotAllowed = "FS8502"
+    
     // Generic/fallback
     let FS0001_GenericError = "FS0001"
     let FS0002_GenericWarning = "FS0002"
@@ -58,21 +65,17 @@ module DiagnosticCodes =
 // Type Environment
 //-------------------------------------------------------------------------
 
-/// A binding in the type environment
-type Binding = {
-    Name: string
-    Type: NativeType
-    IsMutable: bool
-    NodeId: NodeId option  // Reference to definition node
-}
+// Note: InlineBody and ResolvedBinding types are imported from NameResolution module.
+// This ensures consistent types across the resolution infrastructure.
 
 /// The type checking environment
 [<NoComparison; NoEquality>]
 type TypeEnv = {
     /// Global type information
     Globals: NativeGlobals
-    /// Local variable bindings (name -> type)
-    Bindings: Map<string, Binding>
+    /// Compositional name resolution context
+    /// BCL is structurally impossible - only source-defined bindings exist
+    Resolution: ResolutionContext
     /// Type definitions (name -> TypeConRef)
     TypeDefs: Map<string, TypeConRef>
     /// Type abbreviations (name -> NativeType it expands to)
@@ -87,30 +90,77 @@ type TypeEnv = {
     ExpectedReturnType: NativeType option
 }
 
-/// Create an empty type environment with globals
-let createTypeEnv (globals: NativeGlobals) : TypeEnv = {
-    Globals = globals
-    Bindings = Map.empty
-    TypeDefs = Map.empty
-    TypeAbbrevs = Map.empty
-    Constraints = []
-    Diagnostics = []
-    CurrentArena = ArenaAffinity.CurrentActor
-    ExpectedReturnType = None
-}
+/// Create a type environment with built-in bindings from globals
+let createTypeEnv (globals: NativeGlobals) : TypeEnv =
+    // Convert built-in bindings from globals to ResolvedBindings and build resolver
+    let baseResolver =
+        globals.BuiltInBindings
+        |> Map.fold (fun ctx name ty ->
+            let binding: ResolvedBinding = {
+                QualifiedName = name
+                Type = ty
+                IsMutable = false
+                NodeId = None
+                InlineBody = None
+            }
+            NameResolution.registerBinding name binding ctx
+        ) (NameResolution.createContext ())
+    {
+        Globals = globals
+        Resolution = baseResolver
+        TypeDefs = Map.empty
+        TypeAbbrevs = Map.empty
+        Constraints = []
+        Diagnostics = []
+        CurrentArena = ArenaAffinity.CurrentActor
+        ExpectedReturnType = None
+    }
 
 /// Add a diagnostic to the environment
 let addDiagnostic (diag: Diagnostic) (env: TypeEnv) : unit =
     env.Diagnostics <- diag :: env.Diagnostics
 
-/// Add a binding to the environment
+/// Add a binding to the environment using compositional resolution
 let addBinding (name: string) (ty: NativeType) (isMutable: bool) (nodeId: NodeId option) (env: TypeEnv) : TypeEnv =
-    let binding = { Name = name; Type = ty; IsMutable = isMutable; NodeId = nodeId }
-    { env with Bindings = Map.add name binding env.Bindings }
+    let binding: ResolvedBinding = {
+        QualifiedName = name
+        Type = ty
+        IsMutable = isMutable
+        NodeId = nodeId
+        InlineBody = None
+    }
+    { env with Resolution = NameResolution.registerBinding name binding env.Resolution }
 
-/// Look up a binding
-let tryLookupBinding (name: string) (env: TypeEnv) : Binding option =
-    Map.tryFind name env.Bindings
+/// Add a binding with inline body for transparent function expansion
+/// FNCS is inline-by-default: all functions are transparent unless marked opaque
+let addInlineBinding (name: string) (ty: NativeType) (nodeId: NodeId option) (inlineBody: NameResolution.InlineBody) (env: TypeEnv) : TypeEnv =
+    let binding: ResolvedBinding = {
+        QualifiedName = name
+        Type = ty
+        IsMutable = false
+        NodeId = nodeId
+        InlineBody = Some inlineBody
+    }
+    { env with Resolution = NameResolution.registerBinding name binding env.Resolution }
+
+/// Look up a binding using compositional resolver
+/// BCL is structurally impossible - only source-defined bindings exist
+let tryLookupBinding (name: string) (env: TypeEnv) : ResolvedBinding option =
+    NameResolution.resolve name env.Resolution
+
+/// Add an open namespace declaration to the resolution context
+/// This composes a resolver that prefixes lookups with the namespace
+/// Example: `open Alloy` allows `Console.Write` to resolve as `Alloy.Console.Write`
+let addOpen (ns: string) (env: TypeEnv) : TypeEnv =
+    { env with Resolution = NameResolution.addOpen ns env.Resolution }
+
+/// Add a type definition to the environment
+let addTypeDef (name: string) (tyCon: TypeConRef) (env: TypeEnv) : TypeEnv =
+    { env with TypeDefs = Map.add name tyCon env.TypeDefs }
+
+/// Look up a type definition
+let tryLookupTypeDef (name: string) (env: TypeEnv) : TypeConRef option =
+    Map.tryFind name env.TypeDefs
 
 /// Add a type abbreviation to the environment
 let addTypeAbbrev (name: string) (ty: NativeType) (env: TypeEnv) : TypeEnv =
@@ -181,6 +231,34 @@ let addObjError (r: range) (env: TypeEnv) : unit =
 let addBoxingError (r: range) (env: TypeEnv) : unit =
     addNativeError DiagnosticCodes.FS8012_BoxingNotSupported r
         "Boxing is not supported in F# Native; the native type system does not include 'obj'" env
+
+
+/// Emit warning for null annotation - ignored in F# Native
+let addNullWarning (r: range) (env: TypeEnv) : unit =
+    addNativeWarning DiagnosticCodes.FS8101_UninitializedValue r
+        "Nullable annotation ignored in F# Native; native types are null-free by design" env
+
+//-------------------------------------------------------------------------
+// BCL Rejection - CRITICAL
+// BCL types/namespaces are NEVER allowed in F# Native
+//-------------------------------------------------------------------------
+
+/// Check if a name references BCL (Base Class Library) namespaces
+/// BCL references are FORBIDDEN in F# Native - they require .NET runtime
+/// This provides user-friendly FS8500 errors; BCL is structurally impossible
+/// via the compositional resolver, but we want better messages than "undefined"
+let isBclReference (name: string) : bool =
+    // Only definitively BCL prefixes - no library-aware heuristics
+    name.StartsWith("System.") ||
+    name.StartsWith("Microsoft.") ||
+    name.StartsWith("mscorlib.") ||
+    name.StartsWith("netstandard.")
+
+/// Emit FS8500: BCL reference not allowed in F# Native
+/// This is a HARD STOP - BCL types cannot exist in native compilation
+let addBclError (name: string) (r: range) (env: TypeEnv) : unit =
+    addNativeError DiagnosticCodes.FS8500_BclReferenceNotAllowed r
+        $"BCL reference '{name}' is not available in F# Native. The .NET Base Class Library requires the .NET runtime. Use Alloy library equivalents instead." env
 
 //-------------------------------------------------------------------------
 // Constant Type Inference
@@ -294,15 +372,84 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 range,
                 arena = env.CurrentArena)
         | None ->
-            // Unknown identifier - create error node
+            // HARD STOP: Unknown identifier - emit diagnostic and error node
+            addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"The value or constructor '{name}' is not defined."; Range = range; RelatedNodes = [] } env
             builder.Create(
-                SemanticKind.Error $"Unknown identifier: {name}",
-                NativeType.TError $"Unknown: {name}",
+                SemanticKind.Error $"Undefined: {name}",
+                NativeType.TError $"Undefined: {name}",
                 range)
 
     | SynExpr.LongIdent(_, longDotId, _, _) ->
         let name = longDotId.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
-        // TODO: Handle qualified names properly
+        let parts = longDotId.LongIdent |> List.map (fun id -> id.idText)
+
+        // FS8500: BCL references are FORBIDDEN - check FIRST before any lookup
+        if isBclReference name then
+            addBclError name longDotId.Range env
+            builder.Create(
+                SemanticKind.Error $"BCL reference: {name}",
+                NativeType.TError $"BCL reference: {name}",
+                range)
+        // FNCS INTRINSICS: NativePtr module functions
+        elif name.StartsWith("NativePtr.") then
+            let intrinsicName = name.Substring("NativePtr.".Length)
+            let tyParam = freshTypeVar range
+            let intrinsicType =
+                match intrinsicName with
+                | "toNativeInt" ->
+                    // nativeptr<'T> -> nativeint
+                    NativeType.TFun(NativeType.TNativePtr tyParam, Types.nintType)
+                | "ofNativeInt" ->
+                    // nativeint -> nativeptr<'T>
+                    NativeType.TFun(Types.nintType, NativeType.TNativePtr tyParam)
+                | "toVoidPtr" ->
+                    // nativeptr<'T> -> voidptr
+                    NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TApp(NativeGlobals.voidptrTyCon, []))
+                | "ofVoidPtr" ->
+                    // voidptr -> nativeptr<'T>
+                    NativeType.TFun(NativeType.TApp(NativeGlobals.voidptrTyCon, []), NativeType.TNativePtr tyParam)
+                | "get" ->
+                    // nativeptr<'T> -> int -> 'T
+                    NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TFun(env.Globals.IntType, tyParam))
+                | "set" ->
+                    // nativeptr<'T> -> int -> 'T -> unit
+                    NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TFun(env.Globals.IntType, NativeType.TFun(tyParam, env.Globals.UnitType)))
+                | "stackalloc" ->
+                    // int -> nativeptr<'T>
+                    NativeType.TFun(env.Globals.IntType, NativeType.TNativePtr tyParam)
+                | "read" ->
+                    // nativeptr<'T> -> 'T
+                    NativeType.TFun(NativeType.TNativePtr tyParam, tyParam)
+                | "write" ->
+                    // nativeptr<'T> -> 'T -> unit
+                    NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TFun(tyParam, env.Globals.UnitType))
+                | "add" ->
+                    // nativeptr<'T> -> int -> nativeptr<'T>
+                    NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TFun(env.Globals.IntType, NativeType.TNativePtr tyParam))
+                | _ ->
+                    // Unknown NativePtr function - create generic function type
+                    NativeType.TFun(freshTypeVar range, freshTypeVar range)
+            builder.Create(
+                SemanticKind.Intrinsic(name),
+                intrinsicType,
+                range)
+        else
+        // Check for platform bindings (Bindings.* or Platform.Bindings.*)
+        let isPlatformBinding =
+            name.StartsWith("Bindings.") || name.Contains(".Bindings.")
+        // CRITICAL: Check isPlatformBinding FIRST - platform bindings should
+        // generate PlatformBinding kind even if there's a binding in scope
+        // This ensures Primitives.Bindings.writeBytes becomes syscall, not extern
+        if isPlatformBinding then
+            // Platform binding - extract the entry point name (last part)
+            let entryPoint = parts.[parts.Length - 1]
+            let resultTy = freshTypeVar range
+            builder.Create(
+                SemanticKind.PlatformBinding entryPoint,
+                resultTy,
+                range,
+                arena = env.CurrentArena)
+        else
         match tryLookupBinding name env with
         | Some binding ->
             builder.Create(
@@ -310,14 +457,63 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 binding.Type,
                 range,
                 arena = env.CurrentArena)
+        | None when parts.Length >= 2 ->
+            // SPECIAL CASE: LongIdent might be a member access on a local binding
+            // e.g., "s.Length" parsed as LongIdent ["s"; "Length"] instead of DotGet
+            // Try to interpret as: first part is a binding, rest is member access
+            let firstPart = parts.[0]
+            let restParts = parts.[1..] |> String.concat "."
+            match tryLookupBinding firstPart env with
+            | Some binding ->
+                // Found the base binding - treat rest as member access
+                let baseNode = builder.Create(
+                    SemanticKind.VarRef(firstPart, binding.NodeId),
+                    binding.Type,
+                    range,
+                    arena = env.CurrentArena)
+
+                // Handle intrinsic string members
+                let isStringType ty =
+                    match ty with
+                    | NativeType.TApp(tycon, []) when tycon.Name = "string" -> true
+                    | _ -> false
+
+                let resultTy =
+                    match restParts with
+                    | "Pointer" when isStringType binding.Type ->
+                        NativeType.TNativePtr(NativeGlobals.Types.uint8Type)
+                    | "Length" when isStringType binding.Type ->
+                        env.Globals.IntType
+                    | _ ->
+                        // General case: create HasMember constraint
+                        let ty = freshTypeVar range
+                        addConstraint (Constraint.HasMember(binding.Type, restParts, ty, range)) env
+                        ty
+
+                builder.Create(
+                    SemanticKind.FieldGet(baseNode.Id, restParts),
+                    resultTy,
+                    range,
+                    children = [baseNode.Id])
+            | None ->
+                // First part not a binding - report as undefined
+                addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"The value or constructor '{name}' is not defined. Ensure dependencies are loaded before user code."; Range = range; RelatedNodes = [] } env
+                builder.Create(
+                    SemanticKind.Error $"Undefined: {name}",
+                    NativeType.TError $"Undefined: {name}",
+                    range)
         | None ->
-            // Could be a module-qualified name - for now, create a placeholder
-            let resultTy = freshTypeVar range
+            // HARD STOP: Unknown identifier is a real error
+            // If this fires, either:
+            // 1. Files are processed in wrong order (dependency not loaded)
+            // 2. The binding doesn't exist (user error)
+            // 3. Module qualification is wrong (user error)
+            // All cases require explicit resolution - no silent placeholders
+            addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"The value or constructor '{name}' is not defined. Ensure dependencies are loaded before user code."; Range = range; RelatedNodes = [] } env
             builder.Create(
-                SemanticKind.VarRef(name, None),
-                resultTy,
-                range,
-                arena = env.CurrentArena)
+                SemanticKind.Error $"Undefined: {name}",
+                NativeType.TError $"Undefined: {name}",
+                range)
 
     //---------------------------------------------------------------------
     // Type annotations
@@ -351,6 +547,10 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
     // Function application
     //---------------------------------------------------------------------
     | SynExpr.App(_, _isInfix, funcExpr, argExpr, _) ->
+        // NOTE: Inline expansion is tracked via InlineBody on bindings
+        // but NOT performed during type checking because it requires
+        // capturing the definition-time environment (closure semantics).
+        // The PSG records inline bodies; downstream analysis can use them.
         let funcNode = checkExpr env builder funcExpr
         let argNode = checkExpr env builder argExpr
 
@@ -360,8 +560,6 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
             funcNode.Type,
             NativeType.TFun(argNode.Type, resultTy),
             range)) env
-
-        // TODO: Check for SRTP (will be done in SRTPResolution.fs)
 
         builder.Create(
             SemanticKind.Application(funcNode.Id, [argNode.Id]),
@@ -587,10 +785,28 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
     | SynExpr.DotGet(expr, _, longDotId, _) ->
         let exprNode = checkExpr env builder expr
         let fieldName = longDotId.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
-        let resultTy = freshTypeVar range
 
-        // Add HasMember constraint for SRTP
-        addConstraint (Constraint.HasMember(exprNode.Type, fieldName, resultTy, range)) env
+        // INTRINSIC MEMBERS: Native string type has intrinsic Pointer and Length
+        // NativeStr = {ptr: *u8, len: usize} - these are NOT fields, they're intrinsics
+        // FNCS provides these as part of the native type universe
+        let isStringType ty =
+            match ty with
+            | NativeType.TApp(tycon, []) when tycon.Name = "string" -> true
+            | _ -> false
+
+        let resultTy =
+            match fieldName with
+            | "Pointer" when isStringType exprNode.Type ->
+                // string.Pointer : nativeptr<byte>
+                NativeType.TNativePtr(NativeGlobals.Types.uint8Type)
+            | "Length" when isStringType exprNode.Type ->
+                // string.Length : int
+                env.Globals.IntType
+            | _ ->
+                // General case: create HasMember constraint for SRTP
+                let ty = freshTypeVar range
+                addConstraint (Constraint.HasMember(exprNode.Type, fieldName, ty, range)) env
+                ty
 
         builder.Create(
             SemanticKind.FieldGet(exprNode.Id, fieldName),
@@ -722,12 +938,31 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 // Propagate error
                 NativeType.TError msg
 
+            | NativeType.TFun _ ->
+                // Function type receiving type arguments
+                // This typically means a polymorphic function being instantiated
+                // Add deferred constraint that function must be generic
+                let resultTy = freshTypeVar range
+                addConstraint (Constraint.HasTypeArgs(funcNode.Type, typeArgTypes, resultTy, range)) env
+                resultTy
+
+            | NativeType.TApp _ ->
+                // Type application - possibly a partially applied generic
+                // Add deferred constraint for type application
+                let resultTy = freshTypeVar range
+                addConstraint (Constraint.HasTypeArgs(funcNode.Type, typeArgTypes, resultTy, range)) env
+                resultTy
+
             | other ->
-                // Non-generic type being applied with type arguments - error
-                addError syn.Range
-                    (sprintf "Cannot apply type arguments to non-generic type: %s"
+                // Unexpected type receiving type arguments
+                // This is likely a bug or unresolved type - add warning but continue
+                addWarning syn.Range
+                    (sprintf "Type application on unexpected type form: %s"
                         (NativeTypes.formatType other)) env
-                NativeType.TError "Type application to non-generic type"
+                // Still add constraint for later resolution
+                let resultTy = freshTypeVar range
+                addConstraint (Constraint.HasTypeArgs(funcNode.Type, typeArgTypes, resultTy, range)) env
+                resultTy
 
         builder.Create(
             SemanticKind.Application(funcNode.Id, []),  // TypeApp is function with type args
@@ -1479,17 +1714,27 @@ and checkLetOrUse (env: TypeEnv) (builder: NodeBuilder) (letOrUse: SynLetOrUse) 
         else
             env
 
-    // Check each binding
-    let bindingNodes = bindings |> List.map (fun binding ->
+    // Check each binding (returns SemanticNode * InlineBody option)
+    let bindingResults = bindings |> List.map (fun binding ->
         checkBinding bindingEnv builder binding)
 
+    // Extract just the nodes for the semantic graph
+    let bindingNodes = bindingResults |> List.map fst
+
     // Add bindings to environment for body
+    // FNCS inline-by-default: use addInlineBinding for functions with bodies
     let bodyEnv =
-        List.zip bindings bindingNodes
-        |> List.fold (fun env (binding, node) ->
+        List.zip3 bindings bindingNodes (bindingResults |> List.map snd)
+        |> List.fold (fun env (binding, node, inlineBodyOpt) ->
             let name = getBindingName binding
             let isMutable = isBindingMutable binding
-            addBinding name node.Type isMutable (Some node.Id) env
+            match inlineBodyOpt with
+            | Some inlineBody ->
+                // Function with inline body - add with transparency
+                addInlineBinding name node.Type (Some node.Id) inlineBody env
+            | None ->
+                // Regular value binding
+                addBinding name node.Type isMutable (Some node.Id) env
         ) bindingEnv
 
     // Check body
@@ -1562,7 +1807,9 @@ and tryGetFunctionParams (headPat: SynPat) (env: TypeEnv) (range: SourceRange) :
     | _ -> None
 
 /// Check a single binding
-and checkBinding (env: TypeEnv) (builder: NodeBuilder) (binding: SynBinding) : SemanticNode =
+/// Returns the semantic node and optionally an InlineBody for transparent function expansion
+/// FNCS is inline-by-default: all function bodies are captured for potential expansion
+and checkBinding (env: TypeEnv) (builder: NodeBuilder) (binding: SynBinding) : SemanticNode * InlineBody option =
     let (SynBinding(_, _, _, isMutable, _, _, _, headPat, _, expr, bindingRange, _, _)) = binding
     let range = rangeToSourceRange bindingRange
     let name = getBindingName binding
@@ -1599,20 +1846,31 @@ and checkBinding (env: TypeEnv) (builder: NodeBuilder) (binding: SynBinding) : S
             children = [bodyNode.Id])
 
         // Create Binding node wrapping the Lambda
-        builder.Create(
+        let bindingNode = builder.Create(
             SemanticKind.Binding(name, isMutable, false),
             funcType,
             range,
             children = [lambdaNode.Id])
 
+        // Capture inline body for transparent function expansion
+        // FNCS inline-by-default: all functions are transparent to the compiler
+        let inlineBody: NameResolution.InlineBody = {
+            Parameters = paramBindings |> List.map fst  // Just the parameter names
+            Body = expr                                  // The original SynExpr
+            Range = rangeToSourceRange bindingRange     // Source range for error reporting
+        }
+
+        (bindingNode, Some inlineBody)
+
     | None ->
-        // Regular value binding
+        // Regular value binding (not a function - no inline body)
         let exprNode = checkExpr env builder expr
-        builder.Create(
+        let node = builder.Create(
             SemanticKind.Binding(name, isMutable, false),
             exprNode.Type,
             range,
             children = [exprNode.Id])
+        (node, None)
 
 /// Check a match clause
 and checkMatchClause (env: TypeEnv) (builder: NodeBuilder) (scrutineeTy: NativeType) (resultTy: NativeType) (clause: SynMatchClause) : MatchCase =
@@ -1678,8 +1936,122 @@ and checkPattern (env: TypeEnv) (pat: SynPat) (expectedTy: NativeType) (range: S
     | SynPat.Null _ ->
         (Pattern.Null, [])
 
+    | SynPat.LongIdent(SynLongIdent(idents, _, _), _, _, argPats, _, _) ->
+        // Constructor or identifier pattern
+        let caseName = idents |> List.map (fun id -> id.idText) |> String.concat "."
+        match argPats with
+        | SynArgPats.Pats [] ->
+            // No arguments - could be variable binding or nullary constructor
+            // Lowercase single identifier = variable binding, otherwise = constructor
+            match idents with
+            | [ident] when not (System.Char.IsUpper(ident.idText.[0])) ->
+                // Lowercase single identifier - treat as variable binding
+                (Pattern.Var(caseName, expectedTy), [(caseName, expectedTy)])
+            | _ ->
+                // Uppercase or qualified - nullary constructor
+                (Pattern.Union(caseName, None, expectedTy), [])
+        | SynArgPats.Pats pats ->
+            // Constructor with arguments (e.g., Some x, Error e)
+            let (argPatterns, argBindings) =
+                pats
+                |> List.map (fun p ->
+                    let argTy = freshTypeVar range
+                    checkPattern env p argTy range)
+                |> List.unzip
+            let payload = if List.isEmpty argPatterns then None else Some (Pattern.Tuple argPatterns)
+            (Pattern.Union(caseName, payload, expectedTy), List.concat argBindings)
+        | SynArgPats.NamePatPairs _ ->
+            // Named pattern pairs (e.g., { Field = pat })
+            (Pattern.Union(caseName, None, expectedTy), [])
+
+    | SynPat.As(lhsPat, rhsPat, _) ->
+        // Pattern alias: pat as name
+        let (lhsPattern, lhsBindings) = checkPattern env lhsPat expectedTy range
+        let (_, rhsBindings) = checkPattern env rhsPat expectedTy range
+        (lhsPattern, lhsBindings @ rhsBindings)
+
+    | SynPat.Or(lhsPat, rhsPat, _, _) ->
+        // Alternation pattern
+        let (lhsPattern, lhsBindings) = checkPattern env lhsPat expectedTy range
+        let (_rhsPattern, _rhsBindings) = checkPattern env rhsPat expectedTy range
+        // Use left pattern, but both branches should bind same names
+        (lhsPattern, lhsBindings)
+
+    | SynPat.ArrayOrList(isArray, pats, _) ->
+        let elemTy = freshTypeVar range
+        let listTy = if isArray then mkArrayType elemTy else mkListType elemTy
+        addConstraint (Constraint.Equals(expectedTy, listTy, range)) env
+        let (patterns, bindings) =
+            pats
+            |> List.map (fun p -> checkPattern env p elemTy range)
+            |> List.unzip
+        (Pattern.Array patterns, List.concat bindings)
+
+    | SynPat.Record(fields, _) ->
+        // Record pattern: { field1 = pat1; ... }
+        let fieldPats =
+            fields
+            |> List.map (fun field ->
+                let fieldName = field.FieldName.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
+                let pat = field.Pattern
+                let fieldTy = freshTypeVar range
+                let (pattern, bindings) = checkPattern env pat fieldTy range
+                ((fieldName, pattern), bindings))
+        let patterns = fieldPats |> List.map fst
+        let bindings = fieldPats |> List.collect snd
+        (Pattern.Record(patterns, expectedTy), bindings)
+
+    | SynPat.IsInst(synType, _) ->
+        // Type test pattern: :? Type
+        let testTy = checkSynType env synType
+        (Pattern.IsType testTy, [])
+
+    | SynPat.OptionalVal(ident, _) ->
+        // Optional parameter pattern: ?x
+        let name = ident.idText
+        let innerTy = freshTypeVar range
+        let optTy = mkOptionType innerTy
+        addConstraint (Constraint.Equals(expectedTy, optTy, range)) env
+        (Pattern.Var(name, optTy), [(name, optTy)])
+
+    | SynPat.ListCons(lhsPat, rhsPat, _, _) ->
+        // List cons pattern: x :: xs
+        let elemTy = freshTypeVar range
+        let listTy = mkListType elemTy
+        addConstraint (Constraint.Equals(expectedTy, listTy, range)) env
+        let (lhsPattern, lhsBindings) = checkPattern env lhsPat elemTy range
+        let (rhsPattern, rhsBindings) = checkPattern env rhsPat listTy range
+        // Represent as a tuple pattern for head :: tail
+        (Pattern.Tuple [lhsPattern; rhsPattern], lhsBindings @ rhsBindings)
+
+    | SynPat.Ands(pats, _) ->
+        // Conjunction pattern: pat1 & pat2 & ...
+        let (patterns, bindings) =
+            pats
+            |> List.map (fun p -> checkPattern env p expectedTy range)
+            |> List.unzip
+        match patterns with
+        | [single] -> (single, List.concat bindings)
+        | _ -> (Pattern.And(List.head patterns, Pattern.Tuple (List.tail patterns)), List.concat bindings)
+
+    | SynPat.Attrib(innerPat, _, _) ->
+        // Attributed pattern - ignore attributes, check inner pattern
+        checkPattern env innerPat expectedTy range
+
+    | SynPat.QuoteExpr(_, _) ->
+        // Quote expression pattern - not supported in native
+        (Pattern.Wildcard, [])
+
+    | SynPat.FromParseError(innerPat, _) ->
+        // Parse error recovery - check inner pattern
+        checkPattern env innerPat expectedTy range
+
+    | SynPat.InstanceMember _ ->
+        // Instance member pattern - for object expressions
+        (Pattern.Wildcard, [])
+
     | _ ->
-        // Fallback for unhandled patterns
+        // Truly unknown pattern - fallback to wildcard
         (Pattern.Wildcard, [])
 
 /// Check a SynType and convert to NativeType
@@ -1689,10 +2061,14 @@ and checkSynType (env: TypeEnv) (synType: SynType) : NativeType =
         let name = longIdent.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
         let range = longIdent.Range
         
+        // FS8500: BCL type references are FORBIDDEN - check FIRST
+        if isBclReference name then
+            addBclError name range env
+            NativeType.TError $"BCL type: {name}"
         // CRITICAL: Reject 'obj' - FS8011
         // The type 'obj' (System.Object) does not exist in F# Native.
         // The native type system is closed - no boxing, no runtime type inspection.
-        if name = "obj" || name = "System.Object" || name = "Object" then
+        elif name = "obj" || name = "System.Object" || name = "Object" then
             addObjError range env
             NativeType.TError "obj not supported"
         else
@@ -1715,6 +2091,14 @@ and checkSynType (env: TypeEnv) (synType: SynType) : NativeType =
         | NativeType.TApp(tyCon, []) -> NativeType.TApp(tyCon, argTys)
         | _ -> baseTy  // Already an error or complex type
 
+    | SynType.LongIdentApp(typeName, _longIdent, _, typeArgs, _, _, _) ->
+        // Qualified generic type: Module.Type<arg1, arg2>
+        let baseTy = checkSynType env typeName
+        let argTys = typeArgs |> List.map (checkSynType env)
+        match baseTy with
+        | NativeType.TApp(tyCon, []) -> NativeType.TApp(tyCon, argTys)
+        | _ -> baseTy
+
     | SynType.Tuple(isStruct, elementTypes, _) ->
         // SynTupleTypeSegment is a union: Type of SynType | Star of range | Slash of range
         // Filter for Type segments only
@@ -1726,6 +2110,17 @@ and checkSynType (env: TypeEnv) (synType: SynType) : NativeType =
                 | SynTupleTypeSegment.Slash _ -> None)
         NativeType.TTuple(elemTys, isStruct)
 
+    | SynType.AnonRecd(isStruct, fields, _) ->
+        // Anonymous record: {| field1: T1; field2: T2 |}
+        let fieldTys = fields |> List.map (fun (id, ty) -> (id.idText, checkSynType env ty))
+        NativeType.TAnon(fieldTys, isStruct)
+
+    | SynType.Array(_rank, elementType, _) ->
+        // Array types: int[], byte[], etc.
+        let elemTy = checkSynType env elementType
+        // Note: rank > 1 for multidimensional arrays - for now, treat all as 1D
+        mkArrayType elemTy
+
     | SynType.Fun(argType, returnType, _, _) ->
         let argTy = checkSynType env argType
         let retTy = checkSynType env returnType
@@ -1735,11 +2130,74 @@ and checkSynType (env: TypeEnv) (synType: SynType) : NativeType =
         // Type variable - create a fresh type variable
         freshTypeVar dummyRange
 
+    | SynType.Anon _ ->
+        // Anonymous type: _
+        freshTypeVar dummyRange
+
+    | SynType.WithGlobalConstraints(typeName, _constraints, _) ->
+        // Type with constraints: 'a when 'a :> IComparable
+        // TODO: Record constraints for SRTP resolution
+        // For now, just check the inner type
+        checkSynType env typeName
+
+    | SynType.HashConstraint(innerType, _) ->
+        // Hash constraint: #IInterface (flexible type)
+        checkSynType env innerType
+
+    | SynType.MeasurePower(baseMeasure, _exponent, _) ->
+        // Measure type: int<m^2> - units of measure
+        let _baseTy = checkSynType env baseMeasure
+        // TODO: Implement proper measure type handling with exponent
+        NativeType.TMeasure(Measure.MOne)
+
+    | SynType.StaticConstant(constant, _range) ->
+        // Static type constant - used in type-level programming
+        match constant with
+        | SynConst.Int32 n -> NativeType.TError $"Static constant {n} not yet supported"
+        | SynConst.String(s, _, _) -> NativeType.TError $"Static constant \"{s}\" not yet supported"
+        | _ -> NativeType.TError "Static constant type not yet supported"
+
+    | SynType.StaticConstantNull range ->
+        // null type constant - REJECTED in native
+        addNullError range env
+        NativeType.TError "null not allowed in F# Native"
+
+    | SynType.StaticConstantExpr(_expr, _) ->
+        // Static type-level expression
+        NativeType.TError "Static constant expressions not yet supported"
+
+    | SynType.StaticConstantNamed(_ident, _value, _) ->
+        // Named static constant
+        NativeType.TError "Named static constants not yet supported"
+
+    | SynType.WithNull(innerType, _ambivalent, range, _) ->
+        // Nullable type annotation: string | null
+        // Native types are null-free by design - emit warning and return inner type
+        // The type system doesn't support null; use ValueOption instead
+        addNullWarning range env
+        checkSynType env innerType
+
     | SynType.Paren(innerType, _) ->
         checkSynType env innerType
 
-    | _ ->
-        NativeType.TError "Unsupported type syntax"
+    | SynType.SignatureParameter(_, _, _, usedType, _) ->
+        // Parameter in a signature - check the actual type
+        checkSynType env usedType
+
+    | SynType.Or(lhsType, _rhsType, _, _) ->
+        // Flexible type: (type | type) - use the left type for now
+        // This is typically used for flexible generic constraints
+        checkSynType env lhsType
+
+    | SynType.FromParseError _ ->
+        // Parse error recovery - return error type
+        NativeType.TError "Parse error in type syntax"
+
+    | SynType.Intersection(_typar, types, _, _) ->
+        // Intersection type: for SRTP constraints like ^T & IComparable
+        match types with
+        | first :: _ -> checkSynType env first
+        | [] -> NativeType.TError "Empty intersection type"
 
 //-------------------------------------------------------------------------
 // Entry Point

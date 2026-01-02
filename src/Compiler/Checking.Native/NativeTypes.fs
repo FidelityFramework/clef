@@ -150,6 +150,8 @@ and [<RequireQualifiedAccess>] Constraint =
     | Subtype of sub: NativeType * super: NativeType * SourceRange
     /// Type must have compatible memory layout
     | LayoutCompatible of NativeType * TypeLayout * SourceRange
+    /// Type application: forall type must instantiate with given args to yield result
+    | HasTypeArgs of forallTy: NativeType * args: NativeType list * resultTy: NativeType * SourceRange
 
 //-------------------------------------------------------------------------
 // Native Type Representation

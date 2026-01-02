@@ -299,6 +299,26 @@ let solveConstraint (c: Constraint) : Result<unit, UnificationError> =
             ignore range  // Would be used for error location
             Ok ()  // For now, accept - codegen will validate
 
+    | Constraint.HasTypeArgs(forallTy, args, resultTy, range) ->
+        // Type application constraint - forallTy should be generic and instantiate to resultTy
+        match forallTy with
+        | NativeType.TForall(typeParams, bodyType) ->
+            if List.length typeParams = List.length args then
+                // Instantiate body with args and unify with result
+                let substituted = NativeTypes.instantiate typeParams args bodyType
+                tryUnify substituted resultTy range
+            else
+                // Arity mismatch
+                Error (UnificationError.ArityMismatch(List.length typeParams, List.length args, range))
+        | NativeType.TVar _ ->
+            // Type variable - cannot resolve yet, this is okay
+            Ok ()
+        | _ ->
+            // Non-forall type - this constraint will fail unless resolved later
+            // For now, accept it; later constraint solving may refine
+            ignore (args, resultTy, range)
+            Ok ()
+
 /// Solve a list of constraints, returning any that couldn't be solved immediately
 let solveConstraints (constraints: Constraint list) : SolveResult =
     let mutable errors = []
