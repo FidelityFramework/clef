@@ -231,8 +231,13 @@ let private tryResolveViaTable (table: WitnessTable) (memberName: string) (argTy
             | TypePattern.Numeric ->
                 if isNumericType argType then Some entry.Resolution
                 else None
-            | TypePattern.HasTrait _trait ->
-                // TODO: Check if type has the trait
+            | TypePattern.HasTrait trait ->
+                // Trait-based SRTP resolution is not yet implemented.
+                // In native F#, traits are structural (type must have the member).
+                // For now, this falls through to error handling which reports
+                // "No witness found for <member> on type" - clear diagnostic.
+                // If trait checking is needed, implement hasTraitMember here.
+                eprintfn "[SRTP] Warning: HasTrait(%s) pattern not yet implemented for type %A" trait argType
                 None)
 
 /// Resolve the Alloy $ operator for string formatting

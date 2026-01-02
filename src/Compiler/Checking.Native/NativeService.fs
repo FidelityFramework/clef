@@ -16,6 +16,7 @@ open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.CheckExpressions
+open FSharp.Native.Compiler.Checking.Native.UnionFind
 open FSharp.Native.Compiler.Checking.Native.Unify
 open FSharp.Native.Compiler.DiagnosticsLogger
 open FSharp.Native.Compiler.Features
@@ -329,12 +330,17 @@ let checkExpression (expr: SynExpr) : CheckResult =
 //-------------------------------------------------------------------------
 
 /// Check a single let binding and return a semantic node.
+/// Note: The inline body is intentionally discarded here because:
+/// 1. This checks a single binding in isolation (no subsequent bindings to inline into)
+/// 2. The Lambda node's child already contains the checked body for code generation
+/// 3. InlineBody is for environment-based name resolution during multi-binding checking
 let checkLetBinding (binding: SynBinding) : CheckResult =
     let globals = createNativeGlobals()
     let env = createTypeEnv globals
     let builder = NodeBuilder()
     NodeId.reset()
 
+    // InlineBody discarded - see function doc comment for rationale
     let (node, _inlineBody) = checkBinding env builder binding
     let diagnostics = solveAndGetDiagnostics env.Constraints
 
@@ -356,6 +362,17 @@ let private hasStructAttribute (attrs: SynAttributes) : bool =
         attrList.Attributes |> List.exists (fun attr ->
             match attr.TypeName.LongIdent with
             | [id] -> id.idText = "Struct" || id.idText = "StructAttribute"
+            | _ -> false
+        )
+    )
+
+/// Check if a type definition has the [<RequireQualifiedAccess>] attribute
+/// Per fsnative-spec: When true, field labels are NOT added to FieldLabels table
+let private hasRequireQualifiedAccessAttribute (attrs: SynAttributes) : bool =
+    attrs |> List.exists (fun attrList ->
+        attrList.Attributes |> List.exists (fun attr ->
+            match attr.TypeName.LongIdent with
+            | [id] -> id.idText = "RequireQualifiedAccess" || id.idText = "RequireQualifiedAccessAttribute"
             | _ -> false
         )
     )
@@ -386,27 +403,74 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     | [] -> simpleName
                     | _ -> (modPath |> String.concat ".") + "." + simpleName)
 
-        // For recursive bindings, we should add all names to env first
-        // For now, we at least thread the environment through sequentially
         // FNCS inline-by-default: capture function bodies for transparent expansion
+        // Handle recursive vs non-recursive bindings differently
         let (finalEnv, nodes) =
-            bindings |> List.fold (fun (accEnv, accNodes) binding ->
-                let _ = isRec  // TODO: Handle recursive bindings properly
-                let (node, inlineBodyOpt) = checkBinding accEnv builder binding
-                // Add the binding to environment so later bindings can reference it
-                // Register under all qualified name suffixes (handles AutoOpen modules)
-                let simpleName = getBindingName binding
-                let updatedEnv =
-                    bindingNameSuffixes simpleName
-                    |> List.fold (fun env qname ->
-                        // Use addInlineBinding for functions to capture body for expansion
-                        match inlineBodyOpt with
-                        | Some inlineBody -> addInlineBinding qname node.Type (Some node.Id) inlineBody env
-                        | None -> addBinding qname node.Type false (Some node.Id) env
-                    ) accEnv
-                (updatedEnv, node :: accNodes)
-            ) (env, [])
-        (finalEnv, List.rev nodes)
+            if isRec then
+                // RECURSIVE BINDINGS: Two-pass approach
+                // Pass 1: Add all binding names with fresh type variables to environment
+                // This allows mutual recursion - each binding can reference all others
+                let placeholders =
+                    bindings
+                    |> List.map (fun binding ->
+                        let simpleName = getBindingName binding
+                        let placeholderTy = freshTypeVar range
+                        (binding, simpleName, placeholderTy))
+                
+                let envWithAllNames =
+                    placeholders
+                    |> List.fold (fun accEnv (_, simpleName, placeholderTy) ->
+                        bindingNameSuffixes simpleName
+                        |> List.fold (fun env qname ->
+                            addBinding qname placeholderTy false None env
+                        ) accEnv
+                    ) env
+                
+                // Pass 2: Check all bodies with all names in scope
+                // Add constraints to unify placeholder types with inferred types
+                let (updatedEnv, checkedBindings) =
+                    placeholders
+                    |> List.fold (fun (accEnv, accResults) (binding, simpleName, placeholderTy) ->
+                        let (node, inlineBodyOpt) = checkBinding envWithAllNames builder binding
+                        
+                        // Unify the placeholder type with the inferred type
+                        // This ensures references to this binding get the correct type
+                        addConstraint (Constraint.Equals(placeholderTy, node.Type, range)) accEnv
+                        
+                        // Update the binding in environment with the actual node ID and inline body
+                        let envWithNode =
+                            bindingNameSuffixes simpleName
+                            |> List.fold (fun env qname ->
+                                match inlineBodyOpt with
+                                | Some inlineBody -> addInlineBinding qname node.Type (Some node.Id) inlineBody env
+                                | None -> addBinding qname node.Type false (Some node.Id) env
+                            ) accEnv
+                        
+                        (envWithNode, (node, inlineBodyOpt, simpleName) :: accResults)
+                    ) (envWithAllNames, [])
+                
+                let nodes = checkedBindings |> List.map (fun (node, _, _) -> node) |> List.rev
+                (updatedEnv, nodes)
+            else
+                // NON-RECURSIVE BINDINGS: Sequential processing (existing behavior)
+                // Each binding can only reference bindings that came before it
+                bindings |> List.fold (fun (accEnv, accNodes) binding ->
+                    let (node, inlineBodyOpt) = checkBinding accEnv builder binding
+                    // Add the binding to environment so later bindings can reference it
+                    // Register under all qualified name suffixes (handles AutoOpen modules)
+                    let simpleName = getBindingName binding
+                    let updatedEnv =
+                        bindingNameSuffixes simpleName
+                        |> List.fold (fun env qname ->
+                            // Use addInlineBinding for functions to capture body for expansion
+                            match inlineBodyOpt with
+                            | Some inlineBody -> addInlineBinding qname node.Type (Some node.Id) inlineBody env
+                            | None -> addBinding qname node.Type false (Some node.Id) env
+                        ) accEnv
+                    (updatedEnv, node :: accNodes)
+                ) (env, [])
+                |> fun (finalEnv, nodes) -> (finalEnv, List.rev nodes)
+        (finalEnv, nodes)
 
     | SynModuleDecl.Expr(expr, exprRange) ->
         // Module-level expression (e.g., do expr)
@@ -496,21 +560,63 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     )
                     (updatedEnv, node :: accNodes)
 
-                | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Record(_, _fields, _), _) ->
+                | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Record(_, fields, _), _) ->
                     // Record type
-                    let (SynComponentInfo(_, typars, _, _, _, _, _, _)) = typeInfo
+                    // Per fsnative-spec: Field order determines memory layout
+                    // "Fidelity makes ALL memory layout decisions - MLIR/LLVM never determine layout"
+                    let (SynComponentInfo(attrs, typars, _, _, _, _, _, _)) = typeInfo
                     let arity = match typars with Some tp -> tp.TyparDecls.Length | None -> 0
-                    let tyCon = mkTypeConRef typeName arity (TypeLayout.Opaque)
+                    let requireQualifiedAccess = hasRequireQualifiedAccessAttribute attrs
+                    
+                    // Extract field names and types from SynField list
+                    // Per spec: fields are processed in declaration order (= memory order)
+                    let fieldInfos =
+                        fields
+                        |> List.choose (fun synField ->
+                            match synField with
+                            | SynField(_, _, idOpt, fieldType, _, _, _, _, _) ->
+                                match idOpt with
+                                | Some ident ->
+                                    let fieldName = ident.idText
+                                    let nativeType = checkSynType accEnv fieldType
+                                    Some (fieldName, nativeType)
+                                | None ->
+                                    // Anonymous field (tuple-style) - skip for now
+                                    // Full implementation would handle this case
+                                    None
+                        )
+                    
+                    // Compute memory layout from fields
+                    // Per spec Step 4: "Initialize offset = 0, max_align = 1..."
+                    let layout = computeRecordLayout fieldInfos
+                    
+                    // Create TypeConRef with computed layout
+                    let tyCon = mkTypeConRef typeName arity layout
+                    
                     // Register under all name suffixes (handles AutoOpen modules)
                     let updatedEnv = 
                         typeNameSuffixes 
                         |> List.fold (fun env name -> addTypeDef name tyCon env) accEnv
+                    
+                    // Create RecordTypeInfo and register in environment
+                    // This populates RecordDefs and (unless RequireQualifiedAccess) FieldLabels
+                    let recordInfo: RecordTypeInfo = {
+                        TypeCon = tyCon
+                        Fields = fieldInfos
+                        Module = ctx.Path
+                        RequireQualifiedAccess = requireQualifiedAccess
+                    }
+                    let updatedEnv = addRecordDef recordInfo updatedEnv
+                    
                     // Also register the record constructor as a binding
                     // Record constructor takes field values and returns the record type
                     let recordType = mkSimpleType tyCon
                     let updatedEnv = addBinding typeName recordType false None updatedEnv
+                    
+                    // Create semantic node with field information for downstream consumers
+                    let fieldDefs = fieldInfos |> List.map (fun (name, ty) -> (name, ty))
                     let node = builder.Create(
-                        SemanticKind.TypeDef(typeName, TypeDefKind.RecordDef [], []),
+                        SemanticKind.TypeDef(typeName, TypeDefKind.RecordDef fieldDefs, []),
                         recordType,
                         range
                     )

@@ -57,6 +57,17 @@ module DiagnosticCodes =
     let FS8501_SystemNamespaceNotAllowed = "FS8501"
     let FS8502_MicrosoftNamespaceNotAllowed = "FS8502"
     
+    // Platform binding resolution (FS8600-FS8699)
+    let FS8600_PlatformBindingUndefined = "FS8600"
+    
+    // Record type resolution (FS8700-FS8799)
+    // Per fsnative-spec: Field Label Resolution Algorithm error codes
+    let FS8701_NoFields = "FS8701"
+    let FS8702_UndefinedField = "FS8702"
+    let FS8703_ConflictingFields = "FS8703"
+    let FS8704_AmbiguousFields = "FS8704"
+    let FS8705_MissingFields = "FS8705"
+    
     // Generic/fallback
     let FS0001_GenericError = "FS0001"
     let FS0002_GenericWarning = "FS0002"
@@ -80,6 +91,12 @@ type TypeEnv = {
     TypeDefs: Map<string, TypeConRef>
     /// Type abbreviations (name -> NativeType it expands to)
     TypeAbbrevs: Map<string, NativeType>
+    /// Record type definitions with full field information
+    /// Per spec: "Field order determines memory layout"
+    RecordDefs: Map<string, RecordTypeInfo>
+    /// Field label table for record type inference
+    /// Per spec (inference-procedures.md): "maps names to sets of field references"
+    FieldLabels: Map<string, FieldRef list>
     /// Current constraints being collected
     mutable Constraints: Constraint list
     /// Accumulated diagnostics (errors, warnings)
@@ -110,6 +127,8 @@ let createTypeEnv (globals: NativeGlobals) : TypeEnv =
         Resolution = baseResolver
         TypeDefs = Map.empty
         TypeAbbrevs = Map.empty
+        RecordDefs = Map.empty
+        FieldLabels = Map.empty
         Constraints = []
         Diagnostics = []
         CurrentArena = ArenaAffinity.CurrentActor
@@ -169,6 +188,127 @@ let addTypeAbbrev (name: string) (ty: NativeType) (env: TypeEnv) : TypeEnv =
 /// Look up a type abbreviation
 let tryLookupTypeAbbrev (name: string) (env: TypeEnv) : NativeType option =
     Map.tryFind name env.TypeAbbrevs
+
+//-------------------------------------------------------------------------
+// Record Type Infrastructure
+// Per fsnative-spec inference-procedures.md Field Label Resolution
+//-------------------------------------------------------------------------
+
+/// Add a record type definition to the environment.
+/// This populates RecordDefs and (unless RequireQualifiedAccess) FieldLabels.
+let addRecordDef (info: RecordTypeInfo) (env: TypeEnv) : TypeEnv =
+    // Add to RecordDefs
+    let env = { env with RecordDefs = Map.add info.TypeCon.Name info env.RecordDefs }
+
+    // Add field labels unless RequireQualifiedAccess
+    if info.RequireQualifiedAccess then
+        env
+    else
+        // For each field, add a FieldRef to the FieldLabels table
+        let fieldRefs =
+            info.Fields
+            |> List.mapi (fun idx (fieldName, fieldType) ->
+                fieldName, {
+                    RecordType = info.TypeCon
+                    FieldName = fieldName
+                    FieldType = fieldType
+                    FieldIndex = idx
+                })
+
+        let updatedLabels =
+            fieldRefs
+            |> List.fold (fun labels (fieldName, fieldRef) ->
+                let existing = Map.tryFind fieldName labels |> Option.defaultValue []
+                Map.add fieldName (fieldRef :: existing) labels
+            ) env.FieldLabels
+
+        { env with FieldLabels = updatedLabels }
+
+/// Look up a record type definition by name
+let tryLookupRecordDef (name: string) (env: TypeEnv) : RecordTypeInfo option =
+    Map.tryFind name env.RecordDefs
+
+/// Look up field labels (all record types that have a field with this name)
+let lookupFieldLabels (fieldName: string) (env: TypeEnv) : FieldRef list =
+    Map.tryFind fieldName env.FieldLabels |> Option.defaultValue []
+
+/// Resolve record type from field labels.
+/// Per fsnative-spec inference-procedures.md: Field Label Resolution Algorithm
+/// 
+/// Steps:
+/// 1. For each field f_i in the expression, get C_i = candidates(f_i)
+/// 2. Compute intersection: I = C_1 ∩ C_2 ∩ ... ∩ C_n
+/// 3. Disambiguate based on |I|
+///
+/// Returns Ok(recordType) or Error(diagnosticCode, message)
+let resolveRecordTypeFromFields
+    (fieldNames: string list)
+    (_range: SourceRange)
+    (env: TypeEnv)
+    : Result<NativeType, string * string> =
+    
+    if List.isEmpty fieldNames then
+        Result.Error((DiagnosticCodes.FS8701_NoFields, "Record expression must have at least one field"))
+    else
+        // Step 1: Get candidates for each field
+        let candidateSets =
+            fieldNames
+            |> List.map (fun fieldName ->
+                let candidates = lookupFieldLabels fieldName env
+                (fieldName, candidates))
+        
+        // Check if any field has no candidates (undefined field label)
+        let undefinedFields =
+            candidateSets
+            |> List.filter (fun (_, candidates) -> List.isEmpty candidates)
+            |> List.map fst
+        
+        match undefinedFields with
+        | first :: _ ->
+            // FS8702: Undefined field label
+            Result.Error((DiagnosticCodes.FS8702_UndefinedField, 
+                   sprintf "Field '%s' is not defined in any record type in scope" first))
+        | [] ->
+            // Step 2: Compute intersection
+            // Extract record type names from each candidate set
+            let typeNameSets =
+                candidateSets
+                |> List.map (fun (_, candidates) ->
+                    candidates
+                    |> List.map (fun fieldRef -> fieldRef.RecordType.Name)
+                    |> Set.ofList)
+            
+            let intersection =
+                match typeNameSets with
+                | [] -> Set.empty
+                | first :: rest -> List.fold Set.intersect first rest
+            
+            // Step 3: Disambiguate
+            match Set.count intersection with
+            | 0 ->
+                // FS8703: Conflicting fields - no record type has all fields
+                let fieldListStr = fieldNames |> String.concat ", "
+                Result.Error((DiagnosticCodes.FS8703_ConflictingFields,
+                       sprintf "No record type has all fields: %s" fieldListStr))
+            | 1 ->
+                // Exactly one candidate - success!
+                let typeName = Set.minElement intersection
+                match Map.tryFind typeName env.RecordDefs with
+                | Some recordInfo ->
+                    // Return the record type with its computed layout
+                    Result.Ok (mkSimpleType recordInfo.TypeCon)
+                | None ->
+                    // Fallback: look up in TypeDefs (for records not yet in RecordDefs)
+                    match Map.tryFind typeName env.TypeDefs with
+                    | Some tyCon -> Result.Ok (mkSimpleType tyCon)
+                    | None ->
+                        Result.Error((DiagnosticCodes.FS0001_GenericError,
+                               sprintf "Internal error: resolved record type '%s' not found" typeName))
+            | _ ->
+                // FS8704: Ambiguous fields - multiple record types could match
+                let typeNames = intersection |> Set.toList |> String.concat ", "
+                Result.Error((DiagnosticCodes.FS8704_AmbiguousFields,
+                       sprintf "Field labels are ambiguous; could be any of: %s. Use type annotation or qualified field access." typeNames))
 
 /// Add a constraint to the environment
 let addConstraint (c: Constraint) (env: TypeEnv) : unit =
@@ -437,26 +577,38 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
         // Check for platform bindings (Bindings.* or Platform.Bindings.*)
         let isPlatformBinding =
             name.StartsWith("Bindings.") || name.Contains(".Bindings.")
-        // CRITICAL: Check isPlatformBinding FIRST - platform bindings should
-        // generate PlatformBinding kind even if there's a binding in scope
-        // This ensures Primitives.Bindings.writeBytes becomes syscall, not extern
-        if isPlatformBinding then
-            // Platform binding - extract the entry point name (last part)
-            let entryPoint = parts.[parts.Length - 1]
-            let resultTy = freshTypeVar range
-            builder.Create(
-                SemanticKind.PlatformBinding entryPoint,
-                resultTy,
-                range,
-                arena = env.CurrentArena)
-        else
         match tryLookupBinding name env with
         | Some binding ->
+            // Found the binding - use its type
+            // If it's a platform binding, mark it as such while PRESERVING the type
+            if isPlatformBinding then
+                let entryPoint = parts.[parts.Length - 1]
+                builder.Create(
+                    SemanticKind.PlatformBinding entryPoint,
+                    binding.Type,
+                    range,
+                    arena = env.CurrentArena)
+            else
+                builder.Create(
+                    SemanticKind.VarRef(name, binding.NodeId),
+                    binding.Type,
+                    range,
+                    arena = env.CurrentArena)
+        | None when isPlatformBinding ->
+            // Platform binding not in scope - this is an ERROR, not a fallback
+            // Platform bindings must be declared in Alloy and loaded before use
+            let entryPoint = parts.[parts.Length - 1]
+            addDiagnostic {
+                Severity = NativeDiagnosticSeverity.Error
+                Code = "FS8600"
+                Message = $"Platform binding '{name}' is not defined. Ensure Alloy is loaded and contains Platform.Bindings.{entryPoint}."
+                Range = range
+                RelatedNodes = []
+            } env
             builder.Create(
-                SemanticKind.VarRef(name, binding.NodeId),
-                binding.Type,
-                range,
-                arena = env.CurrentArena)
+                SemanticKind.Error $"Undefined platform binding: {name}",
+                NativeType.TError $"Undefined platform binding: {name}",
+                range)
         | None when parts.Length >= 2 ->
             // SPECIAL CASE: LongIdent might be a member access on a local binding
             // e.g., "s.Length" parsed as LongIdent ["s"; "Length"] instead of DotGet
@@ -695,24 +847,106 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
     //---------------------------------------------------------------------
     // Record expressions
     //---------------------------------------------------------------------
-    | SynExpr.Record(_, copyInfo, fields, _) ->
+    | SynExpr.Record(_, copyInfo, fields, recordRange) ->
         let copyNode = copyInfo |> Option.map (fun (expr, _) -> checkExpr env builder expr)
+        
+        // Extract field names and check expressions
         let fieldNodes = fields |> List.choose (fun field ->
             match field with
             | SynExprRecordField((fieldId, _), _, Some expr, _, _) ->
                 let fieldName = fieldId.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
                 let exprNode = checkExpr env builder expr
-                Some (fieldName, exprNode.Id)
+                Some (fieldName, exprNode)
             | _ -> None)
-
-        // TODO: Infer record type from fields
-        let recordTy = freshTypeVar range
-
+        
+        // Extract just the field names for type resolution
+        let fieldNames = fieldNodes |> List.map fst
+        
+        // Resolve record type using Field Label Resolution Algorithm
+        // Per fsnative-spec: intersection of candidate sets for each field label
+        let recordTy =
+            match copyNode with
+            | Some copyExpr ->
+                // Copy-update expression: { existingRecord with Field = value }
+                // The type comes from the copied record
+                copyExpr.Type
+            | None ->
+                // Fresh record expression: { Field1 = v1; Field2 = v2 }
+                // Resolve type from field labels
+                match resolveRecordTypeFromFields fieldNames range env with
+                | Result.Ok resolvedTy ->
+                    // Verify field types match (add constraints)
+                    // Each NativeType case must be handled explicitly - no catch-all patterns
+                    match resolvedTy with
+                    | NativeType.TApp(tyCon, _) ->
+                        // Expected case: nominal record type like `Person` or `Record<'a>`
+                        match Map.tryFind tyCon.Name env.RecordDefs with
+                        | Some recordInfo ->
+                            // Add constraints: each field expression must match field type
+                            for (fieldName, exprNode) in fieldNodes do
+                                match recordInfo.Fields |> List.tryFind (fun (n, _) -> n = fieldName) with
+                                | Some (_, expectedTy) ->
+                                    addConstraint (Constraint.Equals(exprNode.Type, expectedTy, range)) env
+                                | None ->
+                                    // Field not found in record definition - this is an error
+                                    addNativeError DiagnosticCodes.FS8702_UndefinedField recordRange
+                                        (sprintf "Field '%s' is not defined in record type '%s'" fieldName tyCon.Name) env
+                        | None ->
+                            // Record type not in RecordDefs - internal error in resolution
+                            addNativeError DiagnosticCodes.FS0001_GenericError recordRange
+                                (sprintf "Internal error: record type '%s' not found in RecordDefs" tyCon.Name) env
+                    | NativeType.TRecord(tyCon, fields) ->
+                        // Inline record type with explicit fields
+                        for (fieldName, exprNode) in fieldNodes do
+                            match fields |> List.tryFind (fun (n, _) -> n = fieldName) with
+                            | Some (_, expectedTy) ->
+                                addConstraint (Constraint.Equals(exprNode.Type, expectedTy, range)) env
+                            | None ->
+                                addNativeError DiagnosticCodes.FS8702_UndefinedField recordRange
+                                    (sprintf "Field '%s' is not defined in record type '%s'" fieldName tyCon.Name) env
+                    | NativeType.TError _ ->
+                        // Already an error - don't add more diagnostics
+                        ()
+                    // All other NativeType cases are invalid for record expressions
+                    | NativeType.TForall _ ->
+                        addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                            "Record expression cannot have polymorphic type" env
+                    | NativeType.TTuple _ ->
+                        addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                            "Expected record type, got tuple. Use record syntax { Field = value } not tuple syntax (a, b)" env
+                    | NativeType.TFun _ ->
+                        addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                            "Expected record type, got function type" env
+                    | NativeType.TVar typar ->
+                        addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                            (sprintf "Could not resolve record type - type variable '%s' is still unbound" typar.Name) env
+                    | NativeType.TMeasure _ ->
+                        addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                            "Expected record type, got unit of measure" env
+                    | NativeType.TAnon _ ->
+                        addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                            "Expected nominal record type. For anonymous records, use {| Field = value |} syntax" env
+                    | NativeType.TUnion _ ->
+                        addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                            "Expected record type, got discriminated union. Use union case constructors instead" env
+                    | NativeType.TByref _ ->
+                        addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                            "Expected record type, got byref type" env
+                    | NativeType.TNativePtr _ ->
+                        addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                            "Expected record type, got native pointer type" env
+                    resolvedTy
+                | Result.Error((code, message)) ->
+                    addNativeError code recordRange message env
+                    NativeType.TError message
+        
+        let fieldNodePairs = fieldNodes |> List.map (fun (name, node) -> (name, node.Id))
+        
         builder.Create(
-            SemanticKind.RecordExpr(fieldNodes, copyNode |> Option.map (fun n -> n.Id)),
+            SemanticKind.RecordExpr(fieldNodePairs, copyNode |> Option.map (fun n -> n.Id)),
             recordTy,
             range,
-            children = (copyNode |> Option.map (fun n -> [n.Id]) |> Option.defaultValue []) @ (fieldNodes |> List.map snd))
+            children = (copyNode |> Option.map (fun n -> [n.Id]) |> Option.defaultValue []) @ (fieldNodes |> List.map (fun (_, n) -> n.Id)))
 
     //---------------------------------------------------------------------
     // Array/list expressions
@@ -2039,20 +2273,30 @@ and checkPattern (env: TypeEnv) (pat: SynPat) (expectedTy: NativeType) (range: S
         checkPattern env innerPat expectedTy range
 
     | SynPat.QuoteExpr(_, _) ->
-        // Quote expression pattern - not supported in native
-        (Pattern.Wildcard, [])
+        // Quote expression pattern - not supported in native compilation
+        addDiagnostic {
+            Severity = NativeDiagnosticSeverity.Error
+            Code = "FS8700"
+            Message = "Quote expression patterns are not supported in native F# compilation."
+            Range = range
+            RelatedNodes = []
+        } env
+        (Pattern.Wildcard, [])  // Wildcard for error recovery
 
     | SynPat.FromParseError(innerPat, _) ->
         // Parse error recovery - check inner pattern
         checkPattern env innerPat expectedTy range
 
     | SynPat.InstanceMember _ ->
-        // Instance member pattern - for object expressions
-        (Pattern.Wildcard, [])
-
-    | _ ->
-        // Truly unknown pattern - fallback to wildcard
-        (Pattern.Wildcard, [])
+        // Instance member pattern - for object expressions (not supported in native)
+        addDiagnostic {
+            Severity = NativeDiagnosticSeverity.Error
+            Code = "FS8701"
+            Message = "Instance member patterns (object expressions) are not supported in native F# compilation."
+            Range = range
+            RelatedNodes = []
+        } env
+        (Pattern.Wildcard, [])  // Wildcard for error recovery
 
 /// Check a SynType and convert to NativeType
 and checkSynType (env: TypeEnv) (synType: SynType) : NativeType =

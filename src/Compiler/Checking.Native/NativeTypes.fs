@@ -219,8 +219,43 @@ and UnionCase = {
 /// Kind of byref
 and [<RequireQualifiedAccess>] ByrefKind =
     | In      // inref<T> - read-only
-    | Out     // outref<T> - write-only  
+    | Out     // outref<T> - write-only
     | InOut   // byref<T> - read-write
+
+//-------------------------------------------------------------------------
+// Record Type Infrastructure (for Field Label Resolution)
+// Per fsnative-spec inference-procedures.md: "Field order determines memory layout"
+//-------------------------------------------------------------------------
+
+/// A reference to a field in a specific record type.
+/// Used in the FieldLabels table for field label resolution.
+[<NoComparison>]
+type FieldRef = {
+    /// The record type this field belongs to
+    RecordType: TypeConRef
+    /// The field name
+    FieldName: string
+    /// The field's type
+    FieldType: NativeType
+    /// Position in declaration order (= memory order), 0-based
+    FieldIndex: int
+}
+
+/// Complete record type information.
+/// Stores fields in declaration order, which determines memory layout.
+/// Per spec: "Fidelity makes ALL memory layout decisions - MLIR/LLVM never determine layout."
+[<NoComparison; NoEquality>]
+type RecordTypeInfo = {
+    /// The type constructor (with computed layout)
+    TypeCon: TypeConRef
+    /// Fields in declaration order (= memory order)
+    Fields: (string * NativeType) list
+    /// Module path where this record type is defined
+    Module: ModulePath
+    /// Whether type has [<RequireQualifiedAccess>] attribute
+    /// If true, field labels are NOT added to FieldLabels table
+    RequireQualifiedAccess: bool
+}
 
 //-------------------------------------------------------------------------
 // Type Utilities
@@ -243,6 +278,52 @@ let rec layoutOf (ty: NativeType) : TypeLayout =
     | NativeType.TRecord(tycon, _) -> tycon.Layout
     | NativeType.TUnion(tycon, _) -> tycon.Layout
     | NativeType.TError _ -> TypeLayout.Opaque
+
+/// Compute memory layout for a record from its fields.
+/// Per fsnative-spec: "Field order determines memory layout" and
+/// "Fidelity makes ALL memory layout decisions - MLIR/LLVM never determine layout."
+///
+/// Algorithm (from spec inference-procedures.md Step 4):
+/// 1. For each field in declaration order, compute offset with padding for alignment
+/// 2. Total layout = (sum of sizes + padding, max alignment)
+let computeRecordLayout (fields: (string * NativeType) list) : TypeLayout =
+    let folder (offset, maxAlign) (_, fieldType) =
+        let fieldLayout = layoutOf fieldType
+        match fieldLayout with
+        | TypeLayout.Inline(size, align) when size >= 0 && align > 0 ->
+            // Add padding for alignment
+            let pad =
+                let remainder = offset % align
+                if remainder = 0 then 0 else align - remainder
+            let paddedOffset = offset + pad
+            (paddedOffset + size, max maxAlign align)
+        | TypeLayout.Inline _ ->
+            // Size or alignment is unknown (-1), propagate unknown
+            (-1, -1)
+        | TypeLayout.Opaque ->
+            // Unknown at compile time - can't compute exact layout
+            (-1, -1)
+        | TypeLayout.Reference _ ->
+            // Reference types are pointer-sized (8 bytes on 64-bit)
+            let pad =
+                let remainder = offset % 8
+                if remainder = 0 then 0 else 8 - remainder
+            let paddedOffset = offset + pad
+            (paddedOffset + 8, max maxAlign 8)
+
+    let (totalSize, maxAlign) = List.fold folder (0, 1) fields
+
+    if totalSize < 0 || maxAlign < 0 then
+        // Some field has unknown size - layout is opaque
+        TypeLayout.Opaque
+    else
+        // Final padding for struct alignment
+        let finalPad =
+            if maxAlign > 0 then
+                let remainder = totalSize % maxAlign
+                if remainder = 0 then 0 else maxAlign - remainder
+            else 0
+        TypeLayout.Inline(totalSize + finalPad, maxAlign)
 
 /// Check if a type is a function type
 let isFunctionType = function

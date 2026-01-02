@@ -190,6 +190,60 @@ These are patterns observed in the fsharp compiler that should be avoided:
 
 **The Fix:** Immutable substitution threading. Use persistent data structures for constraint environments.
 
+## Downstream Type Flow Anti-Patterns
+
+These anti-patterns occur when FNCS provides correct type information but downstream consumers (like Firefly/Alex) ignore or discard it.
+
+### Anti-Pattern 22: Ignoring FNCS TypeLayout in Downstream Mapping
+
+**The Problem (January 2026):** FNCS correctly defines string type layout:
+```fsharp
+// FNCS NativeGlobals.fs - CORRECT
+let stringTyCon = mkTypeConRef "string" 0 (TypeLayout.Inline(16, 8))  // Fat pointer
+```
+
+But downstream `mapType` ignores this and returns wrong type:
+```fsharp
+// Firefly FNCSTransfer.fs - WRONG
+| "string" -> Pointer  // Ignores that FNCS knows strings are fat pointers!
+```
+
+**Why it's critical:** The type information IS the contract. When downstream code ignores it, type mismatches manifest as mysterious MLIR errors far from the source.
+
+**The Fix:** Downstream code must respect FNCS type semantics. `mapType` must return `NativeStrType` (fat pointer struct) for strings, matching the `TypeLayout.Inline(16, 8)` that FNCS defines.
+
+### Anti-Pattern 23: Hardcoding Function Signatures Instead of Using Node.Type
+
+**The Problem:** PSG nodes carry `Type: NativeType` from FNCS. But downstream code ignores it:
+```fsharp
+// WRONG - Hardcoded signature ignores valueNode.Type
+| SemanticKind.Lambda _ ->
+    let signature = "(!llvm.ptr) -> !llvm.ptr"  // HARDCODED!
+    ...
+```
+
+**Why it's bad:** FNCS resolved the types. The node has `TFun(stringType, intType)`. Using hardcoded signatures breaks the principled type flow.
+
+**The Fix:** Derive signatures from the actual types:
+```fsharp
+// RIGHT - Use the type FNCS provided
+match valueNode.Type with
+| NativeType.TFun(paramTy, retTy) ->
+    sprintf "(%s) -> %s"
+        (Serialize.mlirType (mapType paramTy))
+        (Serialize.mlirType (mapType retTy))
+```
+
+### Anti-Pattern 24: "Fallback" Logic That Discards Type Information
+
+**The Problem:** Creating fallback paths for "wasn't traversed yet" scenarios that use hardcoded types instead of querying the graph.
+
+**Why it's bad:** The graph contains everything. FNCS put the types there. The zipper provides "attention" to any node. There's no legitimate "wasn't traversed yet" if you use the architecture correctly.
+
+**The Principle:** Type information flows: FNCS → PSG nodes → `mapType` → `Serialize.mlirType` → MLIR string. Every step must preserve the semantics. Fallbacks that hardcode types break this chain.
+
+---
+
 ## Summary: The Big Ones
 
 | Priority | Anti-Pattern | Why Critical |

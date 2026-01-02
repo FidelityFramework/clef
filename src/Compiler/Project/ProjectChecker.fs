@@ -56,75 +56,78 @@ module ProjectChecker =
         match FidprojLoader.load fidprojPath with
         | Error msg -> Error msg
         | Ok options ->
-            // Resolve all source files in order
-            let allSourcePaths = SourceResolver.getAllSourcesInOrder options
-
-            if List.isEmpty allSourcePaths then
-                Error $"No source files found for project {options.Name}"
-            else
-                // Read all source files
-                let readResults =
-                    allSourcePaths
-                    |> List.map readSourceFile
-
-                let readErrors =
-                    readResults
-                    |> List.choose (function Result.Error e -> Some e | Result.Ok _ -> None)
-
-                if not (List.isEmpty readErrors) then
-                    Error (String.concat "\n" readErrors)
+            // Resolve all source files in order - MUST succeed, no silent fallbacks
+            match SourceResolver.getAllSourcesInOrder options with
+            | Error srcError ->
+                // Source resolution failed - this is a hard error, not a warning
+                Error (SourceResolutionError.format srcError)
+            | Ok allSourcePaths ->
+                if List.isEmpty allSourcePaths then
+                    Error $"No source files found for project {options.Name}"
                 else
-                    let sourceFiles =
+                    // Read all source files
+                    let readResults =
+                        allSourcePaths
+                        |> List.map readSourceFile
+
+                    let readErrors =
                         readResults
-                        |> List.choose (function Result.Ok f -> Some f | Result.Error _ -> None)
+                        |> List.choose (function Result.Error e -> Some e | Result.Ok _ -> None)
 
-                    // Parse all source files
-                    let parseResults =
-                        sourceFiles
-                        |> List.map (fun (path, content) ->
-                            match parseSourceFile path content with
-                            | Ok parsed -> (path, Result.Ok parsed)
-                            | Error errors -> (path, Result.Error errors))
-
-                    let parseErrors =
-                        parseResults
-                        |> List.choose (fun (path, result) ->
-                            match result with
-                            | Result.Error errors -> Some (path, errors)
-                            | Result.Ok _ -> None)
-                        |> Map.ofList
-
-                    let parsedInputs =
-                        parseResults
-                        |> List.choose (fun (_, result) ->
-                            match result with
-                            | Result.Ok parsed -> Some parsed
-                            | Result.Error _ -> None)
-
-                    if Map.isEmpty parseErrors |> not then
-                        // Return partial result with parse errors
-                        let emptyGraph: SemanticGraph.SemanticGraph = {
-                            Nodes = Map.empty
-                            EntryPoints = []
-                            Modules = Map.empty
-                            Types = lazy Map.empty
-                        }
-                        Ok {
-                            Options = options
-                            CheckResult = { Graph = emptyGraph; Diagnostics = [] }
-                            SourceFiles = sourceFiles
-                            ParseErrors = parseErrors
-                        }
+                    if not (List.isEmpty readErrors) then
+                        Error (String.concat "\n" readErrors)
                     else
-                        // Check all parsed inputs together
-                        let checkResult = checkParsedInputs parsedInputs
+                        let sourceFiles =
+                            readResults
+                            |> List.choose (function Result.Ok f -> Some f | Result.Error _ -> None)
 
-                        Ok {
-                            Options = options
-                            CheckResult = checkResult
-                            SourceFiles = sourceFiles
-                            ParseErrors = Map.empty
-                        }
+                        // Parse all source files
+                        let parseResults =
+                            sourceFiles
+                            |> List.map (fun (path, content) ->
+                                match parseSourceFile path content with
+                                | Ok parsed -> (path, Result.Ok parsed)
+                                | Error errors -> (path, Result.Error errors))
+
+                        let parseErrors =
+                            parseResults
+                            |> List.choose (fun (path, result) ->
+                                match result with
+                                | Result.Error errors -> Some (path, errors)
+                                | Result.Ok _ -> None)
+                            |> Map.ofList
+
+                        let parsedInputs =
+                            parseResults
+                            |> List.choose (fun (_, result) ->
+                                match result with
+                                | Result.Ok parsed -> Some parsed
+                                | Result.Error _ -> None)
+
+                        if Map.isEmpty parseErrors |> not then
+                            // Return partial result with parse errors
+                            let emptyGraph: SemanticGraph.SemanticGraph = {
+                                Nodes = Map.empty
+                                EntryPoints = []
+                                Modules = Map.empty
+                                Types = lazy Map.empty
+                            }
+                            Ok {
+                                Options = options
+                                CheckResult = { Graph = emptyGraph; Diagnostics = [] }
+                                SourceFiles = sourceFiles
+                                ParseErrors = parseErrors
+                            }
+                        else
+                            // Check all parsed inputs together
+                            let checkResult = checkParsedInputs parsedInputs
+
+                            Ok {
+                                Options = options
+                                CheckResult = checkResult
+                                SourceFiles = sourceFiles
+                                ParseErrors = Map.empty
+                            }
 
     /// Check a project with volatile content override.
     /// volatileContent: Map from absolute file path to in-memory content.
@@ -138,62 +141,65 @@ module ProjectChecker =
         match FidprojLoader.load fidprojPath with
         | Error msg -> Error msg
         | Ok options ->
-            // Resolve all source files in order
-            let allSourcePaths = SourceResolver.getAllSourcesInOrder options
-
-            if List.isEmpty allSourcePaths then
-                Error $"No source files found for project {options.Name}"
-            else
-                // Read all source files, using volatile content where available
-                let sourceFiles =
-                    allSourcePaths
-                    |> List.choose (fun path ->
-                        let normalizedPath = normalizePath path
-                        match Map.tryFind normalizedPath volatileContent with
-                        | Some content ->
-                            // Use volatile (unsaved) content
-                            Some (normalizedPath, content)
-                        | None ->
-                            // Read from disk
-                            match readSourceFile path with
-                            | Result.Ok f -> Some f
-                            | Result.Error _ -> None)
-
-                if List.length sourceFiles <> List.length allSourcePaths then
-                    Error "Some source files could not be read"
+            // Resolve all source files in order - MUST succeed, no silent fallbacks
+            match SourceResolver.getAllSourcesInOrder options with
+            | Error srcError ->
+                // Source resolution failed - this is a hard error, not a warning
+                Error (SourceResolutionError.format srcError)
+            | Ok allSourcePaths ->
+                if List.isEmpty allSourcePaths then
+                    Error $"No source files found for project {options.Name}"
                 else
-                    // Parse all source files
-                    let parseResults =
-                        sourceFiles
-                        |> List.map (fun (path, content) ->
-                            match parseSourceFile path content with
-                            | Ok parsed -> (path, Result.Ok parsed)
-                            | Error errors -> (path, Result.Error errors))
+                    // Read all source files, using volatile content where available
+                    let sourceFiles =
+                        allSourcePaths
+                        |> List.choose (fun path ->
+                            let normalizedPath = normalizePath path
+                            match Map.tryFind normalizedPath volatileContent with
+                            | Some content ->
+                                // Use volatile (unsaved) content
+                                Some (normalizedPath, content)
+                            | None ->
+                                // Read from disk
+                                match readSourceFile path with
+                                | Result.Ok f -> Some f
+                                | Result.Error _ -> None)
 
-                    let parseErrors =
-                        parseResults
-                        |> List.choose (fun (path, result) ->
-                            match result with
-                            | Result.Error errors -> Some (path, errors)
-                            | Result.Ok _ -> None)
-                        |> Map.ofList
+                    if List.length sourceFiles <> List.length allSourcePaths then
+                        Error "Some source files could not be read"
+                    else
+                        // Parse all source files
+                        let parseResults =
+                            sourceFiles
+                            |> List.map (fun (path, content) ->
+                                match parseSourceFile path content with
+                                | Ok parsed -> (path, Result.Ok parsed)
+                                | Error errors -> (path, Result.Error errors))
 
-                    let parsedInputs =
-                        parseResults
-                        |> List.choose (fun (_, result) ->
-                            match result with
-                            | Result.Ok parsed -> Some parsed
-                            | Result.Error _ -> None)
+                        let parseErrors =
+                            parseResults
+                            |> List.choose (fun (path, result) ->
+                                match result with
+                                | Result.Error errors -> Some (path, errors)
+                                | Result.Ok _ -> None)
+                            |> Map.ofList
 
-                    // Check all parsed inputs together
-                    let checkResult = checkParsedInputs parsedInputs
+                        let parsedInputs =
+                            parseResults
+                            |> List.choose (fun (_, result) ->
+                                match result with
+                                | Result.Ok parsed -> Some parsed
+                                | Result.Error _ -> None)
 
-                    Ok {
-                        Options = options
-                        CheckResult = checkResult
-                        SourceFiles = sourceFiles
-                        ParseErrors = parseErrors
-                    }
+                        // Check all parsed inputs together
+                        let checkResult = checkParsedInputs parsedInputs
+
+                        Ok {
+                            Options = options
+                            CheckResult = checkResult
+                            SourceFiles = sourceFiles
+                            ParseErrors = parseErrors
+                        }
 
     /// Get diagnostics for a specific file from a checked project.
     let getDiagnosticsForFile (result: ProjectCheckResult) (filePath: string): SemanticGraph.Diagnostic list =
