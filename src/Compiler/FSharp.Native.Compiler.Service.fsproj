@@ -282,6 +282,10 @@
     <Compile Include="Checking.Native\NameResolution.fs" />
     <Compile Include="Checking.Native\CheckExpressions.fs" />
     <Compile Include="Checking.Native\SRTPResolution.fs" />
+    <!-- Infrastructure - Nanopass phase configuration and intermediate emission -->
+    <Compile Include="Checking.Native\Infrastructure\PhaseConfig.fs" />
+    <Compile Include="Checking.Native\Infrastructure\PhaseTypes.fs" />
+    <Compile Include="Checking.Native\Infrastructure\PhaseEmitter.fs" />
     <Compile Include="Checking.Native\NativeService.fs" />
 
     <!-- Project - Unified project loading and checking (DRY - single source of truth) -->

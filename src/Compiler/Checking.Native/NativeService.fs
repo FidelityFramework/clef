@@ -16,6 +16,11 @@ open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.CheckExpressions
+
+// Infrastructure modules - use qualified names to avoid conflicts
+module PhaseConfig = FSharp.Native.Compiler.Checking.Native.Infrastructure.PhaseConfig
+module PhaseTypes = FSharp.Native.Compiler.Checking.Native.Infrastructure.PhaseTypes
+module PhaseEmitter = FSharp.Native.Compiler.Checking.Native.Infrastructure.PhaseEmitter
 open FSharp.Native.Compiler.Checking.Native.UnionFind
 open FSharp.Native.Compiler.Checking.Native.Unify
 open FSharp.Native.Compiler.DiagnosticsLogger
@@ -297,6 +302,55 @@ let private findEntryPoints (allNodes: Map<NodeId, SemanticNode>) (topLevelNodes
 // Graph Building Helpers
 //-------------------------------------------------------------------------
 
+/// Truncate SemanticKind to avoid huge output
+let private truncateKind (s: string) =
+    if s.Length > 200 then s.[..197] + "..."
+    else s
+
+/// Helper to emit a phase if enabled
+let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph) (diagnostics: Diagnostic list) : unit =
+    if not (PhaseConfig.shouldEmitPhase phase.Number) then ()
+    else
+        let (reachable, _unreachable) =
+            if phase.Number >= 4 then Reachability.getReachabilityStats graph
+            else (Map.count graph.Nodes, 0)
+        
+        let nodeOutputs =
+            graph.Nodes
+            |> Map.toList
+            |> List.map (fun (id, node) ->
+                let kindStr = node.Kind |> sprintf "%A" |> truncateKind
+                let typeStr = node.Type |> sprintf "%A"
+                let parentId = node.Parent |> Option.map NodeId.value
+                { PhaseTypes.PhaseNodeOutput.Id = NodeId.value id
+                  PhaseTypes.PhaseNodeOutput.Kind = kindStr
+                  PhaseTypes.PhaseNodeOutput.Type = typeStr
+                  PhaseTypes.PhaseNodeOutput.IsReachable = node.IsReachable
+                  PhaseTypes.PhaseNodeOutput.Children = node.Children |> List.map NodeId.value
+                  PhaseTypes.PhaseNodeOutput.Parent = parentId
+                  PhaseTypes.PhaseNodeOutput.Range = Some (sprintf "%s:%d:%d" node.Range.File node.Range.Start.Line node.Range.Start.Column)
+                  PhaseTypes.PhaseNodeOutput.SRTPResolution = node.SRTPResolution |> Option.map (sprintf "%A")
+                  PhaseTypes.PhaseNodeOutput.Body = None })
+        
+        let summary =
+            if phase.Number >= 4 then
+                PhaseTypes.createSummaryWithReachability phase (Map.count graph.Nodes) reachable (List.length graph.EntryPoints) 0L
+            else
+                PhaseTypes.createSummary phase (Map.count graph.Nodes) (List.length graph.EntryPoints) 0L
+        
+        let diagStrings = diagnostics |> List.map (fun d -> d.Message)
+        let errorCount = diagnostics |> List.filter (fun d -> d.Severity = NativeDiagnosticSeverity.Error) |> List.length
+        let summaryWithDiags = summary |> PhaseTypes.withDiagnostics (List.length diagnostics) errorCount
+        
+        let output : PhaseTypes.PhaseOutput = {
+            Summary = summaryWithDiags
+            Nodes = nodeOutputs
+            EntryPoints = graph.EntryPoints |> List.map NodeId.value
+            Diagnostics = diagStrings
+        }
+        
+        PhaseEmitter.emitPhase output
+
 /// Build a CheckResult from builder state and diagnostics
 let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) : CheckResult =
     let entryPoints = findEntryPoints builder.Nodes topLevelNodes
@@ -309,11 +363,26 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         Types = SemanticGraph.mkTypesIndex builder.Nodes
     }
 
-    // Hard prune unreachable nodes (not soft-delete!)
-    let prunedGraph = Reachability.pruneUnreachable graph
+    // Phase 1: Emit structural construction result
+    emitPhaseIfEnabled PhaseTypes.PhaseId.Structural graph diagnostics
+
+    // Phase 4: Reachability analysis
+    // Use soft-delete (mark IsReachable = false) or hard prune based on config
+    let finalGraph =
+        if PhaseConfig.useSoftDeleteReachability() then
+            let markedGraph = Reachability.markUnreachable graph
+            emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability markedGraph diagnostics
+            markedGraph
+        else
+            let prunedGraph = Reachability.pruneUnreachable graph
+            emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability prunedGraph diagnostics
+            prunedGraph
+
+    // Phase 5: Emit final result
+    emitPhaseIfEnabled PhaseTypes.PhaseId.Final finalGraph diagnostics
 
     {
-        Graph = prunedGraph
+        Graph = finalGraph
         Diagnostics = diagnostics
     }
 

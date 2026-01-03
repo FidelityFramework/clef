@@ -328,6 +328,10 @@ type SemanticNode = {
     
     /// Additional typed metadata (no obj - all values are statically typed)
     Metadata: Map<string, MetadataValue>
+    
+    /// Soft-delete marker for reachability analysis
+    /// When false, node is unreachable but preserved for debugging/analysis
+    IsReachable: bool
 }
 
 //-------------------------------------------------------------------------
@@ -432,6 +436,7 @@ type NodeBuilder() =
             Children = defaultArg children []
             Parent = parent
             Metadata = Map.empty
+            IsReachable = true  // Default to reachable; soft-delete marks false
         }
         nodes <- Map.add id node nodes
         node
@@ -548,7 +553,30 @@ module Reachability =
 
         entries |> List.fold walk Set.empty
 
+    /// Soft-delete: mark unreachable nodes but preserve structure
+    /// Use this for debugging - allows inspection of full graph with reachability info
+    let markUnreachable (graph: SemanticGraph) : SemanticGraph =
+        let reachable = computeReachable graph graph.EntryPoints
+        let updatedNodes =
+            graph.Nodes
+            |> Map.map (fun id node ->
+                { node with IsReachable = Set.contains id reachable })
+        { graph with Nodes = updatedNodes }
+    
+    /// Get counts of reachable and unreachable nodes
+    let getReachabilityStats (graph: SemanticGraph) : int * int =
+        let reachableCount = 
+            graph.Nodes 
+            |> Map.filter (fun _ n -> n.IsReachable) 
+            |> Map.count
+        let unreachableCount = 
+            graph.Nodes 
+            |> Map.filter (fun _ n -> not n.IsReachable) 
+            |> Map.count
+        (reachableCount, unreachableCount)
+
     /// Hard prune unreachable nodes (not soft-delete!)
+    /// Use for production - removes unreachable nodes entirely
     let pruneUnreachable (graph: SemanticGraph) : SemanticGraph =
         let reachable = computeReachable graph graph.EntryPoints
         { graph with
