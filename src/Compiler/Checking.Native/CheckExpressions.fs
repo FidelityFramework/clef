@@ -411,13 +411,31 @@ let isBclReference (name: string) : bool =
     name.StartsWith("System.") ||
     name.StartsWith("Microsoft.") ||
     name.StartsWith("mscorlib.") ||
-    name.StartsWith("netstandard.")
+    name.StartsWith("netstandard.") ||
+    // Unchecked module - commonly used without full qualification
+    // Unchecked.defaultof requires runtime type info, not available in native
+    name.StartsWith("Unchecked.") ||
+    name = "Unchecked"
+
+/// Check if a name is specifically Unchecked.* (needs special error message)
+let isUncheckedReference (name: string) : bool =
+    name.StartsWith("Unchecked.") || name = "Unchecked"
+
+/// Emit FS8104: Unchecked.defaultof not allowed in F# Native
+/// Unchecked.defaultof requires runtime type information which doesn't exist in native
+let addUncheckedError (name: string) (r: range) (env: TypeEnv) : unit =
+    addNativeError DiagnosticCodes.FS8104_UncheckedDefault r
+        $"'{name}' is not available in F# Native. Unchecked.defaultof requires runtime type information. Use explicit initialization, FNCS intrinsics, or NativeDefault.zeroed instead." env
 
 /// Emit FS8500: BCL reference not allowed in F# Native
 /// This is a HARD STOP - BCL types cannot exist in native compilation
 let addBclError (name: string) (r: range) (env: TypeEnv) : unit =
-    addNativeError DiagnosticCodes.FS8500_BclReferenceNotAllowed r
-        $"BCL reference '{name}' is not available in F# Native. The .NET Base Class Library requires the .NET runtime. Use Alloy library equivalents instead." env
+    // Give specific message for Unchecked
+    if isUncheckedReference name then
+        addUncheckedError name r env
+    else
+        addNativeError DiagnosticCodes.FS8500_BclReferenceNotAllowed r
+            $"BCL reference '{name}' is not available in F# Native. The .NET Base Class Library requires the .NET runtime. Use Alloy library equivalents instead." env
 
 //-------------------------------------------------------------------------
 // Constant Type Inference
@@ -623,6 +641,42 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     NativeType.TForall([tyParamSpec], exitBody)
                 | _ ->
                     // Unknown Sys function - create generic function type
+                    NativeType.TFun(freshTypeVar range, freshTypeVar range)
+            builder.Create(
+                SemanticKind.Intrinsic(name),
+                intrinsicType,
+                range)
+        // FNCS INTRINSICS: NativeStr module functions (string construction)
+        // These construct native strings from pointers and lengths
+        elif name.StartsWith("NativeStr.") then
+            let intrinsicName = name.Substring("NativeStr.".Length)
+            let intrinsicType =
+                match intrinsicName with
+                | "fromPointer" ->
+                    // ptr:nativeptr<byte> -> len:int -> string
+                    // Constructs a NativeStr (fat pointer) from pointer and length
+                    NativeType.TFun(NativeType.TNativePtr Types.uint8Type,
+                        NativeType.TFun(env.Globals.IntType, env.Globals.StringType))
+                | _ ->
+                    NativeType.TFun(freshTypeVar range, freshTypeVar range)
+            builder.Create(
+                SemanticKind.Intrinsic(name),
+                intrinsicType,
+                range)
+        // FNCS INTRINSICS: NativeDefault module functions (zero initialization)
+        // These provide zero-initialized values without runtime type info
+        elif name.StartsWith("NativeDefault.") then
+            let intrinsicName = name.Substring("NativeDefault.".Length)
+            let intrinsicType =
+                match intrinsicName with
+                | "zeroed" ->
+                    // unit -> 'T
+                    // Returns the zero bit pattern for any type
+                    // This is the native replacement for Unchecked.defaultof
+                    let tyParamSpec = UnionFind.freshTypeParam "'T" TypeParamKind.Type range
+                    let tyParam = NativeType.TVar tyParamSpec
+                    NativeType.TForall([tyParamSpec], NativeType.TFun(env.Globals.UnitType, tyParam))
+                | _ ->
                     NativeType.TFun(freshTypeVar range, freshTypeVar range)
             builder.Create(
                 SemanticKind.Intrinsic(name),
