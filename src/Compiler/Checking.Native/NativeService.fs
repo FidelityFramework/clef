@@ -254,35 +254,41 @@ let private solveAndGetDiagnostics (constraints: Constraint list) : Diagnostic l
 //-------------------------------------------------------------------------
 
 /// Determine entry points from checked nodes
+/// Entry points are bindings that are either:
+/// - Named "main", or
+/// - Have the [<EntryPoint>] attribute
 let private findEntryPoints (allNodes: Map<NodeId, SemanticNode>) (topLevelNodes: SemanticNode list) : NodeId list =
-    // Find only bindings named "main" - this is the entry point
-    // TODO: Check for [<EntryPoint>] attribute when available
+    // Helper to check if a node is an entry point
+    let isEntryPointBinding node =
+        match node with
+        | Some memberNode ->
+            match memberNode.Kind with
+            | SemanticKind.Binding(name, _, _, isEntryPoint) ->
+                name = "main" || isEntryPoint
+            | _ -> false
+        | None -> false
 
     // Helper to look up a node by ID
     let tryGetNode (nodeId: NodeId) =
         Map.tryFind nodeId allNodes
 
-    // Find modules that contain a "main" binding
-    let mainModules =
+    // Find modules that contain an entry point binding
+    let entryModules =
         topLevelNodes
         |> List.filter (fun node ->
             match node.Kind with
             | SemanticKind.ModuleDef (_, memberIds) ->
-                // Check if this module contains a "main" binding
+                // Check if this module contains an entry point binding
                 memberIds |> List.exists (fun memberId ->
-                    match tryGetNode memberId with
-                    | Some memberNode ->
-                        match memberNode.Kind with
-                        | SemanticKind.Binding(name, _, _) when name = "main" -> true
-                        | _ -> false
-                    | None -> false)
-            | SemanticKind.Binding(name, _, _) when name = "main" -> true
+                    isEntryPointBinding (tryGetNode memberId))
+            | SemanticKind.Binding(name, _, _, isEntryPoint) ->
+                name = "main" || isEntryPoint
             | _ -> false
         )
         |> List.map (fun n -> n.Id)
 
-    // If no main found, this is a library - return empty (no entry points)
-    mainModules
+    // If no entry point found, this is a library - return empty
+    entryModules
 
 //-------------------------------------------------------------------------
 // Graph Building Helpers

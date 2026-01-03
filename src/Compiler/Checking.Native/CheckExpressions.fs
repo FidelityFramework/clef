@@ -68,6 +68,10 @@ module DiagnosticCodes =
     let FS8704_AmbiguousFields = "FS8704"
     let FS8705_MissingFields = "FS8705"
     
+    // Constraint-related errors (FS8710-FS8719)
+    let FS8710_NullConstraint = "FS8710"
+    let FS8711_UnsupportedConstraint = "FS8711"
+    
     // Generic/fallback
     let FS0001_GenericError = "FS0001"
     let FS0002_GenericWarning = "FS0002"
@@ -377,6 +381,21 @@ let addBoxingError (r: range) (env: TypeEnv) : unit =
 let addNullWarning (r: range) (env: TypeEnv) : unit =
     addNativeWarning DiagnosticCodes.FS8101_UninitializedValue r
         "Nullable annotation ignored in F# Native; native types are null-free by design" env
+
+//-------------------------------------------------------------------------
+// Attribute Helpers
+//-------------------------------------------------------------------------
+
+/// Check if a binding has the [<EntryPoint>] attribute
+/// Per F# spec: The entry point function should have signature: string[] -> int
+let hasEntryPointAttribute (attrs: SynAttributes) : bool =
+    attrs |> List.exists (fun attrList ->
+        attrList.Attributes |> List.exists (fun attr ->
+            match attr.TypeName.LongIdent with
+            | [id] -> id.idText = "EntryPoint" || id.idText = "EntryPointAttribute"
+            | _ -> false
+        )
+    )
 
 //-------------------------------------------------------------------------
 // BCL Rejection - CRITICAL
@@ -2044,9 +2063,10 @@ and tryGetFunctionParams (headPat: SynPat) (env: TypeEnv) (range: SourceRange) :
 /// Returns the semantic node and optionally an InlineBody for transparent function expansion
 /// FNCS is inline-by-default: all function bodies are captured for potential expansion
 and checkBinding (env: TypeEnv) (builder: NodeBuilder) (binding: SynBinding) : SemanticNode * InlineBody option =
-    let (SynBinding(_, _, _, isMutable, _, _, _, headPat, _, expr, bindingRange, _, _)) = binding
+    let (SynBinding(_, _, _, isMutable, attrs, _, _, headPat, _, expr, bindingRange, _, _)) = binding
     let range = rangeToSourceRange bindingRange
     let name = getBindingName binding
+    let isEntryPoint = hasEntryPointAttribute attrs
 
     // Check if this is a function definition (has parameters)
     match tryGetFunctionParams headPat env range with
@@ -2081,7 +2101,7 @@ and checkBinding (env: TypeEnv) (builder: NodeBuilder) (binding: SynBinding) : S
 
         // Create Binding node wrapping the Lambda
         let bindingNode = builder.Create(
-            SemanticKind.Binding(name, isMutable, false),
+            SemanticKind.Binding(name, isMutable, false, isEntryPoint),
             funcType,
             range,
             children = [lambdaNode.Id])
@@ -2100,7 +2120,7 @@ and checkBinding (env: TypeEnv) (builder: NodeBuilder) (binding: SynBinding) : S
         // Regular value binding (not a function - no inline body)
         let exprNode = checkExpr env builder expr
         let node = builder.Create(
-            SemanticKind.Binding(name, isMutable, false),
+            SemanticKind.Binding(name, isMutable, false, isEntryPoint),
             exprNode.Type,
             range,
             children = [exprNode.Id])
@@ -2299,6 +2319,219 @@ and checkPattern (env: TypeEnv) (pat: SynPat) (expectedTy: NativeType) (range: S
         (Pattern.Wildcard, [])  // Wildcard for error recovery
 
 /// Check a SynType and convert to NativeType
+
+//-------------------------------------------------------------------------
+// Type Constraint Helpers (SRTP Resolution)
+//-------------------------------------------------------------------------
+
+/// Convert a SynTypar to a TypeParam
+/// Creates a named type parameter from the syntax tree representation
+/// Note: Currently creates fresh type parameters; scope tracking not yet implemented
+and checkSynTypar (_env: TypeEnv) (synTypar: SynTypar) : TypeParam =
+    let (SynTypar(ident, _typarStaticReq, _isCompGen)) = synTypar
+    let name = "'" + ident.idText
+    let range = rangeToSourceRange ident.idRange
+    // Create a new named type parameter using the UnionFind helper
+    // TODO: Track type parameters in scope for proper sharing
+    freshTypeParam name TypeParamKind.Type range
+
+/// Evaluate a SynRationalConst to an integer exponent
+/// For simplicity, we only support integer exponents (not rational)
+and evalRationalConst (synRat: SynRationalConst) : int =
+    match synRat with
+    | SynRationalConst.Integer(value, _) -> value
+    | SynRationalConst.Negate(inner, _) -> -(evalRationalConst inner)
+    | SynRationalConst.Paren(inner, _) -> evalRationalConst inner
+    | SynRationalConst.Rational(num, _, _, denom, _, _range) ->
+        // Rational exponents not fully supported in native compilation
+        // Use the nearest integer (num / denom rounded)
+        if denom <> 0 then num / denom else 1
+
+/// Expand a measure power: m^n = m * m * ... * m (n times)
+/// For negative powers: m^-n = 1 / (m^n)
+and expandMeasurePower (baseMeasure: Measure) (exponent: int) : Measure =
+    if exponent = 0 then MOne
+    elif exponent = 1 then baseMeasure
+    elif exponent = -1 then MInv baseMeasure
+    elif exponent > 0 then
+        // m^n = m * m * ... * m
+        List.replicate exponent baseMeasure
+        |> List.reduce (fun a b -> MProd(a, b))
+    else
+        // m^-n = 1 / m^n
+        MInv (expandMeasurePower baseMeasure (-exponent))
+
+/// Convert a SynMeasure to our native Measure representation
+/// Per fsnative-spec units-of-measure.md: measures support product, quotient, power, and named units
+and checkSynMeasure (env: TypeEnv) (synMeasure: SynMeasure) : Measure =
+    match synMeasure with
+    | SynMeasure.One _ ->
+        // The dimensionless unit: 1
+        MOne
+
+    | SynMeasure.Named(longId, _) ->
+        // Named measure: kg, m, s, or module-qualified like Physics.Meters
+        let parts = longId |> List.map (fun id -> id.idText)
+        let name = parts |> List.last
+        let modulePath = parts |> List.rev |> List.tail |> List.rev
+        MCon(name, modulePath)
+
+    | SynMeasure.Product(m1, _, m2, _) ->
+        // Product of measures: m1 * m2
+        let measure1 = checkSynMeasure env m1
+        let measure2 = checkSynMeasure env m2
+        MProd(measure1, measure2)
+
+    | SynMeasure.Divide(Some m1, _, m2, _) ->
+        // Division: m1 / m2 = m1 * (1/m2)
+        let measure1 = checkSynMeasure env m1
+        let measure2 = checkSynMeasure env m2
+        MProd(measure1, MInv measure2)
+
+    | SynMeasure.Divide(None, _, m2, _) ->
+        // Division with no numerator: /m2 = 1/m2
+        let measure2 = checkSynMeasure env m2
+        MInv measure2
+
+    | SynMeasure.Power(baseMeasure, _, power, _) ->
+        // Power: m^n
+        let measure = checkSynMeasure env baseMeasure
+        let exp = evalRationalConst power
+        expandMeasurePower measure exp
+
+    | SynMeasure.Var(synTypar, _) ->
+        // Measure type variable: 'u
+        let tp = checkSynTypar env synTypar
+        // Ensure it's marked as a measure parameter
+        let measureTp = { tp with Kind = TypeParamKind.Measure }
+        MVar measureTp
+
+    | SynMeasure.Seq(measures, _) ->
+        // Sequence of measures: m1 m2 m3 (implicit product)
+        measures
+        |> List.map (checkSynMeasure env)
+        |> List.reduce (fun a b -> MProd(a, b))
+
+    | SynMeasure.Anon _ ->
+        // Anonymous measure: _ (fresh measure variable)
+        let range = dummyRange
+        MVar (freshMeasureVar range)
+
+    | SynMeasure.Paren(inner, _) ->
+        // Parenthesized measure
+        checkSynMeasure env inner
+
+/// Check a type constraint from syntax and record it
+/// Per native_type_checker_design_principles: SRTP resolved DURING type checking
+/// Returns the constraint to add to the type parameter, or None if handled inline
+and checkSynConstraint (env: TypeEnv) (constraint_: SynTypeConstraint) : Constraint option =
+    match constraint_ with
+    // KEY FOR SRTP: (^a or ^b) : (static member op : signature)
+    | SynTypeConstraint.WhereTyparSupportsMember(typars, memberSig, range) ->
+        let typarType = checkSynType env typars
+        let nativeRange = rangeToSourceRange range
+        // Extract member name and signature from the member signature
+        let memberName =
+            match memberSig with
+            | SynMemberSig.Member(SynValSig(ident = SynIdent(id, _)), _, _, _) -> id.idText
+            | _ -> "unknown_member"
+        let memberType =
+            match memberSig with
+            | SynMemberSig.Member(SynValSig(synType = synRetType), _, _, _) ->
+                checkSynType env synRetType
+            | _ -> freshTypeVar nativeRange
+        Some (Constraint.HasMember(typarType, memberName, memberType, nativeRange))
+
+    // Subtype/inheritance constraint: 'a :> ISomething
+    | SynTypeConstraint.WhereTyparSubtypeOfType(synTypar, superType, range) ->
+        let typar = checkSynTypar env synTypar
+        let superTy = checkSynType env superType
+        let nativeRange = rangeToSourceRange range
+        Some (Constraint.Subtype(NativeType.TVar typar, superTy, nativeRange))
+
+    // Struct constraint: 'a : struct
+    | SynTypeConstraint.WhereTyparIsValueType(synTypar, range) ->
+        let typar = checkSynTypar env synTypar
+        let nativeRange = rangeToSourceRange range
+        // Record as layout constraint - type must be inline (stack-allocated)
+        Some (Constraint.LayoutCompatible(NativeType.TVar typar, TypeLayout.Inline(-1, -1), nativeRange))
+
+    // Reference type constraint: 'a : not struct
+    | SynTypeConstraint.WhereTyparIsReferenceType(synTypar, range) ->
+        let typar = checkSynTypar env synTypar
+        let nativeRange = rangeToSourceRange range
+        // Record as layout constraint - type must be reference (arena-allocated)
+        Some (Constraint.LayoutCompatible(NativeType.TVar typar, TypeLayout.Reference ArenaAffinity.CurrentActor, nativeRange))
+
+    // Unmanaged constraint: 'a : unmanaged
+    | SynTypeConstraint.WhereTyparIsUnmanaged(synTypar, range) ->
+        let typar = checkSynTypar env synTypar
+        let nativeRange = rangeToSourceRange range
+        // Unmanaged = no GC references, blittable - use inline layout
+        Some (Constraint.LayoutCompatible(NativeType.TVar typar, TypeLayout.Inline(-1, -1), nativeRange))
+
+    // NULL CONSTRAINT - REJECTED in fsnative
+    // Per fsnative-spec types-and-type-constraints.md: null is not permitted
+    | SynTypeConstraint.WhereTyparSupportsNull(_, range) ->
+        addNativeError DiagnosticCodes.FS8710_NullConstraint range
+            "The 'null' constraint is not permitted in F# Native. Use ValueOption for optional values."
+            env
+        None
+
+    // Not null constraint: 'a : not null
+    | SynTypeConstraint.WhereTyparNotSupportsNull(_, _, _) ->
+        // All types in native are non-nullable by default - this is a no-op
+        None
+
+    // Comparison constraint: 'a : comparison
+    | SynTypeConstraint.WhereTyparIsComparable(synTypar, range) ->
+        let typar = checkSynTypar env synTypar
+        let nativeRange = rangeToSourceRange range
+        // In Alloy, comparison is via SRTP - generate HasMember for comparison operations
+        // Type must implement: compare : 'a -> 'a -> int
+        let compareTy = NativeType.TFun(NativeType.TVar typar, NativeType.TFun(NativeType.TVar typar, Types.intType))
+        Some (Constraint.HasMember(NativeType.TVar typar, "compare", compareTy, nativeRange))
+
+    // Equality constraint: 'a : equality
+    | SynTypeConstraint.WhereTyparIsEquatable(synTypar, range) ->
+        let typar = checkSynTypar env synTypar
+        let nativeRange = rangeToSourceRange range
+        // In Alloy, equality is via SRTP - generate HasMember for equality operations
+        // Type must implement: op_Equality : 'a -> 'a -> bool
+        let eqTy = NativeType.TFun(NativeType.TVar typar, NativeType.TFun(NativeType.TVar typar, Types.boolType))
+        Some (Constraint.HasMember(NativeType.TVar typar, "op_Equality", eqTy, nativeRange))
+
+    // Default type constraint: 'a : > Type (defaults to Type if unconstrained)
+    | SynTypeConstraint.WhereTyparDefaultsToType(synTypar, defaultType, _range) ->
+        // Record the default but don't emit as constraint - used during generalization
+        let _typar = checkSynTypar env synTypar
+        let _defaultTy = checkSynType env defaultType
+        // TODO: Store default types for generalization
+        None
+
+    // Enum constraint: 'a : enum<int>
+    | SynTypeConstraint.WhereTyparIsEnum(_, _, range) ->
+        addNativeError DiagnosticCodes.FS8711_UnsupportedConstraint range
+            "Enum constraints are not supported in F# Native. Use discriminated unions instead."
+            env
+        None
+
+    // Delegate constraint: 'a : delegate<arg, ret>
+    | SynTypeConstraint.WhereTyparIsDelegate(_, _, range) ->
+        addNativeError DiagnosticCodes.FS8711_UnsupportedConstraint range
+            "Delegate constraints are not supported in F# Native. Use function types instead."
+            env
+        None
+
+    // Self constraint (used in recursive type definitions)
+    | SynTypeConstraint.WhereSelfConstrained(selfType, range) ->
+        let selfTy = checkSynType env selfType
+        let nativeRange = rangeToSourceRange range
+        // Self constraints typically appear in recursive type definitions
+        // For now, treat as type equality with fresh variable
+        let freshTy = freshTypeVar nativeRange
+        Some (Constraint.Equals(selfTy, freshTy, nativeRange))
+
 and checkSynType (env: TypeEnv) (synType: SynType) : NativeType =
     match synType with
     | SynType.LongIdent(longIdent) ->
@@ -2378,21 +2611,54 @@ and checkSynType (env: TypeEnv) (synType: SynType) : NativeType =
         // Anonymous type: _
         freshTypeVar dummyRange
 
-    | SynType.WithGlobalConstraints(typeName, _constraints, _) ->
+    | SynType.WithGlobalConstraints(typeName, constraints, _) ->
         // Type with constraints: 'a when 'a :> IComparable
-        // TODO: Record constraints for SRTP resolution
-        // For now, just check the inner type
-        checkSynType env typeName
+        // Per native_type_checker_design_principles: SRTP resolved DURING type checking
+        let innerTy = checkSynType env typeName
+        
+        // Process each constraint and record them
+        let nativeConstraints =
+            constraints
+            |> List.choose (checkSynConstraint env)
+        
+        // Add constraints to type parameter if inner type is a TVar
+        // This attaches constraints to the type parameter for later resolution
+        match innerTy with
+        | NativeType.TVar typar ->
+            typar.Constraints <- nativeConstraints @ typar.Constraints
+        | _ ->
+            // For non-variable types, add constraints to the environment
+            for constraint_ in nativeConstraints do
+                addConstraint constraint_ env
+        
+        innerTy
 
     | SynType.HashConstraint(innerType, _) ->
         // Hash constraint: #IInterface (flexible type)
         checkSynType env innerType
 
-    | SynType.MeasurePower(baseMeasure, _exponent, _) ->
+    | SynType.MeasurePower(baseMeasure, exponent, _) ->
         // Measure type: int<m^2> - units of measure
-        let _baseTy = checkSynType env baseMeasure
-        // TODO: Implement proper measure type handling with exponent
-        NativeType.TMeasure(Measure.MOne)
+        // Per fsnative-spec units-of-measure.md: measures support product, quotient, power
+        // Convert the SynMeasure base and apply the exponent
+        let measure =
+            match baseMeasure with
+            | SynType.Var(synTypar, _) ->
+                // Type variable as measure: 'u^2
+                let tp = checkSynTypar env synTypar
+                let measureTp = { tp with Kind = TypeParamKind.Measure }
+                MVar measureTp
+            | SynType.LongIdent(longIdent) ->
+                // Named measure: kg^2, m^-1
+                let parts = longIdent.LongIdent |> List.map (fun id -> id.idText)
+                let name = parts |> List.last
+                let modulePath = parts |> List.rev |> List.tail |> List.rev
+                MCon(name, modulePath)
+            | _ ->
+                // Complex measure expression - try to parse as measure
+                MOne
+        let exp = evalRationalConst exponent
+        NativeType.TMeasure(expandMeasurePower measure exp)
 
     | SynType.StaticConstant(constant, _range) ->
         // Static type constant - used in type-level programming

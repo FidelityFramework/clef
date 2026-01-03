@@ -132,7 +132,8 @@ and [<RequireQualifiedAccess>] Pattern =
 [<RequireQualifiedAccess>]
 type SemanticKind =
     /// Let binding: let name = value
-    | Binding of name: string * isMutable: bool * isRecursive: bool
+    /// isEntryPoint: true if [<EntryPoint>] attribute is present
+    | Binding of name: string * isMutable: bool * isRecursive: bool * isEntryPoint: bool
     
     /// Function application: f arg1 arg2
     | Application of func: NodeId * args: NodeId list
