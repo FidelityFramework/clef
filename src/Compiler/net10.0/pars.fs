@@ -7454,17 +7454,14 @@ let _fsyacc_reductions = lazy [|
                 (
                    (
 # 2484 "pars.fsy"
-                            if not (isNil _1) then errorR(Error(FSComp.SR.parsAttributesIllegalHere(), rhs parseState 1))
                             let mLhs = lhs parseState
-                            if parseState.LexBuffer.ReportLibraryOnlyFeatures then libraryOnlyError mLhs
-                            if Option.isSome _2 then errorR(Error(FSComp.SR.parsInlineAssemblyCannotHaveVisibilityDeclarations(), rhs parseState 2))
-                            let s, _ = _5
-                            let ilType = ParseAssemblyCodeType s parseState.LexBuffer.ReportLibraryOnlyFeatures parseState.LexBuffer.LanguageVersion parseState.LexBuffer.StrictIndentation (rhs parseState 5)
-                            SynTypeDefnSimpleRepr.LibraryOnlyILAssembly(box ilType, mLhs) 
+                            // FNCS: Inline IL type definitions are not supported in native compilation
+                            errorR(Error((193, "Inline IL type definitions (# ... #) are not supported in native F# compilation"), mLhs))
+                            SynTypeDefnSimpleRepr.None(mLhs) 
                    )
 # 2484 "pars.fsy"
                  : SynTypeDefnSimpleRepr));
-# 7467 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7464 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_recdFieldDeclList in
@@ -7472,12 +7469,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2496 "pars.fsy"
+# 2493 "pars.fsy"
                             _2 
                    )
-# 2496 "pars.fsy"
+# 2493 "pars.fsy"
                  : 'gentype_braceFieldDeclList));
-# 7480 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7477 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_recdFieldDeclList in
@@ -7485,158 +7482,158 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2499 "pars.fsy"
+# 2496 "pars.fsy"
                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedBrace())
                             _2 
                    )
-# 2499 "pars.fsy"
+# 2496 "pars.fsy"
                  : 'gentype_braceFieldDeclList));
-# 7494 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7491 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _3 = parseState.GetInput(3) :?> 'gentype_rbrace in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2503 "pars.fsy"
+# 2500 "pars.fsy"
                             [] 
                    )
-# 2503 "pars.fsy"
+# 2500 "pars.fsy"
                  : 'gentype_braceFieldDeclList));
-# 7506 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7503 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_rbrace in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2506 "pars.fsy"
+# 2503 "pars.fsy"
                             errorR (Error(FSComp.SR.parsExpectingRecordField (), rhs parseState 2))
                             [] 
                    )
-# 2506 "pars.fsy"
+# 2503 "pars.fsy"
                  : 'gentype_braceFieldDeclList));
-# 7519 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7516 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_braceBarFieldDeclListCore in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2511 "pars.fsy"
+# 2508 "pars.fsy"
                                _2, true 
                    )
-# 2511 "pars.fsy"
+# 2508 "pars.fsy"
                  : 'gentype_anonRecdType));
-# 7530 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7527 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_braceBarFieldDeclListCore in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2513 "pars.fsy"
+# 2510 "pars.fsy"
                                _1, false 
                    )
-# 2513 "pars.fsy"
+# 2510 "pars.fsy"
                  : 'gentype_anonRecdType));
-# 7541 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7538 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recdFieldDeclList in
             let _3 = parseState.GetInput(3) :?> 'gentype_bar_rbrace in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2518 "pars.fsy"
+# 2515 "pars.fsy"
                             _2 
                    )
-# 2518 "pars.fsy"
+# 2515 "pars.fsy"
                  : 'gentype_braceBarFieldDeclListCore));
-# 7553 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7550 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recdFieldDeclList in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2521 "pars.fsy"
+# 2518 "pars.fsy"
                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedBraceBar())
                             _2 
                    )
-# 2521 "pars.fsy"
+# 2518 "pars.fsy"
                  : 'gentype_braceBarFieldDeclListCore));
-# 7566 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7563 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_bar_rbrace in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2525 "pars.fsy"
+# 2522 "pars.fsy"
                             [] 
                    )
-# 2525 "pars.fsy"
+# 2522 "pars.fsy"
                  : 'gentype_braceBarFieldDeclListCore));
-# 7577 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7574 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2529 "pars.fsy"
+# 2526 "pars.fsy"
                             SynTypeDefnKind.Class 
                    )
-# 2529 "pars.fsy"
+# 2526 "pars.fsy"
                  : 'gentype_classOrInterfaceOrStruct));
-# 7587 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7584 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2532 "pars.fsy"
+# 2529 "pars.fsy"
                             SynTypeDefnKind.Interface 
                    )
-# 2532 "pars.fsy"
+# 2529 "pars.fsy"
                  : 'gentype_classOrInterfaceOrStruct));
-# 7597 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7594 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2535 "pars.fsy"
+# 2532 "pars.fsy"
                             SynTypeDefnKind.Struct 
                    )
-# 2535 "pars.fsy"
+# 2532 "pars.fsy"
                  : 'gentype_classOrInterfaceOrStruct));
-# 7607 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7604 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2538 "pars.fsy"
+# 2535 "pars.fsy"
                                      
                    )
-# 2538 "pars.fsy"
+# 2535 "pars.fsy"
                  : 'gentype_interfaceMember));
-# 7617 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7614 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2539 "pars.fsy"
+# 2536 "pars.fsy"
                                              
                    )
-# 2539 "pars.fsy"
+# 2536 "pars.fsy"
                  : 'gentype_interfaceMember));
-# 7627 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7624 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_access in
             let _2 = parseState.GetInput(2) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2543 "pars.fsy"
+# 2540 "pars.fsy"
                              None, _2.LongIdent, false, _1 
                    )
-# 2543 "pars.fsy"
+# 2540 "pars.fsy"
                  : 'gentype_tyconNameAndTyparDecls));
-# 7639 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7636 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_access in
             let _2 = parseState.GetInput(2) :?> 'gentype_prefixTyparDecls in
@@ -7644,12 +7641,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2546 "pars.fsy"
+# 2543 "pars.fsy"
                              Some _2, _3.LongIdent, false, _1 
                    )
-# 2546 "pars.fsy"
+# 2543 "pars.fsy"
                  : 'gentype_tyconNameAndTyparDecls));
-# 7652 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7649 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_access in
             let _2 = parseState.GetInput(2) :?> SynLongIdent in
@@ -7657,82 +7654,82 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2549 "pars.fsy"
+# 2546 "pars.fsy"
                              Some _3, _2.LongIdent, true, _1 
                    )
-# 2549 "pars.fsy"
+# 2546 "pars.fsy"
                  : 'gentype_tyconNameAndTyparDecls));
-# 7665 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7662 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_access in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2552 "pars.fsy"
+# 2549 "pars.fsy"
                              None, [], false, _1 
                    )
-# 2552 "pars.fsy"
+# 2549 "pars.fsy"
                  : 'gentype_tyconNameAndTyparDecls));
-# 7677 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7674 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2556 "pars.fsy"
+# 2553 "pars.fsy"
                              SynTyparDecls.SinglePrefix(SynTyparDecl([], _1, [], SynTyparDeclTrivia.Zero), rhs parseState 1) 
                    )
-# 2556 "pars.fsy"
+# 2553 "pars.fsy"
                  : 'gentype_prefixTyparDecls));
-# 7688 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7685 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typarDeclList in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2559 "pars.fsy"
+# 2556 "pars.fsy"
                              SynTyparDecls.PrefixList(List.rev _2, rhs2 parseState 1 3) 
                    )
-# 2559 "pars.fsy"
+# 2556 "pars.fsy"
                  : 'gentype_prefixTyparDecls));
-# 7700 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7697 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typarDeclList in
             let _3 = parseState.GetInput(3) :?> 'gentype_typarDecl in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2562 "pars.fsy"
+# 2559 "pars.fsy"
                                                          _3 :: _1 
                    )
-# 2562 "pars.fsy"
+# 2559 "pars.fsy"
                  : 'gentype_typarDeclList));
-# 7712 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7709 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typarDecl in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2563 "pars.fsy"
+# 2560 "pars.fsy"
                                      [_1] 
                    )
-# 2563 "pars.fsy"
+# 2560 "pars.fsy"
                  : 'gentype_typarDeclList));
-# 7723 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7720 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2567 "pars.fsy"
+# 2564 "pars.fsy"
                              SynTyparDecl(_1, _2, [], SynTyparDeclTrivia.Zero) 
                    )
-# 2567 "pars.fsy"
+# 2564 "pars.fsy"
                  : 'gentype_typarDecl));
-# 7735 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7732 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> SynTypar in
@@ -7740,14 +7737,14 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2570 "pars.fsy"
+# 2567 "pars.fsy"
                              parseState.LexBuffer.CheckLanguageFeatureAndRecover LanguageFeature.ConstraintIntersectionOnFlexibleTypes (rhs2 parseState 3 4)
                              let constraints, mAmpersands = _4
                              SynTyparDecl(_1, _2, List.rev constraints, { AmpersandRanges = rhs parseState 3 :: List.rev mAmpersands }) 
                    )
-# 2570 "pars.fsy"
+# 2567 "pars.fsy"
                  : 'gentype_typarDecl));
-# 7750 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7747 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_HIGH_PRECEDENCE_TYAPP in
             let _2 = parseState.GetInput(2) :?> bool in
@@ -7757,46 +7754,46 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2578 "pars.fsy"
+# 2575 "pars.fsy"
                              let m = rhs2 parseState 2 5
                              if not _2 then warning(Error(FSComp.SR.parsNonAdjacentTypars(), m))
                              SynTyparDecls.PostfixList(List.rev _3, _4, m) 
                    )
-# 2578 "pars.fsy"
+# 2575 "pars.fsy"
                  : 'gentype_postfixTyparDecls));
-# 7767 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7764 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typarDeclList in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2586 "pars.fsy"
+# 2583 "pars.fsy"
                              (List.rev _1, true) 
                    )
-# 2586 "pars.fsy"
+# 2583 "pars.fsy"
                  : 'gentype_explicitValTyparDeclsCore));
-# 7778 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7775 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typarDeclList in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2589 "pars.fsy"
+# 2586 "pars.fsy"
                              (List.rev _1, false) 
                    )
-# 2589 "pars.fsy"
+# 2586 "pars.fsy"
                  : 'gentype_explicitValTyparDeclsCore));
-# 7789 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7786 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2592 "pars.fsy"
+# 2589 "pars.fsy"
                              ([], false) 
                    )
-# 2592 "pars.fsy"
+# 2589 "pars.fsy"
                  : 'gentype_explicitValTyparDeclsCore));
-# 7799 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7796 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_HIGH_PRECEDENCE_TYAPP in
             let _2 = parseState.GetInput(2) :?> bool in
@@ -7806,216 +7803,216 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2596 "pars.fsy"
+# 2593 "pars.fsy"
                              let m = rhs2 parseState 2 5
                              if not _2 then warning(Error(FSComp.SR.parsNonAdjacentTypars(), m))
                              let tps, flex = _3
                              let tps = SynTyparDecls.PostfixList(tps, _4, m)
                              SynValTyparDecls(Some tps, flex) 
                    )
-# 2596 "pars.fsy"
+# 2593 "pars.fsy"
                  : 'gentype_explicitValTyparDecls));
-# 7818 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7815 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_explicitValTyparDecls in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2604 "pars.fsy"
+# 2601 "pars.fsy"
                              _1 
                    )
-# 2604 "pars.fsy"
+# 2601 "pars.fsy"
                  : 'gentype_opt_explicitValTyparDecls));
-# 7829 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7826 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2606 "pars.fsy"
+# 2603 "pars.fsy"
                              SynValTyparDecls(None, true) 
                    )
-# 2606 "pars.fsy"
+# 2603 "pars.fsy"
                  : 'gentype_opt_explicitValTyparDecls));
-# 7839 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7836 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_atomType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2610 "pars.fsy"
+# 2607 "pars.fsy"
                             SynType.HashConstraint(_2, lhs parseState) 
                    )
-# 2610 "pars.fsy"
+# 2607 "pars.fsy"
                  : 'gentype_hashConstraint));
-# 7850 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7847 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2616 "pars.fsy"
+# 2613 "pars.fsy"
                             [] 
                    )
-# 2616 "pars.fsy"
+# 2613 "pars.fsy"
                  : 'gentype_opt_typeConstraints));
-# 7860 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7857 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typeConstraints in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2619 "pars.fsy"
+# 2616 "pars.fsy"
                             List.rev _2 
                    )
-# 2619 "pars.fsy"
+# 2616 "pars.fsy"
                  : 'gentype_opt_typeConstraints));
-# 7871 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7868 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeConstraints in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeConstraint in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2625 "pars.fsy"
+# 2622 "pars.fsy"
                             _3 :: _1 
                    )
-# 2625 "pars.fsy"
+# 2622 "pars.fsy"
                  : 'gentype_typeConstraints));
-# 7883 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7880 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeConstraint in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2628 "pars.fsy"
+# 2625 "pars.fsy"
                             [_1] 
                    )
-# 2628 "pars.fsy"
+# 2625 "pars.fsy"
                  : 'gentype_typeConstraints));
-# 7894 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7891 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_intersectionConstraints in
             let _3 = parseState.GetInput(3) :?> 'gentype_hashConstraint in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2634 "pars.fsy"
+# 2631 "pars.fsy"
                              let constraints, mAmpersands = _1
                              (_3 :: constraints), (rhs parseState 2 :: mAmpersands) 
                    )
-# 2634 "pars.fsy"
+# 2631 "pars.fsy"
                  : 'gentype_intersectionConstraints));
-# 7907 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7904 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_intersectionConstraints in
             let _3 = parseState.GetInput(3) :?> 'gentype_atomType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2638 "pars.fsy"
+# 2635 "pars.fsy"
                              let constraints, mAmpersands = _1
                              errorR(Error(FSComp.SR.parsConstraintIntersectionSyntaxUsedWithNonFlexibleType(), _3.Range))
                              (_3 :: constraints), (rhs parseState 2 :: mAmpersands) 
                    )
-# 2638 "pars.fsy"
+# 2635 "pars.fsy"
                  : 'gentype_intersectionConstraints));
-# 7921 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7918 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hashConstraint in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2643 "pars.fsy"
+# 2640 "pars.fsy"
                              [ _1 ], [] 
                    )
-# 2643 "pars.fsy"
+# 2640 "pars.fsy"
                  : 'gentype_intersectionConstraints));
-# 7932 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7929 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2646 "pars.fsy"
+# 2643 "pars.fsy"
                              errorR(Error(FSComp.SR.parsConstraintIntersectionSyntaxUsedWithNonFlexibleType(), _1.Range))
                              [ _1 ], [] 
                    )
-# 2646 "pars.fsy"
+# 2643 "pars.fsy"
                  : 'gentype_intersectionConstraints));
-# 7944 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7941 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynTypar in
             let _4 = parseState.GetInput(4) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2653 "pars.fsy"
+# 2650 "pars.fsy"
                             if parseState.LexBuffer.ReportLibraryOnlyFeatures then libraryOnlyError (lhs parseState)
                             SynTypeConstraint.WhereTyparDefaultsToType(_2, _4, lhs parseState) 
                    )
-# 2653 "pars.fsy"
+# 2650 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 7957 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7954 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2657 "pars.fsy"
+# 2654 "pars.fsy"
                             SynTypeConstraint.WhereTyparSubtypeOfType(_1, _3, lhs parseState) 
                    )
-# 2657 "pars.fsy"
+# 2654 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 7969 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7966 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2660 "pars.fsy"
+# 2657 "pars.fsy"
                             SynTypeConstraint.WhereTyparIsValueType(_1, lhs parseState) 
                    )
-# 2660 "pars.fsy"
+# 2657 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 7980 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7977 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> string in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2663 "pars.fsy"
+# 2660 "pars.fsy"
                             if _3 <> "not" then reportParseErrorAt (rhs parseState 3) (FSComp.SR.parsUnexpectedIdentifier(_3))
                             SynTypeConstraint.WhereTyparIsReferenceType(_1, lhs parseState) 
                    )
-# 2663 "pars.fsy"
+# 2660 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 7993 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 7990 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2667 "pars.fsy"
+# 2664 "pars.fsy"
                             SynTypeConstraint.WhereTyparSupportsNull(_1, lhs parseState) 
                    )
-# 2667 "pars.fsy"
+# 2664 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8004 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8001 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> string in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2670 "pars.fsy"
+# 2667 "pars.fsy"
                              if _3 <> "not" then reportParseErrorAt (rhs parseState 3) (FSComp.SR.parsUnexpectedIdentifier(_3 + " (2)"))
                              let trivia : SynTypeConstraintWhereTyparNotSupportsNullTrivia = { ColonRange = rhs parseState 2; NotRange = rhs parseState 3 }
                              SynTypeConstraint.WhereTyparNotSupportsNull(_1, lhs parseState, trivia) 
                    )
-# 2670 "pars.fsy"
+# 2667 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8018 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8015 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _4 = parseState.GetInput(4) :?> 'gentype_classMemberSpfn in
@@ -8023,13 +8020,13 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2675 "pars.fsy"
+# 2672 "pars.fsy"
                             let tp = _1
                             SynTypeConstraint.WhereTyparSupportsMember(SynType.Var(tp, tp.Range), _4, lhs parseState) 
                    )
-# 2675 "pars.fsy"
+# 2672 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8032 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8029 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typeAlts in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -8038,27 +8035,27 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2679 "pars.fsy"
+# 2676 "pars.fsy"
                             let mParen = rhs2 parseState 1 3
                             let t = SynType.Paren(_2, mParen)
                             SynTypeConstraint.WhereTyparSupportsMember(t, _6, lhs parseState) 
                    )
-# 2679 "pars.fsy"
+# 2676 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8048 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8045 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _4 = parseState.GetInput(4) :?> range * range option * SynType list * range list * range in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2684 "pars.fsy"
+# 2681 "pars.fsy"
                             let _ltm, _gtm, args, _commas, mWhole = _4
                             SynTypeConstraint.WhereTyparIsDelegate(_1, args, unionRanges _1.Range mWhole) 
                    )
-# 2684 "pars.fsy"
+# 2681 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8061 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8058 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> string in
@@ -8066,80 +8063,80 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2688 "pars.fsy"
+# 2685 "pars.fsy"
                             match _3 with
                             | "enum" ->
                                 let _ltm, _gtm, args, _commas, mWhole = _4
                                 SynTypeConstraint.WhereTyparIsEnum(_1, args, unionRanges _1.Range mWhole)
                             | nm -> raiseParseErrorAt (rhs parseState 3) (FSComp.SR.parsUnexpectedIdentifier(nm + " (3)")) 
                    )
-# 2688 "pars.fsy"
+# 2685 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8078 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8075 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> string in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2695 "pars.fsy"
+# 2692 "pars.fsy"
                             match _3 with
                             | "comparison" -> SynTypeConstraint.WhereTyparIsComparable(_1, lhs parseState)
                             | "equality" -> SynTypeConstraint.WhereTyparIsEquatable(_1, lhs parseState)
                             | "unmanaged" -> SynTypeConstraint.WhereTyparIsUnmanaged(_1, lhs parseState)
                             | nm -> raiseParseErrorAt (rhs parseState 3) (FSComp.SR.parsUnexpectedIdentifier(nm + " (4)")) 
                    )
-# 2695 "pars.fsy"
+# 2692 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8094 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8091 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2702 "pars.fsy"
+# 2699 "pars.fsy"
                             SynTypeConstraint.WhereSelfConstrained(_1, lhs parseState) 
                    )
-# 2702 "pars.fsy"
+# 2699 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8105 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8102 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeAlts in
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeWithoutNull in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2706 "pars.fsy"
+# 2703 "pars.fsy"
                             let mOr = rhs parseState 2
                             let m = unionRanges _1.Range _3.Range
                             SynType.Or(_1, _3, m, { OrKeyword = mOr }) 
                    )
-# 2706 "pars.fsy"
+# 2703 "pars.fsy"
                  : 'gentype_typeAlts));
-# 8119 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8116 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2711 "pars.fsy"
+# 2708 "pars.fsy"
                             _1 
                    )
-# 2711 "pars.fsy"
+# 2708 "pars.fsy"
                  : 'gentype_typeAlts));
-# 8130 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8127 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_barAndgrabXmlDoc in
             let _2 = parseState.GetInput(2) :?> 'gentype_attrUnionCaseDecls in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2718 "pars.fsy"
+# 2715 "pars.fsy"
                             _2 _1 
                    )
-# 2718 "pars.fsy"
+# 2715 "pars.fsy"
                  : Choice<SynEnumCase, SynUnionCase> list));
-# 8142 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8139 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_firstUnionCaseDeclOfMany in
             let _2 = parseState.GetInput(2) :?> 'gentype_barAndgrabXmlDoc in
@@ -8147,34 +8144,34 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2721 "pars.fsy"
+# 2718 "pars.fsy"
                             _1 :: _3 _2 
                    )
-# 2721 "pars.fsy"
+# 2718 "pars.fsy"
                  : Choice<SynEnumCase, SynUnionCase> list));
-# 8155 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8152 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_firstUnionCaseDecl in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2724 "pars.fsy"
+# 2721 "pars.fsy"
                             [_1] 
                    )
-# 2724 "pars.fsy"
+# 2721 "pars.fsy"
                  : Choice<SynEnumCase, SynUnionCase> list));
-# 8166 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8163 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2728 "pars.fsy"
+# 2725 "pars.fsy"
                             let mBar = rhs parseState 1
                             grabXmlDoc(parseState, [], 1), mBar 
                    )
-# 2728 "pars.fsy"
+# 2725 "pars.fsy"
                  : 'gentype_barAndgrabXmlDoc));
-# 8177 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8174 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attrUnionCaseDecl in
             let _2 = parseState.GetInput(2) :?> 'gentype_barAndgrabXmlDoc in
@@ -8182,23 +8179,23 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2733 "pars.fsy"
+# 2730 "pars.fsy"
                             (fun xmlDocAndBar -> _1 xmlDocAndBar :: _3 _2) 
                    )
-# 2733 "pars.fsy"
+# 2730 "pars.fsy"
                  : 'gentype_attrUnionCaseDecls));
-# 8190 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8187 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attrUnionCaseDecl in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2736 "pars.fsy"
+# 2733 "pars.fsy"
                             (fun xmlDocAndBar -> [ _1 xmlDocAndBar ]) 
                    )
-# 2736 "pars.fsy"
+# 2733 "pars.fsy"
                  : 'gentype_attrUnionCaseDecls));
-# 8201 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8198 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8206,12 +8203,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2741 "pars.fsy"
+# 2738 "pars.fsy"
                              mkSynUnionCase _1 _2 _3 (SynUnionCaseKind.Fields []) (rhs2 parseState 1 3) >> Choice2Of2 
                    )
-# 2741 "pars.fsy"
+# 2738 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8214 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8211 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8219,12 +8216,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2744 "pars.fsy"
+# 2741 "pars.fsy"
                              fun (xmlDoc, mBar) -> mkSynUnionCase _1 _2 (SynIdent(mkSynId mBar.EndRange "", None)) (SynUnionCaseKind.Fields []) mBar (xmlDoc, mBar) |> Choice2Of2 
                    )
-# 2744 "pars.fsy"
+# 2741 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8227 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8224 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8233,15 +8230,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2747 "pars.fsy"
+# 2744 "pars.fsy"
                              let mId = rhs parseState 3
                              let fields, mFields = _5
                              let mWhole = unionRanges mId mFields
                              mkSynUnionCase _1 _2 _3 (SynUnionCaseKind.Fields fields) mWhole >> Choice2Of2 
                    )
-# 2747 "pars.fsy"
+# 2744 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8244 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8241 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8250,16 +8247,16 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2753 "pars.fsy"
+# 2750 "pars.fsy"
                              errorR (Error(FSComp.SR.parsMissingKeyword("of"), rhs2 parseState 3 4))
                              let mAttributes = rhs parseState 1
                              let fields, mFields = _4
                              let mWhole = unionRanges mAttributes mFields
                              mkSynUnionCase _1 _2 _3 (SynUnionCaseKind.Fields fields) mWhole >> Choice2Of2 
                    )
-# 2753 "pars.fsy"
+# 2750 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8262 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8259 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8267,7 +8264,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2760 "pars.fsy"
+# 2757 "pars.fsy"
                              let mAttributes = rhs parseState 1
                              let mOf = rhs parseState 3
                              let mId = mOf.StartRange
@@ -8276,9 +8273,9 @@ let _fsyacc_reductions = lazy [|
                              errorR (Error(FSComp.SR.parsMissingUnionCaseName(), mOf))
                              mkSynUnionCase _1 _2 (SynIdent(mkSynId mId "", None)) (SynUnionCaseKind.Fields fields) mWhole >> Choice2Of2 
                    )
-# 2760 "pars.fsy"
+# 2757 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8281 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8278 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8286,15 +8283,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2769 "pars.fsy"
+# 2766 "pars.fsy"
                              let mOf = rhs parseState 3
                              let mId = mOf.StartRange
                              errorR (Error(FSComp.SR.parsMissingUnionCaseName(), mOf))
                              mkSynUnionCase _1 _2 (SynIdent(mkSynId mId "", None)) (SynUnionCaseKind.Fields []) (rhs2 parseState 1 3) >> Choice2Of2 
                    )
-# 2769 "pars.fsy"
+# 2766 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8297 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8294 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8303,12 +8300,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2775 "pars.fsy"
+# 2772 "pars.fsy"
                              mkSynUnionCase _1 _2 _3 (SynUnionCaseKind.Fields []) (rhs2 parseState 1 4) >> Choice2Of2 
                    )
-# 2775 "pars.fsy"
+# 2772 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8311 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8308 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8317,16 +8314,16 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2778 "pars.fsy"
+# 2775 "pars.fsy"
                              let mAttributes = rhs parseState 1
                              let fullType, _ = _5
                              let mWhole = unionRanges mAttributes fullType.Range
                              if parseState.LexBuffer.ReportLibraryOnlyFeatures then libraryOnlyWarning(lhs parseState)
                              mkSynUnionCase _1 _2 _3 (SynUnionCaseKind.FullType _5) mWhole >> Choice2Of2 
                    )
-# 2778 "pars.fsy"
+# 2775 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8329 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8326 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8335,7 +8332,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2785 "pars.fsy"
+# 2782 "pars.fsy"
                              if Option.isSome _2 then errorR(Error(FSComp.SR.parsEnumFieldsCannotHaveVisibilityDeclarations(), rhs parseState 2))
                              let mEquals = rhs parseState 4
                              let mAttributes = rhs parseState 1
@@ -8346,9 +8343,9 @@ let _fsyacc_reductions = lazy [|
                                  let mDecl = unionRangeWithXmlDoc xmlDoc mDecl
                                  Choice1Of2 (SynEnumCase (_1, _3, fst _5, xmlDoc, mDecl, trivia))) 
                    )
-# 2785 "pars.fsy"
+# 2782 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8351 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8348 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8357,7 +8354,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2796 "pars.fsy"
+# 2793 "pars.fsy"
                              if Option.isSome _2 then errorR(Error(FSComp.SR.parsEnumFieldsCannotHaveVisibilityDeclarations(), rhs parseState 2))
                              let mEquals = rhs parseState 4
                              let expr = arbExpr ("attrUnionCaseDecl", mEquals.EndRange)
@@ -8367,61 +8364,61 @@ let _fsyacc_reductions = lazy [|
                                  let mDecl = unionRangeWithXmlDoc xmlDoc mDecl
                                  Choice1Of2 (SynEnumCase (_1, _3, expr, xmlDoc, mDecl, trivia)) 
                    )
-# 2796 "pars.fsy"
+# 2793 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8372 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8369 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_nameop in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2808 "pars.fsy"
+# 2805 "pars.fsy"
                              _1 
                    )
-# 2808 "pars.fsy"
+# 2805 "pars.fsy"
                  : 'gentype_unionCaseName));
-# 8383 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8380 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2811 "pars.fsy"
+# 2808 "pars.fsy"
                              let lpr = rhs parseState 1
                              let rpr = rhs parseState 3
                              SynIdent(ident(opNameCons, rhs parseState 2), Some(IdentTrivia.OriginalNotationWithParen(lpr, "::", rpr))) 
                    )
-# 2811 "pars.fsy"
+# 2808 "pars.fsy"
                  : 'gentype_unionCaseName));
-# 8396 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8393 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _4 = parseState.GetInput(4) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2816 "pars.fsy"
+# 2813 "pars.fsy"
                              let lpr = rhs parseState 1
                              let rpr = rhs parseState 3
                              SynIdent(ident(opNameNil, rhs2 parseState 2 3), Some(IdentTrivia.OriginalNotationWithParen(lpr, "[]", rpr))) 
                    )
-# 2816 "pars.fsy"
+# 2813 "pars.fsy"
                  : 'gentype_unionCaseName));
-# 8409 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8406 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_OBLOCKSEP in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2822 "pars.fsy"
+# 2819 "pars.fsy"
                              let trivia: SynUnionCaseTrivia = { BarRange = None }
                              let xmlDoc = grabXmlDoc(parseState, [], 1)
                              let mDecl = (rhs parseState 1) |> unionRangeWithXmlDoc xmlDoc
                              Choice2Of2 (SynUnionCase ([], (SynIdent(_1, None)), SynUnionCaseKind.Fields [], xmlDoc, None, mDecl, trivia)) 
                    )
-# 2822 "pars.fsy"
+# 2819 "pars.fsy"
                  : 'gentype_firstUnionCaseDeclOfMany));
-# 8424 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8421 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> SynExpr * bool in
@@ -8429,16 +8426,16 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2828 "pars.fsy"
+# 2825 "pars.fsy"
                              let mEquals = rhs parseState 2
                              let trivia: SynEnumCaseTrivia = { BarRange = None; EqualsRange = mEquals }
                              let xmlDoc = grabXmlDoc(parseState, [], 1)
                              let mDecl = (rhs2 parseState 1 3) |> unionRangeWithXmlDoc xmlDoc
                              Choice1Of2 (SynEnumCase ([], SynIdent(_1, None), fst _3, xmlDoc, mDecl, trivia)) 
                    )
-# 2828 "pars.fsy"
+# 2825 "pars.fsy"
                  : 'gentype_firstUnionCaseDeclOfMany));
-# 8441 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8438 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -8446,7 +8443,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2835 "pars.fsy"
+# 2832 "pars.fsy"
                              let mEquals = rhs parseState 2
                              let expr = arbExpr ("firstUnionCaseDeclOfMany1", mEquals.EndRange)
                              let trivia: SynEnumCaseTrivia = { BarRange = None; EqualsRange = mEquals }
@@ -8454,28 +8451,28 @@ let _fsyacc_reductions = lazy [|
                              let mDecl = (rhs2 parseState 1 2) |> unionRangeWithXmlDoc xmlDoc
                              Choice1Of2 (SynEnumCase ([], SynIdent(_1, None), expr, xmlDoc, mDecl, trivia)) 
                    )
-# 2835 "pars.fsy"
+# 2832 "pars.fsy"
                  : 'gentype_firstUnionCaseDeclOfMany));
-# 8459 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8456 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_firstUnionCaseDecl in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_OBLOCKSEP in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2843 "pars.fsy"
+# 2840 "pars.fsy"
                              _1 
                    )
-# 2843 "pars.fsy"
+# 2840 "pars.fsy"
                  : 'gentype_firstUnionCaseDeclOfMany));
-# 8471 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8468 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_unionCaseRepr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2847 "pars.fsy"
+# 2844 "pars.fsy"
                              let fields, mFields = _3
                              let trivia: SynUnionCaseTrivia = { BarRange = None }
                              let xmlDoc = grabXmlDoc (parseState, [], 1)
@@ -8483,16 +8480,16 @@ let _fsyacc_reductions = lazy [|
                              let mDecl = unionRanges mId mFields |> unionRangeWithXmlDoc xmlDoc
                              Choice2Of2(SynUnionCase([], SynIdent(_1, None), SynUnionCaseKind.Fields fields, xmlDoc, None, mDecl, trivia)) 
                    )
-# 2847 "pars.fsy"
+# 2844 "pars.fsy"
                  : 'gentype_firstUnionCaseDecl));
-# 8488 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8485 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_unionCaseName in
             let _3 = parseState.GetInput(3) :?> 'gentype_topType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2855 "pars.fsy"
+# 2852 "pars.fsy"
                              if parseState.LexBuffer.ReportLibraryOnlyFeatures then libraryOnlyWarning(lhs parseState)
                              let trivia: SynUnionCaseTrivia = { BarRange = None }
                              let xmlDoc = grabXmlDoc (parseState, [], 1)
@@ -8501,30 +8498,30 @@ let _fsyacc_reductions = lazy [|
                              let mDecl = unionRanges mId fullType.Range |> unionRangeWithXmlDoc xmlDoc
                              Choice2Of2(SynUnionCase([], _1, SynUnionCaseKind.FullType _3, xmlDoc, None, mDecl, trivia)) 
                    )
-# 2855 "pars.fsy"
+# 2852 "pars.fsy"
                  : 'gentype_firstUnionCaseDecl));
-# 8506 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8503 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2864 "pars.fsy"
+# 2861 "pars.fsy"
                              let trivia: SynUnionCaseTrivia = { BarRange = None }
                              let xmlDoc = grabXmlDoc (parseState, [], 1)
                              let mDecl = rhs2 parseState 1 2 |> unionRangeWithXmlDoc xmlDoc
                              Choice2Of2(SynUnionCase([], SynIdent(_1, None), SynUnionCaseKind.Fields [], xmlDoc, None, mDecl, trivia)) 
                    )
-# 2864 "pars.fsy"
+# 2861 "pars.fsy"
                  : 'gentype_firstUnionCaseDecl));
-# 8521 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8518 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_unionCaseRepr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2870 "pars.fsy"
+# 2867 "pars.fsy"
                             let mOf = rhs parseState 1
                             let mId = mOf.StartRange
                             let fields, mFields = _2
@@ -8535,9 +8532,9 @@ let _fsyacc_reductions = lazy [|
                             let mDecl = unionRanges mOf mFields |> unionRangeWithXmlDoc xmlDoc
                             Choice2Of2(SynUnionCase([], id, SynUnionCaseKind.Fields fields, xmlDoc, None, mDecl, trivia)) 
                    )
-# 2870 "pars.fsy"
+# 2867 "pars.fsy"
                  : 'gentype_firstUnionCaseDecl));
-# 8540 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8537 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> SynExpr * bool in
@@ -8545,7 +8542,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2881 "pars.fsy"
+# 2878 "pars.fsy"
                              let mId = rhs parseState 1
                              let mEquals = rhs parseState 2
                              let trivia: SynEnumCaseTrivia = { BarRange = None; EqualsRange = mEquals }
@@ -8554,9 +8551,9 @@ let _fsyacc_reductions = lazy [|
                              let mDecl = unionRanges mId expr.Range |> unionRangeWithXmlDoc xmlDoc
                              Choice1Of2(SynEnumCase([], SynIdent(_1, None), fst _3, xmlDoc, mDecl, trivia)) 
                    )
-# 2881 "pars.fsy"
+# 2878 "pars.fsy"
                  : 'gentype_firstUnionCaseDecl));
-# 8559 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8556 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -8564,7 +8561,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2890 "pars.fsy"
+# 2887 "pars.fsy"
                              let mEquals = rhs parseState 2
                              let expr = arbExpr ("firstUnionCaseDecl", mEquals.EndRange)
                              let trivia: SynEnumCaseTrivia = { BarRange = None; EqualsRange = mEquals }
@@ -8572,44 +8569,44 @@ let _fsyacc_reductions = lazy [|
                              let mDecl = rhs2 parseState 1 2 |> unionRangeWithXmlDoc xmlDoc
                              Choice1Of2(SynEnumCase([], SynIdent(_1, None), expr, xmlDoc, mDecl, trivia)) 
                    )
-# 2890 "pars.fsy"
+# 2887 "pars.fsy"
                  : 'gentype_firstUnionCaseDecl));
-# 8577 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8574 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_unionCaseReprElement in
             let _3 = parseState.GetInput(3) :?> 'gentype_unionCaseReprElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2900 "pars.fsy"
+# 2897 "pars.fsy"
                             let mField = rhs parseState 1
                             let fields, mFields = _3
                             _1 :: fields, unionRanges mField mFields 
                    )
-# 2900 "pars.fsy"
+# 2897 "pars.fsy"
                  : 'gentype_unionCaseReprElements));
-# 8591 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8588 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_unionCaseReprElement in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2905 "pars.fsy"
+# 2902 "pars.fsy"
                             let mStar = rhs parseState 2
                             let ty = SynType.FromParseError mStar.EndRange
                             let field = mkSynAnonField (ty, PreXmlDoc.Empty)
                             [_1; field], rhs2 parseState 1 2 
                    )
-# 2905 "pars.fsy"
+# 2902 "pars.fsy"
                  : 'gentype_unionCaseReprElements));
-# 8606 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8603 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_unionCaseReprElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2911 "pars.fsy"
+# 2908 "pars.fsy"
                             let mStar = rhs parseState 1
                             errorR (Error(FSComp.SR.parsExpectingUnionCaseField (), rhs parseState 1))
                             let fields, mFields = _2
@@ -8617,114 +8614,114 @@ let _fsyacc_reductions = lazy [|
                             let field = mkSynAnonField (ty, PreXmlDoc.Empty)
                             field :: fields, unionRanges mStar mFields 
                    )
-# 2911 "pars.fsy"
+# 2908 "pars.fsy"
                  : 'gentype_unionCaseReprElements));
-# 8622 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8619 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_unionCaseReprElement in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2919 "pars.fsy"
+# 2916 "pars.fsy"
                             [_1], _1.Range 
                    )
-# 2919 "pars.fsy"
+# 2916 "pars.fsy"
                  : 'gentype_unionCaseReprElements));
-# 8633 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8630 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2923 "pars.fsy"
+# 2920 "pars.fsy"
                             let xmlDoc = grabXmlDoc (parseState, [], 1)
                             let mId = rhs parseState 1
                             let mWhole = unionRanges mId _3.Range |> unionRangeWithXmlDoc xmlDoc
                             mkSynNamedField (_1, _3, xmlDoc, mWhole) 
                    )
-# 2923 "pars.fsy"
+# 2920 "pars.fsy"
                  : 'gentype_unionCaseReprElement));
-# 8648 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8645 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2929 "pars.fsy"
+# 2926 "pars.fsy"
                             let xmlDoc = grabXmlDoc (parseState, [], 1)
                             let mColon = rhs parseState 2
                             let ty = SynType.FromParseError mColon.EndRange
                             let mWhole = rhs2 parseState 1 2 |> unionRangeWithXmlDoc xmlDoc
                             mkSynNamedField (_1, ty, xmlDoc, mWhole) 
                    )
-# 2929 "pars.fsy"
+# 2926 "pars.fsy"
                  : 'gentype_unionCaseReprElement));
-# 8664 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8661 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2936 "pars.fsy"
+# 2933 "pars.fsy"
                             let xmlDoc = grabXmlDoc (parseState, [], 1)
                             mkSynAnonField (_1, xmlDoc) 
                    )
-# 2936 "pars.fsy"
+# 2933 "pars.fsy"
                  : 'gentype_unionCaseReprElement));
-# 8676 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8673 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_invalidUseOfAppTypeFunction in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2940 "pars.fsy"
+# 2937 "pars.fsy"
                             let xmlDoc = grabXmlDoc (parseState, [], 1)
                             let mWhole = rhs2 parseState 1 3 |> unionRangeWithXmlDoc xmlDoc
                             reportParseErrorAt (_3: SynType).Range (FSComp.SR.tcUnexpectedFunTypeInUnionCaseField ())
                             mkSynNamedField (_1, _3, xmlDoc, mWhole) 
                    )
-# 2940 "pars.fsy"
+# 2937 "pars.fsy"
                  : 'gentype_unionCaseReprElement));
-# 8691 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8688 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_invalidUseOfAppTypeFunction in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2946 "pars.fsy"
+# 2943 "pars.fsy"
                             let xmlDoc = grabXmlDoc (parseState, [], 1)
                             reportParseErrorAt (_1: SynType).Range (FSComp.SR.tcUnexpectedFunTypeInUnionCaseField ())
                             mkSynAnonField (_1, xmlDoc) 
                    )
-# 2946 "pars.fsy"
+# 2943 "pars.fsy"
                  : 'gentype_unionCaseReprElement));
-# 8704 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8701 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_braceFieldDeclList in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2952 "pars.fsy"
+# 2949 "pars.fsy"
                             errorR(Deprecated(FSComp.SR.parsConsiderUsingSeparateRecordType(), lhs parseState))
                             _1, rhs parseState 1 
                    )
-# 2952 "pars.fsy"
+# 2949 "pars.fsy"
                  : 'gentype_unionCaseRepr));
-# 8716 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8713 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_unionCaseReprElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2956 "pars.fsy"
+# 2953 "pars.fsy"
                             _1 
                    )
-# 2956 "pars.fsy"
+# 2953 "pars.fsy"
                  : 'gentype_unionCaseRepr));
-# 8727 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8724 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recdFieldDecl in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps in
@@ -8732,31 +8729,31 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2961 "pars.fsy"
+# 2958 "pars.fsy"
                             _1 :: _3 
                    )
-# 2961 "pars.fsy"
+# 2958 "pars.fsy"
                  : 'gentype_recdFieldDeclList));
-# 8740 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8737 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recdFieldDecl in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_seps in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2964 "pars.fsy"
+# 2961 "pars.fsy"
                             [_1] 
                    )
-# 2964 "pars.fsy"
+# 2961 "pars.fsy"
                  : 'gentype_recdFieldDeclList));
-# 8752 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8749 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_fieldDecl in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2969 "pars.fsy"
+# 2966 "pars.fsy"
                             let rangeStart = rhs parseState 1
                             let fld = _2 _1 None rangeStart None
                             let (SynField (a, b, c, d, e, xmlDoc, vis, mWhole, trivia)) = fld
@@ -8764,9 +8761,9 @@ let _fsyacc_reductions = lazy [|
                             let mWhole = unionRangeWithXmlDoc xmlDoc mWhole
                             SynField (a, b, c, d, e, xmlDoc, None, mWhole, trivia) 
                    )
-# 2969 "pars.fsy"
+# 2966 "pars.fsy"
                  : 'gentype_recdFieldDecl));
-# 8769 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8766 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_mutable in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8775,12 +8772,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2979 "pars.fsy"
+# 2976 "pars.fsy"
                             mkSynField parseState (Some _3) (Some _5) _1 _2 
                    )
-# 2979 "pars.fsy"
+# 2976 "pars.fsy"
                  : 'gentype_fieldDecl));
-# 8783 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8780 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_mutable in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8789,14 +8786,14 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2982 "pars.fsy"
+# 2979 "pars.fsy"
                             let mColon = rhs parseState 4
                             let t = SynType.FromParseError(mColon.EndRange)
                             mkSynField parseState (Some _3) (Some t) _1 _2 
                    )
-# 2982 "pars.fsy"
+# 2979 "pars.fsy"
                  : 'gentype_fieldDecl));
-# 8799 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8796 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_mutable in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8805,13 +8802,13 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2987 "pars.fsy"
+# 2984 "pars.fsy"
                             let t = SynType.FromParseError(_3.idRange.EndRange)
                             mkSynField parseState (Some _3) (Some t) _1 _2 
                    )
-# 2987 "pars.fsy"
+# 2984 "pars.fsy"
                  : 'gentype_fieldDecl));
-# 8814 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8811 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_mutable in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8819,25 +8816,25 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2991 "pars.fsy"
+# 2988 "pars.fsy"
                             mkSynField parseState None None _1 _2 
                    )
-# 2991 "pars.fsy"
+# 2988 "pars.fsy"
                  : 'gentype_fieldDecl));
-# 8827 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8824 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExceptionDefnRepr in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_classDefn in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 2996 "pars.fsy"
+# 2993 "pars.fsy"
                             let mWith, optClassDefn = _2
                             SynExceptionDefn(_1, mWith, optClassDefn, (_1.Range, optClassDefn) ||> unionRangeWithListBy (fun cd -> cd.Range)) 
                    )
-# 2996 "pars.fsy"
+# 2993 "pars.fsy"
                  : SynExceptionDefn));
-# 8840 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8837 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_attributes in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -8846,16 +8843,16 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3002 "pars.fsy"
+# 2999 "pars.fsy"
                              let m =
                                  match _5 with
                                  | None -> rhs2 parseState 1 4
                                  | Some p -> unionRanges (rangeOfLongIdent p) (rhs2 parseState 1 4)
                              SynExceptionDefnRepr(_2, _4, _5, PreXmlDoc.Empty, _3, m) 
                    )
-# 3002 "pars.fsy"
+# 2999 "pars.fsy"
                  : SynExceptionDefnRepr));
-# 8858 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8855 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_attributes in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -8863,7 +8860,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3009 "pars.fsy"
+# 3006 "pars.fsy"
                              let m =
                                  match _3 with
                                  | Some access -> unionRanges (rhs parseState 1) access.Range
@@ -8875,66 +8872,66 @@ let _fsyacc_reductions = lazy [|
                              let unionCase = SynUnionCase([], id, SynUnionCaseKind.Fields [], PreXmlDoc.Empty, None, m, { BarRange = None })
                              SynExceptionDefnRepr(_2, unionCase, None, PreXmlDoc.Empty, _3, m) 
                    )
-# 3009 "pars.fsy"
+# 3006 "pars.fsy"
                  : SynExceptionDefnRepr));
-# 8880 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8877 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3026 "pars.fsy"
+# 3023 "pars.fsy"
                              SynUnionCase([], SynIdent(_1, None), SynUnionCaseKind.Fields [], PreXmlDoc.Empty, None, lhs parseState, { BarRange = None }) 
                    )
-# 3026 "pars.fsy"
+# 3023 "pars.fsy"
                  : 'gentype_exconIntro));
-# 8891 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8888 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_unionCaseRepr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3029 "pars.fsy"
+# 3026 "pars.fsy"
                              let fields, _ = _3
                              SynUnionCase([], SynIdent(_1, None), SynUnionCaseKind.Fields fields, PreXmlDoc.Empty, None, lhs parseState, { BarRange = None }) 
                    )
-# 3029 "pars.fsy"
+# 3026 "pars.fsy"
                  : 'gentype_exconIntro));
-# 8904 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8901 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3033 "pars.fsy"
+# 3030 "pars.fsy"
                              SynUnionCase([], SynIdent(_1, None), SynUnionCaseKind.Fields [], PreXmlDoc.Empty, None, lhs parseState, { BarRange = None }) 
                    )
-# 3033 "pars.fsy"
+# 3030 "pars.fsy"
                  : 'gentype_exconIntro));
-# 8916 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8913 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3037 "pars.fsy"
+# 3034 "pars.fsy"
                             None 
                    )
-# 3037 "pars.fsy"
+# 3034 "pars.fsy"
                  : 'gentype_exconRepr));
-# 8926 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8923 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3040 "pars.fsy"
+# 3037 "pars.fsy"
                             Some(_2.LongIdent) 
                    )
-# 3040 "pars.fsy"
+# 3037 "pars.fsy"
                  : 'gentype_exconRepr));
-# 8937 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8934 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_rec in
@@ -8942,7 +8939,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3048 "pars.fsy"
+# 3045 "pars.fsy"
                              let mLetKwd = rhs parseState 1
                              let isUse = _1
                              let isRec = _2
@@ -8968,36 +8965,36 @@ let _fsyacc_reductions = lazy [|
                                      [], binds),
                                  bindingSetRange) 
                    )
-# 3048 "pars.fsy"
+# 3045 "pars.fsy"
                  : 'gentype_defnBindings));
-# 8973 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8970 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_cPrototype in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3077 "pars.fsy"
+# 3074 "pars.fsy"
                              let bindRange = lhs parseState
                              BindingSetPreAttrs(bindRange, false, false, _1, bindRange) 
                    )
-# 3077 "pars.fsy"
+# 3074 "pars.fsy"
                  : 'gentype_defnBindings));
-# 8985 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8982 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3084 "pars.fsy"
+# 3081 "pars.fsy"
                              let mDoKwd = rhs parseState 1
                              let mWhole = unionRanges mDoKwd _2.Range
                              // any attributes prior to the 'let' are left free, e.g. become top-level attributes
                              // associated with the module, 'main' function or assembly depending on their target
                              BindingSetPreAttrs(mDoKwd, false, false, (fun attrs vis -> attrs, [mkSynDoBinding (vis, mDoKwd, _2, mWhole)]), mWhole) 
                    )
-# 3084 "pars.fsy"
+# 3081 "pars.fsy"
                  : 'gentype_doBinding));
-# 9000 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 8997 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_rec in
@@ -9006,7 +9003,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3094 "pars.fsy"
+# 3091 "pars.fsy"
                              let mLetKwd = rhs parseState 1
                              let isUse = _1
                              let isRec = _2
@@ -9039,16 +9036,16 @@ let _fsyacc_reductions = lazy [|
                                (unionRanges mLetKwd bindingSetRange),
                                mIn 
                    )
-# 3094 "pars.fsy"
+# 3091 "pars.fsy"
                  : 'gentype_hardwhiteLetBindings));
-# 9044 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9041 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_hardwhiteDefnBindingsTerminator in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3134 "pars.fsy"
+# 3131 "pars.fsy"
                              let mDo = rhs parseState 1
                              let _, _, mDone = _3
                              let mAll = unionRanges mDo _2.Range
@@ -9057,15 +9054,15 @@ let _fsyacc_reductions = lazy [|
                              // associated with the module, 'main' function or assembly depending on their target
                              BindingSetPreAttrs(mDo, false, false, (fun attrs vis -> attrs, [mkSynDoBinding (vis, mDo, _2, mAll)]), mAll), _2 
                    )
-# 3134 "pars.fsy"
+# 3131 "pars.fsy"
                  : 'gentype_hardwhiteDoBinding));
-# 9062 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9059 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> range * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3143 "pars.fsy"
+# 3140 "pars.fsy"
                              let mDo = rhs parseState 1
                              let mDeclEnd, _ = _2
                              reportParseErrorAt mDeclEnd (FSComp.SR.parsExpectingExpression ())
@@ -9073,75 +9070,75 @@ let _fsyacc_reductions = lazy [|
                              let expr = arbExpr ("hardwhiteDoBinding1", mDo.EndRange)
                              BindingSetPreAttrs(mDo, false, false, (fun attrs vis -> attrs, [mkSynDoBinding (vis, mDo, expr, mDo)]), mDo), expr 
                    )
-# 3143 "pars.fsy"
+# 3140 "pars.fsy"
                  : 'gentype_hardwhiteDoBinding));
-# 9078 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9075 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_defnBindings in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3153 "pars.fsy"
+# 3150 "pars.fsy"
                             _1, None 
                    )
-# 3153 "pars.fsy"
+# 3150 "pars.fsy"
                  : 'gentype_classDefnBindings));
-# 9089 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9086 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_doBinding in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3156 "pars.fsy"
+# 3153 "pars.fsy"
                             _1, None 
                    )
-# 3156 "pars.fsy"
+# 3153 "pars.fsy"
                  : 'gentype_classDefnBindings));
-# 9100 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9097 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteLetBindings in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3159 "pars.fsy"
+# 3156 "pars.fsy"
                             let b, m, mIn = _1
                             b, mIn 
                    )
-# 3159 "pars.fsy"
+# 3156 "pars.fsy"
                  : 'gentype_classDefnBindings));
-# 9112 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9109 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteDoBinding in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3163 "pars.fsy"
+# 3160 "pars.fsy"
                             fst _1, None 
                    )
-# 3163 "pars.fsy"
+# 3160 "pars.fsy"
                  : 'gentype_classDefnBindings));
-# 9123 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9120 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> range * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3169 "pars.fsy"
+# 3166 "pars.fsy"
                             let mToken, isFromInKeyword = _1
                             // In LexFilter.fs the IN token could have been transformed to an ODECLEND one.
                             // The boolean flag indicates if it came from an actual IN keyword.
                             let mIn = if isFromInKeyword then Some mToken else None
                             (fun _ m -> ()), mIn, Some mToken 
                    )
-# 3169 "pars.fsy"
+# 3166 "pars.fsy"
                  : 'gentype_hardwhiteDefnBindingsTerminator));
-# 9138 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9135 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3176 "pars.fsy"
+# 3173 "pars.fsy"
                             (fun kwd m ->
                               let msg =
                                   match kwd with
@@ -9151,9 +9148,9 @@ let _fsyacc_reductions = lazy [|
                                   | _ (*"let" *) -> FSComp.SR.parsUnmatchedLet()
                               reportParseErrorAt m msg), None, None 
                    )
-# 3176 "pars.fsy"
+# 3173 "pars.fsy"
                  : 'gentype_hardwhiteDefnBindingsTerminator));
-# 9156 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9153 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_cRetType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -9164,7 +9161,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3188 "pars.fsy"
+# 3185 "pars.fsy"
                              let mExtern = rhs parseState 1
                              let rty, vis, nm, (args, commas) = _2, _3, _4, _7
                              let nmm = rhs parseState 3
@@ -9190,82 +9187,82 @@ let _fsyacc_reductions = lazy [|
                                          (vis, false, false, mWholeBindLhs, DebugPointAtBinding.NoneAtInvisible, Some(None, rty), rhsExpr, mRhs, [], attrs, None, trivia)
                                  [], [binding]) 
                    )
-# 3188 "pars.fsy"
+# 3185 "pars.fsy"
                  : 'gentype_cPrototype));
-# 9195 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9192 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_externMoreArgs in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3216 "pars.fsy"
+# 3213 "pars.fsy"
                             let args, commas = _1
                             List.rev args, (List.rev commas) 
                    )
-# 3216 "pars.fsy"
+# 3213 "pars.fsy"
                  : 'gentype_externArgs));
-# 9207 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9204 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_externArg in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3220 "pars.fsy"
+# 3217 "pars.fsy"
                             [_1], [] 
                    )
-# 3220 "pars.fsy"
+# 3217 "pars.fsy"
                  : 'gentype_externArgs));
-# 9218 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9215 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3222 "pars.fsy"
+# 3219 "pars.fsy"
                             [], [] 
                    )
-# 3222 "pars.fsy"
+# 3219 "pars.fsy"
                  : 'gentype_externArgs));
-# 9228 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9225 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_externMoreArgs in
             let _3 = parseState.GetInput(3) :?> 'gentype_externArg in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3228 "pars.fsy"
+# 3225 "pars.fsy"
                             let args, commas = _1
                             let mComma = rhs parseState 2
                             _3 :: args, (mComma :: commas) 
                    )
-# 3228 "pars.fsy"
+# 3225 "pars.fsy"
                  : 'gentype_externMoreArgs));
-# 9242 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9239 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_externArg in
             let _3 = parseState.GetInput(3) :?> 'gentype_externArg in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3233 "pars.fsy"
+# 3230 "pars.fsy"
                             let mComma = rhs parseState 2
                             [_3; _1], [mComma] 
                    )
-# 3233 "pars.fsy"
+# 3230 "pars.fsy"
                  : 'gentype_externMoreArgs));
-# 9255 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9252 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_cType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3240 "pars.fsy"
+# 3237 "pars.fsy"
                             let m = lhs parseState
                             SynPat.Typed(SynPat.Wild m, _2, m) |> addAttribs _1 
                    )
-# 3240 "pars.fsy"
+# 3237 "pars.fsy"
                  : 'gentype_externArg));
-# 9268 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9265 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_cType in
@@ -9273,115 +9270,115 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3244 "pars.fsy"
+# 3241 "pars.fsy"
                             let m = lhs parseState
                             SynPat.Typed(SynPat.Named(SynIdent(_3, None), false, None, m), _2, m) |> addAttribs _1 
                    )
-# 3244 "pars.fsy"
+# 3241 "pars.fsy"
                  : 'gentype_externArg));
-# 9282 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9279 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3250 "pars.fsy"
+# 3247 "pars.fsy"
                             let m = _1.Range
                             SynType.App(SynType.LongIdent(_1), None, [], [], None, false, m) 
                    )
-# 3250 "pars.fsy"
+# 3247 "pars.fsy"
                  : 'gentype_cType));
-# 9294 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9291 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_cType in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3254 "pars.fsy"
+# 3251 "pars.fsy"
                             let m = lhs parseState
                             SynType.App(SynType.LongIdent(SynLongIdent([ident("[]", m)], [], [None])), None, [_1], [], None, true, m) 
                    )
-# 3254 "pars.fsy"
+# 3251 "pars.fsy"
                  : 'gentype_cType));
-# 9307 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9304 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_cType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3258 "pars.fsy"
+# 3255 "pars.fsy"
                             let m = lhs parseState
                             SynType.App(SynType.LongIdent(SynLongIdent([ident("nativeptr", m)], [], [ Some(IdentTrivia.OriginalNotation "*") ])), None, [_1], [], None, true, m) 
                    )
-# 3258 "pars.fsy"
+# 3255 "pars.fsy"
                  : 'gentype_cType));
-# 9319 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9316 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_cType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3262 "pars.fsy"
+# 3259 "pars.fsy"
                            SynType.WithNull(_1, false, lhs parseState, { BarRange = rhs parseState 2 }) 
                    )
-# 3262 "pars.fsy"
+# 3259 "pars.fsy"
                  : 'gentype_cType));
-# 9330 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9327 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_cType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3265 "pars.fsy"
+# 3262 "pars.fsy"
                             let m = lhs parseState
                             SynType.App(SynType.LongIdent(SynLongIdent([ident("byref", m)], [], [ Some(IdentTrivia.OriginalNotation "&") ])), None, [_1], [], None, true, m) 
                    )
-# 3265 "pars.fsy"
+# 3262 "pars.fsy"
                  : 'gentype_cType));
-# 9342 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9339 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3269 "pars.fsy"
+# 3266 "pars.fsy"
                             let m = lhs parseState
                             SynType.App(SynType.LongIdent(SynLongIdent([ident("nativeint", m)], [], [ Some(IdentTrivia.OriginalNotation "void*") ])), None, [], [], None, true, m) 
                    )
-# 3269 "pars.fsy"
+# 3266 "pars.fsy"
                  : 'gentype_cType));
-# 9353 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9350 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_cType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3276 "pars.fsy"
+# 3273 "pars.fsy"
                             SynReturnInfo((_2, SynArgInfo(_1, false, None)), rhs parseState 2) 
                    )
-# 3276 "pars.fsy"
+# 3273 "pars.fsy"
                  : 'gentype_cRetType));
-# 9365 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9362 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3279 "pars.fsy"
+# 3276 "pars.fsy"
                             let m = rhs parseState 2
                             SynReturnInfo((SynType.App(SynType.LongIdent(SynLongIdent([ident("unit", m)], [], [ Some(IdentTrivia.OriginalNotation "void") ])), None, [], [], None, false, m), SynArgInfo(_1, false, None)), m) 
                    )
-# 3279 "pars.fsy"
+# 3276 "pars.fsy"
                  : 'gentype_cRetType));
-# 9377 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9374 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attr_localBinding in
             let _2 = parseState.GetInput(2) :?> 'gentype_moreLocalBindings in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3285 "pars.fsy"
+# 3282 "pars.fsy"
                              let (moreBindings, moreBindingRanges) = List.unzip _2
                              let moreLocalBindingsLastRange = if moreBindingRanges.IsEmpty then None else Some(List.last moreBindingRanges)
                              match _1 with
@@ -9394,16 +9391,16 @@ let _fsyacc_reductions = lazy [|
                              | None ->
                                 moreLocalBindingsLastRange, (fun _xmlDoc _attrs _vis _leadingKeyword -> moreBindings) 
                    )
-# 3285 "pars.fsy"
+# 3282 "pars.fsy"
                  : 'gentype_localBindings));
-# 9399 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9396 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_attr_localBinding in
             let _3 = parseState.GetInput(3) :?> 'gentype_moreLocalBindings in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3300 "pars.fsy"
+# 3297 "pars.fsy"
                              let leadingKeyword = SynLeadingKeyword.And(rhs parseState 1)
                              (match _2 with
                               | Some(localBindingRange, attrLocalBindingBuilder) ->
@@ -9412,44 +9409,44 @@ let _fsyacc_reductions = lazy [|
                                  (attrLocalBindingBuilder xmlDoc [] None leadingKeyword false, localBindingRange) :: _3
                               | None -> _3) 
                    )
-# 3300 "pars.fsy"
+# 3297 "pars.fsy"
                  : 'gentype_moreLocalBindings));
-# 9417 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9414 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3309 "pars.fsy"
+# 3306 "pars.fsy"
                              [] 
                    )
-# 3309 "pars.fsy"
+# 3306 "pars.fsy"
                  : 'gentype_moreLocalBindings));
-# 9427 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9424 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_localBinding in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3315 "pars.fsy"
+# 3312 "pars.fsy"
                              let attrs2 = _1
                              let localBindingRange, localBindingBuilder = _2
                              let attrLocalBindingBuilder = (fun xmlDoc attrs vis leadingKeyword _ -> localBindingBuilder xmlDoc (attrs@attrs2) vis leadingKeyword)
                              Some(localBindingRange, attrLocalBindingBuilder) 
                    )
-# 3315 "pars.fsy"
+# 3312 "pars.fsy"
                  : 'gentype_attr_localBinding));
-# 9442 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9439 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3321 "pars.fsy"
+# 3318 "pars.fsy"
                              None 
                    )
-# 3321 "pars.fsy"
+# 3318 "pars.fsy"
                  : 'gentype_attr_localBinding));
-# 9452 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9449 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_inline in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
@@ -9459,7 +9456,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3327 "pars.fsy"
+# 3324 "pars.fsy"
                              let (expr: SynExpr), opts = _6
                              let mEquals = rhs parseState 5
                              let mRhs = expr.Range
@@ -9475,9 +9472,9 @@ let _fsyacc_reductions = lazy [|
                                  mkSynBinding (xmlDoc, bindingPat) (vis, Option.isSome _1, Option.isSome _2, mWholeBindLhs, spBind, optReturnType, expr, mRhs, opts, attrs, None, trivia))
                              localBindingRange, localBindingBuilder 
                    )
-# 3327 "pars.fsy"
+# 3324 "pars.fsy"
                  : 'gentype_localBinding));
-# 9480 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9477 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_inline in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
@@ -9486,7 +9483,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3343 "pars.fsy"
+# 3340 "pars.fsy"
                              let mWhole = rhs2 parseState 1 5
                              let mRhs = rhs parseState 5
                              let optReturnType = _4
@@ -9501,9 +9498,9 @@ let _fsyacc_reductions = lazy [|
                                  mkSynBinding (xmlDoc, bindingPat) (vis, Option.isSome _1, Option.isSome _2, mBindLhs, spBind, optReturnType, rhsExpr, mRhs, [], attrs, None, trivia))
                              mWhole, localBindingBuilder 
                    )
-# 3343 "pars.fsy"
+# 3340 "pars.fsy"
                  : 'gentype_localBinding));
-# 9506 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9503 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_inline in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
@@ -9513,7 +9510,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3358 "pars.fsy"
+# 3355 "pars.fsy"
                              if not _5 then reportParseErrorAt (rhs parseState 5) (FSComp.SR.parsUnexpectedEndOfFileDefinition())
                              let bindingPat, mBindLhs = _3
                              let optReturnType = _4
@@ -9533,344 +9530,344 @@ let _fsyacc_reductions = lazy [|
                                  mkSynBinding (xmlDoc, bindingPat) (vis, Option.isSome _1, Option.isSome _2, mBindLhs, spBind, optReturnType, rhsExpr, mRhs, [], attrs, None, trivia))
                              mWhole, localBindingBuilder 
                    )
-# 3358 "pars.fsy"
+# 3355 "pars.fsy"
                  : 'gentype_localBinding));
-# 9538 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9535 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedExprWithStaticOptimizations in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3380 "pars.fsy"
+# 3377 "pars.fsy"
                              _2 
                    )
-# 3380 "pars.fsy"
+# 3377 "pars.fsy"
                  : 'gentype_typedExprWithStaticOptimizationsBlock));
-# 9550 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9547 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedExprWithStaticOptimizations in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3383 "pars.fsy"
+# 3380 "pars.fsy"
                              if not _3 then reportParseErrorAt (rhs parseState 3) (FSComp.SR.parsUnexpectedEndOfFile())
                              let a, b = _2
                              (exprFromParseError a, b) 
                    )
-# 3383 "pars.fsy"
+# 3380 "pars.fsy"
                  : 'gentype_typedExprWithStaticOptimizationsBlock));
-# 9564 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9561 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedExprWithStaticOptimizations in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3388 "pars.fsy"
+# 3385 "pars.fsy"
                              _1 
                    )
-# 3388 "pars.fsy"
+# 3385 "pars.fsy"
                  : 'gentype_typedExprWithStaticOptimizationsBlock));
-# 9575 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9572 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedSequentialExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_staticOptimizations in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3392 "pars.fsy"
+# 3389 "pars.fsy"
                              _1, List.rev _2 
                    )
-# 3392 "pars.fsy"
+# 3389 "pars.fsy"
                  : 'gentype_typedExprWithStaticOptimizations));
-# 9587 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9584 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_staticOptimizations in
             let _2 = parseState.GetInput(2) :?> 'gentype_staticOptimization in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3396 "pars.fsy"
+# 3393 "pars.fsy"
                              _2 :: _1 
                    )
-# 3396 "pars.fsy"
+# 3393 "pars.fsy"
                  : 'gentype_opt_staticOptimizations));
-# 9599 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9596 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3399 "pars.fsy"
+# 3396 "pars.fsy"
                              [] 
                    )
-# 3399 "pars.fsy"
+# 3396 "pars.fsy"
                  : 'gentype_opt_staticOptimizations));
-# 9609 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9606 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_staticOptimizationConditions in
             let _4 = parseState.GetInput(4) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3403 "pars.fsy"
+# 3400 "pars.fsy"
                              (_2, _4) 
                    )
-# 3403 "pars.fsy"
+# 3400 "pars.fsy"
                  : 'gentype_staticOptimization));
-# 9621 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9618 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_staticOptimizationConditions in
             let _3 = parseState.GetInput(3) :?> 'gentype_staticOptimizationCondition in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3407 "pars.fsy"
+# 3404 "pars.fsy"
                              _3 :: _1 
                    )
-# 3407 "pars.fsy"
+# 3404 "pars.fsy"
                  : 'gentype_staticOptimizationConditions));
-# 9633 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9630 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_staticOptimizationCondition in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3410 "pars.fsy"
+# 3407 "pars.fsy"
                              [_1 ] 
                    )
-# 3410 "pars.fsy"
+# 3407 "pars.fsy"
                  : 'gentype_staticOptimizationConditions));
-# 9644 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9641 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3414 "pars.fsy"
+# 3411 "pars.fsy"
                              SynStaticOptimizationConstraint.WhenTyparTyconEqualsTycon(_1, _3, lhs parseState) 
                    )
-# 3414 "pars.fsy"
+# 3411 "pars.fsy"
                  : 'gentype_staticOptimizationCondition));
-# 9656 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9653 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3417 "pars.fsy"
+# 3414 "pars.fsy"
                              SynStaticOptimizationConstraint.WhenTyparIsStruct(_1, lhs parseState) 
                    )
-# 3417 "pars.fsy"
+# 3414 "pars.fsy"
                  : 'gentype_staticOptimizationCondition));
-# 9667 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9664 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> sbyte * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3421 "pars.fsy"
+# 3418 "pars.fsy"
                            if snd _1 then errorR(Error(FSComp.SR.lexOutsideEightBitSigned(), lhs parseState))
                            SynConst.SByte(fst _1) 
                    )
-# 3421 "pars.fsy"
+# 3418 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9679 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9676 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> byte in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3425 "pars.fsy"
+# 3422 "pars.fsy"
                            SynConst.Byte _1 
                    )
-# 3425 "pars.fsy"
+# 3422 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9690 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9687 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int16 * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3428 "pars.fsy"
+# 3425 "pars.fsy"
                            if snd _1 then errorR(Error(FSComp.SR.lexOutsideSixteenBitSigned(), lhs parseState))
                            SynConst.Int16 (fst _1) 
                    )
-# 3428 "pars.fsy"
+# 3425 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9702 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9699 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> uint16 in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3432 "pars.fsy"
+# 3429 "pars.fsy"
                            SynConst.UInt16 _1 
                    )
-# 3432 "pars.fsy"
+# 3429 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9713 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9710 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int32 * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3435 "pars.fsy"
+# 3432 "pars.fsy"
                            if snd _1 then errorR(Error(FSComp.SR.lexOutsideThirtyTwoBitSigned(), lhs parseState))
                            SynConst.Int32 (fst _1) 
                    )
-# 3435 "pars.fsy"
+# 3432 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9725 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9722 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> uint32 in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3439 "pars.fsy"
+# 3436 "pars.fsy"
                            SynConst.UInt32 _1 
                    )
-# 3439 "pars.fsy"
+# 3436 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9736 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9733 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int64 * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3442 "pars.fsy"
+# 3439 "pars.fsy"
                            if snd _1 then errorR(Error(FSComp.SR.lexOutsideSixtyFourBitSigned(), lhs parseState))
                            SynConst.Int64 (fst _1) 
                    )
-# 3442 "pars.fsy"
+# 3439 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9748 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9745 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> uint64 in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3446 "pars.fsy"
+# 3443 "pars.fsy"
                            SynConst.UInt64 _1 
                    )
-# 3446 "pars.fsy"
+# 3443 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9759 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9756 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int64 * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3449 "pars.fsy"
+# 3446 "pars.fsy"
                            if snd _1 then errorR(Error(FSComp.SR.lexOutsideNativeSigned(), lhs parseState))
                            SynConst.IntPtr(fst _1) 
                    )
-# 3449 "pars.fsy"
+# 3446 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9771 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9768 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> uint64 in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3453 "pars.fsy"
+# 3450 "pars.fsy"
                            SynConst.UIntPtr _1 
                    )
-# 3453 "pars.fsy"
+# 3450 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9782 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9779 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> single in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3456 "pars.fsy"
+# 3453 "pars.fsy"
                            SynConst.Single _1 
                    )
-# 3456 "pars.fsy"
+# 3453 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9793 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9790 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> double in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3459 "pars.fsy"
+# 3456 "pars.fsy"
                            SynConst.Double _1 
                    )
-# 3459 "pars.fsy"
+# 3456 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9804 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9801 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> char in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3462 "pars.fsy"
+# 3459 "pars.fsy"
                            SynConst.Char _1 
                    )
-# 3462 "pars.fsy"
+# 3459 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9815 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9812 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> System.Decimal in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3465 "pars.fsy"
+# 3462 "pars.fsy"
                            SynConst.Decimal _1 
                    )
-# 3465 "pars.fsy"
+# 3462 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9826 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9823 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> (string * string) in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3468 "pars.fsy"
+# 3465 "pars.fsy"
                            SynConst.UserNum _1 
                    )
-# 3468 "pars.fsy"
+# 3465 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9837 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9834 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_string in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3471 "pars.fsy"
+# 3468 "pars.fsy"
                            let s, synStringKind = _1
                            SynConst.String(s, synStringKind, lhs parseState) 
                    )
-# 3471 "pars.fsy"
+# 3468 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9849 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9846 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sourceIdentifier in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3475 "pars.fsy"
+# 3472 "pars.fsy"
                            let c, v = _1
                            SynConst.SourceIdentifier(c, v, lhs parseState) 
                    )
-# 3475 "pars.fsy"
+# 3472 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9861 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9858 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> byte[] * SynByteStringKind * ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3479 "pars.fsy"
+# 3476 "pars.fsy"
                            let (v, synByteStringKind, _) = _1
                            SynConst.Bytes(v, synByteStringKind, lhs parseState) 
                    )
-# 3479 "pars.fsy"
+# 3476 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9873 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9870 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int32 * bool in
             let _2 = parseState.GetInput(2) :?> string in
@@ -9878,15 +9875,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3484 "pars.fsy"
+# 3481 "pars.fsy"
                            if _2 <> "/" then reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsUnexpectedOperatorForUnitOfMeasure())
                            if fst _3 = 0 then reportParseErrorAt (rhs parseState 3) (FSComp.SR.parsIllegalDenominatorForMeasureExponent())
                            if (snd _1) || (snd _3) then errorR(Error(FSComp.SR.lexOutsideThirtyTwoBitSigned(), lhs parseState))
                            SynRationalConst.Rational(fst _1, rhs parseState 1, rhs parseState 2, fst _3, rhs parseState 3, lhs parseState) 
                    )
-# 3484 "pars.fsy"
+# 3481 "pars.fsy"
                  : 'gentype_rationalConstant));
-# 9889 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9886 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> int32 * bool in
             let _3 = parseState.GetInput(3) :?> string in
@@ -9894,122 +9891,122 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3490 "pars.fsy"
+# 3487 "pars.fsy"
                            if _3 <> "/" then reportParseErrorAt (rhs parseState 3) (FSComp.SR.parsUnexpectedOperatorForUnitOfMeasure())
                            if fst _4 = 0 then reportParseErrorAt (rhs parseState 4) (FSComp.SR.parsIllegalDenominatorForMeasureExponent())
                            if (snd _2) || (snd _4) then errorR(Error(FSComp.SR.lexOutsideThirtyTwoBitSigned(), lhs parseState))
                            SynRationalConst.Negate(SynRationalConst.Rational(fst _2, rhs parseState 2, rhs parseState 3, fst _4, rhs parseState 4, lhs parseState), lhs parseState) 
                    )
-# 3490 "pars.fsy"
+# 3487 "pars.fsy"
                  : 'gentype_rationalConstant));
-# 9905 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9902 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int32 * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3496 "pars.fsy"
+# 3493 "pars.fsy"
                            if snd _1 then errorR(Error(FSComp.SR.lexOutsideThirtyTwoBitSigned(), lhs parseState))
                            SynRationalConst.Integer(fst _1, lhs parseState) 
                    )
-# 3496 "pars.fsy"
+# 3493 "pars.fsy"
                  : 'gentype_rationalConstant));
-# 9917 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9914 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> int32 * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3500 "pars.fsy"
+# 3497 "pars.fsy"
                            if snd _2 then errorR(Error(FSComp.SR.lexOutsideThirtyTwoBitSigned(), lhs parseState))
                            SynRationalConst.Negate(SynRationalConst.Integer(fst _2, rhs parseState 2), lhs parseState) 
                    )
-# 3500 "pars.fsy"
+# 3497 "pars.fsy"
                  : 'gentype_rationalConstant));
-# 9929 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9926 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int32 * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3504 "pars.fsy"
+# 3501 "pars.fsy"
                                  if snd _1 then errorR(Error(FSComp.SR.lexOutsideThirtyTwoBitSigned(), lhs parseState))
                                  SynRationalConst.Integer(fst _1, lhs parseState) 
                    )
-# 3504 "pars.fsy"
+# 3501 "pars.fsy"
                  : 'gentype_atomicUnsignedRationalConstant));
-# 9941 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9938 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_rationalConstant in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3508 "pars.fsy"
+# 3505 "pars.fsy"
                            SynRationalConst.Paren(_2, rhs2 parseState 1 3) 
                    )
-# 3508 "pars.fsy"
+# 3505 "pars.fsy"
                  : 'gentype_atomicUnsignedRationalConstant));
-# 9953 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9950 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicUnsignedRationalConstant in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3511 "pars.fsy"
+# 3508 "pars.fsy"
                                                           _1 
                    )
-# 3511 "pars.fsy"
+# 3508 "pars.fsy"
                  : 'gentype_atomicRationalConstant));
-# 9964 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9961 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_atomicUnsignedRationalConstant in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3514 "pars.fsy"
+# 3511 "pars.fsy"
                            SynRationalConst.Negate(_2, lhs parseState) 
                    )
-# 3514 "pars.fsy"
+# 3511 "pars.fsy"
                  : 'gentype_atomicRationalConstant));
-# 9975 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9972 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_rawConstant in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3518 "pars.fsy"
+# 3515 "pars.fsy"
                            _1, rhs parseState 1 
                    )
-# 3518 "pars.fsy"
+# 3515 "pars.fsy"
                  : 'gentype_constant));
-# 9986 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9983 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_rawConstant in
             let _3 = parseState.GetInput(3) :?> 'gentype_measureTypeArg in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3521 "pars.fsy"
+# 3518 "pars.fsy"
                            let synMeasure, trivia = _3 
                            let mConstant = rhs parseState 1
                            let m = unionRanges mConstant trivia.GreaterRange
                            SynConst.Measure(_1, rhs parseState 1, synMeasure, trivia), m 
                    )
-# 3521 "pars.fsy"
+# 3518 "pars.fsy"
                  : 'gentype_constant));
-# 10001 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 9998 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3528 "pars.fsy"
+# 3525 "pars.fsy"
                            _1, _1.Range 
                    )
-# 3528 "pars.fsy"
+# 3525 "pars.fsy"
                  : 'gentype_bindingPattern));
-# 10012 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10009 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_inline in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
@@ -10018,7 +10015,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3533 "pars.fsy"
+# 3530 "pars.fsy"
                            let pat, mPat = _3
                            let tyOpt = _4
                            let isInline = Option.isSome _1
@@ -10032,113 +10029,113 @@ let _fsyacc_reductions = lazy [|
                                    None
                            pat, mPat, isInline, isMutable, returnInfo 
                    )
-# 3533 "pars.fsy"
+# 3530 "pars.fsy"
                  : 'gentype_ceBindingCore));
-# 10037 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10034 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_simplePatterns in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3550 "pars.fsy"
+# 3547 "pars.fsy"
                              Some _1 
                    )
-# 3550 "pars.fsy"
+# 3547 "pars.fsy"
                  : 'gentype_opt_simplePatterns));
-# 10048 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10045 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3552 "pars.fsy"
+# 3549 "pars.fsy"
                            None 
                    )
-# 3552 "pars.fsy"
+# 3549 "pars.fsy"
                  : 'gentype_opt_simplePatterns));
-# 10058 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10055 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3556 "pars.fsy"
+# 3553 "pars.fsy"
                              SynPat.Paren(_2, rhs2 parseState 1 3) 
                    )
-# 3556 "pars.fsy"
+# 3553 "pars.fsy"
                  : 'gentype_simplePatterns));
-# 10070 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10067 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3559 "pars.fsy"
+# 3556 "pars.fsy"
                              SynPat.Const(SynConst.Unit, rhs2 parseState 1 2) 
                    )
-# 3559 "pars.fsy"
+# 3556 "pars.fsy"
                  : 'gentype_simplePatterns));
-# 10081 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10078 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3563 "pars.fsy"
+# 3560 "pars.fsy"
                               
                    )
-# 3563 "pars.fsy"
+# 3560 "pars.fsy"
                  : 'gentype_barCanBeRightBeforeNull));
-# 10091 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10088 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3565 "pars.fsy"
+# 3562 "pars.fsy"
                               
                    )
-# 3565 "pars.fsy"
+# 3562 "pars.fsy"
                  : 'gentype_barCanBeRightBeforeNull));
-# 10101 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10098 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> 'gentype_constrPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3570 "pars.fsy"
+# 3567 "pars.fsy"
                              SynPat.As(_1, _3, rhs2 parseState 1 3) 
                    )
-# 3570 "pars.fsy"
+# 3567 "pars.fsy"
                  : SynPat));
-# 10113 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10110 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3573 "pars.fsy"
+# 3570 "pars.fsy"
                              let mAs = rhs parseState 2
                              let pat2 = SynPat.Wild(mAs.EndRange)
                              SynPat.As(_1, pat2, rhs2 parseState 1 2) 
                    )
-# 3573 "pars.fsy"
+# 3570 "pars.fsy"
                  : SynPat));
-# 10127 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10124 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3578 "pars.fsy"
+# 3575 "pars.fsy"
                              let mAs = rhs parseState 2
                              reportParseErrorAt mAs (FSComp.SR.parsExpectingPattern ())
                              let pat2 = SynPat.Wild(mAs.EndRange)
                              SynPat.As(_1, pat2, rhs2 parseState 1 2) 
                    )
-# 3578 "pars.fsy"
+# 3575 "pars.fsy"
                  : SynPat));
-# 10141 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10138 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _2 = parseState.GetInput(2) :?> 'gentype_barCanBeRightBeforeNull in
@@ -10146,214 +10143,214 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3584 "pars.fsy"
+# 3581 "pars.fsy"
                              let mBar = rhs parseState 2
                              SynPat.Or(_1, _3, rhs2 parseState 1 3, { BarRange = mBar }) 
                    )
-# 3584 "pars.fsy"
+# 3581 "pars.fsy"
                  : SynPat));
-# 10155 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10152 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> SynPat in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3588 "pars.fsy"
+# 3585 "pars.fsy"
                              let mColonColon = rhs parseState 2
                              SynPat.ListCons(_1, _3, rhs2 parseState 1 3, { ColonColonRange = mColonColon }) 
                    )
-# 3588 "pars.fsy"
+# 3585 "pars.fsy"
                  : SynPat));
-# 10168 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10165 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3592 "pars.fsy"
+# 3589 "pars.fsy"
                              let mColonColon = rhs parseState 2
                              let pat2 = SynPat.Wild(mColonColon.EndRange)
                              SynPat.ListCons(_1, pat2, rhs2 parseState 1 2, { ColonColonRange = mColonColon }) 
                    )
-# 3592 "pars.fsy"
+# 3589 "pars.fsy"
                  : SynPat));
-# 10182 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10179 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3597 "pars.fsy"
+# 3594 "pars.fsy"
                              let mColonColon = rhs parseState 2
                              reportParseErrorAt mColonColon (FSComp.SR.parsExpectingPattern ())
                              let pat2 = SynPat.Wild(mColonColon.EndRange)
                              SynPat.ListCons(_1, pat2, rhs2 parseState 1 2, { ColonColonRange = mColonColon }) 
                    )
-# 3597 "pars.fsy"
+# 3594 "pars.fsy"
                  : SynPat));
-# 10196 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10193 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tuplePatternElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3603 "pars.fsy"
+# 3600 "pars.fsy"
                              let pats, commas = _1
                              let pats, commas = normalizeTuplePat pats commas
                              let m = (rhs parseState 1, pats) ||> unionRangeWithListBy (fun p -> p.Range)
                              SynPat.Tuple(false, List.rev pats, List.rev commas, m) 
                    )
-# 3603 "pars.fsy"
+# 3600 "pars.fsy"
                  : SynPat));
-# 10210 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10207 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_conjPatternElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3609 "pars.fsy"
+# 3606 "pars.fsy"
                              SynPat.Ands(List.rev _1, lhs parseState) 
                    )
-# 3609 "pars.fsy"
+# 3606 "pars.fsy"
                  : SynPat));
-# 10221 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10218 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_constrPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3612 "pars.fsy"
+# 3609 "pars.fsy"
                              _1 
                    )
-# 3612 "pars.fsy"
+# 3609 "pars.fsy"
                  : SynPat));
-# 10232 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10229 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tuplePatternElements in
             let _3 = parseState.GetInput(3) :?> SynPat in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3616 "pars.fsy"
+# 3613 "pars.fsy"
                              let pats, commas = _1
                              _3 :: pats, (rhs parseState 2 :: commas) 
                    )
-# 3616 "pars.fsy"
+# 3613 "pars.fsy"
                  : 'gentype_tuplePatternElements));
-# 10245 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10242 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> SynPat in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3620 "pars.fsy"
+# 3617 "pars.fsy"
                              [_3; _1], [rhs parseState 2] 
                    )
-# 3620 "pars.fsy"
+# 3617 "pars.fsy"
                  : 'gentype_tuplePatternElements));
-# 10257 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10254 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tuplePatternElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3623 "pars.fsy"
+# 3620 "pars.fsy"
                                let pats, commas = _1
                                let commaRange = rhs parseState 2
                                reportParseErrorAt commaRange (FSComp.SR.parsExpectingPattern ())
                                let pat2 = SynPat.Wild(commaRange.EndRange)
                                pat2 :: pats, (commaRange :: commas) 
                    )
-# 3623 "pars.fsy"
+# 3620 "pars.fsy"
                  : 'gentype_tuplePatternElements));
-# 10273 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10270 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3630 "pars.fsy"
+# 3627 "pars.fsy"
                              let commaRange = rhs parseState 2
                              reportParseErrorAt commaRange (FSComp.SR.parsExpectingPattern ())
                              let pat2 = SynPat.Wild(commaRange.EndRange)
                              [pat2; _1], [commaRange] 
                    )
-# 3630 "pars.fsy"
+# 3627 "pars.fsy"
                  : 'gentype_tuplePatternElements));
-# 10288 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10285 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3636 "pars.fsy"
+# 3633 "pars.fsy"
                              let commaRange = rhs parseState 1
                              reportParseErrorAt commaRange (FSComp.SR.parsExpectingPattern ())
                              let pat1 = SynPat.Wild(commaRange.StartRange)
                              [_2; pat1], [commaRange] 
                    )
-# 3636 "pars.fsy"
+# 3633 "pars.fsy"
                  : 'gentype_tuplePatternElements));
-# 10302 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10299 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3642 "pars.fsy"
+# 3639 "pars.fsy"
                              let commaRange = rhs parseState 1
                              if not _2 then reportParseErrorAt commaRange (FSComp.SR.parsExpectedPatternAfterToken ())
                              let pat1 = SynPat.Wild(commaRange.StartRange)
                              let pat2 = SynPat.Wild(commaRange.EndRange)
                              [pat2; pat1], [commaRange] 
                    )
-# 3642 "pars.fsy"
+# 3639 "pars.fsy"
                  : 'gentype_tuplePatternElements));
-# 10317 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10314 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_conjPatternElements in
             let _3 = parseState.GetInput(3) :?> SynPat in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3650 "pars.fsy"
+# 3647 "pars.fsy"
                             _3 :: _1 
                    )
-# 3650 "pars.fsy"
+# 3647 "pars.fsy"
                  : 'gentype_conjPatternElements));
-# 10329 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10326 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> SynPat in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3653 "pars.fsy"
+# 3650 "pars.fsy"
                             _3 :: _1 :: [] 
                    )
-# 3653 "pars.fsy"
+# 3650 "pars.fsy"
                  : 'gentype_conjPatternElements));
-# 10341 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10338 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_namePatPair in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_seps_block in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3657 "pars.fsy"
+# 3654 "pars.fsy"
                             let (id: Ident), mEq, (pat: SynPat) = _1
                             let m = unionRanges id.idRange pat.Range
                             let lid = SynLongIdent([id], [], [None])
                             [ NamePatPairField(lid, mEq, m, pat, _2) ] 
                    )
-# 3657 "pars.fsy"
+# 3654 "pars.fsy"
                  : 'gentype_namePatPairs));
-# 10356 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10353 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_namePatPair in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps_block in
@@ -10361,15 +10358,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3663 "pars.fsy"
+# 3660 "pars.fsy"
                             let (id: Ident), mEq, (pat: SynPat) = _1
                             let m = unionRanges id.idRange pat.Range
                             let lid = SynLongIdent([id], [], [None])
                             NamePatPairField(lid, mEq, m, pat, Some _2) :: _3 
                    )
-# 3663 "pars.fsy"
+# 3660 "pars.fsy"
                  : 'gentype_namePatPairs));
-# 10372 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10369 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_namePatPair in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps_block in
@@ -10378,67 +10375,67 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3669 "pars.fsy"
+# 3666 "pars.fsy"
                              reportParseErrorAt (rhs parseState 3) (FSComp.SR.parsExpectingPattern ())
                              let (id: Ident), mEq, (pat: SynPat) = _1
                              let m = unionRanges id.idRange pat.Range
                              let lid = SynLongIdent([id], [], [None])
                              NamePatPairField(lid, mEq, m, pat, Some _2) :: _4 
                    )
-# 3669 "pars.fsy"
+# 3666 "pars.fsy"
                  : 'gentype_namePatPairs));
-# 10390 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10387 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3677 "pars.fsy"
+# 3674 "pars.fsy"
                             let mEquals = rhs parseState 2
                             _1, Some mEquals, _3 
                    )
-# 3677 "pars.fsy"
+# 3674 "pars.fsy"
                  : 'gentype_namePatPair));
-# 10403 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10400 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3681 "pars.fsy"
+# 3678 "pars.fsy"
                             let mEquals = rhs parseState 2
                             _1, Some mEquals, patFromParseError (SynPat.Wild mEquals.EndRange) 
                    )
-# 3681 "pars.fsy"
+# 3678 "pars.fsy"
                  : 'gentype_namePatPair));
-# 10416 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10413 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3685 "pars.fsy"
+# 3682 "pars.fsy"
                             _1, None, patFromParseError (SynPat.Wild _1.idRange.EndRange) 
                    )
-# 3685 "pars.fsy"
+# 3682 "pars.fsy"
                  : 'gentype_namePatPair));
-# 10428 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10425 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _2 = parseState.GetInput(2) :?> 'gentype_explicitValTyparDecls in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3689 "pars.fsy"
+# 3686 "pars.fsy"
                              let vis, lid = _1
                              SynPat.LongIdent(lid, None, Some _2, SynArgPats.Pats [], vis, lhs parseState) 
                    )
-# 3689 "pars.fsy"
+# 3686 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10441 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10438 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _2 = parseState.GetInput(2) :?> 'gentype_explicitValTyparDecls in
@@ -10446,15 +10443,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3693 "pars.fsy"
+# 3690 "pars.fsy"
                              let vis, lid = _1
                              let args, argsM = _3
                              let m = unionRanges (rhs2 parseState 1 2) argsM
                              SynPat.LongIdent(lid, None, Some _2, args, vis, m) 
                    )
-# 3693 "pars.fsy"
+# 3690 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10457 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10454 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _2 = parseState.GetInput(2) :?> 'gentype_explicitValTyparDecls in
@@ -10462,15 +10459,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3699 "pars.fsy"
+# 3696 "pars.fsy"
                              let vis, lid = _1
                              let args, argsM = _4
                              let m = unionRanges (rhs2 parseState 1 2) argsM
                              SynPat.LongIdent(lid, None, Some _2, args, vis, m) 
                    )
-# 3699 "pars.fsy"
+# 3696 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10473 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10470 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _2 = parseState.GetInput(2) :?> 'gentype_explicitValTyparDecls in
@@ -10478,198 +10475,198 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3705 "pars.fsy"
+# 3702 "pars.fsy"
                              let vis, lid = _1
                              let args, argsM = _4
                              let m = unionRanges (rhs2 parseState 1 2) argsM
                              SynPat.LongIdent(lid, None, Some _2, args, vis, m) 
                    )
-# 3705 "pars.fsy"
+# 3702 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10489 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10486 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _2 = parseState.GetInput(2) :?> SynArgPats * Range in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3711 "pars.fsy"
+# 3708 "pars.fsy"
                              let vis, lid = _1
                              let args, argsM = _2
                              let m = unionRanges (rhs parseState 1) argsM
                              SynPat.LongIdent(lid, None, None, args, vis, m) 
                    )
-# 3711 "pars.fsy"
+# 3708 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10504 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10501 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _3 = parseState.GetInput(3) :?> SynArgPats * Range in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3717 "pars.fsy"
+# 3714 "pars.fsy"
                              let vis, lid = _1
                              let args, argsM = _3
                              let m = unionRanges (rhs parseState 1) argsM
                              SynPat.LongIdent(lid, None, None, args, vis, m) 
                    )
-# 3717 "pars.fsy"
+# 3714 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10519 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10516 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _3 = parseState.GetInput(3) :?> SynArgPats * Range in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3723 "pars.fsy"
+# 3720 "pars.fsy"
                              let vis, lid = _1
                              let args, argsM = _3
                              let m = unionRanges (rhs parseState 1) argsM
                              SynPat.LongIdent(lid, None, None, args, vis, m) 
                    )
-# 3723 "pars.fsy"
+# 3720 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10534 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10531 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3729 "pars.fsy"
+# 3726 "pars.fsy"
                              let m = unionRanges (rhs parseState 1) _2.Range
                              SynPat.IsInst(_2, m) 
                    )
-# 3729 "pars.fsy"
+# 3726 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10546 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10543 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3733 "pars.fsy"
+# 3730 "pars.fsy"
                              let mColon = rhs parseState 1
                              if not _2 then
                                  reportParseErrorAt mColon (FSComp.SR.parsExpectingPattern ())
                              let ty = SynType.FromParseError(mColon.EndRange)
                              SynPat.IsInst(ty, mColon) 
                    )
-# 3733 "pars.fsy"
+# 3730 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10561 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10558 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3740 "pars.fsy"
+# 3737 "pars.fsy"
                              let mColon = rhs parseState 1
                              let ty = SynType.FromParseError(mColon.EndRange)
                              reportParseErrorAt mColon (FSComp.SR.parsExpectingType ())
                              SynPat.IsInst(ty, mColon) 
                    )
-# 3740 "pars.fsy"
+# 3737 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10574 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10571 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3746 "pars.fsy"
+# 3743 "pars.fsy"
                              _1 
                    )
-# 3746 "pars.fsy"
+# 3743 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10585 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10582 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_namePatPairs in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3750 "pars.fsy"
+# 3747 "pars.fsy"
                              let mParen = rhs2 parseState 1 3
                              let trivia = { ParenRange = mParen }
                              SynArgPats.NamePatPairs(_2, rhs parseState 2, trivia), mParen 
                    )
-# 3750 "pars.fsy"
+# 3747 "pars.fsy"
                  : SynArgPats * Range));
-# 10599 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10596 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat list in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3755 "pars.fsy"
+# 3752 "pars.fsy"
                              let mParsed = rhs parseState 1
                              let mAll = (mParsed.StartRange, _1) ||> unionRangeWithListBy (fun p -> p.Range)
                              SynArgPats.Pats _1, mAll 
                    )
-# 3755 "pars.fsy"
+# 3752 "pars.fsy"
                  : SynArgPats * Range));
-# 10612 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10609 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPattern in
             let _2 = parseState.GetInput(2) :?> SynPat list in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3761 "pars.fsy"
+# 3758 "pars.fsy"
                              _1 :: _2 
                    )
+# 3758 "pars.fsy"
+                 : SynPat list));
+# 10621 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            let _1 = parseState.GetInput(1) :?> 'gentype_atomicPattern in
+            let _3 = parseState.GetInput(3) :?> SynPat list in
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 3761 "pars.fsy"
+                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsSuccessivePatternsShouldBeSpacedOrTupled())
+                             _1 :: _3 
+                   )
 # 3761 "pars.fsy"
                  : SynPat list));
-# 10624 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10634 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPattern in
             let _3 = parseState.GetInput(3) :?> SynPat list in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3764 "pars.fsy"
+# 3765 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsSuccessivePatternsShouldBeSpacedOrTupled())
                              _1 :: _3 
                    )
-# 3764 "pars.fsy"
+# 3765 "pars.fsy"
                  : SynPat list));
-# 10637 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            let _1 = parseState.GetInput(1) :?> 'gentype_atomicPattern in
-            let _3 = parseState.GetInput(3) :?> SynPat list in
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 3768 "pars.fsy"
-                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsSuccessivePatternsShouldBeSpacedOrTupled())
-                             _1 :: _3 
-                   )
-# 3768 "pars.fsy"
-                 : SynPat list));
-# 10650 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10647 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3772 "pars.fsy"
+# 3769 "pars.fsy"
                              [_1] 
                    )
-# 3772 "pars.fsy"
+# 3769 "pars.fsy"
                  : SynPat list));
-# 10661 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10658 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_quoteExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3777 "pars.fsy"
+# 3774 "pars.fsy"
                              SynPat.QuoteExpr(_1, lhs parseState) 
                    )
-# 3777 "pars.fsy"
+# 3774 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10672 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10669 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_recordPatternElementsAux in
@@ -10677,51 +10674,51 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3780 "pars.fsy"
+# 3777 "pars.fsy"
                              SynPat.Record(_2, rhs2 parseState 1 3) 
                    )
-# 3780 "pars.fsy"
+# 3777 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10685 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10682 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _3 = parseState.GetInput(3) :?> 'gentype_rbrace in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3783 "pars.fsy"
+# 3780 "pars.fsy"
                              SynPat.Record([], rhs2 parseState 1 3) 
                    )
-# 3783 "pars.fsy"
+# 3780 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10697 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10694 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_listPatternElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3786 "pars.fsy"
+# 3783 "pars.fsy"
                              SynPat.ArrayOrList(false, _2, lhs parseState) 
                    )
-# 3786 "pars.fsy"
+# 3783 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10708 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10705 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_listPatternElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3789 "pars.fsy"
+# 3786 "pars.fsy"
                              SynPat.ArrayOrList(true, _2, lhs parseState) 
                    )
-# 3789 "pars.fsy"
+# 3786 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10719 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10716 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3792 "pars.fsy"
+# 3789 "pars.fsy"
                              (* Underscore pattern ('_') is represented as SynPat.Wild
                                 This wild pattern is used in all binding forms:
                                 - let _ = ...
@@ -10731,26 +10728,26 @@ let _fsyacc_reductions = lazy [|
                                 This ensures consistent representation of wildcard bindings in the AST *)
                              SynPat.Wild(lhs parseState) 
                    )
-# 3792 "pars.fsy"
+# 3789 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10736 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10733 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3802 "pars.fsy"
+# 3799 "pars.fsy"
                              SynPat.OptionalVal(_2, lhs parseState) 
                    )
-# 3802 "pars.fsy"
+# 3799 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10747 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10744 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3805 "pars.fsy"
+# 3802 "pars.fsy"
                              (* This rule handles identifiers in patterns like 'use! __' *)
                              (* For simple identifiers (like '__'), it creates a SynPat.Named AST node *)
                              (* For complex paths (A.B.C) or uppercase ids, it calls mkSynPatMaybeVar *)
@@ -10765,216 +10762,216 @@ let _fsyacc_reductions = lazy [|
                                     | _ -> synIdent.Range
                                 SynPat.Named(synIdent, false, vis, m) 
                    )
-# 3805 "pars.fsy"
+# 3802 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10770 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10767 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_constant in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3820 "pars.fsy"
+# 3817 "pars.fsy"
                              SynPat.Const(fst _1, snd _1) 
                    )
-# 3820 "pars.fsy"
+# 3817 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10781 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10778 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3823 "pars.fsy"
+# 3820 "pars.fsy"
                              SynPat.Const(SynConst.Bool false, lhs parseState) 
                    )
-# 3823 "pars.fsy"
+# 3820 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10791 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10788 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3826 "pars.fsy"
+# 3823 "pars.fsy"
                              SynPat.Const(SynConst.Bool true, lhs parseState) 
                    )
-# 3826 "pars.fsy"
+# 3823 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10801 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10798 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3829 "pars.fsy"
+# 3826 "pars.fsy"
                              SynPat.Null(lhs parseState) 
                    )
-# 3829 "pars.fsy"
+# 3826 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10811 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10808 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPatternBody in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3832 "pars.fsy"
+# 3829 "pars.fsy"
                              let m = lhs parseState
                              SynPat.Paren(_2 m, m) 
                    )
-# 3832 "pars.fsy"
+# 3829 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10824 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10821 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPatternBody in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3836 "pars.fsy"
+# 3833 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedParen())
                              let m = rhs2 parseState 1 2
                              let parenPat = SynPat.Paren(_2 m, m)
                              patFromParseError parenPat 
                    )
-# 3836 "pars.fsy"
+# 3833 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10839 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10836 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3842 "pars.fsy"
+# 3839 "pars.fsy"
                              let innerPat = patFromParseError (SynPat.Wild(rhs parseState 2))
                              SynPat.Paren(innerPat, lhs parseState) 
                    )
-# 3842 "pars.fsy"
+# 3839 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10851 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10848 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3846 "pars.fsy"
+# 3843 "pars.fsy"
                              let parenM = rhs parseState 1
                              reportParseErrorAt parenM (FSComp.SR.parsUnmatchedParen())
                              let innerPat = patFromParseError (SynPat.Wild parenM.EndRange)
                              let parenPat = SynPat.Paren(innerPat, parenM)
                              patFromParseError parenPat 
                    )
-# 3846 "pars.fsy"
+# 3843 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10866 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10863 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_tupleParenPatternElements in
             let _4 = parseState.GetInput(4) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3853 "pars.fsy"
+# 3850 "pars.fsy"
                              let pats, commas = _3
                              SynPat.Tuple(true, List.rev pats, List.rev commas, lhs parseState) 
                    )
-# 3853 "pars.fsy"
+# 3850 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10879 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10876 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_tupleParenPatternElements in
             let _4 = parseState.GetInput(4) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3857 "pars.fsy"
+# 3854 "pars.fsy"
                              reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsUnmatchedParen())
                              let pats, commas = _3
                              SynPat.Tuple(true, List.rev pats, List.rev commas, lhs parseState) 
                    )
-# 3857 "pars.fsy"
+# 3854 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10893 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10890 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _4 = parseState.GetInput(4) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3862 "pars.fsy"
+# 3859 "pars.fsy"
                              (* silent recovery *) SynPat.Wild(lhs parseState) 
                    )
-# 3862 "pars.fsy"
+# 3859 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10904 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10901 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3865 "pars.fsy"
+# 3862 "pars.fsy"
                              reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsUnmatchedParen())
                              SynPat.Wild(lhs parseState) 
                    )
-# 3865 "pars.fsy"
+# 3862 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10916 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10913 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3870 "pars.fsy"
+# 3867 "pars.fsy"
                              (fun m -> _1) 
                    )
-# 3870 "pars.fsy"
+# 3867 "pars.fsy"
                  : 'gentype_parenPatternBody));
-# 10927 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10924 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3873 "pars.fsy"
+# 3870 "pars.fsy"
                              (fun m -> SynPat.Const(SynConst.Unit, m)) 
                    )
-# 3873 "pars.fsy"
+# 3870 "pars.fsy"
                  : 'gentype_parenPatternBody));
-# 10937 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10934 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_constrPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3902 "pars.fsy"
+# 3899 "pars.fsy"
                              SynPat.As(_1, _3, rhs2 parseState 1 3) 
                    )
-# 3902 "pars.fsy"
+# 3899 "pars.fsy"
                  : 'gentype_parenPattern));
-# 10949 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10946 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3905 "pars.fsy"
+# 3902 "pars.fsy"
                              let mAs = rhs parseState 2
                              let pat2 = SynPat.Wild(mAs.EndRange)
                              SynPat.As(_1, pat2, rhs2 parseState 1 2) 
                    )
-# 3905 "pars.fsy"
+# 3902 "pars.fsy"
                  : 'gentype_parenPattern));
-# 10963 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10960 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3910 "pars.fsy"
+# 3907 "pars.fsy"
                              let mAs = rhs parseState 2
                              let pat2 = SynPat.Wild(mAs.EndRange)
                              reportParseErrorAt mAs (FSComp.SR.parsExpectingPattern ())
                              SynPat.As(_1, pat2, rhs2 parseState 1 2) 
                    )
-# 3910 "pars.fsy"
+# 3907 "pars.fsy"
                  : 'gentype_parenPattern));
-# 10977 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10974 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _2 = parseState.GetInput(2) :?> 'gentype_barCanBeRightBeforeNull in
@@ -10982,259 +10979,259 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3916 "pars.fsy"
+# 3913 "pars.fsy"
                              let mBar = rhs parseState 2
                              SynPat.Or(_1, _3, rhs2 parseState 1 3, { BarRange = mBar }) 
                    )
-# 3916 "pars.fsy"
+# 3913 "pars.fsy"
                  : 'gentype_parenPattern));
-# 10991 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 10988 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleParenPatternElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3920 "pars.fsy"
+# 3917 "pars.fsy"
                              let pats, commas = _1
                              let pats, commas = normalizeTuplePat pats commas
                              let m = (rhs parseState 1, pats) ||> unionRangeWithListBy (fun p -> p.Range)
                              SynPat.Tuple(false, List.rev pats, List.rev commas, m) 
                    )
-# 3920 "pars.fsy"
+# 3917 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11005 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11002 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_conjParenPatternElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3926 "pars.fsy"
+# 3923 "pars.fsy"
                              SynPat.Ands(List.rev _1, rhs2 parseState 1 3) 
                    )
-# 3926 "pars.fsy"
+# 3923 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11016 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11013 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeWithTypeConstraints in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3929 "pars.fsy"
+# 3926 "pars.fsy"
                              let mLhs = lhs parseState
                              SynPat.Typed(_1, _3, mLhs) 
                    )
-# 3929 "pars.fsy"
+# 3926 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11029 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11026 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3933 "pars.fsy"
+# 3930 "pars.fsy"
                              let mColon = rhs parseState 2
                              if not _3 then
                                  reportParseErrorAt mColon (FSComp.SR.parsExpectingPattern ())
                              let ty = SynType.FromParseError(mColon.EndRange)
                              SynPat.Typed(_1, ty, unionRanges _1.Range mColon) 
                    )
-# 3933 "pars.fsy"
+# 3930 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11045 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11042 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3940 "pars.fsy"
+# 3937 "pars.fsy"
                              let mLhs = lhs parseState
                              SynPat.Attrib(_2, _1, mLhs) 
                    )
-# 3940 "pars.fsy"
+# 3937 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11058 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11055 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3944 "pars.fsy"
+# 3941 "pars.fsy"
                              let mColonColon = rhs parseState 2
                              SynPat.ListCons(_1, _3, rhs2 parseState 1 3, { ColonColonRange = mColonColon }) 
                    )
-# 3944 "pars.fsy"
+# 3941 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11071 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11068 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3948 "pars.fsy"
+# 3945 "pars.fsy"
                              let mColonColon = rhs parseState 2
                              if not _3 then
                                  reportParseErrorAt mColonColon (FSComp.SR.parsExpectingPattern ())
                              let pat2 = SynPat.Wild(mColonColon.EndRange)
                              SynPat.ListCons(_1, pat2, rhs2 parseState 1 2, { ColonColonRange = mColonColon }) 
                    )
-# 3948 "pars.fsy"
+# 3945 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11087 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11084 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3955 "pars.fsy"
+# 3952 "pars.fsy"
                              let mColonColon = rhs parseState 2
                              reportParseErrorAt mColonColon (FSComp.SR.parsExpectingPattern ())
                              let pat2 = SynPat.Wild(mColonColon.EndRange)
                              SynPat.ListCons(_1, pat2, rhs2 parseState 1 2, { ColonColonRange = mColonColon }) 
                    )
-# 3955 "pars.fsy"
+# 3952 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11101 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11098 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_constrPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3960 "pars.fsy"
+# 3957 "pars.fsy"
                                          _1 
                    )
-# 3960 "pars.fsy"
+# 3957 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11112 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11109 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleParenPatternElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3964 "pars.fsy"
+# 3961 "pars.fsy"
                              let pats, commas = _1
                              let mComma = rhs parseState 2
                              _3 :: pats, (mComma :: commas) 
                    )
-# 3964 "pars.fsy"
+# 3961 "pars.fsy"
                  : 'gentype_tupleParenPatternElements));
-# 11126 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11123 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3969 "pars.fsy"
+# 3966 "pars.fsy"
                              let mComma = rhs parseState 2
                              [_3; _1], [mComma] 
                    )
-# 3969 "pars.fsy"
+# 3966 "pars.fsy"
                  : 'gentype_tupleParenPatternElements));
-# 11139 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11136 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleParenPatternElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3973 "pars.fsy"
+# 3970 "pars.fsy"
                                let pats, commas = _1
                                let commaRange = rhs parseState 2
                                reportParseErrorAt commaRange (FSComp.SR.parsExpectingPattern())
                                let pat2 = SynPat.Wild(commaRange.EndRange)
                                pat2 :: pats, (commaRange :: commas) 
                    )
-# 3973 "pars.fsy"
+# 3970 "pars.fsy"
                  : 'gentype_tupleParenPatternElements));
-# 11155 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11152 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3980 "pars.fsy"
+# 3977 "pars.fsy"
                              let commaRange = rhs parseState 2
                              reportParseErrorAt commaRange (FSComp.SR.parsExpectingPattern())
                              let pat2 = SynPat.Wild(commaRange.EndRange)
                              [pat2; _1], [commaRange] 
                    )
-# 3980 "pars.fsy"
+# 3977 "pars.fsy"
                  : 'gentype_tupleParenPatternElements));
-# 11170 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11167 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3986 "pars.fsy"
+# 3983 "pars.fsy"
                              let commaRange = rhs parseState 1
                              reportParseErrorAt commaRange (FSComp.SR.parsExpectingPattern())
                              let pat1 = SynPat.Wild(commaRange.StartRange)
                              [_2; pat1], [commaRange] 
                    )
-# 3986 "pars.fsy"
+# 3983 "pars.fsy"
                  : 'gentype_tupleParenPatternElements));
-# 11184 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11181 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 3992 "pars.fsy"
+# 3989 "pars.fsy"
                              let commaRange = rhs parseState 1
                              if not _2 then reportParseErrorAt commaRange (FSComp.SR.parsExpectedPatternAfterToken ())
                              let pat1 = SynPat.Wild(commaRange.StartRange)
                              let pat2 = SynPat.Wild(commaRange.EndRange)
                              [pat2; pat1], [commaRange] 
                    )
-# 3992 "pars.fsy"
+# 3989 "pars.fsy"
                  : 'gentype_tupleParenPatternElements));
-# 11199 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11196 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_conjParenPatternElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4000 "pars.fsy"
+# 3997 "pars.fsy"
                              _3 :: _1 
                    )
-# 4000 "pars.fsy"
+# 3997 "pars.fsy"
                  : 'gentype_conjParenPatternElements));
-# 11211 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11208 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4003 "pars.fsy"
+# 4000 "pars.fsy"
                              _3 :: _1 :: [] 
                    )
-# 4003 "pars.fsy"
+# 4000 "pars.fsy"
                  : 'gentype_conjParenPatternElements));
-# 11223 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11220 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recordPatternElement in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_seps_block in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4007 "pars.fsy"
+# 4004 "pars.fsy"
                              let (lid: SynLongIdent), mEq, (pat: SynPat) = _1
                              let m = unionRanges lid.Range pat.Range
                              [ NamePatPairField(lid, mEq, m, pat, _2) ] 
                    )
-# 4007 "pars.fsy"
+# 4004 "pars.fsy"
                  : 'gentype_recordPatternElementsAux));
-# 11237 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11234 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recordPatternElement in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps_block in
@@ -11242,14 +11239,14 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4012 "pars.fsy"
+# 4009 "pars.fsy"
                              let (lid: SynLongIdent), mEq, (pat: SynPat) = _1
                              let m = unionRanges lid.Range pat.Range
                              NamePatPairField(lid, mEq, m, pat, Some _2) :: _3 
                    )
-# 4012 "pars.fsy"
+# 4009 "pars.fsy"
                  : 'gentype_recordPatternElementsAux));
-# 11252 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11249 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recordPatternElement in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps_block in
@@ -11258,75 +11255,75 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4017 "pars.fsy"
+# 4014 "pars.fsy"
                              reportParseErrorAt (rhs parseState 3) (FSComp.SR.parsExpectingPattern ())
                              let (lid: SynLongIdent), mEq, (pat: SynPat) = _1
                              let m = unionRanges lid.Range pat.Range
                              NamePatPairField(lid, mEq, m, pat, Some _2) :: _4 
                    )
-# 4017 "pars.fsy"
+# 4014 "pars.fsy"
                  : 'gentype_recordPatternElementsAux));
-# 11269 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11266 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4024 "pars.fsy"
+# 4021 "pars.fsy"
                            let mEquals = rhs parseState 2
                            _1, Some mEquals, _3 
                    )
-# 4024 "pars.fsy"
+# 4021 "pars.fsy"
                  : 'gentype_recordPatternElement));
-# 11282 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11279 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4028 "pars.fsy"
+# 4025 "pars.fsy"
                            let mEquals = rhs parseState 2
                            _1, Some mEquals, patFromParseError (SynPat.Wild mEquals.EndRange) 
                    )
-# 4028 "pars.fsy"
+# 4025 "pars.fsy"
                  : 'gentype_recordPatternElement));
-# 11295 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11292 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4032 "pars.fsy"
+# 4029 "pars.fsy"
                            _1, None, patFromParseError (SynPat.Wild _1.Range.EndRange) 
                    )
-# 4032 "pars.fsy"
+# 4029 "pars.fsy"
                  : 'gentype_recordPatternElement));
-# 11307 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11304 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4036 "pars.fsy"
+# 4033 "pars.fsy"
                              [] 
                    )
-# 4036 "pars.fsy"
+# 4033 "pars.fsy"
                  : 'gentype_listPatternElements));
-# 11317 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11314 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_seps in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4039 "pars.fsy"
+# 4036 "pars.fsy"
                              [_1] 
                    )
-# 4039 "pars.fsy"
+# 4036 "pars.fsy"
                  : 'gentype_listPatternElements));
-# 11329 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11326 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps in
@@ -11334,180 +11331,180 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4042 "pars.fsy"
+# 4039 "pars.fsy"
                              _1 :: _3 
                    )
-# 4042 "pars.fsy"
+# 4039 "pars.fsy"
                  : 'gentype_listPatternElements));
-# 11342 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11339 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4047 "pars.fsy"
+# 4044 "pars.fsy"
                              _2 
                    )
-# 4047 "pars.fsy"
+# 4044 "pars.fsy"
                  : SynExpr));
-# 11354 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11351 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4050 "pars.fsy"
+# 4047 "pars.fsy"
                              if not _3 then reportParseErrorAt (rhs parseState 3) (FSComp.SR.parsUnexpectedEndOfFileExpression())
                              exprFromParseError _2 
                    )
-# 4050 "pars.fsy"
+# 4047 "pars.fsy"
                  : SynExpr));
-# 11367 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11364 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_oblockend in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4054 "pars.fsy"
+# 4051 "pars.fsy"
                              let m = rhs parseState 1
                              reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsExpectingExpression ())
                              arbExpr ("typedSequentialExprBlock1", m.EndRange) 
                    )
-# 4054 "pars.fsy"
+# 4051 "pars.fsy"
                  : SynExpr));
-# 11380 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11377 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedSequentialExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4059 "pars.fsy"
+# 4056 "pars.fsy"
                              _1 
                    )
-# 4059 "pars.fsy"
+# 4056 "pars.fsy"
                  : SynExpr));
-# 11391 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11388 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4064 "pars.fsy"
+# 4061 "pars.fsy"
                              _2 
                    )
-# 4064 "pars.fsy"
+# 4061 "pars.fsy"
                  : SynExpr));
-# 11403 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11400 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_oblockend in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4067 "pars.fsy"
+# 4064 "pars.fsy"
                              let m = rhs parseState 1
                              reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsExpectingExpression ())
                              arbExpr ("declExprBlock1", m.EndRange) 
                    )
-# 4067 "pars.fsy"
+# 4064 "pars.fsy"
                  : SynExpr));
-# 11416 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11413 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4072 "pars.fsy"
+# 4069 "pars.fsy"
                              _1 
                    )
-# 4072 "pars.fsy"
+# 4069 "pars.fsy"
                  : SynExpr));
-# 11427 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11424 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedSequentialExpr in
             let _2 = parseState.GetInput(2) :?> range in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4078 "pars.fsy"
+# 4075 "pars.fsy"
                            fun _ -> _1 
                    )
-# 4078 "pars.fsy"
+# 4075 "pars.fsy"
                  : 'gentype_typedSequentialExprBlockR));
-# 11439 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11436 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedSequentialExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4081 "pars.fsy"
+# 4078 "pars.fsy"
                            fun _ -> _1 
                    )
-# 4081 "pars.fsy"
+# 4078 "pars.fsy"
                  : 'gentype_typedSequentialExprBlockR));
-# 11450 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11447 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4084 "pars.fsy"
+# 4081 "pars.fsy"
                            fun (mStart: range) -> arbExpr ("typedSequentialExprBlockR1", mStart.EndRange) 
                    )
-# 4084 "pars.fsy"
+# 4081 "pars.fsy"
                  : 'gentype_typedSequentialExprBlockR));
-# 11461 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11458 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeWithTypeConstraints in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4088 "pars.fsy"
+# 4085 "pars.fsy"
                              SynExpr.Typed(_1, _3, unionRanges _1.Range _3.Range) 
                    )
-# 4088 "pars.fsy"
+# 4085 "pars.fsy"
                  : 'gentype_typedSequentialExpr));
-# 11473 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11470 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4091 "pars.fsy"
+# 4088 "pars.fsy"
                            let mColon = rhs parseState 2
                            let ty = SynType.FromParseError(mColon.EndRange)
                            SynExpr.Typed(_1, ty, unionRanges _1.Range mColon) 
                    )
-# 4091 "pars.fsy"
+# 4088 "pars.fsy"
                  : 'gentype_typedSequentialExpr));
-# 11487 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11484 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sequentialExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4096 "pars.fsy"
+# 4093 "pars.fsy"
                            _1 
                    )
-# 4096 "pars.fsy"
+# 4093 "pars.fsy"
                  : 'gentype_typedSequentialExpr));
-# 11498 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11495 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedSequentialExpr in
             let _2 = parseState.GetInput(2) :?> ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4100 "pars.fsy"
+# 4097 "pars.fsy"
                            checkEndOfFileError _2; _1 
                    )
-# 4100 "pars.fsy"
+# 4097 "pars.fsy"
                  : SynExpr));
-# 11510 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11507 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps in
@@ -11515,49 +11512,49 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4104 "pars.fsy"
+# 4101 "pars.fsy"
                              let trivia = { SeparatorRange = _2 }
                              SynExpr.Sequential(DebugPointAtSequential.SuppressNeither, true, _1, _3, unionRanges _1.Range _3.Range, trivia) 
                    )
-# 4104 "pars.fsy"
+# 4101 "pars.fsy"
                  : 'gentype_sequentialExpr));
-# 11524 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11521 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4108 "pars.fsy"
+# 4105 "pars.fsy"
                              _1 
                    )
-# 4108 "pars.fsy"
+# 4105 "pars.fsy"
                  : 'gentype_sequentialExpr));
-# 11536 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11533 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4111 "pars.fsy"
+# 4108 "pars.fsy"
                              _1 
                    )
-# 4111 "pars.fsy"
+# 4108 "pars.fsy"
                  : 'gentype_sequentialExpr));
-# 11547 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11544 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_sequentialExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4114 "pars.fsy"
+# 4111 "pars.fsy"
                              let trivia = { SeparatorRange = Some (rhs parseState 2) }
                              SynExpr.Sequential(DebugPointAtSequential.SuppressNeither, false, _1, _3, unionRanges _1.Range _3.Range, trivia) 
                    )
-# 4114 "pars.fsy"
+# 4111 "pars.fsy"
                  : 'gentype_sequentialExpr));
-# 11560 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11557 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _4 = parseState.GetInput(4) :?> 'gentype_typedSequentialExpr in
@@ -11565,19 +11562,19 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4118 "pars.fsy"
+# 4115 "pars.fsy"
                              let trivia = { SeparatorRange = Some (rhs parseState 2) }
                              SynExpr.Sequential(DebugPointAtSequential.SuppressNeither, false, _1, _4, unionRanges _1.Range _4.Range, trivia) 
                    )
-# 4118 "pars.fsy"
+# 4115 "pars.fsy"
                  : 'gentype_sequentialExpr));
-# 11574 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11571 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteLetBindings in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4122 "pars.fsy"
+# 4119 "pars.fsy"
                             let bindingSet, m, mIn = _1
                             let mLetKwd, isUse = match bindingSet with (BindingSetPreAttrs(m, _, isUse, _, _)) -> m, isUse
                             let usedKeyword = if isUse then "use" else "let"
@@ -11585,30 +11582,30 @@ let _fsyacc_reductions = lazy [|
                             let fauxRange = m.EndRange // zero width range at end of m
                             mkLetExpression(mIn, m, arbExpr ("seqExpr", fauxRange), bindingSet) 
                    )
-# 4122 "pars.fsy"
+# 4119 "pars.fsy"
                  : 'gentype_sequentialExpr));
-# 11590 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11587 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4135 "pars.fsy"
+# 4132 "pars.fsy"
                              debugPrint("recovering via error"); true 
                    )
-# 4135 "pars.fsy"
+# 4132 "pars.fsy"
                  : 'gentype_recover));
-# 11600 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11597 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4138 "pars.fsy"
+# 4135 "pars.fsy"
                              debugPrint("recovering via EOF"); false 
                    )
-# 4138 "pars.fsy"
+# 4135 "pars.fsy"
                  : 'gentype_recover));
-# 11611 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11608 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_ceBindingCore in
@@ -11617,7 +11614,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4142 "pars.fsy"
+# 4139 "pars.fsy"
                             let pat, mPat, isInline, isMutable, returnInfo = _2
                             
                             // and! bindings don't support inline or mutable modifiers
@@ -11630,9 +11627,9 @@ let _fsyacc_reductions = lazy [|
                             
                             mkAndBang(mKeyword, pat, returnInfo, _4, m, mEquals) :: _6 
                    )
-# 4142 "pars.fsy"
+# 4139 "pars.fsy"
                  : 'gentype_moreBinders));
-# 11635 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11632 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_ceBindingCore in
@@ -11643,7 +11640,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4155 "pars.fsy"
+# 4152 "pars.fsy"
                             // Offside-sensitive version of and! binding
                             let pat, mPat, isInline, isMutable, returnInfo = _2
                             
@@ -11659,204 +11656,204 @@ let _fsyacc_reductions = lazy [|
                             
                             mkAndBang(mKeyword, pat, returnInfo, _4, m, mEquals) :: _7 
                    )
-# 4155 "pars.fsy"
+# 4152 "pars.fsy"
                  : 'gentype_moreBinders));
-# 11664 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11661 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4171 "pars.fsy"
+# 4168 "pars.fsy"
                              [] 
                    )
-# 4171 "pars.fsy"
+# 4168 "pars.fsy"
                  : 'gentype_moreBinders));
-# 11674 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11671 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_defnBindings in
             let _3 = parseState.GetInput(3) :?> 'gentype_typedSequentialExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4175 "pars.fsy"
+# 4172 "pars.fsy"
                             let mIn = rhs parseState 2 |> Some
                             let mWhole = unionRanges (rhs2 parseState 1 2) _3.Range
                             let bindingSet = _1
                             mkLetExpression(mIn, mWhole, _3, bindingSet) 
                    )
-# 4175 "pars.fsy"
+# 4172 "pars.fsy"
                  : SynExpr));
-# 11689 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11686 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_defnBindings in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4181 "pars.fsy"
+# 4178 "pars.fsy"
                             let mIn = rhs parseState 2 |> Some
                             let mWhole = rhs2 parseState 1 2
                             let bindingSet = _1
                             mkLetExpression(mIn, mWhole, arbExpr ("declExpr1", (rhs parseState 3)), bindingSet) 
                    )
-# 4181 "pars.fsy"
+# 4178 "pars.fsy"
                  : SynExpr));
-# 11703 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11700 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteLetBindings in
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4190 "pars.fsy"
+# 4187 "pars.fsy"
                             let bindingSet, m, mIn = _1
                             let mWhole = unionRanges m _2.Range
                             mkLetExpression(mIn, mWhole, _2, bindingSet) 
                    )
-# 4190 "pars.fsy"
+# 4187 "pars.fsy"
                  : SynExpr));
-# 11717 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11714 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteLetBindings in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4195 "pars.fsy"
+# 4192 "pars.fsy"
                             let bindingSet, m, mIn = _1
                             reportParseErrorAt (match bindingSet with (BindingSetPreAttrs(m, _, _, _, _)) -> m) (FSComp.SR.parsErrorInReturnForLetIncorrectIndentation())
                             mkLetExpression(mIn, m, arbExpr ("declExpr2", (rhs parseState 2)), bindingSet) 
                    )
-# 4195 "pars.fsy"
+# 4192 "pars.fsy"
                  : SynExpr));
-# 11730 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11727 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteLetBindings in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4200 "pars.fsy"
+# 4197 "pars.fsy"
                             let bindingSet, m, mIn = _1
                             let mWhole = unionRanges m _3.Range
                             mkLetExpression(mIn, mWhole, _3, bindingSet) 
                    )
-# 4200 "pars.fsy"
+# 4197 "pars.fsy"
                  : SynExpr));
-# 11744 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11741 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteLetBindings in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4205 "pars.fsy"
+# 4202 "pars.fsy"
                             let bindingSet, m, mIn = _1
                             //reportParseErrorAt (match bindingSet with (BindingSetPreAttrs(m, _, _, _, _)) -> m) (FSComp.SR.parsErrorInReturnForLetIncorrectIndentation())
                             let mWhole = unionRanges m (rhs parseState 3)
                             mkLetExpression(mIn, mWhole, arbExpr ("declExpr3", (rhs parseState 3)), bindingSet) 
                    )
-# 4205 "pars.fsy"
+# 4202 "pars.fsy"
                  : SynExpr));
-# 11758 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11755 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteDoBinding in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4211 "pars.fsy"
+# 4208 "pars.fsy"
                             let (BindingSetPreAttrs(_, _, _, _, m)), e = _1
                             SynExpr.Do(e, unionRanges (rhs parseState 1).StartRange e.Range) 
                    )
-# 4211 "pars.fsy"
+# 4208 "pars.fsy"
                  : SynExpr));
-# 11770 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11767 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_anonMatchingExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4215 "pars.fsy"
+# 4212 "pars.fsy"
                              _1 
                    )
-# 4215 "pars.fsy"
+# 4212 "pars.fsy"
                  : SynExpr));
-# 11781 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11778 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_anonLambdaExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4218 "pars.fsy"
+# 4215 "pars.fsy"
                              _1 
                    )
-# 4218 "pars.fsy"
+# 4215 "pars.fsy"
                  : SynExpr));
-# 11792 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11789 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_withClauses in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4221 "pars.fsy"
+# 4218 "pars.fsy"
                              let mMatch = rhs parseState 1
                              let mWith, (clauses, mLast) = _3
                              let spBind = DebugPointAtBinding.Yes(unionRanges mMatch mWith)
                              let trivia = { MatchKeyword = mMatch; WithKeyword = mWith }
                              SynExpr.Match(spBind, _2, clauses, unionRanges mMatch mLast, trivia) 
                    )
-# 4221 "pars.fsy"
+# 4218 "pars.fsy"
                  : SynExpr));
-# 11808 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11805 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4228 "pars.fsy"
+# 4225 "pars.fsy"
                              if not _3 then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedEndOfFileMatch())
                              // Produce approximate expression during error recovery
                              exprFromParseError _2 
                    )
-# 4228 "pars.fsy"
+# 4225 "pars.fsy"
                  : SynExpr));
-# 11822 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11819 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_withClauses in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4233 "pars.fsy"
+# 4230 "pars.fsy"
                              let mMatch = (rhs parseState 1)
                              let mWith, (clauses, mLast) = _3
                              let spBind = DebugPointAtBinding.Yes(unionRanges mMatch mWith)
                              let trivia = { MatchBangKeyword = mMatch; WithKeyword = mWith }
                              SynExpr.MatchBang(spBind, _2, clauses, unionRanges mMatch mLast, trivia) 
                    )
-# 4233 "pars.fsy"
+# 4230 "pars.fsy"
                  : SynExpr));
-# 11838 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11835 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4240 "pars.fsy"
+# 4237 "pars.fsy"
                              if not _3 then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedEndOfFileMatch())
                              // Produce approximate expression during error recovery
                              exprFromParseError _2 
                    )
-# 4240 "pars.fsy"
+# 4237 "pars.fsy"
                  : SynExpr));
-# 11852 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11849 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExprBlockR in
             let _3 = parseState.GetInput(3) :?> 'gentype_withClauses in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4245 "pars.fsy"
+# 4242 "pars.fsy"
                              let mTry = rhs parseState 1
                              let expr = _2 mTry
                              let spTry = DebugPointAtTry.Yes mTry
@@ -11872,16 +11869,16 @@ let _fsyacc_reductions = lazy [|
                                    WithToEndRange = mWithToLast }
                              SynExpr.TryWith(expr, clauses, mTryToLast, spTry, spWith, trivia) 
                    )
-# 4245 "pars.fsy"
+# 4242 "pars.fsy"
                  : SynExpr));
-# 11877 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11874 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExprBlockR in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4261 "pars.fsy"
+# 4258 "pars.fsy"
                              let mTry = rhs parseState 1
                              let spTry = DebugPointAtTry.Yes mTry
                              if not _3 then reportParseErrorAt mTry (FSComp.SR.parsUnexpectedEndOfFileTry ())
@@ -11897,15 +11894,15 @@ let _fsyacc_reductions = lazy [|
                                    WithToEndRange = mWhole }
                              SynExpr.TryWith(expr, [], mWhole, spTry, spWith, trivia) 
                    )
-# 4261 "pars.fsy"
+# 4258 "pars.fsy"
                  : SynExpr));
-# 11902 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11899 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> range in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4277 "pars.fsy"
+# 4274 "pars.fsy"
                              let mTry = rhs parseState 1
                              let mExpr = mTry.EndRange
                              let expr = arbExpr ("try1", mExpr)
@@ -11923,16 +11920,16 @@ let _fsyacc_reductions = lazy [|
                                    WithToEndRange = mWithToLast }
                              SynExpr.TryWith(expr, clauses, mTryToLast, spTry, spWith, trivia) 
                    )
-# 4277 "pars.fsy"
+# 4274 "pars.fsy"
                  : SynExpr));
-# 11928 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11925 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> range in
             let _3 = parseState.GetInput(3) :?> 'gentype_withClauses in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4295 "pars.fsy"
+# 4292 "pars.fsy"
                              let mTry = rhs parseState 1
                              let mExpr = mTry.EndRange
                              let expr = arbExpr ("try2", mExpr)
@@ -11950,16 +11947,16 @@ let _fsyacc_reductions = lazy [|
                                    WithToEndRange = mWithToLast }
                              SynExpr.TryWith(expr, clauses, mTryToLast, spTry, spWith, trivia) 
                    )
-# 4295 "pars.fsy"
+# 4292 "pars.fsy"
                  : SynExpr));
-# 11955 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11952 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExprBlockR in
             let _4 = parseState.GetInput(4) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4313 "pars.fsy"
+# 4310 "pars.fsy"
                              let mTry = rhs parseState 1
                              let tryExpr = _2 mTry
                              let spTry = DebugPointAtTry.Yes mTry
@@ -11970,29 +11967,29 @@ let _fsyacc_reductions = lazy [|
                              let trivia = { TryKeyword = mTry; FinallyKeyword = mFinally }
                              SynExpr.TryFinally(tryExpr, finallyExpr, mTryToLast, spTry, spFinally, trivia) 
                    )
-# 4313 "pars.fsy"
+# 4310 "pars.fsy"
                  : SynExpr));
-# 11975 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11972 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ifExprCases in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4324 "pars.fsy"
+# 4321 "pars.fsy"
                              let mIf = rhs parseState 1
                              _3 _2 mIf false 
                    )
-# 4324 "pars.fsy"
+# 4321 "pars.fsy"
                  : SynExpr));
-# 11988 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 11985 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4328 "pars.fsy"
+# 4325 "pars.fsy"
                              errorR (Error(FSComp.SR.parsIncompleteIf (), rhs parseState 1))
                              let ifExpr = _2
                              let mIf = rhs parseState 1
@@ -12002,15 +11999,15 @@ let _fsyacc_reductions = lazy [|
                              let trivia = { IfKeyword = mIf; IsElif = false; ThenKeyword = mThen; ElseKeyword = None; IfToThenRange = m }
                              SynExpr.IfThenElse(_2, arbExpr ("if1", mThen), None, spIfToThen, true, m, trivia) 
                    )
-# 4328 "pars.fsy"
+# 4325 "pars.fsy"
                  : SynExpr));
-# 12007 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12004 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4338 "pars.fsy"
+# 4335 "pars.fsy"
                              errorR (Error(FSComp.SR.parsIncompleteIf (), rhs parseState 1))
                              let m = rhs parseState 1
                              let mEnd = m.EndRange
@@ -12018,97 +12015,97 @@ let _fsyacc_reductions = lazy [|
                              let trivia = { IfKeyword = m; IsElif = false; ThenKeyword = m; ElseKeyword = None; IfToThenRange = m }
                              SynExpr.IfThenElse(arbExpr ("if2", mEnd), arbExpr ("if3", mEnd), None, spIfToThen, true, m, trivia) 
                    )
-# 4338 "pars.fsy"
+# 4335 "pars.fsy"
                  : SynExpr));
-# 12023 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12020 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            let _2 = parseState.GetInput(2) :?> SynExpr in
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 4343 "pars.fsy"
+                             SynExpr.Lazy(_2, unionRanges (rhs parseState 1) _2.Range) 
+                   )
+# 4343 "pars.fsy"
+                 : SynExpr));
+# 12031 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
 # 4346 "pars.fsy"
-                             SynExpr.Lazy(_2, unionRanges (rhs parseState 1) _2.Range) 
+                             SynExpr.Assert(_2, unionRanges (rhs parseState 1) _2.Range) 
                    )
 # 4346 "pars.fsy"
                  : SynExpr));
-# 12034 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            let _2 = parseState.GetInput(2) :?> SynExpr in
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 4349 "pars.fsy"
-                             SynExpr.Assert(_2, unionRanges (rhs parseState 1) _2.Range) 
-                   )
-# 4349 "pars.fsy"
-                 : SynExpr));
-# 12045 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12042 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4352 "pars.fsy"
+# 4349 "pars.fsy"
                              raiseParseErrorAt (rhs parseState 1) (FSComp.SR.parsAssertIsNotFirstClassValue()) 
                    )
-# 4352 "pars.fsy"
+# 4349 "pars.fsy"
                  : SynExpr));
-# 12055 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12052 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4355 "pars.fsy"
+# 4352 "pars.fsy"
                              SynExpr.Lazy(_2, unionRanges (rhs parseState 1) _2.Range) 
                    )
-# 4355 "pars.fsy"
+# 4352 "pars.fsy"
                  : SynExpr));
-# 12066 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12063 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4358 "pars.fsy"
+# 4355 "pars.fsy"
                              SynExpr.Assert(_2, unionRanges (rhs parseState 1) _2.Range) 
                    )
-# 4358 "pars.fsy"
+# 4355 "pars.fsy"
                  : SynExpr));
-# 12077 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12074 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4361 "pars.fsy"
+# 4358 "pars.fsy"
                              raiseParseErrorAt (rhs parseState 1) (FSComp.SR.parsAssertIsNotFirstClassValue()) 
                    )
-# 4361 "pars.fsy"
+# 4358 "pars.fsy"
                  : SynExpr));
-# 12087 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12084 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_whileExprCore in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4364 "pars.fsy"
+# 4361 "pars.fsy"
                              SynExpr.While (_2 (rhs parseState 1)) 
                    )
-# 4364 "pars.fsy"
+# 4361 "pars.fsy"
                  : SynExpr));
-# 12098 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12095 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_whileExprCore in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4367 "pars.fsy"
+# 4364 "pars.fsy"
                              let mKeyword = rhs parseState 1
                              parseState.LexBuffer.CheckLanguageFeatureAndRecover LanguageFeature.WhileBang mKeyword
                              SynExpr.WhileBang (_2 mKeyword) 
                    )
-# 4367 "pars.fsy"
+# 4364 "pars.fsy"
                  : SynExpr));
-# 12111 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12108 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopBinder in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12117,16 +12114,16 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4372 "pars.fsy"
+# 4369 "pars.fsy"
                              let mFor = rhs parseState 1
                              let mDo = rhs parseState 3
                              let spFor = DebugPointAtFor.Yes mFor
                              let (pat, expr, _, spIn) = _2
                              SynExpr.ForEach(spFor, spIn, SeqExprOnly false, true, pat, expr, _4, unionRanges mFor _5) 
                    )
-# 4372 "pars.fsy"
+# 4369 "pars.fsy"
                  : SynExpr));
-# 12129 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12126 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopBinder in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12135,16 +12132,16 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4379 "pars.fsy"
+# 4376 "pars.fsy"
                              let mFor = rhs parseState 1
                              if not _5 then reportParseErrorAt mFor (FSComp.SR.parsUnexpectedEndOfFileFor ())
                              let spFor = DebugPointAtFor.Yes mFor
                              let (pat, expr, _, spIn) = _2
                              SynExpr.ForEach(spFor, spIn, SeqExprOnly false, true, pat, expr, _4, unionRanges mFor _4.Range) 
                    )
-# 4379 "pars.fsy"
+# 4376 "pars.fsy"
                  : SynExpr));
-# 12147 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12144 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopBinder in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12152,16 +12149,16 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4386 "pars.fsy"
+# 4383 "pars.fsy"
                              let mFor = rhs parseState 1
                              let spFor = DebugPointAtFor.Yes mFor
                              let (pat, expr, _, spIn) = _2
                              let bodyExpr = arbExpr ("forLoopBody2a", rhs parseState 4)
                              SynExpr.ForEach(spFor, spIn, SeqExprOnly false, true, pat, expr, bodyExpr, unionRanges mFor _5) 
                    )
-# 4386 "pars.fsy"
+# 4383 "pars.fsy"
                  : SynExpr));
-# 12164 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12161 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopBinder in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12169,7 +12166,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4393 "pars.fsy"
+# 4390 "pars.fsy"
                              let mFor = rhs parseState 1
                              if not _4 then reportParseErrorAt mFor (FSComp.SR.parsExpectedExpressionAfterToken ())
                              let spFor = DebugPointAtFor.Yes mFor
@@ -12178,16 +12175,16 @@ let _fsyacc_reductions = lazy [|
                              let bodyExpr = arbExpr ("forLoopBody2", mDo.EndRange)
                              SynExpr.ForEach(spFor, spIn, SeqExprOnly false, true, pat, expr, bodyExpr, unionRanges mFor mDo) 
                    )
-# 4393 "pars.fsy"
+# 4390 "pars.fsy"
                  : SynExpr));
-# 12183 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12180 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopBinder in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4402 "pars.fsy"
+# 4399 "pars.fsy"
                              let mFor = rhs parseState 1
                              let (pat, expr, ok, spIn) = _2
                              if not _3 then reportParseErrorAt mFor (FSComp.SR.parsForDoExpected ())
@@ -12197,9 +12194,9 @@ let _fsyacc_reductions = lazy [|
                              let bodyExpr = arbExpr ("forLoopBody1", mForLoopBodyArb)
                              SynExpr.ForEach(spFor, spIn, SeqExprOnly false, true, pat, expr, bodyExpr, unionRanges mFor mForLoopBodyArb) 
                    )
-# 4402 "pars.fsy"
+# 4399 "pars.fsy"
                  : SynExpr));
-# 12202 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12199 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopBinder in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_OBLOCKSEP in
@@ -12207,15 +12204,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4412 "pars.fsy"
+# 4409 "pars.fsy"
                             let mFor = rhs parseState 1
                             let spFor = DebugPointAtFor.Yes mFor
                             let (pat, expr, _, spIn) = _2
                             SynExpr.ForEach(spFor, spIn, SeqExprOnly true, true, pat, expr, _4, unionRanges mFor _4.Range) 
                    )
-# 4412 "pars.fsy"
+# 4409 "pars.fsy"
                  : SynExpr));
-# 12218 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12215 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopRange in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12224,15 +12221,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4418 "pars.fsy"
+# 4415 "pars.fsy"
                              let mFor = rhs parseState 1
                              let spFor = DebugPointAtFor.Yes mFor
                              let (a, b, c, d, exprTo, spTo) = _2
                              SynExpr.For(spFor, spTo, a, b, c, d, exprTo, _4, unionRanges mFor _5) 
                    )
-# 4418 "pars.fsy"
+# 4415 "pars.fsy"
                  : SynExpr));
-# 12235 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12232 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopRange in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12241,16 +12238,16 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4424 "pars.fsy"
+# 4421 "pars.fsy"
                              let mFor = rhs parseState 1
                              if not _5 then reportParseErrorAt mFor (FSComp.SR.parsUnexpectedEndOfFileFor ())
                              let spFor = DebugPointAtFor.Yes mFor
                              let (a, b, c, d, exprTo, spTo) = _2
                              SynExpr.For(spFor, spTo, a, b, c, d, exprTo, _4, unionRanges mFor _4.Range) 
                    )
-# 4424 "pars.fsy"
+# 4421 "pars.fsy"
                  : SynExpr));
-# 12253 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12250 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopRange in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12258,7 +12255,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4431 "pars.fsy"
+# 4428 "pars.fsy"
                              let mFor = rhs parseState 1
                              let spFor = DebugPointAtFor.Yes mFor
                              let (a, b, c, d, exprTo, spTo) = _2
@@ -12266,9 +12263,9 @@ let _fsyacc_reductions = lazy [|
                              let bodyExpr = arbExpr ("declExpr11", mForLoopBodyArb)
                              SynExpr.For(spFor, spTo, a, b, c, d, exprTo, bodyExpr, unionRanges mFor _5) 
                    )
-# 4431 "pars.fsy"
+# 4428 "pars.fsy"
                  : SynExpr));
-# 12271 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12268 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopRange in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12276,7 +12273,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4439 "pars.fsy"
+# 4436 "pars.fsy"
                              let mFor = rhs parseState 1
                              if not _4 then reportParseErrorAt mFor (FSComp.SR.parsUnexpectedEndOfFileFor ())
                              let spFor = DebugPointAtFor.Yes mFor
@@ -12285,16 +12282,16 @@ let _fsyacc_reductions = lazy [|
                              let bodyExpr = arbExpr ("declExpr11", mDo.EndRange)
                              SynExpr.For(spFor, spTo, a, b, c, d, exprTo, bodyExpr, rhs2 parseState 1 3) 
                    )
-# 4439 "pars.fsy"
+# 4436 "pars.fsy"
                  : SynExpr));
-# 12290 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12287 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopRange in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4448 "pars.fsy"
+# 4445 "pars.fsy"
                              let mFor = rhs parseState 1
                              if not _3 then reportParseErrorAt mFor (FSComp.SR.parsUnexpectedEndOfFileFor ())
                              let spFor = DebugPointAtFor.Yes mFor
@@ -12303,9 +12300,9 @@ let _fsyacc_reductions = lazy [|
                              let bodyExpr = arbExpr ("declExpr11", mExpr.EndRange)
                              SynExpr.For(spFor, spTo, a, b, c, d, exprTo, bodyExpr, unionRanges mFor mExpr) 
                    )
-# 4448 "pars.fsy"
+# 4445 "pars.fsy"
                  : SynExpr));
-# 12308 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12305 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
             let _4 = parseState.GetInput(4) :?> SynExpr in
@@ -12313,7 +12310,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4457 "pars.fsy"
+# 4454 "pars.fsy"
                              let mFor = rhs parseState 1
                              let spToFake = DebugPointAtInOrTo.Yes mFor
                              let spFor = DebugPointAtFor.Yes mFor
@@ -12321,28 +12318,28 @@ let _fsyacc_reductions = lazy [|
                              let expr2 = arbExpr ("endLoopRange1", rhs parseState 3)
                              SynExpr.For(spFor, spToFake, mkSynId mFor "_loopVar", None, expr1, true, expr2, _4, unionRanges mFor _4.Range) 
                    )
-# 4457 "pars.fsy"
+# 4454 "pars.fsy"
                  : SynExpr));
-# 12326 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12323 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4465 "pars.fsy"
+# 4462 "pars.fsy"
                              reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsIdentifierExpected())
                              arbExpr ("declExpr12", (rhs parseState 1)) 
                    )
-# 4465 "pars.fsy"
+# 4462 "pars.fsy"
                  : SynExpr));
-# 12338 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12335 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPattern in
             let _4 = parseState.GetInput(4) :?> 'gentype_doneDeclEnd in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4469 "pars.fsy"
+# 4466 "pars.fsy"
                              reportParseErrorAt (rhs parseState 3) (FSComp.SR.parsInOrEqualExpected())
                              let mFor = rhs parseState 1
                              let spFor = DebugPointAtFor.Yes mFor
@@ -12351,16 +12348,16 @@ let _fsyacc_reductions = lazy [|
                              let mForLoopAll = rhs2 parseState 1 4
                              SynExpr.ForEach(spFor, spInFake, SeqExprOnly false, true, _2, arbExpr ("forLoopCollection", mFor), arbExpr ("forLoopBody3", mForLoopBodyArb), mForLoopAll) 
                    )
-# 4469 "pars.fsy"
+# 4466 "pars.fsy"
                  : SynExpr));
-# 12356 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12353 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4478 "pars.fsy"
+# 4475 "pars.fsy"
                              if not _3 then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedEndOfFileFor())
                              let mFor = rhs parseState 1
                              let mIn = rhs parseState 1
@@ -12370,9 +12367,9 @@ let _fsyacc_reductions = lazy [|
                              let mForLoopAll = rhs2 parseState 1 2
                              exprFromParseError (SynExpr.ForEach(spFor, spIn, SeqExprOnly false, true, _2, arbExpr ("forLoopCollection", mFor), arbExpr ("forLoopBody3", mForLoopBodyArb), mForLoopAll)) 
                    )
-# 4478 "pars.fsy"
+# 4475 "pars.fsy"
                  : SynExpr));
-# 12375 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12372 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -12380,15 +12377,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4488 "pars.fsy"
+# 4485 "pars.fsy"
                             let trivia: SynExprYieldOrReturnTrivia = { YieldOrReturnKeyword = rhs parseState 1 }
                             let typedExpr = SynExpr.Typed(_2, _4, unionRanges _2.Range _4.Range)
                             parseState.LexBuffer.CheckLanguageFeatureAndRecover LanguageFeature.AllowTypedLetUseAndBang typedExpr.Range
                             SynExpr.YieldOrReturn((_1, not _1), typedExpr, (unionRanges (rhs parseState 1) _4.Range), trivia) 
                    )
-# 4488 "pars.fsy"
+# 4485 "pars.fsy"
                  : SynExpr));
-# 12391 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12388 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -12396,7 +12393,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4494 "pars.fsy"
+# 4491 "pars.fsy"
                             let trivia: SynExprYieldOrReturnTrivia = { YieldOrReturnKeyword = rhs parseState 1 }
                             let expr = 
                                 match _3 with
@@ -12407,37 +12404,37 @@ let _fsyacc_reductions = lazy [|
                                     SynExpr.Typed(_2, ty, m)
                             SynExpr.YieldOrReturn((_1, not _1), expr, (unionRanges (rhs parseState 1) expr.Range), trivia) 
                    )
-# 4494 "pars.fsy"
+# 4491 "pars.fsy"
                  : SynExpr));
-# 12412 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12409 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4505 "pars.fsy"
+# 4502 "pars.fsy"
                             let mYieldAll = rhs parseState 1
                             let trivia: SynExprYieldOrReturnTrivia = { YieldOrReturnKeyword = rhs parseState 1 }
                             SynExpr.YieldOrReturn((_1, not _1), arbExpr ("yield", mYieldAll), mYieldAll, trivia) 
                    )
-# 4505 "pars.fsy"
+# 4502 "pars.fsy"
                  : SynExpr));
-# 12426 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12423 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4510 "pars.fsy"
+# 4507 "pars.fsy"
                             let mYieldAll = rhs parseState 1
                             let trivia: SynExprYieldOrReturnFromTrivia = { YieldOrReturnFromKeyword = rhs parseState 1 }
                             SynExpr.YieldOrReturnFrom((_1, not _1), arbExpr ("yield!", mYieldAll), mYieldAll, trivia) 
                    )
-# 4510 "pars.fsy"
+# 4507 "pars.fsy"
                  : SynExpr));
-# 12440 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12437 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -12445,15 +12442,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4515 "pars.fsy"
+# 4512 "pars.fsy"
                             let trivia: SynExprYieldOrReturnFromTrivia = { YieldOrReturnFromKeyword = rhs parseState 1 }
                             let typedExpr = SynExpr.Typed(_2, _4, unionRanges _2.Range _4.Range)
                             parseState.LexBuffer.CheckLanguageFeatureAndRecover LanguageFeature.AllowTypedLetUseAndBang typedExpr.Range
                             SynExpr.YieldOrReturnFrom((_1, not _1), typedExpr, (unionRanges (rhs parseState 1) _2.Range), trivia) 
                    )
-# 4515 "pars.fsy"
+# 4512 "pars.fsy"
                  : SynExpr));
-# 12456 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12453 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -12461,7 +12458,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4521 "pars.fsy"
+# 4518 "pars.fsy"
                             let trivia: SynExprYieldOrReturnFromTrivia = { YieldOrReturnFromKeyword = rhs parseState 1 }
                             let expr = 
                                 match _3 with
@@ -12472,9 +12469,9 @@ let _fsyacc_reductions = lazy [|
                                     SynExpr.Typed(_2, ty, m)
                             SynExpr.YieldOrReturnFrom((_1, not _1), expr, (unionRanges (rhs parseState 1) _2.Range), trivia) 
                    )
-# 4521 "pars.fsy"
+# 4518 "pars.fsy"
                  : SynExpr));
-# 12477 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12474 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_ceBindingCore in
@@ -12485,7 +12482,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4532 "pars.fsy"
+# 4529 "pars.fsy"
                             // Handle let! and use! bindings with unified pattern parsing
                             let pat, mPat, isInline, isMutable, returnInfo = _2
                             
@@ -12503,9 +12500,9 @@ let _fsyacc_reductions = lazy [|
                             let isUse = (_1 = "use")
                             mkLetBangExpression(Some mIn, m, _8, (pat, returnInfo, _4, _7, keyword, mEquals, isUse)) 
                    )
-# 4532 "pars.fsy"
+# 4529 "pars.fsy"
                  : SynExpr));
-# 12508 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12505 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_ceBindingCore in
@@ -12517,7 +12514,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4551 "pars.fsy"
+# 4548 "pars.fsy"
                             // Offside-sensitive version of let!/use! binding
                             let pat, mPat, isInline, isMutable, returnInfo = _2
                             
@@ -12536,9 +12533,9 @@ let _fsyacc_reductions = lazy [|
                             
                             mkLetBangExpression(mIn, m, _8, (pat, returnInfo, _4, _7, keyword, mEquals, isUse)) 
                    )
-# 4551 "pars.fsy"
+# 4548 "pars.fsy"
                  : SynExpr));
-# 12541 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12538 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_ceBindingCore in
@@ -12548,7 +12545,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4570 "pars.fsy"
+# 4567 "pars.fsy"
                             // Error recovery for incomplete let!/use! bindings
                             // Allows intellisense to work when writing incomplete computation expressions
                             let pat, mPat, isInline, isMutable, returnInfo = _2
@@ -12569,9 +12566,9 @@ let _fsyacc_reductions = lazy [|
                             // Use ImplicitZero as the continuation expression for error recovery
                             mkLetBangExpression(mIn, mAll, SynExpr.ImplicitZero m, (pat, returnInfo, _4, [], keyword, mEquals, isUse)) 
                    )
-# 4570 "pars.fsy"
+# 4567 "pars.fsy"
                  : SynExpr));
-# 12574 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12571 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _4 = parseState.GetInput(4) :?> 'gentype_opt_OBLOCKSEP in
@@ -12579,222 +12576,222 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4591 "pars.fsy"
+# 4588 "pars.fsy"
                             let spBind = DebugPointAtBinding.NoneAtDo
                             let trivia: SynExprDoBangTrivia = { DoBangKeyword = rhs parseState 1 }
                             let m = unionRanges (rhs parseState 1) _5.Range
                             SynExpr.DoBang(_2, m, trivia) 
                    )
-# 4591 "pars.fsy"
+# 4588 "pars.fsy"
                  : SynExpr));
-# 12590 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12587 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_hardwhiteDefnBindingsTerminator in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4597 "pars.fsy"
+# 4594 "pars.fsy"
                              let trivia: SynExprDoBangTrivia = { DoBangKeyword = rhs parseState 1 }
                              let m = unionRanges (rhs parseState 1) _2.Range
                              SynExpr.DoBang(_2, m, trivia) 
                    )
-# 4597 "pars.fsy"
+# 4594 "pars.fsy"
                  : SynExpr));
-# 12604 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12601 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4602 "pars.fsy"
+# 4599 "pars.fsy"
                             SynExpr.Fixed(_2, (unionRanges (rhs parseState 1) _2.Range)) 
                    )
-# 4602 "pars.fsy"
+# 4599 "pars.fsy"
                  : SynExpr));
-# 12615 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12612 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExprBlockR in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4605 "pars.fsy"
+# 4602 "pars.fsy"
                             errorR(Error(FSComp.SR.parsArrowUseIsLimited(), lhs parseState))
                             let mArrow = rhs parseState 1
                             let expr = _2 mArrow
                             let trivia: SynExprYieldOrReturnTrivia = { YieldOrReturnKeyword = rhs parseState 1 }
                             SynExpr.YieldOrReturn((true, true), expr, (unionRanges mArrow expr.Range), trivia) 
                    )
-# 4605 "pars.fsy"
+# 4602 "pars.fsy"
                  : SynExpr));
-# 12630 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12627 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4612 "pars.fsy"
+# 4609 "pars.fsy"
                              SynExpr.TypeTest(_1, _3, unionRanges _1.Range _3.Range) 
                    )
-# 4612 "pars.fsy"
+# 4609 "pars.fsy"
                  : SynExpr));
-# 12642 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12639 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4615 "pars.fsy"
+# 4612 "pars.fsy"
                              let mColon = rhs parseState 2
                              let ty = SynType.FromParseError(mColon.EndRange)
                              SynExpr.TypeTest(_1, ty, unionRanges _1.Range mColon) 
                    )
-# 4615 "pars.fsy"
+# 4612 "pars.fsy"
                  : SynExpr));
-# 12656 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12653 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4620 "pars.fsy"
+# 4617 "pars.fsy"
                              SynExpr.Upcast(_1, _3, unionRanges _1.Range _3.Range) 
                    )
-# 4620 "pars.fsy"
+# 4617 "pars.fsy"
                  : SynExpr));
-# 12668 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12665 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4623 "pars.fsy"
+# 4620 "pars.fsy"
                              let mOp = rhs parseState 2
                              let ty = SynType.FromParseError(mOp.EndRange)
                              SynExpr.Upcast(_1, ty, unionRanges _1.Range mOp) 
                    )
-# 4623 "pars.fsy"
+# 4620 "pars.fsy"
                  : SynExpr));
-# 12682 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12679 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4628 "pars.fsy"
+# 4625 "pars.fsy"
                             SynExpr.Downcast(_1, _3, unionRanges _1.Range _3.Range) 
                    )
-# 4628 "pars.fsy"
+# 4625 "pars.fsy"
                  : SynExpr));
-# 12694 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12691 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4631 "pars.fsy"
+# 4628 "pars.fsy"
                              let mOp = rhs parseState 2
                              let ty = SynType.FromParseError(mOp.EndRange)
                              SynExpr.Downcast(_1, ty, unionRanges _1.Range mOp) 
                    )
-# 4631 "pars.fsy"
+# 4628 "pars.fsy"
                  : SynExpr));
-# 12708 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12705 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4636 "pars.fsy"
+# 4633 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 ":=" _3 
                    )
-# 4636 "pars.fsy"
+# 4633 "pars.fsy"
                  : SynExpr));
-# 12720 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12717 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4639 "pars.fsy"
+# 4636 "pars.fsy"
                             mkSynAssign _1 _3 
                    )
-# 4639 "pars.fsy"
+# 4636 "pars.fsy"
                  : SynExpr));
-# 12732 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12729 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr list * range list in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4642 "pars.fsy"
+# 4639 "pars.fsy"
                             let exprs, commas = _1
                             let m = unionRanges exprs.Head.Range (List.last exprs).Range
                             SynExpr.Tuple(false, List.rev exprs, List.rev commas, m) 
                    )
-# 4642 "pars.fsy"
+# 4639 "pars.fsy"
                  : SynExpr));
-# 12745 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12742 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4647 "pars.fsy"
+# 4644 "pars.fsy"
                             SynExpr.JoinIn(_1, rhs parseState 2, _3, unionRanges _1.Range _3.Range) 
                    )
-# 4647 "pars.fsy"
+# 4644 "pars.fsy"
                  : SynExpr));
-# 12757 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12754 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4650 "pars.fsy"
+# 4647 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression "in")
                             mkSynInfix mOp _1 "@in" (arbExpr ("declExprInfixJoinIn", mOp.EndRange)) 
                    )
-# 4650 "pars.fsy"
+# 4647 "pars.fsy"
                  : SynExpr));
-# 12771 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12768 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4655 "pars.fsy"
+# 4652 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 "||" _3 
                    )
-# 4655 "pars.fsy"
+# 4652 "pars.fsy"
                  : SynExpr));
-# 12783 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12780 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4658 "pars.fsy"
+# 4655 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression "||")
                             mkSynInfix mOp _1 "||" (arbExpr ("declExprInfixBarBar", mOp.EndRange)) 
                    )
-# 4658 "pars.fsy"
+# 4655 "pars.fsy"
                  : SynExpr));
-# 12797 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12794 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -12802,12 +12799,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4663 "pars.fsy"
+# 4660 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 _2 _3 
                    )
-# 4663 "pars.fsy"
+# 4660 "pars.fsy"
                  : SynExpr));
-# 12810 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12807 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -12815,91 +12812,91 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4666 "pars.fsy"
+# 4663 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression _2)
                             mkSynInfix mOp _1 _2 (arbExpr ("declExprInfixBarOp", mOp.EndRange)) 
                    )
-# 4666 "pars.fsy"
+# 4663 "pars.fsy"
                  : SynExpr));
-# 12825 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12822 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4671 "pars.fsy"
+# 4668 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 "or" _3 
                    )
-# 4671 "pars.fsy"
+# 4668 "pars.fsy"
                  : SynExpr));
-# 12837 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12834 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4674 "pars.fsy"
+# 4671 "pars.fsy"
                             reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsUnfinishedExpression "or")
                             mkSynInfix (rhs parseState 2) _1 "or" (arbExpr ("declExprInfixOr", (rhs parseState 3).StartRange)) 
                    )
-# 4674 "pars.fsy"
+# 4671 "pars.fsy"
                  : SynExpr));
-# 12850 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12847 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4678 "pars.fsy"
+# 4675 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 "&" _3 
                    )
-# 4678 "pars.fsy"
+# 4675 "pars.fsy"
                  : SynExpr));
-# 12862 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12859 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4681 "pars.fsy"
+# 4678 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression "&")
                             mkSynInfix mOp _1 "&" (arbExpr ("declExprInfixAmp", mOp.EndRange)) 
                    )
-# 4681 "pars.fsy"
+# 4678 "pars.fsy"
                  : SynExpr));
-# 12876 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12873 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4686 "pars.fsy"
+# 4683 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 "&&" _3 
                    )
-# 4686 "pars.fsy"
+# 4683 "pars.fsy"
                  : SynExpr));
-# 12888 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12885 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4689 "pars.fsy"
+# 4686 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression "&&")
                             mkSynInfix mOp _1 "&&" (arbExpr ("declExprInfixAmpAmp", mOp.EndRange)) 
                    )
-# 4689 "pars.fsy"
+# 4686 "pars.fsy"
                  : SynExpr));
-# 12902 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12899 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -12907,12 +12904,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4694 "pars.fsy"
+# 4691 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 _2 _3 
                    )
-# 4694 "pars.fsy"
+# 4691 "pars.fsy"
                  : SynExpr));
-# 12915 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12912 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -12920,40 +12917,40 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4697 "pars.fsy"
+# 4694 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression _2)
                             mkSynInfix mOp _1 _2 (arbExpr ("declExprInfixAmpOp", (rhs parseState 3).StartRange)) 
                    )
-# 4697 "pars.fsy"
+# 4694 "pars.fsy"
                  : SynExpr));
-# 12930 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12927 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4702 "pars.fsy"
+# 4699 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 "=" _3 
                    )
-# 4702 "pars.fsy"
+# 4699 "pars.fsy"
                  : SynExpr));
-# 12942 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12939 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4705 "pars.fsy"
+# 4702 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression "=")
                             mkSynInfix mOp _1 "=" (arbExpr ("declExprInfixEquals", mOp.EndRange)) 
                    )
-# 4705 "pars.fsy"
+# 4702 "pars.fsy"
                  : SynExpr));
-# 12956 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12953 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -12961,12 +12958,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4710 "pars.fsy"
+# 4707 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 _2 _3 
                    )
-# 4710 "pars.fsy"
+# 4707 "pars.fsy"
                  : SynExpr));
-# 12969 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12966 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -12974,40 +12971,40 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4713 "pars.fsy"
+# 4710 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression _2)
                             mkSynInfix mOp _1 _2 (arbExpr ("declExprInfix", mOp.EndRange)) 
                    )
-# 4713 "pars.fsy"
+# 4710 "pars.fsy"
                  : SynExpr));
-# 12984 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12981 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4718 "pars.fsy"
+# 4715 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 "$" _3 
                    )
-# 4718 "pars.fsy"
+# 4715 "pars.fsy"
                  : SynExpr));
-# 12996 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 12993 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4721 "pars.fsy"
+# 4718 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression "$")
                             mkSynInfix mOp _1 "$" (arbExpr ("declExprInfixDollar", mOp.EndRange)) 
                    )
-# 4721 "pars.fsy"
+# 4718 "pars.fsy"
                  : SynExpr));
-# 13010 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13007 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> bool in
@@ -13015,12 +13012,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4726 "pars.fsy"
+# 4723 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 "<" _3 
                    )
-# 4726 "pars.fsy"
+# 4723 "pars.fsy"
                  : SynExpr));
-# 13023 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13020 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> bool in
@@ -13028,14 +13025,14 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4729 "pars.fsy"
+# 4726 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression "<")
                             mkSynInfix mOp _1 "<" (arbExpr ("declExprInfixLess", mOp.EndRange)) 
                    )
-# 4729 "pars.fsy"
+# 4726 "pars.fsy"
                  : SynExpr));
-# 13038 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13035 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> bool in
@@ -13043,12 +13040,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4734 "pars.fsy"
+# 4731 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 ">" _3 
                    )
-# 4734 "pars.fsy"
+# 4731 "pars.fsy"
                  : SynExpr));
-# 13051 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13048 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> bool in
@@ -13056,14 +13053,14 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4737 "pars.fsy"
+# 4734 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression ">")
                             mkSynInfix mOp _1 ">" (arbExpr ("declExprInfixGreater", mOp.EndRange)) 
                    )
-# 4737 "pars.fsy"
+# 4734 "pars.fsy"
                  : SynExpr));
-# 13066 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13063 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13071,12 +13068,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4742 "pars.fsy"
+# 4739 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 _2 _3 
                    )
-# 4742 "pars.fsy"
+# 4739 "pars.fsy"
                  : SynExpr));
-# 13079 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13076 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13084,14 +13081,14 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4745 "pars.fsy"
+# 4742 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression _2)
                             mkSynInfix mOp _1 _2 (arbExpr ("declExprInfix", mOp.EndRange)) 
                    )
-# 4745 "pars.fsy"
+# 4742 "pars.fsy"
                  : SynExpr));
-# 13094 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13091 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13099,12 +13096,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4750 "pars.fsy"
+# 4747 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 _2 _3 
                    )
-# 4750 "pars.fsy"
+# 4747 "pars.fsy"
                  : SynExpr));
-# 13107 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13104 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13112,37 +13109,37 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4753 "pars.fsy"
+# 4750 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression _2)
                             mkSynInfix mOp _1 _2 (arbExpr ("declExprInfixPercent", mOp.EndRange)) 
                    )
-# 4753 "pars.fsy"
+# 4750 "pars.fsy"
                  : SynExpr));
-# 13122 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13119 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4758 "pars.fsy"
+# 4755 "pars.fsy"
                             let mOp = rhs parseState 2
                             let m = unionRanges _1.Range _3.Range
                             let tupExpr = SynExpr.Tuple(false, [_1; _3], [mOp], m)
                             let identExpr = mkSynOperator mOp "::"
                             SynExpr.App(ExprAtomicFlag.NonAtomic, true, identExpr, tupExpr, m) 
                    )
-# 4758 "pars.fsy"
+# 4755 "pars.fsy"
                  : SynExpr));
-# 13138 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13135 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4765 "pars.fsy"
+# 4762 "pars.fsy"
                             let mOp = rhs parseState 2
                             let m = unionRanges _1.Range mOp
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression "::")
@@ -13150,9 +13147,9 @@ let _fsyacc_reductions = lazy [|
                             let tupExpr = SynExpr.Tuple(false, [_1; (arbExpr ("declExprInfixColonColon", mOp.EndRange))], [mOp], m)
                             SynExpr.App(ExprAtomicFlag.NonAtomic, true, identExpr, tupExpr, m) 
                    )
-# 4765 "pars.fsy"
+# 4762 "pars.fsy"
                  : SynExpr));
-# 13155 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13152 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13160,12 +13157,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4773 "pars.fsy"
+# 4770 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 _2 _3 
                    )
-# 4773 "pars.fsy"
+# 4770 "pars.fsy"
                  : SynExpr));
-# 13168 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13165 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13173,66 +13170,66 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4776 "pars.fsy"
+# 4773 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression _2)
                             mkSynInfix mOp _1 _2 (arbExpr ("declExprInfixPlusMinus", mOp.EndRange)) 
                    )
-# 4776 "pars.fsy"
+# 4773 "pars.fsy"
                  : SynExpr));
-# 13183 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13180 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4781 "pars.fsy"
+# 4778 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 "-" _3 
                    )
-# 4781 "pars.fsy"
+# 4778 "pars.fsy"
                  : SynExpr));
-# 13195 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13192 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4784 "pars.fsy"
+# 4781 "pars.fsy"
                              let mOp = rhs parseState 2
                              reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression "-")
                              mkSynInfix mOp _1 "-" (arbExpr ("declExprInfixMinus", mOp.EndRange)) 
                    )
-# 4784 "pars.fsy"
+# 4781 "pars.fsy"
                  : SynExpr));
-# 13209 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13206 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4789 "pars.fsy"
+# 4786 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 "*" _3 
                    )
-# 4789 "pars.fsy"
+# 4786 "pars.fsy"
                  : SynExpr));
-# 13221 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13218 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4792 "pars.fsy"
+# 4789 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression "*")
                             mkSynInfix mOp _1 "*" (arbExpr ("declExprInfixStar", mOp.EndRange)) 
                    )
-# 4792 "pars.fsy"
+# 4789 "pars.fsy"
                  : SynExpr));
-# 13235 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13232 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13240,12 +13237,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4797 "pars.fsy"
+# 4794 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 _2 _3 
                    )
-# 4797 "pars.fsy"
+# 4794 "pars.fsy"
                  : SynExpr));
-# 13248 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13245 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13253,14 +13250,14 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4800 "pars.fsy"
+# 4797 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression _2)
                             mkSynInfix mOp _1 _2 (arbExpr ("declExprInfixStarDivMod", mOp.EndRange)) 
                    )
-# 4800 "pars.fsy"
+# 4797 "pars.fsy"
                  : SynExpr));
-# 13263 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13260 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13268,12 +13265,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4805 "pars.fsy"
+# 4802 "pars.fsy"
                             mkSynInfix (rhs parseState 2) _1 _2 _3 
                    )
-# 4805 "pars.fsy"
+# 4802 "pars.fsy"
                  : SynExpr));
-# 13276 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13273 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13281,76 +13278,76 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4808 "pars.fsy"
+# 4805 "pars.fsy"
                             let mOp = rhs parseState 2
                             reportParseErrorAt mOp (FSComp.SR.parsUnfinishedExpression _2)
                             mkSynInfix mOp _1 _2 (arbExpr ("declExprInfixStarStar", mOp.EndRange)) 
                    )
-# 4808 "pars.fsy"
+# 4805 "pars.fsy"
                  : SynExpr));
-# 13291 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13288 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4813 "pars.fsy"
+# 4810 "pars.fsy"
                              let wholem = rhs2 parseState 1 3
                              let mOperator = rhs parseState 2
                              SynExpr.IndexRange(Some _1, mOperator, Some _3, rhs parseState 1, rhs parseState 3, wholem) 
                    )
-# 4813 "pars.fsy"
+# 4810 "pars.fsy"
                  : SynExpr));
-# 13305 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13302 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4818 "pars.fsy"
+# 4815 "pars.fsy"
                              let wholem = rhs2 parseState 1 2
                              let mOperator = rhs parseState 2
                              SynExpr.IndexRange(Some _1, mOperator, None, rhs parseState 1, mOperator, wholem) 
                    )
-# 4818 "pars.fsy"
+# 4815 "pars.fsy"
                  : SynExpr));
-# 13318 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13315 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4823 "pars.fsy"
+# 4820 "pars.fsy"
                              let wholem = rhs2 parseState 1 2
                              let mOperator = rhs parseState 1
                              SynExpr.IndexRange(None, mOperator, Some _2, mOperator, rhs parseState 2, wholem) 
                    )
-# 4823 "pars.fsy"
+# 4820 "pars.fsy"
                  : SynExpr));
-# 13331 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13328 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4828 "pars.fsy"
+# 4825 "pars.fsy"
                              let m = rhs parseState 1
                              SynExpr.IndexRange(None, m, None, m, m, m) 
                    )
-# 4828 "pars.fsy"
+# 4825 "pars.fsy"
                  : SynExpr));
-# 13342 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13339 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4831 "pars.fsy"
+# 4828 "pars.fsy"
                                                                   _1 
                    )
-# 4831 "pars.fsy"
+# 4828 "pars.fsy"
                  : SynExpr));
-# 13353 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13350 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_doToken in
@@ -13359,16 +13356,16 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4835 "pars.fsy"
+# 4832 "pars.fsy"
                            fun mKeyword ->
                              let mWhileHeader = unionRanges mKeyword _1.Range
                              let spWhile = DebugPointAtWhile.Yes mWhileHeader 
                              let mWhileAll = unionRanges mKeyword _4
                              spWhile, _1, _3, mWhileAll 
                    )
-# 4835 "pars.fsy"
+# 4832 "pars.fsy"
                  : 'gentype_whileExprCore));
-# 13371 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13368 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_doToken in
@@ -13377,7 +13374,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4843 "pars.fsy"
+# 4840 "pars.fsy"
                            fun mKeyword ->
                              if not _4 then reportParseErrorAt mKeyword (FSComp.SR.parsUnexpectedEndOfFileWhile ())
                              let mWhileHeader = unionRanges mKeyword _1.Range
@@ -13385,9 +13382,9 @@ let _fsyacc_reductions = lazy [|
                              let mWhileAll = unionRanges mKeyword _3.Range
                              spWhile, _1, _3, mWhileAll 
                    )
-# 4843 "pars.fsy"
+# 4840 "pars.fsy"
                  : 'gentype_whileExprCore));
-# 13390 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13387 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_doToken in
@@ -13395,7 +13392,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4852 "pars.fsy"
+# 4849 "pars.fsy"
                            let mWhileBodyArb = rhs parseState 3
                          
                            fun mKeyword ->
@@ -13405,16 +13402,16 @@ let _fsyacc_reductions = lazy [|
                              let bodyArb = arbExpr ("whileBody1", mWhileBodyArb)
                              spWhile, _1, bodyArb, mWhileAll 
                    )
-# 4852 "pars.fsy"
+# 4849 "pars.fsy"
                  : 'gentype_whileExprCore));
-# 13410 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13407 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4863 "pars.fsy"
+# 4860 "pars.fsy"
                            fun mKeyword ->
                              reportParseErrorAt mKeyword (FSComp.SR.parsWhileDoExpected())
                              let mWhileHeader = unionRanges mKeyword _1.Range
@@ -13423,15 +13420,15 @@ let _fsyacc_reductions = lazy [|
                              let bodyArb = arbExpr ("whileBody2", _1.Range.EndRange)
                              spWhile, _1, bodyArb, mWhileAll 
                    )
-# 4863 "pars.fsy"
+# 4860 "pars.fsy"
                  : 'gentype_whileExprCore));
-# 13428 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13425 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4873 "pars.fsy"
+# 4870 "pars.fsy"
                            fun mKeyword ->
                              if not _1 then reportParseErrorAt mKeyword (FSComp.SR.parsUnexpectedEndOfFileWhile ())
                              let spWhile = DebugPointAtWhile.Yes mKeyword
@@ -13440,15 +13437,15 @@ let _fsyacc_reductions = lazy [|
                              
                              spWhile, expr1, expr2, mKeyword 
                    )
-# 4873 "pars.fsy"
+# 4870 "pars.fsy"
                  : 'gentype_whileExprCore));
-# 13445 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13442 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_doneDeclEnd in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4882 "pars.fsy"
+# 4879 "pars.fsy"
                            let mWhileBodyArb = rhs parseState 1
                          
                            fun mKeyword ->
@@ -13459,36 +13456,47 @@ let _fsyacc_reductions = lazy [|
                              
                              spWhile, expr1, expr2, mWhileAll 
                    )
-# 4882 "pars.fsy"
+# 4879 "pars.fsy"
                  : 'gentype_whileExprCore));
-# 13464 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13461 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4894 "pars.fsy"
+# 4891 "pars.fsy"
                              let m = rhs parseState 1
                              SynExpr.Ident(Ident(_1, m)) 
                    )
-# 4894 "pars.fsy"
+# 4891 "pars.fsy"
                  : 'gentype_dynamicArg));
-# 13476 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13473 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4898 "pars.fsy"
+# 4895 "pars.fsy"
                              let lpr = rhs parseState 1
                              let rpr = rhs parseState 3
                              let m = unionRanges lpr rpr
                              SynExpr.Paren(_2, lpr, Some rpr, m) 
                    )
-# 4898 "pars.fsy"
+# 4895 "pars.fsy"
                  : 'gentype_dynamicArg));
-# 13491 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13488 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            let _2 = parseState.GetInput(2) :?> 'gentype_withPatternClauses in
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 4902 "pars.fsy"
+                             rhs parseState 1, _2 
+                   )
+# 4902 "pars.fsy"
+                 : 'gentype_withClauses));
+# 13499 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_withPatternClauses in
             Microsoft.FSharp.Core.Operators.box
@@ -13499,75 +13507,64 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4905 "pars.fsy"
                  : 'gentype_withClauses));
-# 13502 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            let _2 = parseState.GetInput(2) :?> 'gentype_withPatternClauses in
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 4908 "pars.fsy"
-                             rhs parseState 1, _2 
-                   )
-# 4908 "pars.fsy"
-                 : 'gentype_withClauses));
-# 13513 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13510 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_withPatternClauses in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4911 "pars.fsy"
+# 4908 "pars.fsy"
                              if not _3 then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedEndOfFileWith())
                              rhs parseState 1, _2 
                    )
-# 4911 "pars.fsy"
+# 4908 "pars.fsy"
                  : 'gentype_withClauses));
-# 13526 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13523 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4915 "pars.fsy"
+# 4912 "pars.fsy"
                              let mWith = rhs parseState 1
                              if not _2 then reportParseErrorAt mWith (FSComp.SR.parsUnexpectedEndOfFileWith ())
                              mWith, ([], mWith.EndRange) 
                    )
-# 4915 "pars.fsy"
+# 4912 "pars.fsy"
                  : 'gentype_withClauses));
-# 13539 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13536 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternClauses in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4921 "pars.fsy"
+# 4918 "pars.fsy"
                              _1 None 
                    )
-# 4921 "pars.fsy"
+# 4918 "pars.fsy"
                  : 'gentype_withPatternClauses));
-# 13550 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13547 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_barCanBeRightBeforeNull in
             let _2 = parseState.GetInput(2) :?> 'gentype_patternClauses in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4924 "pars.fsy"
+# 4921 "pars.fsy"
                              let mBar = rhs parseState 1 |> Some
                              _2 mBar 
                    )
-# 4924 "pars.fsy"
+# 4921 "pars.fsy"
                  : 'gentype_withPatternClauses));
-# 13563 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13560 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_barCanBeRightBeforeNull in
             let _3 = parseState.GetInput(3) :?> 'gentype_patternClauses in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4928 "pars.fsy"
+# 4925 "pars.fsy"
                             let mBar1 = rhs parseState 1
                             let mBar2 = rhs parseState 2
                             reportParseErrorAt mBar2 (FSComp.SR.parsExpectingPattern ())
@@ -13575,53 +13572,53 @@ let _fsyacc_reductions = lazy [|
                             let clauses = addEmptyMatchClause mBar1 mBar2 clauses
                             clauses, mLast 
                    )
-# 4928 "pars.fsy"
+# 4925 "pars.fsy"
                  : 'gentype_withPatternClauses));
-# 13580 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13577 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_barCanBeRightBeforeNull in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4936 "pars.fsy"
+# 4933 "pars.fsy"
                              // silent recovery
                              let mLast = rhs parseState 1
                              [], mLast 
                    )
-# 4936 "pars.fsy"
+# 4933 "pars.fsy"
                  : 'gentype_withPatternClauses));
-# 13593 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13590 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4941 "pars.fsy"
+# 4938 "pars.fsy"
                              // silent recovery
                              let mLast = rhs parseState 1
                              [], mLast 
                    )
-# 4941 "pars.fsy"
+# 4938 "pars.fsy"
                  : 'gentype_withPatternClauses));
-# 13605 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13602 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _2 = parseState.GetInput(2) :?> 'gentype_patternGuard in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4948 "pars.fsy"
+# 4945 "pars.fsy"
                              _1, _2 
                    )
-# 4948 "pars.fsy"
+# 4945 "pars.fsy"
                  : 'gentype_patternAndGuard));
-# 13617 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13614 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _2 = parseState.GetInput(2) :?> Range * SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4952 "pars.fsy"
+# 4949 "pars.fsy"
                             let pat, guard = _1
                             let mArrow, resultExpr = _2
                             let mLast = resultExpr.Range
@@ -13629,9 +13626,9 @@ let _fsyacc_reductions = lazy [|
                             fun mBar ->
                                 [SynMatchClause(pat, guard, resultExpr, m, DebugPointAtTarget.Yes, { ArrowRange = Some mArrow; BarRange = mBar })], mLast 
                    )
-# 4952 "pars.fsy"
+# 4949 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13634 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13631 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _2 = parseState.GetInput(2) :?> Range * SynExpr in
@@ -13640,7 +13637,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4960 "pars.fsy"
+# 4957 "pars.fsy"
                             let pat, guard = _1
                             let mArrow, resultExpr = _2
                             let mNextBar = rhs parseState 3 |> Some
@@ -13649,9 +13646,9 @@ let _fsyacc_reductions = lazy [|
                             fun mBar ->
                                 (SynMatchClause(pat, guard, resultExpr, m, DebugPointAtTarget.Yes, { ArrowRange = Some mArrow; BarRange = mBar }) :: clauses), mLast 
                    )
-# 4960 "pars.fsy"
+# 4957 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13654 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13651 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _2 = parseState.GetInput(2) :?> Range * SynExpr in
@@ -13660,7 +13657,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4969 "pars.fsy"
+# 4966 "pars.fsy"
                             let pat, guard = _1
                             let mArrow, resultExpr = _2
                             let mBar1 = rhs parseState 3
@@ -13673,9 +13670,9 @@ let _fsyacc_reductions = lazy [|
                                 let trivia = { ArrowRange = Some mArrow; BarRange = mBar }
                                 SynMatchClause(pat, guard, resultExpr, m, DebugPointAtTarget.Yes, trivia) :: clauses, mLast 
                    )
-# 4969 "pars.fsy"
+# 4966 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13678 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13675 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _3 = parseState.GetInput(3) :?> 'gentype_barCanBeRightBeforeNull in
@@ -13683,7 +13680,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4983 "pars.fsy"
+# 4980 "pars.fsy"
                             let pat, guard = _1
                             let mNextBar = rhs parseState 3 |> Some
                             let clauses, mLast = _4 mNextBar
@@ -13692,9 +13689,9 @@ let _fsyacc_reductions = lazy [|
                             fun _mBar ->
                                 (SynMatchClause(pat, guard, arbExpr ("patternClauses1", m.EndRange), m, DebugPointAtTarget.Yes, SynMatchClauseTrivia.Zero) :: clauses), mLast 
                    )
-# 4983 "pars.fsy"
+# 4980 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13697 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13694 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _2 = parseState.GetInput(2) :?> Range * SynExpr in
@@ -13703,7 +13700,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 4992 "pars.fsy"
+# 4989 "pars.fsy"
                             let pat, guard = _1
                             let mArrow, resultExpr = _2
                             let mLast = rhs parseState 3
@@ -13711,9 +13708,9 @@ let _fsyacc_reductions = lazy [|
                             fun mBar ->
                                 [SynMatchClause(pat, guard, resultExpr, m, DebugPointAtTarget.Yes, { ArrowRange = Some mArrow; BarRange = mBar })], mLast 
                    )
-# 4992 "pars.fsy"
+# 4989 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13716 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13713 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _2 = parseState.GetInput(2) :?> Range * SynExpr in
@@ -13721,73 +13718,73 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5000 "pars.fsy"
+# 4997 "pars.fsy"
                             let pat, guard = _1
                             let mArrow, resultExpr = _2
                             let m = unionRanges resultExpr.Range pat.Range
                             fun mBar ->
                                 [SynMatchClause(pat, guard, resultExpr, m, DebugPointAtTarget.Yes, { ArrowRange = Some mArrow; BarRange = mBar })], m 
                    )
-# 5000 "pars.fsy"
+# 4997 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13733 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13730 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5007 "pars.fsy"
+# 5004 "pars.fsy"
                             let pat, guard = _1
                             let patm = pat.Range
                             let m = guard |> Option.map (fun e -> unionRanges patm e.Range) |> Option.defaultValue patm
                             fun mBar ->
                                 [SynMatchClause(pat, guard, arbExpr ("patternClauses2", m.EndRange), m, DebugPointAtTarget.Yes, { ArrowRange = None; BarRange = mBar })], m 
                    )
-# 5007 "pars.fsy"
+# 5004 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13749 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13746 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5015 "pars.fsy"
+# 5012 "pars.fsy"
                             Some _2 
                    )
-# 5015 "pars.fsy"
+# 5012 "pars.fsy"
                  : 'gentype_patternGuard));
-# 13760 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13757 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5018 "pars.fsy"
+# 5015 "pars.fsy"
                             None 
                    )
-# 5018 "pars.fsy"
+# 5015 "pars.fsy"
                  : 'gentype_patternGuard));
-# 13770 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13767 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExprBlockR in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5022 "pars.fsy"
+# 5019 "pars.fsy"
                              let mArrow = rhs parseState 1
                              let expr = _2 mArrow
                              mArrow, expr 
                    )
-# 5022 "pars.fsy"
+# 5019 "pars.fsy"
                  : Range * SynExpr));
-# 13783 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13780 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_ifExprThen in
             let _2 = parseState.GetInput(2) :?> 'gentype_ifExprElifs in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5028 "pars.fsy"
+# 5025 "pars.fsy"
                              let exprThen, mThen = _1
                              let mElse, elseExpr = _2
                              (fun exprGuard mIf isElif ->
@@ -13798,96 +13795,96 @@ let _fsyacc_reductions = lazy [|
                                  let trivia = { IfKeyword = mIf; IsElif = isElif; ThenKeyword = mThen; ElseKeyword = mElse; IfToThenRange = mIfToThen }
                                  SynExpr.IfThenElse(exprGuard, exprThen, elseExpr, spIfToThen, false, mIfToEndOfLastBranch, trivia)) 
                    )
-# 5028 "pars.fsy"
+# 5025 "pars.fsy"
                  : 'gentype_ifExprCases));
-# 13803 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13800 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5040 "pars.fsy"
+# 5037 "pars.fsy"
                              _2, rhs parseState 1 
                    )
-# 5040 "pars.fsy"
+# 5037 "pars.fsy"
                  : 'gentype_ifExprThen));
-# 13814 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13811 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5043 "pars.fsy"
+# 5040 "pars.fsy"
                              let mThen = rhs parseState 1
                              arbExpr ("ifThen1", mThen.EndRange), mThen 
                    )
-# 5043 "pars.fsy"
+# 5040 "pars.fsy"
                  : 'gentype_ifExprThen));
-# 13826 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13823 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5047 "pars.fsy"
+# 5044 "pars.fsy"
                              _2, rhs parseState 1 
                    )
-# 5047 "pars.fsy"
+# 5044 "pars.fsy"
                  : 'gentype_ifExprThen));
-# 13837 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13834 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5050 "pars.fsy"
+# 5047 "pars.fsy"
                              let mThen = rhs parseState 1
                              arbExpr ("ifThen2", mThen.EndRange), mThen 
                    )
-# 5050 "pars.fsy"
+# 5047 "pars.fsy"
                  : 'gentype_ifExprThen));
-# 13849 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13846 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5055 "pars.fsy"
+# 5052 "pars.fsy"
                              None, None 
                    )
+# 5052 "pars.fsy"
+                 : 'gentype_ifExprElifs));
+# 13856 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            let _2 = parseState.GetInput(2) :?> SynExpr in
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 5055 "pars.fsy"
+                             let mElse = rhs parseState 1
+                             Some mElse, Some _2 
+                   )
 # 5055 "pars.fsy"
                  : 'gentype_ifExprElifs));
-# 13859 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13868 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5058 "pars.fsy"
+# 5059 "pars.fsy"
                              let mElse = rhs parseState 1
                              Some mElse, Some _2 
                    )
-# 5058 "pars.fsy"
+# 5059 "pars.fsy"
                  : 'gentype_ifExprElifs));
-# 13871 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            let _2 = parseState.GetInput(2) :?> SynExpr in
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 5062 "pars.fsy"
-                             let mElse = rhs parseState 1
-                             Some mElse, Some _2 
-                   )
-# 5062 "pars.fsy"
-                 : 'gentype_ifExprElifs));
-# 13883 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13880 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ifExprCases in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5066 "pars.fsy"
+# 5063 "pars.fsy"
                              let mElif = rhs parseState 1
                              // verify if `ELIF` is not a merged token
                              let length = mElif.EndColumn - mElif.StartColumn
@@ -13898,57 +13895,57 @@ let _fsyacc_reductions = lazy [|
                              else
                                  None, Some(_3 _2 mElif true) 
                    )
-# 5066 "pars.fsy"
+# 5063 "pars.fsy"
                  : 'gentype_ifExprElifs));
-# 13903 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13900 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5077 "pars.fsy"
+# 5074 "pars.fsy"
                              if not _3 then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedEndOfFileElif())
                              None, Some(exprFromParseError _2) 
                    )
-# 5077 "pars.fsy"
+# 5074 "pars.fsy"
                  : 'gentype_ifExprElifs));
-# 13916 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13913 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr list * range list in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5082 "pars.fsy"
+# 5079 "pars.fsy"
                              let exprs, commas = _1
                              _3 :: exprs, (rhs parseState 2 :: commas) 
                    )
-# 5082 "pars.fsy"
+# 5079 "pars.fsy"
                  : SynExpr list * range list));
-# 13929 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13926 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr list * range list in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5086 "pars.fsy"
+# 5083 "pars.fsy"
                              let commaRange = rhs parseState 2
                              if not _3 then reportParseErrorAt commaRange (FSComp.SR.parsExpectedExpressionAfterToken ())
                              let exprs, commas = _1
                              arbExpr ("tupleExpr1", commaRange.EndRange) :: exprs, commaRange :: commas 
                    )
-# 5086 "pars.fsy"
+# 5083 "pars.fsy"
                  : SynExpr list * range list));
-# 13944 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13941 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr list * range list in
             let _4 = parseState.GetInput(4) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5092 "pars.fsy"
+# 5089 "pars.fsy"
                              let exprs, commas = _1
                              let mComma1 = rhs parseState 2
                              let mComma2 = rhs parseState 3
@@ -13956,16 +13953,16 @@ let _fsyacc_reductions = lazy [|
                              let expr = arbExpr ("tupleExpr2", mComma1.EndRange)
                              _4 :: expr :: exprs, (mComma2 :: mComma1 :: commas) 
                    )
-# 5092 "pars.fsy"
+# 5089 "pars.fsy"
                  : SynExpr list * range list));
-# 13961 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13958 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr list * range list in
             let _4 = parseState.GetInput(4) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5100 "pars.fsy"
+# 5097 "pars.fsy"
                              let exprs, commas = _1
                              let mComma1 = rhs parseState 2
                              let mComma2 = rhs parseState 3
@@ -13975,42 +13972,42 @@ let _fsyacc_reductions = lazy [|
                              let expr2 = arbExpr ("tupleExpr4", mComma2.EndRange)
                              expr2 :: expr1 :: exprs, mComma2 :: mComma1 :: commas 
                    )
-# 5100 "pars.fsy"
+# 5097 "pars.fsy"
                  : SynExpr list * range list));
-# 13980 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13977 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5110 "pars.fsy"
+# 5107 "pars.fsy"
                              let commaRange = rhs parseState 2
                              if not _3 then reportParseErrorAt commaRange (FSComp.SR.parsExpectedExpressionAfterToken ())
                              [arbExpr ("tupleExpr5", commaRange.EndRange); _1], [commaRange] 
                    )
-# 5110 "pars.fsy"
+# 5107 "pars.fsy"
                  : SynExpr list * range list));
-# 13994 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 13991 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5115 "pars.fsy"
+# 5112 "pars.fsy"
                              [_3; _1], [rhs parseState 2] 
                    )
-# 5115 "pars.fsy"
+# 5112 "pars.fsy"
                  : SynExpr list * range list));
-# 14006 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14003 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _4 = parseState.GetInput(4) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5118 "pars.fsy"
+# 5115 "pars.fsy"
                              let mComma1 = rhs parseState 2
                              let mComma2 = rhs parseState 3
                              reportParseErrorAt mComma2 (FSComp.SR.parsExpectingExpression ())
@@ -14019,111 +14016,111 @@ let _fsyacc_reductions = lazy [|
                              let expr2 = arbExpr ("tupleExpr7", mComma2.EndRange)
                              [expr2; expr1; _1], [mComma2; mComma1] 
                    )
-# 5118 "pars.fsy"
+# 5115 "pars.fsy"
                  : SynExpr list * range list));
-# 14024 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14021 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _4 = parseState.GetInput(4) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5127 "pars.fsy"
+# 5124 "pars.fsy"
                              let mComma1 = rhs parseState 2
                              let mComma2 = rhs parseState 3
                              reportParseErrorAt mComma2 (FSComp.SR.parsExpectingExpression ())
                              let expr = arbExpr ("tupleExpr8", mComma1.EndRange)
                              [_4; expr; _1], [mComma2; mComma1] 
                    )
-# 5127 "pars.fsy"
+# 5124 "pars.fsy"
                  : SynExpr list * range list));
-# 14040 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14037 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5135 "pars.fsy"
+# 5132 "pars.fsy"
                            if _1 <> "^" then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsInvalidPrefixOperator())
                            let m = (rhs2 parseState 1 2)
                            SynExpr.IndexFromEnd(_2, m) 
                    )
-# 5135 "pars.fsy"
+# 5132 "pars.fsy"
                  : SynExpr));
-# 14054 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14051 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5140 "pars.fsy"
+# 5137 "pars.fsy"
                              mkSynPrefix (rhs parseState 1) (unionRanges (rhs parseState 1) _2.Range) "~-" _2 
                    )
+# 5137 "pars.fsy"
+                 : SynExpr));
+# 14062 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            let _1 = parseState.GetInput(1) :?> string in
+            let _2 = parseState.GetInput(2) :?> SynExpr in
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 5140 "pars.fsy"
+                             if not (IsValidPrefixOperatorUse _1) then reportParseErrorAt _2.Range (FSComp.SR.parsInvalidPrefixOperator())
+                             mkSynPrefix (rhs parseState 1) (unionRanges (rhs parseState 1) _2.Range) ("~" + (_1)) _2 
+                   )
 # 5140 "pars.fsy"
                  : SynExpr));
-# 14065 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14075 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5143 "pars.fsy"
+# 5144 "pars.fsy"
                              if not (IsValidPrefixOperatorUse _1) then reportParseErrorAt _2.Range (FSComp.SR.parsInvalidPrefixOperator())
                              mkSynPrefix (rhs parseState 1) (unionRanges (rhs parseState 1) _2.Range) ("~" + (_1)) _2 
                    )
-# 5143 "pars.fsy"
+# 5144 "pars.fsy"
                  : SynExpr));
-# 14078 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14088 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5147 "pars.fsy"
+# 5148 "pars.fsy"
                              if not (IsValidPrefixOperatorUse _1) then reportParseErrorAt _2.Range (FSComp.SR.parsInvalidPrefixOperator())
                              mkSynPrefix (rhs parseState 1) (unionRanges (rhs parseState 1) _2.Range) ("~" + (_1)) _2 
                    )
-# 5147 "pars.fsy"
+# 5148 "pars.fsy"
                  : SynExpr));
-# 14091 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            let _1 = parseState.GetInput(1) :?> string in
-            let _2 = parseState.GetInput(2) :?> SynExpr in
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 5151 "pars.fsy"
-                             if not (IsValidPrefixOperatorUse _1) then reportParseErrorAt _2.Range (FSComp.SR.parsInvalidPrefixOperator())
-                             mkSynPrefix (rhs parseState 1) (unionRanges (rhs parseState 1) _2.Range) ("~" + (_1)) _2 
-                   )
-# 5151 "pars.fsy"
-                 : SynExpr));
-# 14104 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14101 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5155 "pars.fsy"
+# 5152 "pars.fsy"
                              SynExpr.AddressOf(true, _2, rhs parseState 1, unionRanges (rhs parseState 1) _2.Range) 
                    )
-# 5155 "pars.fsy"
+# 5152 "pars.fsy"
                  : SynExpr));
-# 14115 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14112 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5158 "pars.fsy"
+# 5155 "pars.fsy"
                              SynExpr.AddressOf(false, _2, rhs parseState 1, unionRanges (rhs parseState 1) _2.Range) 
                    )
-# 5158 "pars.fsy"
+# 5155 "pars.fsy"
                  : SynExpr));
-# 14126 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14123 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -14132,14 +14129,14 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5161 "pars.fsy"
+# 5158 "pars.fsy"
                              errorR (Error (FSComp.SR.parsNewExprMemberAccess (), rhs parseState 6))
                              let newExpr = SynExpr.New(false, _2, _4, unionRanges (rhs parseState 1) _4.Range)
                              _6 newExpr (lhs parseState) (rhs parseState 5) 
                    )
-# 5161 "pars.fsy"
+# 5158 "pars.fsy"
                  : SynExpr));
-# 14142 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14139 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -14147,125 +14144,125 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5166 "pars.fsy"
+# 5163 "pars.fsy"
                              SynExpr.New(false, _2, _4, unionRanges (rhs parseState 1) _4.Range) 
                    )
-# 5166 "pars.fsy"
+# 5163 "pars.fsy"
                  : SynExpr));
-# 14155 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14152 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5169 "pars.fsy"
+# 5166 "pars.fsy"
                              SynExpr.New(false, _2, arbExpr ("minusExpr", (rhs parseState 4)), unionRanges (rhs parseState 1) (_2).Range) 
                    )
-# 5169 "pars.fsy"
+# 5166 "pars.fsy"
                  : SynExpr));
-# 14167 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14164 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5172 "pars.fsy"
+# 5169 "pars.fsy"
                              arbExpr ("minusExpr2", (rhs parseState 1)) 
                    )
-# 5172 "pars.fsy"
+# 5169 "pars.fsy"
                  : SynExpr));
-# 14177 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14174 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5175 "pars.fsy"
+# 5172 "pars.fsy"
                              SynExpr.InferredUpcast(_2, unionRanges (rhs parseState 1) _2.Range) 
                    )
-# 5175 "pars.fsy"
+# 5172 "pars.fsy"
                  : SynExpr));
-# 14188 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14185 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5178 "pars.fsy"
+# 5175 "pars.fsy"
                              SynExpr.InferredDowncast(_2, unionRanges (rhs parseState 1) _2.Range) 
                    )
-# 5178 "pars.fsy"
+# 5175 "pars.fsy"
                  : SynExpr));
-# 14199 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14196 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5181 "pars.fsy"
+# 5178 "pars.fsy"
                              _1 
                    )
-# 5181 "pars.fsy"
+# 5178 "pars.fsy"
                  : SynExpr));
-# 14210 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14207 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5185 "pars.fsy"
+# 5182 "pars.fsy"
                              SynExpr.App(ExprAtomicFlag.NonAtomic, false, _1, _2, unionRanges _1.Range _2.Range) 
                    )
-# 5185 "pars.fsy"
+# 5182 "pars.fsy"
                  : SynExpr));
-# 14222 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14219 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5188 "pars.fsy"
+# 5185 "pars.fsy"
                              let arg, _ = _1
                              arg 
                    )
-# 5188 "pars.fsy"
+# 5185 "pars.fsy"
                  : SynExpr));
-# 14234 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14231 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> SynExpr * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5193 "pars.fsy"
+# 5190 "pars.fsy"
                              let arg2, hpa2 = _2
                              if not (IsValidPrefixOperatorUse _1) then reportParseErrorAt arg2.Range (FSComp.SR.parsInvalidPrefixOperator())
                              if hpa2 then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsSuccessiveArgsShouldBeSpacedOrTupled())
                              mkSynPrefix (rhs parseState 1) (unionRanges (rhs parseState 1) arg2.Range) ("~" + (_1)) arg2 
                    )
-# 5193 "pars.fsy"
+# 5190 "pars.fsy"
                  : SynExpr));
-# 14249 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14246 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5199 "pars.fsy"
+# 5196 "pars.fsy"
                              let arg, hpa = _1
                              if hpa then reportParseErrorAt arg.Range (FSComp.SR.parsSuccessiveArgsShouldBeSpacedOrTupled())
                              arg 
                    )
-# 5199 "pars.fsy"
+# 5196 "pars.fsy"
                  : SynExpr));
-# 14262 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14259 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynExpr * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5205 "pars.fsy"
+# 5202 "pars.fsy"
                              let mUnderscore  = rhs parseState 1
                              let mDot  = rhs parseState 2
                              parseState.LexBuffer.CheckLanguageFeatureAndRecover LanguageFeature.AccessorFunctionShorthand (unionRanges mUnderscore  mDot )
@@ -14273,15 +14270,15 @@ let _fsyacc_reductions = lazy [|
                              let trivia: SynExprDotLambdaTrivia = { UnderscoreRange = mUnderscore ; DotRange = mDot  }
                              SynExpr.DotLambda(expr, unionRanges mUnderscore  expr.Range, trivia), false 
                    )
-# 5205 "pars.fsy"
+# 5202 "pars.fsy"
                  : SynExpr * bool));
-# 14278 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14275 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5214 "pars.fsy"
+# 5211 "pars.fsy"
                              let mUnderscore = rhs parseState 1
                              let mDot = rhs parseState 2
                              let mWhole = unionRanges mUnderscore mDot
@@ -14292,341 +14289,341 @@ let _fsyacc_reductions = lazy [|
                              let trivia: SynExprDotLambdaTrivia = { UnderscoreRange = mUnderscore ; DotRange = mDot  }
                              SynExpr.DotLambda(expr, mWhole, trivia), false 
                    )
-# 5214 "pars.fsy"
+# 5211 "pars.fsy"
                  : SynExpr * bool));
-# 14297 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14294 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5227 "pars.fsy"
+# 5224 "pars.fsy"
                              let mUnderscore = rhs parseState 1
                              if not _2 then reportParseErrorAt mUnderscore (FSComp.SR.parsUnexpectedEndOfFileExpression())
                              let expr = SynExpr.Ident(Ident("_", mUnderscore))
                              SynExpr.FromParseError(expr, mUnderscore), false 
                    )
-# 5227 "pars.fsy"
+# 5224 "pars.fsy"
                  : SynExpr * bool));
-# 14311 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14308 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             let _3 = parseState.GetInput(3) :?> SynExpr * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5235 "pars.fsy"
+# 5232 "pars.fsy"
                              let arg1, _ = _1
                              let arg2, hpa = _3
                              SynExpr.App(ExprAtomicFlag.Atomic, false, arg1, arg2, unionRanges arg1.Range arg2.Range), hpa 
                    )
-# 5235 "pars.fsy"
+# 5232 "pars.fsy"
                  : SynExpr * bool));
-# 14325 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14322 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             let _3 = parseState.GetInput(3) :?> SynExpr * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5240 "pars.fsy"
+# 5237 "pars.fsy"
                              let arg1, _ = _1
                              let arg2, _ = _3
                              SynExpr.App(ExprAtomicFlag.Atomic, false, arg1, arg2, unionRanges arg1.Range arg2.Range), true 
                    )
-# 5240 "pars.fsy"
+# 5237 "pars.fsy"
                  : SynExpr * bool));
-# 14339 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14336 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             let _3 = parseState.GetInput(3) :?> range * range option * bool     * SynType list * range list * range in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5245 "pars.fsy"
+# 5242 "pars.fsy"
                              let arg1, _ = _1
                              let mLessThan, mGreaterThan, _, args, commas, mTypeArgs = _3
                              let mWholeExpr = unionRanges arg1.Range mTypeArgs
                              SynExpr.TypeApp(arg1, mLessThan, args, commas, mGreaterThan, mTypeArgs, mWholeExpr), false 
                    )
-# 5245 "pars.fsy"
+# 5242 "pars.fsy"
                  : SynExpr * bool));
-# 14354 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14351 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> SynExpr * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5251 "pars.fsy"
+# 5248 "pars.fsy"
                              let arg2, hpa2 = _2
                              if not (IsValidPrefixOperatorUse _1) then reportParseErrorAt arg2.Range (FSComp.SR.parsInvalidPrefixOperator())
                              mkSynPrefixPrim (rhs parseState 1) (unionRanges (rhs parseState 1) arg2.Range) _1 arg2, hpa2 
                    )
-# 5251 "pars.fsy"
+# 5248 "pars.fsy"
                  : SynExpr * bool));
-# 14368 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14365 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5256 "pars.fsy"
+# 5253 "pars.fsy"
                              let id = mkSynId (lhs parseState) (_2).idText
                              let typar = SynTypar(id, TyparStaticReq.None, false)
                              let lhsm = rhs2 parseState 1 2
                              SynExpr.Typar(typar, lhsm), false 
                    )
-# 5256 "pars.fsy"
+# 5253 "pars.fsy"
                  : SynExpr * bool));
-# 14382 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14379 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5262 "pars.fsy"
+# 5259 "pars.fsy"
                              arbExpr ("unfinished identifier", rhs parseState 1), false 
                    )
-# 5262 "pars.fsy"
+# 5259 "pars.fsy"
                  : SynExpr * bool));
-# 14392 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14389 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             let _3 = parseState.GetInput(3) :?> 'gentype_atomicExprQualification in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5265 "pars.fsy"
+# 5262 "pars.fsy"
                              let arg1, hpa1 = _1
                              _3 arg1 (lhs parseState) (rhs parseState 2), hpa1 
                    )
-# 5265 "pars.fsy"
+# 5262 "pars.fsy"
                  : SynExpr * bool));
-# 14405 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14402 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_atomicExprQualification in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5269 "pars.fsy"
+# 5266 "pars.fsy"
                              let arg1 = SynExpr.Ident(ident("base", rhs parseState 1))
                              _3 arg1 (lhs parseState) (rhs parseState 2), false 
                    )
-# 5269 "pars.fsy"
+# 5266 "pars.fsy"
                  : SynExpr * bool));
-# 14417 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14414 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_nameop in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5273 "pars.fsy"
+# 5270 "pars.fsy"
                              let (SynIdent(ident, trivia)) = _2
                              SynExpr.LongIdent(true, SynLongIdent([ident], [], [trivia]), None, rhs parseState 2), false 
                    )
-# 5273 "pars.fsy"
+# 5270 "pars.fsy"
                  : SynExpr * bool));
-# 14429 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14426 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             let _3 = parseState.GetInput(3) :?> 'gentype_dynamicArg in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5277 "pars.fsy"
+# 5274 "pars.fsy"
                              let m = rhs2 parseState 1 3
                              let mQmark = rhs parseState 2
                              let arg1, hpa1 = _1
                              SynExpr.Dynamic(arg1, mQmark, _3, m), hpa1 
                    )
-# 5277 "pars.fsy"
+# 5274 "pars.fsy"
                  : SynExpr * bool));
-# 14444 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14441 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5283 "pars.fsy"
+# 5280 "pars.fsy"
                              let m = rhs parseState 1
                              let ident = ident(MangledGlobalName, m)
                              SynExpr.LongIdent(false, SynLongIdent([ident], [], [Some(IdentTrivia.OriginalNotation "global")]), None, m), false 
                    )
-# 5283 "pars.fsy"
+# 5280 "pars.fsy"
                  : SynExpr * bool));
-# 14456 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14453 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_identExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5288 "pars.fsy"
+# 5285 "pars.fsy"
                              _1, false 
                    )
-# 5288 "pars.fsy"
+# 5285 "pars.fsy"
                  : SynExpr * bool));
-# 14467 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14464 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_listExprElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5291 "pars.fsy"
+# 5288 "pars.fsy"
                              _2 (lhs parseState), false 
                    )
-# 5291 "pars.fsy"
+# 5288 "pars.fsy"
                  : SynExpr * bool));
-# 14478 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14475 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_listExprElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5294 "pars.fsy"
+# 5291 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedBracket())
                              exprFromParseError (_2 (rhs2 parseState 1 2)), false 
                    )
-# 5294 "pars.fsy"
+# 5291 "pars.fsy"
                  : SynExpr * bool));
-# 14491 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14488 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5298 "pars.fsy"
+# 5295 "pars.fsy"
                              // silent recovery
                              SynExpr.ArrayOrList(false, [ ], lhs parseState), false 
                    )
-# 5298 "pars.fsy"
+# 5295 "pars.fsy"
                  : SynExpr * bool));
-# 14502 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14499 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5302 "pars.fsy"
+# 5299 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedBracket())
                              // silent recovery
                              exprFromParseError (SynExpr.ArrayOrList(false, [ ], rhs parseState 1)), false 
                    )
-# 5302 "pars.fsy"
+# 5299 "pars.fsy"
                  : SynExpr * bool));
-# 14515 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14512 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynExpr list * range list in
             let _4 = parseState.GetInput(4) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5307 "pars.fsy"
+# 5304 "pars.fsy"
                              let exprs, commas = _3
                              let m = rhs2 parseState 1 4
                              SynExpr.Tuple(true, List.rev exprs, List.rev commas, m), false 
                    )
-# 5307 "pars.fsy"
+# 5304 "pars.fsy"
                  : SynExpr * bool));
-# 14529 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14526 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynExpr list * range list in
             let _4 = parseState.GetInput(4) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5312 "pars.fsy"
+# 5309 "pars.fsy"
                              reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsUnmatchedBracket())
                              let exprs, commas = _3
                              let m = (rhs parseState 1, exprs) ||> unionRangeWithListBy (fun e -> e.Range)
                              SynExpr.Tuple(true, List.rev exprs, List.rev commas, m), false 
                    )
-# 5312 "pars.fsy"
+# 5309 "pars.fsy"
                  : SynExpr * bool));
-# 14544 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14541 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5318 "pars.fsy"
+# 5315 "pars.fsy"
                              _1, false 
                    )
-# 5318 "pars.fsy"
+# 5315 "pars.fsy"
                  : SynExpr * bool));
-# 14555 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14552 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_identOrOp in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5322 "pars.fsy"
+# 5319 "pars.fsy"
                              let idm = rhs parseState 1
                              (fun e mLhs mDot -> mkSynDot mDot mLhs e _1) 
                    )
-# 5322 "pars.fsy"
+# 5319 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14567 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14564 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5326 "pars.fsy"
+# 5323 "pars.fsy"
                              (fun e mLhs mDot ->
                                  reportParseErrorAt (rhs parseState 3) (FSComp.SR.nrGlobalUsedOnlyAsFirstName())
                                  let fixedLhsm = withEnd mDot.End mLhs // previous mLhs is wrong after 'recover'
                                  mkSynDotMissing mDot fixedLhsm e) 
                    )
-# 5326 "pars.fsy"
+# 5323 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14580 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14577 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5332 "pars.fsy"
+# 5329 "pars.fsy"
                              (fun e mLhs mDot ->
                                  reportParseErrorAt mDot (FSComp.SR.parsMissingQualificationAfterDot())
                                  let fixedLhsm = withEnd mDot.End mLhs // previous mLhs is wrong after 'recover'
                                  mkSynDotMissing mDot fixedLhsm e) 
                    )
-# 5332 "pars.fsy"
+# 5329 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14593 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14590 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5337 "pars.fsy"
+# 5334 "pars.fsy"
                              (fun e mLhs mDot ->
                                  reportParseErrorAt mDot (FSComp.SR.parsMissingQualificationAfterDot())
                                  let fixedLhsm = withEnd mDot.End mLhs // previous mLhs is wrong after 'recover'
                                  // Include 'e' in the returned expression but throw it away
                                  mkSynDotMissing mDot fixedLhsm e) 
                    )
-# 5337 "pars.fsy"
+# 5334 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14608 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14605 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             let _5 = parseState.GetInput(5) :?> int32 * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5343 "pars.fsy"
+# 5340 "pars.fsy"
                              (fun e mLhs mDot ->
                                  if parseState.LexBuffer.ReportLibraryOnlyFeatures then libraryOnlyError(lhs parseState)
                                  SynExpr.LibraryOnlyUnionCaseFieldGet(e, mkSynCaseName mLhs opNameCons, (fst _5), mLhs)) 
                    )
-# 5343 "pars.fsy"
+# 5340 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14622 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14619 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5348 "pars.fsy"
+# 5345 "pars.fsy"
                              let lpr = rhs parseState 1
                              let rpr = rhs parseState 3
                              (fun e mLhs mDot ->
@@ -14642,219 +14639,219 @@ let _fsyacc_reductions = lazy [|
                                          mlCompatWarning (FSComp.SR.parsParenFormIsForML()) (lhs parseState)
                                      mkSynDotParenGet mLhs mDot e _2) 
                    )
-# 5348 "pars.fsy"
+# 5345 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14647 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14644 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5364 "pars.fsy"
+# 5361 "pars.fsy"
                              (fun e mLhs mDot -> mkSynDotBrackGet mLhs mDot e _2) 
                    )
-# 5364 "pars.fsy"
+# 5361 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14658 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14655 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5367 "pars.fsy"
+# 5364 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedBracket())
                              (fun e mLhs mDot -> exprFromParseError (mkSynDotBrackGet mLhs mDot e _2)) 
                    )
-# 5367 "pars.fsy"
+# 5364 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14671 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14668 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5371 "pars.fsy"
+# 5368 "pars.fsy"
                              let mArg = rhs2 parseState 1 3
                              (fun e mLhs mDot -> mkSynDotBrackGet mLhs mDot e (arbExpr ("indexerExpr1", mArg))) 
                    )
-# 5371 "pars.fsy"
+# 5368 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14682 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14679 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5375 "pars.fsy"
+# 5372 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedBracket())
                              let mArg = (rhs parseState 1).EndRange
                              (fun e mLhs mDot -> exprFromParseError (mkSynDotBrackGet mLhs mDot e (arbExpr ("indexerExpr2", mArg)))) 
                    )
-# 5375 "pars.fsy"
+# 5372 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14695 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14692 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_constant in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5382 "pars.fsy"
+# 5379 "pars.fsy"
                              SynExpr.Const(fst _1, snd _1) 
                    )
-# 5382 "pars.fsy"
+# 5379 "pars.fsy"
                  : SynExpr));
-# 14706 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14703 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5385 "pars.fsy"
+# 5382 "pars.fsy"
                              _1 
                    )
-# 5385 "pars.fsy"
+# 5382 "pars.fsy"
                  : SynExpr));
-# 14717 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14714 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_braceExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5388 "pars.fsy"
+# 5385 "pars.fsy"
                              _1 
                    )
-# 5388 "pars.fsy"
+# 5385 "pars.fsy"
                  : SynExpr));
-# 14728 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14725 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_braceBarExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5391 "pars.fsy"
+# 5388 "pars.fsy"
                              _1 
                    )
-# 5391 "pars.fsy"
+# 5388 "pars.fsy"
                  : SynExpr));
-# 14739 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14736 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interpolatedString in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5394 "pars.fsy"
+# 5391 "pars.fsy"
                              let parts, synStringKind = _1
                              SynExpr.InterpolatedString(parts, synStringKind, rhs parseState 1) 
                    )
-# 5394 "pars.fsy"
+# 5391 "pars.fsy"
                  : SynExpr));
-# 14751 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14748 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5398 "pars.fsy"
+# 5395 "pars.fsy"
                              SynExpr.Null(lhs parseState) 
                    )
-# 5398 "pars.fsy"
+# 5395 "pars.fsy"
                  : SynExpr));
-# 14761 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14758 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5401 "pars.fsy"
+# 5398 "pars.fsy"
                              SynExpr.Const(SynConst.Bool false, lhs parseState) 
                    )
-# 5401 "pars.fsy"
+# 5398 "pars.fsy"
                  : SynExpr));
-# 14771 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14768 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5404 "pars.fsy"
+# 5401 "pars.fsy"
                              SynExpr.Const(SynConst.Bool true, lhs parseState) 
                    )
-# 5404 "pars.fsy"
+# 5401 "pars.fsy"
                  : SynExpr));
-# 14781 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14778 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_quoteExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5407 "pars.fsy"
+# 5404 "pars.fsy"
                              _1 
                    )
-# 5407 "pars.fsy"
+# 5404 "pars.fsy"
                  : SynExpr));
-# 14792 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14789 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_arrayExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5410 "pars.fsy"
+# 5407 "pars.fsy"
                              _1 
                    )
-# 5410 "pars.fsy"
+# 5407 "pars.fsy"
                  : SynExpr));
-# 14803 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14800 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_beginEndExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5413 "pars.fsy"
+# 5410 "pars.fsy"
                              _1 
                    )
-# 5413 "pars.fsy"
+# 5410 "pars.fsy"
                  : SynExpr));
-# 14814 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14811 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5417 "pars.fsy"
+# 5414 "pars.fsy"
                              SynExpr.Paren(_2, rhs parseState 1, Some(rhs parseState 3), rhs2 parseState 1 3) 
                    )
-# 5417 "pars.fsy"
+# 5414 "pars.fsy"
                  : 'gentype_beginEndExpr));
-# 14825 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14822 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5420 "pars.fsy"
+# 5417 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedBegin()); exprFromParseError _2 
                    )
-# 5420 "pars.fsy"
+# 5417 "pars.fsy"
                  : 'gentype_beginEndExpr));
-# 14837 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14834 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5423 "pars.fsy"
+# 5420 "pars.fsy"
                              (* silent recovery *) arbExpr ("beginEndExpr", (lhs parseState)) 
                    )
-# 5423 "pars.fsy"
+# 5420 "pars.fsy"
                  : 'gentype_beginEndExpr));
-# 14847 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14844 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5426 "pars.fsy"
+# 5423 "pars.fsy"
                              mkSynUnit (lhs parseState) 
                    )
-# 5426 "pars.fsy"
+# 5423 "pars.fsy"
                  : 'gentype_beginEndExpr));
-# 14857 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14854 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
@@ -14862,13 +14859,13 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5430 "pars.fsy"
+# 5427 "pars.fsy"
                              if _1 <> _3 then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsMismatchedQuote(fst _1))
                              (SynExpr.Quote(mkSynIdGet (lhs parseState) (CompileOpName (fst _1)), snd _1, _2, false, lhs parseState)) 
                    )
-# 5430 "pars.fsy"
+# 5427 "pars.fsy"
                  : 'gentype_quoteExpr));
-# 14871 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14868 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
@@ -14876,203 +14873,203 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5434 "pars.fsy"
+# 5431 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatched(fst _1))
                              let mExpr = rhs2 parseState 1 2
                              exprFromParseError (SynExpr.Quote(mkSynIdGet (lhs parseState) (CompileOpName (fst _1)), snd _1, _2, false, mExpr)) 
                    )
-# 5434 "pars.fsy"
+# 5431 "pars.fsy"
                  : 'gentype_quoteExpr));
-# 14886 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14883 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * bool in
             let _3 = parseState.GetInput(3) :?> string * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5439 "pars.fsy"
+# 5436 "pars.fsy"
                              (* silent recovery *) SynExpr.Quote(mkSynIdGet (lhs parseState) (CompileOpName (fst _1)), snd _1, arbExpr ("quoteExpr", (rhs parseState 2)), false, lhs parseState) 
                    )
-# 5439 "pars.fsy"
+# 5436 "pars.fsy"
                  : 'gentype_quoteExpr));
-# 14898 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14895 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5442 "pars.fsy"
+# 5439 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatched(fst _1))
                              exprFromParseError (SynExpr.Quote(mkSynIdGet (lhs parseState) (CompileOpName (fst _1)), snd _1, arbExpr ("quoteExpr2", (rhs parseState 1).EndRange), false, rhs parseState 1)) 
                    )
-# 5442 "pars.fsy"
+# 5439 "pars.fsy"
                  : 'gentype_quoteExpr));
-# 14911 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14908 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_arrayExprElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5447 "pars.fsy"
+# 5444 "pars.fsy"
                              _2 (lhs parseState) 
                    )
-# 5447 "pars.fsy"
+# 5444 "pars.fsy"
                  : 'gentype_arrayExpr));
-# 14922 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14919 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_arrayExprElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5450 "pars.fsy"
+# 5447 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedBracketBar())
                              exprFromParseError (_2 (rhs2 parseState 1 2)) 
                    )
-# 5450 "pars.fsy"
+# 5447 "pars.fsy"
                  : 'gentype_arrayExpr));
-# 14935 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14932 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5454 "pars.fsy"
+# 5451 "pars.fsy"
                              (* silent recovery *) SynExpr.ArrayOrList(true, [ ], lhs parseState) 
                    )
-# 5454 "pars.fsy"
+# 5451 "pars.fsy"
                  : 'gentype_arrayExpr));
-# 14945 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14942 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5457 "pars.fsy"
+# 5454 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedBracketBar())
                              (* silent recovery *)
                              exprFromParseError (SynExpr.ArrayOrList(true, [ ], rhs parseState 1)) 
                    )
-# 5457 "pars.fsy"
+# 5454 "pars.fsy"
                  : 'gentype_arrayExpr));
-# 14958 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14955 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5463 "pars.fsy"
+# 5460 "pars.fsy"
                              SynExpr.Const(SynConst.Unit, (rhs2 parseState 1 2)) 
                    )
-# 5463 "pars.fsy"
+# 5460 "pars.fsy"
                  : 'gentype_parenExpr));
-# 14969 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14966 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenExprBody in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5466 "pars.fsy"
+# 5463 "pars.fsy"
                              let m = rhs2 parseState 1 3
                              SynExpr.Paren(_2 m, rhs parseState 1, Some(rhs parseState 3), m) 
                    )
-# 5466 "pars.fsy"
+# 5463 "pars.fsy"
                  : 'gentype_parenExpr));
-# 14982 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14979 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenExprBody in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_other_than_rparen_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5470 "pars.fsy"
+# 5467 "pars.fsy"
                              if not _3 then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedParen())
                              let mLhs = unionRangeWithPos (rhs parseState 1) (rhs parseState 2).End
                              SynExpr.Paren(exprFromParseError (_2 mLhs), rhs parseState 1, None, mLhs) 
                    )
-# 5470 "pars.fsy"
+# 5467 "pars.fsy"
                  : 'gentype_parenExpr));
-# 14996 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 14993 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5475 "pars.fsy"
+# 5472 "pars.fsy"
                              // silent recovery
                              SynExpr.Paren(arbExpr ("parenExpr1", (rhs parseState 1).EndRange), (rhs parseState 1), Some(rhs parseState 3), (rhs2 parseState 1 3)) 
                    )
-# 5475 "pars.fsy"
+# 5472 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15008 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15005 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5479 "pars.fsy"
+# 5476 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedParen())
                              let mLhs = unionRangeWithPos (rhs parseState 1) (rhs parseState 2).Start
                              arbExpr ("parenExpr2tcs", mLhs) 
                    )
-# 5479 "pars.fsy"
+# 5476 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15020 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15017 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5484 "pars.fsy"
+# 5481 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedParen())
                              let mLhs = unionRangeWithPos (rhs parseState 1) (rhs parseState 2).Start
                              arbExpr ("parenExpr2mcs", mLhs) 
                    )
-# 5484 "pars.fsy"
+# 5481 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15032 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15029 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5489 "pars.fsy"
+# 5486 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedParen())
                              let mLhs = unionRangeWithPos (rhs parseState 1) (rhs parseState 2).Start
                              arbExpr ("parenExpr2rbcs", mLhs) 
                    )
-# 5489 "pars.fsy"
+# 5486 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15044 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15041 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5494 "pars.fsy"
+# 5491 "pars.fsy"
                              let lparenRange = (rhs parseState 1)
                              reportParseErrorAt lparenRange (FSComp.SR.parsUnmatchedParen())
                              SynExpr.Paren(arbExpr ("parenExpr2obecs", lparenRange.EndRange), lparenRange, None, lparenRange) 
                    )
-# 5494 "pars.fsy"
+# 5491 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15056 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15053 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5499 "pars.fsy"
+# 5496 "pars.fsy"
                              reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedParen())
                              arbExpr ("parenExpr2", (lhs parseState)) 
                    )
-# 5499 "pars.fsy"
+# 5496 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15068 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15065 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynExpr in
             let _4 = parseState.GetInput(4) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5510 "pars.fsy"
+# 5507 "pars.fsy"
                              let mComma = rhs parseState 2
                              let mLparen = rhs parseState 1
                              let mRparen = rhs parseState 3
@@ -15086,9 +15083,9 @@ let _fsyacc_reductions = lazy [|
                                  | expr -> SynExpr.Tuple(false, [errorExpr; expr], [mComma], mTuple)
                              SynExpr.Paren(tupleExpr, mLparen, Some mRparen, rhs2 parseState 1 4) 
                    )
-# 5510 "pars.fsy"
+# 5507 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15091 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15088 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typars in
             let _4 = parseState.GetInput(4) :?> 'gentype_classMemberSpfn in
@@ -15097,84 +15094,84 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5525 "pars.fsy"
+# 5522 "pars.fsy"
                              (fun m -> SynExpr.TraitCall(_1, _4, _6, m)) 
                    )
-# 5525 "pars.fsy"
+# 5522 "pars.fsy"
                  : 'gentype_parenExprBody));
-# 15105 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15102 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedSequentialExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5528 "pars.fsy"
+# 5525 "pars.fsy"
                              (fun _m -> _1) 
                    )
-# 5528 "pars.fsy"
+# 5525 "pars.fsy"
                  : 'gentype_parenExprBody));
-# 15116 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15113 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_inlineAssemblyExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5531 "pars.fsy"
+# 5528 "pars.fsy"
                              _1 
                    )
-# 5531 "pars.fsy"
+# 5528 "pars.fsy"
                  : 'gentype_parenExprBody));
-# 15127 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15124 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5535 "pars.fsy"
+# 5532 "pars.fsy"
                              SynType.Var(_1, rhs parseState 1) 
                    )
-# 5535 "pars.fsy"
+# 5532 "pars.fsy"
                  : 'gentype_typars));
-# 15138 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15135 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typarAlts in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5538 "pars.fsy"
+# 5535 "pars.fsy"
                              let m = rhs2 parseState 1 3
                              SynType.Paren(_2, m) 
                    )
-# 5538 "pars.fsy"
+# 5535 "pars.fsy"
                  : 'gentype_typars));
-# 15151 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15148 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typarAlts in
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeCanBeNullable in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5543 "pars.fsy"
+# 5540 "pars.fsy"
                              let mOr = rhs parseState 2
                              let appType : SynType = _3
                              let m = unionRanges _1.Range appType.Range
                              SynType.Or(_1, _3, m, { OrKeyword = mOr }) 
                    )
-# 5543 "pars.fsy"
+# 5540 "pars.fsy"
                  : 'gentype_typarAlts));
-# 15166 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15163 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5549 "pars.fsy"
+# 5546 "pars.fsy"
                              SynType.Var(_1, rhs parseState 1) 
                    )
-# 5549 "pars.fsy"
+# 5546 "pars.fsy"
                  : 'gentype_typarAlts));
-# 15177 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15174 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_braceExprBody in
@@ -15182,13 +15179,13 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5553 "pars.fsy"
+# 5550 "pars.fsy"
                             let m, r = _2
                             r (rhs2 parseState 1 3) 
                    )
-# 5553 "pars.fsy"
+# 5550 "pars.fsy"
                  : 'gentype_braceExpr));
-# 15191 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15188 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_braceExprBody in
@@ -15196,195 +15193,195 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5557 "pars.fsy"
+# 5554 "pars.fsy"
                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedBrace())
                             let m, r = _2
                             // Note, we can't use 'exprFromParseError' because the extra syntax node interferes with some syntax-directed transformations for computation expressions
                             r (unionRanges (rhs parseState 1) m) 
                    )
-# 5557 "pars.fsy"
+# 5554 "pars.fsy"
                  : 'gentype_braceExpr));
-# 15207 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15204 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _3 = parseState.GetInput(3) :?> 'gentype_rbrace in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5563 "pars.fsy"
+# 5560 "pars.fsy"
                             // silent recovery
                             arbExpr ("braceExpr", rhs2 parseState 1 3) 
                    )
-# 5563 "pars.fsy"
+# 5560 "pars.fsy"
                  : 'gentype_braceExpr));
-# 15220 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15217 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5567 "pars.fsy"
+# 5564 "pars.fsy"
                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedBrace())
                             // Note, we can't use 'exprFromParseError' because the extra syntax node interferes with some syntax-directed transformations for computation expressions
                             SynExpr.Record(None, None, [], rhs parseState 1) 
                    )
-# 5567 "pars.fsy"
+# 5564 "pars.fsy"
                  : 'gentype_braceExpr));
-# 15234 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15231 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_rbrace in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5572 "pars.fsy"
+# 5569 "pars.fsy"
                             let m = rhs2 parseState 1 2
                             SynExpr.Record(None, None, [], m) 
                    )
-# 5572 "pars.fsy"
+# 5569 "pars.fsy"
                  : 'gentype_braceExpr));
-# 15247 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15244 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recdExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5577 "pars.fsy"
+# 5574 "pars.fsy"
                             (lhs parseState), (fun m -> let a, b, c = _1 in SynExpr.Record(a, b, c, m)) 
                    )
-# 5577 "pars.fsy"
+# 5574 "pars.fsy"
                  : 'gentype_braceExprBody));
-# 15258 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15255 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5580 "pars.fsy"
+# 5577 "pars.fsy"
                             _1 
                    )
-# 5580 "pars.fsy"
+# 5577 "pars.fsy"
                  : 'gentype_braceExprBody));
-# 15269 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15266 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_computationExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5583 "pars.fsy"
+# 5580 "pars.fsy"
                             _1 
                    )
-# 5583 "pars.fsy"
+# 5580 "pars.fsy"
                  : 'gentype_braceExprBody));
-# 15280 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15277 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sequentialExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5587 "pars.fsy"
+# 5584 "pars.fsy"
                             (fun mLhs -> SynExpr.ArrayOrListComputed(false, _1, mLhs)) 
                    )
-# 5587 "pars.fsy"
+# 5584 "pars.fsy"
                  : 'gentype_listExprElements));
-# 15291 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15288 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5590 "pars.fsy"
+# 5587 "pars.fsy"
                             (fun mLhs -> SynExpr.ArrayOrList(false, [ ], mLhs)) 
                    )
-# 5590 "pars.fsy"
+# 5587 "pars.fsy"
                  : 'gentype_listExprElements));
-# 15301 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15298 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sequentialExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5594 "pars.fsy"
+# 5591 "pars.fsy"
                             (fun mLhs -> SynExpr.ArrayOrListComputed(true, _1, mLhs)) 
                    )
-# 5594 "pars.fsy"
+# 5591 "pars.fsy"
                  : 'gentype_arrayExprElements));
-# 15312 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15309 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5597 "pars.fsy"
+# 5594 "pars.fsy"
                             (fun mLhs -> SynExpr.ArrayOrList(true, [ ], mLhs)) 
                    )
-# 5597 "pars.fsy"
+# 5594 "pars.fsy"
                  : 'gentype_arrayExprElements));
-# 15322 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15319 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sequentialExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5601 "pars.fsy"
+# 5598 "pars.fsy"
                             _1.Range, (fun mLhs -> SynExpr.ComputationExpr(false, _1, mLhs)) 
                    )
-# 5601 "pars.fsy"
+# 5598 "pars.fsy"
                  : 'gentype_computationExpr));
-# 15333 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15330 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExprBlockR in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5605 "pars.fsy"
+# 5602 "pars.fsy"
                              let mArrow = rhs parseState 1
                              let expr = _2 mArrow
                              let trivia: SynExprYieldOrReturnTrivia = { YieldOrReturnKeyword = mArrow }
                              SynExpr.YieldOrReturn((true, false), expr, (unionRanges mArrow expr.Range), trivia) 
                    )
-# 5605 "pars.fsy"
+# 5602 "pars.fsy"
                  : 'gentype_arrowThenExprR));
-# 15347 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15344 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5612 "pars.fsy"
+# 5609 "pars.fsy"
                             _1, _3, true, DebugPointAtInOrTo.Yes(rhs parseState 2) 
                    )
-# 5612 "pars.fsy"
+# 5609 "pars.fsy"
                  : 'gentype_forLoopBinder));
-# 15359 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15356 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5615 "pars.fsy"
+# 5612 "pars.fsy"
                             let mIn = rhs parseState 2
                             if not _3 then reportParseErrorAt mIn (FSComp.SR.parsExpectedExpressionAfterToken ())
                             _1, arbExpr ("forLoopBinder1", mIn.EndRange), false, DebugPointAtInOrTo.Yes mIn 
                    )
-# 5615 "pars.fsy"
+# 5612 "pars.fsy"
                  : 'gentype_forLoopBinder));
-# 15373 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15370 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _2 = parseState.GetInput(2) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5620 "pars.fsy"
+# 5617 "pars.fsy"
                             let mPat = rhs parseState 1
                             if not _2 then reportParseErrorAt mPat (FSComp.SR.parsInOrEqualExpected ())
                             _1, arbExpr ("forLoopBinder2", mPat.EndRange), false, DebugPointAtInOrTo.Yes(rhs parseState 2) 
                    )
-# 5620 "pars.fsy"
+# 5617 "pars.fsy"
                  : 'gentype_forLoopBinder));
-# 15387 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15384 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -15393,34 +15390,34 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5626 "pars.fsy"
+# 5623 "pars.fsy"
                              let mEquals = rhs parseState 2
                              let spTo = DebugPointAtInOrTo.Yes(rhs parseState 4)
                              idOfPat parseState (rhs parseState 1) _1, Some mEquals, _3, _4, _5, spTo 
                    )
-# 5626 "pars.fsy"
+# 5623 "pars.fsy"
                  : 'gentype_forLoopRange));
-# 15403 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15400 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5631 "pars.fsy"
+# 5628 "pars.fsy"
                               true 
                    )
-# 5631 "pars.fsy"
+# 5628 "pars.fsy"
                  : 'gentype_forLoopDirection));
-# 15413 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15410 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5633 "pars.fsy"
+# 5630 "pars.fsy"
                                   false 
                    )
-# 5633 "pars.fsy"
+# 5630 "pars.fsy"
                  : 'gentype_forLoopDirection));
-# 15423 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15420 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_string in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_inlineAssemblyTypeArg in
@@ -15429,69 +15426,68 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5637 "pars.fsy"
-                             if parseState.LexBuffer.ReportLibraryOnlyFeatures then libraryOnlyWarning (lhs parseState)
-                             let (s, _), sm = _2, rhs parseState 2
+# 5635 "pars.fsy"
+                             // FNCS: Inline IL expressions are not supported in native compilation
                              (fun m ->
-                                 let ilInstrs = ParseAssemblyCodeInstructions s parseState.LexBuffer.ReportLibraryOnlyFeatures parseState.LexBuffer.LanguageVersion parseState.LexBuffer.StrictIndentation sm
-                                 SynExpr.LibraryOnlyILAssembly(box ilInstrs, _3, List.rev _4, _5, m)) 
+                                 errorR(Error((193, "Inline IL expressions (# ... #) are not supported in native F# compilation"), m))
+                                 SynExpr.FromParseError(SynExpr.Const(SynConst.Unit, m), m)) 
                    )
-# 5637 "pars.fsy"
+# 5635 "pars.fsy"
                  : 'gentype_inlineAssemblyExpr));
-# 15441 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15437 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_optCurriedArgExprs in
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5645 "pars.fsy"
+# 5642 "pars.fsy"
                              _2 :: _1 
                    )
-# 5645 "pars.fsy"
+# 5642 "pars.fsy"
                  : 'gentype_optCurriedArgExprs));
-# 15453 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15449 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5648 "pars.fsy"
+# 5645 "pars.fsy"
                              [] 
                    )
-# 5648 "pars.fsy"
+# 5645 "pars.fsy"
                  : 'gentype_optCurriedArgExprs));
-# 15463 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15459 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5652 "pars.fsy"
+# 5649 "pars.fsy"
                              None 
                    )
-# 5652 "pars.fsy"
+# 5649 "pars.fsy"
                  : 'gentype_opt_atomicExprAfterType));
-# 15473 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15469 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5655 "pars.fsy"
+# 5652 "pars.fsy"
                              Some(_1) 
                    )
-# 5655 "pars.fsy"
+# 5652 "pars.fsy"
                  : 'gentype_opt_atomicExprAfterType));
-# 15484 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15480 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5659 "pars.fsy"
+# 5656 "pars.fsy"
                              [] 
                    )
-# 5659 "pars.fsy"
+# 5656 "pars.fsy"
                  : 'gentype_opt_inlineAssemblyTypeArg));
-# 15494 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15490 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeKeyword in
             let _3 = parseState.GetInput(3) :?> SynType in
@@ -15499,44 +15495,44 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5662 "pars.fsy"
+# 5659 "pars.fsy"
                              [_3] 
                    )
-# 5662 "pars.fsy"
+# 5659 "pars.fsy"
                  : 'gentype_opt_inlineAssemblyTypeArg));
-# 15507 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15503 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5666 "pars.fsy"
+# 5663 "pars.fsy"
                             [] 
                    )
-# 5666 "pars.fsy"
+# 5663 "pars.fsy"
                  : 'gentype_optInlineAssemblyReturnTypes));
-# 15517 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15513 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5669 "pars.fsy"
+# 5666 "pars.fsy"
                             [_2] 
                    )
-# 5669 "pars.fsy"
+# 5666 "pars.fsy"
                  : 'gentype_optInlineAssemblyReturnTypes));
-# 15528 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15524 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5672 "pars.fsy"
+# 5669 "pars.fsy"
                             [] 
                    )
-# 5672 "pars.fsy"
+# 5669 "pars.fsy"
                  : 'gentype_optInlineAssemblyReturnTypes));
-# 15539 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15535 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -15546,7 +15542,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5676 "pars.fsy"
+# 5673 "pars.fsy"
                             let arg = match _4 with None -> mkSynUnit (lhs parseState) | Some e -> e
                             let l = List.rev _5
                             let dummyField = mkRecdField (SynLongIdent([], [], [])) // dummy identifier, it will be discarded
@@ -15555,21 +15551,21 @@ let _fsyacc_reductions = lazy [|
                             let bindings = List.tail l
                             (Some(_2, arg, rhs2 parseState 2 4, inheritsSep, rhs parseState 1), None, bindings) 
                    )
-# 5676 "pars.fsy"
+# 5673 "pars.fsy"
                  : 'gentype_recdExpr));
-# 15560 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15556 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recdExprCore in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5685 "pars.fsy"
+# 5682 "pars.fsy"
                            let a, b = _1
                            None, a, b 
                    )
-# 5685 "pars.fsy"
+# 5682 "pars.fsy"
                  : 'gentype_recdExpr));
-# 15572 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15568 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -15578,7 +15574,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5690 "pars.fsy"
+# 5687 "pars.fsy"
                             match _1 with
                             | LongOrSingleIdent(false, (SynLongIdent _ as f), None, m) ->
                                  let f = mkRecdField f
@@ -15588,16 +15584,16 @@ let _fsyacc_reductions = lazy [|
                                  (None, l)
                             | _ -> raiseParseErrorAt (rhs parseState 2) (FSComp.SR.parsFieldBinding()) 
                    )
-# 5690 "pars.fsy"
+# 5687 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15593 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15589 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5700 "pars.fsy"
+# 5697 "pars.fsy"
                             match _1 with
                             | LongOrSingleIdent(false, (SynLongIdent _ as f), None, m) ->
                                  let f = mkRecdField f
@@ -15606,41 +15602,41 @@ let _fsyacc_reductions = lazy [|
                                  None, l
                             | _ -> raiseParseErrorAt (rhs parseState 2) (FSComp.SR.parsFieldBinding ()) 
                    )
-# 5700 "pars.fsy"
+# 5697 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15611 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15607 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5709 "pars.fsy"
+# 5706 "pars.fsy"
                            let mExpr = rhs parseState 1
                            reportParseErrorAt mExpr (FSComp.SR.parsFieldBinding ())
                            Some(_1, (mExpr.EndRange, None)), [] 
                    )
-# 5709 "pars.fsy"
+# 5706 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15624 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15620 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5718 "pars.fsy"
+# 5715 "pars.fsy"
                            let m = rhs parseState 1
                            reportParseErrorAt m (FSComp.SR.parsUnderscoreInvalidFieldName())
                            reportParseErrorAt m (FSComp.SR.parsFieldBinding())
                            let f = mkUnderscoreRecdField m
                            (None, [ SynExprRecordField(f, None, None, m, None)  ]) 
                    )
-# 5718 "pars.fsy"
+# 5715 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15638 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15634 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5725 "pars.fsy"
+# 5722 "pars.fsy"
                            let m = rhs parseState 1
                            reportParseErrorAt m (FSComp.SR.parsUnderscoreInvalidFieldName())
                            let f = mkUnderscoreRecdField m
@@ -15648,9 +15644,9 @@ let _fsyacc_reductions = lazy [|
                            reportParseErrorAt (rhs2 parseState 1 2) (FSComp.SR.parsFieldBinding())
                            (None, [ SynExprRecordField(f, Some mEquals, None, (rhs2 parseState 1 2), None) ]) 
                    )
-# 5725 "pars.fsy"
+# 5722 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15653 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15649 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynExpr in
             let _4 = parseState.GetInput(4) :?> 'gentype_recdExprBindings in
@@ -15658,7 +15654,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5734 "pars.fsy"
+# 5731 "pars.fsy"
                            reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnderscoreInvalidFieldName())
                            let f = mkUnderscoreRecdField (rhs parseState 1)
                            let mEquals = rhs parseState 2
@@ -15666,9 +15662,9 @@ let _fsyacc_reductions = lazy [|
                            let l = rebindRanges (f, Some mEquals, Some _3) l _5
                            (None, l) 
                    )
-# 5734 "pars.fsy"
+# 5731 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15671 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15667 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recdBinding in
@@ -15677,26 +15673,26 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5743 "pars.fsy"
+# 5740 "pars.fsy"
                             let l = List.rev _4
                             let l = rebindRanges _3 l _5
                             (Some(_1, (rhs parseState 2, None)), l) 
                    )
-# 5743 "pars.fsy"
+# 5740 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15687 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15683 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_seps_block in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5748 "pars.fsy"
+# 5745 "pars.fsy"
                             (Some(_1, (rhs parseState 2, None)), []) 
                    )
-# 5748 "pars.fsy"
+# 5745 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15699 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15695 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recdBinding in
@@ -15705,99 +15701,99 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5751 "pars.fsy"
+# 5748 "pars.fsy"
                             let l = List.rev _4
                             let l = rebindRanges _3 l _5
                             (Some(_1, (rhs parseState 2, None)), l) 
                    )
-# 5751 "pars.fsy"
+# 5748 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15715 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15711 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_seps_block in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5757 "pars.fsy"
+# 5754 "pars.fsy"
                             Some _1 
                    )
-# 5757 "pars.fsy"
+# 5754 "pars.fsy"
                  : 'gentype_opt_seps_block));
-# 15726 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15722 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5760 "pars.fsy"
+# 5757 "pars.fsy"
                             None 
                    )
-# 5760 "pars.fsy"
+# 5757 "pars.fsy"
                  : 'gentype_opt_seps_block));
-# 15736 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15732 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5764 "pars.fsy"
+# 5761 "pars.fsy"
                             (rhs parseState 1), None 
                    )
-# 5764 "pars.fsy"
+# 5761 "pars.fsy"
                  : 'gentype_seps_block));
-# 15746 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15742 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5767 "pars.fsy"
+# 5764 "pars.fsy"
                             let m = (rhs parseState 1)
                             m, Some m.End 
                    )
-# 5767 "pars.fsy"
+# 5764 "pars.fsy"
                  : 'gentype_seps_block));
-# 15757 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15753 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5771 "pars.fsy"
+# 5768 "pars.fsy"
                             (rhs2 parseState 1 2), Some (rhs parseState 1).End 
                    )
-# 5771 "pars.fsy"
+# 5768 "pars.fsy"
                  : 'gentype_seps_block));
-# 15767 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15763 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5774 "pars.fsy"
+# 5771 "pars.fsy"
                             (rhs2 parseState 1 2), Some (rhs parseState 2).End 
                    )
-# 5774 "pars.fsy"
+# 5771 "pars.fsy"
                  : 'gentype_seps_block));
-# 15777 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15773 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5780 "pars.fsy"
+# 5777 "pars.fsy"
                            mkRecdField _1 
                    )
-# 5780 "pars.fsy"
+# 5777 "pars.fsy"
                  : 'gentype_pathOrUnderscore));
-# 15788 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15784 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5783 "pars.fsy"
+# 5780 "pars.fsy"
                            let m = rhs parseState 1
                            reportParseErrorAt m (FSComp.SR.parsUnderscoreInvalidFieldName())
                            mkUnderscoreRecdField m 
                    )
-# 5783 "pars.fsy"
+# 5780 "pars.fsy"
                  : 'gentype_pathOrUnderscore));
-# 15800 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15796 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recdExprBindings in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps_block in
@@ -15805,87 +15801,87 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5789 "pars.fsy"
+# 5786 "pars.fsy"
                             (_3, Some _2) :: _1 
                    )
-# 5789 "pars.fsy"
+# 5786 "pars.fsy"
                  : 'gentype_recdExprBindings));
-# 15813 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15809 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5792 "pars.fsy"
+# 5789 "pars.fsy"
                             [] 
                    )
-# 5792 "pars.fsy"
+# 5789 "pars.fsy"
                  : 'gentype_recdExprBindings));
-# 15823 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15819 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_pathOrUnderscore in
             let _3 = parseState.GetInput(3) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5796 "pars.fsy"
+# 5793 "pars.fsy"
                             let mEquals = rhs parseState 2
                             (_1, Some mEquals, Some _3) 
                    )
-# 5796 "pars.fsy"
+# 5793 "pars.fsy"
                  : 'gentype_recdBinding));
-# 15836 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15832 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_pathOrUnderscore in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5800 "pars.fsy"
+# 5797 "pars.fsy"
                             let mEquals = rhs parseState 2
                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsFieldBinding())
                             (_1, Some mEquals, None) 
                    )
-# 5800 "pars.fsy"
+# 5797 "pars.fsy"
                  : 'gentype_recdBinding));
-# 15849 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15845 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_pathOrUnderscore in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5805 "pars.fsy"
+# 5802 "pars.fsy"
                             let mEquals = rhs parseState 2
                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsFieldBinding())
                             (_1, Some mEquals, None) 
                    )
-# 5805 "pars.fsy"
+# 5802 "pars.fsy"
                  : 'gentype_recdBinding));
-# 15863 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15859 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_pathOrUnderscore in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5810 "pars.fsy"
+# 5807 "pars.fsy"
                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsFieldBinding())
                             (_1, None, None) 
                    )
-# 5810 "pars.fsy"
+# 5807 "pars.fsy"
                  : 'gentype_recdBinding));
-# 15875 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15871 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_pathOrUnderscore in
             let _2 = parseState.GetInput(2) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5814 "pars.fsy"
+# 5811 "pars.fsy"
                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsFieldBinding())
                             (_1, None, None) 
                    )
-# 5814 "pars.fsy"
+# 5811 "pars.fsy"
                  : 'gentype_recdBinding));
-# 15888 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15884 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objExprBaseCall in
             let _2 = parseState.GetInput(2) :?> 'gentype_objExprBindings in
@@ -15894,15 +15890,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5825 "pars.fsy"
+# 5822 "pars.fsy"
                             let mNewExpr = rhs parseState 1
                             let fullRange = match _4 with [] -> (rhs parseState 1) | _ -> (rhs2 parseState 1 4)
                             let mWithKwd, bindings, members = _2
                             fullRange, (fun m -> let (a, b) = _1 in SynExpr.ObjExpr(a, b, Some mWithKwd, bindings, members, _4, mNewExpr, m)) 
                    )
-# 5825 "pars.fsy"
+# 5822 "pars.fsy"
                  : 'gentype_objExpr));
-# 15905 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15901 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objExprBaseCall in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_OBLOCKSEP in
@@ -15910,26 +15906,26 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5831 "pars.fsy"
+# 5828 "pars.fsy"
                             let mNewExpr = rhs parseState 1
                             let fullRange = match _3 with [] -> (rhs parseState 1) | _ -> (rhs2 parseState 1 3)
                             fullRange, (fun m -> let (a, b) = _1 in SynExpr.ObjExpr(a, b, None, [], [], _3, mNewExpr, m)) 
                    )
-# 5831 "pars.fsy"
+# 5828 "pars.fsy"
                  : 'gentype_objExpr));
-# 15920 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15916 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5836 "pars.fsy"
+# 5833 "pars.fsy"
                             let mNewExpr = rhs parseState 1
                             (rhs2 parseState 1 2), (fun m -> let (a, b) = _2, None in SynExpr.ObjExpr(a, b, None, [], [], [], mNewExpr, m)) 
                    )
-# 5836 "pars.fsy"
+# 5833 "pars.fsy"
                  : 'gentype_objExpr));
-# 15932 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15928 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -15938,12 +15934,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5841 "pars.fsy"
+# 5838 "pars.fsy"
                             (_2, Some(_4, Some(_5))) 
                    )
-# 5841 "pars.fsy"
+# 5838 "pars.fsy"
                  : 'gentype_objExprBaseCall));
-# 15946 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15942 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -15951,78 +15947,78 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5844 "pars.fsy"
+# 5841 "pars.fsy"
                             (_2, Some(_4, None)) 
                    )
-# 5844 "pars.fsy"
+# 5841 "pars.fsy"
                  : 'gentype_objExprBaseCall));
-# 15959 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15955 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5847 "pars.fsy"
+# 5844 "pars.fsy"
                             _2, None 
                    )
-# 5847 "pars.fsy"
+# 5844 "pars.fsy"
                  : 'gentype_objExprBaseCall));
-# 15970 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15966 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objExprBindings in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5852 "pars.fsy"
+# 5849 "pars.fsy"
                             let mWithKwd, bindings, members = _1
                             Some mWithKwd, bindings, members 
                    )
-# 5852 "pars.fsy"
+# 5849 "pars.fsy"
                  : 'gentype_opt_objExprBindings));
-# 15982 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15978 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5856 "pars.fsy"
+# 5853 "pars.fsy"
                             None, [], [] 
                    )
-# 5856 "pars.fsy"
+# 5853 "pars.fsy"
                  : 'gentype_opt_objExprBindings));
-# 15992 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 15988 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_localBindings in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5860 "pars.fsy"
+# 5857 "pars.fsy"
                              let mWithKwd = (rhs parseState 1)
                              let _localBindingsLastRange, localBindingsBuilder = _2
                              mWithKwd, (localBindingsBuilder PreXmlDoc.Empty [] None SynLeadingKeyword.Synthetic), [] 
                    )
-# 5860 "pars.fsy"
+# 5857 "pars.fsy"
                  : 'gentype_objExprBindings));
-# 16005 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16001 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_localBindings in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5865 "pars.fsy"
+# 5862 "pars.fsy"
                              let mWithKwd = (rhs parseState 1)
                              let _localBindingsLastRange, localBindingsBuilder = _2
                              mWithKwd, (localBindingsBuilder PreXmlDoc.Empty [] None SynLeadingKeyword.Synthetic), [] 
                    )
-# 5865 "pars.fsy"
+# 5862 "pars.fsy"
                  : 'gentype_objExprBindings));
-# 16018 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16014 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_objectImplementationBlock in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_declEnd in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5870 "pars.fsy"
+# 5867 "pars.fsy"
                              let mWithKwd = rhs parseState 1
                              let memberDefns =
                                  _2 |>
@@ -16032,54 +16028,54 @@ let _fsyacc_reductions = lazy [|
                                                    | x -> errorR(Error(FSComp.SR.parsMemberIllegalInObjectImplementation(), x.Range)); None))
                              mWithKwd, [], memberDefns 
                    )
-# 5870 "pars.fsy"
+# 5867 "pars.fsy"
                  : 'gentype_objExprBindings));
-# 16037 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16033 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objExprInterface in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_objExprInterfaces in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5880 "pars.fsy"
+# 5877 "pars.fsy"
                                                                   _1 :: _2 
                    )
-# 5880 "pars.fsy"
+# 5877 "pars.fsy"
                  : 'gentype_objExprInterfaces));
-# 16049 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16045 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5884 "pars.fsy"
+# 5881 "pars.fsy"
                             [] 
                    )
-# 5884 "pars.fsy"
+# 5881 "pars.fsy"
                  : 'gentype_opt_objExprInterfaces));
-# 16059 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16055 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objExprInterface in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_objExprInterfaces in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5887 "pars.fsy"
+# 5884 "pars.fsy"
                             _1 :: _2 
                    )
-# 5887 "pars.fsy"
+# 5884 "pars.fsy"
                  : 'gentype_opt_objExprInterfaces));
-# 16071 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16067 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_objExprInterfaces in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5890 "pars.fsy"
+# 5887 "pars.fsy"
                             (* silent recovery *) _2 
                    )
-# 5890 "pars.fsy"
+# 5887 "pars.fsy"
                  : 'gentype_opt_objExprInterfaces));
-# 16082 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16078 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interfaceMember in
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypeWithoutNull in
@@ -16089,7 +16085,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5894 "pars.fsy"
+# 5891 "pars.fsy"
                            let mWithKwd, bindings, members = _3
                            let m =
                                match List.tryLast members with
@@ -16099,39 +16095,39 @@ let _fsyacc_reductions = lazy [|
                                    mkFileIndexRange mInterface.FileIndex mInterface.Start ms.Range.End
                            SynInterfaceImpl(_2, mWithKwd, bindings, members, m) 
                    )
-# 5894 "pars.fsy"
+# 5891 "pars.fsy"
                  : 'gentype_objExprInterface));
-# 16104 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16100 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_braceBarExprCore in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5905 "pars.fsy"
+# 5902 "pars.fsy"
                              let mStruct = rhs parseState 1
                              _2 (Some mStruct) 
                    )
-# 5905 "pars.fsy"
+# 5902 "pars.fsy"
                  : 'gentype_braceBarExpr));
-# 16116 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16112 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_braceBarExprCore in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5909 "pars.fsy"
+# 5906 "pars.fsy"
                              _1 None 
                    )
-# 5909 "pars.fsy"
+# 5906 "pars.fsy"
                  : 'gentype_braceBarExpr));
-# 16127 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16123 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recdExprCore in
             let _3 = parseState.GetInput(3) :?> 'gentype_bar_rbrace in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5913 "pars.fsy"
+# 5910 "pars.fsy"
                             let orig, flds = _2
                             let flds =
                                 flds |> List.choose (function
@@ -16145,16 +16141,16 @@ let _fsyacc_reductions = lazy [|
                                  let m = match mStruct with | None -> unionRanges mLeftBrace mRightBrace | Some mStruct -> unionRanges mStruct mRightBrace
                                  SynExpr.AnonRecd(mStruct.IsSome, orig, flds, m, { OpeningBraceRange = mLeftBrace })) 
                    )
-# 5913 "pars.fsy"
+# 5910 "pars.fsy"
                  : 'gentype_braceBarExprCore));
-# 16150 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16146 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recdExprCore in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5927 "pars.fsy"
+# 5924 "pars.fsy"
                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedBraceBar())
                             let orig, flds = _2
                             let flds =
@@ -16167,15 +16163,15 @@ let _fsyacc_reductions = lazy [|
                                 let m = match mStruct with | None -> unionRanges mLeftBrace mExpr | Some mStruct -> unionRanges mStruct mExpr
                                 SynExpr.AnonRecd(mStruct.IsSome, orig, flds, m, { OpeningBraceRange = mLeftBrace })) 
                    )
-# 5927 "pars.fsy"
+# 5924 "pars.fsy"
                  : 'gentype_braceBarExprCore));
-# 16172 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16168 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_bar_rbrace in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5940 "pars.fsy"
+# 5937 "pars.fsy"
                             // silent recovery
                             let mLeftBrace = rhs parseState 1
                             let mRightBrace = rhs parseState 3
@@ -16183,81 +16179,81 @@ let _fsyacc_reductions = lazy [|
                                 let m = match mStruct with | None -> unionRanges mLeftBrace mRightBrace | Some mStruct -> unionRanges mStruct mRightBrace
                                 arbExpr ("braceBarExpr", m)) 
                    )
-# 5940 "pars.fsy"
+# 5937 "pars.fsy"
                  : 'gentype_braceBarExprCore));
-# 16188 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16184 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5948 "pars.fsy"
+# 5945 "pars.fsy"
                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedBraceBar())
                             let mLeftBrace = rhs parseState 1
                             (fun (mStruct: range option) ->
                                 let m = match mStruct with | None -> mLeftBrace | Some mStruct -> unionRanges mStruct mLeftBrace
                                 SynExpr.AnonRecd(mStruct.IsSome, None, [], m, { OpeningBraceRange = mLeftBrace })) 
                    )
-# 5948 "pars.fsy"
+# 5945 "pars.fsy"
                  : 'gentype_braceBarExprCore));
-# 16203 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16199 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_bar_rbrace in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5955 "pars.fsy"
+# 5952 "pars.fsy"
                             let mLeftBrace = rhs parseState 1
                             let mRightBrace = rhs parseState 2
                             (fun (mStruct: range option) ->
                                 let m = match mStruct with | None -> unionRanges mLeftBrace mRightBrace | Some mStruct -> unionRanges mStruct mRightBrace
                                 SynExpr.AnonRecd(mStruct.IsSome, None, [], m, { OpeningBraceRange = mLeftBrace })) 
                    )
-# 5955 "pars.fsy"
+# 5952 "pars.fsy"
                  : 'gentype_braceBarExprCore));
-# 16218 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16214 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             let _4 = parseState.GetInput(4) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5963 "pars.fsy"
+# 5960 "pars.fsy"
                             let mAll = unionRanges (rhs parseState 1) _4.Range
                             let mArrow = Some(rhs parseState 3)
                             mkSynFunMatchLambdas (getSynArgNameGenerator parseState.LexBuffer) false mAll _2 mArrow _4 
                    )
-# 5963 "pars.fsy"
+# 5960 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16232 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16228 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5968 "pars.fsy"
+# 5965 "pars.fsy"
                             let mAll = rhs2 parseState 1 3
                             let mArrow = Some(rhs parseState 3)
                             mkSynFunMatchLambdas (getSynArgNameGenerator parseState.LexBuffer) false mAll _2 mArrow (arbExpr ("anonLambdaExpr1", (rhs parseState 4))) 
                    )
-# 5968 "pars.fsy"
+# 5965 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16245 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16241 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             let _4 = parseState.GetInput(4) :?> 'gentype_typedSequentialExprBlockR in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5973 "pars.fsy"
+# 5970 "pars.fsy"
                              let mArrow = rhs parseState 3
                              let expr = _4 mArrow
                              let mAll = unionRanges (rhs parseState 1) expr.Range
                              mkSynFunMatchLambdas (getSynArgNameGenerator parseState.LexBuffer) false mAll _2 (Some mArrow) expr 
                    )
-# 5973 "pars.fsy"
+# 5970 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16260 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16256 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             let _4 = parseState.GetInput(4) :?> 'gentype_typedSequentialExprBlockR in
@@ -16265,336 +16261,336 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5979 "pars.fsy"
+# 5976 "pars.fsy"
                             if not _5 then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedEndOfFileFunBody ())
                             let mArrow = rhs parseState 3
                             let expr = _4 mArrow
                             let mAll = unionRanges (rhs parseState 1) expr.Range
                             exprFromParseError (mkSynFunMatchLambdas (getSynArgNameGenerator parseState.LexBuffer) false mAll _2 (Some mArrow) expr) 
                    )
-# 5979 "pars.fsy"
+# 5976 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16277 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16273 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             let _4 = parseState.GetInput(4) :?> range in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5986 "pars.fsy"
+# 5983 "pars.fsy"
                             let mLambda = rhs2 parseState 1 3
                             reportParseErrorAt mLambda (FSComp.SR.parsMissingFunctionBody())
                             let mArrow = Some(rhs parseState 3)
                             mkSynFunMatchLambdas (getSynArgNameGenerator parseState.LexBuffer) false mLambda _2 mArrow (arbExpr ("anonLambdaExpr2", mLambda.EndRange)) 
                    )
-# 5986 "pars.fsy"
+# 5983 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16292 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16288 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             let _4 = parseState.GetInput(4) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5992 "pars.fsy"
+# 5989 "pars.fsy"
                             if not _4 then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedEndOfFileFunBody())
                             let mLambda = rhs2 parseState 1 3
                             let mArrow = Some(rhs parseState 3)
                             exprFromParseError (mkSynFunMatchLambdas (getSynArgNameGenerator parseState.LexBuffer) false mLambda _2 mArrow (arbExpr ("anonLambdaExpr3", mLambda.EndRange))) 
                    )
-# 5992 "pars.fsy"
+# 5989 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16307 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16303 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 5998 "pars.fsy"
+# 5995 "pars.fsy"
                             let mLambda = rhs2 parseState 1 2
                             exprFromParseError (mkSynFunMatchLambdas (getSynArgNameGenerator parseState.LexBuffer) false mLambda _2 None (arbExpr ("anonLambdaExpr4", mLambda.EndRange))) 
                    )
-# 5998 "pars.fsy"
+# 5995 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16319 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16315 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6002 "pars.fsy"
+# 5999 "pars.fsy"
                             exprFromParseError (mkSynFunMatchLambdas (getSynArgNameGenerator parseState.LexBuffer) false (rhs parseState 1) [] None (arbExpr ("anonLambdaExpr5", (rhs parseState 2)))) 
                    )
-# 6002 "pars.fsy"
+# 5999 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16329 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16325 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_withPatternClauses in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6006 "pars.fsy"
+# 6003 "pars.fsy"
                             let clauses, mLast = _2
                             let mAll = unionRanges (rhs parseState 1) mLast
                             SynExpr.MatchLambda(false, (rhs parseState 1), clauses, DebugPointAtBinding.NoneAtInvisible, mAll) 
                    )
-# 6006 "pars.fsy"
+# 6003 "pars.fsy"
                  : 'gentype_anonMatchingExpr));
-# 16342 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16338 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_withPatternClauses in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6011 "pars.fsy"
+# 6008 "pars.fsy"
                             let clauses, mLast = _2
                             let mAll = unionRanges (rhs parseState 1) mLast
                             SynExpr.MatchLambda(false, (rhs parseState 1), clauses, DebugPointAtBinding.NoneAtInvisible, mAll) 
                    )
-# 6011 "pars.fsy"
+# 6008 "pars.fsy"
                  : 'gentype_anonMatchingExpr));
-# 16355 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16351 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6020 "pars.fsy"
+# 6017 "pars.fsy"
                             _1 
                    )
-# 6020 "pars.fsy"
+# 6017 "pars.fsy"
                  : 'gentype_typeWithTypeConstraints));
-# 16366 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16362 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeConstraints in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6023 "pars.fsy"
+# 6020 "pars.fsy"
                             SynType.WithGlobalConstraints(_1, List.rev _3, lhs parseState) 
                    )
-# 6023 "pars.fsy"
+# 6020 "pars.fsy"
                  : 'gentype_typeWithTypeConstraints));
-# 16378 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16374 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6027 "pars.fsy"
+# 6024 "pars.fsy"
                             _1 
                    )
-# 6027 "pars.fsy"
+# 6024 "pars.fsy"
                  : 'gentype_topTypeWithTypeConstraints));
-# 16389 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16385 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topType in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeConstraints in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6030 "pars.fsy"
+# 6027 "pars.fsy"
                             let ty, arity = _1
                             // nb. it doesn't matter where the constraints go in the structure of the type.
                             SynType.WithGlobalConstraints(ty, List.rev _3, lhs parseState), arity 
                    )
-# 6030 "pars.fsy"
+# 6027 "pars.fsy"
                  : 'gentype_topTypeWithTypeConstraints));
-# 16403 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16399 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6036 "pars.fsy"
+# 6033 "pars.fsy"
                              None 
                    )
-# 6036 "pars.fsy"
+# 6033 "pars.fsy"
                  : 'gentype_opt_topReturnTypeWithTypeConstraints));
-# 16413 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16409 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_topTypeWithTypeConstraints in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6039 "pars.fsy"
+# 6036 "pars.fsy"
                              let mColon = rhs parseState 1
                              let ty, arity = _2
                              let arity = (match arity with SynValInfo([], rmdata)-> rmdata | _ -> SynInfo.unnamedRetVal)
                              Some(Some mColon, SynReturnInfo((ty, arity), rhs parseState 2)) 
                    )
-# 6039 "pars.fsy"
+# 6036 "pars.fsy"
                  : 'gentype_opt_topReturnTypeWithTypeConstraints));
-# 16427 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16423 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6045 "pars.fsy"
+# 6042 "pars.fsy"
                              let mColon = rhs parseState 1
                              let ty, arity = SynType.FromParseError(mColon.EndRange), SynInfo.unnamedRetVal
                              reportParseErrorAt mColon.EndRange (FSComp.SR.parsExpectingType ())
                              Some(Some mColon, SynReturnInfo((ty, arity), mColon.EndRange)) 
                    )
-# 6045 "pars.fsy"
+# 6042 "pars.fsy"
                  : 'gentype_opt_topReturnTypeWithTypeConstraints));
-# 16441 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16437 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topTupleType in
             let _3 = parseState.GetInput(3) :?> 'gentype_topType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6052 "pars.fsy"
+# 6049 "pars.fsy"
                              let dty, dmdata = _1
                              let rty, (SynValInfo(dmdatas, rmdata)) = _3
                              let mArrow = rhs parseState 2
                              SynType.Fun(dty, rty, lhs parseState, { ArrowRange = mArrow }), SynValInfo(dmdata :: dmdatas, rmdata) 
                    )
-# 6052 "pars.fsy"
+# 6049 "pars.fsy"
                  : 'gentype_topType));
-# 16456 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16452 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topTupleType in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6058 "pars.fsy"
+# 6055 "pars.fsy"
                             let dty, dmdata = _1
                             let mArrow = rhs parseState 2
                             let rty = SynType.FromParseError(mArrow.EndRange)
                             SynType.Fun(dty, rty, lhs parseState, { ArrowRange = mArrow }), SynValInfo([dmdata], SynInfo.unnamedRetVal) 
                    )
-# 6058 "pars.fsy"
+# 6055 "pars.fsy"
                  : 'gentype_topType));
-# 16471 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16467 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topTupleType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6064 "pars.fsy"
+# 6061 "pars.fsy"
                             let ty, rmdata = _1
                             ty, (SynValInfo([], (match rmdata with [md] -> md | _ -> SynInfo.unnamedRetVal))) 
                    )
-# 6064 "pars.fsy"
+# 6061 "pars.fsy"
                  : 'gentype_topType));
-# 16483 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16479 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topAppType in
             let _3 = parseState.GetInput(3) :?> 'gentype_topTupleTypeElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6069 "pars.fsy"
+# 6066 "pars.fsy"
                              let t, argInfo = _1
                              let mStar = rhs parseState 2
                              let path = SynTupleTypeSegment.Type t :: SynTupleTypeSegment.Star mStar :: (List.map fst _3)
                              let mdata = argInfo :: (List.choose snd _3)
                              mkSynTypeTuple path, mdata 
                    )
-# 6069 "pars.fsy"
+# 6066 "pars.fsy"
                  : 'gentype_topTupleType));
-# 16499 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16495 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topAppType in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6076 "pars.fsy"
+# 6073 "pars.fsy"
                             let ty1, argInfo = _1
                             let mStar = rhs parseState 2
                             let ty2 = SynType.FromParseError(mStar.EndRange)
                             let path = [SynTupleTypeSegment.Type ty1; SynTupleTypeSegment.Star mStar; SynTupleTypeSegment.Type ty2]
                             mkSynTypeTuple path, [argInfo; SynInfo.emptySynArgInfo] 
                    )
-# 6076 "pars.fsy"
+# 6073 "pars.fsy"
                  : 'gentype_topTupleType));
-# 16515 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16511 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_topTupleTypeElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6083 "pars.fsy"
+# 6080 "pars.fsy"
                              let mStar = rhs parseState 1
                              let ty = SynType.FromParseError(mStar.EndRange)
                              reportParseErrorAt mStar (FSComp.SR.parsExpectingType ())
                              let path = SynTupleTypeSegment.Type ty :: SynTupleTypeSegment.Star mStar :: (List.map fst _2)
                              mkSynTypeTuple path, List.choose snd _2 
                    )
-# 6083 "pars.fsy"
+# 6080 "pars.fsy"
                  : 'gentype_topTupleType));
-# 16530 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16526 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topAppType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6090 "pars.fsy"
+# 6087 "pars.fsy"
                             let ty, mdata = _1
                             ty, [mdata] 
                    )
-# 6090 "pars.fsy"
+# 6087 "pars.fsy"
                  : 'gentype_topTupleType));
-# 16542 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16538 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topAppType in
             let _3 = parseState.GetInput(3) :?> 'gentype_topTupleTypeElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6095 "pars.fsy"
+# 6092 "pars.fsy"
                              let t, argInfo = _1
                              let mStar = rhs parseState 2
                              (SynTupleTypeSegment.Type t, Some argInfo) :: (SynTupleTypeSegment.Star mStar, None) :: _3 
                    )
-# 6095 "pars.fsy"
+# 6092 "pars.fsy"
                  : 'gentype_topTupleTypeElements));
-# 16556 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16552 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topAppType in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6100 "pars.fsy"
+# 6097 "pars.fsy"
                              let ty1, argInfo = _1
                              let mStar = rhs parseState 2
                              let ty2 = SynType.FromParseError(mStar.EndRange)
                              [SynTupleTypeSegment.Type ty1, Some argInfo; SynTupleTypeSegment.Star mStar, None; SynTupleTypeSegment.Type ty2, Some SynInfo.emptySynArgInfo] 
                    )
-# 6100 "pars.fsy"
+# 6097 "pars.fsy"
                  : 'gentype_topTupleTypeElements));
-# 16571 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16567 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_topTupleTypeElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6106 "pars.fsy"
+# 6103 "pars.fsy"
                              let mStar = rhs parseState 1
                              let ty = SynType.FromParseError(mStar.EndRange)
                              reportParseErrorAt mStar (FSComp.SR.parsExpectingType ())
                              (SynTupleTypeSegment.Type ty, None) :: (SynTupleTypeSegment.Star mStar, None) :: _2 
                    )
-# 6106 "pars.fsy"
+# 6103 "pars.fsy"
                  : 'gentype_topTupleTypeElements));
-# 16585 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16581 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topAppType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6112 "pars.fsy"
+# 6109 "pars.fsy"
                             let t, argInfo = _1
                             [ SynTupleTypeSegment.Type t, Some argInfo ] 
                    )
-# 6112 "pars.fsy"
+# 6109 "pars.fsy"
                  : 'gentype_topTupleTypeElements));
-# 16597 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16593 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypeCanBeNullable in
@@ -16602,16 +16598,16 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6117 "pars.fsy"
+# 6114 "pars.fsy"
                              match _2 with
                              | SynType.LongIdent(SynLongIdent([id], _, _)) ->
                                  let m = unionRanges (rhs parseState 1) _4.Range
                                  SynType.SignatureParameter(_1, false, Some id, _4, m), SynArgInfo(_1, false, Some id)
                              | _ -> raiseParseErrorAt (rhs parseState 2) (FSComp.SR.parsSyntaxErrorInLabeledType()) 
                    )
-# 6117 "pars.fsy"
+# 6114 "pars.fsy"
                  : 'gentype_topAppType));
-# 16614 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16610 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypeCanBeNullable in
@@ -16619,7 +16615,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6124 "pars.fsy"
+# 6121 "pars.fsy"
                              match _2 with
                              | SynType.LongIdent(SynLongIdent([id], _, _)) ->
                                  let mColon = rhs parseState 2
@@ -16628,9 +16624,9 @@ let _fsyacc_reductions = lazy [|
                                  SynType.SignatureParameter(_1, false, Some id, ty, m), SynArgInfo(_1, false, Some id)
                              | _ -> raiseParseErrorAt (rhs parseState 2) (FSComp.SR.parsSyntaxErrorInLabeledType()) 
                    )
-# 6124 "pars.fsy"
+# 6121 "pars.fsy"
                  : 'gentype_topAppType));
-# 16633 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16629 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             let _3 = parseState.GetInput(3) :?> Ident in
@@ -16638,13 +16634,13 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6133 "pars.fsy"
+# 6130 "pars.fsy"
                              let m = unionRanges (rhs parseState 1) _5.Range
                              SynType.SignatureParameter(_1, true, Some _3, _5, m), SynArgInfo(_1, true, Some _3) 
                    )
-# 6133 "pars.fsy"
+# 6130 "pars.fsy"
                  : 'gentype_topAppType));
-# 16647 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16643 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             let _3 = parseState.GetInput(3) :?> Ident in
@@ -16652,51 +16648,51 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6137 "pars.fsy"
+# 6134 "pars.fsy"
                              let mColon = rhs parseState 4
                              let m = unionRanges (rhs parseState 1) mColon
                              let ty = SynType.FromParseError(mColon.EndRange)
                              SynType.SignatureParameter(_1, true, Some _3, ty, m), SynArgInfo(_1, true, Some _3) 
                    )
-# 6137 "pars.fsy"
+# 6134 "pars.fsy"
                  : 'gentype_topAppType));
-# 16663 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16659 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypeCanBeNullable in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6143 "pars.fsy"
+# 6140 "pars.fsy"
                              let m = unionRanges (rhs parseState 1) _2.Range
                              SynType.SignatureParameter(_1, false, None, _2, m), SynArgInfo(_1, false, None) 
                    )
-# 6143 "pars.fsy"
+# 6140 "pars.fsy"
                  : 'gentype_topAppType));
-# 16676 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16672 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeCanBeNullable in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6147 "pars.fsy"
+# 6144 "pars.fsy"
                              match _1 with
                              | SynType.LongIdent(SynLongIdent([id], _, _)) ->
                                  let m = unionRanges (rhs parseState 1) _3.Range
                                  SynType.SignatureParameter([], false, Some id, _3, m), SynArgInfo([], false, Some id)
                              | _ -> raiseParseErrorAt (rhs parseState 2) (FSComp.SR.parsSyntaxErrorInLabeledType()) 
                    )
-# 6147 "pars.fsy"
+# 6144 "pars.fsy"
                  : 'gentype_topAppType));
-# 16692 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16688 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6154 "pars.fsy"
+# 6151 "pars.fsy"
                              match _1 with
                              | SynType.LongIdent(SynLongIdent([id], _, _)) ->
                                  let mColon = rhs parseState 2
@@ -16705,84 +16701,84 @@ let _fsyacc_reductions = lazy [|
                                  SynType.SignatureParameter([], false, Some id, ty, m), SynArgInfo([], false, Some id)
                              | _ -> raiseParseErrorAt (rhs parseState 2) (FSComp.SR.parsSyntaxErrorInLabeledType()) 
                    )
-# 6154 "pars.fsy"
+# 6151 "pars.fsy"
                  : 'gentype_topAppType));
-# 16710 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16706 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> Ident in
             let _4 = parseState.GetInput(4) :?> 'gentype_appTypeCanBeNullable in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6163 "pars.fsy"
+# 6160 "pars.fsy"
                              let m = unionRanges (rhs parseState 1) _4.Range
                              SynType.SignatureParameter([], true, Some _2, _4, m), SynArgInfo([], true, Some _2) 
                    )
-# 6163 "pars.fsy"
+# 6160 "pars.fsy"
                  : 'gentype_topAppType));
-# 16723 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16719 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> Ident in
             let _4 = parseState.GetInput(4) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6167 "pars.fsy"
+# 6164 "pars.fsy"
                              let mColon = rhs parseState 3
                              let m = unionRanges (rhs parseState 1) mColon
                              let ty = SynType.FromParseError(mColon.EndRange)
                              SynType.SignatureParameter([], true, Some _2, ty, m), SynArgInfo([], true, Some _2) 
                    )
-# 6167 "pars.fsy"
+# 6164 "pars.fsy"
                  : 'gentype_topAppType));
-# 16738 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16734 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6173 "pars.fsy"
+# 6170 "pars.fsy"
                             _1, SynArgInfo([], false, None) 
                    )
-# 6173 "pars.fsy"
+# 6170 "pars.fsy"
                  : 'gentype_topAppType));
-# 16749 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16745 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _3 = parseState.GetInput(3) :?> 'gentype_invalidUseOfAppTypeFunction in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6179 "pars.fsy"
+# 6176 "pars.fsy"
                             let mArrow = rhs parseState 2
                             let m = unionRanges (rhs2 parseState 1 2) _3.Range
                             SynType.Fun(_1, _3, m, { ArrowRange = mArrow }) 
                    )
-# 6179 "pars.fsy"
+# 6176 "pars.fsy"
                  : 'gentype_invalidUseOfAppTypeFunction));
-# 16763 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16759 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6184 "pars.fsy"
+# 6181 "pars.fsy"
                             let mArrow = rhs parseState 2
                             let ty = SynType.FromParseError(mArrow.EndRange)
                             let m = rhs2 parseState 1 2
                             SynType.Fun(_1, ty, m, { ArrowRange = mArrow }) 
                    )
-# 6184 "pars.fsy"
+# 6181 "pars.fsy"
                  : 'gentype_invalidUseOfAppTypeFunction));
-# 16778 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16774 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _4 = parseState.GetInput(4) :?> 'gentype_invalidUseOfAppTypeFunction in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6190 "pars.fsy"
+# 6187 "pars.fsy"
                             let mArrow1 = rhs parseState 2
                             let mArrow2 = rhs parseState 3
                             reportParseErrorAt mArrow2 (FSComp.SR.parsExpectingType ())
@@ -16791,59 +16787,59 @@ let _fsyacc_reductions = lazy [|
                             let m2 = unionRanges mArrow2 _4.Range
                             SynType.Fun(_1, SynType.Fun(ty, _4, m2, { ArrowRange = mArrow2 }), m1, { ArrowRange = mArrow1 }) 
                    )
-# 6190 "pars.fsy"
+# 6187 "pars.fsy"
                  : 'gentype_invalidUseOfAppTypeFunction));
-# 16796 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16792 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeWithoutNull in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6199 "pars.fsy"
+# 6196 "pars.fsy"
                             let mArrow = rhs parseState 2
                             let m = rhs2 parseState 1 3
                             SynType.Fun(_1, _3, m, { ArrowRange = mArrow }) 
                    )
-# 6199 "pars.fsy"
+# 6196 "pars.fsy"
                  : 'gentype_invalidUseOfAppTypeFunction));
-# 16810 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16806 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleType in
             let _3 = parseState.GetInput(3) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6207 "pars.fsy"
+# 6204 "pars.fsy"
                              let mArrow = rhs parseState 2
                              let m = unionRanges (rhs2 parseState 1 2) _3.Range
                              SynType.Fun(_1, _3, m, { ArrowRange = mArrow }) 
                    )
-# 6207 "pars.fsy"
+# 6204 "pars.fsy"
                  : SynType));
-# 16824 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16820 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleType in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6212 "pars.fsy"
+# 6209 "pars.fsy"
                              let mArrow = rhs parseState 2
                              let ty = SynType.FromParseError(mArrow.EndRange)
                              let m = rhs2 parseState 1 2
                              SynType.Fun(_1, ty, m, { ArrowRange = mArrow }) 
                    )
-# 6212 "pars.fsy"
+# 6209 "pars.fsy"
                  : SynType));
-# 16839 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16835 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleType in
             let _4 = parseState.GetInput(4) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6218 "pars.fsy"
+# 6215 "pars.fsy"
                              let mArrow1 = rhs parseState 2
                              let mArrow2 = rhs parseState 3
                              reportParseErrorAt mArrow2 (FSComp.SR.parsExpectingType ())
@@ -16852,107 +16848,107 @@ let _fsyacc_reductions = lazy [|
                              let m2 = unionRanges mArrow2 _4.Range
                              SynType.Fun(_1, SynType.Fun(ty, _4, m2, { ArrowRange = mArrow2 }), m1, { ArrowRange = mArrow1 }) 
                    )
-# 6218 "pars.fsy"
+# 6215 "pars.fsy"
                  : SynType));
-# 16857 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16853 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6227 "pars.fsy"
+# 6224 "pars.fsy"
                              _1 
                    )
-# 6227 "pars.fsy"
+# 6224 "pars.fsy"
                  : SynType));
-# 16868 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16864 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             let _2 = parseState.GetInput(2) :?> ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6230 "pars.fsy"
+# 6227 "pars.fsy"
                                    checkEndOfFileError _2; _1 
                    )
-# 6230 "pars.fsy"
+# 6227 "pars.fsy"
                  : SynType));
-# 16880 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16876 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_tupleOrQuotTypeElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6235 "pars.fsy"
+# 6232 "pars.fsy"
                              let mStar = rhs parseState 2
                              let path = SynTupleTypeSegment.Type _1 :: SynTupleTypeSegment.Star mStar :: _3
                              mkSynTypeTuple path 
                    )
-# 6235 "pars.fsy"
+# 6232 "pars.fsy"
                  : 'gentype_tupleType));
-# 16894 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16890 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6240 "pars.fsy"
+# 6237 "pars.fsy"
                              let mStar = rhs parseState 2
                              let ty = SynType.FromParseError(mStar.EndRange)
                              let path = [SynTupleTypeSegment.Type _1; SynTupleTypeSegment.Star mStar; SynTupleTypeSegment.Type ty]
                              mkSynTypeTuple path 
                    )
-# 6240 "pars.fsy"
+# 6237 "pars.fsy"
                  : 'gentype_tupleType));
-# 16909 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16905 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_tupleOrQuotTypeElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6246 "pars.fsy"
+# 6243 "pars.fsy"
                              let mStar = rhs parseState 1
                              let ty = SynType.FromParseError(mStar.EndRange)
                              reportParseErrorAt mStar (FSComp.SR.parsExpectingType ())
                              let path = SynTupleTypeSegment.Type ty :: SynTupleTypeSegment.Star mStar :: _2
                              mkSynTypeTuple path 
                    )
-# 6246 "pars.fsy"
+# 6243 "pars.fsy"
                  : 'gentype_tupleType));
-# 16924 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16920 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_tupleOrQuotTypeElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6253 "pars.fsy"
+# 6250 "pars.fsy"
                              if _1 <> "/" then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedInfixOperator ())
                              let mSlash = rhs parseState 1
                              let path = SynTupleTypeSegment.Slash mSlash :: _2
                              mkSynTypeTuple path 
                    )
-# 6253 "pars.fsy"
+# 6250 "pars.fsy"
                  : 'gentype_tupleType));
-# 16939 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16935 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6259 "pars.fsy"
+# 6256 "pars.fsy"
                              if _1 <> "/" then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedInfixOperator ())
                              let mSlash = rhs parseState 1
                              let ty = SynType.FromParseError(mSlash.EndRange)
                              let path = [SynTupleTypeSegment.Slash mSlash; SynTupleTypeSegment.Type ty]
                              mkSynTypeTuple path 
                    )
-# 6259 "pars.fsy"
+# 6256 "pars.fsy"
                  : 'gentype_tupleType));
-# 16955 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16951 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _2 = parseState.GetInput(2) :?> string in
@@ -16960,15 +16956,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6266 "pars.fsy"
+# 6263 "pars.fsy"
                              if _2 <> "/" then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedInfixOperator())
                              let mSlash = rhs parseState 2
                              let path = SynTupleTypeSegment.Type _1 :: SynTupleTypeSegment.Slash mSlash :: _3
                              mkSynTypeTuple path 
                    )
-# 6266 "pars.fsy"
+# 6263 "pars.fsy"
                  : 'gentype_tupleType));
-# 16971 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16967 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _2 = parseState.GetInput(2) :?> string in
@@ -16976,68 +16972,68 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6272 "pars.fsy"
+# 6269 "pars.fsy"
                              if _2 <> "/" then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedInfixOperator ())
                              let mSlash = rhs parseState 2
                              let ty = SynType.FromParseError(mSlash.EndRange)
                              let path = [SynTupleTypeSegment.Type _1; SynTupleTypeSegment.Slash mSlash; SynTupleTypeSegment.Type ty]
                              mkSynTypeTuple path 
                    )
-# 6272 "pars.fsy"
+# 6269 "pars.fsy"
                  : 'gentype_tupleType));
-# 16988 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16984 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6279 "pars.fsy"
+# 6276 "pars.fsy"
                              _1 
                    )
-# 6279 "pars.fsy"
+# 6276 "pars.fsy"
                  : 'gentype_tupleType));
-# 16999 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 16995 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_tupleOrQuotTypeElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6283 "pars.fsy"
+# 6280 "pars.fsy"
                              let mStar = rhs parseState 2
                              SynTupleTypeSegment.Type _1 :: SynTupleTypeSegment.Star mStar :: _3 
                    )
-# 6283 "pars.fsy"
+# 6280 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17012 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17008 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6287 "pars.fsy"
+# 6284 "pars.fsy"
                              let mStar = rhs parseState 2
                              let ty = SynType.FromParseError(mStar.EndRange)
                              [SynTupleTypeSegment.Type _1; SynTupleTypeSegment.Star mStar; SynTupleTypeSegment.Type ty] 
                    )
-# 6287 "pars.fsy"
+# 6284 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17026 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17022 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_tupleOrQuotTypeElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6292 "pars.fsy"
+# 6289 "pars.fsy"
                              let mStar = rhs parseState 1
                              let ty = SynType.FromParseError(mStar.EndRange)
                              reportParseErrorAt mStar (FSComp.SR.parsExpectingType ())
                              SynTupleTypeSegment.Type ty :: SynTupleTypeSegment.Star mStar :: _2 
                    )
-# 6292 "pars.fsy"
+# 6289 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17040 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17036 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _2 = parseState.GetInput(2) :?> string in
@@ -17045,14 +17041,14 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6298 "pars.fsy"
+# 6295 "pars.fsy"
                              if _2 <> "/" then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedInfixOperator ())
                              let mSlash = rhs parseState 2
                              SynTupleTypeSegment.Type _1 :: SynTupleTypeSegment.Slash mSlash :: _3 
                    )
-# 6298 "pars.fsy"
+# 6295 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17055 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17051 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _2 = parseState.GetInput(2) :?> string in
@@ -17060,90 +17056,90 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6303 "pars.fsy"
+# 6300 "pars.fsy"
                              if _2 <> "/" then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedInfixOperator ())
                              let mSlash = rhs parseState 2
                              let ty = SynType.FromParseError(mSlash.EndRange)
                              [SynTupleTypeSegment.Type _1; SynTupleTypeSegment.Slash mSlash; SynTupleTypeSegment.Type ty] 
                    )
-# 6303 "pars.fsy"
+# 6300 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17071 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17067 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_tupleOrQuotTypeElements in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6309 "pars.fsy"
+# 6306 "pars.fsy"
                              if _1 <> "/" then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedInfixOperator ())
                              let mSlash = rhs parseState 1
                              let ty = SynType.FromParseError(mSlash.EndRange)
                              reportParseErrorAt mSlash (FSComp.SR.parsExpectingType ())
                              SynTupleTypeSegment.Type ty :: SynTupleTypeSegment.Slash mSlash :: _2 
                    )
-# 6309 "pars.fsy"
+# 6306 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17087 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17083 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6316 "pars.fsy"
+# 6313 "pars.fsy"
                              [ SynTupleTypeSegment.Type _1 ] 
                    )
-# 6316 "pars.fsy"
+# 6313 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17098 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17094 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> 'gentype_intersectionConstraints in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6320 "pars.fsy"
+# 6317 "pars.fsy"
                            let constraints, mAmpersands = _3
                            SynType.Intersection(Some _1, List.rev constraints, lhs parseState, { AmpersandRanges = rhs parseState 2 :: List.rev mAmpersands }) 
                    )
-# 6320 "pars.fsy"
+# 6317 "pars.fsy"
                  : 'gentype_intersectionType));
-# 17111 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17107 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hashConstraint in
             let _3 = parseState.GetInput(3) :?> 'gentype_intersectionConstraints in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6324 "pars.fsy"
+# 6321 "pars.fsy"
                            let constraints, mAmpersands = _3
                            SynType.Intersection(None, _1 :: List.rev constraints, lhs parseState, { AmpersandRanges = rhs parseState 2 :: List.rev mAmpersands }) 
                    )
-# 6324 "pars.fsy"
+# 6321 "pars.fsy"
                  : 'gentype_intersectionType));
-# 17124 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17120 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6329 "pars.fsy"
+# 6326 "pars.fsy"
                            SynType.LongIdent(_1) 
                    )
-# 6329 "pars.fsy"
+# 6326 "pars.fsy"
                  : 'gentype_appTypeCon));
-# 17135 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17131 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6332 "pars.fsy"
+# 6329 "pars.fsy"
                            SynType.Var(_1, lhs parseState) 
                    )
-# 6332 "pars.fsy"
+# 6329 "pars.fsy"
                  : 'gentype_appTypeCon));
-# 17146 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17142 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCon in
             let _2 = parseState.GetInput(2) :?> string in
@@ -17151,7 +17147,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6336 "pars.fsy"
+# 6333 "pars.fsy"
                            if _2 <> "^" && _2 <> "^-" then reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsUnexpectedInfixOperator())
                            if _2 = "^-" then
                                let afterMinus = (rhs parseState 2).EndRange
@@ -17160,101 +17156,101 @@ let _fsyacc_reductions = lazy [|
                                SynType.MeasurePower(_1, SynRationalConst.Negate(_3, m), lhs parseState)
                            else SynType.MeasurePower(_1, _3, lhs parseState) 
                    )
-# 6336 "pars.fsy"
+# 6333 "pars.fsy"
                  : 'gentype_appTypeConPower));
-# 17165 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17161 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCon in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6345 "pars.fsy"
+# 6342 "pars.fsy"
                            _1 
                    )
-# 6345 "pars.fsy"
+# 6342 "pars.fsy"
                  : 'gentype_appTypeConPower));
-# 17176 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17172 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6349 "pars.fsy"
+# 6346 "pars.fsy"
                            SynType.WithNull(_1, false, lhs parseState, { BarRange = rhs parseState 2 }) 
                    )
+# 6346 "pars.fsy"
+                 : 'gentype_appTypeCanBeNullable));
+# 17183 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 6349 "pars.fsy"
+                           _1 
+                   )
 # 6349 "pars.fsy"
                  : 'gentype_appTypeCanBeNullable));
-# 17187 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17194 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6352 "pars.fsy"
+# 6353 "pars.fsy"
                            _1 
                    )
-# 6352 "pars.fsy"
-                 : 'gentype_appTypeCanBeNullable));
-# 17198 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 6356 "pars.fsy"
-                           _1 
-                   )
-# 6356 "pars.fsy"
+# 6353 "pars.fsy"
                  : SynType));
-# 17209 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17205 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6359 "pars.fsy"
+# 6356 "pars.fsy"
                            SynType.Paren(_2, lhs parseState) 
                    )
-# 6359 "pars.fsy"
+# 6356 "pars.fsy"
                  : SynType));
-# 17221 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17217 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _2 = parseState.GetInput(2) :?> 'gentype_arrayTypeSuffix in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6363 "pars.fsy"
+# 6360 "pars.fsy"
                              SynType.Array(_2, _1, lhs parseState) 
                    )
-# 6363 "pars.fsy"
+# 6360 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17233 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17229 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _3 = parseState.GetInput(3) :?> 'gentype_arrayTypeSuffix in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6366 "pars.fsy"
+# 6363 "pars.fsy"
                              SynType.Array(_3, _1, lhs parseState) 
                    )
-# 6366 "pars.fsy"
+# 6363 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17245 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17241 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypeConPower in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6370 "pars.fsy"
+# 6367 "pars.fsy"
                              SynType.App(_2, None, [_1], [], None, true, unionRanges (rhs parseState 1) _2.Range) 
                    )
-# 6370 "pars.fsy"
+# 6367 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17257 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17253 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypePrefixArguments in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -17262,7 +17258,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6373 "pars.fsy"
+# 6370 "pars.fsy"
                              let args, commas = _2
                              if parseState.LexBuffer.SupportsFeature LanguageFeature.MLCompatRevisions then
                                  mlCompatError (FSComp.SR.mlCompatMultiPrefixTyparsNoLongerSupported()) (unionRanges (rhs parseState 1) _4.Range)
@@ -17270,377 +17266,377 @@ let _fsyacc_reductions = lazy [|
                                  mlCompatWarning (FSComp.SR.parsMultiArgumentGenericTypeFormDeprecated()) (unionRanges (rhs parseState 1) _4.Range)
                              SynType.App(_4, None, args, commas, None, true, unionRanges (rhs parseState 1) _4.Range) 
                    )
-# 6373 "pars.fsy"
+# 6370 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17275 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17271 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_powerType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6381 "pars.fsy"
+# 6378 "pars.fsy"
                              _1 
                    )
-# 6381 "pars.fsy"
+# 6378 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17286 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17282 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_intersectionType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6384 "pars.fsy"
+# 6381 "pars.fsy"
                              parseState.LexBuffer.CheckLanguageFeatureAndRecover LanguageFeature.ConstraintIntersectionOnFlexibleTypes (lhs parseState)
                              _1 
                    )
-# 6384 "pars.fsy"
+# 6381 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17298 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17294 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6388 "pars.fsy"
+# 6385 "pars.fsy"
                              let tp, typ = _1, _3
                              let m = lhs parseState
                              SynType.WithGlobalConstraints(SynType.Var(tp, rhs parseState 1), [SynTypeConstraint.WhereTyparSubtypeOfType(tp, typ, m)], m) 
                    )
-# 6388 "pars.fsy"
+# 6385 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17312 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17308 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6393 "pars.fsy"
+# 6390 "pars.fsy"
                              SynType.HashConstraint(_3, lhs parseState) 
                    )
-# 6393 "pars.fsy"
+# 6390 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17323 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17319 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6397 "pars.fsy"
+# 6394 "pars.fsy"
                              1 
                    )
-# 6397 "pars.fsy"
+# 6394 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17333 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17329 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6400 "pars.fsy"
+# 6397 "pars.fsy"
                              2 
                    )
-# 6400 "pars.fsy"
+# 6397 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17343 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17339 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6403 "pars.fsy"
+# 6400 "pars.fsy"
                              3 
                    )
-# 6403 "pars.fsy"
+# 6400 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17353 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17349 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6406 "pars.fsy"
+# 6403 "pars.fsy"
                              4 
                    )
-# 6406 "pars.fsy"
+# 6403 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17363 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17359 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6409 "pars.fsy"
+# 6406 "pars.fsy"
                              5 
                    )
-# 6409 "pars.fsy"
+# 6406 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17373 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17369 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6412 "pars.fsy"
+# 6409 "pars.fsy"
                              6 
                    )
-# 6412 "pars.fsy"
+# 6409 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17383 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17379 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6415 "pars.fsy"
+# 6412 "pars.fsy"
                              7 
                    )
-# 6415 "pars.fsy"
+# 6412 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17393 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17389 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6418 "pars.fsy"
+# 6415 "pars.fsy"
                              8 
                    )
-# 6418 "pars.fsy"
+# 6415 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17403 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17399 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6421 "pars.fsy"
+# 6418 "pars.fsy"
                              9 
                    )
-# 6421 "pars.fsy"
+# 6418 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17413 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17409 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6424 "pars.fsy"
+# 6421 "pars.fsy"
                              10 
                    )
-# 6424 "pars.fsy"
+# 6421 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17423 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17419 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6427 "pars.fsy"
+# 6424 "pars.fsy"
                              11 
                    )
-# 6427 "pars.fsy"
+# 6424 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17433 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17429 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6430 "pars.fsy"
+# 6427 "pars.fsy"
                              12 
                    )
-# 6430 "pars.fsy"
+# 6427 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17443 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17439 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6433 "pars.fsy"
+# 6430 "pars.fsy"
                              13 
                    )
-# 6433 "pars.fsy"
+# 6430 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17453 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17449 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6436 "pars.fsy"
+# 6433 "pars.fsy"
                              14 
                    )
-# 6436 "pars.fsy"
+# 6433 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17463 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17459 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6439 "pars.fsy"
+# 6436 "pars.fsy"
                              15 
                    )
-# 6439 "pars.fsy"
+# 6436 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17473 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17469 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6442 "pars.fsy"
+# 6439 "pars.fsy"
                              16 
                    )
-# 6442 "pars.fsy"
+# 6439 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17483 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17479 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6445 "pars.fsy"
+# 6442 "pars.fsy"
                              17 
                    )
-# 6445 "pars.fsy"
+# 6442 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17493 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17489 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6448 "pars.fsy"
+# 6445 "pars.fsy"
                              18 
                    )
-# 6448 "pars.fsy"
+# 6445 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17503 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17499 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6451 "pars.fsy"
+# 6448 "pars.fsy"
                              19 
                    )
-# 6451 "pars.fsy"
+# 6448 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17513 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17509 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6454 "pars.fsy"
+# 6451 "pars.fsy"
                              20 
                    )
-# 6454 "pars.fsy"
+# 6451 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17523 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17519 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6457 "pars.fsy"
+# 6454 "pars.fsy"
                              21 
                    )
-# 6457 "pars.fsy"
+# 6454 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17533 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17529 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6460 "pars.fsy"
+# 6457 "pars.fsy"
                              22 
                    )
-# 6460 "pars.fsy"
+# 6457 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17543 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17539 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6463 "pars.fsy"
+# 6460 "pars.fsy"
                              23 
                    )
-# 6463 "pars.fsy"
+# 6460 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17553 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17549 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6466 "pars.fsy"
+# 6463 "pars.fsy"
                              24 
                    )
-# 6466 "pars.fsy"
+# 6463 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17563 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17559 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6469 "pars.fsy"
+# 6466 "pars.fsy"
                              25 
                    )
-# 6469 "pars.fsy"
+# 6466 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17573 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17569 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6472 "pars.fsy"
+# 6469 "pars.fsy"
                              26 
                    )
-# 6472 "pars.fsy"
+# 6469 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17583 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17579 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6475 "pars.fsy"
+# 6472 "pars.fsy"
                              27 
                    )
-# 6475 "pars.fsy"
+# 6472 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17593 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17589 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6478 "pars.fsy"
+# 6475 "pars.fsy"
                              28 
                    )
-# 6478 "pars.fsy"
+# 6475 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17603 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17599 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6481 "pars.fsy"
+# 6478 "pars.fsy"
                              29 
                    )
-# 6481 "pars.fsy"
+# 6478 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17613 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17609 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6484 "pars.fsy"
+# 6481 "pars.fsy"
                              30 
                    )
-# 6484 "pars.fsy"
+# 6481 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17623 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17619 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6487 "pars.fsy"
+# 6484 "pars.fsy"
                              31 
                    )
-# 6487 "pars.fsy"
+# 6484 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17633 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17629 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6490 "pars.fsy"
+# 6487 "pars.fsy"
                              32 
                    )
-# 6490 "pars.fsy"
+# 6487 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17643 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17639 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeArgActual in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeArgActual in
@@ -17648,61 +17644,61 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6494 "pars.fsy"
+# 6491 "pars.fsy"
                              let typeArgs, commas = _4
                              _1 :: _3 :: List.rev typeArgs, (rhs parseState 2) :: (List.rev commas) 
                    )
-# 6494 "pars.fsy"
+# 6491 "pars.fsy"
                  : 'gentype_appTypePrefixArguments));
-# 17657 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17653 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeArgListElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeArgActual in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6499 "pars.fsy"
+# 6496 "pars.fsy"
                              let typeArgs, commas = _1
                              _3 :: typeArgs, (rhs parseState 2) :: commas 
                    )
-# 6499 "pars.fsy"
+# 6496 "pars.fsy"
                  : 'gentype_typeArgListElements));
-# 17670 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17666 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeArgListElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_dummyTypeArg in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6503 "pars.fsy"
+# 6500 "pars.fsy"
                             reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsMissingTypeArgs())
                             let typeArgs, commas = _1
                             _3 :: typeArgs, (rhs parseState 2) :: commas 
                    )
-# 6503 "pars.fsy"
+# 6500 "pars.fsy"
                  : 'gentype_typeArgListElements));
-# 17684 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17680 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6508 "pars.fsy"
+# 6505 "pars.fsy"
                              [], [] 
                    )
-# 6508 "pars.fsy"
+# 6505 "pars.fsy"
                  : 'gentype_typeArgListElements));
-# 17694 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17690 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6512 "pars.fsy"
+# 6509 "pars.fsy"
                            _1 
                    )
-# 6512 "pars.fsy"
+# 6509 "pars.fsy"
                  : 'gentype_powerType));
-# 17705 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17701 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             let _2 = parseState.GetInput(2) :?> string in
@@ -17710,7 +17706,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6515 "pars.fsy"
+# 6512 "pars.fsy"
                             if _2 <> "^" && _2 <> "^-" then reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsUnexpectedInfixOperator())
                             if _2 = "^-" then
                                 let afterMinus = (rhs parseState 2).EndRange
@@ -17719,9 +17715,9 @@ let _fsyacc_reductions = lazy [|
                                 SynType.MeasurePower(_1, SynRationalConst.Negate(_3, m), lhs parseState)
                             else SynType.MeasurePower(_1, _3, lhs parseState) 
                    )
-# 6515 "pars.fsy"
+# 6512 "pars.fsy"
                  : 'gentype_powerType));
-# 17724 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17720 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypePrefixArguments in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -17729,7 +17725,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6528 "pars.fsy"
+# 6525 "pars.fsy"
                              let args, commas = _2
                              if parseState.LexBuffer.SupportsFeature LanguageFeature.MLCompatRevisions then
                                  mlCompatError (FSComp.SR.mlCompatMultiPrefixTyparsNoLongerSupported()) (unionRanges (rhs parseState 1) _4.Range)
@@ -17737,37 +17733,37 @@ let _fsyacc_reductions = lazy [|
                                  mlCompatWarning (FSComp.SR.parsMultiArgumentGenericTypeFormDeprecated()) (unionRanges (rhs parseState 1) _4.Range)
                              SynType.App(_4, None, args, commas, None, true, unionRanges (rhs parseState 1) _4.Range) 
                    )
-# 6528 "pars.fsy"
+# 6525 "pars.fsy"
                  : SynType));
-# 17742 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17738 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6536 "pars.fsy"
+# 6533 "pars.fsy"
                              _1 
                    )
-# 6536 "pars.fsy"
+# 6533 "pars.fsy"
                  : SynType));
-# 17753 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17749 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6540 "pars.fsy"
+# 6537 "pars.fsy"
                             _1 
                    )
-# 6540 "pars.fsy"
+# 6537 "pars.fsy"
                  : SynType));
-# 17764 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17760 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_anonRecdType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6543 "pars.fsy"
+# 6540 "pars.fsy"
                             let flds, isStruct = _1
                             let flds2 =
                                 flds |> List.choose (function
@@ -17775,66 +17771,66 @@ let _fsyacc_reductions = lazy [|
                                   | _ -> reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsInvalidAnonRecdType()); None)
                             SynType.AnonRecd(isStruct, flds2, rhs parseState 1) 
                    )
-# 6543 "pars.fsy"
+# 6540 "pars.fsy"
                  : SynType));
-# 17780 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17776 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hashConstraint in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6554 "pars.fsy"
+# 6551 "pars.fsy"
                             _1 
                    )
-# 6554 "pars.fsy"
+# 6551 "pars.fsy"
                  : 'gentype_atomType));
-# 17791 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17787 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeConPower in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6557 "pars.fsy"
+# 6554 "pars.fsy"
                             _1 
                    )
-# 6557 "pars.fsy"
+# 6554 "pars.fsy"
                  : 'gentype_atomType));
-# 17802 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17798 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6560 "pars.fsy"
+# 6557 "pars.fsy"
                             SynType.Anon(lhs parseState) 
                    )
-# 6560 "pars.fsy"
+# 6557 "pars.fsy"
                  : 'gentype_atomType));
-# 17812 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17808 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6563 "pars.fsy"
+# 6560 "pars.fsy"
                             SynType.Paren(_2, lhs parseState) 
                    )
-# 6563 "pars.fsy"
+# 6560 "pars.fsy"
                  : 'gentype_atomType));
-# 17824 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17820 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6566 "pars.fsy"
+# 6563 "pars.fsy"
                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnmatchedParen ())
                             SynType.Paren(_2, lhs parseState) 
                    )
-# 6566 "pars.fsy"
+# 6563 "pars.fsy"
                  : 'gentype_atomType));
-# 17837 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17833 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeCanBeNullable in
             let _5 = parseState.GetInput(5) :?> 'gentype_tupleOrQuotTypeElements in
@@ -17842,15 +17838,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6570 "pars.fsy"
+# 6567 "pars.fsy"
                            let mStar = rhs parseState 4
                            let path = SynTupleTypeSegment.Type _3 :: SynTupleTypeSegment.Star mStar :: _5
                            let m = rhs2 parseState 1 6
                            SynType.Tuple(true, path, m) 
                    )
-# 6570 "pars.fsy"
+# 6567 "pars.fsy"
                  : 'gentype_atomType));
-# 17853 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17849 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeCanBeNullable in
             let _5 = parseState.GetInput(5) :?> 'gentype_tupleOrQuotTypeElements in
@@ -17858,144 +17854,144 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6576 "pars.fsy"
+# 6573 "pars.fsy"
                            reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsUnmatchedParen())
                            let mStar = rhs parseState 4
                            let path = SynTupleTypeSegment.Type _3 :: SynTupleTypeSegment.Star mStar :: _5
                            let m = rhs2 parseState 1 5
                            SynType.Tuple(true, path, m) 
                    )
-# 6576 "pars.fsy"
+# 6573 "pars.fsy"
                  : 'gentype_atomType));
-# 17870 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17866 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeCanBeNullable in
             let _5 = parseState.GetInput(5) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6583 "pars.fsy"
+# 6580 "pars.fsy"
                            reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsUnmatchedParen())
                            SynType.Anon(lhs parseState) 
                    )
-# 6583 "pars.fsy"
+# 6580 "pars.fsy"
                  : 'gentype_atomType));
-# 17883 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17879 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeCanBeNullable in
             let _4 = parseState.GetInput(4) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6587 "pars.fsy"
+# 6584 "pars.fsy"
                            reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsUnmatchedParen())
                            SynType.Anon(lhs parseState) 
                    )
-# 6587 "pars.fsy"
+# 6584 "pars.fsy"
                  : 'gentype_atomType));
-# 17896 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17892 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6591 "pars.fsy"
+# 6588 "pars.fsy"
                            reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsUnmatchedParen())
                            SynType.Anon(lhs parseState) 
                    )
-# 6591 "pars.fsy"
+# 6588 "pars.fsy"
                  : 'gentype_atomType));
-# 17908 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17904 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_rawConstant in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6595 "pars.fsy"
+# 6592 "pars.fsy"
                             SynType.StaticConstant(_1, rhs parseState 1) 
                    )
-# 6595 "pars.fsy"
+# 6592 "pars.fsy"
                  : 'gentype_atomType));
-# 17919 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17915 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6598 "pars.fsy"
+# 6595 "pars.fsy"
                             let m = rhs parseState 1
                             SynType.StaticConstantNull(m) 
                    )
-# 6598 "pars.fsy"
+# 6595 "pars.fsy"
                  : 'gentype_atomType));
-# 17930 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17926 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6602 "pars.fsy"
+# 6599 "pars.fsy"
                             let e, _ = _2
                             SynType.StaticConstantExpr(e, lhs parseState) 
                    )
-# 6602 "pars.fsy"
+# 6599 "pars.fsy"
                  : 'gentype_atomType));
-# 17942 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17938 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6606 "pars.fsy"
+# 6603 "pars.fsy"
                              SynType.StaticConstant(SynConst.Bool false, lhs parseState) 
                    )
-# 6606 "pars.fsy"
+# 6603 "pars.fsy"
                  : 'gentype_atomType));
-# 17952 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17948 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6609 "pars.fsy"
+# 6606 "pars.fsy"
                              SynType.StaticConstant(SynConst.Bool true, lhs parseState) 
                    )
-# 6609 "pars.fsy"
+# 6606 "pars.fsy"
                  : 'gentype_atomType));
-# 17962 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17958 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6612 "pars.fsy"
+# 6609 "pars.fsy"
                             (* silent recovery *) SynType.Anon(lhs parseState) 
                    )
-# 6612 "pars.fsy"
+# 6609 "pars.fsy"
                  : 'gentype_atomType));
-# 17973 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17969 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCon in
             let _2 = parseState.GetInput(2) :?> range * range option * SynType list * range list * range in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6615 "pars.fsy"
+# 6612 "pars.fsy"
                             let mLessThan, mGreaterThan, args, commas, mWhole = _2
                             SynType.App(_1, Some(mLessThan), args, commas, mGreaterThan, false, unionRanges _1.Range mWhole) 
                    )
-# 6615 "pars.fsy"
+# 6612 "pars.fsy"
                  : 'gentype_atomType));
-# 17986 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17982 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomType in
             let _3 = parseState.GetInput(3) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6619 "pars.fsy"
+# 6616 "pars.fsy"
                             SynType.LongIdentApp(_1, _3, None, [], [], None, unionRanges (rhs parseState 1) _3.Range) 
                    )
-# 6619 "pars.fsy"
+# 6616 "pars.fsy"
                  : 'gentype_atomType));
-# 17998 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 17994 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomType in
             let _3 = parseState.GetInput(3) :?> SynLongIdent in
@@ -18003,52 +17999,52 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6622 "pars.fsy"
+# 6619 "pars.fsy"
                             let mLessThan, mGreaterThan, args, commas, mWhole = _4
                             SynType.LongIdentApp(_1, _3, Some(mLessThan), args, commas, mGreaterThan, unionRanges _1.Range mWhole) 
                    )
-# 6622 "pars.fsy"
+# 6619 "pars.fsy"
                  : 'gentype_atomType));
-# 18012 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18008 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCon in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6626 "pars.fsy"
+# 6623 "pars.fsy"
                             if not _3 then reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsExpectedNameAfterToken())
                             _1 
                    )
-# 6626 "pars.fsy"
+# 6623 "pars.fsy"
                  : 'gentype_atomType));
-# 18025 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18021 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> range * range option * bool     * SynType list * range list * range in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6631 "pars.fsy"
+# 6628 "pars.fsy"
                             let mLessThan, mGreaterThan, parsedOk, args, commas, mAll = _1
                             if parsedOk then // if someone has "foo<bar" without a closing greater-than, then the lexfilter does not introduce a HPA, even though it is adjacent
                                 warning(Error(FSComp.SR.parsNonAdjacentTyargs(), rhs parseState 1))
                             mLessThan, mGreaterThan, args, commas, mAll 
                    )
-# 6631 "pars.fsy"
+# 6628 "pars.fsy"
                  : range * range option * SynType list * range list * range));
-# 18039 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18035 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> range * range option * bool     * SynType list * range list * range in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6637 "pars.fsy"
+# 6634 "pars.fsy"
                             let mLessThan, mGreaterThan, _, args, commas, mAll = _2
                             mLessThan, mGreaterThan, args, commas, mAll 
                    )
-# 6637 "pars.fsy"
+# 6634 "pars.fsy"
                  : range * range option * SynType list * range list * range));
-# 18051 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18047 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typeArgActualOrDummyIfEmpty in
@@ -18058,13 +18054,13 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6642 "pars.fsy"
+# 6639 "pars.fsy"
                             let typeArgs, commas = _5
                             (rhs parseState 1), Some(rhs parseState 6), true, (_2 :: _4 :: List.rev typeArgs), (rhs parseState 3) :: (List.rev commas), lhs parseState 
                    )
-# 6642 "pars.fsy"
+# 6639 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18067 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18063 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typeArgActualOrDummyIfEmpty in
@@ -18074,7 +18070,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6646 "pars.fsy"
+# 6643 "pars.fsy"
                             if not _6 then
                                 reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedEndOfFileTypeArgs())
                             else
@@ -18084,9 +18080,9 @@ let _fsyacc_reductions = lazy [|
                             let zeroWidthAtStartOfNextToken = nextToken.StartRange
                             (rhs parseState 1), None, false, (_2 :: _4 :: List.rev typeArgs), (rhs parseState 3) :: (List.rev commas), unionRanges (rhs parseState 1) zeroWidthAtStartOfNextToken 
                    )
-# 6646 "pars.fsy"
+# 6643 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18089 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18085 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typeArgActualOrDummyIfEmpty in
@@ -18094,15 +18090,15 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6656 "pars.fsy"
+# 6653 "pars.fsy"
                             if not _4 then reportParseErrorAt (rhs parseState 4) (FSComp.SR.parsMissingTypeArgs())
                             let nextToken = rhs parseState 4
                             let zeroWidthAtStartOfNextToken = nextToken.StartRange
                             (rhs parseState 1), None, false, [_2], [rhs parseState 3], unionRanges (rhs parseState 1) zeroWidthAtStartOfNextToken 
                    )
-# 6656 "pars.fsy"
+# 6653 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18105 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18101 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typeArgActual in
@@ -18110,12 +18106,12 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6662 "pars.fsy"
+# 6659 "pars.fsy"
                             (rhs parseState 1), Some(rhs parseState 3), true, [_2], [], lhs parseState 
                    )
-# 6662 "pars.fsy"
+# 6659 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18118 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18114 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typeArgActual in
@@ -18123,34 +18119,34 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6665 "pars.fsy"
+# 6662 "pars.fsy"
                             let nextToken = rhs parseState 3
                             if not _3 then reportParseErrorAt nextToken (FSComp.SR.parsMissingTypeArgs())
                             let zeroWidthAtStartOfNextToken = nextToken.StartRange
                             (rhs parseState 1), None, false, [_2], [], unionRanges (rhs parseState 1) zeroWidthAtStartOfNextToken 
                    )
-# 6665 "pars.fsy"
+# 6662 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18134 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18130 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6671 "pars.fsy"
+# 6668 "pars.fsy"
                             (rhs parseState 1), Some(rhs parseState 2), true, [], [], lhs parseState 
                    )
-# 6671 "pars.fsy"
+# 6668 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18146 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18142 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6674 "pars.fsy"
+# 6671 "pars.fsy"
                             if not _2 then
                                 reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsExpectedTypeAfterToken())
                             else
@@ -18159,83 +18155,83 @@ let _fsyacc_reductions = lazy [|
                             let zeroWidthAtStartOfNextToken = nextToken.StartRange
                             (rhs parseState 1), None, false, [], [], unionRanges (rhs parseState 1) zeroWidthAtStartOfNextToken 
                    )
-# 6674 "pars.fsy"
+# 6671 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18164 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18160 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6684 "pars.fsy"
+# 6681 "pars.fsy"
                             _1 
                    )
-# 6684 "pars.fsy"
+# 6681 "pars.fsy"
                  : 'gentype_typeArgActual));
-# 18175 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18171 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             let _3 = parseState.GetInput(3) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6687 "pars.fsy"
+# 6684 "pars.fsy"
                             SynType.StaticConstantNamed(_1, _3, unionRanges _1.Range _3.Range) 
                    )
-# 6687 "pars.fsy"
+# 6684 "pars.fsy"
                  : 'gentype_typeArgActual));
-# 18187 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18183 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6690 "pars.fsy"
+# 6687 "pars.fsy"
                             reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsMissingTypeArgs())
                             let dummy = SynType.StaticConstant(SynConst.Int32(0), rhs parseState 2)
                             SynType.StaticConstantNamed(_1, dummy, (rhs2 parseState 1 2))
                           
                    )
-# 6690 "pars.fsy"
+# 6687 "pars.fsy"
                  : 'gentype_typeArgActual));
-# 18201 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18197 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeArgActual in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6697 "pars.fsy"
+# 6694 "pars.fsy"
                             _1 
                    )
-# 6697 "pars.fsy"
+# 6694 "pars.fsy"
                  : 'gentype_typeArgActualOrDummyIfEmpty));
-# 18212 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18208 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_dummyTypeArg in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6700 "pars.fsy"
+# 6697 "pars.fsy"
                             reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsMissingTypeArgs())
                             _1 
                    )
-# 6700 "pars.fsy"
+# 6697 "pars.fsy"
                  : 'gentype_typeArgActualOrDummyIfEmpty));
-# 18224 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18220 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6705 "pars.fsy"
+# 6702 "pars.fsy"
                             let m = rhs parseState 1
                             let dummyStatVal = SynType.StaticConstant(SynConst.Int32(0), m)
                             let dummyName = SynType.LongIdent(SynLongIdent([ident("", m)], [], [None]))
                             let dummyTypeArg = SynType.StaticConstantNamed(dummyName, dummyStatVal, m)
                             dummyTypeArg 
                    )
-# 6705 "pars.fsy"
+# 6702 "pars.fsy"
                  : 'gentype_dummyTypeArg));
-# 18238 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18234 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_measureTypeExpr in
@@ -18243,76 +18239,76 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6713 "pars.fsy"
+# 6710 "pars.fsy"
                             let mLess = rhs parseState 1
                             let mGreater = rhs parseState 3
                             let trivia = { LessRange = mLess; GreaterRange = mGreater }
                             _2, trivia 
                    )
-# 6713 "pars.fsy"
+# 6710 "pars.fsy"
                  : 'gentype_measureTypeArg));
-# 18254 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18250 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _3 = parseState.GetInput(3) :?> bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6719 "pars.fsy"
+# 6716 "pars.fsy"
                             let mLess = rhs parseState 1
                             let mGreater = rhs parseState 3
                             let trivia = { LessRange = mLess; GreaterRange = mGreater } 
                             SynMeasure.Anon(rhs parseState 2), trivia 
                    )
-# 6719 "pars.fsy"
+# 6716 "pars.fsy"
                  : 'gentype_measureTypeArg));
-# 18269 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18265 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6726 "pars.fsy"
+# 6723 "pars.fsy"
                             SynMeasure.Named(_1.LongIdent, _1.Range) 
                    )
-# 6726 "pars.fsy"
+# 6723 "pars.fsy"
                  : 'gentype_measureTypeAtom));
-# 18280 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18276 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6729 "pars.fsy"
+# 6726 "pars.fsy"
                             SynMeasure.Var(_1, lhs parseState) 
                    )
-# 6729 "pars.fsy"
+# 6726 "pars.fsy"
                  : 'gentype_measureTypeAtom));
-# 18291 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18287 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_measureTypeExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6732 "pars.fsy"
+# 6729 "pars.fsy"
                             let mParen = rhs2 parseState 1 3
                             SynMeasure.Paren(_2, mParen) 
                    )
-# 6732 "pars.fsy"
+# 6729 "pars.fsy"
                  : 'gentype_measureTypeAtom));
-# 18304 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18300 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypeAtom in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6737 "pars.fsy"
+# 6734 "pars.fsy"
                              _1 
                    )
-# 6737 "pars.fsy"
+# 6734 "pars.fsy"
                  : 'gentype_measureTypePower));
-# 18315 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18311 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypeAtom in
             let _2 = parseState.GetInput(2) :?> string in
@@ -18320,7 +18316,7 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6740 "pars.fsy"
+# 6737 "pars.fsy"
                             if _2 <> "^" && _2 <> "^-" then reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsUnexpectedOperatorForUnitOfMeasure())
                             if _2 = "^-" then
                                 let mOp = rhs parseState 2
@@ -18331,68 +18327,68 @@ let _fsyacc_reductions = lazy [|
                                 SynMeasure.Power(_1, mCaret, SynRationalConst.Negate(_3, mNegate), lhs parseState)
                             else SynMeasure.Power(_1, rhs parseState 2, _3, lhs parseState) 
                    )
-# 6740 "pars.fsy"
+# 6737 "pars.fsy"
                  : 'gentype_measureTypePower));
-# 18336 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18332 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int32 * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6751 "pars.fsy"
+# 6748 "pars.fsy"
                             if fst _1 <> 1 then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedIntegerLiteralForUnitOfMeasure())
                             let m = rhs parseState 1
                             SynMeasure.One(m) 
                    )
-# 6751 "pars.fsy"
+# 6748 "pars.fsy"
                  : 'gentype_measureTypePower));
-# 18349 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18345 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypePower in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6757 "pars.fsy"
+# 6754 "pars.fsy"
                            [_1] 
                    )
-# 6757 "pars.fsy"
+# 6754 "pars.fsy"
                  : 'gentype_measureTypeSeq));
-# 18360 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18356 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypePower in
             let _2 = parseState.GetInput(2) :?> 'gentype_measureTypeSeq in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6760 "pars.fsy"
+# 6757 "pars.fsy"
                            _1 :: _2 
                    )
-# 6760 "pars.fsy"
+# 6757 "pars.fsy"
                  : 'gentype_measureTypeSeq));
-# 18372 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18368 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypeSeq in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6764 "pars.fsy"
+# 6761 "pars.fsy"
                            SynMeasure.Seq(_1, lhs parseState) 
                    )
-# 6764 "pars.fsy"
+# 6761 "pars.fsy"
                  : 'gentype_measureTypeExpr));
-# 18383 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18379 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypeExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_measureTypeExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6767 "pars.fsy"
+# 6764 "pars.fsy"
                            SynMeasure.Product(_1, rhs parseState 2, _3, lhs parseState) 
                    )
-# 6767 "pars.fsy"
+# 6764 "pars.fsy"
                  : 'gentype_measureTypeExpr));
-# 18395 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18391 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypeExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -18400,196 +18396,207 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6770 "pars.fsy"
+# 6767 "pars.fsy"
                            if _2 <> "*" && _2 <> "/" then reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsUnexpectedOperatorForUnitOfMeasure())
                            if _2 = "*" then SynMeasure.Product(_1, rhs parseState 2, _3, lhs parseState)
                            else SynMeasure.Divide(Some _1, rhs parseState 2, _3, lhs parseState) 
                    )
-# 6770 "pars.fsy"
+# 6767 "pars.fsy"
                  : 'gentype_measureTypeExpr));
-# 18410 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18406 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_measureTypeExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6775 "pars.fsy"
+# 6772 "pars.fsy"
                             if _1 <> "/" then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsUnexpectedOperatorForUnitOfMeasure())
                             SynMeasure.Divide(None, rhs parseState 1, _2, lhs parseState) 
                    )
-# 6775 "pars.fsy"
+# 6772 "pars.fsy"
                  : 'gentype_measureTypeExpr));
-# 18423 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18419 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6780 "pars.fsy"
+# 6777 "pars.fsy"
                             let id = mkSynId (lhs parseState) (_2).idText
                             SynTypar(id, TyparStaticReq.None, false) 
                    )
-# 6780 "pars.fsy"
+# 6777 "pars.fsy"
                  : SynTypar));
-# 18435 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18431 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6784 "pars.fsy"
+# 6781 "pars.fsy"
                            if _1 <> "^" then reportParseErrorAt (rhs parseState 1) (FSComp.SR.tcUnexpectedSymbolInTypeExpression(_1))
                            let id = mkSynId (lhs parseState) (_2).idText
                            SynTypar(id, TyparStaticReq.HeadType, false) 
                    )
-# 6784 "pars.fsy"
+# 6781 "pars.fsy"
                  : SynTypar));
-# 18449 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18445 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6790 "pars.fsy"
+# 6787 "pars.fsy"
                             ident(_1, rhs parseState 1) 
                    )
-# 6790 "pars.fsy"
+# 6787 "pars.fsy"
                  : Ident));
-# 18460 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18456 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6795 "pars.fsy"
+# 6792 "pars.fsy"
                              SynLongIdent([ident(MangledGlobalName, rhs parseState 1)], [], [Some(IdentTrivia.OriginalNotation "global")]) 
                    )
-# 6795 "pars.fsy"
+# 6792 "pars.fsy"
                  : SynLongIdent));
-# 18470 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18466 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6798 "pars.fsy"
+# 6795 "pars.fsy"
                             SynLongIdent([_1], [], [None]) 
                    )
-# 6798 "pars.fsy"
+# 6795 "pars.fsy"
                  : SynLongIdent));
-# 18481 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18477 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             let _3 = parseState.GetInput(3) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6801 "pars.fsy"
+# 6798 "pars.fsy"
                             let (SynLongIdent(lid, dotms, trivia)) = _1
                             SynLongIdent(lid @ [_3], dotms @ [rhs parseState 2], trivia @ [None]) 
                    )
-# 6801 "pars.fsy"
+# 6798 "pars.fsy"
                  : SynLongIdent));
-# 18494 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18490 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6805 "pars.fsy"
+# 6802 "pars.fsy"
                             if not _3 then reportParseErrorAt (rhs parseState 2) (FSComp.SR.parsExpectedNameAfterToken())
                             let (SynLongIdent(lid, dotms, trivia)) = _1
                             SynLongIdent(lid, dotms @ [rhs parseState 2], trivia) 
                    )
-# 6805 "pars.fsy"
+# 6802 "pars.fsy"
                  : SynLongIdent));
-# 18508 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18504 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_operatorName in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6813 "pars.fsy"
+# 6810 "pars.fsy"
                             let lpr = rhs parseState 1
                             let rpr = rhs parseState 3
                             ident(CompileOpName _2, rhs parseState 2), IdentTrivia.OriginalNotationWithParen(lpr, _2, rpr) 
                    )
-# 6813 "pars.fsy"
+# 6810 "pars.fsy"
                  : 'gentype_opName));
-# 18522 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18518 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6818 "pars.fsy"
+# 6815 "pars.fsy"
                             reportParseErrorAt (lhs parseState) (FSComp.SR.parsErrorParsingAsOperatorName())
                             let lpr = rhs parseState 1
                             let rpr = rhs parseState 3
                             ident(CompileOpName "****", rhs parseState 2), IdentTrivia.HasParenthesis(lpr, rpr) 
                    )
-# 6818 "pars.fsy"
+# 6815 "pars.fsy"
                  : 'gentype_opName));
-# 18536 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18532 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6824 "pars.fsy"
+# 6821 "pars.fsy"
                             let m = rhs parseState 1
                             let lpr = mkFileIndexRange m.FileIndex m.Start m.Start
                             let rpr = mkFileIndexRange m.FileIndex m.End m.End
                             ident(CompileOpName "*", rhs parseState 1), IdentTrivia.OriginalNotationWithParen(lpr, "*", rpr) 
                    )
-# 6824 "pars.fsy"
+# 6821 "pars.fsy"
                  : 'gentype_opName));
-# 18549 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18545 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_activePatternCaseNames in
             let _4 = parseState.GetInput(4) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6831 "pars.fsy"
+# 6828 "pars.fsy"
                             let lpr = rhs parseState 1
                             let text = ("|" + String.concat "|" (List.rev _2) + "|")
                             let rpr = rhs parseState 4
                             ident(text, rhs2 parseState 2 3), IdentTrivia.HasParenthesis(lpr, rpr) 
                    )
-# 6831 "pars.fsy"
+# 6828 "pars.fsy"
                  : 'gentype_opName));
-# 18564 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18560 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_activePatternCaseNames in
             let _6 = parseState.GetInput(6) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6838 "pars.fsy"
+# 6835 "pars.fsy"
                             let lpr = rhs parseState 1
                             let text = ("|" + String.concat "|" (List.rev _2) + "|_|")
                             let rpr = rhs parseState 6
                             ident(text, rhs2 parseState 2 5), IdentTrivia.HasParenthesis(lpr, rpr) 
                    )
-# 6838 "pars.fsy"
+# 6835 "pars.fsy"
                  : 'gentype_opName));
-# 18579 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18575 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6846 "pars.fsy"
+# 6843 "pars.fsy"
                             if not (IsValidPrefixOperatorDefinitionName _1) then
                                 reportParseErrorAt (lhs parseState) (FSComp.SR.parsInvalidPrefixOperatorDefinition())
                             _1 
                    )
-# 6846 "pars.fsy"
+# 6843 "pars.fsy"
                  : 'gentype_operatorName));
-# 18592 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18588 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            let _1 = parseState.GetInput(1) :?> string in
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 6848 "pars.fsy"
+                            _1 
+                   )
+# 6848 "pars.fsy"
+                 : 'gentype_operatorName));
+# 18599 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18600,7 +18607,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6851 "pars.fsy"
                  : 'gentype_operatorName));
-# 18603 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18610 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18611,7 +18618,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6854 "pars.fsy"
                  : 'gentype_operatorName));
-# 18614 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18621 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18622,7 +18629,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6857 "pars.fsy"
                  : 'gentype_operatorName));
-# 18625 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18632 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18633,7 +18640,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6860 "pars.fsy"
                  : 'gentype_operatorName));
-# 18636 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18643 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18644,7 +18651,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6863 "pars.fsy"
                  : 'gentype_operatorName));
-# 18647 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18654 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18655,776 +18662,765 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6866 "pars.fsy"
                  : 'gentype_operatorName));
-# 18658 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            let _1 = parseState.GetInput(1) :?> string in
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 6869 "pars.fsy"
-                            _1 
-                   )
-# 6869 "pars.fsy"
-                 : 'gentype_operatorName));
-# 18669 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18665 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6872 "pars.fsy"
+# 6869 "pars.fsy"
                             "$" 
                    )
-# 6872 "pars.fsy"
+# 6869 "pars.fsy"
                  : 'gentype_operatorName));
-# 18679 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18675 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6875 "pars.fsy"
+# 6872 "pars.fsy"
                             _1 
                    )
-# 6875 "pars.fsy"
+# 6872 "pars.fsy"
                  : 'gentype_operatorName));
-# 18690 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18686 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6878 "pars.fsy"
+# 6875 "pars.fsy"
                             "-" 
                    )
-# 6878 "pars.fsy"
+# 6875 "pars.fsy"
                  : 'gentype_operatorName));
-# 18700 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18696 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6881 "pars.fsy"
+# 6878 "pars.fsy"
                             "*" 
                    )
-# 6881 "pars.fsy"
+# 6878 "pars.fsy"
                  : 'gentype_operatorName));
-# 18710 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18706 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6884 "pars.fsy"
+# 6881 "pars.fsy"
                             "=" 
                    )
-# 6884 "pars.fsy"
+# 6881 "pars.fsy"
                  : 'gentype_operatorName));
-# 18720 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18716 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6887 "pars.fsy"
+# 6884 "pars.fsy"
                             "or" 
                    )
-# 6887 "pars.fsy"
+# 6884 "pars.fsy"
                  : 'gentype_operatorName));
-# 18730 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18726 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6890 "pars.fsy"
+# 6887 "pars.fsy"
                             "<" 
                    )
-# 6890 "pars.fsy"
+# 6887 "pars.fsy"
                  : 'gentype_operatorName));
-# 18741 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18737 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6893 "pars.fsy"
+# 6890 "pars.fsy"
                             ">" 
                    )
-# 6893 "pars.fsy"
+# 6890 "pars.fsy"
                  : 'gentype_operatorName));
-# 18752 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18748 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6896 "pars.fsy"
+# 6893 "pars.fsy"
                             "?" 
                    )
-# 6896 "pars.fsy"
+# 6893 "pars.fsy"
                  : 'gentype_operatorName));
-# 18762 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18758 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6899 "pars.fsy"
+# 6896 "pars.fsy"
                             "&" 
                    )
-# 6899 "pars.fsy"
+# 6896 "pars.fsy"
                  : 'gentype_operatorName));
-# 18772 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18768 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6902 "pars.fsy"
+# 6899 "pars.fsy"
                             "&&" 
                    )
-# 6902 "pars.fsy"
+# 6899 "pars.fsy"
                  : 'gentype_operatorName));
-# 18782 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18778 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6905 "pars.fsy"
+# 6902 "pars.fsy"
                             "||" 
                    )
-# 6905 "pars.fsy"
+# 6902 "pars.fsy"
                  : 'gentype_operatorName));
-# 18792 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18788 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6908 "pars.fsy"
+# 6905 "pars.fsy"
                             ":=" 
                    )
-# 6908 "pars.fsy"
+# 6905 "pars.fsy"
                  : 'gentype_operatorName));
-# 18802 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18798 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6911 "pars.fsy"
+# 6908 "pars.fsy"
                             if _1 <> ".[]"  && _1 <> ".()" && _1 <> ".()<-" then
                                  deprecatedOperator (lhs parseState)
                             _1 
                    )
-# 6911 "pars.fsy"
+# 6908 "pars.fsy"
                  : 'gentype_operatorName));
-# 18815 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18811 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6916 "pars.fsy"
+# 6913 "pars.fsy"
                             _1 
                    )
-# 6916 "pars.fsy"
+# 6913 "pars.fsy"
                  : 'gentype_operatorName));
-# 18826 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18822 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6919 "pars.fsy"
+# 6916 "pars.fsy"
                             ".." 
                    )
-# 6919 "pars.fsy"
+# 6916 "pars.fsy"
                  : 'gentype_operatorName));
-# 18836 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18832 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6922 "pars.fsy"
+# 6919 "pars.fsy"
                             ".. .." 
                    )
-# 6922 "pars.fsy"
+# 6919 "pars.fsy"
                  : 'gentype_operatorName));
-# 18846 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18842 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * bool in
             let _2 = parseState.GetInput(2) :?> string * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6925 "pars.fsy"
+# 6922 "pars.fsy"
                             if _1 <> _2 then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsMismatchedQuotationName(fst _1))
                             fst _1 
                    )
-# 6925 "pars.fsy"
+# 6922 "pars.fsy"
                  : 'gentype_operatorName));
-# 18859 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18855 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6931 "pars.fsy"
+# 6928 "pars.fsy"
                             if not (String.isLeadingIdentifierCharacterUpperCase _1) then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsActivePatternCaseMustBeginWithUpperCase())
                             if (_1.IndexOf('|') <> -1) then reportParseErrorAt (rhs parseState 1) (FSComp.SR.parsActivePatternCaseContainsPipe())
                             _1 
                    )
-# 6931 "pars.fsy"
+# 6928 "pars.fsy"
                  : 'gentype_activePatternCaseName));
-# 18872 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18868 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_activePatternCaseName in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6938 "pars.fsy"
+# 6935 "pars.fsy"
                             [_2] 
                    )
-# 6938 "pars.fsy"
+# 6935 "pars.fsy"
                  : 'gentype_activePatternCaseNames));
-# 18883 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18879 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_activePatternCaseNames in
             let _3 = parseState.GetInput(3) :?> 'gentype_activePatternCaseName in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6941 "pars.fsy"
+# 6938 "pars.fsy"
                             _3 :: _1 
                    )
-# 6941 "pars.fsy"
+# 6938 "pars.fsy"
                  : 'gentype_activePatternCaseNames));
-# 18895 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18891 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6946 "pars.fsy"
+# 6943 "pars.fsy"
                             SynIdent(_1, None) 
                    )
-# 6946 "pars.fsy"
+# 6943 "pars.fsy"
                  : 'gentype_identOrOp));
-# 18906 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18902 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opName in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6949 "pars.fsy"
+# 6946 "pars.fsy"
                             let ident, trivia = _1
                             SynIdent(ident, Some trivia) 
                    )
-# 6949 "pars.fsy"
+# 6946 "pars.fsy"
                  : 'gentype_identOrOp));
-# 18918 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18914 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6956 "pars.fsy"
+# 6953 "pars.fsy"
                             SynLongIdent([_1], [], [None]) 
                    )
-# 6956 "pars.fsy"
+# 6953 "pars.fsy"
                  : SynLongIdent));
-# 18929 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18925 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opName in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6959 "pars.fsy"
+# 6956 "pars.fsy"
                             let ident, trivia = _1
                             SynLongIdent([ident], [], [Some trivia]) 
                    )
-# 6959 "pars.fsy"
+# 6956 "pars.fsy"
                  : SynLongIdent));
-# 18941 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18937 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6963 "pars.fsy"
+# 6960 "pars.fsy"
                             prependIdentInLongIdentWithTrivia (SynIdent(_1, None)) (rhs parseState 2) _3 
                    )
-# 6963 "pars.fsy"
+# 6960 "pars.fsy"
                  : SynLongIdent));
-# 18953 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18949 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6966 "pars.fsy"
+# 6963 "pars.fsy"
                             if not _3 then reportParseErrorAt (rhs parseState 3) (FSComp.SR.parsIdentifierExpected())
                             SynLongIdent([_1], [rhs parseState 2], [None]) 
                    )
-# 6966 "pars.fsy"
+# 6963 "pars.fsy"
                  : SynLongIdent));
-# 18966 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18962 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_identOrOp in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6972 "pars.fsy"
+# 6969 "pars.fsy"
                                      _1 
                    )
-# 6972 "pars.fsy"
+# 6969 "pars.fsy"
                  : 'gentype_nameop));
-# 18977 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18973 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6976 "pars.fsy"
+# 6973 "pars.fsy"
                             if _1.idText = "" then
                                 SynExpr.FromParseError(SynExpr.Ident(_1), _1.idRange)
                             else
                                 SynExpr.Ident(_1) 
                    )
-# 6976 "pars.fsy"
+# 6973 "pars.fsy"
                  : 'gentype_identExpr));
-# 18991 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 18987 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opName in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6982 "pars.fsy"
+# 6979 "pars.fsy"
                             let m = lhs parseState
                             let ident, trivia = _1
                             SynExpr.LongIdent(false, SynLongIdent([ident], [], [Some trivia]), None, m) 
                    )
-# 6982 "pars.fsy"
+# 6979 "pars.fsy"
                  : 'gentype_identExpr));
-# 19004 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19000 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6987 "pars.fsy"
+# 6984 "pars.fsy"
                                      
                    )
-# 6987 "pars.fsy"
+# 6984 "pars.fsy"
                  : 'gentype_topSeparator));
-# 19014 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19010 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6988 "pars.fsy"
+# 6985 "pars.fsy"
                                                
                    )
-# 6988 "pars.fsy"
+# 6985 "pars.fsy"
                  : 'gentype_topSeparator));
-# 19024 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19020 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6989 "pars.fsy"
+# 6986 "pars.fsy"
                                      
                    )
-# 6989 "pars.fsy"
+# 6986 "pars.fsy"
                  : 'gentype_topSeparator));
-# 19034 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19030 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topSeparator in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6992 "pars.fsy"
+# 6989 "pars.fsy"
                                         
                    )
-# 6992 "pars.fsy"
+# 6989 "pars.fsy"
                  : 'gentype_topSeparators));
-# 19045 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19041 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topSeparator in
             let _2 = parseState.GetInput(2) :?> 'gentype_topSeparators in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6993 "pars.fsy"
+# 6990 "pars.fsy"
                                                       
                    )
-# 6993 "pars.fsy"
+# 6990 "pars.fsy"
                  : 'gentype_topSeparators));
-# 19057 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19053 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topSeparator in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_topSeparators in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6996 "pars.fsy"
+# 6993 "pars.fsy"
                                                           
                    )
-# 6996 "pars.fsy"
+# 6993 "pars.fsy"
                  : 'gentype_opt_topSeparators));
-# 19069 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19065 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 6997 "pars.fsy"
+# 6994 "pars.fsy"
                                                           
                    )
-# 6997 "pars.fsy"
+# 6994 "pars.fsy"
                  : 'gentype_opt_topSeparators));
-# 19079 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19075 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7001 "pars.fsy"
+# 6998 "pars.fsy"
                                      None 
                    )
-# 7001 "pars.fsy"
+# 6998 "pars.fsy"
                  : 'gentype_seps));
-# 19089 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19085 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7002 "pars.fsy"
+# 6999 "pars.fsy"
                                      Some (rhs parseState 1) 
                    )
-# 7002 "pars.fsy"
+# 6999 "pars.fsy"
                  : 'gentype_seps));
-# 19099 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19095 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7003 "pars.fsy"
+# 7000 "pars.fsy"
                                                Some (rhs parseState 2) 
                    )
-# 7003 "pars.fsy"
+# 7000 "pars.fsy"
                  : 'gentype_seps));
-# 19109 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19105 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7004 "pars.fsy"
+# 7001 "pars.fsy"
                                                Some (rhs parseState 1) 
                    )
-# 7004 "pars.fsy"
+# 7001 "pars.fsy"
                  : 'gentype_seps));
-# 19119 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19115 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> range * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7009 "pars.fsy"
+# 7006 "pars.fsy"
                              
                    )
-# 7009 "pars.fsy"
+# 7006 "pars.fsy"
                  : 'gentype_declEnd));
-# 19130 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19126 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7011 "pars.fsy"
+# 7008 "pars.fsy"
                              
                    )
-# 7011 "pars.fsy"
+# 7008 "pars.fsy"
                  : 'gentype_declEnd));
-# 19140 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19136 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7013 "pars.fsy"
+# 7010 "pars.fsy"
                              
                    )
-# 7013 "pars.fsy"
+# 7010 "pars.fsy"
                  : 'gentype_declEnd));
-# 19150 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19146 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> range * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7018 "pars.fsy"
+# 7015 "pars.fsy"
                             
                    )
-# 7018 "pars.fsy"
+# 7015 "pars.fsy"
                  : 'gentype_opt_declEnd));
-# 19161 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19157 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7020 "pars.fsy"
+# 7017 "pars.fsy"
                              
                    )
-# 7020 "pars.fsy"
+# 7017 "pars.fsy"
                  : 'gentype_opt_declEnd));
-# 19171 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19167 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7022 "pars.fsy"
+# 7019 "pars.fsy"
                             
                    )
-# 7022 "pars.fsy"
+# 7019 "pars.fsy"
                  : 'gentype_opt_declEnd));
-# 19181 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19177 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 7021 "pars.fsy"
+                            
+                   )
+# 7021 "pars.fsy"
+                 : 'gentype_opt_declEnd));
+# 19187 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            let _1 = parseState.GetInput(1) :?> range * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
 # 7024 "pars.fsy"
-                            
-                   )
-# 7024 "pars.fsy"
-                 : 'gentype_opt_declEnd));
-# 19191 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            let _1 = parseState.GetInput(1) :?> range * bool in
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 7027 "pars.fsy"
                                     
                    )
-# 7027 "pars.fsy"
+# 7024 "pars.fsy"
                  : 'gentype_opt_ODECLEND));
-# 19202 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19198 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7028 "pars.fsy"
+# 7025 "pars.fsy"
                                        
                    )
-# 7028 "pars.fsy"
+# 7025 "pars.fsy"
                  : 'gentype_opt_ODECLEND));
-# 19212 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19208 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7031 "pars.fsy"
+# 7028 "pars.fsy"
                                   deprecatedWithError (FSComp.SR.parsNoEqualShouldFollowNamespace()) (lhs parseState); () 
                    )
-# 7031 "pars.fsy"
+# 7028 "pars.fsy"
                  : 'gentype_deprecated_opt_equals));
-# 19222 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19218 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7032 "pars.fsy"
+# 7029 "pars.fsy"
                                        
                    )
-# 7032 "pars.fsy"
+# 7029 "pars.fsy"
                  : 'gentype_deprecated_opt_equals));
-# 19232 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19228 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7035 "pars.fsy"
+# 7032 "pars.fsy"
                                      
                    )
-# 7035 "pars.fsy"
+# 7032 "pars.fsy"
                  : 'gentype_opt_OBLOCKSEP));
-# 19242 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19238 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7036 "pars.fsy"
+# 7033 "pars.fsy"
                                        
                    )
-# 7036 "pars.fsy"
+# 7033 "pars.fsy"
                  : 'gentype_opt_OBLOCKSEP));
-# 19252 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19248 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_seps in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7039 "pars.fsy"
+# 7036 "pars.fsy"
                                 
                    )
-# 7039 "pars.fsy"
+# 7036 "pars.fsy"
                  : 'gentype_opt_seps));
-# 19263 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19259 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7040 "pars.fsy"
+# 7037 "pars.fsy"
                                        
                    )
-# 7040 "pars.fsy"
+# 7037 "pars.fsy"
                  : 'gentype_opt_seps));
-# 19273 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19269 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7043 "pars.fsy"
+# 7040 "pars.fsy"
                                true 
                    )
-# 7043 "pars.fsy"
+# 7040 "pars.fsy"
                  : 'gentype_opt_rec));
-# 19283 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19279 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7044 "pars.fsy"
+# 7041 "pars.fsy"
                                        false 
                    )
-# 7044 "pars.fsy"
+# 7041 "pars.fsy"
                  : 'gentype_opt_rec));
-# 19293 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19289 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7047 "pars.fsy"
+# 7044 "pars.fsy"
                                   Some(rhs parseState 1) 
                    )
-# 7047 "pars.fsy"
+# 7044 "pars.fsy"
                  : 'gentype_opt_inline));
-# 19303 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19299 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7048 "pars.fsy"
+# 7045 "pars.fsy"
                                        None 
                    )
-# 7048 "pars.fsy"
+# 7045 "pars.fsy"
                  : 'gentype_opt_inline));
-# 19313 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19309 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7051 "pars.fsy"
+# 7048 "pars.fsy"
                                    Some(rhs parseState 1) 
                    )
-# 7051 "pars.fsy"
+# 7048 "pars.fsy"
                  : 'gentype_opt_mutable));
-# 19323 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19319 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7052 "pars.fsy"
+# 7049 "pars.fsy"
                                        None 
                    )
-# 7052 "pars.fsy"
+# 7049 "pars.fsy"
                  : 'gentype_opt_mutable));
-# 19333 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19329 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7056 "pars.fsy"
+# 7053 "pars.fsy"
                               
                    )
-# 7056 "pars.fsy"
+# 7053 "pars.fsy"
                  : 'gentype_doToken));
-# 19343 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19339 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7057 "pars.fsy"
+# 7054 "pars.fsy"
                                
                    )
-# 7057 "pars.fsy"
+# 7054 "pars.fsy"
                  : 'gentype_doToken));
-# 19353 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19349 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7061 "pars.fsy"
+# 7058 "pars.fsy"
                              rhs parseState 1 
                    )
-# 7061 "pars.fsy"
+# 7058 "pars.fsy"
                  : 'gentype_doneDeclEnd));
-# 19363 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19359 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> range * bool in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7063 "pars.fsy"
+# 7060 "pars.fsy"
                              let m, _ = _1 in m 
                    )
-# 7063 "pars.fsy"
+# 7060 "pars.fsy"
                  : 'gentype_doneDeclEnd));
-# 19374 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19370 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7067 "pars.fsy"
+# 7064 "pars.fsy"
                            if parseState.LexBuffer.SupportsFeature LanguageFeature.MLCompatRevisions then
                                mlCompatError (FSComp.SR.mlCompatStructEndNoLongerSupported()) (lhs parseState)
                            else
                                mlCompatWarning (FSComp.SR.parsSyntaxModuleStructEndDeprecated()) (lhs parseState)
                          
                    )
-# 7067 "pars.fsy"
+# 7064 "pars.fsy"
                  : 'gentype_structOrBegin));
-# 19388 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19384 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7072 "pars.fsy"
+# 7069 "pars.fsy"
                                  
                    )
-# 7072 "pars.fsy"
+# 7069 "pars.fsy"
                  : 'gentype_structOrBegin));
-# 19398 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19394 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7076 "pars.fsy"
+# 7073 "pars.fsy"
                            if parseState.LexBuffer.SupportsFeature LanguageFeature.MLCompatRevisions then
                                mlCompatError (FSComp.SR.mlCompatSigEndNoLongerSupported())(lhs parseState)
                            else
                                mlCompatWarning (FSComp.SR.parsSyntaxModuleSigEndDeprecated()) (lhs parseState)
                          
                    )
-# 7076 "pars.fsy"
+# 7073 "pars.fsy"
                  : 'gentype_sigOrBegin));
-# 19412 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19408 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7081 "pars.fsy"
+# 7078 "pars.fsy"
                                  
                    )
-# 7081 "pars.fsy"
+# 7078 "pars.fsy"
                  : 'gentype_sigOrBegin));
-# 19422 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19418 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7085 "pars.fsy"
+# 7082 "pars.fsy"
                            if parseState.LexBuffer.SupportsFeature LanguageFeature.MLCompatRevisions then
                                mlCompatError (FSComp.SR.mlCompatSigColonNoLongerSupported())(lhs parseState)
                            else
@@ -19432,77 +19428,77 @@ let _fsyacc_reductions = lazy [|
                            None
                          
                    )
-# 7085 "pars.fsy"
+# 7082 "pars.fsy"
                  : 'gentype_colonOrEquals));
-# 19437 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19433 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7092 "pars.fsy"
+# 7089 "pars.fsy"
                              let mEquals = rhs parseState 1
                              Some mEquals 
                    )
-# 7092 "pars.fsy"
+# 7089 "pars.fsy"
                  : 'gentype_colonOrEquals));
-# 19448 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19444 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * SynStringKind * ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7098 "pars.fsy"
+# 7095 "pars.fsy"
                             let (s, synStringKind, _) = _1
                             s, synStringKind 
                    )
-# 7098 "pars.fsy"
+# 7095 "pars.fsy"
                  : 'gentype_string));
-# 19460 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19456 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * string in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7102 "pars.fsy"
+# 7099 "pars.fsy"
                                           _1 
                    )
-# 7102 "pars.fsy"
+# 7099 "pars.fsy"
                  : 'gentype_sourceIdentifier));
-# 19471 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19467 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7106 "pars.fsy"
+# 7103 "pars.fsy"
                             (_1, None) 
                    )
-# 7106 "pars.fsy"
+# 7103 "pars.fsy"
                  : 'gentype_interpolatedStringFill));
-# 19482 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19478 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7109 "pars.fsy"
+# 7106 "pars.fsy"
                             (_1, Some _3) 
                    )
-# 7109 "pars.fsy"
+# 7106 "pars.fsy"
                  : 'gentype_interpolatedStringFill));
-# 19494 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19490 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7113 "pars.fsy"
+# 7110 "pars.fsy"
                             [ SynInterpolatedStringPart.String(fst _1, rhs parseState 1) ] 
                    )
-# 7113 "pars.fsy"
+# 7110 "pars.fsy"
                  : 'gentype_interpolatedStringParts));
-# 19505 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19501 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_interpolatedStringFill in
@@ -19510,27 +19506,27 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7116 "pars.fsy"
+# 7113 "pars.fsy"
                             SynInterpolatedStringPart.String(fst _1, rhs parseState 1) :: SynInterpolatedStringPart.FillExpr _2 :: _3 
                    )
-# 7116 "pars.fsy"
+# 7113 "pars.fsy"
                  : 'gentype_interpolatedStringParts));
-# 19518 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19514 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_interpolatedStringParts in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7119 "pars.fsy"
+# 7116 "pars.fsy"
                             let rbrace = parseState.InputEndPosition 1
                             let lbrace = parseState.InputStartPosition 2
                             reportParseErrorAt (mkSynRange rbrace lbrace) (FSComp.SR.parsEmptyFillInInterpolatedString())
                             SynInterpolatedStringPart.String(fst _1, rhs parseState 1) :: _2 
                    )
-# 7119 "pars.fsy"
+# 7116 "pars.fsy"
                  : 'gentype_interpolatedStringParts));
-# 19533 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19529 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * SynStringKind * ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_interpolatedStringFill in
@@ -19538,371 +19534,371 @@ let _fsyacc_reductions = lazy [|
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7129 "pars.fsy"
+# 7126 "pars.fsy"
                            let s, synStringKind, _ = _1
                            SynInterpolatedStringPart.String(s, rhs parseState 1) :: SynInterpolatedStringPart.FillExpr _2 :: _3, synStringKind 
                    )
-# 7129 "pars.fsy"
+# 7126 "pars.fsy"
                  : 'gentype_interpolatedString));
-# 19547 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19543 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * SynStringKind * ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7133 "pars.fsy"
+# 7130 "pars.fsy"
                            let s, synStringKind, _ = _1
                            [ SynInterpolatedStringPart.String(s, rhs parseState 1) ], synStringKind 
                    )
-# 7133 "pars.fsy"
+# 7130 "pars.fsy"
                  : 'gentype_interpolatedString));
-# 19559 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19555 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * SynStringKind * ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_interpolatedStringParts in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7137 "pars.fsy"
+# 7134 "pars.fsy"
                            let s, synStringKind, _ = _1
                            let rbrace = parseState.InputEndPosition 1
                            let lbrace = parseState.InputStartPosition 2
                            reportParseErrorAt (mkSynRange rbrace lbrace) (FSComp.SR.parsEmptyFillInInterpolatedString())
                            SynInterpolatedStringPart.String(s, rhs parseState 1) :: _2, synStringKind 
                    )
-# 7137 "pars.fsy"
+# 7134 "pars.fsy"
                  : 'gentype_interpolatedString));
-# 19575 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19571 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7144 "pars.fsy"
+# 7141 "pars.fsy"
                                                      
                    )
-# 7144 "pars.fsy"
+# 7141 "pars.fsy"
                  : 'gentype_opt_HIGH_PRECEDENCE_APP));
-# 19585 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19581 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7145 "pars.fsy"
+# 7142 "pars.fsy"
                                                      
                    )
-# 7145 "pars.fsy"
+# 7142 "pars.fsy"
                  : 'gentype_opt_HIGH_PRECEDENCE_APP));
-# 19595 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19591 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7146 "pars.fsy"
+# 7143 "pars.fsy"
                                          
                    )
-# 7146 "pars.fsy"
+# 7143 "pars.fsy"
                  : 'gentype_opt_HIGH_PRECEDENCE_APP));
-# 19605 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19601 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7149 "pars.fsy"
+# 7146 "pars.fsy"
                                                  
                    )
-# 7149 "pars.fsy"
+# 7146 "pars.fsy"
                  : 'gentype_opt_HIGH_PRECEDENCE_TYAPP));
-# 19615 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19611 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7150 "pars.fsy"
+# 7147 "pars.fsy"
                                          
                    )
-# 7150 "pars.fsy"
+# 7147 "pars.fsy"
                  : 'gentype_opt_HIGH_PRECEDENCE_TYAPP));
-# 19625 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19621 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typeKeyword in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7154 "pars.fsy"
+# 7151 "pars.fsy"
                                                         
                    )
-# 7154 "pars.fsy"
+# 7151 "pars.fsy"
                  : 'gentype_typeKeyword));
-# 19636 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19632 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7155 "pars.fsy"
+# 7152 "pars.fsy"
                                         
                    )
-# 7155 "pars.fsy"
+# 7152 "pars.fsy"
                  : 'gentype_typeKeyword));
-# 19646 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19642 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7156 "pars.fsy"
+# 7153 "pars.fsy"
                                 
                    )
-# 7156 "pars.fsy"
+# 7153 "pars.fsy"
                  : 'gentype_typeKeyword));
-# 19656 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19652 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleKeyword in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7160 "pars.fsy"
+# 7157 "pars.fsy"
                                                             
                    )
-# 7160 "pars.fsy"
+# 7157 "pars.fsy"
                  : 'gentype_moduleKeyword));
-# 19667 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19663 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7161 "pars.fsy"
+# 7158 "pars.fsy"
                                           
                    )
-# 7161 "pars.fsy"
+# 7158 "pars.fsy"
                  : 'gentype_moduleKeyword));
-# 19677 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19673 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7162 "pars.fsy"
+# 7159 "pars.fsy"
                                   
                    )
-# 7162 "pars.fsy"
+# 7159 "pars.fsy"
                  : 'gentype_moduleKeyword));
-# 19687 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19683 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_rbrace in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7165 "pars.fsy"
+# 7162 "pars.fsy"
                                                      
                    )
-# 7165 "pars.fsy"
+# 7162 "pars.fsy"
                  : 'gentype_rbrace));
-# 19698 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19694 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7166 "pars.fsy"
+# 7163 "pars.fsy"
                                           
                    )
-# 7166 "pars.fsy"
+# 7163 "pars.fsy"
                  : 'gentype_rbrace));
-# 19708 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19704 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7167 "pars.fsy"
+# 7164 "pars.fsy"
                                   
                    )
-# 7167 "pars.fsy"
+# 7164 "pars.fsy"
                  : 'gentype_rbrace));
-# 19719 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19715 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7170 "pars.fsy"
+# 7167 "pars.fsy"
                                       
                    )
-# 7170 "pars.fsy"
+# 7167 "pars.fsy"
                  : 'gentype_bar_rbrace));
-# 19729 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19725 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7173 "pars.fsy"
+# 7170 "pars.fsy"
                                                      
                    )
-# 7173 "pars.fsy"
+# 7170 "pars.fsy"
                  : 'gentype_rparen));
-# 19740 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19736 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7174 "pars.fsy"
+# 7171 "pars.fsy"
                                           
                    )
-# 7174 "pars.fsy"
+# 7171 "pars.fsy"
                  : 'gentype_rparen));
-# 19750 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19746 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7175 "pars.fsy"
+# 7172 "pars.fsy"
                                   
                    )
-# 7175 "pars.fsy"
+# 7172 "pars.fsy"
                  : 'gentype_rparen));
-# 19760 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19756 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_oblockend in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7178 "pars.fsy"
+# 7175 "pars.fsy"
                                                            
                    )
-# 7178 "pars.fsy"
+# 7175 "pars.fsy"
                  : 'gentype_oblockend));
-# 19771 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19767 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7179 "pars.fsy"
+# 7176 "pars.fsy"
                                              
                    )
-# 7179 "pars.fsy"
+# 7176 "pars.fsy"
                  : 'gentype_oblockend));
-# 19781 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19777 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> range in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7180 "pars.fsy"
+# 7177 "pars.fsy"
                                      
                    )
-# 7180 "pars.fsy"
+# 7177 "pars.fsy"
                  : 'gentype_oblockend));
-# 19792 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19788 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 7180 "pars.fsy"
+                                            false 
+                   )
+# 7180 "pars.fsy"
+                 : 'gentype_ends_other_than_rparen_coming_soon_or_recover));
+# 19798 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 7181 "pars.fsy"
+                                              false 
+                   )
+# 7181 "pars.fsy"
+                 : 'gentype_ends_other_than_rparen_coming_soon_or_recover));
+# 19808 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 7182 "pars.fsy"
+                                              false 
+                   )
+# 7182 "pars.fsy"
+                 : 'gentype_ends_other_than_rparen_coming_soon_or_recover));
+# 19818 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
 # 7183 "pars.fsy"
-                                            false 
+                                                 false 
                    )
 # 7183 "pars.fsy"
                  : 'gentype_ends_other_than_rparen_coming_soon_or_recover));
-# 19802 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 7184 "pars.fsy"
-                                              false 
-                   )
-# 7184 "pars.fsy"
-                 : 'gentype_ends_other_than_rparen_coming_soon_or_recover));
-# 19812 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 7185 "pars.fsy"
-                                              false 
-                   )
-# 7185 "pars.fsy"
-                 : 'gentype_ends_other_than_rparen_coming_soon_or_recover));
-# 19822 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 7186 "pars.fsy"
-                                                 false 
-                   )
-# 7186 "pars.fsy"
-                 : 'gentype_ends_other_than_rparen_coming_soon_or_recover));
-# 19832 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19828 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7187 "pars.fsy"
+# 7184 "pars.fsy"
                                    _1 
                    )
-# 7187 "pars.fsy"
+# 7184 "pars.fsy"
                  : 'gentype_ends_other_than_rparen_coming_soon_or_recover));
-# 19843 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19839 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7190 "pars.fsy"
+# 7187 "pars.fsy"
                                             false 
                    )
+# 7187 "pars.fsy"
+                 : 'gentype_ends_coming_soon_or_recover));
+# 19849 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 7188 "pars.fsy"
+                                              false 
+                   )
+# 7188 "pars.fsy"
+                 : 'gentype_ends_coming_soon_or_recover));
+# 19859 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 7189 "pars.fsy"
+                                              false 
+                   )
+# 7189 "pars.fsy"
+                 : 'gentype_ends_coming_soon_or_recover));
+# 19869 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
+            Microsoft.FSharp.Core.Operators.box
+                (
+                   (
+# 7190 "pars.fsy"
+                                              false 
+                   )
 # 7190 "pars.fsy"
                  : 'gentype_ends_coming_soon_or_recover));
-# 19853 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19879 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
 # 7191 "pars.fsy"
-                                              false 
-                   )
-# 7191 "pars.fsy"
-                 : 'gentype_ends_coming_soon_or_recover));
-# 19863 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 7192 "pars.fsy"
-                                              false 
-                   )
-# 7192 "pars.fsy"
-                 : 'gentype_ends_coming_soon_or_recover));
-# 19873 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 7193 "pars.fsy"
-                                              false 
-                   )
-# 7193 "pars.fsy"
-                 : 'gentype_ends_coming_soon_or_recover));
-# 19883 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
-        (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
-            Microsoft.FSharp.Core.Operators.box
-                (
-                   (
-# 7194 "pars.fsy"
                                                  false 
                    )
-# 7194 "pars.fsy"
+# 7191 "pars.fsy"
                  : 'gentype_ends_coming_soon_or_recover));
-# 19893 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19889 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
-# 7195 "pars.fsy"
+# 7192 "pars.fsy"
                                    _1 
                    )
-# 7195 "pars.fsy"
+# 7192 "pars.fsy"
                  : 'gentype_ends_coming_soon_or_recover));
 |]
-# 19905 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
+# 19901 "/home/hhh/repos/fsnative/src/Compiler/net10.0/pars.fs"
 let tables : Internal.Utilities.Text.Parsing.Tables<_> = 
   { reductions = _fsyacc_reductions.Value;
     endOfInputTag = _fsyacc_endOfInputTag;

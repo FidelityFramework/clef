@@ -1,7 +1,7 @@
 module internal Internal.Utilities.TypeHashing
 
 open Internal.Utilities.Rational
-open FSharp.Native.Compiler.AbstractIL.IL
+open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.TcGlobals
 open FSharp.Native.Compiler.Text
@@ -81,37 +81,21 @@ module internal HashUtilities =
         |> hashListOrderMatters (fst >> hashText)
         |> pipeToHash tyconHash
 
+// FNCS: HashIL module removed - native compilation doesn't use IL types
+// These stubs exist for compatibility with any remaining references
 module HashIL =
-
-    let hashILTypeRef (tref: ILTypeRef) =
-        tref.Enclosing
-        |> hashListOrderMatters hashText
-        |> addFullStructuralHash tref.Name
-
-    let private hashILArrayShape (sh: ILArrayShape) = sh.Rank
-
-    let rec hashILType (ty: ILType) : Hash =
-        match ty with
-        | ILType.Void -> hash ILType.Void
-        | ILType.Array(sh, t) -> hashILType t @@ hashILArrayShape sh
-        | ILType.Value t
-        | ILType.Boxed t -> hashILTypeRef t.TypeRef @@ (t.GenericArgs |> hashListOrderMatters hashILType)
-        | ILType.Ptr t
-        | ILType.Byref t -> hashILType t
-        | ILType.FunctionPointer t -> hashILCallingSignature t
-        | ILType.TypeVar n -> hash n
-        | ILType.Modified(_, _, t) -> hashILType t
-
-    and hashILCallingSignature (signature: ILCallingSignature) =
-        let res = signature.ReturnType |> hashILType
-        signature.ArgTypes |> hashListOrderMatters hashILType |> pipeToHash res
+    // Stub functions that return constant hashes
+    let hashILTypeRef (_tref: obj) : Hash = 0
+    let hashILType (_ty: obj) : Hash = 0
+    let hashILCallingSignature (_signature: obj) : Hash = 0
 
 module HashAccessibility =
 
     let isHiddenToObserver (TAccess access) (observer: ObserverVisibility) =
         let isInternalCompPath x =
             match x with
-            | CompPath(ILScopeRef.Local, _, []) -> true
+            // FNCS: ILScopeRef.Local replaced with ScopeRef.Local
+            | CompPath(ScopeRef.Local, _, []) -> true
             | _ -> false
 
         match access with

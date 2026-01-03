@@ -107,6 +107,91 @@ let mkTypeConRefWithMeasures name paramKinds layout =
     { Name = name; Module = []; ParamKinds = paramKinds; Layout = layout }
 
 //-------------------------------------------------------------------------
+// Code Labels (for state machine compilation)
+//-------------------------------------------------------------------------
+
+/// Code label for state machine compilation (async, task, resumable code).
+/// Used in Goto/Label operations.
+type CodeLabel = int
+
+//-------------------------------------------------------------------------
+// Method and Function References
+//-------------------------------------------------------------------------
+
+/// Reference to a method or function in native compilation.
+/// Replaces IL method references with native semantics.
+[<NoComparison>]
+type MethodRef = {
+    /// The name of the method
+    Name: string
+    /// The type that declares this method (None for module-level functions)
+    DeclaringType: TypeConRef option
+    /// The module path for module-level functions
+    DeclaringModule: ModulePath
+    /// Generic arity (number of type parameters on the method itself)
+    GenericArity: int
+    /// Is this an instance method?
+    IsInstance: bool
+}
+
+/// Create a simple method reference
+let mkMethodRef name declaringType isInstance =
+    { Name = name; DeclaringType = declaringType; DeclaringModule = []; GenericArity = 0; IsInstance = isInstance }
+
+/// Create a module function reference
+let mkFunctionRef name modulePath =
+    { Name = name; DeclaringType = None; DeclaringModule = modulePath; GenericArity = 0; IsInstance = false }
+
+
+//-------------------------------------------------------------------------
+// Scope References
+//-------------------------------------------------------------------------
+
+/// Reference to a scope/compilation unit in native compilation.
+/// Replaces IL scope references with native semantics.
+[<RequireQualifiedAccess>]
+type ScopeRef =
+    /// The current compilation unit
+    | Local
+    /// Reference to an external module
+    | Module of name: string
+    /// Reference to an external assembly/library
+    | Assembly of name: string
+    /// Reference to the primary runtime library (Alloy core)
+    | Primary
+
+    member x.Name =
+        match x with
+        | Local -> "<local>"
+        | Module name -> name
+        | Assembly name -> name
+        | Primary -> "<primary>"
+
+    member x.QualifiedName = x.Name
+
+//-------------------------------------------------------------------------
+// Access Modifiers
+//-------------------------------------------------------------------------
+
+/// Access modifier for type members in native compilation.
+[<RequireQualifiedAccess>]
+type MemberAccess =
+    | Public
+    | Private
+    | Internal
+    | Assembly
+    | Protected
+    | FamilyOrAssembly
+    | FamilyAndAssembly
+
+/// Access modifier for type definitions in native compilation.
+[<RequireQualifiedAccess>]
+type TypeAccess =
+    | Public
+    | Private
+    | Nested of MemberAccess
+
+//-------------------------------------------------------------------------
 // Type Parameter (with Union-Find support)
 //-------------------------------------------------------------------------
 

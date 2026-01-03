@@ -91,7 +91,10 @@ let private implFileToInput (fileName: string) (implFile: ParsedImplFile) : Pars
     let contents = fragments |> List.map fragmentToModuleOrNamespace
 
     // Create qualified name from file name
-    let baseName = System.IO.Path.GetFileNameWithoutExtension(fileName)
+    let baseName =
+        match System.IO.Path.GetFileNameWithoutExtension(fileName) with
+        | null -> failwith $"Cannot extract base name from file: {fileName}"
+        | name -> name
     let qualifiedName = QualifiedNameOfFile(Ident(baseName, Range.range0))
 
     ParsedImplFileInput(

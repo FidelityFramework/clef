@@ -2,7 +2,6 @@
 
 module internal FSharp.Native.Compiler.ParseHelpers
 
-open FSharp.Native.Compiler.AbstractIL.IL
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.SyntaxTrivia
 open FSharp.Native.Compiler.Features
@@ -103,25 +102,11 @@ type LexerContinuation =
 
 and LexCont = LexerContinuation
 
-val ParseAssemblyCodeInstructions:
-    s: string ->
-    reportLibraryOnlyFeatures: bool ->
-    langVersion: LanguageVersion ->
-    strictIndentation: bool option ->
-    m: range ->
-        ILInstr[]
+// FNCS: Inline IL parsing removed - native compilation doesn't support (# ... #) syntax
 
 val grabXmlDocAtRangeStart: parseState: IParseState * optAttributes: SynAttributeList list * range: range -> PreXmlDoc
 
 val grabXmlDoc: parseState: IParseState * optAttributes: SynAttributeList list * elemIdx: int -> PreXmlDoc
-
-val ParseAssemblyCodeType:
-    s: string ->
-    reportLibraryOnlyFeatures: bool ->
-    langVersion: LanguageVersion ->
-    strictIndentation: bool option ->
-    m: range ->
-        ILType
 
 val reportParseErrorAt: range -> (int * string) -> unit
 

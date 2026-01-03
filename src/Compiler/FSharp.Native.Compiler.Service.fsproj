@@ -152,13 +152,6 @@
     <Compile Include="Facilities\AsyncMemoize.fs" />
     <Compile Include="Utilities\ReadOnlySpan.fsi" />
     <Compile Include="Utilities\ReadOnlySpan.fs" />
-    <!-- AbstractIL scaffolding - Native compilation uses these as scaffolding types -->
-    <!-- Note: Diagnostics module is provided by Utilities/ildiag.fs -->
-    <Compile Include="AbstractIL\IL.fsi" />
-    <Compile Include="AbstractIL\IL.fs" />
-    <Compile Include="AbstractIL\ILBinaryReader.fs" />
-    <Compile Include="AbstractIL\ILPdbWriter.fs" />
-    <Compile Include="AbstractIL\ILX\Types.fs" />
     <Compile Include="SyntaxTree\PrettyNaming.fsi" />
     <Compile Include="SyntaxTree\PrettyNaming.fs" />
     <FsLex Include="pplex.fsl">
@@ -245,6 +238,8 @@
     <Compile Include="TypedTree\QuotationPickler.fs" />
     <Compile Include="TypedTree\CompilerGlobalState.fsi" />
     <Compile Include="TypedTree\CompilerGlobalState.fs" />
+    <!-- Native types - foundational types for native compilation, needed by TypedTree -->
+    <Compile Include="Checking.Native\NativeTypes.fs" />
     <Compile Include="TypedTree\TypedTree.fsi" />
     <Compile Include="TypedTree\TypedTree.fs" />
     <Compile Include="TypedTree\TypedTreeBasics.fsi" />
@@ -279,7 +274,7 @@
     -->
 
     <!-- Checking.Native - Native Type Checker (BCL-free, unified representation) -->
-    <Compile Include="Checking.Native\NativeTypes.fs" />
+    <!-- NativeTypes.fs moved earlier - foundational types needed by TypedTree -->
     <Compile Include="Checking.Native\NativeGlobals.fs" />
     <Compile Include="Checking.Native\UnionFind.fs" />
     <Compile Include="Checking.Native\Unify.fs" />
@@ -372,9 +367,6 @@
     <!-- Core F# runtime -->
     <PackageReference Include="FSharp.Core" Version="10.0.101" />
 
-    <!-- Required for compiler internals -->
-    <PackageReference Include="System.Collections.Immutable" Version="8.0.0" />
-    <PackageReference Include="System.Reflection.Metadata" Version="8.0.0" />
   </ItemGroup>
 
   <!--

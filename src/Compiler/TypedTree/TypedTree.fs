@@ -13,8 +13,8 @@ open Internal.Utilities.Library.Extras
 open Internal.Utilities.Rational
 
 open FSharp.Native.Compiler 
-open FSharp.Native.Compiler.AbstractIL.IL 
-open FSharp.Native.Compiler.AbstractIL.ILX.Types
+open FSharp.Native.Compiler.Checking.Native.NativeTypes 
+// ILX.Types removed - FNCS doesn't emit IL for discriminated unions
 open FSharp.Native.Compiler.CompilerGlobalState
 open FSharp.Native.Compiler.DiagnosticsLogger
 open FSharp.Native.Compiler.Syntax
@@ -548,9 +548,9 @@ type SyntaxAccess =
 
 /// The information ILXGEN needs about the location of an item
 type CompilationPath =
-    | CompPath of ILScopeRef * SyntaxAccess * (string * ModuleOrNamespaceKind) list
+    | CompPath of ScopeRef * SyntaxAccess * (string * ModuleOrNamespaceKind) list
 
-    member x.ILScopeRef = let (CompPath(scoref, _, _)) = x in scoref
+    member x.ScopeRef = let (CompPath(scoref, _, _)) = x in scoref
 
     member x.AccessPath = let (CompPath(_, _, p)) = x in p
 
@@ -560,10 +560,10 @@ type CompilationPath =
 
     member x.ParentCompPath = 
         let a, _ = List.frontAndBack x.AccessPath
-        CompPath(x.ILScopeRef, x.SyntaxAccess, a)
+        CompPath(x.ScopeRef, x.SyntaxAccess, a)
 
     member x.NestedCompPath n moduleKind =
-        CompPath(x.ILScopeRef, x.SyntaxAccess, x.AccessPath@[(n, moduleKind)])
+        CompPath(x.ScopeRef, x.SyntaxAccess, x.AccessPath@[(n, moduleKind)])
 
     member x.DemangledPath = 
         x.AccessPath |> List.map (fun (nm, k) -> CompilationPath.DemangleEntityName nm k)
@@ -675,9 +675,7 @@ type Entity =
       // MUTABILITY: only for unpickle linkage
       mutable entity_cpath: CompilationPath option 
 
-      /// Used during codegen to hold the ILX representation indicating how to access the type 
-      // MUTABILITY: only for unpickle linkage and caching
-      mutable entity_il_repr_cache: CompiledTypeRepr cache
+      // FNCS: entity_il_repr_cache removed - native compilation doesn't use IL representation
 
       mutable entity_opt_data: EntityOptionalData option
     }
@@ -918,8 +916,7 @@ type Entity =
         | Some optData -> optData.entity_tycon_repr_accessibility
         | _ -> TAccess []
 
-    /// Get the cache of the compiled ILTypeRef representation of this module or type.
-    member x.CompiledReprCache = x.entity_il_repr_cache
+    // FNCS: CompiledReprCache removed - native compilation doesn't use IL representation
 
     /// Get a blob of data indicating how this type is nested in other namespaces, modules or types.
     member x.PublicPath = x.entity_pubpath
@@ -1068,7 +1065,6 @@ type Entity =
           entity_modul_type= Unchecked.defaultof<_>
           entity_pubpath = Unchecked.defaultof<_>
           entity_cpath = Unchecked.defaultof<_>
-          entity_il_repr_cache = Unchecked.defaultof<_>
           entity_opt_data = Unchecked.defaultof<_>}
 
     /// Create a new entity with the given backing data. Only used during unpickling of F# metadata.
@@ -1087,7 +1083,6 @@ type Entity =
         x.entity_modul_type <- tg.entity_modul_type
         x.entity_pubpath <- tg.entity_pubpath 
         x.entity_cpath <- tg.entity_cpath 
-        x.entity_il_repr_cache <- tg.entity_il_repr_cache 
         match tg.entity_opt_data with
         | Some tg ->
             x.entity_opt_data <- 
@@ -1113,15 +1108,7 @@ type Entity =
          | TFSharpTyconRepr x -> x 
          | _ -> failwith "not an F# object model type definition"
 
-    /// Indicate if this is a type definition backed by Abstract IL metadata.
-    member x.IsILTycon = match x.TypeReprInfo with | TILObjectRepr _ -> true | _ -> false
-
-    /// Get the Abstract IL scope, nesting and metadata for this 
-    /// type definition, assuming it is backed by Abstract IL metadata.
-    member x.ILTyconInfo = match x.TypeReprInfo with | TILObjectRepr data -> data | _ -> failwith "not a .NET type definition"
-
-    /// Get the Abstract IL metadata for this type definition, assuming it is backed by Abstract IL metadata.
-    member x.ILTyconRawMetadata = let (TILObjectReprData(_, _, td)) = x.ILTyconInfo in td
+    // FNCS: IsILTycon, ILTyconInfo, ILTyconRawMetadata removed - native compilation doesn't use IL type representation
 
     /// Indicates if this is an F# type definition whose r.h.s. is known to be a record type definition.
     member x.IsRecordTycon =
@@ -1170,9 +1157,7 @@ type Entity =
             | TFSharpEnum -> true
         | _ -> false
 
-    /// Indicates if this is an F# type definition which is one of the special types in FSharp.Core.dll which uses 
-    /// an assembly-code representation for the type, e.g. the primitive array type constructor.
-    member x.IsAsmReprTycon = match x.TypeReprInfo with | TAsmRepr _ -> true | _ -> false
+    // FNCS: IsAsmReprTycon removed - native compilation doesn't use IL assembly representation
 
     /// Indicates if this is an F# type definition which is one of the special types in FSharp.Core.dll like 'float<_>' which
     /// defines a measure type with a relation to an existing non-measure type as a representation.
@@ -1194,8 +1179,8 @@ type Entity =
     /// Indicates if this is an F#-defined class type definition 
     member x.IsFSharpClassTycon = x.IsFSharpObjectModelTycon && match x.FSharpTyconRepresentationData.fsobjmodel_kind with TFSharpClass -> true | _ -> false
 
-    /// Indicates if this is a .NET-defined enum type definition 
-    member x.IsILEnumTycon = x.IsILTycon && x.ILTyconRawMetadata.IsEnum
+    // FNCS: IsILEnumTycon always false - native compilation doesn't import IL types
+    member x.IsILEnumTycon = false
 
     /// Indicates if this is an enum type definition 
     member x.IsEnumTycon = 
@@ -1217,10 +1202,8 @@ type Entity =
             | TFSharpStruct | TFSharpEnum -> true
         | _ -> false
 
-    /// Indicates if this is a .NET-defined struct or enum type definition, i.e. a value type definition
-    member x.IsILStructOrEnumTycon =
-        x.IsILTycon && 
-        x.ILTyconRawMetadata.IsStructOrEnum
+    // FNCS: IsILStructOrEnumTycon always false - native compilation doesn't import IL types
+    member x.IsILStructOrEnumTycon = false
 
     /// Indicates if this is a struct or enum type definition, i.e. a value type definition, including struct records and unions
     member x.IsStructOrEnumTycon = 
@@ -1281,64 +1264,7 @@ type Entity =
           | Some (vref1, vref2, vref3, _) -> yield vref1; yield vref2; yield vref3 ]
     
 
-    /// Gets the data indicating the compiled representation of a type or module in terms of Abstract IL data structures.
-    member x.CompiledRepresentation =
-#if !NO_TYPEPROVIDERS
-        match x.TypeReprInfo with 
-        // We should never be computing this property for erased types
-        | TProvidedTypeRepr info when info.IsErased -> 
-            failwith "No compiled representation for provided erased type"
-        
-        // Generated types that are not relocated just point straight to the generated backing assembly, computed from "st".
-        // These are used when running F# Interactive, which does not use static linking of provider-generated assemblies,
-        // and also for types with relocation suppressed.
-        | TProvidedTypeRepr info when info.IsGenerated && info.IsSuppressRelocate -> 
-            let st = info.ProvidedType
-            let tref = GetILTypeRefOfProvidedType (st, x.Range)
-            let boxity = if x.IsStructOrEnumTycon then AsValue else AsObject
-            CompiledTypeRepr.ILAsmNamed(tref, boxity, None)
-        | TProvidedNamespaceRepr _ -> failwith "No compiled representation for provided namespace"
-        | _ ->
-#endif
-            let ilTypeRefForCompilationPath (CompPath(sref, _, p)) item = 
-                let rec top racc p = 
-                    match p with 
-                    | [] -> ILTypeRef.Create(sref, [], textOfPath (List.rev (item :: racc)))
-                    | (h, isType) :: t -> 
-                        match isType with 
-                        | FSharpModuleWithSuffix | ModuleOrType -> 
-                            let outerTypeName = (textOfPath (List.rev (h :: racc)))
-                            ILTypeRef.Create(sref, (outerTypeName :: List.map fst t), item)
-                        | _ -> 
-                          top (h :: racc) t
-                top [] p 
-
-
-            cached x.CompiledReprCache (fun () -> 
-                match x.ExceptionInfo with 
-                | TExnAbbrevRepr ecref2 -> ecref2.CompiledRepresentation
-                | TExnAsmRepr tref -> CompiledTypeRepr.ILAsmNamed(tref, AsObject, Some (mkILTy AsObject (mkILTySpec (tref, []))))
-                | _ -> 
-                match x.TypeReprInfo with 
-                | TAsmRepr ty -> CompiledTypeRepr.ILAsmOpen ty
-                | _ -> 
-                    let boxity = if x.IsStructOrEnumTycon then AsValue else AsObject
-                    let ilTypeRef = 
-                        match x.TypeReprInfo with 
-                        | TILObjectRepr (TILObjectReprData(ilScopeRef, ilEnclosingTypeDefs, ilTypeDef)) -> mkRefForNestedILTypeDef ilScopeRef (ilEnclosingTypeDefs, ilTypeDef)
-                        | _ -> ilTypeRefForCompilationPath x.CompilationPath x.CompiledName
-                    // Pre-allocate a ILType for monomorphic types, to reduce memory usage from Abstract IL nodes
-                    let ilTypeOpt = 
-                        match x.TyparsNoRange with 
-                        | [] -> Some (mkILTy boxity (mkILTySpec (ilTypeRef, []))) 
-                        | _ -> None
-                    CompiledTypeRepr.ILAsmNamed (ilTypeRef, boxity, ilTypeOpt))
-
-    /// Gets the data indicating the compiled representation of a named type or module in terms of Abstract IL data structures.
-    member x.CompiledRepresentationForNamedType =
-        match x.CompiledRepresentation with 
-        | CompiledTypeRepr.ILAsmNamed(tref, _, _) -> tref
-        | CompiledTypeRepr.ILAsmOpen _ -> invalidOp (FSComp.SR.tastTypeHasAssemblyCodeRepresentation(x.DisplayNameWithStaticParametersAndUnderscoreTypars))
+    // FNCS: CompiledRepresentation and CompiledRepresentationForNamedType removed - native compilation doesn't use IL type representation
 
 
     /// Indicates if we have pre-determined that a type definition has a default constructor.
@@ -1371,34 +1297,8 @@ type ParentRef =
 /// just an ILTypeRef. Computed and cached by later phases. Stored in 
 /// type and exception definitions. Not pickled. Store an optional ILType object for 
 /// non-generic types.
-[<NoEquality; NoComparison; RequireQualifiedAccess; StructuredFormatDisplay("{DebugText}")>]
-type CompiledTypeRepr = 
-
-    /// An AbstractIL type representation that is just the name of a type.
-    ///
-    /// CompiledTypeRepr.ILAsmNamed (ilTypeRef, ilBoxity, ilTypeOpt)
-    /// 
-    /// The ilTypeOpt is present for non-generic types. It is an ILType corresponding to the first two elements of the case. This
-    /// prevents reallocation of the ILType each time we need to generate it. For generic types, it is None.
-    | ILAsmNamed of 
-         ilTypeRef: ILTypeRef * 
-         ilBoxity: ILBoxity * 
-         ilTypeOpt: ILType option
-         
-    /// An AbstractIL type representation that may include type variables
-    // This case is only used for types defined in the F# library by their translation to ILASM types, e.g.
-    //   type ``[]``<'T> = (# "!0[]" #)
-    //   type ``[, ]``<'T> = (# "!0[0 ..., 0 ...]" #)
-    //   type ``[, , ]``<'T> = (# "!0[0 ..., 0 ..., 0 ...]" #)
-    //   type byref<'T> = (# "!0&" #)
-    //   type nativeptr<'T when 'T: unmanaged> = (# "native int" #)
-    //   type ilsigptr<'T> = (# "!0*" #)
-    | ILAsmOpen of ilType: ILType  
-
-    [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
-    member x.DebugText = x.ToString()
-
-    override x.ToString() = "CompiledTypeRepr(...)"
+// FNCS: CompiledTypeRepr removed - native compilation doesn't use IL type representations
+// Native types use NativeType from Checking.Native.NativeTypes instead
 
 [<NoEquality; NoComparison; RequireQualifiedAccess; StructuredFormatDisplay("{DebugText}")>]
 type TyconAugmentation = 
@@ -1483,11 +1383,8 @@ type TyconRepresentation =
     /// Indicates the type is a class, struct, enum, delegate or interface 
     | TFSharpTyconRepr of FSharpTyconData
 
-    /// Indicates the type is a type from a .NET assembly without F# metadata.
-    | TILObjectRepr of TILObjectReprData
-
-    /// Indicates the type is implemented as IL assembly code using the given closed Abstract IL type 
-    | TAsmRepr of ILType
+    // FNCS: TILObjectRepr removed - native compilation doesn't use IL object representations
+    // FNCS: TAsmRepr removed - native compilation doesn't use IL assembly representations
 
     /// Indicates the type is parameterized on a measure (e.g. float<_>) but erases to some other type (e.g. float)
     | TMeasureableRepr of TType
@@ -1519,14 +1416,7 @@ type TyconRepresentation =
 
     override x.ToString() = sprintf "%+A" x 
 
-[<NoEquality; NoComparison; StructuredFormatDisplay("{DebugText}")>]
-type TILObjectReprData = 
-    | TILObjectReprData of scope: ILScopeRef * nesting: ILTypeDef list * definition: ILTypeDef 
-
-    [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
-    member x.DebugText = x.ToString()
-
-    override x.ToString() = "TILObjectReprData(...)"
+// FNCS: TILObjectReprData removed - native compilation doesn't use IL object representations
 
 
 #if !NO_TYPEPROVIDERS
@@ -1704,8 +1594,8 @@ type TyconUnionData =
       /// The cases contained in the discriminated union. 
       CasesTable: TyconUnionCases
 
-      /// The ILX data structure representing the discriminated union. 
-      CompiledRepresentation: IlxUnionRef cache 
+      /// FNCS stub - IL representation not used in native compilation
+      CompiledRepresentation: unit cache 
     }
 
     /// Get the union cases as a list
@@ -1967,8 +1857,7 @@ type ExceptionInfo =
     /// Indicates that an exception is an abbreviation for the given exception 
     | TExnAbbrevRepr of TyconRef 
 
-    /// Indicates that an exception is shorthand for the given .NET exception type 
-    | TExnAsmRepr of ILTypeRef
+    // FNCS: TExnAsmRepr removed - native compilation doesn't use IL exception types
 
     /// Indicates that an exception carries the given record of values 
     | TExnFresh of TyconRecdFields
@@ -2171,14 +2060,14 @@ type Tycon = Entity
 
 let getNameOfScopeRef sref = 
     match sref with 
-    | ILScopeRef.Local -> "<local>"
-    | ILScopeRef.Module mref -> mref.Name
-    | ILScopeRef.Assembly aref -> aref.Name
-    | ILScopeRef.PrimaryAssembly -> "<primary>"
+    | ScopeRef.Local -> "<local>"
+    | ScopeRef.Module name -> name
+    | ScopeRef.Assembly name -> name
+    | ScopeRef.Primary -> "<primary>"
 
 let private isInternalCompPath x =
     match x with
-    | CompPath(ILScopeRef.Local, _, []) -> true
+    | CompPath(ScopeRef.Local, _, []) -> true
     | _ -> false
 
 let private (|Public|Internal|Private|) (TAccess p) =
@@ -2209,19 +2098,19 @@ type Accessibility =
     [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
     member x.DebugText = x.ToString()
 
-    member x.AsILMemberAccess () =
+    member x.AsMemberAccess () =
         match getSyntaxAccessForCompPath x with
-        | SyntaxAccess.Public -> ILMemberAccess.Public
-        | SyntaxAccess.Internal -> ILMemberAccess.Assembly
-        | SyntaxAccess.Private -> ILMemberAccess.Private
+        | SyntaxAccess.Public -> MemberAccess.Public
+        | SyntaxAccess.Internal -> MemberAccess.Assembly
+        | SyntaxAccess.Private -> MemberAccess.Private
         | _ ->
-            if x.IsPublic then ILMemberAccess.Public
-            elif x.IsInternal then ILMemberAccess.Assembly
-            else ILMemberAccess.Private
+            if x.IsPublic then MemberAccess.Public
+            elif x.IsInternal then MemberAccess.Assembly
+            else MemberAccess.Private
 
-    member x.AsILTypeDefAccess () =
-        if x.IsPublic then ILTypeDefAccess.Public
-        else ILTypeDefAccess.Private
+    member x.AsTypeAccess () =
+        if x.IsPublic then TypeAccess.Public
+        else TypeAccess.Private
 
     member x.CompilationPaths = match x with | TAccess compilationPaths -> compilationPaths
 
@@ -2645,15 +2534,15 @@ type TraitConstraintSln =
     /// Indicates a trait is solved by an F# anonymous record field.
     | FSAnonRecdFieldSln of anonInfo: AnonRecdTypeInfo * tinst: TypeInst * index: int
 
-    /// ILMethSln(ty, extOpt, ilMethodRef, minst)
+    /// MethodSln(ty, extOpt, methodRef, minst)
     ///
-    /// Indicates a trait is solved by a .NET method.
+    /// Indicates a trait is solved by a method.
     ///    ty -- the type and its instantiation
     ///    extOpt -- information about an extension member, if any
-    ///    ilMethodRef -- the method that solves the trait constraint
+    ///    methodRef -- the method that solves the trait constraint
     ///    minst -- the generic method instantiation 
     ///    staticTyOpt -- the static type governing a static virtual call, if any
-    | ILMethSln of ty: TType * extOpt: ILTypeRef option * ilMethodRef: ILMethodRef * minst: TypeInst * staticTyOpt: TType option
+    | MethodSln of ty: TType * extOpt: TypeConRef option * methodRef: MethodRef * minst: TypeInst * staticTyOpt: TType option
 
     /// ClosedExprSln expr
     ///
@@ -3655,11 +3544,7 @@ type EntityRef =
     /// Is the destination assembly available?
     member tcr.CanDeref = tcr.TryDeref.IsSome
 
-    /// Gets the data indicating the compiled representation of a type or module in terms of Abstract IL data structures.
-    member x.CompiledRepresentation = x.Deref.CompiledRepresentation
-
-    /// Gets the data indicating the compiled representation of a named type or module in terms of Abstract IL data structures.
-    member x.CompiledRepresentationForNamedType = x.Deref.CompiledRepresentationForNamedType
+    // FNCS: CompiledRepresentation and CompiledRepresentationForNamedType removed - native compilation doesn't use IL
 
     /// The implementation definition location of the namespace, module or type
     member x.DefinitionRange = x.Deref.DefinitionRange
@@ -3764,8 +3649,7 @@ type EntityRef =
     /// Get the value representing the accessibility of the r.h.s. of an F# type definition.
     member x.TypeReprAccessibility = x.Deref.TypeReprAccessibility
 
-    /// Get the cache of the compiled ILTypeRef representation of this module or type.
-    member x.CompiledReprCache = x.Deref.CompiledReprCache
+    // FNCS: CompiledReprCache removed - native compilation doesn't use IL representation
 
     /// Get a blob of data indicating how this type is nested in other namespaces, modules or types.
     member x.PublicPath: PublicPath option = x.Deref.PublicPath
@@ -3870,9 +3754,7 @@ type EntityRef =
     /// Indicates if this is a struct or enum type definition, i.e. a value type definition, including struct records and unions
     member x.IsStructOrEnumTycon = x.Deref.IsStructOrEnumTycon
 
-    /// Indicates if this is an F# type definition which is one of the special types in FSharp.Core.dll which uses 
-    /// an assembly-code representation for the type, e.g. the primitive array type constructor.
-    member x.IsAsmReprTycon = x.Deref.IsAsmReprTycon
+    // FNCS: IsAsmReprTycon removed - native compilation doesn't use IL assembly representation
 
     /// Indicates if this is an F# type definition which is one of the special types in FSharp.Core.dll like 'float<_>' which
     /// defines a measure type with a relation to an existing non-measure type as a representation.
@@ -3893,15 +3775,7 @@ type EntityRef =
     /// Gets any implicit hash/equals methods added to an F# record, union or struct type definition.
     member x.GeneratedHashAndEqualsValues = x.Deref.GeneratedHashAndEqualsValues
     
-    /// Indicate if this is a type definition backed by Abstract IL metadata.
-    member x.IsILTycon = x.Deref.IsILTycon
-
-    /// Get the Abstract IL scope, nesting and metadata for this 
-    /// type definition, assuming it is backed by Abstract IL metadata.
-    member x.ILTyconInfo = x.Deref.ILTyconInfo
-
-    /// Get the Abstract IL metadata for this type definition, assuming it is backed by Abstract IL metadata.
-    member x.ILTyconRawMetadata = x.Deref.ILTyconRawMetadata
+    // FNCS: IsILTycon, ILTyconInfo, ILTyconRawMetadata removed - native compilation doesn't use IL
 
     /// Indicate if this is a type whose r.h.s. is known to be a union type definition.
     member x.IsUnionTycon = x.Deref.IsUnionTycon
@@ -4456,15 +4330,15 @@ type TType =
     member x.GetAssemblyName() =
         match x with
         | TType_forall (_tps, ty) -> ty.GetAssemblyName()
-        | TType_app (tcref, _tinst, _) -> tcref.CompilationPath.ILScopeRef.QualifiedName
+        | TType_app (tcref, _tinst, _) -> tcref.CompilationPath.ScopeRef.QualifiedName
         | TType_tuple _ -> ""
         | TType_anon (anonInfo, _tinst) -> defaultArg anonInfo.Assembly.QualifiedName ""
         | TType_fun _ -> ""
         | TType_measure _ -> ""
         | TType_var (tp, _) -> tp.Solution |> function Some slnTy -> slnTy.GetAssemblyName() | None -> ""
+        // FNCS: Use CompilationPath.ScopeRef instead of ILTyconInfo for native compilation
         | TType_ucase (_uc, _tinst) ->
-            let (TILObjectReprData(scope, _nesting, _definition)) = _uc.Tycon.ILTyconInfo
-            scope.QualifiedName
+            _uc.Tycon.CompilationPath.ScopeRef.QualifiedName
 
     [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
     member x.DebugText = x.LimitedToString(4)
@@ -4512,51 +4386,34 @@ type AnonRecdTypeInfo =
       mutable Stamp: Stamp
 
       mutable SortedNames: string[]
-
-      mutable IlTypeName : int64
     }
+
+    // FNCS: Simple incrementing stamp counter for anonymous record type identity
+    static let mutable anonRecdStampCounter = 0L
 
     /// Create an AnonRecdTypeInfo from the basic data
     static member Create(ccu: CcuThunk, tupInfo, ids: Ident[]) = 
         let sortedIds = ids |> Array.sortBy (fun id -> id.idText)
 
-        // Hash all the data to form a unique stamp.
-        // This used to be used as an input for generating IL type name, however the stamp generation
-        // had to be modified to fix #6411, and the IL type name must remain unchanged for back compat reasons.
-        let stamp =
-            sha1HashInt64
-                [| for c in ccu.AssemblyName do yield byte c; yield byte (int32 c >>> 8)
-                   match tupInfo with 
-                   | TupInfo.Const b -> yield (if b then 0uy else 1uy)
-                   for id in sortedIds do 
-                       for c in id.idText do yield byte c; yield byte (int32 c >>> 8)
-                       yield 0uy |]
-
-        // Hash data to form a code used in generating IL type name.
-        // To maintain backward compatibility this should not be changed.
-        let ilName =
-            sha1HashInt64
-                [| for c in ccu.AssemblyName do yield byte c; yield byte (int32 c >>> 8)
-                   match tupInfo with
-                   | TupInfo.Const b -> yield (if b then 0uy else 1uy)
-                   for id in sortedIds do
-                       for c in id.idText do yield byte c; yield byte (int32 c >>> 8) |]
+        // FNCS: Use simple incrementing stamp instead of SHA1 hash
+        // This provides uniqueness for type identity without IL dependencies
+        let stamp = System.Threading.Interlocked.Increment(&anonRecdStampCounter)
 
         let sortedNames = Array.map textOfId sortedIds
-        { Assembly = ccu; TupInfo = tupInfo; SortedIds = sortedIds; Stamp = stamp; SortedNames = sortedNames; IlTypeName = ilName }
+        { Assembly = ccu; TupInfo = tupInfo; SortedIds = sortedIds; Stamp = stamp; SortedNames = sortedNames }
 
-    /// Get the ILTypeRef for the generated type implied by the anonymous type
-    member x.ILTypeRef = 
-        let ilTypeName = sprintf "<>f__AnonymousType%s%u`%d" (match x.TupInfo with TupInfo.Const b -> if b then "1000" else "") (uint32 x.IlTypeName) x.SortedIds.Length
-        mkILTyRef(x.Assembly.ILScopeRef, ilTypeName)
+    /// Get the display name for the anonymous record type (for native compilation)
+    member x.DisplayName = 
+        let structPrefix = match x.TupInfo with TupInfo.Const true -> "struct " | _ -> ""
+        let fieldNames = String.concat "; " x.SortedNames
+        sprintf "%s{| %s |}" structPrefix fieldNames
 
     static member NewUnlinked() : AnonRecdTypeInfo = 
         { Assembly = Unchecked.defaultof<_>
           TupInfo = Unchecked.defaultof<_>
           SortedIds = Unchecked.defaultof<_>
           Stamp = Unchecked.defaultof<_>
-          SortedNames = Unchecked.defaultof<_>
-          IlTypeName = Unchecked.defaultof<_> }
+          SortedNames = Unchecked.defaultof<_> }
 
     member x.Link d = 
         let sortedNames = Array.map textOfId d.SortedIds
@@ -4565,7 +4422,6 @@ type AnonRecdTypeInfo =
         x.SortedIds <- d.SortedIds
         x.Stamp <- d.Stamp
         x.SortedNames <- sortedNames
-        x.IlTypeName <- d.IlTypeName
 
     member x.IsLinked = (match box x.SortedIds with null -> true | _ -> false)
     
@@ -4621,7 +4477,7 @@ type Attribs = Attrib list
 type AttribKind = 
 
     /// Indicates an attribute refers to a type defined in an imported .NET assembly 
-    | ILAttrib of ilMethodRef: ILMethodRef 
+    | NativeAttrib of ilMethodRef: MethodRef 
 
     /// Indicates an attribute refers to a type defined in an imported F# assembly 
     | FSAttrib of valRef: ValRef
@@ -5113,9 +4969,10 @@ type Expr =
     /// Indicates the expression is a quoted expression tree. 
     ///
     // MUTABILITY: this use of mutability is awkward and perhaps should be removed
+    // FNCS: Quotation info uses TypeConRef instead of ILTypeRef for native compilation
     | Quote of
         quotedExpr: Expr *
-        quotationInfo: ((ILTypeRef list * TTypes * Exprs * ExprData) * (ILTypeRef list * TTypes * Exprs * ExprData)) option ref *
+        quotationInfo: ((TypeConRef list * TTypes * Exprs * ExprData) * (TypeConRef list * TTypes * Exprs * ExprData)) option ref *
         isFromQueryExpression: bool *
         range: range *
         quotedType: TType  
@@ -5274,10 +5131,7 @@ type TOp =
     /// An operation representing a field-get from an F# tuple value.
     | TupleFieldGet of TupInfo * int 
 
-    /// IL assembly code - type list are the types pushed on the stack 
-    | ILAsm of 
-        instrs: ILInstr list * 
-        retTypes: TTypes 
+    // FNCS: ILAsm removed - native compilation uses MLIR, not IL assembly
 
     /// Generate a ldflda on an 'a ref. 
     | RefAddrGet of bool
@@ -5292,10 +5146,10 @@ type TOp =
     | Return
 
     /// Used for state machine compilation
-    | Goto of ILCodeLabel
+    | Goto of CodeLabel
 
     /// Used for state machine compilation
-    | Label of ILCodeLabel
+    | Label of CodeLabel
 
     /// Pseudo method calls. This is used for overloaded operations like op_Addition. 
     | TraitCall of TraitConstraintInfo 
@@ -5303,22 +5157,7 @@ type TOp =
     /// Operation nodes representing C-style operations on byrefs and mutable vals (l-values) 
     | LValueOp of LValueOperation * ValRef 
 
-    /// IL method calls.
-    ///     isProperty -- used for quotation reflection, property getters & setters  
-    ///     noTailCall - DllImport? if so don't tailcall  
-    ///     retTypes -- the types of pushed values, if any
-    | ILCall of 
-        isVirtual: bool * 
-        isProtected: bool * 
-        isStruct: bool * 
-        isCtor: bool * 
-        valUseFlag: ValUseFlag * 
-        isProperty: bool * 
-        noTailCall: bool * 
-        ilMethRef: ILMethodRef * 
-        enclTypeInst: TypeInst * 
-        methInst: TypeInst * 
-        retTypes: TTypes   
+    // FNCS: ILCall removed - native compilation uses MLIR, not IL method calls
 
     [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
     member x.DebugText = x.ToString()
@@ -5349,7 +5188,7 @@ type TOp =
         | ExnFieldGet (tcref, _) -> "ExnFieldGet(" + tcref.LogicalName + ",..)"
         | ExnFieldSet (tcref, _) -> "ExnFieldSet(" + tcref.LogicalName + ",..)"
         | TupleFieldGet _ -> "TupleFieldGet(..)"
-        | ILAsm _ -> "ILAsm(..)"
+        // FNCS: ILAsm removed
         | RefAddrGet _ -> "RefAddrGet(..)"
         | Coerce -> "Coerce"
         | Reraise -> "Reraise"
@@ -5358,7 +5197,7 @@ type TOp =
         | Label n -> "Label(" + string n + ")"
         | TraitCall info -> "TraitCall(" + info.MemberLogicalName + ")"
         | LValueOp (op, vref) -> sprintf "%+A(%s)" op vref.LogicalName
-        | ILCall (_,_,_,_,_,_,_,ilMethRef,_,_,_) -> "ILCall(" + ilMethRef.ToString() + ",..)"
+        // FNCS: ILCall removed
 
 /// Represents the kind of record construction operation.
 type RecordConstructionInfo = 
@@ -5676,7 +5515,7 @@ type CcuData =
       FileName: string option 
       
       /// Holds the data indicating how this assembly/module is referenced from the code being compiled. 
-      ILScopeRef: ILScopeRef
+      ScopeRef: ScopeRef
       
       /// A unique stamp for this DLL 
       Stamp: Stamp
@@ -5709,9 +5548,7 @@ type CcuData =
       // NOTE: may contain transient state during typechecking 
       mutable Contents: ModuleOrNamespace
       
-      /// A helper function used to link method signatures using type equality. This is effectively a forward call to the type equality 
-      /// logic in tastops.fs
-      TryGetILModuleDef: unit -> ILModuleDef option 
+      // FNCS: TryGetILModuleDef removed - native compilation doesn't use IL modules
       
       /// A helper function used to link method signatures using type equality. This is effectively a forward call to the type equality 
       /// logic in tastops.fs
@@ -5814,7 +5651,7 @@ type CcuThunk =
     member ccu.AssemblyName = ccu.name
 
     /// Holds the data indicating how this assembly/module is referenced from the code being compiled. 
-    member ccu.ILScopeRef = ccu.Deref.ILScopeRef
+    member ccu.ScopeRef = ccu.Deref.ScopeRef
 
     /// A unique stamp for this assembly
     member ccu.Stamp = ccu.Deref.Stamp
@@ -5822,9 +5659,7 @@ type CcuThunk =
     /// Holds the file name for the assembly, if any 
     member ccu.FileName = ccu.Deref.FileName
 
-    /// Try to get the .NET Assembly, if known. May not be present for `IsFSharp` for
-    /// in-memory cross-project references
-    member ccu.TryGetILModuleDef() = ccu.Deref.TryGetILModuleDef()
+    // FNCS: TryGetILModuleDef removed - native compilation doesn't use IL modules
 
 #if !NO_TYPEPROVIDERS
     /// Is this a provider-injected assembly
@@ -6128,7 +5963,6 @@ type Construct() =
             // Generated types get internal accessibility
             entity_pubpath = Some pubpath
             entity_cpath = Some cpath
-            entity_il_repr_cache = newCache()
             entity_opt_data =
                 match kind, access with
                 | TyparKind.Type, TAccess [] -> None
@@ -6153,7 +5987,6 @@ type Construct() =
             entity_pubpath=cpath |> Option.map (fun (cp: CompilationPath) -> cp.NestedPublicPath id)
             entity_cpath=cpath
             entity_attribs=attribs
-            entity_il_repr_cache = newCache()
             entity_opt_data =
                 match xml, access with
                 | doc, TAccess [] when doc.IsEmpty -> None
@@ -6231,7 +6064,6 @@ type Construct() =
             entity_typars = LazyWithContext.NotLazy []
             entity_tycon_repr = TNoRepr
             entity_flags = EntityFlags(usesPrefixDisplay=false, isModuleOrNamespace=false, preEstablishedHasDefaultCtor=false, hasSelfReferentialCtor=false, isStructRecordOrUnionType=false)
-            entity_il_repr_cache = newCache()
             entity_opt_data =
                 match doc, access, repr with
                 | doc, TAccess [], TExnNone when doc.IsEmpty -> None
@@ -6270,19 +6102,12 @@ type Construct() =
             entity_modul_type = mtyp
             entity_pubpath=cpath |> Option.map (fun (cp: CompilationPath) -> cp.NestedPublicPath (mkSynId m nm))
             entity_cpath = cpath
-            entity_il_repr_cache = newCache()
             entity_opt_data =
                 match kind, doc, reprAccess, access with
                 | TyparKind.Type, doc, TAccess [], TAccess [] when doc.IsEmpty -> None
                 | _ -> Some { Entity.NewEmptyEntityOptData() with entity_kind = kind; entity_xmldoc = doc; entity_tycon_repr_accessibility = reprAccess; entity_accessibility=access } } 
 
-    /// Create a new type definition node for a .NET type definition
-    static member NewILTycon nlpath (nm, m) tps (scoref: ILScopeRef, enc, tdef: ILTypeDef) mtyp =
-        let tycon = Construct.NewTycon(nlpath, nm, m, taccessPublic, taccessPublic, TyparKind.Type, tps, XmlDoc.Empty, true, false, false, mtyp)
-
-        tycon.entity_tycon_repr <- TILObjectRepr (TILObjectReprData (scoref, enc, tdef))
-        tycon.TypeContents.tcaug_closed <- true
-        tycon
+    // FNCS: NewILTycon removed - native compilation doesn't import .NET type definitions
 
     /// Create a new Val node
     static member NewVal(

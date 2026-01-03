@@ -7,7 +7,7 @@
 module internal FSharp.Native.Compiler.TypedTreeBasics
 
 open Internal.Utilities.Library
-open FSharp.Native.Compiler.AbstractIL.IL 
+open FSharp.Native.Compiler.Checking.Native.NativeTypes 
 open FSharp.Native.Compiler.CompilerGlobalState
 open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.Syntax
@@ -538,9 +538,9 @@ let accessSubstPaths (newPath, oldPath) (TAccess paths) =
     let subst cpath = if cpath=oldPath then newPath else cpath
     TAccess (List.map subst paths)
 
-let compPathOfCcu (ccu: CcuThunk) = CompPath(ccu.ILScopeRef, SyntaxAccess.Unknown, []) 
+let compPathOfCcu (ccu: CcuThunk) = CompPath(ccu.ScopeRef, SyntaxAccess.Unknown, []) 
 let taccessPublic = TAccess []
-let compPathInternal = CompPath(ILScopeRef.Local, SyntaxAccess.Internal, [])
+let compPathInternal = CompPath(ScopeRef.Local, SyntaxAccess.Internal, [])
 let taccessInternal = TAccess [compPathInternal]
 let taccessPrivate accessPath = let (CompPath(sc,_, paths)) = accessPath in TAccess [CompPath(sc, SyntaxAccess.Private, paths)]
 

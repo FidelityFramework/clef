@@ -8,7 +8,7 @@ open System.Collections.Immutable
 open Internal.Utilities.Collections
 open Internal.Utilities.Library
 open Internal.Utilities.Rational
-open FSharp.Native.Compiler.AbstractIL.IL
+open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.DiagnosticsLogger
 open FSharp.Native.Compiler.CompilerGlobalState
 open FSharp.Native.Compiler.Syntax
@@ -275,8 +275,7 @@ val mkUnionCaseExpr: UnionCaseRef * TypeInst * Exprs * range -> Expr
 /// Make an expression that constructs an exception value
 val mkExnExpr: TyconRef * Exprs * range -> Expr
 
-/// Make an expression that is IL assembly code
-val mkAsmExpr: ILInstr list * TypeInst * Exprs * TTypes * range -> Expr
+// FNCS: mkAsmExpr removed - native compilation doesn't use IL assembly
 
 /// Make an expression that coerces one expression to another type
 val mkCoerceExpr: Expr * TType * range * TType -> Expr
@@ -353,8 +352,9 @@ val mkExnCaseFieldGet: Expr * TyconRef * int * range -> Expr
 val mkExnCaseFieldSet: Expr * TyconRef * int * Expr * range -> Expr
 
 /// Make an expression that gets the address of an element in an array
+/// FNCS: Simplified - native arrays use fat pointer representation, not IL array shapes
 val mkArrayElemAddress:
-    TcGlobals -> readonly: bool * ILReadonlyPrefix * bool * ILArrayShape * TType * Expr list * range -> Expr
+    TcGlobals -> readonly: bool * TType * Expr list * range -> Expr
 
 /// The largest tuple before we start encoding, i.e. 7
 val maxTuple: int
@@ -376,7 +376,8 @@ val mkCompiledTupleTy: TcGlobals -> bool -> TTypes -> TType
 val mkCompiledTuple: TcGlobals -> bool -> TTypes * Exprs * range -> TyconRef * TTypes * Exprs * range
 
 /// Make a TAST expression representing getting an item from a tuple
-val mkGetTupleItemN: TcGlobals -> range -> int -> ILType -> bool -> Expr -> TType -> Expr
+/// FNCS: Simplified - native tuples don't need IL type parameter
+val mkGetTupleItemN: TcGlobals -> range -> int -> bool -> Expr -> TType -> Expr
 
 /// Evaluate the TupInfo to work out if it is a struct or a ref.  Currently this is very simple
 /// but TupInfo may later be used carry variables that infer structness.
@@ -1685,7 +1686,7 @@ val isStringTy: TcGlobals -> TType -> bool
 val isListTy: TcGlobals -> TType -> bool
 
 /// Determine if a type is a nominal .NET type
-val isILAppTy: TcGlobals -> TType -> bool
+// FNCS: isILAppTy removed - native compilation doesn't distinguish IL app types
 
 /// Determine if a type is any kind of array type
 val isArrayTy: TcGlobals -> TType -> bool
@@ -2014,9 +2015,7 @@ val mkSequentials: TcGlobals -> range -> Exprs -> Expr
 
 val mkRecordExpr: TcGlobals -> RecordConstructionInfo * TyconRef * TypeInst * RecdFieldRef list * Exprs * range -> Expr
 
-val mkUnbox: TType -> Expr -> range -> Expr
-
-val mkBox: TType -> Expr -> range -> Expr
+// FNCS: mkUnbox, mkBox removed - IL boxing operations not used in native compilation
 
 val mkIsInst: TType -> Expr -> range -> Expr
 
@@ -2296,9 +2295,7 @@ val mkCallSeqEmpty: TcGlobals -> range -> TType -> Expr
 /// Make a call to the 'isprintf' function for string interpolation
 val mkCall_sprintf: g: TcGlobals -> m: range -> funcTy: TType -> fmtExpr: Expr -> fillExprs: Expr list -> Expr
 
-val mkILAsmCeq: TcGlobals -> range -> Expr -> Expr -> Expr
-
-val mkILAsmClt: TcGlobals -> range -> Expr -> Expr -> Expr
+// FNCS: mkILAsmCeq and mkILAsmClt removed - native compilation doesn't use IL assembly
 
 val mkCallFailInit: TcGlobals -> range -> Expr
 
@@ -2316,13 +2313,8 @@ val mkCallNewQuerySource: TcGlobals -> range -> TType -> TType -> Expr -> Expr
 
 val mkArray: TType * Exprs * range -> Expr
 
-val mkStaticCall_String_Concat2: TcGlobals -> range -> Expr -> Expr -> Expr
-
-val mkStaticCall_String_Concat3: TcGlobals -> range -> Expr -> Expr -> Expr -> Expr
-
-val mkStaticCall_String_Concat4: TcGlobals -> range -> Expr -> Expr -> Expr -> Expr -> Expr
-
-// NOTE: mkStaticCall_String_Concat_Array removed - uses BCL array types
+// FNCS: mkStaticCall_String_Concat2/3/4 removed - IL string operations not used in native compilation
+// Native string operations use Alloy's Text module
 
 /// Use a witness in BuiltInWitnesses
 val tryMkCallBuiltInWitness: TcGlobals -> TraitConstraintInfo -> Expr list -> range -> Expr option
@@ -2338,23 +2330,15 @@ val tryMkCallCoreFunctionAsBuiltInWitness:
 
 val mkDecr: TcGlobals -> range -> Expr -> Expr
 
-val mkIncr: TcGlobals -> range -> Expr -> Expr
-
-val mkLdlen: TcGlobals -> range -> Expr -> Expr
-
-val mkLdelem: TcGlobals -> range -> TType -> Expr -> Expr -> Expr
+// FNCS: mkIncr, mkLdlen, mkLdelem removed - IL array operations not used in native compilation
+// Native array operations use direct memory access
 
 //-------------------------------------------------------------------------
 // Analyze attribute sets
 //-------------------------------------------------------------------------
 
-val TryDecodeILAttribute: ILTypeRef -> ILAttributes -> (ILAttribElem list * ILAttributeNamedArg list) option
-
-val IsILAttrib: BuiltinAttribInfo -> ILAttribute -> bool
-
-val TryFindILAttribute: BuiltinAttribInfo -> ILAttributes -> bool
-
-val TryFindILAttributeOpt: BuiltinAttribInfo option -> ILAttributes -> bool
+// FNCS: IL attribute functions removed - native compilation uses F# attributes only
+// Removed: TryDecodeILAttribute, IsILAttrib, TryFindILAttribute, TryFindILAttributeOpt
 
 val IsMatchingFSharpAttribute: TcGlobals -> BuiltinAttribInfo -> Attrib -> bool
 
@@ -2395,31 +2379,10 @@ val TyconRefHasAttributeByName: range -> string -> TyconRef -> bool
 /// Try to find the AttributeUsage attribute, looking for the value of the AllowMultiple named parameter
 val TryFindAttributeUsageAttribute: TcGlobals -> range -> TyconRef -> bool option
 
-#if !NO_TYPEPROVIDERS
-/// returns Some(assemblyName) for success
-val TryDecodeTypeProviderAssemblyAttr: ILAttribute -> string MaybeNull option
-#endif
-
-val IsSignatureDataVersionAttr: ILAttribute -> bool
-
-val TryFindAutoOpenAttr: ILAttribute -> string option
-
-val TryFindInternalsVisibleToAttr: ILAttribute -> string option
-
-val IsMatchingSignatureDataVersionAttr: ILVersionInfo -> ILAttribute -> bool
-
-val mkCompilationMappingAttr: TcGlobals -> int -> ILAttribute
-
-val mkCompilationMappingAttrWithSeqNum: TcGlobals -> int -> int -> ILAttribute
-
-val mkCompilationMappingAttrWithVariantNumAndSeqNum: TcGlobals -> int -> int -> int -> ILAttribute
-
-// NOTE: mkCompilationMappingAttrForQuotationResource removed - uses BCL array types (mkILArr1DTy, typ_Type)
-// NOTE: mkCompilationArgumentCountsAttr removed - uses BCL array types (mkILArr1DTy)
-
-val mkCompilationSourceNameAttr: TcGlobals -> string -> ILAttribute
-
-val mkSignatureDataVersionAttr: TcGlobals -> ILVersionInfo -> ILAttribute
+// FNCS: IL attribute creation/reading functions removed - native compilation doesn't use IL attributes
+// Removed: TryDecodeTypeProviderAssemblyAttr, IsSignatureDataVersionAttr, TryFindAutoOpenAttr
+// Removed: TryFindInternalsVisibleToAttr, IsMatchingSignatureDataVersionAttr
+// Removed: mkCompilationMappingAttr*, mkCompilationSourceNameAttr, mkSignatureDataVersionAttr
 
 //-------------------------------------------------------------------------
 // More common type construction
@@ -2634,14 +2597,10 @@ val EvaledAttribExprEquality: TcGlobals -> Expr -> Expr -> bool
 
 val IsSimpleSyntacticConstantExpr: TcGlobals -> Expr -> bool
 
-[<return: Struct>]
-val (|ConstToILFieldInit|_|): Const -> ILFieldInit voption
+// FNCS: ConstToILFieldInit, ExtractILAttributeNamedArg removed - vestigial IL patterns
 
 [<return: Struct>]
 val (|ExtractAttribNamedArg|_|): string -> AttribNamedArg list -> AttribExpr voption
-
-[<return: Struct>]
-val (|ExtractILAttributeNamedArg|_|): string -> ILAttributeNamedArg list -> ILAttribElem voption
 
 [<return: Struct>]
 val (|AttribInt32Arg|_|): (AttribExpr -> int32 voption)
@@ -2655,7 +2614,7 @@ val (|AttribBoolArg|_|): (AttribExpr -> bool voption)
 [<return: Struct>]
 val (|AttribStringArg|_|): (AttribExpr -> string voption)
 
-val (|AttribElemStringArg|_|): (ILAttribElem -> string option)
+// FNCS: AttribElemStringArg removed - vestigial IL pattern
 
 [<return: Struct>]
 val (|Int32Expr|_|): Expr -> int32 voption
@@ -2833,7 +2792,7 @@ val (|TryWithExpr|_|):
 val (|TryFinallyExpr|_|): Expr -> (DebugPointAtTry * DebugPointAtFinally * TType * Expr * Expr * range) voption
 
 /// Add a label to use as the target for a goto
-val mkLabelled: range -> ILCodeLabel -> Expr -> Expr
+val mkLabelled: range -> CodeLabel -> Expr -> Expr
 
 /// Any delegate type with ResumableCode attribute, or any function returning such a delegate type
 val isResumableCodeTy: TcGlobals -> TType -> bool
@@ -2842,14 +2801,14 @@ val isResumableCodeTy: TcGlobals -> TType -> bool
 val isReturnsResumableCodeTy: TcGlobals -> TType -> bool
 
 /// Shared helper for binding attributes
+/// FNCS: Simplified - removed IL attribute callback (f1), kept F# and provided type callbacks
 val TryBindTyconRefAttribute:
     g: TcGlobals ->
     m: range ->
     BuiltinAttribInfo ->
     tcref: TyconRef ->
-    f1: (ILAttribElem list * ILAttributeNamedArg list -> 'a option) ->
     f2: (Attrib -> 'a option) ->
-    f3: (obj option list * (string * obj option) list -> 'a option) ->
+    _f3: (obj option list * (string * obj option) list -> 'a option) ->
         'a option
 
 val HasDefaultAugmentationAttribute: g: TcGlobals -> tcref: TyconRef -> bool

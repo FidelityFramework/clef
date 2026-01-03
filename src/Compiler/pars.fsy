@@ -2479,15 +2479,12 @@ tyconDefnOrSpfnSimpleRepr:
      { if not (isNil $1) then errorR(Error(FSComp.SR.parsAttributesIllegalHere(), rhs parseState 1))
        SynTypeDefnSimpleRepr.Record($2, $3, lhs parseState) }
 
-  /* An inline-assembly type definition, for FSharp.Core library only */
+  /* An inline-assembly type definition - NOT SUPPORTED in FNCS (native compilation) */
   | opt_attributes opt_access LPAREN HASH string HASH rparen
-     { if not (isNil $1) then errorR(Error(FSComp.SR.parsAttributesIllegalHere(), rhs parseState 1))
-       let mLhs = lhs parseState
-       if parseState.LexBuffer.ReportLibraryOnlyFeatures then libraryOnlyError mLhs
-       if Option.isSome $2 then errorR(Error(FSComp.SR.parsInlineAssemblyCannotHaveVisibilityDeclarations(), rhs parseState 2))
-       let s, _ = $5
-       let ilType = ParseAssemblyCodeType s parseState.LexBuffer.ReportLibraryOnlyFeatures parseState.LexBuffer.LanguageVersion parseState.LexBuffer.StrictIndentation (rhs parseState 5)
-       SynTypeDefnSimpleRepr.LibraryOnlyILAssembly(box ilType, mLhs) }
+     { let mLhs = lhs parseState
+       // FNCS: Inline IL type definitions are not supported in native compilation
+       errorR(Error((193, "Inline IL type definitions (# ... #) are not supported in native F# compilation"), mLhs))
+       SynTypeDefnSimpleRepr.None(mLhs) }
 
 
 /* The core of a record type definition */
@@ -5633,12 +5630,12 @@ forLoopDirection:
   | DOWNTO { false }
 
 inlineAssemblyExpr:
+  /* Inline assembly expressions - NOT SUPPORTED in FNCS (native compilation) */
   | HASH string opt_inlineAssemblyTypeArg optCurriedArgExprs optInlineAssemblyReturnTypes HASH
-      { if parseState.LexBuffer.ReportLibraryOnlyFeatures then libraryOnlyWarning (lhs parseState)
-        let (s, _), sm = $2, rhs parseState 2
+      { // FNCS: Inline IL expressions are not supported in native compilation
         (fun m ->
-            let ilInstrs = ParseAssemblyCodeInstructions s parseState.LexBuffer.ReportLibraryOnlyFeatures parseState.LexBuffer.LanguageVersion parseState.LexBuffer.StrictIndentation sm
-            SynExpr.LibraryOnlyILAssembly(box ilInstrs, $3, List.rev $4, $5, m)) }
+            errorR(Error((193, "Inline IL expressions (# ... #) are not supported in native F# compilation"), m))
+            SynExpr.FromParseError(SynExpr.Const(SynConst.Unit, m), m)) }
 
 optCurriedArgExprs:
   | optCurriedArgExprs argExpr %prec expr_args

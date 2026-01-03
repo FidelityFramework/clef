@@ -148,10 +148,17 @@ module FidprojLoader =
             match Toml.parse content with
             | Error msg -> Error $"Failed to parse {absPath}: {msg}"
             | Ok doc ->
-                let projectDir = normalizePath (Path.GetDirectoryName absPath)
+                let projectDir =
+                    match Path.GetDirectoryName absPath with
+                    | null -> failwith $"Cannot get directory for project path: {absPath}"
+                    | dir -> normalizePath dir
 
                 // Package section
-                let name = Toml.getString "package.name" doc |> Option.defaultValue (Path.GetFileNameWithoutExtension absPath)
+                let defaultName =
+                    match Path.GetFileNameWithoutExtension absPath with
+                    | null -> "unnamed"
+                    | n -> n
+                let name = Toml.getString "package.name" doc |> Option.defaultValue defaultName
                 let version = Toml.getString "package.version" doc |> Option.defaultValue "0.1.0"
 
                 // Compilation section

@@ -2,7 +2,6 @@
 
 module FSharp.Native.Compiler.ParseHelpers
 
-open FSharp.Native.Compiler.AbstractIL
 open FSharp.Native.Compiler.DiagnosticsLogger
 open FSharp.Native.Compiler.Features
 open FSharp.Native.Compiler.Syntax
@@ -195,35 +194,8 @@ type LexerContinuation =
 
 and LexCont = LexerContinuation
 
-//------------------------------------------------------------------------
-// Parse IL assembly code
-//------------------------------------------------------------------------
-
-let ParseAssemblyCodeInstructions (s: string) (reportLibraryOnlyFeatures: bool) (langVersion: LanguageVersion) (strictIndentation: bool option) (m: range) : IL.ILInstr[] =
-#if NO_INLINE_IL_PARSER
-    ignore (s, reportLibraryOnlyFeatures, langVersion, strictIndentation)  // Native compiler doesn't use inline IL
-    errorR (Error((193, "Inline IL not supported in native compiler"), m))
-    [||]
-#else
-    try
-        AsciiParser.ilInstrs AsciiLexer.token (StringAsLexbuf(reportLibraryOnlyFeatures, langVersion, strictIndentation, s))
-    with _ ->
-        errorR (Error(FSComp.SR.astParseEmbeddedILError (), m))
-        [||]
-#endif
-
-let ParseAssemblyCodeType (s: string) (reportLibraryOnlyFeatures: bool) (langVersion: LanguageVersion) (strictIndentation: bool option) (m: range) : IL.ILType =
-#if NO_INLINE_IL_PARSER
-    ignore (s, reportLibraryOnlyFeatures, langVersion, strictIndentation)  // Native compiler doesn't use inline IL
-    errorR (Error((193, "Inline IL not supported in native compiler"), m))
-    IL.PrimaryAssemblyILGlobals.typ_Object
-#else
-    try
-        AsciiParser.ilType AsciiLexer.token (StringAsLexbuf(reportLibraryOnlyFeatures, langVersion, strictIndentation, s))
-    with RecoverableParseError ->
-        errorR (Error(FSComp.SR.astParseEmbeddedILTypeError (), m))
-        IL.PrimaryAssemblyILGlobals.typ_Object
-#endif
+// FNCS: Inline IL parsing removed - native compilation doesn't support (# ... #) syntax
+// ParseAssemblyCodeInstructions and ParseAssemblyCodeType have been removed
 
 let grabXmlDocAtRangeStart (parseState: IParseState, optAttributes: SynAttributeList list, range: range) =
     let grabPoint =

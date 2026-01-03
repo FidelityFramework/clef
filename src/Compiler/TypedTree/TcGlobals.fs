@@ -14,7 +14,7 @@ open System.Diagnostics
 
 open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
-open FSharp.Native.Compiler.AbstractIL.IL
+open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.CompilerGlobalState
 open FSharp.Native.Compiler.Features
 open FSharp.Native.Compiler.IO
@@ -24,6 +24,22 @@ open FSharp.Native.Compiler.Text.Range
 open FSharp.Native.Compiler.TypedTree
 open FSharp.Native.Compiler.TypedTreeBasics
 open Internal.Utilities
+
+/// Split a fully-qualified type name into (namespace path, type name)
+/// e.g., "System.Runtime.CompilerServices.Foo" -> (["System"; "Runtime"; "CompilerServices"], "Foo")
+let private splitTypeName (nm: string) : string list * string =
+    match nm.LastIndexOf '.' with
+    | -1 -> [], nm
+    | idx -> 
+        let path = nm.[0..idx-1] |> fun s -> s.Split('.') |> Array.toList
+        let name = nm.[idx+1..]
+        path, name
+
+/// Create a native TypeConRef from a fully-qualified type name
+/// Used for attribute types which are reference types with no type parameters
+let private mkNativeTypeRef (qualifiedName: string) : TypeConRef =
+    let path, name = splitTypeName qualifiedName
+    { Name = name; Module = path; ParamKinds = []; Layout = TypeLayout.Reference ArenaAffinity.CurrentActor }
 
 let internal DummyFileNameForRangesWithoutASpecificLocation = startupFileName
 let private envRange = rangeN DummyFileNameForRangesWithoutASpecificLocation 0
@@ -52,9 +68,9 @@ let ValRefForIntrinsic (IntrinsicValRef(mvr, _, _, _, key))  = mkNonLocalValRef 
 module FSharpLib =
 
     let Root                       = "Microsoft.FSharp"
-    let RootPath                   = splitNamespace Root
+    let RootPath                   = SplitNamesForILPath Root
     let Core                       = Root + ".Core"
-    let CorePath                   = splitNamespace Core
+    let CorePath                   = SplitNamesForILPath Core
     let CoreOperatorsCheckedName   = Root + ".Core.Operators.Checked"
     let ControlName                = Root + ".Control"
     let LinqName                   = Root + ".Linq"
@@ -67,13 +83,13 @@ module FSharpLib =
 
     let QuotationsName             = Root + ".Quotations"
 
-    let ControlPath                = splitNamespace ControlName
-    let LinqPath                   = splitNamespace LinqName
-    let CollectionsPath            = splitNamespace CollectionsName
-    let NativeInteropPath          = splitNamespace NativeInteropName |> Array.ofList
-    let CompilerServicesPath       = splitNamespace CompilerServicesName |> Array.ofList
-    let LinqRuntimeHelpersPath     = splitNamespace LinqRuntimeHelpersName |> Array.ofList
-    let QuotationsPath             = splitNamespace QuotationsName |> Array.ofList
+    let ControlPath                = SplitNamesForILPath ControlName
+    let LinqPath                   = SplitNamesForILPath LinqName
+    let CollectionsPath            = SplitNamesForILPath CollectionsName
+    let NativeInteropPath          = SplitNamesForILPath NativeInteropName |> Array.ofList
+    let CompilerServicesPath       = SplitNamesForILPath CompilerServicesName |> Array.ofList
+    let LinqRuntimeHelpersPath     = SplitNamesForILPath LinqRuntimeHelpersName |> Array.ofList
+    let QuotationsPath             = SplitNamesForILPath QuotationsName |> Array.ofList
 
     let RootPathArray              = RootPath |> Array.ofList
     let CorePathArray              = CorePath |> Array.ofList
@@ -88,11 +104,11 @@ module FSharpLib =
 type
     [<NoEquality; NoComparison; StructuredFormatDisplay("{DebugText}")>]
     BuiltinAttribInfo =
-    | AttribInfo of ILTypeRef * TyconRef
+    | AttribInfo of TypeConRef * TyconRef
 
     member this.TyconRef = let (AttribInfo(_, tcref)) = this in tcref
 
-    member this.TypeRef  = let (AttribInfo(tref, _)) = this in tref
+    member this.TypeRef = let (AttribInfo(tref, _)) = this in tref
 
     /// For debugging
     [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
@@ -104,43 +120,44 @@ type
 
 [<Literal>]
 let tname_InternalsVisibleToAttribute = "System.Runtime.CompilerServices.InternalsVisibleToAttribute"
+// FNCS: Prefixed with underscore - vestigial BCL references not used in native compilation
 [<Literal>]
-let tname_DebuggerNonUserCodeAttribute = "System.Diagnostics.DebuggerNonUserCodeAttribute"
+let _tname_DebuggerNonUserCodeAttribute = "System.Diagnostics.DebuggerNonUserCodeAttribute"
 [<Literal>]
-let tname_DebuggableAttribute_DebuggingModes = "DebuggingModes"
+let _tname_DebuggableAttribute_DebuggingModes = "DebuggingModes"
 [<Literal>]
 let tname_DebuggerHiddenAttribute = "System.Diagnostics.DebuggerHiddenAttribute"
 [<Literal>]
-let tname_DebuggerDisplayAttribute = "System.Diagnostics.DebuggerDisplayAttribute"
+let _tname_DebuggerDisplayAttribute = "System.Diagnostics.DebuggerDisplayAttribute"
 [<Literal>]
-let tname_DebuggerTypeProxyAttribute = "System.Diagnostics.DebuggerTypeProxyAttribute"
+let _tname_DebuggerTypeProxyAttribute = "System.Diagnostics.DebuggerTypeProxyAttribute"
 [<Literal>]
 let tname_DebuggerStepThroughAttribute = "System.Diagnostics.DebuggerStepThroughAttribute"
 [<Literal>]
-let tname_DebuggerBrowsableAttribute = "System.Diagnostics.DebuggerBrowsableAttribute"
+let _tname_DebuggerBrowsableAttribute = "System.Diagnostics.DebuggerBrowsableAttribute"
 [<Literal>]
-let tname_DebuggerBrowsableState = "System.Diagnostics.DebuggerBrowsableState"
+let _tname_DebuggerBrowsableState = "System.Diagnostics.DebuggerBrowsableState"
 
 [<Literal>]
 let tname_StringBuilder = "System.Text.StringBuilder"
 [<Literal>]
-let tname_IComparable = "System.IComparable"
+let _tname_IComparable = "System.IComparable"
 [<Literal>]
-let tname_Exception = "System.Exception"
+let _tname_Exception = "System.Exception"
 [<Literal>]
-let tname_Missing = "System.Reflection.Missing"
+let _tname_Missing = "System.Reflection.Missing"
 [<Literal>]
 let tname_FormattableString = "System.FormattableString"
 [<Literal>]
-let tname_SerializationInfo = "System.Runtime.Serialization.SerializationInfo"
+let _tname_SerializationInfo = "System.Runtime.Serialization.SerializationInfo"
 [<Literal>]
-let tname_StreamingContext = "System.Runtime.Serialization.StreamingContext"
+let _tname_StreamingContext = "System.Runtime.Serialization.StreamingContext"
 [<Literal>]
 let tname_SecurityPermissionAttribute = "System.Security.Permissions.SecurityPermissionAttribute"
 [<Literal>]
 let tname_Delegate = "System.Delegate"
 [<Literal>]
-let tname_ValueType = "System.ValueType"
+let _tname_ValueType = "System.ValueType"
 [<Literal>]
 let tname_Enum = "System.Enum"
 [<Literal>]
@@ -150,23 +167,23 @@ let tname_Array = "System.Array"
 [<Literal>]
 let tname_RuntimeArgumentHandle = "System.RuntimeArgumentHandle"
 [<Literal>]
-let tname_RuntimeTypeHandle = "System.RuntimeTypeHandle"
+let _tname_RuntimeTypeHandle = "System.RuntimeTypeHandle"
 [<Literal>]
-let tname_RuntimeMethodHandle = "System.RuntimeMethodHandle"
+let _tname_RuntimeMethodHandle = "System.RuntimeMethodHandle"
 [<Literal>]
-let tname_RuntimeFieldHandle = "System.RuntimeFieldHandle"
+let _tname_RuntimeFieldHandle = "System.RuntimeFieldHandle"
 [<Literal>]
-let tname_CompilerGeneratedAttribute = "System.Runtime.CompilerServices.CompilerGeneratedAttribute"
+let _tname_CompilerGeneratedAttribute = "System.Runtime.CompilerServices.CompilerGeneratedAttribute"
 [<Literal>]
-let tname_ReferenceAssemblyAttribute = "System.Runtime.CompilerServices.ReferenceAssemblyAttribute"
+let _tname_ReferenceAssemblyAttribute = "System.Runtime.CompilerServices.ReferenceAssemblyAttribute"
 [<Literal>]
-let tname_UnmanagedType = "System.Runtime.InteropServices.UnmanagedType"
+let _tname_UnmanagedType = "System.Runtime.InteropServices.UnmanagedType"
 [<Literal>]
-let tname_DebuggableAttribute = "System.Diagnostics.DebuggableAttribute"
+let _tname_DebuggableAttribute = "System.Diagnostics.DebuggableAttribute"
 [<Literal>]
-let tname_AsyncCallback = "System.AsyncCallback"
+let _tname_AsyncCallback = "System.AsyncCallback"
 [<Literal>]
-let tname_IAsyncResult = "System.IAsyncResult"
+let _tname_IAsyncResult = "System.IAsyncResult"
 [<Literal>]
 let tname_IsByRefLikeAttribute = "System.Runtime.CompilerServices.IsByRefLikeAttribute"
 
@@ -184,9 +201,8 @@ type CompilationMode =
 
 type TcGlobals(
     compilingFSharpCore: bool,
-    ilg: ILGlobals,
     fslibCcu: CcuThunk,
-    directoryToResolveRelativePaths,
+    directoryToResolveRelativePaths: string,
     mlCompatibility: bool,
     isInteractive: bool,
     checkNullness: bool,
@@ -283,7 +299,7 @@ type TcGlobals(
   let v_refcell_tcr_nice  = mk_MFCore_tcref fslibCcu "ref`1"
   let v_mfe_tcr           = mk_MFCore_tcref fslibCcu "MatchFailureException"
 
-  let mutable embeddedILTypeDefs = ConcurrentDictionary<string, ILTypeDef>()
+  // FNCS: embeddedILTypeDefs removed - IL type embedding not used in native compilation
 
   let dummyAssemblyNameCarryingUsefulErrorInformation path typeName =
       FSComp.SR.tcGlobalsSystemTypeNotFound (String.concat "." path + "." + typeName)
@@ -304,25 +320,21 @@ type TcGlobals(
       let ccu = findSysTypeCcu path nm
       mkNonLocalTyconRef2 ccu (Array.ofList path) nm
 
-  let findSysILTypeRef nm =
-      let path, typeName = splitILTypeName nm
-      let scoref =
-          match tryFindSysTypeCcu path typeName with
-          | None -> ILScopeRef.Assembly (mkSimpleAssemblyRef (dummyAssemblyNameCarryingUsefulErrorInformation path typeName))
-          | Some ccu -> ccu.ILScopeRef
-      mkILTyRef (scoref, nm)
+  // FNCS: Native type ref creation (replaces findSysILTypeRef)
+  let findSysTypeRef nm : TypeConRef =
+      mkNativeTypeRef nm
 
-  let tryFindSysILTypeRef nm =
-      let path, typeName = splitILTypeName nm
-      tryFindSysTypeCcu path typeName |> Option.map (fun ccu -> mkILTyRef (ccu.ILScopeRef, nm))
+  let tryFindSysTypeRef nm : TypeConRef option =
+      let path, typeName = splitTypeName nm
+      tryFindSysTypeCcu path typeName |> Option.map (fun _ -> mkNativeTypeRef nm)
 
   let findSysAttrib nm =
-      let tref = findSysILTypeRef nm
-      let path, typeName = splitILTypeName nm
+      let tref = findSysTypeRef nm
+      let path, typeName = splitTypeName nm
       AttribInfo(tref, findSysTyconRef path typeName)
 
   let tryFindSysAttrib nm =
-      let path, typeName = splitILTypeName nm
+      let path, typeName = splitTypeName nm
 
       // System Attributes must be public types.
       match tryFindSysTypeCcu path typeName with
@@ -330,16 +342,14 @@ type TcGlobals(
       | None -> None
 
   let findPublicSysAttrib nm =
-      let path, typeName = splitILTypeName nm
-      let scoref, ccu =
+      let path, typeName = splitTypeName nm
+      let ccu =
             match tryFindPublicSysTypeCcu path typeName with
             | None ->
-                ILScopeRef.Assembly (mkSimpleAssemblyRef (dummyAssemblyNameCarryingUsefulErrorInformation path typeName)),
                 CcuThunk.CreateDelayed(dummyAssemblyNameCarryingUsefulErrorInformation path typeName)
             | Some ccu ->
-                ccu.ILScopeRef,
                 ccu
-      let tref = mkILTyRef (scoref, nm)
+      let tref = mkNativeTypeRef nm
       let tcref = mkNonLocalTyconRef2 ccu (Array.ofList path) typeName
       AttribInfo(tref, tcref)
 
@@ -355,31 +365,11 @@ type TcGlobals(
       | "System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes" -> true
       | _ -> false
 
+  // FNCS: findOrEmbedSysPublicType simplified - just returns the attrib info
+  // Native compilation doesn't embed IL types
   let findOrEmbedSysPublicType nm =
-
-      assert (isInEmbeddableKnownSet nm)                        //Ensure that the named type is in known set of embedded types
-
-      let sysAttrib = findPublicSysAttrib nm
-      if sysAttrib.TyconRef.CanDeref then
-          sysAttrib
-      else
-          let attrRef = ILTypeRef.Create(ILScopeRef.Local, [], nm)
-          let attrTycon =
-             Construct.NewTycon(
-                 Some (CompPath(ILScopeRef.Local, SyntaxAccess.Internal, [])),
-                 attrRef.Name,
-                 range0,
-                 taccessInternal,
-                  taccessInternal,
-                  TyparKind.Type,
-                  LazyWithContext.NotLazy [],
-                  FSharp.Native.Compiler.Xml.XmlDoc.Empty,
-                  false,
-                  false,
-                  false,
-                  MaybeLazy.Strict(Construct.NewEmptyModuleOrNamespaceType ModuleOrType)
-              )
-          AttribInfo(attrRef, mkLocalTyconRef attrTycon)
+      assert (isInEmbeddableKnownSet nm)
+      findPublicSysAttrib nm
 
   let mkSysNonGenericTy path n = mkNonGenericTy(findSysTyconRef path n)
   let tryMkSysNonGenericTy path n = tryFindSysTyconRef path n |> Option.map mkNonGenericTy
@@ -674,21 +664,12 @@ type TcGlobals(
       decodeTupleTyAndNullness tupInfo tinst v_knownWithoutNull
 
   let mk_MFCore_attrib nm : BuiltinAttribInfo =
-      AttribInfo(mkILTyRef(ilg.fsharpCoreAssemblyScopeRef, Core + "." + nm), mk_MFCore_tcref fslibCcu nm)
+      AttribInfo(mkNativeTypeRef (Core + "." + nm), mk_MFCore_tcref fslibCcu nm)
 
   let mk_MFCompilerServices_attrib nm : BuiltinAttribInfo =
-      AttribInfo(mkILTyRef(ilg.fsharpCoreAssemblyScopeRef, Core + "." + nm), mk_MFCompilerServices_tcref fslibCcu nm)
+      AttribInfo(mkNativeTypeRef (Core + "." + nm), mk_MFCompilerServices_tcref fslibCcu nm)
 
-  let mkSourceDoc fileName = ILSourceDocument.Create(language=None, vendor=None, documentType=None, file=fileName)
-
-  let compute i =
-      let path = fileOfFileIndex i
-      let fullPath = FileSystem.GetFullFilePathInDirectoryShim directoryToResolveRelativePaths path
-      mkSourceDoc fullPath
-
-  // Build the memoization table for files
-  let v_memoize_file =
-      MemoizationTable<int, ILSourceDocument>("v_memoize_file", compute, keyComparer = HashIdentity.Structural)
+  // FNCS: ILSourceDocument memoization removed - native compilation doesn't use IL source documents
 
   let v_and_info =                   makeIntrinsicValRef(fslib_MFIntrinsicOperators_nleref,                    CompileOpName "&"                      , None                 , None          , [],         mk_rel_sig v_bool_ty)
   let v_addrof_info =                makeIntrinsicValRef(fslib_MFIntrinsicOperators_nleref,                    CompileOpName "~&"                     , None                 , None          , [vara],     ([[varaTy]], mkByrefTy varaTy))
@@ -910,61 +891,15 @@ type TcGlobals(
   let v_check_this_info            = makeIntrinsicValRef(fslib_MFIntrinsicFunctions_nleref,                    "CheckThis"                            , None                 , None                          , [vara],      ([[varaTy]], varaTy))
   let v_quote_to_linq_lambda_info  = makeIntrinsicValRef(fslib_MFLinqRuntimeHelpersQuotationConverter_nleref,  "QuotationToLambdaExpression"          , None                 , None                          , [vara],      ([[mkQuotedExprTy varaTy]], mkLinqExpressionTy varaTy))
 
-  let tref_DebuggerNonUserCodeAttribute = findSysILTypeRef tname_DebuggerNonUserCodeAttribute
-  let v_DebuggerNonUserCodeAttribute_tcr = splitILTypeName tname_DebuggerNonUserCodeAttribute ||> findSysTyconRef
+  // FNCS: IL attribute generation infrastructure removed - native compilation uses MLIR
+  // Removed: tref_DebuggerNonUserCodeAttribute, tref_DebuggableAttribute, tref_CompilerGeneratedAttribute
+  // Removed: tref_InternalsVisibleToAttribute, debuggerNonUserCodeAttribute, compilerGeneratedAttribute
+  // Removed: generatedAttributes, addGeneratedAttrs, addValGeneratedAttrs
+  // Removed: addMethodGeneratedAttrs, addPropertyGeneratedAttrs, addFieldGeneratedAttrs
+  // Removed: tref_DebuggerBrowsableAttribute, debuggerBrowsableNeverAttribute, addNeverAttrs
+  // Removed: addPropertyNeverAttrs, addFieldNeverAttrs, mkDebuggerTypeProxyAttribute
 
-  let tref_DebuggableAttribute = findSysILTypeRef tname_DebuggableAttribute
-  let tref_CompilerGeneratedAttribute  = findSysILTypeRef tname_CompilerGeneratedAttribute
-  let v_CompilerGeneratedAttribute_tcr = splitILTypeName tname_CompilerGeneratedAttribute ||> findSysTyconRef
-  let tref_InternalsVisibleToAttribute = findSysILTypeRef tname_InternalsVisibleToAttribute
-
-  let debuggerNonUserCodeAttribute = mkILCustomAttribute (tref_DebuggerNonUserCodeAttribute, [], [], [])
-  let compilerGeneratedAttribute = mkILCustomAttribute (tref_CompilerGeneratedAttribute, [], [], [])
-  let generatedAttributes = if noDebugAttributes then [||] else [| compilerGeneratedAttribute; debuggerNonUserCodeAttribute |]
   let compilerGlobalState = CompilerGlobalState()
-
-  // Requests attributes to be added to compiler generated methods.
-  let addGeneratedAttrs (attrs: ILAttributes) =
-      if Array.isEmpty generatedAttributes then
-          attrs
-      else
-          match attrs.AsArray() with
-          | [||] -> mkILCustomAttrsFromArray generatedAttributes
-          | attrs -> mkILCustomAttrsFromArray (Array.append attrs generatedAttributes)
-
-  let addValGeneratedAttrs (v: Val) m =
-      if not noDebugAttributes then
-          let attrs = [
-              Attrib(v_CompilerGeneratedAttribute_tcr, ILAttrib compilerGeneratedAttribute.Method.MethodRef, [], [], false, None, m)
-              Attrib(v_DebuggerNonUserCodeAttribute_tcr, ILAttrib debuggerNonUserCodeAttribute.Method.MethodRef, [], [], false, None, m)
-              Attrib(v_DebuggerNonUserCodeAttribute_tcr, ILAttrib debuggerNonUserCodeAttribute.Method.MethodRef, [], [], true, None, m)
-          ]
-
-          match v.Attribs with
-          | [] -> v.SetAttribs attrs
-          | _ -> v.SetAttribs (attrs @ v.Attribs)
-
-  // Native compiler doesn't generate IL definitions, stub these functions
-  let addMethodGeneratedAttrs (mdef:ILMethodDef) = mdef
-  let addPropertyGeneratedAttrs (pdef:ILPropertyDef) = pdef
-  let addFieldGeneratedAttrs (fdef:ILFieldDef) = fdef
-
-  let tref_DebuggerBrowsableAttribute n =
-        let typ_DebuggerBrowsableState =
-            let tref = findSysILTypeRef tname_DebuggerBrowsableState
-            ILType.Value (mkILNonGenericTySpec tref)
-        mkILCustomAttribute (findSysILTypeRef tname_DebuggerBrowsableAttribute, [typ_DebuggerBrowsableState], [ILAttribElem.Int32 n], [])
-
-  let debuggerBrowsableNeverAttribute = tref_DebuggerBrowsableAttribute 0
-
-  let addNeverAttrs (attrs: ILAttributes) = mkILCustomAttrsFromArray (Array.append (attrs.AsArray()) [| debuggerBrowsableNeverAttribute |])
-
-  // Native compiler doesn't need debugger attributes
-  let addPropertyNeverAttrs (pdef:ILPropertyDef) = pdef
-  let addFieldNeverAttrs (fdef:ILFieldDef) = fdef
-  let mkDebuggerTypeProxyAttribute (ty : ILType) =
-    ignore ty  // Native compiler doesn't have System.Type
-    mkILCustomAttribute (findSysILTypeRef tname_DebuggerTypeProxyAttribute, [], [], [])
 
   let betterTyconEntries =
      [| yield sys, "Int32"    , v_int_tcr
@@ -1109,18 +1044,13 @@ type TcGlobals(
 
   member _.directoryToResolveRelativePaths = directoryToResolveRelativePaths
 
-  member _.ilg = ilg
+  // FNCS: ilg removed - IL globals not used in native compilation
 
   member _.noDebugAttributes = noDebugAttributes
 
   member _.tryFindSysTypeCcuHelper: string list -> string -> bool -> CcuThunk option = tryFindSysTypeCcuHelper
 
-  member _.tryRemoveEmbeddedILTypeDefs () = [
-      for key in embeddedILTypeDefs.Keys.OrderBy id do
-        match embeddedILTypeDefs.TryRemove(key) with
-        | true, ilTypeDef -> yield ilTypeDef
-        | false, _ -> ()
-      ]
+  // FNCS: tryRemoveEmbeddedILTypeDefs removed - IL type embedding not used in native compilation
 
   // A table of all intrinsics that the compiler cares about
   member _.knownIntrinsics = v_knownIntrinsics
@@ -1284,9 +1214,7 @@ type TcGlobals(
 
   member val SupportsWhenTEnum_tcr = mk_MFCompilerServices_tcref fslibCcu "SupportsWhenTEnum"
 
-  member _.TryEmbedILType(tref: ILTypeRef, mkEmbeddableType: unit -> ILTypeDef) =
-    if tref.Scope = ILScopeRef.Local && not(embeddedILTypeDefs.ContainsKey(tref.Name)) then
-        embeddedILTypeDefs.TryAdd(tref.Name, mkEmbeddableType()) |> ignore
+  // FNCS: TryEmbedILType removed - IL type embedding not used in native compilation
 
   member g.mk_GeneratedSequenceBase_ty seqElemTy = TType_app(g.seq_base_tcr,[seqElemTy], v_knownWithoutNull)
 
@@ -1369,8 +1297,7 @@ type TcGlobals(
   member val float_ty = v_float_ty
   member val float32_ty = v_float32_ty
 
-  /// Memoization table to help minimize the number of ILSourceDocument objects we create
-  member _.memoize_file x = v_memoize_file.Apply x
+  // FNCS: memoize_file removed - IL source documents not used in native compilation
 
   member val system_Array_ty = mkSysNonGenericTy sys "Array"
   member val system_Object_ty = mkSysNonGenericTy sys "Object"
@@ -1453,19 +1380,8 @@ type TcGlobals(
   // Review: Does this need to be an option type?
   member val System_Runtime_CompilerServices_RuntimeFeature_ty = tryFindSysTyconRef sysCompilerServices "RuntimeFeature" |> Option.map mkNonGenericTy
 
-  member val iltyp_StreamingContext = tryFindSysILTypeRef tname_StreamingContext  |> Option.map mkILNonGenericValueTy
-  member val iltyp_SerializationInfo = tryFindSysILTypeRef tname_SerializationInfo  |> Option.map mkILNonGenericBoxedTy
-  member val iltyp_Missing = findSysILTypeRef tname_Missing |> mkILNonGenericBoxedTy
-  member val iltyp_AsyncCallback = findSysILTypeRef tname_AsyncCallback |> mkILNonGenericBoxedTy
-  member val iltyp_IAsyncResult = findSysILTypeRef tname_IAsyncResult |> mkILNonGenericBoxedTy
-  member val iltyp_IComparable = findSysILTypeRef tname_IComparable |> mkILNonGenericBoxedTy
-  member val iltyp_Exception = findSysILTypeRef tname_Exception |> mkILNonGenericBoxedTy
-  member val iltyp_ValueType = findSysILTypeRef tname_ValueType |> mkILNonGenericBoxedTy
-  member val iltyp_RuntimeFieldHandle = findSysILTypeRef tname_RuntimeFieldHandle |> mkILNonGenericValueTy
-  member val iltyp_RuntimeMethodHandle = findSysILTypeRef tname_RuntimeMethodHandle |> mkILNonGenericValueTy
-  member val iltyp_RuntimeTypeHandle   = findSysILTypeRef tname_RuntimeTypeHandle |> mkILNonGenericValueTy
-  member val iltyp_ReferenceAssemblyAttributeOpt = tryFindSysILTypeRef tname_ReferenceAssemblyAttribute |> Option.map mkILNonGenericBoxedTy
-  member val iltyp_UnmanagedType   = findSysILTypeRef tname_UnmanagedType |> mkILNonGenericValueTy  
+  // FNCS: iltyp_* members removed - IL types not used in native compilation
+
   member val attrib_AttributeUsageAttribute = findSysAttrib "System.AttributeUsageAttribute"
   member val attrib_ParamArrayAttribute = findSysAttrib "System.ParamArrayAttribute"
   member val attrib_IDispatchConstantAttribute = tryFindSysAttrib "System.Runtime.CompilerServices.IDispatchConstantAttribute"
@@ -1868,57 +1784,26 @@ type TcGlobals(
 
   member _.TryFindSysTyconRef path nm = tryFindSysTyconRef path nm
 
-  member _.FindSysILTypeRef nm = findSysILTypeRef nm
+  member _.FindSysTypeRef nm = findSysTypeRef nm
 
-  member _.TryFindSysILTypeRef nm = tryFindSysILTypeRef nm
+  member _.TryFindSysTypeRef nm = tryFindSysTypeRef nm
 
   member _.FindSysAttrib nm = findSysAttrib nm
 
   member _.TryFindSysAttrib nm = tryFindSysAttrib nm
 
-  member _.AddGeneratedAttributes attrs = addGeneratedAttrs attrs
-
-  member _.AddValGeneratedAttributes v = addValGeneratedAttrs v
-
-  member _.AddMethodGeneratedAttributes mdef = addMethodGeneratedAttrs mdef
-
-  member _.AddPropertyGeneratedAttributes mdef = addPropertyGeneratedAttrs mdef
-
-  member _.AddFieldGeneratedAttributes mdef = addFieldGeneratedAttrs mdef
-
-  member _.AddPropertyNeverAttributes mdef = addPropertyNeverAttrs mdef
-
-  member _.AddFieldNeverAttributes mdef = addFieldNeverAttrs mdef
-
-  member _.MkDebuggerTypeProxyAttribute ty = mkDebuggerTypeProxyAttribute ty
-
-  member _.mkDebuggerDisplayAttribute s = mkILCustomAttribute (findSysILTypeRef tname_DebuggerDisplayAttribute, [ilg.typ_String], [ILAttribElem.String (Some s)], [])
-
-  member _.DebuggerBrowsableNeverAttribute = debuggerBrowsableNeverAttribute
-
-  member _.mkDebuggableAttributeV2(jitTracking, jitOptimizerDisabled) =
-        let debuggingMode =
-            0x3 (* Default ||| IgnoreSymbolStoreSequencePoints *) |||
-            (if jitTracking then 1 else 0) |||
-            (if jitOptimizerDisabled then 256 else 0)
-        let tref_DebuggableAttribute_DebuggingModes = mkILTyRefInTyRef (tref_DebuggableAttribute, tname_DebuggableAttribute_DebuggingModes)
-        mkILCustomAttribute
-          (tref_DebuggableAttribute, [mkILNonGenericValueTy tref_DebuggableAttribute_DebuggingModes],
-           (* See System.Diagnostics.DebuggableAttribute.DebuggingModes *)
-           [ILAttribElem.Int32( debuggingMode )], [])
+  // FNCS: IL attribute generation removed - native compilation uses MLIR
+  // Removed: AddGeneratedAttributes, AddValGeneratedAttributes, AddMethodGeneratedAttributes
+  // Removed: AddPropertyGeneratedAttributes, AddFieldGeneratedAttributes, AddPropertyNeverAttributes
+  // Removed: AddFieldNeverAttributes, MkDebuggerTypeProxyAttribute, mkDebuggerDisplayAttribute
+  // Removed: DebuggerBrowsableNeverAttribute, mkDebuggableAttributeV2
+  // Removed: CompilerGeneratedAttribute, DebuggerNonUserCodeAttribute, MakeInternalsVisibleToAttribute
 
   member internal _.CompilerGlobalState = Some compilerGlobalState
 
-  member _.CompilerGeneratedAttribute = compilerGeneratedAttribute
-
-  member _.DebuggerNonUserCodeAttribute = debuggerNonUserCodeAttribute
-
   member _.HasTailCallAttrib (attribs: Attribs) =
     attribs
-    |> List.exists (fun a -> a.TyconRef.CompiledRepresentationForNamedType.FullName = "Microsoft.FSharp.Core.TailCallAttribute")
-  
-  member _.MakeInternalsVisibleToAttribute(simpleAssemName) =
-      mkILCustomAttribute (tref_InternalsVisibleToAttribute, [ilg.typ_String], [ILAttribElem.String (Some simpleAssemName)], [])
+    |> List.exists (fun a -> a.TyconRef.DisplayName = "TailCallAttribute")
 
   /// Find an FSharp.Core LanguagePrimitives dynamic function that corresponds to a trait witness, e.g.
   /// AdditionDynamic for op_Addition.  Also work out the type instantiation of the dynamic function.
