@@ -128,6 +128,20 @@ This is **NEW to FNCS** - not found in FCS:
 
 ## Cross-References
 
+- **Firefly**: `binding_architecture_unified` memory - **CANONICAL** three-layer binding architecture
 - **Firefly**: `fsharp_metaprogramming_patterns` memory - quotation usage in PSG
 - **Firefly**: `delimited_continuations_architecture` memory - related CE desugaring
+- **Firefly**: `native_binding_architecture` memory - platform binding resolution
 - **fsnative-spec**: `spec/native-type-mappings.md` § "Compile-Time Metaprogramming"
+
+## Relationship to Unified Binding Architecture
+
+Quotation semantic carriers are the **Layer 2** mechanism in the unified binding architecture:
+
+| Layer | What | Examples |
+|-------|------|----------|
+| Layer 1 | FNCS Intrinsics | `Sys.write`, `NativePtr.set`, `NativeDefault.zeroed` |
+| **Layer 2** | **Quotation Semantic Carriers** | Farscape-generated GTK bindings, BAREWire memory layouts |
+| Layer 3 | User Code | Alloy library, application code |
+
+**Key Insight**: Layer 1 intrinsics are operations native to the type universe (no semantic carrier needed). Layer 2 bindings carry rich metadata (memory layout, alignment, ownership) that cannot be expressed through simple type signatures alone.

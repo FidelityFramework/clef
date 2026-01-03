@@ -14,6 +14,16 @@ target/intermediates/
 ├── fncs_phase_1_structural.json    # After type checking, before reachability
 ├── fncs_phase_4_reachability.json  # With IsReachable marks (soft-delete)
 ├── fncs_phase_5_final.json         # Final result before MLIR generation
+├── fncs_expr.json                  # FSharpNativeExpr - expression-centric view (JSON)
+├── fncs_expr.txt                   # FSharpNativeExpr - pretty-printed text
+├── ProjectName.mlir                # Generated MLIR
+├── ProjectName.ll                  # LLVM IR
+└── ProjectName.o                   # Object file
+```
+target/intermediates/
+├── fncs_phase_1_structural.json    # After type checking, before reachability
+├── fncs_phase_4_reachability.json  # With IsReachable marks (soft-delete)
+├── fncs_phase_5_final.json         # Final result before MLIR generation
 ├── ProjectName.mlir                # Generated MLIR
 ├── ProjectName.ll                  # LLVM IR
 └── ProjectName.o                   # Object file

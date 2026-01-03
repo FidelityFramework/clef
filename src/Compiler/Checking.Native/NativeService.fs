@@ -170,21 +170,6 @@ let parseString (source: string) (fileName: string) (options: ParseOptions) : Pa
         // Parse the implementation file
         let parsedImplFile = FSharp.Native.Compiler.Parser.implementationFile tokenFunc lexbuf
 
-        // Debug: Print parsed fragments
-        let (ParsedImplFile(hashDirectives, fragments)) = parsedImplFile
-        printfn "[FNCS Parse Debug] Parsed %d fragments, %d hash directives" (List.length fragments) (List.length hashDirectives)
-        for i, frag in List.indexed fragments do
-            match frag with
-            | ParsedImplFileFragment.AnonModule(decls, range) ->
-                printfn "[FNCS Parse Debug]   Fragment %d: AnonModule with %d decls at %A" i (List.length decls) range
-            | ParsedImplFileFragment.NamedModule modOrNs ->
-                let (SynModuleOrNamespace(longId, _, _kind, decls, _, _, _, _, _)) = modOrNs
-                let name = longId |> List.map (fun id -> id.idText) |> String.concat "."
-                printfn "[FNCS Parse Debug]   Fragment %d: NamedModule '%s' with %d decls" i name (List.length decls)
-            | ParsedImplFileFragment.NamespaceFragment(longId, _, _, decls, _, _, _, _) ->
-                let name = longId |> List.map (fun id -> id.idText) |> String.concat "."
-                printfn "[FNCS Parse Debug]   Fragment %d: NamespaceFragment '%s' with %d decls" i name (List.length decls)
-
         // Convert to ParsedImplFileInput and wrap in ParsedInput
         let implFileInput = implFileToInput fileName parsedImplFile
         let parsedInput = ParsedInput.ImplFile implFileInput
@@ -380,6 +365,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     // Phase 5: Emit final result
     emitPhaseIfEnabled PhaseTypes.PhaseId.Final finalGraph diagnostics
+
+    // Emit FSharpNativeExpr view (expression-centric representation)
+    PhaseEmitter.emitExpressionView finalGraph
+    PhaseEmitter.emitExpressionText finalGraph
 
     {
         Graph = finalGraph

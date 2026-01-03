@@ -289,3 +289,217 @@ let emitDiff (diff: PhaseDiff) : unit =
             printfn "[FNCS] Wrote phase diff: %s" path
         with ex ->
             printfn "[FNCS] Warning: Failed to write phase diff: %s" ex.Message
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FSharpNativeExpr Emission (expression-centric view)
+// ═══════════════════════════════════════════════════════════════════════════
+
+open FSharp.Native.Compiler.Checking.Native
+
+/// Serialize FSharpNativeExpr to JSON
+let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeExpr) : string =
+    // Note: these indent helpers reserved for future complex nesting
+    let _indentStr = if pretty then String.replicate indent "  " else ""
+    let _innerIndent = if pretty then String.replicate (indent + 1) "  " else ""
+    let _newline = if pretty then "\n" else ""
+
+    match expr with
+    | FSharpNativeExpr.Literal(value, ty) ->
+        let valueStr = sprintf "%A" value |> escapeJsonString
+        let typeStr = sprintf "%A" ty |> escapeJsonString
+        buildJsonObject pretty indent [
+            ("kind", escapeJsonString "Literal")
+            ("value", valueStr)
+            ("type", typeStr)
+        ]
+
+    | FSharpNativeExpr.Variable(name, ty, isMutable, defId) ->
+        let defIdStr =
+            match defId with
+            | Some (SemanticGraph.NodeId id) -> string id
+            | None -> "null"
+        buildJsonObject pretty indent [
+            ("kind", escapeJsonString "Variable")
+            ("name", escapeJsonString name)
+            ("type", sprintf "%A" ty |> escapeJsonString)
+            ("isMutable", if isMutable then "true" else "false")
+            ("definitionId", defIdStr)
+        ]
+
+    | FSharpNativeExpr.Application(func, args, returnType, srtp) ->
+        let funcJson = serializeExpr pretty (indent + 1) func
+        let argsJson = args |> List.map (serializeExpr pretty (indent + 2)) |> buildJsonArray pretty (indent + 1)
+        let srtpStr =
+            match srtp with
+            | Some r -> buildJsonObject pretty (indent + 1) [
+                ("operator", escapeJsonString r.Operator)
+                ("resolvedMember", escapeJsonString r.ResolvedMember)
+              ]
+            | None -> "null"
+        buildJsonObject pretty indent [
+            ("kind", escapeJsonString "Application")
+            ("function", funcJson)
+            ("arguments", argsJson)
+            ("returnType", sprintf "%A" returnType |> escapeJsonString)
+            ("srtpResolution", srtpStr)
+        ]
+
+    | FSharpNativeExpr.Lambda(parameters, body, returnType, srtp) ->
+        let paramsJson =
+            parameters
+            |> List.map (fun (name, ty) ->
+                buildJsonObject false 0 [
+                    ("name", escapeJsonString name)
+                    ("type", sprintf "%A" ty |> escapeJsonString)
+                ])
+            |> buildJsonArray pretty (indent + 1)
+        let bodyJson = serializeExpr pretty (indent + 1) body
+        let srtpStr =
+            match srtp with
+            | Some r -> buildJsonObject pretty (indent + 1) [
+                ("operator", escapeJsonString r.Operator)
+                ("resolvedMember", escapeJsonString r.ResolvedMember)
+              ]
+            | None -> "null"
+        buildJsonObject pretty indent [
+            ("kind", escapeJsonString "Lambda")
+            ("parameters", paramsJson)
+            ("body", bodyJson)
+            ("returnType", sprintf "%A" returnType |> escapeJsonString)
+            ("srtpResolution", srtpStr)
+        ]
+
+    | FSharpNativeExpr.LetBinding(name, isMutable, value, body, ty) ->
+        let valueJson = serializeExpr pretty (indent + 1) value
+        let bodyJson =
+            match body with
+            | Some b -> serializeExpr pretty (indent + 1) b
+            | None -> "null"
+        buildJsonObject pretty indent [
+            ("kind", escapeJsonString "LetBinding")
+            ("name", escapeJsonString name)
+            ("isMutable", if isMutable then "true" else "false")
+            ("value", valueJson)
+            ("body", bodyJson)
+            ("type", sprintf "%A" ty |> escapeJsonString)
+        ]
+
+    | FSharpNativeExpr.Sequential(exprs, ty) ->
+        let exprsJson = exprs |> List.map (serializeExpr pretty (indent + 1)) |> buildJsonArray pretty (indent + 1)
+        buildJsonObject pretty indent [
+            ("kind", escapeJsonString "Sequential")
+            ("expressions", exprsJson)
+            ("type", sprintf "%A" ty |> escapeJsonString)
+        ]
+
+    | FSharpNativeExpr.IfThenElse(guard, thenBranch, elseBranch, ty) ->
+        let guardJson = serializeExpr pretty (indent + 1) guard
+        let thenJson = serializeExpr pretty (indent + 1) thenBranch
+        let elseJson =
+            match elseBranch with
+            | Some e -> serializeExpr pretty (indent + 1) e
+            | None -> "null"
+        buildJsonObject pretty indent [
+            ("kind", escapeJsonString "IfThenElse")
+            ("guard", guardJson)
+            ("thenBranch", thenJson)
+            ("elseBranch", elseJson)
+            ("type", sprintf "%A" ty |> escapeJsonString)
+        ]
+
+    | FSharpNativeExpr.PlatformBinding(entryPoint, args, ty) ->
+        let argsJson = args |> List.map (serializeExpr pretty (indent + 1)) |> buildJsonArray pretty (indent + 1)
+        buildJsonObject pretty indent [
+            ("kind", escapeJsonString "PlatformBinding")
+            ("entryPoint", escapeJsonString entryPoint)
+            ("arguments", argsJson)
+            ("type", sprintf "%A" ty |> escapeJsonString)
+        ]
+
+    | FSharpNativeExpr.TraitCall(memberName, constrainedTypes, arg, resolution, ty) ->
+        let argJson = serializeExpr pretty (indent + 1) arg
+        let typesJson =
+            constrainedTypes
+            |> List.map (fun t -> sprintf "%A" t |> escapeJsonString)
+            |> buildJsonArray pretty (indent + 1)
+        let resolutionJson =
+            match resolution with
+            | Some r -> buildJsonObject pretty (indent + 1) [
+                ("operator", escapeJsonString r.Operator)
+                ("resolvedMember", escapeJsonString r.ResolvedMember)
+              ]
+            | None -> "null"
+        buildJsonObject pretty indent [
+            ("kind", escapeJsonString "TraitCall")
+            ("memberName", escapeJsonString memberName)
+            ("constrainedTypes", typesJson)
+            ("argument", argJson)
+            ("resolution", resolutionJson)
+            ("type", sprintf "%A" ty |> escapeJsonString)
+        ]
+
+    | FSharpNativeExpr.ModuleDef(name, members) ->
+        let membersJson = members |> List.map (serializeExpr pretty (indent + 1)) |> buildJsonArray pretty (indent + 1)
+        buildJsonObject pretty indent [
+            ("kind", escapeJsonString "ModuleDef")
+            ("name", escapeJsonString name)
+            ("members", membersJson)
+        ]
+
+    | FSharpNativeExpr.Error(message, _range) ->
+        buildJsonObject pretty indent [
+            ("kind", escapeJsonString "Error")
+            ("message", escapeJsonString message)
+        ]
+
+    | _ ->
+        // Fallback for other expression types - use compact string
+        let compactStr = FSharpNativeExpr.toCompactString expr
+        buildJsonObject pretty indent [
+            ("kind", escapeJsonString compactStr)
+            ("note", escapeJsonString "Full serialization not yet implemented for this expression type")
+        ]
+
+/// Emit FSharpNativeExpr views for all entry points
+let emitExpressionView (graph: SemanticGraph.SemanticGraph) : unit =
+    let config = getConfig()
+    if not config.EmitIntermediates then ()
+    else
+        try
+            let exprs = FSharpNativeExpr.fromEntryPoints graph
+            let exprsJson =
+                exprs
+                |> List.map (serializeExpr config.PrettyPrint 1)
+                |> buildJsonArray config.PrettyPrint 0
+
+            let output = buildJsonObject config.PrettyPrint 0 [
+                ("version", escapeJsonString "1.0")
+                ("description", escapeJsonString "FSharpNativeExpr - Expression-centric view of SemanticGraph")
+                ("entryPointCount", string (List.length exprs))
+                ("expressions", exprsJson)
+            ]
+
+            let path = Path.Combine(config.OutputDir, "fncs_expr.json")
+            File.WriteAllText(path, output, Encoding.UTF8)
+            printfn "[FNCS] Wrote expression view: %s" path
+        with ex ->
+            printfn "[FNCS] Warning: Failed to write expression view: %s" ex.Message
+
+/// Emit pretty-printed text view for debugging
+let emitExpressionText (graph: SemanticGraph.SemanticGraph) : unit =
+    let config = getConfig()
+    if not config.EmitIntermediates then ()
+    else
+        try
+            let exprs = FSharpNativeExpr.fromEntryPoints graph
+            let text =
+                exprs
+                |> List.mapi (fun i expr ->
+                    sprintf "=== Entry Point %d ===\n%s\n" i (FSharpNativeExpr.prettyPrint 0 expr))
+                |> String.concat "\n"
+
+            let path = Path.Combine(config.OutputDir, "fncs_expr.txt")
+            File.WriteAllText(path, text, Encoding.UTF8)
+            printfn "[FNCS] Wrote expression text: %s" path
+        with ex ->
+            printfn "[FNCS] Warning: Failed to write expression text: %s" ex.Message

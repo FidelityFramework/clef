@@ -550,10 +550,13 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 NativeType.TError $"BCL reference: {name}",
                 range)
         // FNCS INTRINSICS: NativePtr module functions
+        // These are polymorphic intrinsics that require TForall to allow type application
         elif name.StartsWith("NativePtr.") then
             let intrinsicName = name.Substring("NativePtr.".Length)
-            let tyParam = freshTypeVar range
-            let intrinsicType =
+            // Create a proper type parameter for the polymorphic 'T
+            let tyParamSpec = UnionFind.freshTypeParam "'T" TypeParamKind.Type range
+            let tyParam = NativeType.TVar tyParamSpec
+            let intrinsicBody =
                 match intrinsicName with
                 | "toNativeInt" ->
                     // nativeptr<'T> -> nativeint
@@ -587,6 +590,39 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TFun(env.Globals.IntType, NativeType.TNativePtr tyParam))
                 | _ ->
                     // Unknown NativePtr function - create generic function type
+                    NativeType.TFun(freshTypeVar range, freshTypeVar range)
+            // Wrap in TForall so type application can properly instantiate the type parameter
+            let intrinsicType = NativeType.TForall([tyParamSpec], intrinsicBody)
+            builder.Create(
+                SemanticKind.Intrinsic(name),
+                intrinsicType,
+                range)
+        // FNCS INTRINSICS: Sys module functions (system calls)
+        // These are primitives for low-level I/O that Alex emits directly as syscalls
+        elif name.StartsWith("Sys.") then
+            let intrinsicName = name.Substring("Sys.".Length)
+            let intrinsicType =
+                match intrinsicName with
+                | "write" ->
+                    // fd:int -> buffer:nativeptr<byte> -> count:int -> int
+                    // Returns bytes written
+                    NativeType.TFun(env.Globals.IntType,
+                        NativeType.TFun(NativeType.TNativePtr Types.uint8Type,
+                            NativeType.TFun(env.Globals.IntType, env.Globals.IntType)))
+                | "read" ->
+                    // fd:int -> buffer:nativeptr<byte> -> maxCount:int -> int
+                    // Returns bytes read
+                    NativeType.TFun(env.Globals.IntType,
+                        NativeType.TFun(NativeType.TNativePtr Types.uint8Type,
+                            NativeType.TFun(env.Globals.IntType, env.Globals.IntType)))
+                | "exit" ->
+                    // code:int -> 'a (never returns, polymorphic return type)
+                    let tyParamSpec = UnionFind.freshTypeParam "'a" TypeParamKind.Type range
+                    let tyParam = NativeType.TVar tyParamSpec
+                    let exitBody = NativeType.TFun(env.Globals.IntType, tyParam)
+                    NativeType.TForall([tyParamSpec], exitBody)
+                | _ ->
+                    // Unknown Sys function - create generic function type
                     NativeType.TFun(freshTypeVar range, freshTypeVar range)
             builder.Create(
                 SemanticKind.Intrinsic(name),
@@ -725,18 +761,108 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
         let funcNode = checkExpr env builder funcExpr
         let argNode = checkExpr env builder argExpr
 
-        // Generate constraint: funcType = argType -> ?result
-        let resultTy = freshTypeVar range
-        addConstraint (Constraint.Equals(
-            funcNode.Type,
-            NativeType.TFun(argNode.Type, resultTy),
-            range)) env
+        // Determine result type based on function type
+        // When function type is already concrete (TFun), use return type directly
+        // This provides immediate type information without deferring to constraint solving
+        let resultTy =
+            match funcNode.Type with
+            | NativeType.TFun(domainTy, rangeTy) ->
+                // Function type is known - add domain constraint and use return type directly
+                addConstraint (Constraint.Equals(domainTy, argNode.Type, range)) env
+                rangeTy
+
+            | NativeType.TForall(typeParams, bodyType) ->
+                // IMPLICIT TYPE INSTANTIATION: When a TForall-typed function receives
+                // value arguments (no explicit TypeApp), we instantiate with fresh type
+                // variables that will be unified with argument types.
+                //
+                // Example: NativePtr.set buffer index value
+                //   - NativePtr.set has type TForall(['T], nativeptr<'T> -> int -> 'T -> unit)
+                //   - buffer has type nativeptr<uint8>
+                //   - Instantiate 'T with fresh '?n, then unify nativeptr<'?n> with nativeptr<uint8>
+                //   - Result: 'T = uint8, return type is int -> uint8 -> unit
+                //
+                // This is the implicit counterpart to explicit TypeApp handling.
+                // See memory: typeapp_preserves_kind_principle
+                let freshVars = typeParams |> List.map (fun _ -> freshTypeVar range)
+                let instantiatedType = NativeTypes.instantiate typeParams freshVars bodyType
+                // Now handle the instantiated type
+                match instantiatedType with
+                | NativeType.TFun(domainTy, rangeTy) ->
+                    addConstraint (Constraint.Equals(domainTy, argNode.Type, range)) env
+                    rangeTy
+                | _ ->
+                    // Body wasn't a function type after instantiation - add constraint
+                    let freshResult = freshTypeVar range
+                    addConstraint (Constraint.Equals(
+                        instantiatedType,
+                        NativeType.TFun(argNode.Type, freshResult),
+                        range)) env
+                    freshResult
+
+            | NativeType.TVar _ ->
+                // Function type is a type variable - defer to constraint solving
+                let freshResult = freshTypeVar range
+                addConstraint (Constraint.Equals(
+                    funcNode.Type,
+                    NativeType.TFun(argNode.Type, freshResult),
+                    range)) env
+                freshResult
+
+            | _ ->
+                // Other types (error, etc.)
+                // Generate constraint and fresh result type
+                let freshResult = freshTypeVar range
+                addConstraint (Constraint.Equals(
+                    funcNode.Type,
+                    NativeType.TFun(argNode.Type, freshResult),
+                    range)) env
+                freshResult
+
+        // INTRINSIC APPLICATION SATURATION:
+        // Intrinsics don't support partial application - they're primitives that must
+        // be called with all arguments at once. When we see curried application of an
+        // intrinsic (e.g., NativePtr.set buffer count byte), we flatten into a single
+        // Application node with all arguments.
+        //
+        // Without this, NativePtr.set buffer count byte creates:
+        //   App(App(App(Intrinsic, buffer), count), byte)  -- nested, hard to codegen
+        //
+        // With this fix:
+        //   App(Intrinsic, [buffer; count; byte])  -- flattened, direct codegen
+        //
+        // This is a CONSTRUCTION decision, not cleanup. Intermediate Application nodes
+        // become orphaned and will be pruned by reachability.
+        //
+        // See memory: typeapp_preserves_kind_principle (same principle applies)
+        let (targetFuncId, allArgs) =
+            match funcNode.Kind with
+            | SemanticKind.Intrinsic _ ->
+                // Direct intrinsic application: App(Intrinsic, arg)
+                (funcNode.Id, [argNode.Id])
+            | SemanticKind.Application(innerFuncId, existingArgs) ->
+                // Check if inner func is an Intrinsic - if so, flatten
+                match builder.Nodes.TryFind innerFuncId with
+                | Some innerNode ->
+                    match innerNode.Kind with
+                    | SemanticKind.Intrinsic _ ->
+                        // Curried intrinsic application: flatten
+                        (innerFuncId, existingArgs @ [argNode.Id])
+                    | _ ->
+                        // Not an intrinsic - keep curried structure
+                        (funcNode.Id, [argNode.Id])
+                | None ->
+                    // Inner node not found (shouldn't happen) - keep curried
+                    (funcNode.Id, [argNode.Id])
+            | _ ->
+                // Regular function application - keep curried structure
+                (funcNode.Id, [argNode.Id])
 
         builder.Create(
-            SemanticKind.Application(funcNode.Id, [argNode.Id]),
+            SemanticKind.Application(targetFuncId, allArgs),
             resultTy,
             range,
-            children = [funcNode.Id; argNode.Id])
+            children = targetFuncId :: allArgs)
 
     //---------------------------------------------------------------------
     // Lambda expressions
@@ -1175,11 +1301,10 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                             (List.length typeParams) (List.length typeArgTypes)) env
                     NativeType.TError "Type application arity mismatch"
                 else
-                    // Add constraints that type parameters equal their instantiations
-                    for (tyParam, argTy) in List.zip typeParams typeArgTypes do
-                        addConstraint (Constraint.Equals(NativeType.TVar tyParam, argTy, range)) env
-                    // The result type is the body type - constraint solving will substitute
-                    bodyType
+                    // Perform immediate substitution of type parameters with concrete types
+                    // This is the correct approach - NativeTypes.instantiate replaces TVar
+                    // occurrences with their corresponding type arguments
+                    NativeTypes.instantiate typeParams typeArgTypes bodyType
 
             | NativeType.TVar _ ->
                 // Function type is a type variable - not yet resolved
@@ -1217,11 +1342,37 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 addConstraint (Constraint.HasTypeArgs(funcNode.Type, typeArgTypes, resultTy, range)) env
                 resultTy
 
-        builder.Create(
-            SemanticKind.Application(funcNode.Id, []),  // TypeApp is function with type args
-            resultType,
-            range,
-            children = [funcNode.Id])
+        // ARCHITECTURAL PRINCIPLE: Type Application Preserves Semantic Kind
+        // 
+        // Type application is a TYPE-LEVEL operation, not a VALUE-LEVEL operation.
+        // When TypeApp is applied to a semantically-transparent node (like Intrinsic),
+        // we preserve that node's Kind with the instantiated type. We do NOT wrap it
+        // in an Application node, because Application represents value-level function
+        // calls, not type-level instantiation.
+        //
+        // This is decided during construction, not cleaned up by a nanopass, because:
+        // 1. We're deciding what to build, not fixing what was built
+        // 2. Type information is available here during construction
+        // 3. The zipper receives a clean graph it can traverse directly
+        //
+        // See memory: typeapp_preserves_kind_principle
+        match funcNode.Kind with
+        | SemanticKind.Intrinsic name ->
+            // TypeApp of Intrinsic → Intrinsic with instantiated type
+            // The type parameter is "captured" in resultType (e.g., int -> nativeptr<byte>)
+            // Downstream code sees Intrinsic("NativePtr.stackalloc") with concrete type
+            builder.Create(
+                SemanticKind.Intrinsic name,
+                resultType,
+                range)
+        | _ ->
+            // For other expressions (polymorphic functions, methods, etc.),
+            // create Application node to represent type instantiation
+            builder.Create(
+                SemanticKind.Application(funcNode.Id, []),
+                resultType,
+                range,
+                children = [funcNode.Id])
 
     //---------------------------------------------------------------------
     // ForEach: for x in collection do body

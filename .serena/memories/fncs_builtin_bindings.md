@@ -51,9 +51,25 @@ The detection uses `hasStructAttribute` function in `NativeService.fs`.
 - `src/Compiler/Checking.Native/CheckExpressions.fs` - `createTypeEnv` uses `BuiltInBindings`
 - `src/Compiler/Checking.Native/NativeService.fs` - `hasStructAttribute` for struct detection
 
+## Distinction: Built-in Functions vs Intrinsics
+
+**Built-in Functions** (this memory):
+- Type conversion, operators, union constructors
+- Have F# semantics and can be expressed in F#
+- Registered in type environment for type checking
+
+**FNCS Intrinsics** (separate category):
+- Operations native to the type universe
+- Cannot be expressed in F#
+- Emitted directly as MLIR operations
+- Examples: `Sys.write`, `NativePtr.set`, `NativeDefault.zeroed`
+
+See `fncs_architecture` memory § "FNCS Intrinsics (Layer 1 Operations)" for intrinsics.
+See Firefly `binding_architecture_unified` memory for the three-layer architecture.
+
 ## Status
 
-As of 2026-01-02:
+As of 2026-01-03:
 - All built-in bindings registered
-- FNCS generates 12,453 nodes, 42 entry points for HelloWorldDirect sample
-- Remaining "Variable not found" errors are in Alex/Firefly emission, not FNCS
+- Intrinsic saturation added: curried intrinsic calls flattened during construction
+- FNCS intrinsics (Sys, NativePtr, NativeDefault) are Layer 1 in unified binding architecture

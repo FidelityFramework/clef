@@ -105,7 +105,99 @@ This enables:
 - Platform bindings via Alloy.Primitives.Bindings convention
 - Generates LLVM dialect MLIR
 
+## FSharpNativeExpr: Expression-Centric View
+
+FSharpNativeExpr is FNCS's own typed expression type that provides an expression-centric view over SemanticGraph. It is a **projection** - materialized from SemanticNode + SemanticKind on demand.
+
+**Key Design:**
+- Replaces any need for FCS's FSharpExpr
+- Native types only (NativeType), no CLR types
+- SRTP resolution captured via WitnessResolution
+- BCL-free, freestanding capable
+
+**Output Files:**
+- `fncs_expr.json` - Structured JSON for programmatic analysis
+- `fncs_expr.txt` - Human-readable text for debugging
+
+**Example Output:**
+```
+=== Entry Point 0 ===
+Module HelloWorldDirect:
+  Let main =
+    Lambda(argv) ->
+      Seq:
+        App(Var(Console.Write -> 12356), [Literal(String "Hello, World!")])
+        Seq:
+          App(Var(Console.WriteLine -> 12362), [Literal(String "")])
+          Literal(Int32 0)
+```
+
+**Key Cases:**
+```fsharp
+type FSharpNativeExpr =
+    | LetBinding of name * isMutable * value * body * ty
+    | Lambda of parameters * body * returnType * srtp
+    | Application of func * args * returnType * srtp
+    | Variable of name * ty * isMutable * definitionId
+    | PlatformBinding of entryPoint * args * ty
+    | TraitCall of memberName * constrainedTypes * arg * resolution * ty
+    | ...
+```
+
+**Usage:**
+```fsharp
+// From entry points
+let exprs = FSharpNativeExpr.fromEntryPoints graph
+
+// From specific node
+let expr = FSharpNativeExpr.fromNode graph nodeId
+
+// Pretty print
+let text = FSharpNativeExpr.prettyPrint 0 expr
+```
+
+## FNCS Intrinsics (Layer 1 Operations)
+
+FNCS provides intrinsics for operations that are **native to the type universe**. These require no external binding library - they are primitive operations that FNCS emits directly.
+
+### Sys Module (System Operations)
+```fsharp
+module Sys =
+    val write : fd:int -> buffer:nativeptr<byte> -> count:int -> int
+    val read  : fd:int -> buffer:nativeptr<byte> -> maxCount:int -> int
+    val exit  : code:int -> 'a
+```
+
+### NativePtr Module (Pointer Operations)
+```fsharp
+module NativePtr =
+    val set : nativeptr<'T> -> int -> 'T -> unit
+    val get : nativeptr<'T> -> int -> 'T
+    val add : nativeptr<'T> -> int -> nativeptr<'T>
+    val stackalloc : int -> nativeptr<'T>
+```
+
+### NativeDefault Module (Default Values)
+```fsharp
+module NativeDefault =
+    val zeroed<'T> : 'T     // Zero-initialized value
+    val unreachable<'T> : 'T // Unreachable code marker
+```
+
+**Why these are intrinsics, not library functions:**
+- They operate on the fundamental memory model
+- No F# implementation can express their semantics
+- FNCS must emit them directly as MLIR operations
+- No quotation carrier needed - types carry full semantic information
+
+**Contrast with Binding Libraries (Layer 2):**
+- GTK bindings carry memory layout, ownership info via quotations
+- CMSIS peripherals carry volatile semantics, register layouts
+- These REQUIRE quotation semantic carriers because types alone are insufficient
+
 ## Related Memories
 - `fncs_phase_debugging_protocol` - How to debug using phase files
-- `native_binding_architecture` - Platform binding resolution
+- `platform_binding_recognition` - SUPERSEDED: see Firefly `binding_architecture_unified`
+- `quotation_semantic_carriers` - Layer 2 binding mechanism
 - `compilation_pipeline` - Full Firefly compilation flow
+- **Firefly**: `binding_architecture_unified` - **CANONICAL** three-layer binding architecture
