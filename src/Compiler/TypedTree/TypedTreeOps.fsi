@@ -103,8 +103,7 @@ val primMkCond: DebugPointAtBinding -> range -> TType -> Expr -> Expr -> Expr ->
 /// Build a conditional expression
 val mkCond: DebugPointAtBinding -> range -> TType -> Expr -> Expr -> Expr -> Expr
 
-/// Build a conditional expression that checks for non-nullness
-val mkNonNullCond: TcGlobals -> range -> TType -> Expr -> Expr -> Expr -> Expr
+// FNCS: mkNonNullCond removed - no callers, used broken mkNonNullTest
 
 /// Build an if-then statement
 val mkIfThen: TcGlobals -> range -> Expr -> Expr -> Expr
@@ -2019,21 +2018,15 @@ val mkRecordExpr: TcGlobals -> RecordConstructionInfo * TyconRef * TypeInst * Re
 
 val mkIsInst: TType -> Expr -> range -> Expr
 
-val mkNull: range -> TType -> Expr
-
-val mkNullTest: TcGlobals -> range -> Expr -> Expr -> Expr -> Expr
-
-val mkNonNullTest: TcGlobals -> range -> Expr -> Expr
+// FNCS: Null-related functions removed - fsnative-spec says "No null: Everything is voption"
+// Removed: mkNull, mkNullTest, mkNonNullTest, mkThrow, isThrow
+// These had no callers and mkNonNullTest used broken mkAsmExpr stub
 
 val mkIsInstConditional: TcGlobals -> range -> TType -> Expr -> Val -> Expr -> Expr -> Expr
 
-val mkThrow: range -> TType -> Expr -> Expr
-
-val mkGetArg0: range -> TType -> Expr
+// FNCS: mkGetArg0 removed - vestigial IL, no callers
 
 val mkDefault: range * TType -> Expr
-
-val isThrow: Expr -> bool
 
 val mkString: TcGlobals -> range -> string -> Expr
 
@@ -2328,10 +2321,8 @@ val tryMkCallCoreFunctionAsBuiltInWitness:
 // up loops to generate .NET code that does not include array bound checks
 //-------------------------------------------------------------------------
 
-val mkDecr: TcGlobals -> range -> Expr -> Expr
-
-// FNCS: mkIncr, mkLdlen, mkLdelem removed - IL array operations not used in native compilation
-// Native array operations use direct memory access
+// FNCS: mkDecr, mkIncr, mkLdlen, mkLdelem removed - IL array/arithmetic operations not used in native compilation
+// Native operations use direct memory access and MLIR arithmetic
 
 //-------------------------------------------------------------------------
 // Analyze attribute sets
@@ -2497,8 +2488,7 @@ val DecideStaticOptimizations:
 
 val mkStaticOptimizationExpr: TcGlobals -> StaticOptimization list * Expr * Expr * range -> Expr
 
-/// Build for loops
-val mkFastForLoop: TcGlobals -> DebugPointAtFor * DebugPointAtInOrTo * range * Val * Expr * bool * Expr * Expr -> Expr
+// FNCS: mkFastForLoop removed - only used by vestigial loop optimization
 
 //---------------------------------------------------------------------------
 // Active pattern helpers
@@ -2615,9 +2605,7 @@ val (|AttribBoolArg|_|): (AttribExpr -> bool voption)
 val (|AttribStringArg|_|): (AttribExpr -> string voption)
 
 // FNCS: AttribElemStringArg removed - vestigial IL pattern
-
-[<return: Struct>]
-val (|Int32Expr|_|): Expr -> int32 voption
+// FNCS: Int32Expr pattern removed - only used by vestigial loop optimization
 
 /// Determines types that are potentially known to satisfy the 'comparable' constraint and returns
 /// a set of residual types that must also satisfy the constraint
@@ -2633,55 +2621,13 @@ val (|SpecialNotEquatableHeadType|_|): TcGlobals -> TType -> unit voption
 val (|TyparTy|NullableTypar|StructTy|NullTrueValue|NullableRefType|WithoutNullRefType|UnresolvedRefType|):
     TType * TcGlobals -> Choice<unit, unit, unit, unit, unit, unit, unit>
 
-/// Matches if the given expression is an application
-/// of the range or range-step operator on an integral type
-/// and returns the type, start, step, and finish if so.
-///
-/// start..finish
-///
-/// start..step..finish
-[<return: Struct>]
-val (|IntegralRange|_|): g: TcGlobals -> expr: Expr -> (TType * (Expr * Expr * Expr)) voption
+// FNCS: IntegralRange pattern, IntegralConst module removed - only used by vestigial loop optimization
 
-[<RequireQualifiedAccess>]
-module IntegralConst =
-    /// Constant 0.
-    [<return: Struct>]
-    val (|Zero|_|): c: Const -> unit voption
+// FNCS: Count, Idx, Elem, Body, Loop types removed
+// FNCS: mkOptimizedRangeLoop removed - IL-based loop optimization is vestigial
 
-/// An expression holding the loop's iteration count.
-type Count = Expr
-
-/// An expression representing the loop's current iteration index.
-type Idx = Expr
-
-/// An expression representing the current loop element.
-type Elem = Expr
-
-/// An expression representing the loop body.
-type Body = Expr
-
-/// An expression representing the overall loop.
-type Loop = Expr
-
-/// Makes an optimized while-loop for a range expression with the given integral start, step, and finish:
-///
-/// start..step..finish
-///
-/// The buildLoop function enables using the precomputed iteration count in an optional initialization step before the loop is executed.
-val mkOptimizedRangeLoop:
-    g: TcGlobals ->
-    mBody: range * mFor: range * mIn: range * spInWhile: DebugPointAtWhile ->
-        rangeTy: TType * rangeExpr: Expr ->
-            start: Expr * step: Expr * finish: Expr ->
-                buildLoop: (Count -> ((Idx -> Elem -> Body) -> Loop) -> Expr) ->
-                    Expr
-
-type OptimizeForExpressionOptions =
-    | OptimizeIntRangesOnly
-    | OptimizeAllForExpressions
-
-val DetectAndOptimizeForEachExpression: TcGlobals -> OptimizeForExpressionOptions -> Expr -> Expr
+// FNCS: OptimizeForExpressionOptions, DetectAndOptimizeForEachExpression removed
+// IL-based loop optimization is vestigial - native loops optimized at MLIR level
 
 val TryEliminateDesugaredConstants: TcGlobals -> range -> Const -> Expr option
 
