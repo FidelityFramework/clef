@@ -606,6 +606,12 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 | "add" ->
                     // nativeptr<'T> -> int -> nativeptr<'T>
                     NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TFun(env.Globals.IntType, NativeType.TNativePtr tyParam))
+                | "copy" ->
+                    // dest:nativeptr<'T> -> src:nativeptr<'T> -> count:int -> unit
+                    // Maps to llvm.memcpy
+                    NativeType.TFun(NativeType.TNativePtr tyParam,
+                        NativeType.TFun(NativeType.TNativePtr tyParam,
+                            NativeType.TFun(env.Globals.IntType, env.Globals.UnitType)))
                 | _ ->
                     // Unknown NativePtr function - create generic function type
                     NativeType.TFun(freshTypeVar range, freshTypeVar range)
@@ -1293,28 +1299,55 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
             children = [innerNode.Id])
 
     //---------------------------------------------------------------------
-    // Interpolated strings
+    // Interpolated strings - Lower to string concatenation
+    // Desugar $"a{x}b" to: String.concat2 (String.concat2 "a" x) "b"
+    // Uses synthetic SynExpr so normal name resolution finds Alloy.String.concat2
     //---------------------------------------------------------------------
-    | SynExpr.InterpolatedString(contents, _synStringKind, _) ->
-        // Process each part of the interpolated string
-        let mutable exprNodeIds = []
-        let parts =
-            contents |> List.map (fun part ->
+    | SynExpr.InterpolatedString(contents, _synStringKind, synRange) ->
+        // Convert parts to SynExpr (either string constants or the fill expressions)
+        let partExprs =
+            contents |> List.choose (fun part ->
                 match part with
-                | SynInterpolatedStringPart.String(value, _) ->
-                    InterpolatedPart.StringPart value
+                | SynInterpolatedStringPart.String(value, partRange) ->
+                    if System.String.IsNullOrEmpty(value) then
+                        None  // Skip empty string parts
+                    else
+                        // Create synthetic string literal expression
+                        Some (SynExpr.Const(SynConst.String(value, SynStringKind.Regular, partRange), partRange))
                 | SynInterpolatedStringPart.FillExpr(fillExpr, _qualifiers) ->
-                    // Type check the expression in the hole
-                    let exprNode = checkExpr env builder fillExpr
-                    exprNodeIds <- exprNode.Id :: exprNodeIds
-                    InterpolatedPart.ExprPart exprNode.Id
+                    Some fillExpr
             )
 
-        builder.Create(
-            SemanticKind.InterpolatedString parts,
-            env.Globals.StringType,
-            range,
-            children = List.rev exprNodeIds)
+        match partExprs with
+        | [] ->
+            // Empty interpolated string
+            builder.Create(
+                SemanticKind.Literal(LiteralValue.String ""),
+                env.Globals.StringType,
+                range)
+        | [single] ->
+            // Single part - just check it normally
+            checkExpr env builder single
+        | first :: rest ->
+            // Build nested concat2 calls as synthetic SynExpr, then check
+            // concat2 is defined in Alloy.String which is AutoOpen
+            let concat2Ident =
+                SynExpr.LongIdent(
+                    false,
+                    SynLongIdent([Ident("concat2", synRange)], [], [None]),
+                    None,
+                    synRange)
+
+            // Fold: concat2 (concat2 (concat2 first p1) p2) p3 ...
+            let resultExpr =
+                rest |> List.fold (fun accExpr nextExpr ->
+                    // Create: concat2 accExpr nextExpr
+                    let app1 = SynExpr.App(ExprAtomicFlag.NonAtomic, false, concat2Ident, accExpr, synRange)
+                    SynExpr.App(ExprAtomicFlag.NonAtomic, false, app1, nextExpr, synRange)
+                ) first
+
+            // Check the synthetic expression - this uses normal name resolution
+            checkExpr env builder resultExpr
 
     //---------------------------------------------------------------------
     // AddressOf: &expr or &&expr
