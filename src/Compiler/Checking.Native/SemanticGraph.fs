@@ -583,6 +583,34 @@ module Reachability =
             Nodes = graph.Nodes |> Map.filter (fun id _ -> Set.contains id reachable) }
 
 //-------------------------------------------------------------------------
+// SCF Region Types (for structured control flow witnessing)
+//-------------------------------------------------------------------------
+
+/// Kind of SCF region for control flow operations
+type RegionKind =
+    /// Guard/condition region (while condition, if condition)
+    | GuardRegion
+    /// Body region (while body, for body)
+    | BodyRegion
+    /// Then branch region (if-then)
+    | ThenRegion
+    /// Else branch region (if-then-else)
+    | ElseRegion
+    /// Start expression region (for loop start bound)
+    | StartExprRegion
+    /// End expression region (for loop end bound)
+    | EndExprRegion
+
+/// Hook for SCF region boundary tracking during traversal
+/// Called before/after processing each child region of control flow nodes
+type SCFRegionHook<'State> = {
+    /// Called before entering a region (e.g., before processing guard subtree)
+    BeforeRegion: 'State -> NodeId -> RegionKind -> 'State
+    /// Called after exiting a region (e.g., after processing guard subtree)
+    AfterRegion: 'State -> NodeId -> RegionKind -> 'State
+}
+
+//-------------------------------------------------------------------------
 // Graph Traversal
 //-------------------------------------------------------------------------
 
@@ -661,6 +689,102 @@ module Traversal =
 
                     // Also process structural children if any
                     let state = node.Children |> List.fold walk state
+
+                    // Apply main folder (post-order)
+                    folder state node
+
+        graph.EntryPoints |> List.fold walk state
+
+    /// Fold with pre-order action for Lambda parameters AND SCF region hooks
+    /// Extends foldWithLambdaPreBind with region boundary hooks for control flow nodes.
+    /// The scfHook is called before/after each child region of WhileLoop, ForLoop, IfThenElse.
+    let foldWithSCFRegions
+            (preBind: 'State -> SemanticNode -> 'State)
+            (scfHook: SCFRegionHook<'State> option)
+            (folder: 'State -> SemanticNode -> 'State)
+            (state: 'State)
+            (graph: SemanticGraph) : 'State =
+
+        let visited = System.Collections.Generic.HashSet<int>()
+
+        let rec walk state nodeId =
+            let nodeIdVal = NodeId.value nodeId
+            if visited.Contains(nodeIdVal) then
+                state
+            else
+                visited.Add(nodeIdVal) |> ignore
+                match SemanticGraph.tryGetNode nodeId graph with
+                | None -> state
+                | Some node ->
+                    // FIRST: Follow semantic dependencies (VarRef definitions)
+                    let state =
+                        match node.Kind with
+                        | SemanticKind.VarRef (_, Some defId) ->
+                            walk state defId
+                        | _ -> state
+
+                    // Pre-bind Lambda parameters before processing children
+                    let state =
+                        match node.Kind with
+                        | SemanticKind.Lambda _ -> preBind state node
+                        | _ -> state
+
+                    // Process children with SCF region hooks for control flow nodes
+                    let state =
+                        match node.Kind, scfHook with
+                        // WhileLoop: guard region, then body region
+                        | SemanticKind.WhileLoop (guardId, bodyId), Some hook ->
+                            let parentId = node.Id
+                            // Guard region
+                            let state = hook.BeforeRegion state guardId GuardRegion
+                            let state = walk state guardId
+                            let state = hook.AfterRegion state parentId GuardRegion
+                            // Body region
+                            let state = hook.BeforeRegion state bodyId BodyRegion
+                            let state = walk state bodyId
+                            let state = hook.AfterRegion state parentId BodyRegion
+                            state
+
+                        // ForLoop: start, end, body regions
+                        | SemanticKind.ForLoop (_, startId, endId, _, bodyId), Some hook ->
+                            let parentId = node.Id
+                            // Start expression region
+                            let state = hook.BeforeRegion state startId StartExprRegion
+                            let state = walk state startId
+                            let state = hook.AfterRegion state parentId StartExprRegion
+                            // End expression region
+                            let state = hook.BeforeRegion state endId EndExprRegion
+                            let state = walk state endId
+                            let state = hook.AfterRegion state parentId EndExprRegion
+                            // Body region
+                            let state = hook.BeforeRegion state bodyId BodyRegion
+                            let state = walk state bodyId
+                            let state = hook.AfterRegion state parentId BodyRegion
+                            state
+
+                        // IfThenElse: only then/else are regions, guard is just a boolean SSA value
+                        | SemanticKind.IfThenElse (guardId, thenId, elseIdOpt), Some hook ->
+                            let parentId = node.Id
+                            // Guard - walk normally (not a region for scf.if)
+                            let state = walk state guardId
+                            // Then region
+                            let state = hook.BeforeRegion state thenId ThenRegion
+                            let state = walk state thenId
+                            let state = hook.AfterRegion state parentId ThenRegion
+                            // Else region (optional)
+                            match elseIdOpt with
+                            | Some elseId ->
+                                let state = hook.BeforeRegion state elseId ElseRegion
+                                let state = walk state elseId
+                                hook.AfterRegion state parentId ElseRegion
+                            | None -> state
+
+
+                        // No SCF hook or non-control-flow node: process normally
+                        | _ ->
+                            let semanticRefs = Reachability.getSemanticReferences node
+                            let state = semanticRefs |> List.fold walk state
+                            node.Children |> List.fold walk state
 
                     // Apply main folder (post-order)
                     folder state node

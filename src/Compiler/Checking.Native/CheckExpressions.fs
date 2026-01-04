@@ -612,9 +612,15 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     NativeType.TFun(NativeType.TNativePtr tyParam,
                         NativeType.TFun(NativeType.TNativePtr tyParam,
                             NativeType.TFun(env.Globals.IntType, env.Globals.UnitType)))
-                | _ ->
-                    // Unknown NativePtr function - create generic function type
-                    NativeType.TFun(freshTypeVar range, freshTypeVar range)
+                | "fill" ->
+                    // dest:nativeptr<'T> -> value:'T -> count:int -> unit
+                    // Maps to llvm.memset (when 'T = byte, fills count bytes)
+                    NativeType.TFun(NativeType.TNativePtr tyParam,
+                        NativeType.TFun(tyParam,
+                            NativeType.TFun(env.Globals.IntType, env.Globals.UnitType)))
+                | unknownFunc ->
+                    // Unknown NativePtr function - emit error (NO silent failures in a compiler!)
+                    NativeType.TError $"Unknown NativePtr intrinsic: NativePtr.{unknownFunc}"
             // Wrap in TForall so type application can properly instantiate the type parameter
             let intrinsicType = NativeType.TForall([tyParamSpec], intrinsicBody)
             builder.Create(
@@ -645,9 +651,9 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     let tyParam = NativeType.TVar tyParamSpec
                     let exitBody = NativeType.TFun(env.Globals.IntType, tyParam)
                     NativeType.TForall([tyParamSpec], exitBody)
-                | _ ->
-                    // Unknown Sys function - create generic function type
-                    NativeType.TFun(freshTypeVar range, freshTypeVar range)
+                | unknownFunc ->
+                    // Unknown Sys function - emit error (NO silent failures in a compiler!)
+                    NativeType.TError $"Unknown Sys intrinsic: Sys.{unknownFunc}"
             builder.Create(
                 SemanticKind.Intrinsic(name),
                 intrinsicType,
@@ -663,8 +669,9 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     // Constructs a NativeStr (fat pointer) from pointer and length
                     NativeType.TFun(NativeType.TNativePtr Types.uint8Type,
                         NativeType.TFun(env.Globals.IntType, env.Globals.StringType))
-                | _ ->
-                    NativeType.TFun(freshTypeVar range, freshTypeVar range)
+                | unknownFunc ->
+                    // Unknown NativeStr function - emit error (NO silent failures in a compiler!)
+                    NativeType.TError $"Unknown NativeStr intrinsic: NativeStr.{unknownFunc}"
             builder.Create(
                 SemanticKind.Intrinsic(name),
                 intrinsicType,
@@ -682,8 +689,9 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     let tyParamSpec = UnionFind.freshTypeParam "'T" TypeParamKind.Type range
                     let tyParam = NativeType.TVar tyParamSpec
                     NativeType.TForall([tyParamSpec], NativeType.TFun(env.Globals.UnitType, tyParam))
-                | _ ->
-                    NativeType.TFun(freshTypeVar range, freshTypeVar range)
+                | unknownFunc ->
+                    // Unknown NativeDefault function - emit error (NO silent failures in a compiler!)
+                    NativeType.TError $"Unknown NativeDefault intrinsic: NativeDefault.{unknownFunc}"
             builder.Create(
                 SemanticKind.Intrinsic(name),
                 intrinsicType,

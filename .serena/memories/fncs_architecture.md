@@ -175,6 +175,8 @@ module NativePtr =
     val get : nativeptr<'T> -> int -> 'T
     val add : nativeptr<'T> -> int -> nativeptr<'T>
     val stackalloc : int -> nativeptr<'T>
+    val copy : dest:nativeptr<'T> -> src:nativeptr<'T> -> count:int -> unit  // llvm.memcpy
+    val fill : dest:nativeptr<'T> -> value:'T -> count:int -> unit           // llvm.memset
 ```
 
 ### NativeDefault Module (Default Values)
