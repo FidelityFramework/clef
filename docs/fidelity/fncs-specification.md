@@ -758,6 +758,128 @@ The ownership and coeffect systems are designed to integrate with:
 
 ---
 
+## Part 12: SemanticGraph Traversal and SCF Regions
+
+### 12.1 Overview
+
+The SemanticGraph provides a traversal API that supports control flow construct compilation. For MLIR SCF (Structured Control Flow) dialect emission, downstream compilers need to capture operations within distinct regions (guard, body, then, else branches) of control flow constructs.
+
+### 12.2 SCF Region Kinds
+
+The `RegionKind` discriminated union identifies regions within control flow constructs:
+
+```fsharp
+type RegionKind =
+    | GuardRegion      // Loop guard/condition
+    | BodyRegion       // Loop body
+    | ThenRegion       // If-then branch
+    | ElseRegion       // If-else branch
+    | StartExprRegion  // ForLoop start expression
+    | EndExprRegion    // ForLoop end expression
+```
+
+### 12.3 SCF Region Hooks
+
+The `SCFRegionHook<'State>` record provides callbacks for region boundary events:
+
+```fsharp
+type SCFRegionHook<'State> = {
+    /// Called before entering a region's subtree
+    /// Parameters: state, parentNodeId, regionKind
+    BeforeRegion: 'State -> NodeId -> RegionKind -> 'State
+
+    /// Called after exiting a region's subtree
+    /// Parameters: state, parentNodeId, regionKind
+    AfterRegion: 'State -> NodeId -> RegionKind -> 'State
+}
+```
+
+**Design rationale**: Both `BeforeRegion` and `AfterRegion` receive the *parent* NodeId (e.g., the WhileLoop node), not the region's child NodeId. This enables the hook to look up the parent's structure to extract region-specific information (guard NodeId, body NodeId, etc.).
+
+### 12.4 Extended Fold
+
+The `foldWithSCFRegions` function extends the standard fold with SCF hooks:
+
+```fsharp
+let foldWithSCFRegions
+    (preBind: 'State -> SemanticNode -> 'State)
+    (scfHook: SCFRegionHook<'State> option)
+    (folder: 'State -> SemanticNode -> 'State)
+    (state: 'State)
+    (graph: SemanticGraph) : 'State
+```
+
+For control flow nodes, the traversal calls hooks between child regions:
+
+**WhileLoop (guardId, bodyId)**:
+1. `BeforeRegion(state, parentId, GuardRegion)`
+2. Walk guard subtree
+3. `AfterRegion(state, parentId, GuardRegion)`
+4. `BeforeRegion(state, parentId, BodyRegion)`
+5. Walk body subtree
+6. `AfterRegion(state, parentId, BodyRegion)`
+7. Call `folder` on WhileLoop node (post-order)
+
+**ForLoop (var, startId, endId, isUp, bodyId)**:
+1. StartExprRegion hooks → walk start
+2. EndExprRegion hooks → walk end
+3. BodyRegion hooks → walk body
+4. Call `folder` on ForLoop node
+
+**IfThenElse (guardId, thenId, elseIdOpt)**:
+1. Walk guard (no hooks - guard is just a boolean SSA value)
+2. ThenRegion hooks → walk then
+3. ElseRegion hooks → walk else (if present)
+4. Call `folder` on IfThenElse node
+
+### 12.5 MLIR SCF Dialect Integration
+
+**Context**: The SCF dialect is a well-established MLIR dialect for structured control flow. Using SCF provides an interim solution while DCont (Delimited Continuations) and Inet (Interaction Nets) dialects are developed for the full Fidelity computation expression compilation strategy.
+
+**SCF Operations**:
+- `scf.while` - While loops with iter_args for mutable state
+- `scf.for` - For loops with loop variable and optional iter_args
+- `scf.if` - Conditionals with optional else branch and yield values
+
+**iter_args Pattern**: Mutable variables modified within a loop must be passed as `iter_args` to maintain SSA form:
+
+```mlir
+// F# source:
+let mutable count = 0
+while count < 10 do
+    count <- count + 1
+
+// MLIR output:
+%c0 = arith.constant 0 : i32
+%result = scf.while (%count_arg = %c0) : (i32) -> (i32) {
+    %c10 = arith.constant 10 : i32
+    %cond = arith.cmpi slt, %count_arg, %c10 : i32
+    scf.condition(%cond) %count_arg : i32
+} do {
+    %c1 = arith.constant 1 : i32
+    %next = arith.addi %count_arg, %c1 : i32
+    scf.yield %next : i32
+}
+```
+
+**Analyze Then Witness Pattern**: The `BeforeRegion` hook for a loop's GuardRegion analyzes the body subtree to find Set nodes (mutable assignments), then pre-binds iter_args before body traversal. This ensures operations in both guard and body naturally use the rebound SSA names.
+
+### 12.6 Future Direction: DCont/Inet Dialects
+
+The SCF dialect is a stepping stone. The full Fidelity compilation strategy involves:
+
+1. **DCont (Delimited Continuations)** - For sequential effects (async, state monads)
+   - Explicit continuation capture with `dcont.shift`, `dcont.resume`, `dcont.reset`
+   - Zero-cost async through stack-based continuation management
+
+2. **Inet (Interaction Nets)** - For parallel pure computation (queries, list comprehensions)
+   - Massive parallelism through simultaneous graph reduction
+   - Direct compilation to SIMD/GPU operations
+
+The computation expression builder determines which pattern applies. Sequential patterns with dependencies flow through DCont; pure parallel patterns flow through Inet.
+
+---
+
 ## Appendix A: Type Mapping Reference
 
 ### Primitive Types

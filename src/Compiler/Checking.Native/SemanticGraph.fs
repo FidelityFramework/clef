@@ -733,48 +733,52 @@ module Traversal =
                     let state =
                         match node.Kind, scfHook with
                         // WhileLoop: guard region, then body region
+                        // NOTE: Both BeforeRegion and AfterRegion receive parentId (the WhileLoop's Id)
+                        // so the hook can look up the parent to extract guardId/bodyId as needed
                         | SemanticKind.WhileLoop (guardId, bodyId), Some hook ->
                             let parentId = node.Id
                             // Guard region
-                            let state = hook.BeforeRegion state guardId GuardRegion
+                            let state = hook.BeforeRegion state parentId GuardRegion
                             let state = walk state guardId
                             let state = hook.AfterRegion state parentId GuardRegion
                             // Body region
-                            let state = hook.BeforeRegion state bodyId BodyRegion
+                            let state = hook.BeforeRegion state parentId BodyRegion
                             let state = walk state bodyId
                             let state = hook.AfterRegion state parentId BodyRegion
                             state
 
                         // ForLoop: start, end, body regions
+                        // NOTE: BeforeRegion receives parentId consistently
                         | SemanticKind.ForLoop (_, startId, endId, _, bodyId), Some hook ->
                             let parentId = node.Id
                             // Start expression region
-                            let state = hook.BeforeRegion state startId StartExprRegion
+                            let state = hook.BeforeRegion state parentId StartExprRegion
                             let state = walk state startId
                             let state = hook.AfterRegion state parentId StartExprRegion
                             // End expression region
-                            let state = hook.BeforeRegion state endId EndExprRegion
+                            let state = hook.BeforeRegion state parentId EndExprRegion
                             let state = walk state endId
                             let state = hook.AfterRegion state parentId EndExprRegion
                             // Body region
-                            let state = hook.BeforeRegion state bodyId BodyRegion
+                            let state = hook.BeforeRegion state parentId BodyRegion
                             let state = walk state bodyId
                             let state = hook.AfterRegion state parentId BodyRegion
                             state
 
                         // IfThenElse: only then/else are regions, guard is just a boolean SSA value
+                        // NOTE: BeforeRegion receives parentId consistently
                         | SemanticKind.IfThenElse (guardId, thenId, elseIdOpt), Some hook ->
                             let parentId = node.Id
                             // Guard - walk normally (not a region for scf.if)
                             let state = walk state guardId
                             // Then region
-                            let state = hook.BeforeRegion state thenId ThenRegion
+                            let state = hook.BeforeRegion state parentId ThenRegion
                             let state = walk state thenId
                             let state = hook.AfterRegion state parentId ThenRegion
                             // Else region (optional)
                             match elseIdOpt with
                             | Some elseId ->
-                                let state = hook.BeforeRegion state elseId ElseRegion
+                                let state = hook.BeforeRegion state parentId ElseRegion
                                 let state = walk state elseId
                                 hook.AfterRegion state parentId ElseRegion
                             | None -> state
