@@ -217,12 +217,14 @@ type IntrinsicModule =
     | NativePtr     // Pointer operations (get, set, add, stackalloc, etc.)
     | NativeStr     // Native string construction (fromPointer)
     | NativeDefault // Default value generation (zeroed)
-    | String        // String operations (concat2)
+    | String        // String operations (concat2, contains, etc.)
     | Console       // Console I/O (writeln, write, readln)
     | Array         // Array operations (zeroCreate, length, get, set)
     | Math          // Math functions
     | Unchecked     // Unchecked arithmetic
     | Operators     // Built-in operators (op_Addition, op_LessThan, etc.)
+    | Parse         // String parsing (int, float - NTU string→numeric conversion)
+    | Format        // Value formatting (string - NTU numeric→string conversion)
 
 /// Category of intrinsic - guides how Alex should emit it
 [<RequireQualifiedAccess>]
@@ -329,8 +331,8 @@ type SemanticKind =
     /// Record expression: { field1 = v1; field2 = v2 }
     | RecordExpr of fields: (string * NodeId) list * copyFrom: NodeId option
     
-    /// Union case construction: Case payload
-    | UnionCase of caseName: string * payload: NodeId option
+    /// Union case construction: Case payload with tag index for emission
+    | UnionCase of caseName: string * caseIndex: int * payload: NodeId option
     
     /// Tuple expression: (e1, e2, ...)
     | TupleExpr of elements: NodeId list
@@ -696,7 +698,7 @@ module Reachability =
             elements
         | SemanticKind.RecordExpr (fields, copyFrom) ->
             (fields |> List.map snd) @ (Option.toList copyFrom)
-        | SemanticKind.UnionCase (_, payload) ->
+        | SemanticKind.UnionCase (_, _, payload) ->
             Option.toList payload
         | SemanticKind.FieldGet (expr, _) ->
             [expr]

@@ -453,7 +453,7 @@ module FSharpNativeExpr =
                 FSharpNativeExpr.RecordExpr(fieldExprs, copyFromExpr, node.Type)
 
             // Union case
-            | SemanticKind.UnionCase(caseName, payloadIdOpt) ->
+            | SemanticKind.UnionCase(caseName, _caseIndex, payloadIdOpt) ->
                 let payloadExpr = payloadIdOpt |> Option.map (fromNode graph)
                 FSharpNativeExpr.UnionCase(caseName, payloadExpr, node.Type)
 

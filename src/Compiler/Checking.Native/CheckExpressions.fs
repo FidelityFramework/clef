@@ -138,6 +138,7 @@ let createTypeEnv (globals: NativeGlobals) : TypeEnv =
                 IsMutable = false
                 NodeId = None
                 InlineBody = None
+                UnionCaseInfo = None
             }
             NameResolution.registerBinding name binding ctx
         ) (NameResolution.createContext ())
@@ -166,6 +167,7 @@ let addBinding (name: string) (ty: NativeType) (isMutable: bool) (nodeId: NodeId
         IsMutable = isMutable
         NodeId = nodeId
         InlineBody = None
+        UnionCaseInfo = None
     }
     { env with Resolution = NameResolution.registerBinding name binding env.Resolution }
 
@@ -178,6 +180,19 @@ let addInlineBinding (name: string) (ty: NativeType) (nodeId: NodeId option) (in
         IsMutable = false
         NodeId = nodeId
         InlineBody = Some inlineBody
+        UnionCaseInfo = None
+    }
+    { env with Resolution = NameResolution.registerBinding name binding env.Resolution }
+
+/// Add a DU constructor binding with case info for proper UnionCase node creation
+let addUnionCaseBinding (name: string) (ty: NativeType) (caseInfo: NameResolution.UnionCaseInfo) (env: TypeEnv) : TypeEnv =
+    let binding: ResolvedBinding = {
+        QualifiedName = name
+        Type = ty
+        IsMutable = false
+        NodeId = None
+        InlineBody = None
+        UnionCaseInfo = Some caseInfo
     }
     { env with Resolution = NameResolution.registerBinding name binding env.Resolution }
 
@@ -818,8 +833,35 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     // string -> bool
                     // Returns true if string is empty
                     NativeType.TFun(stringType, env.Globals.BoolType)
+                | "contains" ->
+                    // string -> char -> bool
+                    // Returns true if string contains the specified character
+                    // Key use: String.contains input '.' to detect decimal numbers
+                    NativeType.TFun(stringType, NativeType.TFun(env.Globals.CharType, env.Globals.BoolType))
+                | "startsWith" ->
+                    // string -> string -> bool
+                    // Returns true if string starts with the specified prefix
+                    NativeType.TFun(stringType, NativeType.TFun(stringType, env.Globals.BoolType))
+                | "endsWith" ->
+                    // string -> string -> bool
+                    // Returns true if string ends with the specified suffix
+                    NativeType.TFun(stringType, NativeType.TFun(stringType, env.Globals.BoolType))
+                | "substring" ->
+                    // string -> int -> int -> string
+                    // Returns substring starting at index with specified length
+                    NativeType.TFun(stringType,
+                        NativeType.TFun(env.Globals.IntType,
+                            NativeType.TFun(env.Globals.IntType, stringType)))
+                | "indexOf" ->
+                    // string -> char -> int
+                    // Returns index of first occurrence, or -1 if not found
+                    NativeType.TFun(stringType, NativeType.TFun(env.Globals.CharType, env.Globals.IntType))
+                | "trim" ->
+                    // string -> string
+                    // Removes leading/trailing whitespace
+                    NativeType.TFun(stringType, stringType)
                 | unknownFunc ->
-                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown String intrinsic: String.{unknownFunc}. Available: concat2, length, isEmpty"; Range = range; RelatedNodes = [] } env
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown String intrinsic: String.{unknownFunc}. Available: concat2, length, isEmpty, contains, startsWith, endsWith, substring, indexOf, trim"; Range = range; RelatedNodes = [] } env
                     NativeType.TError $"Unknown String intrinsic: String.{unknownFunc}"
             let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.String intrinsicName IntrinsicCategory.StringOp name
             builder.Create(
@@ -858,6 +900,61 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown Console intrinsic: Console.{unknownFunc}. Available: write, writeln, readln, error, errorln"; Range = range; RelatedNodes = [] } env
                     NativeType.TError $"Unknown Console intrinsic: Console.{unknownFunc}"
             let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Console intrinsicName IntrinsicCategory.Platform name
+            builder.Create(
+                SemanticKind.Intrinsic(intrinsicInfo),
+                intrinsicType,
+                range)
+        // FNCS INTRINSICS: Parse module functions (string → numeric conversion)
+        // Part of the NTU Conversion Model - core parsing intrinsics
+        // For width variants, use SRTP conversions: int8 (Parse.int x)
+        elif name.StartsWith("Parse.") then
+            let intrinsicName = name.Substring("Parse.".Length)
+            let stringType = env.Globals.StringType
+            let intrinsicType =
+                match intrinsicName with
+                | "int" ->
+                    // string -> int
+                    // Parses string as decimal integer (platform word size)
+                    NativeType.TFun(stringType, env.Globals.IntType)
+                | "int64" ->
+                    // string -> int64
+                    NativeType.TFun(stringType, env.Globals.Int64Type)
+                | "float" | "float64" | "double" ->
+                    // string -> float
+                    // Parses string as 64-bit floating-point
+                    NativeType.TFun(stringType, env.Globals.FloatType)
+                | unknownFunc ->
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown Parse intrinsic: Parse.{unknownFunc}. Available: int, int64, float. For other widths, use SRTP: int8 (Parse.int x)"; Range = range; RelatedNodes = [] } env
+                    NativeType.TError $"Unknown Parse intrinsic: Parse.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Parse intrinsicName IntrinsicCategory.Conversion name
+            builder.Create(
+                SemanticKind.Intrinsic(intrinsicInfo),
+                intrinsicType,
+                range)
+        // FNCS INTRINSICS: Format module functions (numeric → string conversion)
+        // Part of the NTU Conversion Model - core formatting intrinsics
+        // For width variants, widen first: Format.int (int x) where x: int8
+        elif name.StartsWith("Format.") then
+            let intrinsicName = name.Substring("Format.".Length)
+            let stringType = env.Globals.StringType
+            let intrinsicType =
+                match intrinsicName with
+                | "int" ->
+                    // int -> string
+                    NativeType.TFun(env.Globals.IntType, stringType)
+                | "int64" ->
+                    // int64 -> string
+                    NativeType.TFun(env.Globals.Int64Type, stringType)
+                | "float" | "float64" | "double" ->
+                    // float -> string
+                    NativeType.TFun(env.Globals.FloatType, stringType)
+                | "bool" ->
+                    // bool -> string
+                    NativeType.TFun(env.Globals.BoolType, stringType)
+                | unknownFunc ->
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown Format intrinsic: Format.{unknownFunc}. Available: int, int64, float, bool. For other widths, widen first."; Range = range; RelatedNodes = [] } env
+                    NativeType.TError $"Unknown Format intrinsic: Format.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Format intrinsicName IntrinsicCategory.Conversion name
             builder.Create(
                 SemanticKind.Intrinsic(intrinsicInfo),
                 intrinsicType,
@@ -1223,11 +1320,44 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 // Regular function application - keep curried structure
                 (funcNode.Id, [argNode.Id])
 
-        builder.Create(
-            SemanticKind.Application(targetFuncId, allArgs),
-            resultTy,
-            range,
-            children = targetFuncId :: allArgs)
+        // DU CONSTRUCTOR DETECTION:
+        // If the target function is a DU constructor (has UnionCaseInfo), create
+        // SemanticKind.UnionCase instead of Application. This enables Alex to
+        // witness the DU construction directly without string matching.
+        //
+        // Check if targetFuncId is a VarRef to a DU constructor binding
+        let isUnionCaseConstruction =
+            match builder.Nodes.TryFind targetFuncId with
+            | Some targetNode ->
+                match targetNode.Kind with
+                | SemanticKind.VarRef(name, _) ->
+                    match tryLookupBinding name env with
+                    | Some binding -> binding.UnionCaseInfo
+                    | None -> None
+                | _ -> None
+            | None -> None
+
+        match isUnionCaseConstruction with
+        | Some caseInfo ->
+            // DU constructor application: create UnionCase node
+            // For single-arg case like `IntVal 42`, payload is the argument
+            // For multi-arg case like `Node(1, 2)`, payload is a tuple (handled by arg flattening)
+            let payloadOpt =
+                match allArgs with
+                | [singleArg] -> Some singleArg  // Common case: single payload
+                | _ -> None  // Multi-arg or nullary (shouldn't reach here for nullary)
+            builder.Create(
+                SemanticKind.UnionCase(caseInfo.CaseName, caseInfo.CaseIndex, payloadOpt),
+                resultTy,
+                range,
+                children = allArgs)
+        | None ->
+            // Regular function application
+            builder.Create(
+                SemanticKind.Application(targetFuncId, allArgs),
+                resultTy,
+                range,
+                children = targetFuncId :: allArgs)
 
     //---------------------------------------------------------------------
     // Lambda expressions

@@ -15,6 +15,7 @@ open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.SemanticGraph
+open FSharp.Native.Compiler.Checking.Native.NameResolution
 open FSharp.Native.Compiler.Checking.Native.CheckExpressions
 
 // Infrastructure modules - use qualified names to avoid conflicts
@@ -622,23 +623,106 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     )
                     (updatedEnv, node :: accNodes)
 
-                | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Union(_, _cases, _), _) ->
-                    // Discriminated union
+                | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Union(_, cases, _), _) ->
+                    // Discriminated union - FIRST CLASS F# SUPPORT
                     // Extract type parameters from SynComponentInfo
                     let (SynComponentInfo(_, typars, _, _, _, _, _, _)) = typeInfo
                     let arity = match typars with Some tp -> tp.TyparDecls.Length | None -> 0
-                    // Create TypeConRef for lookup
-                    let tyCon = mkTypeConRef typeName arity (TypeLayout.Opaque)
-                    // Register under all name suffixes (handles AutoOpen modules)
-                    let updatedEnv = 
-                        typeNameSuffixes 
+
+                    // Helper to estimate type size for layout computation
+                    let estimateTypeSize (ty: NativeType) : int =
+                        match ty with
+                        | NativeType.TApp(tc, _) ->
+                            match tc.Layout with
+                            | TypeLayout.Inline(size, _) -> size
+                            | TypeLayout.PlatformWord -> 8  // 64-bit platform
+                            | _ -> 8
+                        | NativeType.TTuple(elems, _) -> elems.Length * 8
+                        | _ -> 8  // Default to word size
+
+                    // Process union cases to extract case info
+                    // Each case is: CaseName of field1: type1 * field2: type2 * ...
+                    // Format for TypeDefKind.UnionDef: (caseName, [(fieldNameOpt, fieldType), ...])
+                    let caseInfos =
+                        cases |> List.map (fun synCase ->
+                            match synCase with
+                            | SynUnionCase(_, SynIdent(caseIdent, _), caseKind, _, _, _, _) ->
+                                let caseName = caseIdent.idText
+                                let fields : (string option * NativeType) list =
+                                    match caseKind with
+                                    | SynUnionCaseKind.Fields synFields ->
+                                        synFields |> List.map (fun synField ->
+                                            match synField with
+                                            | SynField(_, _, idOpt, fieldType, _, _, _, _, _) ->
+                                                let fieldName = idOpt |> Option.map (fun id -> id.idText)
+                                                let fieldTy = checkSynType accEnv fieldType
+                                                (fieldName, fieldTy)
+                                        )
+                                    | SynUnionCaseKind.FullType(synType, _) ->
+                                        // Full type annotation: Case: T1 * T2 -> UnionType
+                                        [(None, checkSynType accEnv synType)]
+                                (caseName, fields)
+                        )
+
+                    // Compute union layout: tag byte + max payload size
+                    // Per Fidelity memory model: deterministic, compiler-controlled layout
+                    let maxPayloadSize =
+                        caseInfos
+                        |> List.map (fun (_, fields) ->
+                            fields |> List.sumBy (fun (_, ty) -> estimateTypeSize ty))
+                        |> List.fold max 0
+                    let unionSize = 1 + maxPayloadSize  // 1 byte tag + payload
+                    let unionAlign = 8  // Align to word boundary
+                    let layout = TypeLayout.Inline(unionSize, unionAlign)
+
+                    // Create TypeConRef for the union type
+                    let tyCon = mkTypeConRef typeName arity layout
+                    let unionType = mkSimpleType tyCon
+
+                    // Register type definition under all name suffixes
+                    let envWithType =
+                        typeNameSuffixes
                         |> List.fold (fun env name -> addTypeDef name tyCon env) accEnv
+
+                    // CRITICAL: Register case constructors as bindings
+                    // For `type Number = Int of int | Float of float`:
+                    //   Int : int -> Number
+                    //   Float : float -> Number
+                    // Register case constructors as bindings with UnionCaseInfo
+                    // This enables SynExpr.App to detect DU constructor calls and create
+                    // SemanticKind.UnionCase nodes instead of regular Application nodes
+                    let envWithCases =
+                        caseInfos |> List.indexed |> List.fold (fun env (caseIndex, (caseName, fields)) ->
+                            let fieldTypes = fields |> List.map snd
+                            let constructorType =
+                                match fieldTypes with
+                                | [] ->
+                                    // Nullary case (e.g., None): just the union type
+                                    unionType
+                                | [singleField] ->
+                                    // Single field case (e.g., Int of int): field -> union
+                                    NativeType.TFun(singleField, unionType)
+                                | multipleFields ->
+                                    // Multiple fields (e.g., Ok of int * string): tuple -> union
+                                    let tupleType = NativeType.TTuple(multipleFields, false)
+                                    NativeType.TFun(tupleType, unionType)
+                            // Add constructor binding with case info for proper UnionCase node creation
+                            let caseInfo: FSharp.Native.Compiler.Checking.Native.NameResolution.UnionCaseInfo = {
+                                CaseName = caseName
+                                UnionType = unionType
+                                CaseIndex = caseIndex
+                            }
+                            addUnionCaseBinding caseName constructorType caseInfo env
+                        ) envWithType
+
+                    // Create TypeDef node with case metadata for Alex
+                    // TypeDefKind.UnionDef expects: (caseName, [(fieldNameOpt, fieldType), ...]) list
                     let node = builder.Create(
-                        SemanticKind.TypeDef(typeName, TypeDefKind.UnionDef [], []),
-                        mkSimpleType tyCon,
+                        SemanticKind.TypeDef(typeName, TypeDefKind.UnionDef caseInfos, []),
+                        unionType,
                         range
                     )
-                    (updatedEnv, node :: accNodes)
+                    (envWithCases, node :: accNodes)
 
                 | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Record(_, fields, _), _) ->
                     // Record type

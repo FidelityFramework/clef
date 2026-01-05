@@ -200,6 +200,29 @@ let private builtinOps : Map<string, (NativeType -> WitnessResolution option)> =
     Map.ofList entries
 
 //-------------------------------------------------------------------------
+// NTU Conversion Functions
+// Must be defined before SRTP Resolution Logic due to forward reference
+//-------------------------------------------------------------------------
+
+/// Names of conversion functions (bare identifiers in F#)
+/// Used by isSRTPOperator to include conversions in SRTP resolution
+let private conversionFunctions =
+    Set.ofList [
+        // Integer conversions
+        "int"; "int8"; "sbyte"; "int16"; "int32"; "int64"; "nativeint"
+        // Unsigned integer conversions
+        "byte"; "uint8"; "uint16"; "uint32"; "uint64"; "unativeint"
+        // Floating point conversions
+        "float"; "double"; "float32"; "single"; "decimal"
+        // Other conversions
+        "char"; "string"
+    ]
+
+/// Check if a name is a conversion function
+let isConversionFunction (name: string) : bool =
+    conversionFunctions.Contains name
+
+//-------------------------------------------------------------------------
 // SRTP Resolution Logic
 //-------------------------------------------------------------------------
 
@@ -207,7 +230,8 @@ let private builtinOps : Map<string, (NativeType -> WitnessResolution option)> =
 let isSRTPOperator (name: string) : bool =
     builtinOps.ContainsKey name ||
     name.StartsWith("op_") ||
-    name = "$"  // Alloy's string formatting operator
+    name = "$" ||  // Alloy's string formatting operator
+    conversionFunctions.Contains name  // NTU conversion functions
 
 /// Try to resolve an SRTP constraint for a built-in operator
 let private tryResolveBuiltinOp (op: string) (argType: NativeType) : WitnessResolution option =
@@ -258,6 +282,136 @@ let private resolveAlloyDollar (argType: NativeType) : WitnessResolution option 
 let private hasUnboundTypeVars (ty: NativeType) : bool =
     hasUnboundVars ty
 
+//-------------------------------------------------------------------------
+// NTU Conversion Resolution (placed before tryResolve due to F# ordering)
+//
+// Conversions follow the F# syntax: `float x`, `int y`, `string z`
+// SRTP resolution determines the operation based on source type.
+//
+// See: fsnative-spec/spec/drafts/NTU_Conversion_Model.md
+//-------------------------------------------------------------------------
+
+/// Conversion category determines semantics and MLIR operation
+type ConversionCategory =
+    | Widening      // Safe, no data loss (int→int64, int→float)
+    | Narrowing     // May truncate (int64→int32, float→int)
+    | CrossFamily   // Different representations (large int↔float)
+    | Formatting    // To string
+    | Parsing       // From string
+
+/// Get the target type for a conversion function name
+let private getConversionTargetType (funcName: string) : NativeType option =
+    match funcName with
+    | "int" -> Some Types.intType
+    | "int8" | "sbyte" -> Some Types.int8Type
+    | "int16" -> Some Types.int16Type
+    | "int32" -> Some Types.int32Type
+    | "int64" -> Some Types.int64Type
+    | "nativeint" -> Some Types.nintType
+    | "byte" | "uint8" -> Some Types.uint8Type
+    | "uint16" -> Some Types.uint16Type
+    | "uint32" -> Some Types.uint32Type
+    | "uint64" -> Some Types.uint64Type
+    | "unativeint" -> Some Types.unintType
+    | "float" | "double" -> Some Types.floatType
+    | "float32" | "single" -> Some Types.float32Type
+    | "decimal" -> Some Types.decimalType
+    | "char" -> Some Types.charType
+    | "string" -> Some Types.stringType
+    | _ -> None
+
+/// Check if a type is signed (helper using NTUKind)
+let private isSignedType (ty: NativeType) : bool =
+    match ty with
+    | NativeType.TApp(tc, []) ->
+        match tc.NTUKind with
+        | Some kind -> NTUKind.isSigned kind
+        | None -> false
+    | _ -> false
+
+/// Check if a type is string
+let private isStringType (ty: NativeType) : bool =
+    match ty with
+    | NativeType.TApp(tc, _) -> tc.Name = "string"
+    | _ -> false
+
+/// Determine conversion category based on source and target types
+let private categorizeConversion (sourceType: NativeType) (targetType: NativeType) : ConversionCategory =
+    match sourceType, targetType with
+    // Formatting: any → string
+    | _, t when isStringType t -> Formatting
+
+    // Parsing: string → any
+    | s, _ when isStringType s -> Parsing
+
+    // Int → Float (widening, may lose precision for large ints)
+    | s, t when isIntegerType s && isFloatType t -> Widening
+
+    // Float → Int (narrowing, truncates fractional part)
+    | s, t when isFloatType s && isIntegerType t -> Narrowing
+
+    // Integer to integer - simplified categorization
+    | s, t when isIntegerType s && isIntegerType t -> Widening
+
+    // Float to float
+    | s, t when isFloatType s && isFloatType t -> Widening
+
+    // Default to narrowing (conservative)
+    | _ -> Narrowing
+
+/// Get the MLIR operation for a conversion
+let private getConversionMLIROp (sourceType: NativeType) (targetType: NativeType) : string =
+    match sourceType, targetType with
+    // Int → Float
+    | s, t when isIntegerType s && isFloatType t ->
+        if isSignedType s then "arith.sitofp" else "arith.uitofp"
+
+    // Float → Int
+    | s, t when isFloatType s && isIntegerType t ->
+        if isSignedType t then "arith.fptosi" else "arith.fptoui"
+
+    // Int → Int (widening/narrowing)
+    | s, t when isIntegerType s && isIntegerType t ->
+        if isSignedType s then "arith.extsi" else "arith.extui"
+        // Note: for narrowing, should be "arith.trunci" - need size comparison
+
+    // Float → Float
+    | s, t when isFloatType s && isFloatType t ->
+        "arith.extf"  // or truncf depending on direction
+
+    // Formatting
+    | _, t when isStringType t -> "fidelity.format"
+
+    // Parsing
+    | s, _ when isStringType s -> "fidelity.parse"
+
+    // Unknown
+    | _ -> "fidelity.convert"
+
+/// Resolve a conversion function application
+/// Returns WitnessResolution if valid, None if invalid conversion
+let private resolveConversion (funcName: string) (sourceType: NativeType) : WitnessResolution option =
+    match getConversionTargetType funcName with
+    | None -> None  // Not a conversion function
+    | Some targetType ->
+        let _category = categorizeConversion sourceType targetType
+        let _mlirOp = getConversionMLIROp sourceType targetType
+
+        // Create internal name following F* convention
+        let sourceTypeName =
+            match sourceType with
+            | NativeType.TApp(tc, _) -> tc.Name
+            | NativeType.TVar spec -> spec.Name
+            | _ -> "unknown"
+
+        Some {
+            Operator = funcName
+            ArgType = sourceType
+            ResolvedMember = $"{sourceTypeName}_to_{funcName}"  // e.g., "int_to_float"
+            ImplementingModule = ["Fidelity"; "Conversion"]
+            Kind = WitnessKind.StaticMember
+        }
+
 /// The SRTP resolver
 [<NoComparison; NoEquality>]
 type SRTPResolver = {
@@ -305,14 +459,19 @@ let tryResolve (resolver: SRTPResolver) (key: SRTPKey) : WitnessResolution optio
         None
     else
         // Try resolution in order:
-        // 1. Built-in operators
-        // 2. Special Alloy operators
-        // 3. Witness table
+        // 1. Built-in operators (arithmetic, comparison, etc.)
+        // 2. Special Alloy operators ($)
+        // 3. Conversion functions (float, int, string, etc.)
+        // 4. Witness table
 
         let resolution =
             tryResolveBuiltinOp key.MemberName concreteType
             |> Option.orElseWith (fun () ->
                 if key.MemberName = "$" then resolveAlloyDollar concreteType
+                else None)
+            |> Option.orElseWith (fun () ->
+                if isConversionFunction key.MemberName then
+                    resolveConversion key.MemberName concreteType
                 else None)
             |> Option.orElseWith (fun () ->
                 tryResolveViaTable resolver.WitnessTable key.MemberName concreteType)

@@ -25,6 +25,16 @@ type InlineBody = {
     Range: SourceRange
 }
 
+/// Union case info for DU constructor bindings
+type UnionCaseInfo = {
+    /// The case name (e.g., "IntVal", "FloatVal")
+    CaseName: string
+    /// The union type this case belongs to
+    UnionType: NativeType
+    /// Zero-based index of this case in the union (for tag value)
+    CaseIndex: int
+}
+
 /// A resolved binding - the witness produced by resolution
 [<NoComparison; NoEquality>]
 type ResolvedBinding = {
@@ -38,6 +48,8 @@ type ResolvedBinding = {
     NodeId: NodeId option
     /// For inline functions: body for transparent expansion
     InlineBody: InlineBody option
+    /// For DU constructors: case information for proper UnionCase node creation
+    UnionCaseInfo: UnionCaseInfo option
 }
 
 /// A name resolver - codata structure producing bindings on demand
