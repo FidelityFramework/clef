@@ -225,6 +225,7 @@ type IntrinsicModule =
     | Operators     // Built-in operators (op_Addition, op_LessThan, etc.)
     | Parse         // String parsing (int, float - NTU string→numeric conversion)
     | Format        // Value formatting (string - NTU numeric→string conversion)
+    | Convert       // Type conversions (float, int, int64, byte, etc. - numeric↔numeric)
 
 /// Category of intrinsic - guides how Alex should emit it
 [<RequireQualifiedAccess>]

@@ -572,24 +572,112 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
     //---------------------------------------------------------------------
     | SynExpr.Ident(ident) ->
         let name = ident.idText
-        match tryLookupBinding name env with
-        | Some binding ->
-            // CRITICAL: Instantiate TForall types with fresh type variables!
-            // Each use of a polymorphic binding must get its own type variables,
-            // otherwise all uses would share one type (breaking polymorphism).
-            let actualType = instantiateTForall binding.Type range
+
+        // FNCS INTRINSICS: Type conversion functions (float, int, int64, byte, etc.)
+        // These are F# conversion operators that map to MLIR type conversion instructions.
+        // Part of the NTU Conversion Model - numeric↔numeric conversion.
+        //
+        // In F#, these are polymorphic with SRTP constraints. In Fidelity, we treat them
+        // as intrinsics that emit direct MLIR conversion ops (arith.sitofp, arith.fptosi, etc.)
+        let mkIntrinsicInfo (modl: IntrinsicModule) (op: string) (cat: IntrinsicCategory) (fullName: string) : IntrinsicInfo =
+            { Module = modl; Operation = op; Category = cat; FullName = fullName }
+
+        let tryConversionIntrinsic =
+            match name with
+            | "float" | "float64" | "double" ->
+                // 'T -> float (int→float, int64→float, etc.)
+                let tyParam = freshTypeVar range
+                let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Convert "toFloat" IntrinsicCategory.Conversion name
+                let ty = NativeType.TFun(tyParam, env.Globals.FloatType)
+                Some (intrinsicInfo, ty)
+            | "int" | "int32" ->
+                // 'T -> int (float→int, int64→int, etc.)
+                let tyParam = freshTypeVar range
+                let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Convert "toInt" IntrinsicCategory.Conversion name
+                let ty = NativeType.TFun(tyParam, env.Globals.IntType)
+                Some (intrinsicInfo, ty)
+            | "int64" ->
+                // 'T -> int64 (int→int64, float→int64, etc.)
+                let tyParam = freshTypeVar range
+                let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Convert "toInt64" IntrinsicCategory.Conversion name
+                let ty = NativeType.TFun(tyParam, env.Globals.Int64Type)
+                Some (intrinsicInfo, ty)
+            | "byte" | "uint8" ->
+                // 'T -> byte
+                let tyParam = freshTypeVar range
+                let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Convert "toByte" IntrinsicCategory.Conversion name
+                let ty = NativeType.TFun(tyParam, Types.uint8Type)
+                Some (intrinsicInfo, ty)
+            | "sbyte" | "int8" ->
+                // 'T -> sbyte
+                let tyParam = freshTypeVar range
+                let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Convert "toSByte" IntrinsicCategory.Conversion name
+                let ty = NativeType.TFun(tyParam, Types.int8Type)
+                Some (intrinsicInfo, ty)
+            | "int16" ->
+                // 'T -> int16
+                let tyParam = freshTypeVar range
+                let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Convert "toInt16" IntrinsicCategory.Conversion name
+                let ty = NativeType.TFun(tyParam, Types.int16Type)
+                Some (intrinsicInfo, ty)
+            | "uint16" ->
+                // 'T -> uint16
+                let tyParam = freshTypeVar range
+                let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Convert "toUInt16" IntrinsicCategory.Conversion name
+                let ty = NativeType.TFun(tyParam, Types.uint16Type)
+                Some (intrinsicInfo, ty)
+            | "uint32" ->
+                // 'T -> uint32
+                let tyParam = freshTypeVar range
+                let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Convert "toUInt32" IntrinsicCategory.Conversion name
+                let ty = NativeType.TFun(tyParam, Types.uint32Type)
+                Some (intrinsicInfo, ty)
+            | "uint64" ->
+                // 'T -> uint64
+                let tyParam = freshTypeVar range
+                let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Convert "toUInt64" IntrinsicCategory.Conversion name
+                let ty = NativeType.TFun(tyParam, Types.uint64Type)
+                Some (intrinsicInfo, ty)
+            | "float32" | "single" ->
+                // 'T -> float32
+                let tyParam = freshTypeVar range
+                let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Convert "toFloat32" IntrinsicCategory.Conversion name
+                let ty = NativeType.TFun(tyParam, Types.float32Type)
+                Some (intrinsicInfo, ty)
+            | "char" ->
+                // 'T -> char (int→char)
+                let tyParam = freshTypeVar range
+                let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Convert "toChar" IntrinsicCategory.Conversion name
+                let ty = NativeType.TFun(tyParam, env.Globals.CharType)
+                Some (intrinsicInfo, ty)
+            | _ -> None
+
+        match tryConversionIntrinsic with
+        | Some (intrinsicInfo, ty) ->
             builder.Create(
-                SemanticKind.VarRef(name, binding.NodeId),
-                actualType,
+                SemanticKind.Intrinsic(intrinsicInfo),
+                ty,
                 range,
                 arena = env.CurrentArena)
         | None ->
-            // HARD STOP: Unknown identifier - emit diagnostic and error node
-            addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"The value or constructor '{name}' is not defined."; Range = range; RelatedNodes = [] } env
-            builder.Create(
-                SemanticKind.Error $"Undefined: {name}",
-                NativeType.TError $"Undefined: {name}",
-                range)
+            match tryLookupBinding name env with
+            | Some binding ->
+                // CRITICAL: Instantiate TForall types with fresh type variables!
+                // Each use of a polymorphic binding must get its own type variables,
+                // otherwise all uses would share one type (breaking polymorphism).
+                let actualType = instantiateTForall binding.Type range
+                builder.Create(
+                    SemanticKind.VarRef(name, binding.NodeId),
+                    actualType,
+                    range,
+                    arena = env.CurrentArena)
+            | None ->
+                // HARD STOP: Unknown identifier - emit diagnostic and error node
+                addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"The value or constructor '{name}' is not defined."; Range = range; RelatedNodes = [] } env
+                builder.Create(
+                    SemanticKind.Error $"Undefined: {name}",
+                    NativeType.TError $"Undefined: {name}",
+                    range)
 
     | SynExpr.LongIdent(_, longDotId, _, _) ->
         let name = longDotId.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
