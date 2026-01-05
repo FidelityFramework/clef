@@ -276,7 +276,7 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
 
     /// Compiler intrinsic function (e.g., NativePtr.toNativeInt)
     | Intrinsic of
-        name: string *
+        info: IntrinsicInfo *
         args: FSharpNativeExpr list *
         ty: NativeType
 
@@ -547,9 +547,9 @@ module FSharpNativeExpr =
                 FSharpNativeExpr.PlatformBinding(name, args, node.Type)
 
             // Intrinsic
-            | SemanticKind.Intrinsic name ->
+            | SemanticKind.Intrinsic info ->
                 let args = node.Children |> List.map (fromNode graph)
-                FSharpNativeExpr.Intrinsic(name, args, node.Type)
+                FSharpNativeExpr.Intrinsic(info, args, node.Type)
 
             // SRTP trait call
             | SemanticKind.TraitCall(memberName, constrainedTypes, argId) ->
@@ -760,7 +760,7 @@ module FSharpNativeExpr =
         | FSharpNativeExpr.Deref(_, _) -> "Deref"
         | FSharpNativeExpr.Set(_, _) -> "Set"
         | FSharpNativeExpr.PlatformBinding(name, _, _) -> sprintf "Platform(%s)" name
-        | FSharpNativeExpr.Intrinsic(name, _, _) -> sprintf "Intrinsic(%s)" name
+        | FSharpNativeExpr.Intrinsic(info, _, _) -> sprintf "Intrinsic(%s)" info.FullName
         | FSharpNativeExpr.TraitCall(name, _, _, res, _) ->
             let resolved = res |> Option.map (fun r -> sprintf "->%s" r.ResolvedMember) |> Option.defaultValue ""
             sprintf "TraitCall(%s%s)" name resolved

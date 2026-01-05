@@ -580,6 +580,10 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
         let name = longDotId.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
         let parts = longDotId.LongIdent |> List.map (fun id -> id.idText)
 
+        // Helper to create IntrinsicInfo with proper metadata
+        let mkIntrinsicInfo (modl: IntrinsicModule) (op: string) (cat: IntrinsicCategory) (fullName: string) : IntrinsicInfo =
+            { Module = modl; Operation = op; Category = cat; FullName = fullName }
+
         // FS8500: BCL references are FORBIDDEN - check FIRST before any lookup
         if isBclReference name then
             addBclError name longDotId.Range env
@@ -643,8 +647,9 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     NativeType.TError $"Unknown NativePtr intrinsic: NativePtr.{unknownFunc}"
             // Wrap in TForall so type application can properly instantiate the type parameter
             let intrinsicType = NativeType.TForall([tyParamSpec], intrinsicBody)
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.NativePtr intrinsicName IntrinsicCategory.Memory name
             builder.Create(
-                SemanticKind.Intrinsic(name),
+                SemanticKind.Intrinsic(intrinsicInfo),
                 intrinsicType,
                 range)
         // FNCS INTRINSICS: Sys module functions (system calls)
@@ -691,8 +696,9 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 | unknownFunc ->
                     // Unknown Sys function - emit error (NO silent failures in a compiler!)
                     NativeType.TError $"Unknown Sys intrinsic: Sys.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Sys intrinsicName IntrinsicCategory.Platform name
             builder.Create(
-                SemanticKind.Intrinsic(name),
+                SemanticKind.Intrinsic(intrinsicInfo),
                 intrinsicType,
                 range)
         // FNCS INTRINSICS: NativeStr module functions (string construction)
@@ -709,8 +715,9 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 | unknownFunc ->
                     // Unknown NativeStr function - emit error (NO silent failures in a compiler!)
                     NativeType.TError $"Unknown NativeStr intrinsic: NativeStr.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.NativeStr intrinsicName IntrinsicCategory.StringOp name
             builder.Create(
-                SemanticKind.Intrinsic(name),
+                SemanticKind.Intrinsic(intrinsicInfo),
                 intrinsicType,
                 range)
         // FNCS INTRINSICS: NativeDefault module functions (zero initialization)
@@ -729,8 +736,9 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 | unknownFunc ->
                     // Unknown NativeDefault function - emit error (NO silent failures in a compiler!)
                     NativeType.TError $"Unknown NativeDefault intrinsic: NativeDefault.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.NativeDefault intrinsicName IntrinsicCategory.Pure name
             builder.Create(
-                SemanticKind.Intrinsic(name),
+                SemanticKind.Intrinsic(intrinsicInfo),
                 intrinsicType,
                 range)
         // FNCS INTRINSICS: Array module functions (array operations)
@@ -786,8 +794,9 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     NativeType.TError $"Unknown Array intrinsic: Array.{unknownFunc}"
             // Wrap in TForall for proper polymorphism
             let intrinsicType = NativeType.TForall([tyParamSpec], intrinsicBody)
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Array intrinsicName IntrinsicCategory.Memory name
             builder.Create(
-                SemanticKind.Intrinsic(name),
+                SemanticKind.Intrinsic(intrinsicInfo),
                 intrinsicType,
                 range)
         // FNCS INTRINSICS: String module functions (string operations)
@@ -812,8 +821,9 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 | unknownFunc ->
                     addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown String intrinsic: String.{unknownFunc}. Available: concat2, length, isEmpty"; Range = range; RelatedNodes = [] } env
                     NativeType.TError $"Unknown String intrinsic: String.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.String intrinsicName IntrinsicCategory.StringOp name
             builder.Create(
-                SemanticKind.Intrinsic(name),
+                SemanticKind.Intrinsic(intrinsicInfo),
                 intrinsicType,
                 range)
         // FNCS INTRINSICS: Console module functions (I/O operations)
@@ -847,8 +857,9 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     // Unknown Console function - emit error (NO silent failures in a compiler!)
                     addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown Console intrinsic: Console.{unknownFunc}. Available: write, writeln, readln, error, errorln"; Range = range; RelatedNodes = [] } env
                     NativeType.TError $"Unknown Console intrinsic: Console.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Console intrinsicName IntrinsicCategory.Platform name
             builder.Create(
-                SemanticKind.Intrinsic(name),
+                SemanticKind.Intrinsic(intrinsicInfo),
                 intrinsicType,
                 range)
         else
@@ -1812,12 +1823,12 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
         //
         // See memory: typeapp_preserves_kind_principle
         match funcNode.Kind with
-        | SemanticKind.Intrinsic name ->
+        | SemanticKind.Intrinsic info ->
             // TypeApp of Intrinsic → Intrinsic with instantiated type
             // The type parameter is "captured" in resultType (e.g., int -> nativeptr<byte>)
-            // Downstream code sees Intrinsic("NativePtr.stackalloc") with concrete type
+            // Downstream code sees Intrinsic with same IntrinsicInfo but concrete type
             builder.Create(
-                SemanticKind.Intrinsic name,
+                SemanticKind.Intrinsic info,
                 resultType,
                 range)
         | _ ->

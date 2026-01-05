@@ -206,6 +206,50 @@ type InterpolatedPart =
     | ExprPart of NodeId
 
 //-------------------------------------------------------------------------
+// Intrinsic Metadata
+//-------------------------------------------------------------------------
+
+/// Module that provides the intrinsic function
+/// Used by Alex to dispatch to appropriate emission logic without string matching
+[<RequireQualifiedAccess>]
+type IntrinsicModule =
+    | Sys           // System calls (write, read, exit, nanosleep, etc.)
+    | NativePtr     // Pointer operations (get, set, add, stackalloc, etc.)
+    | NativeStr     // Native string construction (fromPointer)
+    | NativeDefault // Default value generation (zeroed)
+    | String        // String operations (concat2)
+    | Console       // Console I/O (writeln, write, readln)
+    | Array         // Array operations (zeroCreate, length, get, set)
+    | Math          // Math functions
+    | Unchecked     // Unchecked arithmetic
+    | Operators     // Built-in operators (op_Addition, op_LessThan, etc.)
+
+/// Category of intrinsic - guides how Alex should emit it
+[<RequireQualifiedAccess>]
+type IntrinsicCategory =
+    | Platform      // Emits as platform-specific syscall (Sys.*, Console.*)
+    | Memory        // Emits as memory operation (NativePtr.get, set, stackalloc)
+    | Arithmetic    // Emits as arith dialect ops (op_Addition, etc.)
+    | Comparison    // Emits as comparison ops (op_LessThan, etc.)
+    | Bitwise       // Emits as bitwise ops (op_BitwiseAnd, etc.)
+    | Conversion    // Emits as type conversion (int, float, etc.)
+    | StringOp      // Emits as string manipulation (concat2, etc.)
+    | Pure          // Emits as pure MLIR (no side effects, NativeDefault.zeroed)
+
+/// Rich metadata for compiler intrinsics
+/// Replaces string-based dispatch with structured information
+type IntrinsicInfo = {
+    /// The module providing this intrinsic
+    Module: IntrinsicModule
+    /// The operation name within the module (e.g., "write", "get", "concat2")
+    Operation: string
+    /// Category guiding emission strategy
+    Category: IntrinsicCategory
+    /// Original full name for error messages/debugging (e.g., "Sys.write")
+    FullName: string
+}
+
+//-------------------------------------------------------------------------
 // Pattern Matching
 //-------------------------------------------------------------------------
 
@@ -338,7 +382,7 @@ type SemanticKind =
     | PlatformBinding of name: string
 
     /// Compiler intrinsic function (e.g., NativePtr.toNativeInt)
-    | Intrinsic of name: string
+    | Intrinsic of info: IntrinsicInfo
 
     /// SRTP trait call: (^T : (member Name : unit -> unit) t)
     /// In native compilation, SRTP is resolved at compile time (no runtime dispatch).
