@@ -1120,6 +1120,25 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     range)) env
                 freshResult
 
+        // PIPE OPERATOR REDUCTION:
+        // F# pipe operators (|>, <|) are syntactic sugar that FNCS reduces during
+        // type checking. This is a SEMANTIC TRANSFORM that belongs in FNCS, not
+        // downstream in Firefly.
+        //
+        // Forward pipe: App(App(|>, x), f) → App(f, [x])
+        //   - The value x flows into function f
+        //   - Inner App: (|>, x) where existingArgs = [xId]
+        //   - argNode is f
+        //
+        // Backward pipe: App(App(<|, f), x) → App(f, [x])
+        //   - Function f is applied to value x
+        //   - Inner App: (<|, f) where existingArgs = [fId]
+        //   - argNode is x
+        //
+        // Helper to detect pipe operators by name
+        let isPipeRight name = name = "op_PipeRight"
+        let isPipeLeft name = name = "op_PipeLeft"
+
         // INTRINSIC APPLICATION SATURATION:
         // Intrinsics don't support partial application - they're primitives that must
         // be called with all arguments at once. When we see curried application of an
@@ -1142,15 +1161,49 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 // Direct intrinsic application: App(Intrinsic, arg)
                 (funcNode.Id, [argNode.Id])
             | SemanticKind.Application(innerFuncId, existingArgs) ->
-                // Check if inner func is an Intrinsic - if so, flatten
+                // Check what the inner function is
                 match builder.Nodes.TryFind innerFuncId with
                 | Some innerNode ->
                     match innerNode.Kind with
-                    | SemanticKind.Intrinsic _ ->
-                        // Curried intrinsic application: flatten
+                    // PIPE REDUCTION: Forward pipe (|>)
+                    // App(App(|>, x), f) → App(f, [x])
+                    | SemanticKind.VarRef(name, _) when isPipeRight name ->
+                        match existingArgs with
+                        | [valueId] ->
+                            // argNode is the function, valueId is the value
+                            // Transform: f(x) instead of (|>)(x)(f)
+                            (argNode.Id, [valueId])
+                        | _ ->
+                            // Unexpected structure - keep as-is
+                            (funcNode.Id, [argNode.Id])
+                    // PIPE REDUCTION: Backward pipe (<|)
+                    // App(App(<|, f), x) → App(f, [x])
+                    | SemanticKind.VarRef(name, _) when isPipeLeft name ->
+                        match existingArgs with
+                        | [funcRefId] ->
+                            // funcRefId is the function, argNode is the value
+                            // Transform: f(x) instead of (<|)(f)(x)
+                            (funcRefId, [argNode.Id])
+                        | _ ->
+                            // Unexpected structure - keep as-is
+                            (funcNode.Id, [argNode.Id])
+                    // APPLICATION SATURATION: Flatten ALL curried applications
+                    // This is a SEMANTIC TRANSFORM that belongs in FNCS, enabling direct
+                    // emission as multi-arg calls. Without flattening:
+                    //   App(App(f, a), b) - nested, requires closure handling
+                    // With flattening:
+                    //   App(f, [a, b]) - flat, direct multi-arg call
+                    //
+                    // Note: Partial application is still preserved by the type system.
+                    // A function expecting 3 args called with 2 creates a closure-typed result.
+                    | SemanticKind.Intrinsic _ 
+                    | SemanticKind.VarRef _
+                    | SemanticKind.Lambda _
+                    | SemanticKind.Application _ ->
+                        // Flatten curried application: accumulate args
                         (innerFuncId, existingArgs @ [argNode.Id])
                     | _ ->
-                        // Not an intrinsic - keep curried structure
+                        // Unknown node kind - keep as-is (shouldn't happen)
                         (funcNode.Id, [argNode.Id])
                 | None ->
                     // Inner node not found (shouldn't happen) - keep curried
