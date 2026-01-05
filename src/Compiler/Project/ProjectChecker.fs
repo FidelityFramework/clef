@@ -111,6 +111,7 @@ module ProjectChecker =
                                 EntryPoints = []
                                 Modules = Map.empty
                                 Types = lazy Map.empty
+                                Platform = None
                             }
                             Ok {
                                 Options = options
@@ -121,10 +122,19 @@ module ProjectChecker =
                         else
                             // Check all parsed inputs together
                             let checkResult = checkParsedInputs parsedInputs
+                            
+                            // Set platform context on the graph if platform path is available
+                            let checkResultWithPlatform =
+                                match options.PlatformPath with
+                                | Some platformPath ->
+                                    let platformCtx = SemanticGraph.PlatformContext.fromPlatformPath platformPath
+                                    { checkResult with 
+                                        Graph = SemanticGraph.SemanticGraph.withPlatform platformCtx checkResult.Graph }
+                                | None -> checkResult
 
                             Ok {
                                 Options = options
-                                CheckResult = checkResult
+                                CheckResult = checkResultWithPlatform
                                 SourceFiles = sourceFiles
                                 ParseErrors = Map.empty
                             }
@@ -193,10 +203,19 @@ module ProjectChecker =
 
                         // Check all parsed inputs together
                         let checkResult = checkParsedInputs parsedInputs
+                        
+                        // Set platform context on the graph if platform path is available
+                        let checkResultWithPlatform =
+                            match options.PlatformPath with
+                            | Some platformPath ->
+                                let platformCtx = SemanticGraph.PlatformContext.fromPlatformPath platformPath
+                                { checkResult with 
+                                    Graph = SemanticGraph.SemanticGraph.withPlatform platformCtx checkResult.Graph }
+                            | None -> checkResult
 
                         Ok {
                             Options = options
-                            CheckResult = checkResult
+                            CheckResult = checkResultWithPlatform
                             SourceFiles = sourceFiles
                             ParseErrors = parseErrors
                         }

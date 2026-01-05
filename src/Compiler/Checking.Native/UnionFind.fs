@@ -244,6 +244,58 @@ let hasUnboundVars (ty: NativeType) : bool =
 let isResolved (ty: NativeType) : bool =
     Set.isEmpty (freeTypeVars ty)
 
+/// Collect all free (unbound) TypeParam objects in a type
+/// Returns the actual TypeParam records, not just IDs, for use in TForall construction
+let rec collectFreeTypeParams (ty: NativeType) : TypeParam list =
+    match ty with
+    | NativeType.TVar typar ->
+        match find typar with
+        | (root, None) -> [root]  // Unbound - collect it
+        | (_, Some boundTy) -> collectFreeTypeParams boundTy
+
+    | NativeType.TApp(_, args) ->
+        args |> List.collect collectFreeTypeParams
+
+    | NativeType.TFun(domain, range) ->
+        collectFreeTypeParams domain @ collectFreeTypeParams range
+
+    | NativeType.TTuple(elems, _) ->
+        elems |> List.collect collectFreeTypeParams
+
+    | NativeType.TForall(typars, body) ->
+        // Exclude bound type parameters
+        let boundIds = typars |> List.map (fun tp -> tp.Id) |> Set.ofList
+        collectFreeTypeParams body |> List.filter (fun tp -> not (Set.contains tp.Id boundIds))
+
+    | NativeType.TByref(elem, _) ->
+        collectFreeTypeParams elem
+
+    | NativeType.TNativePtr elem ->
+        collectFreeTypeParams elem
+
+    | NativeType.TAnon(fields, _) ->
+        fields |> List.collect (fun (_, t) -> collectFreeTypeParams t)
+
+    | NativeType.TRecord(_, fields) ->
+        fields |> List.collect (fun (_, t) -> collectFreeTypeParams t)
+
+    | NativeType.TUnion(_, cases) ->
+        cases
+        |> List.collect (fun c -> c.Fields |> List.map snd)
+        |> List.collect collectFreeTypeParams
+
+    | NativeType.TMeasure _ -> []  // Measure type params handled separately
+    | NativeType.TError _ -> []
+
+/// Generalize a type by wrapping free type variables in TForall
+/// This is used for let-bound polymorphic functions
+let generalizeType (ty: NativeType) : NativeType =
+    let freeParams = collectFreeTypeParams ty |> List.distinctBy (fun tp -> tp.Id)
+    if List.isEmpty freeParams then
+        ty
+    else
+        NativeType.TForall(freeParams, ty)
+
 //-------------------------------------------------------------------------
 // Type Parameter Generation
 //-------------------------------------------------------------------------

@@ -28,23 +28,27 @@ type UnificationError =
 
 exception UnificationException of UnificationError
 
+/// Format source range for display
+let formatRange (range: SourceRange) : string =
+    $"{range.File}({range.Start.Line},{range.Start.Column})"
+
 /// Format a unification error for display
 let formatError (err: UnificationError) : string =
     match err with
-    | TypeMismatch(expected, actual, _) ->
-        $"Type mismatch: expected '{formatType expected}', got '{formatType actual}'"
-    | InfiniteType(typar, ty, _) ->
-        $"Infinite type: type parameter '{typar.Name}' would be equivalent to '{formatType ty}'"
-    | ArityMismatch(expected, actual, _) ->
-        $"Arity mismatch: expected {expected} type arguments, got {actual}"
-    | TupleLengthMismatch(expected, actual, _) ->
-        $"Tuple length mismatch: expected {expected} elements, got {actual}"
-    | TupleKindMismatch(expected, actual, _) ->
+    | TypeMismatch(expected, actual, range) ->
+        $"Type mismatch at {formatRange range}: expected '{formatType expected}', got '{formatType actual}'"
+    | InfiniteType(typar, ty, range) ->
+        $"Infinite type at {formatRange range}: type parameter '{typar.Name}' would be equivalent to '{formatType ty}'"
+    | ArityMismatch(expected, actual, range) ->
+        $"Arity mismatch at {formatRange range}: expected {expected} type arguments, got {actual}"
+    | TupleLengthMismatch(expected, actual, range) ->
+        $"Tuple length mismatch at {formatRange range}: expected {expected} elements, got {actual}"
+    | TupleKindMismatch(expected, actual, range) ->
         let expectedKind = if expected then "struct tuple" else "reference tuple"
         let actualKind = if actual then "struct tuple" else "reference tuple"
-        $"Tuple kind mismatch: expected {expectedKind}, got {actualKind}"
-    | ByrefKindMismatch(expected, actual, _) ->
-        $"Byref kind mismatch: expected {expected}, got {actual}"
+        $"Tuple kind mismatch at {formatRange range}: expected {expectedKind}, got {actualKind}"
+    | ByrefKindMismatch(expected, actual, range) ->
+        $"Byref kind mismatch at {formatRange range}: expected {expected}, got {actual}"
 
 //-------------------------------------------------------------------------
 // Unification Algorithm
@@ -117,7 +121,13 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
     // Native pointer types
     | NativeType.TNativePtr elem1, NativeType.TNativePtr elem2 ->
         unify elem1 elem2 range
-    
+
+    // Handle TNativePtr vs TApp(nativeptr, [elem]) - both represent the same concept
+    | NativeType.TNativePtr elem1, NativeType.TApp(tc, [elem2]) when tc.Name = "nativeptr" ->
+        unify elem1 elem2 range
+    | NativeType.TApp(tc, [elem1]), NativeType.TNativePtr elem2 when tc.Name = "nativeptr" ->
+        unify elem1 elem2 range
+
     // Anonymous record types - must match on isStruct (struct vs reference)
     | NativeType.TAnon(fields1, isStruct1), NativeType.TAnon(fields2, isStruct2) ->
         if isStruct1 <> isStruct2 then
@@ -156,7 +166,16 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
     // Error types unify with anything (for error recovery)
     | NativeType.TError _, _ -> ()
     | _, NativeType.TError _ -> ()
-    
+
+    // TForall vs non-TForall: instantiate the TForall first
+    // This handles implicit polymorphic instantiation (e.g., `let f x = x` being used at a specific type)
+    | NativeType.TForall(tps, body), other
+    | other, NativeType.TForall(tps, body) ->
+        // Instantiate with fresh type variables
+        let freshVars = tps |> List.map (fun tp -> NativeType.TVar (freshTypeParamAuto tp.Kind range))
+        let instantiatedBody = NativeTypes.instantiate tps freshVars body
+        unify instantiatedBody other range
+
     // Anything else is a mismatch
     | _ ->
         raise (UnificationException(TypeMismatch(t1, t2, range)))
@@ -295,6 +314,9 @@ let solveConstraint (c: Constraint) : Result<unit, UnificationError> =
         | _, TypeLayout.Opaque -> Ok ()  // Any layout is compatible with opaque
         | TypeLayout.Inline(s1, a1), TypeLayout.Inline(s2, a2) when s1 = s2 && a1 = a2 -> Ok ()
         | TypeLayout.Reference _, TypeLayout.Reference _ -> Ok ()
+        | TypeLayout.PlatformWord, TypeLayout.PlatformWord -> Ok ()  // Platform word matches platform word
+        | TypeLayout.PlatformWord, _ -> Ok ()  // Platform word deferred to codegen
+        | _, TypeLayout.PlatformWord -> Ok ()  // Platform word deferred to codegen
         | _ ->
             ignore range  // Would be used for error location
             Ok ()  // For now, accept - codegen will validate

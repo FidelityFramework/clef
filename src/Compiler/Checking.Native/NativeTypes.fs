@@ -41,6 +41,199 @@ let formatModulePath (path: ModulePath) =
 // Type Layout (Memory Representation)
 //-------------------------------------------------------------------------
 
+
+//-------------------------------------------------------------------------
+// NTU (Native Type Universe) Kind System
+// Following F* pattern: type identity is separate from type width.
+// Width is erased metadata resolved by Alex via platform quotations.
+//-------------------------------------------------------------------------
+
+/// NTU (Native Type Universe) type kinds.
+/// These categorize native types semantically, independent of platform width.
+/// Type identity: NTUint ≠ NTUint64 (different types even if same width on some platforms)
+[<RequireQualifiedAccess>]
+type NTUKind =
+    //-----------------------------------------------------------------------
+    // Platform-dependent types (resolved via quotations at codegen)
+    //-----------------------------------------------------------------------
+    
+    /// Platform word, signed (F# `int` in Fidelity semantics)
+    /// 64-bit on x86_64, 32-bit on ARM32, etc.
+    | NTUint
+    
+    /// Platform word, unsigned (F# `uint` in Fidelity semantics)
+    | NTUuint
+    
+    /// Native int, pointer-sized signed (explicit `nativeint`)
+    /// Semantically equivalent to NTUint but kept separate for source fidelity
+    | NTUnint
+    
+    /// Native uint, pointer-sized unsigned (explicit `unativeint`)
+    /// Semantically equivalent to NTUuint but kept separate for source fidelity
+    | NTUunint
+    
+    /// Native pointer type (pointer-sized)
+    | NTUptr
+    
+    /// Size type (like C `size_t`) - used for array lengths, memory sizes
+    | NTUsize
+    
+    /// Pointer difference type (like C `ptrdiff_t`)
+    | NTUdiff
+    
+    //-----------------------------------------------------------------------
+    // Fixed width types (platform-independent)
+    //-----------------------------------------------------------------------
+    
+    /// 8-bit signed integer
+    | NTUint8
+    /// 16-bit signed integer
+    | NTUint16
+    /// 32-bit signed integer
+    | NTUint32
+    /// 64-bit signed integer
+    | NTUint64
+    
+    /// 8-bit unsigned integer
+    | NTUuint8
+    /// 16-bit unsigned integer
+    | NTUuint16
+    /// 32-bit unsigned integer
+    | NTUuint32
+    /// 64-bit unsigned integer
+    | NTUuint64
+    
+    /// 32-bit IEEE 754 floating point
+    | NTUfloat32
+    /// 64-bit IEEE 754 floating point
+    | NTUfloat64
+    
+    //-----------------------------------------------------------------------
+    // Special types
+    //-----------------------------------------------------------------------
+    
+    /// UTF-8 encoded string (fat pointer: ptr + length)
+    | NTUstring
+    
+    /// Boolean (1 byte)
+    | NTUbool
+    
+    /// Unicode code point (UTF-32, 4 bytes)
+    | NTUchar
+    
+    /// Unit type (zero-sized)
+    | NTUunit
+    
+    /// Decimal (128-bit)
+    | NTUdecimal
+    
+    //-----------------------------------------------------------------------
+    // Compound value types (platform-independent fixed size)
+    //-----------------------------------------------------------------------
+    
+    /// UUID (128-bit, RFC 4122)
+    /// Platform entropy source for generation (getrandom/BCryptGenRandom)
+    | NTUuuid
+    
+    /// DateTime - ticks since epoch (64-bit)
+    /// Platform clock resolution via quotations
+    | NTUdatetime
+    
+    /// TimeSpan - duration in ticks (64-bit)
+    | NTUtimespan
+    
+    /// Not a primitive NTU kind (user-defined types, parameterized types, etc.)
+    | NTUother
+
+/// Platform predicate types (abstract, erased at runtime).
+/// F*-inspired propositions for conditional compilation without runtime checks.
+/// These flow through FNCS unchanged and are resolved by Alex using platform quotations.
+[<RequireQualifiedAccess>]
+type PlatformPredicate =
+    /// Platform supports 32-bit word operations
+    | FitsU32
+    /// Platform supports 64-bit word operations
+    | FitsU64
+    /// Platform has AVX-512 vector support
+    | HasAVX512
+    /// Platform has ARM NEON vector support
+    | HasNEON
+    /// Platform has 64-bit atomic operations
+    | HasAtomics64
+    /// Platform supports unaligned memory access
+    | HasUnalignedAccess
+    /// Platform has hardware floating point
+    | HasHardwareFloat
+    /// Custom predicate (for extensibility)
+    | Custom of name: string
+
+/// Helpers for NTUKind
+module NTUKind =
+    /// Check if an NTUKind is platform-dependent (requires quotation resolution)
+    let isPlatformDependent = function
+        | NTUKind.NTUint | NTUKind.NTUuint
+        | NTUKind.NTUnint | NTUKind.NTUunint
+        | NTUKind.NTUptr | NTUKind.NTUsize | NTUKind.NTUdiff -> true
+        | _ -> false
+    
+    /// Check if an NTUKind is a fixed-width integer
+    let isFixedWidthInteger = function
+        | NTUKind.NTUint8 | NTUKind.NTUint16 | NTUKind.NTUint32 | NTUKind.NTUint64
+        | NTUKind.NTUuint8 | NTUKind.NTUuint16 | NTUKind.NTUuint32 | NTUKind.NTUuint64 -> true
+        | _ -> false
+    
+    /// Check if an NTUKind is any integer type
+    let isInteger = function
+        | NTUKind.NTUint | NTUKind.NTUuint | NTUKind.NTUnint | NTUKind.NTUunint
+        | NTUKind.NTUint8 | NTUKind.NTUint16 | NTUKind.NTUint32 | NTUKind.NTUint64
+        | NTUKind.NTUuint8 | NTUKind.NTUuint16 | NTUKind.NTUuint32 | NTUKind.NTUuint64
+        | NTUKind.NTUsize | NTUKind.NTUdiff -> true
+        | _ -> false
+    
+    /// Check if an NTUKind is a signed integer
+    let isSigned = function
+        | NTUKind.NTUint | NTUKind.NTUnint
+        | NTUKind.NTUint8 | NTUKind.NTUint16 | NTUKind.NTUint32 | NTUKind.NTUint64
+        | NTUKind.NTUdiff -> true
+        | _ -> false
+    
+    /// Check if an NTUKind is floating point
+    let isFloatingPoint = function
+        | NTUKind.NTUfloat32 | NTUKind.NTUfloat64 -> true
+        | _ -> false
+    
+    /// Check if an NTUKind is numeric (integer or floating point)
+    let isNumeric kind = isInteger kind || isFloatingPoint kind
+    
+    /// Get the human-readable name for an NTUKind
+    let name = function
+        | NTUKind.NTUint -> "int"
+        | NTUKind.NTUuint -> "uint"
+        | NTUKind.NTUnint -> "nativeint"
+        | NTUKind.NTUunint -> "unativeint"
+        | NTUKind.NTUptr -> "nativeptr"
+        | NTUKind.NTUsize -> "size"
+        | NTUKind.NTUdiff -> "diff"
+        | NTUKind.NTUint8 -> "int8"
+        | NTUKind.NTUint16 -> "int16"
+        | NTUKind.NTUint32 -> "int32"
+        | NTUKind.NTUint64 -> "int64"
+        | NTUKind.NTUuint8 -> "uint8"
+        | NTUKind.NTUuint16 -> "uint16"
+        | NTUKind.NTUuint32 -> "uint32"
+        | NTUKind.NTUuint64 -> "uint64"
+        | NTUKind.NTUfloat32 -> "float32"
+        | NTUKind.NTUfloat64 -> "float"
+        | NTUKind.NTUstring -> "string"
+        | NTUKind.NTUbool -> "bool"
+        | NTUKind.NTUchar -> "char"
+        | NTUKind.NTUunit -> "unit"
+        | NTUKind.NTUdecimal -> "decimal"
+        | NTUKind.NTUuuid -> "Uuid"
+        | NTUKind.NTUdatetime -> "DateTime"
+        | NTUKind.NTUtimespan -> "TimeSpan"
+        | NTUKind.NTUother -> "<other>"
+
 /// Type layout determines memory representation
 [<RequireQualifiedAccess>]
 type TypeLayout =
@@ -50,6 +243,18 @@ type TypeLayout =
     | Reference of arena: ArenaAffinity
     /// Platform-specific, size determined at codegen
     | Opaque
+    /// Platform word size - size/alignment depend on target architecture
+    /// FNCS preserves type identity; Alex resolves to concrete size
+    | PlatformWord
+    /// Fat pointer: pointer + length (both platform word sized)
+    /// Used for arrays, strings, spans - compound of two NTU components.
+    /// On x86_64: 16 bytes (8 + 8), on ARM32: 8 bytes (4 + 4)
+    /// Alex resolves to concrete size via platform quotations.
+    | FatPointer
+    /// NTU compound: struct of multiple NTU-sized components
+    /// Size = sum of component sizes (all platform-dependent)
+    /// Used for types like NativeSlice (ptr + length + flags)
+    | NTUCompound of componentCount: int
 
 /// Arena affinity for memory management
 and [<RequireQualifiedAccess>] ArenaAffinity =
@@ -93,18 +298,30 @@ type TypeConRef = {
     ParamKinds: TypeParamKind list
     /// Memory layout hint (may be refined during checking)
     Layout: TypeLayout
+    /// NTU kind for primitive/native types.
+    /// Some(kind) for native primitives, None for user-defined/compound types.
+    /// Used for type identity: NTUint ≠ NTUint64 even if same width on some platforms.
+    NTUKind: NTUKind option
 }
 
 /// Total arity (type + measure parameters)
 let arity (tc: TypeConRef) = List.length tc.ParamKinds
 
-/// Create a simple type constructor with only type parameters
+/// Create a simple type constructor with only type parameters (non-NTU kind)
 let mkTypeConRef name typeArity layout =
-    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout }
+    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = None }
 
-/// Create a type constructor with explicit parameter kinds
+/// Create a type constructor with explicit parameter kinds (non-NTU kind)
 let mkTypeConRefWithMeasures name paramKinds layout =
-    { Name = name; Module = []; ParamKinds = paramKinds; Layout = layout }
+    { Name = name; Module = []; ParamKinds = paramKinds; Layout = layout; NTUKind = None }
+
+/// Create a type constructor with an NTU kind (for native primitives)
+let mkNTUTypeConRef name ntuKind layout =
+    { Name = name; Module = []; ParamKinds = []; Layout = layout; NTUKind = Some ntuKind }
+
+/// Create a parameterized type constructor with an NTU kind
+let mkNTUTypeConRefWithArity name ntuKind typeArity layout =
+    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = Some ntuKind }
 
 //-------------------------------------------------------------------------
 // Code Labels (for state machine compilation)
@@ -354,8 +571,8 @@ let rec layoutOf (ty: NativeType) : TypeLayout =
     | NativeType.TTuple(_, _) -> TypeLayout.Reference ArenaAffinity.CurrentActor
     | NativeType.TFun _ -> TypeLayout.Inline(16, 8)  // Function pointer + closure env
     | NativeType.TVar _ -> TypeLayout.Opaque  // Not yet known
-    | NativeType.TNativePtr _ -> TypeLayout.Inline(8, 8)  // Pointer size
-    | NativeType.TByref _ -> TypeLayout.Inline(8, 8)  // Pointer size
+    | NativeType.TNativePtr _ -> TypeLayout.PlatformWord  // Pointer size is platform-dependent
+    | NativeType.TByref _ -> TypeLayout.PlatformWord  // Byref size is platform-dependent
     | NativeType.TForall(_, body) -> layoutOf body
     | NativeType.TMeasure _ -> TypeLayout.Inline(0, 1)  // Phantom type
     | NativeType.TAnon(_, isStruct) when isStruct -> TypeLayout.Inline(-1, -1) // Size depends on fields
@@ -387,6 +604,17 @@ let computeRecordLayout (fields: (string * NativeType) list) : TypeLayout =
             (-1, -1)
         | TypeLayout.Opaque ->
             // Unknown at compile time - can't compute exact layout
+            (-1, -1)
+        | TypeLayout.PlatformWord ->
+            // Platform-dependent size - propagate unknown (Alex resolves at codegen)
+            (-1, -1)
+        | TypeLayout.FatPointer ->
+            // Fat pointer (ptr + len), both platform-word sized - propagate unknown
+            // Alex resolves to (2 * wordSize, wordSize) at codegen
+            (-1, -1)
+        | TypeLayout.NTUCompound _ ->
+            // NTU compound struct - platform-dependent components
+            // Alex resolves to (n * wordSize, wordSize) at codegen
             (-1, -1)
         | TypeLayout.Reference _ ->
             // Reference types are pointer-sized (8 bytes on 64-bit)

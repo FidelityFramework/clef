@@ -67,9 +67,45 @@ The detection uses `hasStructAttribute` function in `NativeService.fs`.
 See `fncs_architecture` memory § "FNCS Intrinsics (Layer 1 Operations)" for intrinsics.
 See Firefly `binding_architecture_unified` memory for the three-layer architecture.
 
+## Console Module Intrinsics (Added 2026-01-04)
+
+Console operations are FNCS intrinsics following Alloy absorption (January 2026).
+These are thin wrappers over Sys.* intrinsics for convenient I/O.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `Console.write` | `string -> unit` | Writes string to stdout (fd 1) |
+| `Console.writeln` | `string -> unit` | Writes string with newline to stdout |
+| `Console.readln` | `unit -> string` | Reads a line from stdin (fd 0) |
+| `Console.error` | `string -> unit` | Writes string to stderr (fd 2) |
+| `Console.errorln` | `string -> unit` | Writes string with newline to stderr |
+
+Implementation: `CheckExpressions.fs` handles `Console.*` similar to Sys, NativePtr, Array.
+
 ## Status
 
-As of 2026-01-03:
+As of 2026-01-04:
 - All built-in bindings registered
 - Intrinsic saturation added: curried intrinsic calls flattened during construction
-- FNCS intrinsics (Sys, NativePtr, NativeDefault) are Layer 1 in unified binding architecture
+- FNCS intrinsics (Sys, NativePtr, NativeDefault, Array) are Layer 1 in unified binding architecture
+
+## Array Module Intrinsics (Added 2026-01-03)
+
+Array operations are FNCS intrinsics because they:
+1. Require memory allocation (cannot be expressed in pure F#)
+2. Need element size knowledge for layout
+3. Are fundamental to the array fat pointer type
+
+| Function | Signature |
+|----------|-----------|
+| `Array.zeroCreate` | `int -> array<'T>` |
+| `Array.create` | `int -> 'T -> array<'T>` |
+| `Array.init` | `int -> (int -> 'T) -> array<'T>` |
+| `Array.copy` | `array<'T> -> array<'T>` |
+| `Array.length` | `array<'T> -> int` |
+| `Array.get` | `array<'T> -> int -> 'T` |
+| `Array.set` | `array<'T> -> int -> 'T -> unit` |
+| `Array.tryItem` | `int -> array<'T> -> voption<'T>` |
+| `Array.isEmpty` | `array<'T> -> bool` |
+
+Implementation: `CheckExpressions.fs` handles `Array.*` similar to NativePtr, Sys, NativeDefault

@@ -39,7 +39,7 @@ let private splitTypeName (nm: string) : string list * string =
 /// Used for attribute types which are reference types with no type parameters
 let private mkNativeTypeRef (qualifiedName: string) : TypeConRef =
     let path, name = splitTypeName qualifiedName
-    { Name = name; Module = path; ParamKinds = []; Layout = TypeLayout.Reference ArenaAffinity.CurrentActor }
+    { Name = name; Module = path; ParamKinds = []; Layout = TypeLayout.Reference ArenaAffinity.CurrentActor; NTUKind = None }
 
 let internal DummyFileNameForRangesWithoutASpecificLocation = startupFileName
 let private envRange = rangeN DummyFileNameForRangesWithoutASpecificLocation 0

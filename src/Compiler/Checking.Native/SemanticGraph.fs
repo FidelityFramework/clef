@@ -55,6 +55,117 @@ and WitnessImplementation =
     | Builtin of operationKind: string
 
 //-------------------------------------------------------------------------
+// Platform Context (NTU Resolution)
+//-------------------------------------------------------------------------
+
+/// Platform context for NTU type resolution.
+/// Carries quotation-resolved platform information that Alex uses to
+/// resolve platform-dependent types (NTUint, NTUptr, etc.) to concrete widths.
+[<NoComparison; NoEquality>]
+type PlatformContext = {
+    /// Platform identifier (e.g., "Linux_x86_64", "Windows_ARM64")
+    PlatformId: string
+    
+    /// Word size in bits (32 or 64)
+    WordSize: int
+    
+    /// Pointer size in bytes (4 or 8)
+    PointerSize: int
+    
+    /// Pointer alignment in bytes
+    PointerAlign: int
+    
+    /// Path to the Fidelity.Platform library
+    PlatformLibraryPath: string option
+    
+    /// Evaluated platform predicates (from quotations)
+    Predicates: Map<PlatformPredicate, bool>
+}
+
+/// Default platform context for x86_64 Linux (most common development target)
+module PlatformContext =
+    let defaultLinux_x86_64 = {
+        PlatformId = "Linux_x86_64"
+        WordSize = 64
+        PointerSize = 8
+        PointerAlign = 8
+        PlatformLibraryPath = None
+        Predicates = Map.ofList [
+            (PlatformPredicate.FitsU32, true)
+            (PlatformPredicate.FitsU64, true)
+            (PlatformPredicate.HasAtomics64, true)
+            (PlatformPredicate.HasUnalignedAccess, true)
+            (PlatformPredicate.HasHardwareFloat, true)
+        ]
+    }
+    
+    /// Create a platform context from a platform library path
+    let fromPlatformPath (path: string) : PlatformContext =
+        // Extract platform ID from path (e.g., "Linux_x86_64" from ".../Fidelity.Platform/Linux_x86_64")
+        let platformId =
+            let parts = path.Replace("\\", "/").Split('/')
+            parts |> Array.tryLast |> Option.defaultValue "Unknown"
+        
+        // Default to x86_64 assumptions, will be refined by quotation evaluation
+        { defaultLinux_x86_64 with
+            PlatformId = platformId
+            PlatformLibraryPath = Some path }
+    
+    /// Resolve the byte size for an NTU kind on this platform
+    let resolveSize (ctx: PlatformContext) (kind: NTUKind) : int =
+        match kind with
+        // Platform-dependent
+        | NTUKind.NTUint | NTUKind.NTUuint -> ctx.WordSize / 8
+        | NTUKind.NTUnint | NTUKind.NTUunint -> ctx.PointerSize
+        | NTUKind.NTUptr -> ctx.PointerSize
+        | NTUKind.NTUsize | NTUKind.NTUdiff -> ctx.PointerSize
+        // Fixed width
+        | NTUKind.NTUint8 | NTUKind.NTUuint8 -> 1
+        | NTUKind.NTUint16 | NTUKind.NTUuint16 -> 2
+        | NTUKind.NTUint32 | NTUKind.NTUuint32 -> 4
+        | NTUKind.NTUint64 | NTUKind.NTUuint64 -> 8
+        | NTUKind.NTUfloat32 -> 4
+        | NTUKind.NTUfloat64 -> 8
+        // Special types
+        | NTUKind.NTUstring -> 16  // Fat pointer: ptr + length
+        | NTUKind.NTUbool -> 1
+        | NTUKind.NTUchar -> 4  // UTF-32
+        | NTUKind.NTUunit -> 0
+        | NTUKind.NTUdecimal -> 16
+        // Temporal and identity types
+        | NTUKind.NTUuuid -> 16  // 128-bit UUID
+        | NTUKind.NTUdatetime -> 8  // 64-bit ticks
+        | NTUKind.NTUtimespan -> 8  // 64-bit duration
+        | NTUKind.NTUother -> -1  // Unknown
+    
+    /// Resolve the alignment for an NTU kind on this platform
+    let resolveAlign (ctx: PlatformContext) (kind: NTUKind) : int =
+        match kind with
+        // Platform-dependent - align to word size
+        | NTUKind.NTUint | NTUKind.NTUuint -> ctx.WordSize / 8
+        | NTUKind.NTUnint | NTUKind.NTUunint -> ctx.PointerAlign
+        | NTUKind.NTUptr -> ctx.PointerAlign
+        | NTUKind.NTUsize | NTUKind.NTUdiff -> ctx.PointerAlign
+        // Fixed width - natural alignment
+        | NTUKind.NTUint8 | NTUKind.NTUuint8 -> 1
+        | NTUKind.NTUint16 | NTUKind.NTUuint16 -> 2
+        | NTUKind.NTUint32 | NTUKind.NTUuint32 -> 4
+        | NTUKind.NTUint64 | NTUKind.NTUuint64 -> 8
+        | NTUKind.NTUfloat32 -> 4
+        | NTUKind.NTUfloat64 -> 8
+        // Special types
+        | NTUKind.NTUstring -> 8  // Pointer alignment for fat pointer
+        | NTUKind.NTUbool -> 1
+        | NTUKind.NTUchar -> 4
+        | NTUKind.NTUunit -> 1
+        | NTUKind.NTUdecimal -> 8
+        // Temporal and identity types
+        | NTUKind.NTUuuid -> 8  // 64-bit aligned (two i64s)
+        | NTUKind.NTUdatetime -> 8  // 64-bit aligned
+        | NTUKind.NTUtimespan -> 8  // 64-bit aligned
+        | NTUKind.NTUother -> -1
+
+//-------------------------------------------------------------------------
 // Literal Values
 //-------------------------------------------------------------------------
 
@@ -252,6 +363,11 @@ type SemanticKind =
     /// Interpolated string: $"prefix{expr1}middle{expr2}suffix"
     | InterpolatedString of parts: InterpolatedPart list
 
+    /// Pattern binding: a variable introduced by a match pattern
+    /// Following ML/FStar convention where the pattern binding IS the definition.
+    /// The type is carried in SemanticNode.Type, name identifies the binding.
+    | PatternBinding of name: string
+
     /// Error node (for recovery)
     | Error of message: string
 
@@ -353,6 +469,11 @@ type SemanticGraph = {
     /// Type definitions - lazy extraction from witnessed TypeDef nodes (codata pattern)
     /// Computed on first observation, cached thereafter
     Types: Lazy<Map<string, NodeId>>
+    
+    /// Platform context for NTU type resolution.
+    /// Carries quotation-resolved platform information for Alex to use when
+    /// lowering platform-dependent types to concrete MLIR types.
+    Platform: PlatformContext option
 }
 
 module SemanticGraph =
@@ -380,7 +501,21 @@ module SemanticGraph =
         EntryPoints = []
         Modules = Map.empty
         Types = lazy Map.empty
+        Platform = None
     }
+    
+    /// Create an empty semantic graph with platform context
+    let emptyWithPlatform (platform: PlatformContext) : SemanticGraph = {
+        Nodes = Map.empty
+        EntryPoints = []
+        Modules = Map.empty
+        Types = lazy Map.empty
+        Platform = Some platform
+    }
+    
+    /// Set the platform context on a graph
+    let withPlatform (platform: PlatformContext) (graph: SemanticGraph) : SemanticGraph =
+        { graph with Platform = Some platform }
     
     /// Add a node to the graph
     let addNode (node: SemanticNode) (graph: SemanticGraph) : SemanticGraph =
@@ -449,7 +584,16 @@ type NodeBuilder() =
         { Nodes = nodes
           EntryPoints = entryPoints
           Modules = Map.empty
-          Types = SemanticGraph.mkTypesIndex nodes }
+          Types = SemanticGraph.mkTypesIndex nodes
+          Platform = None }
+    
+    /// Build the semantic graph with platform context
+    member _.BuildWithPlatform(entryPoints: NodeId list, platform: PlatformContext) : SemanticGraph =
+        { Nodes = nodes
+          EntryPoints = entryPoints
+          Modules = Map.empty
+          Types = SemanticGraph.mkTypesIndex nodes
+          Platform = Some platform }
     
     /// Reset the builder
     member _.Reset() =
@@ -600,6 +744,8 @@ type RegionKind =
     | StartExprRegion
     /// End expression region (for loop end bound)
     | EndExprRegion
+    /// Match case body region (match case index, 0-based)
+    | MatchCaseRegion of index: int
 
 /// Hook for SCF region boundary tracking during traversal
 /// Called before/after processing each child region of control flow nodes
@@ -783,6 +929,27 @@ module Traversal =
                                 hook.AfterRegion state parentId ElseRegion
                             | None -> state
 
+                        // Match: scrutinee is evaluated first, then each case body is a region
+                        // NOTE: Pattern bindings are children of Match, processed as part of case body traversal
+                        | SemanticKind.Match (scrutineeId, cases), Some hook ->
+                            let parentId = node.Id
+                            // Scrutinee - walk normally (value to match against)
+                            let state = walk state scrutineeId
+                            // Each case body is a separate region
+                            cases
+                            |> List.fold (fun (state, idx) case ->
+                                let state = hook.BeforeRegion state parentId (MatchCaseRegion idx)
+                                // Walk optional guard
+                                let state = 
+                                    match case.Guard with
+                                    | Some guardId -> walk state guardId
+                                    | None -> state
+                                // Walk case body
+                                let state = walk state case.Body
+                                let state = hook.AfterRegion state parentId (MatchCaseRegion idx)
+                                (state, idx + 1)
+                            ) (state, 0)
+                            |> fst
 
                         // No SCF hook or non-control-flow node: process normally
                         | _ ->

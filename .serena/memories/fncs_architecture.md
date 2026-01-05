@@ -1,5 +1,64 @@
 # FNCS Architecture (F# Native Compiler Services)
 
+## I/O Boundary: Firefly vs FNCS
+
+**Critical Design Principle**: FNCS is a PURE compiler service. It has NO file I/O.
+
+**Firefly's Responsibilities** (Orchestration Layer):
+- Parse `.fidproj` using **Fidelity.Toml** (separate full TOML 1.0 library)
+- Resolve all dependencies (Alloy path, Platform library path)
+- Load **Fidelity.Platform** binding library and extract quotations
+- Collect source files in correct compilation order
+- Pass everything to FNCS as **parameters**
+
+**FNCS's Responsibilities** (Pure Compilation Layer):
+- Receive: source files, project options, platform context
+- Perform: parsing, type checking, SRTP resolution, PSG construction
+- Return: SemanticGraph with types attached, diagnostics
+- Does NOT: parse config files, resolve paths, do any file I/O
+
+**The Flow**:
+```
+.fidproj → Fidelity.Toml → Firefly CLI → FNCS (pure) → PSG → Alex → MLIR
+              ↑                ↑              ↑
+         TOML 1.0 lib    Orchestration    Pure compilation
+                         (all I/O here)   (no I/O)
+```
+
+**Platform Quotations Flow**:
+```
+~/repos/Fidelity.Platform/Linux_x86_64 (quotation library)
+    ↓
+Firefly loads platform library, extracts Expr<PlatformDescriptor>
+    ↓
+Passes to FNCS as part of project context
+    ↓
+FNCS attaches platform metadata to PSG nodes
+    ↓
+Alex witnesses quotations → platform-specific MLIR
+```
+
+## NTU (Native Type Universe) Integration
+
+FNCS internally uses NTU nomenclature for all platform-generic types:
+
+**NTUKind Types:**
+- `NTUint/NTUuint` - Platform word (resolved via quotations)
+- `NTUint32/NTUint64` - Fixed width (always same size)
+- `NTUptr<'T>` - Pointer (width from platform)
+- `NTUsize/NTUdiff` - size_t/ptrdiff_t equivalents
+
+**Key Principle:** Type identity and type width are SEPARATE.
+- FNCS enforces: `NTUint ≠ NTUint64` (different types)
+- Alex resolves: Width via platform quotations
+
+**Option B Architecture:**
+- FNCS internal: NTU prefix (NTUint, NTUuint, etc.)
+- Alloy public: Semantic aliases (platformint, platformsize)
+- Application code: Standard `int` or explicit `platformint`
+
+See `ntu_type_system` memory for implementation details.
+
 ## Overview
 
 FNCS is the native type checker for Firefly. It performs complete type checking from `SynExpr` (parsed syntax) and builds the **SemanticGraph** with types attached during construction (not post-hoc).
@@ -186,6 +245,20 @@ module NativeDefault =
     val unreachable<'T> : 'T // Unreachable code marker
 ```
 
+### Array Module (Array Operations)
+```fsharp
+module Array =
+    val zeroCreate : int -> array<'T>                    // Allocate zero-initialized
+    val create : int -> 'T -> array<'T>                  // Allocate with value
+    val init : int -> (int -> 'T) -> array<'T>           // Allocate with initializer
+    val copy : array<'T> -> array<'T>                    // Copy array
+    val length : array<'T> -> int                        // Get length
+    val get : array<'T> -> int -> 'T                     // Indexed access
+    val set : array<'T> -> int -> 'T -> unit             // Indexed mutation
+    val tryItem : int -> array<'T> -> voption<'T>        // Safe indexed access
+    val isEmpty : array<'T> -> bool                      // Check if empty
+```
+
 **Why these are intrinsics, not library functions:**
 - They operate on the fundamental memory model
 - No F# implementation can express their semantics
@@ -199,6 +272,8 @@ module NativeDefault =
 
 ## Related Memories
 - `fncs_phase_debugging_protocol` - How to debug using phase files
+- `fncs_platform_aware_type_resolution` - **CRITICAL**: Platform-aware type staging
+- `fncs_type_specific_operators_status` - Operator implementation status
 - `platform_binding_recognition` - SUPERSEDED: see Firefly `binding_architecture_unified`
 - `quotation_semantic_carriers` - Layer 2 binding mechanism
 - `compilation_pipeline` - Full Firefly compilation flow

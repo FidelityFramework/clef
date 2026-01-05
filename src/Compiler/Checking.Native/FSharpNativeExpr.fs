@@ -587,6 +587,11 @@ module FSharpNativeExpr =
                 let nativeParts = parts |> List.map (convertInterpolatedPart graph)
                 FSharpNativeExpr.InterpolatedString(nativeParts, node.Type)
 
+            // Pattern binding - a variable introduced by a match pattern
+            // This is a definition node; direct traversal returns the variable
+            | SemanticKind.PatternBinding name ->
+                FSharpNativeExpr.Variable(name, node.Type, false, Some nodeId)
+
             // Error
             | SemanticKind.Error message ->
                 FSharpNativeExpr.Error(message, node.Range)

@@ -45,6 +45,9 @@ Everything else is derived from these primitives.
 ### Key Decisions
 
 1. **`int` = platform word**: Not 32-bit like F#, not 63-bit like OCaml
+   - **Critical**: Size is TARGET-DEPENDENT (64-bit on x86_64, 32-bit on ARM32)
+   - FNCS uses `TypeLayout.PlatformWord`, Alex resolves to concrete size
+   - See memory: `fncs_platform_aware_type_resolution`
 2. **`char` = UTF-32**: Not UTF-16 like .NET, not Latin-1 like OCaml
 3. **No GC tagging**: Full integer precision (unlike OCaml's 63-bit)
 
@@ -52,3 +55,6 @@ Everything else is derived from these primitives.
 
 - **fsnative-spec**: `spec/native-type-universe.md` Parts 1-2
 - **fsnative-spec**: `spec/native-type-mappings.md` for normative requirements
+- **Memory**: `fncs_platform_aware_type_resolution` - Platform-dependent type sizing
+- **Memory**: `fidproj_platform_context_principle` - When platform context is known
+- **Memory**: `srtp_operator_architecture` - SRTP and operator resolution

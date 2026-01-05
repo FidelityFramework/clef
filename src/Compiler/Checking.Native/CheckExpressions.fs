@@ -18,6 +18,21 @@ open FSharp.Native.Compiler.Checking.Native.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.NameResolution
 
 //-------------------------------------------------------------------------
+// Polymorphic Instantiation
+//-------------------------------------------------------------------------
+
+/// Instantiate a TForall type with fresh type variables.
+/// This is critical for proper polymorphic type checking:
+/// each use of a polymorphic binding must get FRESH type variables,
+/// not the same ones (which would cause all uses to share one type).
+let instantiateTForall (ty: NativeType) (range: SourceRange) : NativeType =
+    match ty with
+    | NativeType.TForall(typars, body) ->
+        let freshVars = typars |> List.map (fun tp -> NativeType.TVar (freshTypeParamAuto tp.Kind range))
+        NativeTypes.instantiate typars freshVars body
+    | _ -> ty
+
+//-------------------------------------------------------------------------
 // F# Native Diagnostic Codes (FS8xxx series)
 //-------------------------------------------------------------------------
 
@@ -101,10 +116,10 @@ type TypeEnv = {
     /// Field label table for record type inference
     /// Per spec (inference-procedures.md): "maps names to sets of field references"
     FieldLabels: Map<string, FieldRef list>
-    /// Current constraints being collected
-    mutable Constraints: Constraint list
-    /// Accumulated diagnostics (errors, warnings)
-    mutable Diagnostics: Diagnostic list
+    /// Current constraints being collected (ref cell to share across record copies)
+    Constraints: Constraint list ref
+    /// Accumulated diagnostics (errors, warnings) (ref cell to share across record copies)
+    Diagnostics: Diagnostic list ref
     /// Current arena affinity
     CurrentArena: ArenaAffinity
     /// Enclosing function return type (for return checking)
@@ -133,15 +148,15 @@ let createTypeEnv (globals: NativeGlobals) : TypeEnv =
         TypeAbbrevs = Map.empty
         RecordDefs = Map.empty
         FieldLabels = Map.empty
-        Constraints = []
-        Diagnostics = []
+        Constraints = ref []
+        Diagnostics = ref []
         CurrentArena = ArenaAffinity.CurrentActor
         ExpectedReturnType = None
     }
 
 /// Add a diagnostic to the environment
 let addDiagnostic (diag: Diagnostic) (env: TypeEnv) : unit =
-    env.Diagnostics <- diag :: env.Diagnostics
+    env.Diagnostics := diag :: !(env.Diagnostics)
 
 /// Add a binding to the environment using compositional resolution
 let addBinding (name: string) (ty: NativeType) (isMutable: bool) (nodeId: NodeId option) (env: TypeEnv) : TypeEnv =
@@ -316,7 +331,8 @@ let resolveRecordTypeFromFields
 
 /// Add a constraint to the environment
 let addConstraint (c: Constraint) (env: TypeEnv) : unit =
-    env.Constraints <- c :: env.Constraints
+    // eprintfn "[DEBUG] Adding constraint: %s" (match c with | Constraint.Equals(t1, t2, r) -> sprintf "Equals(%s, %s) at %A" (NativeTypes.formatType t1) (NativeTypes.formatType t2) r | Constraint.HasMember _ -> "HasMember" | _ -> "Other")
+    env.Constraints := c :: !(env.Constraints)
 
 //-------------------------------------------------------------------------
 // Range Conversion
@@ -543,9 +559,13 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
         let name = ident.idText
         match tryLookupBinding name env with
         | Some binding ->
+            // CRITICAL: Instantiate TForall types with fresh type variables!
+            // Each use of a polymorphic binding must get its own type variables,
+            // otherwise all uses would share one type (breaking polymorphism).
+            let actualType = instantiateTForall binding.Type range
             builder.Create(
                 SemanticKind.VarRef(name, binding.NodeId),
-                binding.Type,
+                actualType,
                 range,
                 arena = env.CurrentArena)
         | None ->
@@ -651,6 +671,23 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     let tyParam = NativeType.TVar tyParamSpec
                     let exitBody = NativeType.TFun(env.Globals.IntType, tyParam)
                     NativeType.TForall([tyParamSpec], exitBody)
+                // TIME INTRINSICS: Clock and sleep operations
+                | "clock_gettime" ->
+                    // unit -> int64
+                    // Returns wall clock time in ticks (100-nanosecond intervals since epoch)
+                    NativeType.TFun(env.Globals.UnitType, env.Globals.Int64Type)
+                | "clock_monotonic" ->
+                    // unit -> int64
+                    // Returns monotonic clock ticks for timing (not affected by system clock changes)
+                    NativeType.TFun(env.Globals.UnitType, env.Globals.Int64Type)
+                | "tick_frequency" ->
+                    // unit -> int64
+                    // Returns the frequency of the monotonic clock (ticks per second)
+                    NativeType.TFun(env.Globals.UnitType, env.Globals.Int64Type)
+                | "nanosleep" ->
+                    // int -> unit
+                    // Suspends execution for the specified number of milliseconds
+                    NativeType.TFun(env.Globals.IntType, env.Globals.UnitType)
                 | unknownFunc ->
                     // Unknown Sys function - emit error (NO silent failures in a compiler!)
                     NativeType.TError $"Unknown Sys intrinsic: Sys.{unknownFunc}"
@@ -696,6 +733,124 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 SemanticKind.Intrinsic(name),
                 intrinsicType,
                 range)
+        // FNCS INTRINSICS: Array module functions (array operations)
+        // These are fundamental operations on the array fat pointer type
+        elif name.StartsWith("Array.") then
+            let intrinsicName = name.Substring("Array.".Length)
+            // Array element type parameter
+            let tyParamSpec = UnionFind.freshTypeParam "'T" TypeParamKind.Type range
+            let tyParam = NativeType.TVar tyParamSpec
+            let arrayType = mkArrayType tyParam
+            let intrinsicBody =
+                match intrinsicName with
+                | "zeroCreate" ->
+                    // int -> 'T array
+                    // Allocates array of n elements, zero-initialized
+                    NativeType.TFun(env.Globals.IntType, arrayType)
+                | "create" ->
+                    // int -> 'T -> 'T array
+                    // Allocates array of n elements, all set to given value
+                    NativeType.TFun(env.Globals.IntType, NativeType.TFun(tyParam, arrayType))
+                | "init" ->
+                    // int -> (int -> 'T) -> 'T array
+                    // Allocates array of n elements, initialized by function
+                    let initFunc = NativeType.TFun(env.Globals.IntType, tyParam)
+                    NativeType.TFun(env.Globals.IntType, NativeType.TFun(initFunc, arrayType))
+                | "copy" ->
+                    // 'T array -> 'T array
+                    // Creates a copy of the array
+                    NativeType.TFun(arrayType, arrayType)
+                | "length" ->
+                    // 'T array -> int
+                    // Returns the length of the array
+                    NativeType.TFun(arrayType, env.Globals.IntType)
+                | "get" ->
+                    // 'T array -> int -> 'T
+                    // Gets element at index (with bounds checking)
+                    NativeType.TFun(arrayType, NativeType.TFun(env.Globals.IntType, tyParam))
+                | "set" ->
+                    // 'T array -> int -> 'T -> unit
+                    // Sets element at index (with bounds checking)
+                    NativeType.TFun(arrayType, NativeType.TFun(env.Globals.IntType, NativeType.TFun(tyParam, env.Globals.UnitType)))
+                | "tryItem" ->
+                    // int -> 'T array -> voption<'T>
+                    // Safe indexed access returning voption
+                    NativeType.TFun(env.Globals.IntType, NativeType.TFun(arrayType, mkValueOptionType tyParam))
+                | "isEmpty" ->
+                    // 'T array -> bool
+                    // Returns true if array has zero length
+                    NativeType.TFun(arrayType, env.Globals.BoolType)
+                | unknownFunc ->
+                    // Unknown Array function - emit error (NO silent failures in a compiler!)
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown Array intrinsic: Array.{unknownFunc}. Available: zeroCreate, create, init, copy, length, get, set, tryItem, isEmpty"; Range = range; RelatedNodes = [] } env
+                    NativeType.TError $"Unknown Array intrinsic: Array.{unknownFunc}"
+            // Wrap in TForall for proper polymorphism
+            let intrinsicType = NativeType.TForall([tyParamSpec], intrinsicBody)
+            builder.Create(
+                SemanticKind.Intrinsic(name),
+                intrinsicType,
+                range)
+        // FNCS INTRINSICS: String module functions (string operations)
+        // These are native string operations following Alloy absorption
+        elif name.StartsWith("String.") then
+            let intrinsicName = name.Substring("String.".Length)
+            let stringType = env.Globals.StringType
+            let intrinsicType =
+                match intrinsicName with
+                | "concat2" ->
+                    // string -> string -> string
+                    // Concatenates two strings (used by interpolated string desugaring)
+                    NativeType.TFun(stringType, NativeType.TFun(stringType, stringType))
+                | "length" ->
+                    // string -> int
+                    // Returns the length of a string in characters
+                    NativeType.TFun(stringType, env.Globals.IntType)
+                | "isEmpty" ->
+                    // string -> bool
+                    // Returns true if string is empty
+                    NativeType.TFun(stringType, env.Globals.BoolType)
+                | unknownFunc ->
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown String intrinsic: String.{unknownFunc}. Available: concat2, length, isEmpty"; Range = range; RelatedNodes = [] } env
+                    NativeType.TError $"Unknown String intrinsic: String.{unknownFunc}"
+            builder.Create(
+                SemanticKind.Intrinsic(name),
+                intrinsicType,
+                range)
+        // FNCS INTRINSICS: Console module functions (I/O operations)
+        // These are thin wrappers over Sys.* intrinsics for convenient I/O
+        // Following the Alloy absorption: Console.* operations are now compiler intrinsics
+        elif name.StartsWith("Console.") then
+            let intrinsicName = name.Substring("Console.".Length)
+            let intrinsicType =
+                match intrinsicName with
+                | "write" ->
+                    // string -> unit
+                    // Writes string to stdout (fd 1)
+                    NativeType.TFun(env.Globals.StringType, env.Globals.UnitType)
+                | "writeln" ->
+                    // string -> unit
+                    // Writes string with newline to stdout (fd 1)
+                    NativeType.TFun(env.Globals.StringType, env.Globals.UnitType)
+                | "readln" ->
+                    // unit -> string
+                    // Reads a line from stdin (fd 0)
+                    NativeType.TFun(env.Globals.UnitType, env.Globals.StringType)
+                | "error" ->
+                    // string -> unit
+                    // Writes string to stderr (fd 2)
+                    NativeType.TFun(env.Globals.StringType, env.Globals.UnitType)
+                | "errorln" ->
+                    // string -> unit
+                    // Writes string with newline to stderr (fd 2)
+                    NativeType.TFun(env.Globals.StringType, env.Globals.UnitType)
+                | unknownFunc ->
+                    // Unknown Console function - emit error (NO silent failures in a compiler!)
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown Console intrinsic: Console.{unknownFunc}. Available: write, writeln, readln, error, errorln"; Range = range; RelatedNodes = [] } env
+                    NativeType.TError $"Unknown Console intrinsic: Console.{unknownFunc}"
+            builder.Create(
+                SemanticKind.Intrinsic(name),
+                intrinsicType,
+                range)
         else
         // Check for platform bindings (Bindings.* or Platform.Bindings.*)
         let isPlatformBinding =
@@ -703,18 +858,20 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
         match tryLookupBinding name env with
         | Some binding ->
             // Found the binding - use its type
+            // CRITICAL: Instantiate TForall types with fresh type variables!
+            let actualType = instantiateTForall binding.Type range
             // If it's a platform binding, mark it as such while PRESERVING the type
             if isPlatformBinding then
                 let entryPoint = parts.[parts.Length - 1]
                 builder.Create(
                     SemanticKind.PlatformBinding entryPoint,
-                    binding.Type,
+                    actualType,
                     range,
                     arena = env.CurrentArena)
             else
                 builder.Create(
                     SemanticKind.VarRef(name, binding.NodeId),
-                    binding.Type,
+                    actualType,
                     range,
                     arena = env.CurrentArena)
         | None when isPlatformBinding ->
@@ -747,17 +904,25 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     range,
                     arena = env.CurrentArena)
 
-                // Handle intrinsic string members
+                // Handle intrinsic string and array members
+                // CRITICAL: Apply substitutions to resolve type variables before checking
+                let resolvedType = applySubst binding.Type
                 let isStringType ty =
                     match ty with
                     | NativeType.TApp(tycon, []) when tycon.Name = "string" -> true
                     | _ -> false
+                let isArrayType ty =
+                    match ty with
+                    | NativeType.TApp(tycon, [_]) when tycon.Name = "array" -> true
+                    | _ -> false
 
                 let resultTy =
                     match restParts with
-                    | "Pointer" when isStringType binding.Type ->
+                    | "Pointer" when isStringType resolvedType ->
                         NativeType.TNativePtr(NativeGlobals.Types.uint8Type)
-                    | "Length" when isStringType binding.Type ->
+                    | "Length" when isStringType resolvedType ->
+                        env.Globals.IntType
+                    | "Length" when isArrayType resolvedType ->
                         env.Globals.IntType
                     | _ ->
                         // General case: create HasMember constraint
@@ -817,6 +982,74 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
             tupleType,
             range,
             children = childIds)
+
+    //---------------------------------------------------------------------
+    // F# 6 dotless indexer syntax: expr[index]
+    // When the argument is a list literal [index], treat as indexing not function application
+    // This matches FCS behavior with IndexerNotationWithoutDot language feature
+    //---------------------------------------------------------------------
+    | SynExpr.App(_, _, objExpr, SynExpr.ArrayOrListComputed(false, indexExpr, _), _) ->
+        // This is the dotless indexer pattern: obj[index]
+        // The parser produces App(obj, ArrayOrListComputed(false=list, index))
+        // We rewrite this to IndexGet semantics
+        let objNode = checkExpr env builder objExpr
+        
+        // Check the index expression - handle both single index and tuples for multi-dimensional
+        let indexNodes =
+            match indexExpr with
+            | SynExpr.Tuple(_, exprs, _, _) -> exprs |> List.map (checkExpr env builder)
+            | _ -> [checkExpr env builder indexExpr]
+        
+        // For single-index access, index should be int
+        match indexNodes with
+        | [single] ->
+            addConstraint (Constraint.Equals(single.Type, env.Globals.IntType, range)) env
+        | _ -> ()  // Multi-dimensional indexing would need tuple of ints
+        
+        let indexNodeId =
+            match indexNodes with
+            | [single] -> single.Id
+            | multiple ->
+                let multipleNodeIds = multiple |> List.map (fun indexNode -> indexNode.Id)
+                let multipleNodeTypes = multiple |> List.map (fun indexNode -> indexNode.Type)
+                let tupleNode = builder.Create(
+                    SemanticKind.TupleExpr(multipleNodeIds),
+                    NativeType.TTuple(multipleNodeTypes, false),
+                    range,
+                    children = multipleNodeIds)
+                tupleNode.Id
+        
+        // Determine the element type based on the object type
+        let isStringType ty =
+            match ty with
+            | NativeType.TApp(tc, []) when tc.Name = "string" -> true
+            | _ -> false
+        let elementType =
+            let objType = applySubst objNode.Type
+            match objType with
+            | NativeType.TApp(tc, [elemType]) when tc.Name = "array" ->
+                // Array indexing: result is the element type
+                elemType
+            | _ when isStringType objType ->
+                // String indexing: result is char
+                env.Globals.CharType
+            | NativeType.TVar _ ->
+                // Type variable - could be array, add constraint
+                let elemType = freshTypeVar range
+                addConstraint (Constraint.Equals(objType, mkArrayType elemType, range)) env
+                elemType
+            | _ ->
+                // Unknown type - use fresh type variable with HasMember constraint
+                let resultType = freshTypeVar range
+                addConstraint (Constraint.HasMember(objType, "Item", resultType, range)) env
+                resultType
+        
+        let allChildNodeIds = objNode.Id :: (indexNodes |> List.map (fun indexNode -> indexNode.Id))
+        builder.Create(
+            SemanticKind.IndexGet(objNode.Id, indexNodeId),
+            elementType,
+            range,
+            children = allChildNodeIds)
 
     //---------------------------------------------------------------------
     // Function application
@@ -1236,18 +1469,28 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
         // INTRINSIC MEMBERS: Native string type has intrinsic Pointer and Length
         // NativeStr = {ptr: *u8, len: usize} - these are NOT fields, they're intrinsics
         // FNCS provides these as part of the native type universe
+        // CRITICAL: Apply substitutions to resolve type variables before checking
+        let resolvedType = applySubst exprNode.Type
         let isStringType ty =
             match ty with
             | NativeType.TApp(tycon, []) when tycon.Name = "string" -> true
             | _ -> false
 
+        let isArrayType ty =
+            match ty with
+            | NativeType.TApp(tycon, [_]) when tycon.Name = "array" -> true
+            | _ -> false
+
         let resultTy =
             match fieldName with
-            | "Pointer" when isStringType exprNode.Type ->
+            | "Pointer" when isStringType resolvedType ->
                 // string.Pointer : nativeptr<byte>
                 NativeType.TNativePtr(NativeGlobals.Types.uint8Type)
-            | "Length" when isStringType exprNode.Type ->
+            | "Length" when isStringType resolvedType ->
                 // string.Length : int
+                env.Globals.IntType
+            | "Length" when isArrayType resolvedType ->
+                // array.Length : int
                 env.Globals.IntType
             | _ ->
                 // General case: create HasMember constraint for SRTP
@@ -1262,7 +1505,71 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
             children = [exprNode.Id])
 
     //---------------------------------------------------------------------
-    // Assignment
+    // Assignment - F# 6 dotless indexer set: expr[index] <- value
+    //---------------------------------------------------------------------
+    | SynExpr.Set(SynExpr.App(_, _, objExpr, SynExpr.ArrayOrListComputed(false, indexExpr, _), _), valueExpr, _) ->
+        // Dotless indexer set pattern: obj[index] <- value
+        let objNode = checkExpr env builder objExpr
+        let valueNode = checkExpr env builder valueExpr
+        
+        // Check the index expression
+        let indexNodes =
+            match indexExpr with
+            | SynExpr.Tuple(_, exprs, _, _) -> exprs |> List.map (checkExpr env builder)
+            | _ -> [checkExpr env builder indexExpr]
+        
+        // For single-index access, index should be int
+        match indexNodes with
+        | [single] ->
+            addConstraint (Constraint.Equals(single.Type, env.Globals.IntType, range)) env
+        | _ -> ()
+        
+        let indexNodeId =
+            match indexNodes with
+            | [single] -> single.Id
+            | multiple ->
+                let multipleNodeIds = multiple |> List.map (fun indexNode -> indexNode.Id)
+                let multipleNodeTypes = multiple |> List.map (fun indexNode -> indexNode.Type)
+                let tupleNode = builder.Create(
+                    SemanticKind.TupleExpr(multipleNodeIds),
+                    NativeType.TTuple(multipleNodeTypes, false),
+                    range,
+                    children = multipleNodeIds)
+                tupleNode.Id
+        
+        // Determine the element type based on the object type
+        let isStringType ty =
+            match ty with
+            | NativeType.TApp(tc, []) when tc.Name = "string" -> true
+            | _ -> false
+        let elementType =
+            let objType = applySubst objNode.Type
+            match objType with
+            | NativeType.TApp(tc, [elemType]) when tc.Name = "array" ->
+                elemType
+            | _ when isStringType objType ->
+                env.Globals.CharType
+            | NativeType.TVar _ ->
+                let elemType = freshTypeVar range
+                addConstraint (Constraint.Equals(objType, mkArrayType elemType, range)) env
+                elemType
+            | _ ->
+                let resultType = freshTypeVar range
+                addConstraint (Constraint.HasMember(objType, "Item", resultType, range)) env
+                resultType
+        
+        // Value type must match element type
+        addConstraint (Constraint.Equals(valueNode.Type, elementType, range)) env
+        
+        let allChildNodeIds = objNode.Id :: (indexNodes |> List.map (fun indexNode -> indexNode.Id)) @ [valueNode.Id]
+        builder.Create(
+            SemanticKind.IndexSet(objNode.Id, indexNodeId, valueNode.Id),
+            env.Globals.UnitType,
+            range,
+            children = allChildNodeIds)
+
+    //---------------------------------------------------------------------
+    // Assignment - General case
     //---------------------------------------------------------------------
     | SynExpr.Set(targetExpr, valueExpr, _) ->
         let targetNode = checkExpr env builder targetExpr
@@ -1337,19 +1644,19 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
             // Single part - just check it normally
             checkExpr env builder single
         | first :: rest ->
-            // Build nested concat2 calls as synthetic SynExpr, then check
-            // concat2 is defined in Alloy.String which is AutoOpen
+            // Build nested String.concat2 calls as synthetic SynExpr, then check
+            // String.concat2 is an FNCS intrinsic (post-Alloy absorption)
             let concat2Ident =
                 SynExpr.LongIdent(
                     false,
-                    SynLongIdent([Ident("concat2", synRange)], [], [None]),
+                    SynLongIdent([Ident("String", synRange); Ident("concat2", synRange)], [synRange], [None; None]),
                     None,
                     synRange)
 
-            // Fold: concat2 (concat2 (concat2 first p1) p2) p3 ...
+            // Fold: String.concat2 (String.concat2 (String.concat2 first p1) p2) p3 ...
             let resultExpr =
                 rest |> List.fold (fun accExpr nextExpr ->
-                    // Create: concat2 accExpr nextExpr
+                    // Create: String.concat2 accExpr nextExpr
                     let app1 = SynExpr.App(ExprAtomicFlag.NonAtomic, false, concat2Ident, accExpr, synRange)
                     SynExpr.App(ExprAtomicFlag.NonAtomic, false, app1, nextExpr, synRange)
                 ) first
@@ -1601,6 +1908,14 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
             match indexArgs with
             | SynExpr.Tuple(_, exprs, _, _) -> exprs |> List.map (checkExpr env builder)
             | indexExpr -> [checkExpr env builder indexExpr]
+        
+        // For array indexing, the index should be int
+        // For single-index access (most common case)
+        match indexNodes with
+        | [single] ->
+            addConstraint (Constraint.Equals(single.Type, env.Globals.IntType, range)) env
+        | _ -> ()  // Multi-dimensional indexing would need tuple of ints
+        
         let indexNodeId =
             match indexNodes with
             | [single] -> single.Id
@@ -1613,10 +1928,40 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     range,
                     children = multipleNodeIds)
                 tupleNode.Id
+        
+        // Determine the element type based on the object type
+        // For arrays: 'T array -> 'T
+        // For strings: string -> char
+        // For other types: create HasMember constraint for Item property
+        let isStringType ty =
+            match ty with
+            | NativeType.TApp(tc, []) when tc.Name = "string" -> true
+            | _ -> false
+        let elementType =
+            let objType = applySubst objNode.Type
+            match objType with
+            | NativeType.TApp(tc, [elemType]) when tc.Name = "array" ->
+                // Array indexing: result is the element type
+                elemType
+            | _ when isStringType objType ->
+                // String indexing: result is char
+                env.Globals.CharType
+            | NativeType.TVar _ ->
+                // Type variable - could be array, add constraint
+                // Create constraint: objType = elemType array
+                let elemType = freshTypeVar range
+                addConstraint (Constraint.Equals(objType, mkArrayType elemType, range)) env
+                elemType
+            | _ ->
+                // Unknown type - use fresh type variable with HasMember constraint
+                let resultType = freshTypeVar range
+                addConstraint (Constraint.HasMember(objType, "Item", resultType, range)) env
+                resultType
+        
         let allChildNodeIds = objNode.Id :: (indexNodes |> List.map (fun indexNode -> indexNode.Id))
         builder.Create(
             SemanticKind.IndexGet(objNode.Id, indexNodeId),
-            freshTypeVar range,
+            elementType,
             range,
             children = allChildNodeIds)
 
@@ -2338,6 +2683,10 @@ and checkBinding (env: TypeEnv) (builder: NodeBuilder) (binding: SynBinding) : S
             else
                 mkFunctionType paramTypes bodyNode.Type
 
+        // NOTE: Generalization disabled - it was causing type mismatches.
+        // The proper fix requires smarter generalization (only top-level, not nested).
+        // For now, rely on primitive operators having TForall in NativeGlobals.
+
         // Create Lambda node
         let lambdaNode = builder.Create(
             SemanticKind.Lambda(paramBindings, bodyNode.Id),
@@ -2380,10 +2729,18 @@ and checkMatchClause (env: TypeEnv) (builder: NodeBuilder) (scrutineeTy: NativeT
     // Check pattern and extract bindings
     let (pattern, patBindings) = checkPattern env pat scrutineeTy range
 
-    // Add pattern bindings to environment
+    // Create PSG nodes for pattern bindings and add to environment
+    // Following ML/FStar convention: pattern binding IS the definition
     let bodyEnv =
         patBindings
-        |> List.fold (fun env (name, ty) -> addBinding name ty false None env) env
+        |> List.fold (fun env (name, ty) ->
+            let patternBindingNode = builder.Create(
+                SemanticKind.PatternBinding(name),
+                ty,
+                range,
+                arena = env.CurrentArena)
+            addBinding name ty false (Some patternBindingNode.Id) env
+        ) env
 
     // Check guard if present
     let guardNode = guardOpt |> Option.map (checkExpr bodyEnv builder)
@@ -2962,12 +3319,12 @@ and checkSynType (env: TypeEnv) (synType: SynType) : NativeType =
 /// Check an expression and solve constraints
 let checkAndSolve (env: TypeEnv) (builder: NodeBuilder) (expr: SynExpr) : SemanticNode * Constraint list =
     // Reset constraint list
-    env.Constraints <- []
+    env.Constraints := []
 
     // Check expression
     let node = checkExpr env builder expr
 
     // Collect constraints
-    let constraints = env.Constraints
+    let constraints = !(env.Constraints)
 
     (node, constraints)

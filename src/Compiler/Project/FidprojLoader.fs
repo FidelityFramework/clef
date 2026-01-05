@@ -73,6 +73,9 @@ type FidprojOptions = {
     Dependencies: FidprojDependency list
     /// Resolved absolute path to Alloy library (if specified).
     AlloyPath: string option
+    /// Resolved absolute path to platform binding library (if specified).
+    /// E.g., ~/repos/Fidelity.Platform/Linux_x86_64
+    PlatformPath: string option
 }
 
 module FidprojLoader =
@@ -195,6 +198,13 @@ module FidprojLoader =
                     |> List.tryFind (fun d -> d.Name = "alloy" || d.Name = "Alloy")
                     |> Option.bind (fun d -> d.Path)
 
+                // Extract platform binding library path from dependencies
+                // E.g., platform = { path = "/home/hhh/repos/Fidelity.Platform/Linux_x86_64" }
+                let platformPath =
+                    dependencies
+                    |> List.tryFind (fun d -> d.Name = "platform" || d.Name = "Platform")
+                    |> Option.bind (fun d -> d.Path)
+
                 Ok {
                     ProjectPath = absPath
                     ProjectDirectory = projectDir
@@ -207,6 +217,7 @@ module FidprojLoader =
                     OutputKind = outputKind
                     Dependencies = dependencies
                     AlloyPath = alloyPath
+                    PlatformPath = platformPath
                 }
 
     /// Tries to find a .fidproj file in the given directory.
