@@ -287,6 +287,8 @@ type TypeParamKind =
 type TypeParamId = int
 
 /// Reference to a type constructor (not IL-based)
+/// Note: For record types, field info is accessed via SemanticGraph.Types lookup
+/// (not embedded here due to F# forward reference constraints)
 [<NoComparison>]
 type TypeConRef = {
     /// The name of the type constructor (e.g., "string", "option", "Ptr")
@@ -302,6 +304,10 @@ type TypeConRef = {
     /// Some(kind) for native primitives, None for user-defined/compound types.
     /// Used for type identity: NTUint ≠ NTUint64 even if same width on some platforms.
     NTUKind: NTUKind option
+    /// Number of record fields (if this is a record type).
+    /// 0 for non-record types. >0 for record types.
+    /// Actual field types are looked up via SemanticGraph.Types.
+    FieldCount: int
 }
 
 /// Total arity (type + measure parameters)
@@ -309,19 +315,24 @@ let arity (tc: TypeConRef) = List.length tc.ParamKinds
 
 /// Create a simple type constructor with only type parameters (non-NTU kind)
 let mkTypeConRef name typeArity layout =
-    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = None }
+    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = None; FieldCount = 0 }
 
 /// Create a type constructor with explicit parameter kinds (non-NTU kind)
 let mkTypeConRefWithMeasures name paramKinds layout =
-    { Name = name; Module = []; ParamKinds = paramKinds; Layout = layout; NTUKind = None }
+    { Name = name; Module = []; ParamKinds = paramKinds; Layout = layout; NTUKind = None; FieldCount = 0 }
 
 /// Create a type constructor with an NTU kind (for native primitives)
 let mkNTUTypeConRef name ntuKind layout =
-    { Name = name; Module = []; ParamKinds = []; Layout = layout; NTUKind = Some ntuKind }
+    { Name = name; Module = []; ParamKinds = []; Layout = layout; NTUKind = Some ntuKind; FieldCount = 0 }
 
 /// Create a parameterized type constructor with an NTU kind
 let mkNTUTypeConRefWithArity name ntuKind typeArity layout =
-    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = Some ntuKind }
+    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = Some ntuKind; FieldCount = 0 }
+
+/// Create a type constructor for a record type
+/// Field info is accessed via SemanticGraph.Types lookup (not embedded in TypeConRef)
+let mkRecordTypeConRef name modulePath layout fieldCount =
+    { Name = name; Module = modulePath; ParamKinds = []; Layout = layout; NTUKind = None; FieldCount = fieldCount }
 
 //-------------------------------------------------------------------------
 // Code Labels (for state machine compilation)
@@ -588,12 +599,20 @@ let rec layoutOf (ty: NativeType) : TypeLayout =
 /// Algorithm (from spec inference-procedures.md Step 4):
 /// 1. For each field in declaration order, compute offset with padding for alignment
 /// 2. Total layout = (sum of sizes + padding, max alignment)
+/// Compute record layout from field types.
+/// Uses 64-bit (8-byte word size) as the compilation target.
+/// ARCHITECTURAL NOTE: Fidelity targets 64-bit platforms exclusively.
+/// This is a deliberate design choice, not a limitation to be worked around.
 let computeRecordLayout (fields: (string * NativeType) list) : TypeLayout =
+    // 64-bit platform constants
+    let wordSize = 8
+    let wordAlign = 8
+
     let folder (offset, maxAlign) (_, fieldType) =
         let fieldLayout = layoutOf fieldType
         match fieldLayout with
         | TypeLayout.Inline(size, align) when size >= 0 && align > 0 ->
-            // Add padding for alignment
+            // Known inline size - add padding for alignment
             let pad =
                 let remainder = offset % align
                 if remainder = 0 then 0 else align - remainder
@@ -603,26 +622,38 @@ let computeRecordLayout (fields: (string * NativeType) list) : TypeLayout =
             // Size or alignment is unknown (-1), propagate unknown
             (-1, -1)
         | TypeLayout.Opaque ->
-            // Unknown at compile time - can't compute exact layout
+            // Truly unknown at compile time - can't compute exact layout
             (-1, -1)
         | TypeLayout.PlatformWord ->
-            // Platform-dependent size - propagate unknown (Alex resolves at codegen)
-            (-1, -1)
+            // nativeint, nativeptr - word-sized on 64-bit platform
+            let pad =
+                let remainder = offset % wordAlign
+                if remainder = 0 then 0 else wordAlign - remainder
+            let paddedOffset = offset + pad
+            (paddedOffset + wordSize, max maxAlign wordAlign)
         | TypeLayout.FatPointer ->
-            // Fat pointer (ptr + len), both platform-word sized - propagate unknown
-            // Alex resolves to (2 * wordSize, wordSize) at codegen
-            (-1, -1)
-        | TypeLayout.NTUCompound _ ->
-            // NTU compound struct - platform-dependent components
-            // Alex resolves to (n * wordSize, wordSize) at codegen
-            (-1, -1)
+            // Fat pointer = {ptr, len} = 2 words on 64-bit
+            let fatPtrSize = 2 * wordSize
+            let pad =
+                let remainder = offset % wordAlign
+                if remainder = 0 then 0 else wordAlign - remainder
+            let paddedOffset = offset + pad
+            (paddedOffset + fatPtrSize, max maxAlign wordAlign)
+        | TypeLayout.NTUCompound count ->
+            // NTU compound = n words on 64-bit (e.g., tuple of nativeints)
+            let compoundSize = count * wordSize
+            let pad =
+                let remainder = offset % wordAlign
+                if remainder = 0 then 0 else wordAlign - remainder
+            let paddedOffset = offset + pad
+            (paddedOffset + compoundSize, max maxAlign wordAlign)
         | TypeLayout.Reference _ ->
             // Reference types are pointer-sized (8 bytes on 64-bit)
             let pad =
-                let remainder = offset % 8
-                if remainder = 0 then 0 else 8 - remainder
+                let remainder = offset % wordAlign
+                if remainder = 0 then 0 else wordAlign - remainder
             let paddedOffset = offset + pad
-            (paddedOffset + 8, max maxAlign 8)
+            (paddedOffset + wordSize, max maxAlign wordAlign)
 
     let (totalSize, maxAlign) = List.fold folder (0, 1) fields
 

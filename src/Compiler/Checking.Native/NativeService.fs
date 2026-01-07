@@ -729,7 +729,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // Per fsnative-spec: Field order determines memory layout
                     // "Fidelity makes ALL memory layout decisions - MLIR/LLVM never determine layout"
                     let (SynComponentInfo(attrs, typars, _, _, _, _, _, _)) = typeInfo
-                    let arity = match typars with Some tp -> tp.TyparDecls.Length | None -> 0
+                    let _arity = match typars with Some tp -> tp.TyparDecls.Length | None -> 0
                     let requireQualifiedAccess = hasRequireQualifiedAccessAttribute attrs
                     
                     // Extract field names and types from SynField list
@@ -753,9 +753,10 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // Compute memory layout from fields
                     // Per spec Step 4: "Initialize offset = 0, max_align = 1..."
                     let layout = computeRecordLayout fieldInfos
-                    
+
                     // Create TypeConRef with computed layout
-                    let tyCon = mkTypeConRef typeName arity layout
+                    // Field info is accessed via SemanticGraph.Types lookup (TypeDef node)
+                    let tyCon = mkRecordTypeConRef typeName ctx.Path layout (List.length fieldInfos)
                     
                     // Register under all name suffixes (handles AutoOpen modules)
                     let updatedEnv = 
@@ -774,6 +775,8 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     
                     // Also register the record constructor as a binding
                     // Record constructor takes field values and returns the record type
+                    // Use TApp - field information is carried in the TypeDef node (SemanticGraph.Types lookup)
+                    // This follows the FCS pattern: TyconRef.Deref for metadata, not embedded in type refs
                     let recordType = mkSimpleType tyCon
                     let updatedEnv = addBinding typeName recordType false None updatedEnv
                     

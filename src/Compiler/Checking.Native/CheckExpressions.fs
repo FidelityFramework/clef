@@ -329,15 +329,14 @@ let resolveRecordTypeFromFields
                 let typeName = Set.minElement intersection
                 match Map.tryFind typeName env.RecordDefs with
                 | Some recordInfo ->
-                    // Return the record type with its computed layout
+                    // Return TApp - field information is accessed via SemanticGraph.Types → TypeDef lookup
+                    // This follows the FCS pattern: TyconRef.Deref for metadata, not embedded in type refs
                     Result.Ok (mkSimpleType recordInfo.TypeCon)
                 | None ->
-                    // Fallback: look up in TypeDefs (for records not yet in RecordDefs)
-                    match Map.tryFind typeName env.TypeDefs with
-                    | Some tyCon -> Result.Ok (mkSimpleType tyCon)
-                    | None ->
-                        Result.Error((DiagnosticCodes.FS0001_GenericError,
-                               sprintf "Internal error: resolved record type '%s' not found" typeName))
+                    // INTERNAL ERROR: Field label resolution found this type name,
+                    // so it MUST exist in RecordDefs. If not, the FieldLabels map is inconsistent.
+                    Result.Error((DiagnosticCodes.FS0001_GenericError,
+                           sprintf "Internal error: field labels reference record type '%s' but it is not in RecordDefs" typeName))
             | _ ->
                 // FS8704: Ambiguous fields - multiple record types could match
                 let typeNames = intersection |> Set.toList |> String.concat ", "
@@ -1048,9 +1047,10 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 intrinsicType,
                 range)
         else
-        // Check for platform bindings (Bindings.* or Platform.Bindings.*)
+        // Check for platform bindings (Bindings.*, Conduits.*, or specifically WebViewConduits)
         let isPlatformBinding =
-            name.StartsWith("Bindings.") || name.Contains(".Bindings.")
+            name.StartsWith("Bindings.") || name.Contains(".Bindings.") ||
+            name.Contains("WebViewConduits.")
         match tryLookupBinding name env with
         | Some binding ->
             // Found the binding - use its type
@@ -1392,7 +1392,8 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                     //
                     // Note: Partial application is still preserved by the type system.
                     // A function expecting 3 args called with 2 creates a closure-typed result.
-                    | SemanticKind.Intrinsic _ 
+                    | SemanticKind.Intrinsic _
+                    | SemanticKind.PlatformBinding _
                     | SemanticKind.VarRef _
                     | SemanticKind.Lambda _
                     | SemanticKind.Application _ ->
@@ -1623,15 +1624,11 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                             // Record type not in RecordDefs - internal error in resolution
                             addNativeError DiagnosticCodes.FS0001_GenericError recordRange
                                 (sprintf "Internal error: record type '%s' not found in RecordDefs" tyCon.Name) env
-                    | NativeType.TRecord(tyCon, fields) ->
-                        // Inline record type with explicit fields
-                        for (fieldName, exprNode) in fieldNodes do
-                            match fields |> List.tryFind (fun (n, _) -> n = fieldName) with
-                            | Some (_, expectedTy) ->
-                                addConstraint (Constraint.Equals(exprNode.Type, expectedTy, range)) env
-                            | None ->
-                                addNativeError DiagnosticCodes.FS8702_UndefinedField recordRange
-                                    (sprintf "Field '%s' is not defined in record type '%s'" fieldName tyCon.Name) env
+                    | NativeType.TRecord(tyCon, _) ->
+                        // TRecord should not be created - field info is accessed via SemanticGraph.Types lookup
+                        // If we get here, there's a bug in type construction
+                        addNativeError DiagnosticCodes.FS0001_GenericError recordRange
+                            (sprintf "Internal error: unexpected TRecord type '%s'. Field info should use TApp + RecordDefs lookup." tyCon.Name) env
                     | NativeType.TError _ ->
                         // Already an error - don't add more diagnostics
                         ()
@@ -3091,10 +3088,25 @@ and checkPattern (env: TypeEnv) (pat: SynPat) (expectedTy: NativeType) (range: S
                 (Pattern.Union(caseName, None, expectedTy), [])
         | SynArgPats.Pats pats ->
             // Constructor with arguments (e.g., Some x, Error e)
+            // Look up constructor binding to get payload types (FCS TyconRef.Deref pattern)
+            let payloadTypes =
+                match tryLookupBinding caseName env with
+                | Some binding ->
+                    // Extract domain types from constructor's function type
+                    // e.g., IntVal : int -> Number has type TFun(int, Number)
+                    // e.g., Pair : int -> string -> T has type TFun(int, TFun(string, T))
+                    let rec extractDomains ty acc =
+                        match ty with
+                        | NativeType.TFun(domain, range) -> extractDomains range (domain :: acc)
+                        | _ -> List.rev acc
+                    extractDomains binding.Type []
+                | None ->
+                    // Fallback: use fresh type variables (will be constrained later)
+                    pats |> List.map (fun _ -> freshTypeVar range)
+
             let (argPatterns, argBindings) =
-                pats
-                |> List.map (fun p ->
-                    let argTy = freshTypeVar range
+                List.zip pats payloadTypes
+                |> List.map (fun (p, argTy) ->
                     checkPattern env p argTy range)
                 |> List.unzip
             let payload = if List.isEmpty argPatterns then None else Some (Pattern.Tuple argPatterns)

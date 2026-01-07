@@ -38,10 +38,12 @@ type NanopassConfig = {
 }
 
 /// Default configuration - all emission disabled
+/// Note: SoftDeleteReachability = true is required for correct behavior.
+/// Hard-delete removes TypeDef nodes needed for record/union field lookups.
 let defaultConfig : NanopassConfig = {
     EmitIntermediates = false
     OutputDir = ""
-    SoftDeleteReachability = false
+    SoftDeleteReachability = true  // Must be true - hard-delete breaks field lookups
     PhaseSettings = Map.empty
     IncludeNodeBodies = false
     IncludeRanges = true

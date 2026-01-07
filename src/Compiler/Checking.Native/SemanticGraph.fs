@@ -541,7 +541,7 @@ module SemanticGraph =
     /// Recall a type definition by name (codata observation)
     let recallType (name: string) (graph: SemanticGraph) : NodeId option =
         graph.Types.Value |> Map.tryFind name
-    
+
     /// Create an empty semantic graph
     let empty : SemanticGraph = {
         Nodes = Map.empty
@@ -571,7 +571,20 @@ module SemanticGraph =
     /// Get a node by ID
     let tryGetNode (id: NodeId) (graph: SemanticGraph) : SemanticNode option =
         Map.tryFind id graph.Nodes
-    
+
+    /// Get record field definitions by type name (FCS TyconRef.Deref pattern)
+    /// Returns None if type is not found or is not a record type
+    let tryGetRecordFields (typeName: string) (graph: SemanticGraph) : (string * NativeType) list option =
+        match recallType typeName graph with
+        | Some nodeId ->
+            match tryGetNode nodeId graph with
+            | Some node ->
+                match node.Kind with
+                | SemanticKind.TypeDef(_, TypeDefKind.RecordDef fields, _) -> Some fields
+                | _ -> None  // Not a record type
+            | None -> None  // Node not found (shouldn't happen)
+        | None -> None  // Type not in index
+
     /// Get a node by ID (throws if not found)
     let getNode (id: NodeId) (graph: SemanticGraph) : SemanticNode =
         match Map.tryFind id graph.Nodes with
