@@ -739,8 +739,44 @@ module Reachability =
         | _ ->
             node.Children
 
+    /// Extract type names from a NativeType (for reachability of TypeDef nodes)
+    /// Only extracts user-defined type names (records, unions) that need TypeDef lookup
+    let rec getTypeNames (ty: NativeType) : string list =
+        match ty with
+        | NativeType.TApp(tycon, args) ->
+            // TApp with FieldCount > 0 indicates a record type needing TypeDef
+            let tyconNames = if tycon.FieldCount > 0 then [tycon.Name] else []
+            tyconNames @ (args |> List.collect getTypeNames)
+        | NativeType.TFun(domain, range) ->
+            getTypeNames domain @ getTypeNames range
+        | NativeType.TTuple(elements, _) ->
+            elements |> List.collect getTypeNames
+        | NativeType.TRecord(tycon, fields) ->
+            tycon.Name :: (fields |> List.collect (fun (_, t) -> getTypeNames t))
+        | NativeType.TUnion(tycon, cases) ->
+            tycon.Name :: (cases |> List.collect (fun c -> c.Fields |> List.collect (fun (_, t) -> getTypeNames t)))
+        | NativeType.TNativePtr(inner) ->
+            getTypeNames inner
+        | NativeType.TByref(inner, _) ->
+            getTypeNames inner
+        | NativeType.TAnon(fields, _) ->
+            fields |> List.collect (fun (_, t) -> getTypeNames t)
+        | NativeType.TForall(_, body) ->
+            getTypeNames body
+        | NativeType.TVar(tv) ->
+            match tv.Parent with
+            | TypeParamState.Bound t -> getTypeNames t
+            | _ -> []
+        | _ -> []
+
+    /// Get TypeDef NodeIds for types referenced by a node
+    let getTypeDefRefs (node: SemanticNode) (graph: SemanticGraph) : NodeId list =
+        let typeNames = getTypeNames node.Type
+        typeNames
+        |> List.choose (fun name -> SemanticGraph.recallType name graph)
+
     /// Compute the set of reachable nodes from given entry points
-    /// Follows both structural children and semantic references (call edges, etc.)
+    /// Follows structural children, semantic references, AND type references
     let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId> =
         let rec walk (visited: Set<NodeId>) (nodeId: NodeId) =
             if Set.contains nodeId visited then
@@ -750,9 +786,11 @@ module Reachability =
                 | None -> visited
                 | Some node ->
                     let visited = Set.add nodeId visited
-                    // Follow both structural children and semantic references
+                    // Follow structural children and semantic references
                     let refs = getSemanticReferences node
-                    let allRefs = List.append node.Children refs |> List.distinct
+                    // Also follow type references to ensure TypeDefs are reachable
+                    let typeRefs = getTypeDefRefs node graph
+                    let allRefs = (node.Children @ refs @ typeRefs) |> List.distinct
                     allRefs |> List.fold walk visited
 
         entries |> List.fold walk Set.empty
