@@ -690,6 +690,37 @@ module Reachability =
             | _ -> info.Module.ToString().ToLowerInvariant()
         $"__{moduleName}_{info.Operation}"
 
+    /// Determine if an intrinsic is compiler-provided (Alex handles directly)
+    /// vs library-backed (needs F# implementation function in dependency graph).
+    ///
+    /// ARCHITECTURAL PRINCIPLE: Core native operations are part of the Native Type Universe
+    /// and are realized directly by Alex. Library-backed intrinsics (reactive signals)
+    /// require F# implementation functions from libraries like Fidelity.Signal.
+    let isCompilerProvidedIntrinsic (info: IntrinsicInfo) : bool =
+        match info.Module with
+        // Library-backed: require F# implementation functions
+        | IntrinsicModule.Signal
+        | IntrinsicModule.Effect
+        | IntrinsicModule.Memo
+        | IntrinsicModule.Batch
+        | IntrinsicModule.FnPtr -> false
+        // Compiler-provided: Alex handles directly, no F# implementation needed
+        | IntrinsicModule.Sys
+        | IntrinsicModule.NativePtr
+        | IntrinsicModule.NativeStr
+        | IntrinsicModule.NativeDefault
+        | IntrinsicModule.String
+        | IntrinsicModule.Console
+        | IntrinsicModule.Array
+        | IntrinsicModule.Math
+        | IntrinsicModule.Unchecked
+        | IntrinsicModule.Operators
+        | IntrinsicModule.Parse
+        | IntrinsicModule.Format
+        | IntrinsicModule.Convert
+        | IntrinsicModule.Crypto
+        | IntrinsicModule.Bits -> true
+
     /// Extract semantic references from a node's Kind (call targets, definition refs, etc.)
     /// Used by traversal to ensure all semantic children are visited.
     /// IMPORTANT: ALL SemanticKind cases MUST be handled explicitly - no wildcards!
@@ -880,16 +911,24 @@ module Reachability =
         entries |> List.fold walk Set.empty
 
     /// Check for missing intrinsic implementation functions.
+    /// Only checks LIBRARY-BACKED intrinsics (Signal, Effect, Memo, Batch, FnPtr).
+    /// COMPILER-PROVIDED intrinsics (Sys, Console, NativePtr, etc.) are handled
+    /// directly by Alex and don't need F# implementation functions.
     /// Returns list of (intrinsicName, implName, range) for missing functions.
     let findMissingIntrinsicImplementations (graph: SemanticGraph) : (string * string * SourceRange) list =
         graph.Nodes.Values
         |> Seq.choose (fun node ->
             match node.Kind with
             | SemanticKind.Intrinsic info ->
-                let implName = intrinsicImplementationName info
-                match findBindingByName implName graph with
-                | Some _ -> None
-                | None -> Some (info.FullName, implName, node.Range)
+                // Skip compiler-provided intrinsics - Alex handles them directly
+                if isCompilerProvidedIntrinsic info then
+                    None
+                else
+                    // Library-backed intrinsic - check for implementation function
+                    let implName = intrinsicImplementationName info
+                    match findBindingByName implName graph with
+                    | Some _ -> None
+                    | None -> Some (info.FullName, implName, node.Range)
             | _ -> None)
         |> Seq.toList
 
