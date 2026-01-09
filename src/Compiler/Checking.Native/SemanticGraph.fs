@@ -118,6 +118,7 @@ module PlatformContext =
         | NTUKind.NTUint | NTUKind.NTUuint -> ctx.WordSize / 8
         | NTUKind.NTUnint | NTUKind.NTUunint -> ctx.PointerSize
         | NTUKind.NTUptr -> ctx.PointerSize
+        | NTUKind.NTUfnptr -> ctx.PointerSize  // Function pointers are pointer-sized
         | NTUKind.NTUsize | NTUKind.NTUdiff -> ctx.PointerSize
         // Fixed width
         | NTUKind.NTUint8 | NTUKind.NTUuint8 -> 1
@@ -145,6 +146,7 @@ module PlatformContext =
         | NTUKind.NTUint | NTUKind.NTUuint -> ctx.WordSize / 8
         | NTUKind.NTUnint | NTUKind.NTUunint -> ctx.PointerAlign
         | NTUKind.NTUptr -> ctx.PointerAlign
+        | NTUKind.NTUfnptr -> ctx.PointerAlign  // Function pointers align like pointers
         | NTUKind.NTUsize | NTUKind.NTUdiff -> ctx.PointerAlign
         // Fixed width - natural alignment
         | NTUKind.NTUint8 | NTUKind.NTUuint8 -> 1
@@ -226,6 +228,14 @@ type IntrinsicModule =
     | Parse         // String parsing (int, float - NTU string→numeric conversion)
     | Format        // Value formatting (string - NTU numeric→string conversion)
     | Convert       // Type conversions (float, int, int64, byte, etc. - numeric↔numeric)
+    | Crypto        // Cryptographic operations (sha1, base64Encode, base64Decode)
+    | Bits          // Bit manipulation and byte order (htons, ntohs, float↔int bits)
+    // Reactive signals (SolidJS-inspired native signals)
+    | FnPtr         // Function pointer operations (ofFunction, invoke, isNull, null)
+    | Signal        // Reactive signal operations (create, get, set, update)
+    | Effect        // Side effect operations (create, createWithCleanup, dispose)
+    | Memo          // Memoized computation operations (create, get)
+    | Batch         // Update batching operations (run)
 
 /// Category of intrinsic - guides how Alex should emit it
 [<RequireQualifiedAccess>]
@@ -238,6 +248,7 @@ type IntrinsicCategory =
     | Conversion    // Emits as type conversion (int, float, etc.)
     | StringOp      // Emits as string manipulation (concat2, etc.)
     | Pure          // Emits as pure MLIR (no side effects, NativeDefault.zeroed)
+    | Reactive      // Emits as reactive signal operations (Signal.*, Effect.*, Memo.*)
 
 /// Rich metadata for compiler intrinsics
 /// Replaces string-based dispatch with structured information
@@ -665,8 +676,23 @@ type NodeBuilder() =
 //-------------------------------------------------------------------------
 
 module Reachability =
+    /// Derive implementation function name from intrinsic info.
+    /// Convention: Module.operation → __module_operation (lowercase)
+    /// E.g., Signal.create → __signal_create
+    let intrinsicImplementationName (info: IntrinsicInfo) : string =
+        let moduleName =
+            match info.Module with
+            | IntrinsicModule.Signal -> "signal"
+            | IntrinsicModule.Effect -> "effect"
+            | IntrinsicModule.Memo -> "memo"
+            | IntrinsicModule.Batch -> "batch"
+            | IntrinsicModule.FnPtr -> "fnptr"
+            | _ -> info.Module.ToString().ToLowerInvariant()
+        $"__{moduleName}_{info.Operation}"
+
     /// Extract semantic references from a node's Kind (call targets, definition refs, etc.)
-    /// Used by traversal to ensure all semantic children are visited
+    /// Used by traversal to ensure all semantic children are visited.
+    /// IMPORTANT: ALL SemanticKind cases MUST be handled explicitly - no wildcards!
     let getSemanticReferences (node: SemanticNode) : NodeId list =
         match node.Kind with
         // Application: follow function and arguments
@@ -675,6 +701,8 @@ module Reachability =
         // VarRef with definition: follow to definition
         | SemanticKind.VarRef (_, Some defId) ->
             [defId]
+        | SemanticKind.VarRef (_, None) ->
+            []  // Unresolved reference - no semantic edges
         // Match: follow scrutinee and case bodies
         | SemanticKind.Match (scrutinee, cases) ->
             scrutinee :: (cases |> List.collect (fun c ->
@@ -722,22 +750,58 @@ module Reachability =
             [expr; index]
         | SemanticKind.IndexSet (expr, index, value) ->
             [expr; index; value]
+        | SemanticKind.NamedIndexedPropertySet (expr, _, index, value) ->
+            [expr; index; value]
         | SemanticKind.TypeAnnotation (expr, _) ->
             [expr]
         | SemanticKind.Upcast (expr, _) ->
             [expr]
         | SemanticKind.Downcast (expr, _) ->
             [expr]
+        | SemanticKind.TypeTest (expr, _) ->
+            [expr]
         | SemanticKind.Set (target, value) ->
             [target; value]
         | SemanticKind.AddressOf (expr, _) ->
             [expr]
+        | SemanticKind.Deref expr ->
+            [expr]
         // ModuleDef: follow member bindings
         | SemanticKind.ModuleDef (_, memberIds) ->
             memberIds
-        // Others: use children
-        | _ ->
-            node.Children
+        // TypeDef: follow member definitions
+        | SemanticKind.TypeDef (_, _, memberIds) ->
+            memberIds
+        // MemberDef: follow body if present
+        | SemanticKind.MemberDef (_, _, bodyOpt) ->
+            Option.toList bodyOpt
+        // ObjectExpr: follow member implementations
+        | SemanticKind.ObjectExpr (_, memberIds) ->
+            memberIds
+        // InterpolatedString: follow expression parts
+        | SemanticKind.InterpolatedString parts ->
+            parts |> List.choose (function
+                | InterpolatedPart.ExprPart id -> Some id
+                | InterpolatedPart.StringPart _ -> None)
+        // TraitCall: follow the argument
+        | SemanticKind.TraitCall (_, _, argId) ->
+            [argId]
+        // Quote: follow quoted expression
+        | SemanticKind.Quote (exprId, _) ->
+            [exprId]
+        // Intrinsic: implementation function reference is resolved during reachability walk
+        // The actual connection to implementation functions happens in computeReachable
+        | SemanticKind.Intrinsic _ ->
+            node.Children  // Follow any children (arguments)
+        // Leaf nodes with no semantic references
+        | SemanticKind.Literal _ ->
+            []
+        | SemanticKind.PlatformBinding _ ->
+            []
+        | SemanticKind.PatternBinding _ ->
+            []
+        | SemanticKind.Error _ ->
+            []
 
     /// Extract type names from a NativeType (for reachability of TypeDef nodes)
     /// Only extracts user-defined type names (records, unions) that need TypeDef lookup
@@ -775,8 +839,26 @@ module Reachability =
         typeNames
         |> List.choose (fun name -> SemanticGraph.recallType name graph)
 
+    /// Find a binding node by name in the graph
+    let findBindingByName (name: string) (graph: SemanticGraph) : NodeId option =
+        graph.Nodes
+        |> Map.tryPick (fun id node ->
+            match node.Kind with
+            | SemanticKind.Binding (bindingName, _, _, _) when bindingName = name ->
+                Some id
+            | _ -> None)
+
+    /// Get implementation function references for intrinsic nodes
+    /// Returns the NodeId of the implementation function if found
+    let getIntrinsicImplementationRef (node: SemanticNode) (graph: SemanticGraph) : NodeId option =
+        match node.Kind with
+        | SemanticKind.Intrinsic info ->
+            let implName = intrinsicImplementationName info
+            findBindingByName implName graph
+        | _ -> None
+
     /// Compute the set of reachable nodes from given entry points
-    /// Follows structural children, semantic references, AND type references
+    /// Follows structural children, semantic references, type references, AND intrinsic implementation functions
     let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId> =
         let rec walk (visited: Set<NodeId>) (nodeId: NodeId) =
             if Set.contains nodeId visited then
@@ -790,19 +872,58 @@ module Reachability =
                     let refs = getSemanticReferences node
                     // Also follow type references to ensure TypeDefs are reachable
                     let typeRefs = getTypeDefRefs node graph
-                    let allRefs = (node.Children @ refs @ typeRefs) |> List.distinct
+                    // Follow intrinsic implementation function references
+                    let intrinsicRef = getIntrinsicImplementationRef node graph |> Option.toList
+                    let allRefs = (node.Children @ refs @ typeRefs @ intrinsicRef) |> List.distinct
                     allRefs |> List.fold walk visited
 
         entries |> List.fold walk Set.empty
 
-    /// Soft-delete: mark unreachable nodes but preserve structure
-    /// Use this for debugging - allows inspection of full graph with reachability info
+    /// Check for missing intrinsic implementation functions.
+    /// Returns list of (intrinsicName, implName, range) for missing functions.
+    let findMissingIntrinsicImplementations (graph: SemanticGraph) : (string * string * SourceRange) list =
+        graph.Nodes.Values
+        |> Seq.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.Intrinsic info ->
+                let implName = intrinsicImplementationName info
+                match findBindingByName implName graph with
+                | Some _ -> None
+                | None -> Some (info.FullName, implName, node.Range)
+            | _ -> None)
+        |> Seq.toList
+
+    /// Soft-delete: mark unreachable nodes but preserve structure.
+    /// FAILS if any intrinsic is missing its implementation function - this is a fatal error.
     let markUnreachable (graph: SemanticGraph) : SemanticGraph =
+        // Check for missing implementation functions - this is a HARD ERROR
+        let missingImplementations = findMissingIntrinsicImplementations graph
+        if not (List.isEmpty missingImplementations) then
+            printfn ""
+            printfn "[REACHABILITY] FATAL: Missing intrinsic implementation functions!"
+            printfn "  The following intrinsics are used but their implementation functions are not found:"
+            for (intrinsicName, implName, range) in missingImplementations do
+                printfn ""
+                printfn "  Intrinsic: %s" intrinsicName
+                printfn "  Requires:  %s" implName
+                printfn "  Used at:   %s:%d:%d" range.File range.Start.Line range.Start.Column
+            printfn ""
+            printfn "  To fix: Ensure the library containing '%s' is included in your project dependencies."
+                (missingImplementations |> List.head |> fun (_, impl, _) -> impl)
+            failwithf "Missing %d intrinsic implementation function(s). Cannot continue compilation." missingImplementations.Length
+
         let reachable = computeReachable graph graph.EntryPoints
         let updatedNodes =
             graph.Nodes
             |> Map.map (fun id node ->
                 { node with IsReachable = Set.contains id reachable })
+
+        // Print reachability stats
+        let reachableCount = updatedNodes |> Map.filter (fun _ n -> n.IsReachable) |> Map.count
+        let unreachableCount = updatedNodes |> Map.filter (fun _ n -> not n.IsReachable) |> Map.count
+        printfn "[REACHABILITY] Stats: %d reachable, %d unreachable (total: %d nodes)"
+            reachableCount unreachableCount (reachableCount + unreachableCount)
+
         { graph with Nodes = updatedNodes }
     
     /// Get counts of reachable and unreachable nodes

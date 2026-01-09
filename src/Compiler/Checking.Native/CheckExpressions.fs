@@ -1046,6 +1046,214 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
                 SemanticKind.Intrinsic(intrinsicInfo),
                 intrinsicType,
                 range)
+        // FNCS INTRINSICS: Crypto module functions (SHA-1, Base64)
+        // Cryptographic operations for WREN stack WebSocket handshake
+        elif name.StartsWith("Crypto.") then
+            let intrinsicName = name.Substring("Crypto.".Length)
+            let intrinsicType =
+                match intrinsicName with
+                | "sha1" ->
+                    // byte[] -> byte[]
+                    // Returns 20-byte SHA-1 hash (FIPS 180-4)
+                    let byteArrayType = mkArrayType Types.uint8Type
+                    NativeType.TFun(byteArrayType, byteArrayType)
+                | "base64Encode" ->
+                    // byte[] -> string
+                    // Encodes bytes as Base64 string (RFC 4648)
+                    let byteArrayType = mkArrayType Types.uint8Type
+                    NativeType.TFun(byteArrayType, env.Globals.StringType)
+                | "base64Decode" ->
+                    // string -> byte[]
+                    // Decodes Base64 string to bytes (RFC 4648)
+                    let byteArrayType = mkArrayType Types.uint8Type
+                    NativeType.TFun(env.Globals.StringType, byteArrayType)
+                | unknownFunc ->
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown Crypto intrinsic: Crypto.{unknownFunc}. Available: sha1, base64Encode, base64Decode."; Range = range; RelatedNodes = [] } env
+                    NativeType.TError $"Unknown Crypto intrinsic: Crypto.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Crypto intrinsicName IntrinsicCategory.Pure name
+            builder.Create(
+                SemanticKind.Intrinsic(intrinsicInfo),
+                intrinsicType,
+                range)
+        // FNCS INTRINSICS: Bits module functions (byte order, bit casting)
+        // Bit manipulation for binary protocols (BAREWire, WebSocket)
+        elif name.StartsWith("Bits.") then
+            let intrinsicName = name.Substring("Bits.".Length)
+            let intrinsicType =
+                match intrinsicName with
+                // Byte order conversion (host ↔ network)
+                | "htons" ->
+                    // uint16 -> uint16 (host to network short)
+                    NativeType.TFun(Types.uint16Type, Types.uint16Type)
+                | "ntohs" ->
+                    // uint16 -> uint16 (network to host short)
+                    NativeType.TFun(Types.uint16Type, Types.uint16Type)
+                | "htonl" ->
+                    // uint32 -> uint32 (host to network long)
+                    NativeType.TFun(Types.uint32Type, Types.uint32Type)
+                | "ntohl" ->
+                    // uint32 -> uint32 (network to host long)
+                    NativeType.TFun(Types.uint32Type, Types.uint32Type)
+                // Bit casting (reinterpret float ↔ int bits)
+                | "float32ToInt32Bits" ->
+                    // float32 -> int32 (IEEE 754 bits)
+                    NativeType.TFun(Types.float32Type, Types.int32Type)
+                | "int32BitsToFloat32" ->
+                    // int32 -> float32 (IEEE 754 bits)
+                    NativeType.TFun(Types.int32Type, Types.float32Type)
+                | "float64ToInt64Bits" ->
+                    // float -> int64 (IEEE 754 bits)
+                    NativeType.TFun(Types.floatType, Types.int64Type)
+                | "int64BitsToFloat64" ->
+                    // int64 -> float (IEEE 754 bits)
+                    NativeType.TFun(Types.int64Type, Types.floatType)
+                | unknownFunc ->
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown Bits intrinsic: Bits.{unknownFunc}. Available: htons, ntohs, htonl, ntohl, float32ToInt32Bits, int32BitsToFloat32, float64ToInt64Bits, int64BitsToFloat64."; Range = range; RelatedNodes = [] } env
+                    NativeType.TError $"Unknown Bits intrinsic: Bits.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Bits intrinsicName IntrinsicCategory.Pure name
+            builder.Create(
+                SemanticKind.Intrinsic(intrinsicInfo),
+                intrinsicType,
+                range)
+        // FNCS INTRINSICS: FnPtr module - function pointer operations
+        // Used for callbacks to top-level functions (SolidJS-inspired signals)
+        elif name.StartsWith("FnPtr.") then
+            let intrinsicName = name.Substring("FnPtr.".Length)
+            // Create fresh type variables for polymorphic intrinsics
+            let freshTArg = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+            let freshTResult = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+            let intrinsicType =
+                match intrinsicName with
+                | "ofFunction" ->
+                    // ('T -> 'R) -> FnPtr<'T, 'R>
+                    // Convert a top-level function to a function pointer
+                    let funcType = NativeType.TFun(freshTArg, freshTResult)
+                    let fnPtrType = mkFnPtrType freshTArg freshTResult
+                    NativeType.TFun(funcType, fnPtrType)
+                | "invoke" ->
+                    // FnPtr<'T, 'R> -> 'T -> 'R
+                    // Invoke a function pointer with an argument
+                    let fnPtrType = mkFnPtrType freshTArg freshTResult
+                    NativeType.TFun(fnPtrType, NativeType.TFun(freshTArg, freshTResult))
+                | "isNull" ->
+                    // FnPtr<'T, 'R> -> bool
+                    // Check if function pointer is null
+                    let fnPtrType = mkFnPtrType freshTArg freshTResult
+                    NativeType.TFun(fnPtrType, env.Globals.BoolType)
+                | "null" ->
+                    // unit -> FnPtr<'T, 'R>
+                    // Create a null function pointer
+                    let fnPtrType = mkFnPtrType freshTArg freshTResult
+                    NativeType.TFun(env.Globals.UnitType, fnPtrType)
+                | unknownFunc ->
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown FnPtr intrinsic: FnPtr.{unknownFunc}. Available: ofFunction, invoke, isNull, null."; Range = range; RelatedNodes = [] } env
+                    NativeType.TError $"Unknown FnPtr intrinsic: FnPtr.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.FnPtr intrinsicName IntrinsicCategory.Pure name
+            builder.Create(
+                SemanticKind.Intrinsic(intrinsicInfo),
+                intrinsicType,
+                range)
+        // FNCS INTRINSICS: Signal module - reactive signals (SolidJS-inspired)
+        // Reactive values with automatic dependency tracking
+        elif name.StartsWith("Signal.") then
+            let intrinsicName = name.Substring("Signal.".Length)
+            let freshT = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+            let intrinsicType =
+                match intrinsicName with
+                | "create" ->
+                    // 'T -> Signal<'T>
+                    // Create a new reactive signal with initial value
+                    NativeType.TFun(freshT, mkSignalType freshT)
+                | "get" ->
+                    // Signal<'T> -> 'T
+                    // Read current value and register dependency if in effect
+                    NativeType.TFun(mkSignalType freshT, freshT)
+                | "set" ->
+                    // Signal<'T> -> 'T -> unit
+                    // Set new value and notify subscribers
+                    NativeType.TFun(mkSignalType freshT, NativeType.TFun(freshT, env.Globals.UnitType))
+                | "update" ->
+                    // Signal<'T> -> ('T -> 'T) -> unit
+                    // Apply function to current value and set result
+                    let updateFn = NativeType.TFun(freshT, freshT)
+                    NativeType.TFun(mkSignalType freshT, NativeType.TFun(updateFn, env.Globals.UnitType))
+                | unknownFunc ->
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown Signal intrinsic: Signal.{unknownFunc}. Available: create, get, set, update."; Range = range; RelatedNodes = [] } env
+                    NativeType.TError $"Unknown Signal intrinsic: Signal.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Signal intrinsicName IntrinsicCategory.Reactive name
+            builder.Create(
+                SemanticKind.Intrinsic(intrinsicInfo),
+                intrinsicType,
+                range)
+        // FNCS INTRINSICS: Effect module - side effects that track signal dependencies
+        elif name.StartsWith("Effect.") then
+            let intrinsicName = name.Substring("Effect.".Length)
+            let intrinsicType =
+                match intrinsicName with
+                | "create" ->
+                    // FnPtr<unit, unit> -> Effect
+                    // Register a function to run when dependencies change
+                    let fnPtrType = mkFnPtrType env.Globals.UnitType env.Globals.UnitType
+                    NativeType.TFun(fnPtrType, effectType)
+                | "createWithCleanup" ->
+                    // FnPtr<unit, FnPtr<unit, unit>> -> Effect
+                    // Effect function returns cleanup function pointer
+                    let cleanupFnPtrType = mkFnPtrType env.Globals.UnitType env.Globals.UnitType
+                    let effectFnPtrType = mkFnPtrType env.Globals.UnitType cleanupFnPtrType
+                    NativeType.TFun(effectFnPtrType, effectType)
+                | "dispose" ->
+                    // Effect -> unit
+                    // Remove effect from subscription graph
+                    NativeType.TFun(effectType, env.Globals.UnitType)
+                | unknownFunc ->
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown Effect intrinsic: Effect.{unknownFunc}. Available: create, createWithCleanup, dispose."; Range = range; RelatedNodes = [] } env
+                    NativeType.TError $"Unknown Effect intrinsic: Effect.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Effect intrinsicName IntrinsicCategory.Reactive name
+            builder.Create(
+                SemanticKind.Intrinsic(intrinsicInfo),
+                intrinsicType,
+                range)
+        // FNCS INTRINSICS: Memo module - memoized derived values
+        elif name.StartsWith("Memo.") then
+            let intrinsicName = name.Substring("Memo.".Length)
+            let freshT = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+            let intrinsicType =
+                match intrinsicName with
+                | "create" ->
+                    // FnPtr<unit, 'T> -> Memo<'T>
+                    // Create memoized computation
+                    let fnPtrType = mkFnPtrType env.Globals.UnitType freshT
+                    NativeType.TFun(fnPtrType, mkMemoType freshT)
+                | "get" ->
+                    // Memo<'T> -> 'T
+                    // Get cached value, recompute if dependencies changed
+                    NativeType.TFun(mkMemoType freshT, freshT)
+                | unknownFunc ->
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown Memo intrinsic: Memo.{unknownFunc}. Available: create, get."; Range = range; RelatedNodes = [] } env
+                    NativeType.TError $"Unknown Memo intrinsic: Memo.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Memo intrinsicName IntrinsicCategory.Reactive name
+            builder.Create(
+                SemanticKind.Intrinsic(intrinsicInfo),
+                intrinsicType,
+                range)
+        // FNCS INTRINSICS: Batch module - group signal updates
+        elif name.StartsWith("Batch.") then
+            let intrinsicName = name.Substring("Batch.".Length)
+            let intrinsicType =
+                match intrinsicName with
+                | "run" ->
+                    // FnPtr<unit, unit> -> unit
+                    // Execute function, deferring signal notifications until completion
+                    let fnPtrType = mkFnPtrType env.Globals.UnitType env.Globals.UnitType
+                    NativeType.TFun(fnPtrType, env.Globals.UnitType)
+                | unknownFunc ->
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "FS0039"; Message = $"Unknown Batch intrinsic: Batch.{unknownFunc}. Available: run."; Range = range; RelatedNodes = [] } env
+                    NativeType.TError $"Unknown Batch intrinsic: Batch.{unknownFunc}"
+            let intrinsicInfo = mkIntrinsicInfo IntrinsicModule.Batch intrinsicName IntrinsicCategory.Reactive name
+            builder.Create(
+                SemanticKind.Intrinsic(intrinsicInfo),
+                intrinsicType,
+                range)
         else
         // Check for platform bindings (Bindings.*, Conduits.*, or specifically WebViewConduits)
         let isPlatformBinding =
@@ -2837,26 +3045,25 @@ and checkLetOrUse (env: TypeEnv) (builder: NodeBuilder) (letOrUse: SynLetOrUse) 
         else
             env
 
-    // Check each binding (returns SemanticNode * InlineBody option)
+    // Check each binding (returns SemanticNode * InlineBody option * bool)
     let bindingResults = bindings |> List.map (fun binding ->
         checkBinding bindingEnv builder binding)
 
     // Extract just the nodes for the semantic graph
-    let bindingNodes = bindingResults |> List.map fst
+    let bindingNodes = bindingResults |> List.map (fun (node, _, _) -> node)
 
     // Add bindings to environment for body
     // FNCS inline-by-default: use addInlineBinding for functions with bodies
     let bodyEnv =
-        List.zip3 bindings bindingNodes (bindingResults |> List.map snd)
-        |> List.fold (fun env (binding, node, inlineBodyOpt) ->
+        List.zip bindings bindingResults
+        |> List.fold (fun env (binding, (node, inlineBodyOpt, isMutable)) ->
             let name = getBindingName binding
-            let isMutable = isBindingMutable binding
             match inlineBodyOpt with
             | Some inlineBody ->
                 // Function with inline body - add with transparency
                 addInlineBinding name node.Type (Some node.Id) inlineBody env
             | None ->
-                // Regular value binding
+                // Regular value binding - use the isMutable flag from checkBinding
                 addBinding name node.Type isMutable (Some node.Id) env
         ) bindingEnv
 
@@ -2930,9 +3137,10 @@ and tryGetFunctionParams (headPat: SynPat) (env: TypeEnv) (range: SourceRange) :
     | _ -> None
 
 /// Check a single binding
-/// Returns the semantic node and optionally an InlineBody for transparent function expansion
-/// FNCS is inline-by-default: all function bodies are captured for potential expansion
-and checkBinding (env: TypeEnv) (builder: NodeBuilder) (binding: SynBinding) : SemanticNode * InlineBody option =
+/// Returns the semantic node, optionally an InlineBody for transparent function expansion,
+/// and the isMutable flag for proper binding registration in module declarations.
+/// FNCS is inline-by-default: all function bodies are captured for potential expansion.
+and checkBinding (env: TypeEnv) (builder: NodeBuilder) (binding: SynBinding) : SemanticNode * InlineBody option * bool =
     let (SynBinding(_, _, _, isMutable, attrs, _, _, headPat, _, expr, bindingRange, _, _)) = binding
     let range = rangeToSourceRange bindingRange
     let name = getBindingName binding
@@ -2988,7 +3196,7 @@ and checkBinding (env: TypeEnv) (builder: NodeBuilder) (binding: SynBinding) : S
             Range = rangeToSourceRange bindingRange     // Source range for error reporting
         }
 
-        (bindingNode, Some inlineBody)
+        (bindingNode, Some inlineBody, isMutable)
 
     | None ->
         // Regular value binding (not a function - no inline body)
@@ -2998,7 +3206,7 @@ and checkBinding (env: TypeEnv) (builder: NodeBuilder) (binding: SynBinding) : S
             exprNode.Type,
             range,
             children = [exprNode.Id])
-        (node, None)
+        (node, None, isMutable)
 
 /// Check a match clause
 and checkMatchClause (env: TypeEnv) (builder: NodeBuilder) (scrutineeTy: NativeType) (resultTy: NativeType) (clause: SynMatchClause) : MatchCase =

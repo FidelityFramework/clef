@@ -74,7 +74,11 @@ type NTUKind =
     
     /// Native pointer type (pointer-sized)
     | NTUptr
-    
+
+    /// Function pointer type (pointer-sized)
+    /// Used for callbacks to top-level functions (no closures)
+    | NTUfnptr
+
     /// Size type (like C `size_t`) - used for array lengths, memory sizes
     | NTUsize
     
@@ -173,7 +177,7 @@ module NTUKind =
     let isPlatformDependent = function
         | NTUKind.NTUint | NTUKind.NTUuint
         | NTUKind.NTUnint | NTUKind.NTUunint
-        | NTUKind.NTUptr | NTUKind.NTUsize | NTUKind.NTUdiff -> true
+        | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff -> true
         | _ -> false
     
     /// Check if an NTUKind is a fixed-width integer
@@ -212,6 +216,7 @@ module NTUKind =
         | NTUKind.NTUnint -> "nativeint"
         | NTUKind.NTUunint -> "unativeint"
         | NTUKind.NTUptr -> "nativeptr"
+        | NTUKind.NTUfnptr -> "fnptr"
         | NTUKind.NTUsize -> "size"
         | NTUKind.NTUdiff -> "diff"
         | NTUKind.NTUint8 -> "int8"

@@ -304,8 +304,29 @@ let byrefTyCon = mkNTUTypeConRefWithArity "byref" NTUKind.NTUptr 1 TypeLayout.Pl
 let inrefTyCon = mkNTUTypeConRefWithArity "inref" NTUKind.NTUptr 1 TypeLayout.PlatformWord
 
 /// Outref type: outref<'T> - write-only byref
-/// Uses NTUptr kind - pointer-sized on all platforms  
+/// Uses NTUptr kind - pointer-sized on all platforms
 let outrefTyCon = mkNTUTypeConRefWithArity "outref" NTUKind.NTUptr 1 TypeLayout.PlatformWord
+
+/// Function pointer type: FnPtr<'T, 'R>
+/// Used for callbacks to top-level functions (no closures)
+/// Two type parameters: input type 'T and return type 'R
+let fnptrTyCon = mkNTUTypeConRefWithArity "FnPtr" NTUKind.NTUfnptr 2 TypeLayout.PlatformWord
+
+/// Reactive signal type: Signal<'T>
+/// Signal handle type: Signal<'T>
+/// Platform word slot index into runtime signal table
+/// Part of SolidJS-inspired native reactive signals
+let signalTyCon = mkTypeConRef "Signal" 1 TypeLayout.PlatformWord
+
+/// Effect handle type: Effect
+/// Platform word handle to a registered effect in the runtime
+/// Effects re-run when their signal dependencies change
+let effectTyCon = mkTypeConRef "Effect" 0 TypeLayout.PlatformWord
+
+/// Memoized value type: Memo<'T>
+/// Platform word handle to a cached derived value
+/// Memos recompute when their signal dependencies change
+let memoTyCon = mkTypeConRef "Memo" 1 TypeLayout.PlatformWord
 
 let private parameterizedTyConsByName =
     [ ("option", Parameterized.optionTyCon)
@@ -323,7 +344,12 @@ let private parameterizedTyConsByName =
       ("voidptr", voidptrTyCon)
       ("byref", byrefTyCon)
       ("inref", inrefTyCon)
-      ("outref", outrefTyCon) ]
+      ("outref", outrefTyCon)
+      ("FnPtr", fnptrTyCon)
+      // Reactive signals (SolidJS-inspired)
+      ("Signal", signalTyCon)
+      ("Effect", effectTyCon)
+      ("Memo", memoTyCon) ]
     |> Map.ofList
 
 /// Try to find a primitive type constructor by name
@@ -368,6 +394,22 @@ let mkExprType elemType = NativeType.TApp(Parameterized.exprTyCon, [elemType])
 
 /// Create a lazy type: Lazy<'T>
 let mkLazyType elemType = NativeType.TApp(Parameterized.lazyTyCon, [elemType])
+
+/// Create a function pointer type: FnPtr<'TArg, 'TResult>
+/// Used for callbacks to top-level functions (no closures)
+let mkFnPtrType argType resultType = NativeType.TApp(fnptrTyCon, [argType; resultType])
+
+/// Create a reactive signal type: Signal<'T>
+/// Signals are reactive values that notify effects when they change
+let mkSignalType elemType = NativeType.TApp(signalTyCon, [elemType])
+
+/// Get the Effect type (non-parameterized handle)
+/// Effects are side-effect functions that re-run when dependencies change
+let effectType = NativeType.TApp(effectTyCon, [])
+
+/// Create a memoized value type: Memo<'T>
+/// Memos cache derived values that recompute when dependencies change
+let mkMemoType elemType = NativeType.TApp(memoTyCon, [elemType])
 
 //-------------------------------------------------------------------------
 // Built-in F# Intrinsic Functions

@@ -421,8 +421,8 @@ let checkLetBinding (binding: SynBinding) : CheckResult =
     let builder = NodeBuilder()
     NodeId.reset()
 
-    // InlineBody discarded - see function doc comment for rationale
-    let (node, _inlineBody) = checkBinding env builder binding
+    // InlineBody and isMutable discarded - see function doc comment for rationale
+    let (node, _inlineBody, _isMutable) = checkBinding env builder binding
     let diagnostics = solveAndGetDiagnostics !(env.Constraints)
 
     buildResult builder [node] Map.empty diagnostics
@@ -512,19 +512,20 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 let (updatedEnv, checkedBindings) =
                     placeholders
                     |> List.fold (fun (accEnv, accResults) (binding, simpleName, placeholderTy) ->
-                        let (node, inlineBodyOpt) = checkBinding envWithAllNames builder binding
+                        let (node, inlineBodyOpt, isMutable) = checkBinding envWithAllNames builder binding
                         
                         // Unify the placeholder type with the inferred type
                         // This ensures references to this binding get the correct type
                         addConstraint (Constraint.Equals(placeholderTy, node.Type, range)) accEnv
                         
                         // Update the binding in environment with the actual node ID and inline body
+                        // CRITICAL: Use actual isMutable flag for module-level mutable variables
                         let envWithNode =
                             bindingNameSuffixes simpleName
                             |> List.fold (fun env qname ->
                                 match inlineBodyOpt with
                                 | Some inlineBody -> addInlineBinding qname node.Type (Some node.Id) inlineBody env
-                                | None -> addBinding qname node.Type false (Some node.Id) env
+                                | None -> addBinding qname node.Type isMutable (Some node.Id) env
                             ) accEnv
                         
                         (envWithNode, (node, inlineBodyOpt, simpleName) :: accResults)
@@ -536,9 +537,10 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 // NON-RECURSIVE BINDINGS: Sequential processing (existing behavior)
                 // Each binding can only reference bindings that came before it
                 bindings |> List.fold (fun (accEnv, accNodes) binding ->
-                    let (node, inlineBodyOpt) = checkBinding accEnv builder binding
+                    let (node, inlineBodyOpt, isMutable) = checkBinding accEnv builder binding
                     // Add the binding to environment so later bindings can reference it
                     // Register under all qualified name suffixes (handles AutoOpen modules)
+                    // CRITICAL: Use actual isMutable flag for module-level mutable variables
                     let simpleName = getBindingName binding
                     let updatedEnv =
                         bindingNameSuffixes simpleName
@@ -546,7 +548,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                             // Use addInlineBinding for functions to capture body for expansion
                             match inlineBodyOpt with
                             | Some inlineBody -> addInlineBinding qname node.Type (Some node.Id) inlineBody env
-                            | None -> addBinding qname node.Type false (Some node.Id) env
+                            | None -> addBinding qname node.Type isMutable (Some node.Id) env
                         ) accEnv
                     (updatedEnv, node :: accNodes)
                 ) (env, [])
@@ -712,7 +714,20 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                 UnionType = unionType
                                 CaseIndex = caseIndex
                             }
-                            addUnionCaseBinding caseName constructorType caseInfo env
+                            // Register case constructor with BOTH simple and qualified names
+                            // Simple: "Free" (for open Fidelity.Signal.Types access)
+                            // Qualified: "EffectState.Free", "Types.EffectState.Free" (for explicit access)
+                            let qualifiedCaseNames =
+                                typeNameSuffixes
+                                |> List.map (fun typeName -> typeName + "." + caseName)
+                            // Register under all qualified names first, then simple name
+                            let envWithQualifiedCases =
+                                qualifiedCaseNames
+                                |> List.fold (fun accEnv qualifiedName ->
+                                    addUnionCaseBinding qualifiedName constructorType caseInfo accEnv
+                                ) env
+                            // Also register under simple name for unqualified access
+                            addUnionCaseBinding caseName constructorType caseInfo envWithQualifiedCases
                         ) envWithType
 
                     // Create TypeDef node with case metadata for Alex

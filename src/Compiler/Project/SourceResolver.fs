@@ -1,5 +1,6 @@
 /// Source file resolution and ordering.
-/// Handles Alloy library ordering and project source resolution.
+/// Handles dependency library ordering and project source resolution.
+/// GENERIC DEPENDENCY RESOLUTION - no hardcoded library names.
 namespace FSharp.Native.Compiler.Project
 
 open System.IO
@@ -7,14 +8,14 @@ open System.IO
 /// Errors that can occur during source resolution.
 /// A production compiler MUST surface these - no silent fallbacks.
 type SourceResolutionError =
-    /// The Alloy directory specified in dependencies does not exist.
-    | AlloyDirectoryNotFound of path: string
-    /// The Alloy.fidproj file is missing from the Alloy directory.
-    | AlloyFidprojNotFound of path: string
-    /// The Alloy.fidproj file exists but failed to parse/load.
-    | AlloyFidprojLoadError of path: string * message: string
-    /// A source file listed in Alloy.fidproj does not exist.
-    | AlloySourceFileNotFound of path: string
+    /// A dependency directory specified in dependencies does not exist.
+    | DependencyDirectoryNotFound of name: string * path: string
+    /// A dependency's .fidproj file is missing from its directory.
+    | DependencyFidprojNotFound of name: string * path: string
+    /// A dependency's .fidproj file exists but failed to parse/load.
+    | DependencyFidprojLoadError of name: string * path: string * message: string
+    /// A source file listed in a dependency's .fidproj does not exist.
+    | DependencySourceFileNotFound of name: string * path: string
     /// A source file listed in the project does not exist.
     | ProjectSourceFileNotFound of path: string
 
@@ -22,14 +23,14 @@ module SourceResolutionError =
     /// Format error for display.
     let format (error: SourceResolutionError): string =
         match error with
-        | AlloyDirectoryNotFound path ->
-            $"Alloy directory not found: {path}. Check the 'alloy' path in your .fidproj dependencies."
-        | AlloyFidprojNotFound path ->
-            $"Alloy.fidproj not found at: {path}. The Alloy library must have an Alloy.fidproj file."
-        | AlloyFidprojLoadError (path, msg) ->
-            $"Failed to load Alloy.fidproj at {path}: {msg}"
-        | AlloySourceFileNotFound path ->
-            $"Alloy source file not found: {path}. Check your Alloy.fidproj [build] sources."
+        | DependencyDirectoryNotFound (name, path) ->
+            $"Dependency '{name}' directory not found: {path}. Check the path in your .fidproj dependencies."
+        | DependencyFidprojNotFound (name, path) ->
+            $"Dependency '{name}' .fidproj not found at: {path}. The library must have a .fidproj file."
+        | DependencyFidprojLoadError (name, path, msg) ->
+            $"Failed to load dependency '{name}' .fidproj at {path}: {msg}"
+        | DependencySourceFileNotFound (name, path) ->
+            $"Dependency '{name}' source file not found: {path}. Check the [build] sources in its .fidproj."
         | ProjectSourceFileNotFound path ->
             $"Project source file not found: {path}. Check your .fidproj [build] sources."
 
@@ -38,27 +39,28 @@ module SourceResolver =
     let private normalizePath (path: string) =
         Path.GetFullPath(path).Replace('\\', '/')
 
-    /// Gets ordered Alloy source files by reading Alloy.fidproj.
-    /// The Alloy.fidproj file is the single source of truth for file ordering.
-    /// Returns Error if Alloy cannot be loaded - this is NEVER silently ignored.
-    let getAlloySources (alloyPath: string): Result<string list, SourceResolutionError> =
-        let normalizedPath = normalizePath alloyPath
+    /// Gets ordered source files from a dependency by reading its .fidproj.
+    /// The dependency's .fidproj is the single source of truth for file ordering.
+    /// Returns Error if dependency cannot be loaded - this is NEVER silently ignored.
+    let getDependencySources (depName: string) (depPath: string): Result<string list, SourceResolutionError> =
+        let normalizedPath = normalizePath depPath
         if not (Directory.Exists normalizedPath) then
-            Error (AlloyDirectoryNotFound normalizedPath)
+            Error (DependencyDirectoryNotFound (depName, normalizedPath))
         else
-            // Look for Alloy.fidproj in the Alloy directory
-            let fidprojPath = Path.Combine(normalizedPath, "Alloy.fidproj")
-            if not (File.Exists fidprojPath) then
-                Error (AlloyFidprojNotFound fidprojPath)
+            // Look for *.fidproj in the dependency directory
+            let fidprojFiles = Directory.GetFiles(normalizedPath, "*.fidproj")
+            if Array.isEmpty fidprojFiles then
+                Error (DependencyFidprojNotFound (depName, normalizedPath))
             else
-                // Load the Alloy project file to get authoritative source ordering
+                let fidprojPath = fidprojFiles.[0]  // Use first .fidproj found
+                // Load the dependency project file to get authoritative source ordering
                 match FidprojLoader.load fidprojPath with
                 | Error msg ->
-                    Error (AlloyFidprojLoadError (fidprojPath, msg))
-                | Ok alloyOptions ->
-                    // Resolve source paths relative to Alloy directory
+                    Error (DependencyFidprojLoadError (depName, fidprojPath, msg))
+                | Ok depOptions ->
+                    // Resolve source paths relative to dependency directory
                     let resolvedPaths =
-                        alloyOptions.SourceFiles
+                        depOptions.SourceFiles
                         |> List.map (fun sf -> normalizePath (Path.Combine(normalizedPath, sf)))
 
                     // Check that ALL source files exist - missing files are errors
@@ -69,8 +71,7 @@ module SourceResolver =
                     match missingFiles with
                     | [] -> Ok resolvedPaths
                     | missing :: _ ->
-                        // Report the first missing file (could aggregate all)
-                        Error (AlloySourceFileNotFound missing)
+                        Error (DependencySourceFileNotFound (depName, missing))
 
     /// Resolves project source files to absolute paths.
     /// Preserves the order as declared in the fidproj.
@@ -91,24 +92,34 @@ module SourceResolver =
         | missing :: _ ->
             Error (ProjectSourceFileNotFound missing)
 
-    /// Gets all sources in compilation order (Alloy first, then project).
+    /// Gets all sources in compilation order (dependencies first in order, then project).
     /// Returns absolute, normalized paths for all source files.
-    /// Returns Error if Alloy or any source file cannot be resolved.
+    /// Returns Error if any dependency or source file cannot be resolved.
+    /// Dependencies with paths are resolved; dependencies without paths are skipped
+    /// (they may be package references resolved elsewhere).
     let getAllSourcesInOrder (options: FidprojOptions): Result<string list, SourceResolutionError> =
-        // First resolve Alloy sources (if Alloy is specified)
-        let alloyResult =
-            match options.AlloyPath with
-            | Some path -> getAlloySources path
-            | None -> Ok []
+        // Resolve all dependency sources in order
+        // Dependencies are processed in the order they appear in the fidproj
+        let dependencySourcesResult =
+            options.Dependencies
+            |> List.filter (fun dep -> dep.Path.IsSome)  // Only process deps with local paths
+            |> List.fold (fun acc dep ->
+                match acc with
+                | Error e -> Error e  // Short-circuit on first error
+                | Ok accSources ->
+                    match getDependencySources dep.Name dep.Path.Value with
+                    | Error e -> Error e
+                    | Ok depSources -> Ok (accSources @ depSources)
+            ) (Ok [])
 
-        match alloyResult with
+        match dependencySourcesResult with
         | Error e -> Error e
-        | Ok alloySources ->
+        | Ok dependencySources ->
             // Then resolve project sources
             match resolveProjectSources options.ProjectDirectory options.SourceFiles with
             | Error e -> Error e
             | Ok projectSources ->
-                Ok (alloySources @ projectSources)
+                Ok (dependencySources @ projectSources)
 
     /// Checks if a source file belongs to a project.
     /// Compares normalized absolute paths.
@@ -133,21 +144,26 @@ module SourceResolver =
         if normalizedSource.StartsWith(normalizedDir + "/") then
             Some (normalizedSource.Substring(normalizedDir.Length + 1))
         else
-            // Check if it's in Alloy
-            match options.AlloyPath with
-            | Some alloyPath ->
-                let normalizedAlloy = normalizePath alloyPath
-                if normalizedSource.StartsWith(normalizedAlloy + "/") then
-                    Some (normalizedSource.Substring(normalizedAlloy.Length + 1))
-                else
-                    None
-            | None -> None
+            // Check if it's in any dependency
+            options.Dependencies
+            |> List.tryPick (fun dep ->
+                match dep.Path with
+                | Some depPath ->
+                    let normalizedDep = normalizePath depPath
+                    if normalizedSource.StartsWith(normalizedDep + "/") then
+                        Some (normalizedSource.Substring(normalizedDep.Length + 1))
+                    else
+                        None
+                | None -> None)
 
-    /// Determines if a source file is part of Alloy (vs project sources).
-    let isAlloySource (sourceFile: string) (options: FidprojOptions): bool =
-        match options.AlloyPath with
-        | Some alloyPath ->
-            let normalizedSource = normalizePath sourceFile
-            let normalizedAlloy = normalizePath alloyPath
-            normalizedSource.StartsWith(normalizedAlloy + "/")
-        | None -> false
+    /// Determines which dependency (if any) a source file belongs to.
+    /// Returns None if the file is a project source (not from any dependency).
+    let getDependencyForSource (sourceFile: string) (options: FidprojOptions): FidprojDependency option =
+        let normalizedSource = normalizePath sourceFile
+        options.Dependencies
+        |> List.tryFind (fun dep ->
+            match dep.Path with
+            | Some depPath ->
+                let normalizedDep = normalizePath depPath
+                normalizedSource.StartsWith(normalizedDep + "/")
+            | None -> false)
