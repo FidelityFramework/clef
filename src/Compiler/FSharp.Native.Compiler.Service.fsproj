@@ -280,7 +280,21 @@
     <Compile Include="Checking.Native\Unify.fs" />
     <Compile Include="Checking.Native\SemanticGraph.fs" />
     <Compile Include="Checking.Native\NameResolution.fs" />
-    <Compile Include="Checking.Native\CheckExpressions.fs" />
+    <!-- Expressions - Modular expression checking -->
+    <!-- Handler modules (no circular dependencies - use callback pattern) -->
+    <Compile Include="Checking.Native\Expressions\Types.fs" />
+    <Compile Include="Checking.Native\Expressions\Literals.fs" />
+    <Compile Include="Checking.Native\Expressions\Intrinsics.fs" />
+    <Compile Include="Checking.Native\Expressions\Identity.fs" />
+    <Compile Include="Checking.Native\Expressions\SynTypes.fs" />
+    <Compile Include="Checking.Native\Expressions\Patterns.fs" />
+    <Compile Include="Checking.Native\Expressions\ControlFlow.fs" />
+    <Compile Include="Checking.Native\Expressions\TypeOperations.fs" />
+    <Compile Include="Checking.Native\Expressions\Collections.fs" />
+    <Compile Include="Checking.Native\Expressions\Applications.fs" />
+    <Compile Include="Checking.Native\Expressions\Bindings.fs" />
+    <!-- Coordinator - Thin dispatcher that ties modules together -->
+    <Compile Include="Checking.Native\Expressions\Coordinator.fs" />
     <Compile Include="Checking.Native\SRTPResolution.fs" />
     <Compile Include="Checking.Native\FSharpNativeExpr.fs" />
     <!-- Infrastructure - Nanopass phase configuration and intermediate emission -->

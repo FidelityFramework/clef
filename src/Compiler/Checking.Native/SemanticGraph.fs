@@ -220,7 +220,8 @@ type IntrinsicModule =
     | NativeStr     // Native string construction (fromPointer)
     | NativeDefault // Default value generation (zeroed)
     | String        // String operations (concat2, contains, etc.)
-    | Console       // Console I/O (writeln, write, readln)
+    // NOTE: Console is NOT an intrinsic - it's Layer 3 user code in Fidelity.Platform
+    // See fsnative-spec/spec/platform-bindings.md
     | Array         // Array operations (zeroCreate, length, get, set)
     | Math          // Math functions
     | Unchecked     // Unchecked arithmetic
@@ -231,7 +232,7 @@ type IntrinsicModule =
     | Crypto        // Cryptographic operations (sha1, base64Encode, base64Decode)
     | Bits          // Bit manipulation and byte order (htons, ntohs, float↔int bits)
     // Reactive signals (SolidJS-inspired native signals)
-    | FnPtr         // Function pointer operations (ofFunction, invoke, isNull, null)
+    | FnPtr         // Function pointer operations (fromSymbol, invoke, ofFunction)
     | Signal        // Reactive signal operations (create, get, set, update)
     | Effect        // Side effect operations (create, createWithCleanup, dispose)
     | Memo          // Memoized computation operations (create, get)
@@ -308,7 +309,8 @@ type SemanticKind =
     | Application of func: NodeId * args: NodeId list
     
     /// Lambda expression: fun x -> body
-    | Lambda of parameters: (string * NativeType) list * body: NodeId
+    /// Parameters include name, type, and PatternBinding NodeId for SSA assignment
+    | Lambda of parameters: (string * NativeType * NodeId) list * body: NodeId
     
     /// Literal value
     | Literal of value: LiteralValue
@@ -649,7 +651,17 @@ type NodeBuilder() =
     
     /// Get all nodes created by this builder
     member _.Nodes = nodes
-    
+
+    /// Set parent on an existing node (for bidirectional parent-child links)
+    /// ARCHITECTURAL NOTE: Child is created first, then parent. This method
+    /// allows setting the parent after both are created.
+    member _.SetParent(childId: NodeId, parentId: NodeId) =
+        match Map.tryFind childId nodes with
+        | Some node ->
+            let updated = { node with Parent = Some parentId }
+            nodes <- Map.add childId updated nodes
+        | None -> ()  // Node not found (shouldn't happen)
+
     /// Build the semantic graph
     member _.Build(entryPoints: NodeId list) : SemanticGraph =
         { Nodes = nodes
@@ -702,15 +714,13 @@ module Reachability =
         | IntrinsicModule.Signal
         | IntrinsicModule.Effect
         | IntrinsicModule.Memo
-        | IntrinsicModule.Batch
-        | IntrinsicModule.FnPtr -> false
+        | IntrinsicModule.Batch -> false
         // Compiler-provided: Alex handles directly, no F# implementation needed
         | IntrinsicModule.Sys
         | IntrinsicModule.NativePtr
         | IntrinsicModule.NativeStr
         | IntrinsicModule.NativeDefault
         | IntrinsicModule.String
-        | IntrinsicModule.Console
         | IntrinsicModule.Array
         | IntrinsicModule.Math
         | IntrinsicModule.Unchecked
@@ -719,7 +729,8 @@ module Reachability =
         | IntrinsicModule.Format
         | IntrinsicModule.Convert
         | IntrinsicModule.Crypto
-        | IntrinsicModule.Bits -> true
+        | IntrinsicModule.Bits
+        | IntrinsicModule.FnPtr -> true  // FnPtr.fromSymbol, invoke, ofFunction handled by Alex
 
     /// Extract semantic references from a node's Kind (call targets, definition refs, etc.)
     /// Used by traversal to ensure all semantic children are visited.
@@ -911,7 +922,7 @@ module Reachability =
         entries |> List.fold walk Set.empty
 
     /// Check for missing intrinsic implementation functions.
-    /// Only checks LIBRARY-BACKED intrinsics (Signal, Effect, Memo, Batch, FnPtr).
+    /// Only checks LIBRARY-BACKED intrinsics (Signal, Effect, Memo, Batch).
     /// COMPILER-PROVIDED intrinsics (Sys, Console, NativePtr, etc.) are handled
     /// directly by Alex and don't need F# implementation functions.
     /// Returns list of (intrinsicName, implName, range) for missing functions.
@@ -1004,6 +1015,8 @@ type RegionKind =
     | EndExprRegion
     /// Match case body region (match case index, 0-based)
     | MatchCaseRegion of index: int
+    /// Lambda body region (function body)
+    | LambdaBodyRegion
 
 /// Hook for SCF region boundary tracking during traversal
 /// Called before/after processing each child region of control flow nodes
@@ -1208,6 +1221,15 @@ module Traversal =
                                 (state, idx + 1)
                             ) (state, 0)
                             |> fst
+
+                        // Lambda: body is a region
+                        | SemanticKind.Lambda (_params, bodyId), Some hook ->
+                            let parentId = node.Id
+                            // Lambda body is a region
+                            let state = hook.BeforeRegion state parentId LambdaBodyRegion
+                            let state = walk state bodyId
+                            let state = hook.AfterRegion state parentId LambdaBodyRegion
+                            state
 
                         // No SCF hook or non-control-flow node: process normally
                         | _ ->

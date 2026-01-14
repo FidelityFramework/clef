@@ -2,91 +2,74 @@
 
 ## Purpose
 
-FNCS (FSharpNative Compiler Services) provides native-first type checking for the Fidelity framework ecosystem. It is a **ground-up rebuild** of the type-checking layer, not a pruned fork of FCS.
-
-## ARCHITECTURAL DECISION (December 2025)
-
-**REBUILD WITH PRESERVATION**: The type checker uses native types instead of BCL, but **FCS design-time infrastructure must be preserved**:
-- Symbol tracking (FSharpSymbol, locations, references)
-- Editor service APIs (GetToolTip, GetDeclaration, GetSymbolUses)
-- Typed tree structure for correlation
-- Source locations for navigation
-
-**PSG CONSTRUCTION IN FNCS**: FNCS now builds the PSG (Program Semantic Graph). Firefly consumes the PSG as "correct by construction" and focuses on code generation.
-
-See: `native_type_checker_architecture` and `fncs_fcs_preservation` memories for details.
-
-## Naming Convention
-
-| Original | Native Version |
-|----------|---------------|
-| FSharp.Compiler.Service | FSharpNative.Compiler.Service |
-| FCS | FNCS |
+FNCS (FSharpNative Compiler Services) provides native-first type checking for the Fidelity framework ecosystem. It is a **complete, standalone** type checker operating in the Native Type Universe (NTU) - no BCL types, no IL imports, no runtime dependencies.
 
 ## Architecture
 
-### The Architecture Approach
-
-FNCS produces a **PSG with native types and design-time capabilities**:
-- Native type universe (UTF-8 strings, voption, no obj)
+FNCS produces a **PSG (Program Semantic Graph) with native types**:
+- Native Type Universe (UTF-8 strings, value-type options, no `obj`)
 - SRTP resolved during type checking
-- Full symbol information preserved for editor navigation
-- PSG construction (moved from Firefly)
+- Types attached during construction (not post-hoc)
+- Union-Find based constraint solving
 
-Firefly consumes the PSG and focuses on code generation (Alex/Zipper → MLIR → LLVM).
+Firefly consumes the PSG and handles code generation (Alex/Zipper → MLIR → LLVM).
 
-### Core Modules (New)
+### Core Modules
 
 | Module | Purpose |
 |--------|---------|
-| `NativeGlobals.fs` | Built-in types (string=UTF8, option=value-type, no obj) |
-| `NativeTypes.fs` | Type representation with memory layout |
-| `UnionFind.fs` | Efficient substitution with path compression |
-| `Constraints.fs` | Constraint types: Equals, HasMember, LayoutCompatible |
+| `NativeGlobals.fs` | Built-in types, NTUKind definitions |
+| `NativeTypes.fs` | NativeType, TypeParam, TypeConRef |
+| `UnionFind.fs` | Type variable binding, path compression |
 | `Unify.fs` | Unification algorithm with occurs check |
-| `CheckExpr.fs` | Unified construction (AST + types together) |
-| `SRTPResolution.fs` | SRTP during type checking (Alloy witness hierarchy) |
-| `Reachability.fs` | Hard prune before handoff |
-| `SemanticGraph.fs` | Output structure for Firefly |
+| `SemanticGraph.fs` | PSG structure, reachability |
+| `NativeService.fs` | Public API, orchestration |
+| `Expressions/` | Modular expression checking |
+
+### Expression Checking Modules
+
+```
+Expressions/
+├── Coordinator.fs    # SynExpr dispatch
+├── Types.fs          # TypeEnv, helpers
+├── Bindings.fs       # Let/LetRec
+├── Applications.fs   # App, TypeApp, Lambda
+├── Intrinsics.fs     # FNCS intrinsic modules
+├── ControlFlow.fs    # If/Match/While/For
+├── Collections.fs    # Tuple/Array/Record
+├── Patterns.fs       # Pattern matching
+├── Identity.fs       # Identifier resolution
+├── Literals.fs       # Constant handling
+├── SynTypes.fs       # SynType checking
+└── TypeOperations.fs # Cast/TypeTest/AddressOf
+```
 
 ### Output API
 
 ```fsharp
-let checkProject (sources: SourceFile list) (options: CheckOptions) : CheckResult =
-    // Returns SemanticGraph with types attached, SRTP resolved, hard-pruned
+let checkProject (sources: SourceFile list) (options: CheckOptions) : CheckResult
+// Returns: SemanticGraph with types attached, diagnostics
 ```
 
-## Development Phases
+## FNCS Intrinsics
 
-### Phase 1: Native Type Checker (CURRENT FOCUS)
+Operations native to the type universe (no external binding needed):
 
-Build the new type checker from principled foundations. Output:
-- `checkProject(sources) → SemanticGraph` API
-- Types attached during construction
-- SRTP resolved intrinsically
-- Hard-pruned reachable nodes only
-
-### Phase 2: Firefly Integration
-
-- Replace FCS integration with FNCS API call
-- Remove absorbed components from Firefly (~10K LOC):
-  - Baker, PSG Builder, Symbol Correlation, ResolveSRTP
-- Firefly becomes a focused lowering orchestrator
-
-### Phase 3: Tooling (FSNAC)
-
-- FsNativeAutoComplete wraps FNCS for IDE support
-- Native type hover info, SRTP resolution display
-- `.fidproj` project recognition
-
-### POST-QC_DEMO: XParsec Parser
-
-Replace FsLex/FsYacc with XParsec for self-hosting enablement.
-See: `xparsec_parser_unification` memory.
+| Module | Operations |
+|--------|------------|
+| `Sys` | write, read, exit |
+| `NativePtr` | set, get, add, stackalloc |
+| `NativeDefault` | zeroed, unreachable |
+| `Array` | zeroCreate, length, get, set |
+| `Console` | write, writeln, readln |
+| `String` | length, concat |
 
 ## Related Projects
 
-- **Firefly**: AOT F# compiler consuming FNCS (lowering orchestrator)
-- **FSNAC**: FsNativeAutoComplete - LSP server using FNCS
-- **Alloy**: Native F# library (BCL replacement, witness hierarchy)
-- **fsnative-spec**: F# Native Language Specification fork
+- **Firefly**: AOT F# compiler consuming FNCS PSG
+- **Fidelity.Platform**: Platform-specific bindings via quotations
+- **fsnative-spec**: F# Native Language Specification
+
+## Historical Note
+
+FNCS was originally conceived as a fork of FCS (F# Compiler Services). As of January 2026, FNCS is a clean-sheet implementation. The only FCS dependency is the parser (`SynExpr` types) which represents standard F# syntax.

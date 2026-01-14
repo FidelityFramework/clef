@@ -16,7 +16,9 @@ open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.NameResolution
-open FSharp.Native.Compiler.Checking.Native.CheckExpressions
+open FSharp.Native.Compiler.Checking.Native.Expressions.Coordinator
+open FSharp.Native.Compiler.Checking.Native.Expressions.Types
+open FSharp.Native.Compiler.Checking.Native.Expressions.Bindings
 
 // Infrastructure modules - use qualified names to avoid conflicts
 module PhaseConfig = FSharp.Native.Compiler.Checking.Native.Infrastructure.PhaseConfig
@@ -421,8 +423,8 @@ let checkLetBinding (binding: SynBinding) : CheckResult =
     let builder = NodeBuilder()
     NodeId.reset()
 
-    // InlineBody and isMutable discarded - see function doc comment for rationale
-    let (node, _inlineBody, _isMutable) = checkBinding env builder binding
+    // InlineBody, isMutable and literalValue discarded - see function doc comment for rationale
+    let (node, _inlineBody, _isMutable, _literalValue) = checkBinding checkExpr checkSynType env builder binding
     let diagnostics = solveAndGetDiagnostics !(env.Constraints)
 
     buildResult builder [node] Map.empty diagnostics
@@ -469,15 +471,21 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
         let _ = range  // Range captured in individual bindings
 
         // Compute qualified name suffixes for bindings (like we do for types)
-        // This enables lookups like "Bindings.getCurrentTicks" for a binding in Platform.Bindings
+        // This enables lookups like "Console.write" for a binding in Console module
+        // and "Platform.Bindings.foo" for nested modules
+        //
+        // For path = ["Console"], produces: ["Console.write", "write"]
+        // For path = ["Platform"; "Console"], produces:
+        //   ["Platform.Console.write", "Console.write", "write"]
         let bindingNameSuffixes simpleName =
             match ctx.Path with
-            | [] | [_] -> [simpleName]  // No nested module or just namespace
-            | _ :: rest -> 
+            | [] -> [simpleName]  // No module path - just the simple name
+            | path ->
+                // Compute all suffix paths from the module path
                 let rec allSuffixes = function
                     | [] -> [[]]
                     | x :: xs -> (x :: xs) :: allSuffixes xs
-                rest
+                path
                 |> allSuffixes
                 |> List.map (fun modPath ->
                     match modPath with
@@ -512,22 +520,24 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 let (updatedEnv, checkedBindings) =
                     placeholders
                     |> List.fold (fun (accEnv, accResults) (binding, simpleName, placeholderTy) ->
-                        let (node, inlineBodyOpt, isMutable) = checkBinding envWithAllNames builder binding
-                        
+                        let (node, inlineBodyOpt, isMutable, literalValueOpt) = checkBinding checkExpr checkSynType envWithAllNames builder binding
+
                         // Unify the placeholder type with the inferred type
                         // This ensures references to this binding get the correct type
                         addConstraint (Constraint.Equals(placeholderTy, node.Type, range)) accEnv
-                        
+
                         // Update the binding in environment with the actual node ID and inline body
                         // CRITICAL: Use actual isMutable flag for module-level mutable variables
+                        // [<Literal>] bindings are registered for compile-time substitution
                         let envWithNode =
                             bindingNameSuffixes simpleName
                             |> List.fold (fun env qname ->
-                                match inlineBodyOpt with
-                                | Some inlineBody -> addInlineBinding qname node.Type (Some node.Id) inlineBody env
-                                | None -> addBinding qname node.Type isMutable (Some node.Id) env
+                                match inlineBodyOpt, literalValueOpt with
+                                | Some inlineBody, _ -> addInlineBinding qname node.Type (Some node.Id) inlineBody env
+                                | None, Some litVal -> addLiteralBinding qname node.Type (Some node.Id) litVal env
+                                | None, None -> addBinding qname node.Type isMutable (Some node.Id) env
                             ) accEnv
-                        
+
                         (envWithNode, (node, inlineBodyOpt, simpleName) :: accResults)
                     ) (envWithAllNames, [])
                 
@@ -537,18 +547,20 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 // NON-RECURSIVE BINDINGS: Sequential processing (existing behavior)
                 // Each binding can only reference bindings that came before it
                 bindings |> List.fold (fun (accEnv, accNodes) binding ->
-                    let (node, inlineBodyOpt, isMutable) = checkBinding accEnv builder binding
+                    let (node, inlineBodyOpt, isMutable, literalValueOpt) = checkBinding checkExpr checkSynType accEnv builder binding
                     // Add the binding to environment so later bindings can reference it
                     // Register under all qualified name suffixes (handles AutoOpen modules)
                     // CRITICAL: Use actual isMutable flag for module-level mutable variables
+                    // [<Literal>] bindings are registered for compile-time substitution
                     let simpleName = getBindingName binding
                     let updatedEnv =
                         bindingNameSuffixes simpleName
                         |> List.fold (fun env qname ->
-                            // Use addInlineBinding for functions to capture body for expansion
-                            match inlineBodyOpt with
-                            | Some inlineBody -> addInlineBinding qname node.Type (Some node.Id) inlineBody env
-                            | None -> addBinding qname node.Type isMutable (Some node.Id) env
+                            // Use addInlineBinding for functions, addLiteralBinding for literals
+                            match inlineBodyOpt, literalValueOpt with
+                            | Some inlineBody, _ -> addInlineBinding qname node.Type (Some node.Id) inlineBody env
+                            | None, Some litVal -> addLiteralBinding qname node.Type (Some node.Id) litVal env
+                            | None, None -> addBinding qname node.Type isMutable (Some node.Id) env
                         ) accEnv
                     (updatedEnv, node :: accNodes)
                 ) (env, [])

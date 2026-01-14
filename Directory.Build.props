@@ -13,7 +13,7 @@
   <!-- Core Configuration -->
   <PropertyGroup>
     <RepoRoot Condition="'$(RepoRoot)' == ''">$(MSBuildThisFileDirectory)</RepoRoot>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <LangVersion>preview</LangVersion>
     <Nullable>enable</Nullable>
   </PropertyGroup>
@@ -28,8 +28,8 @@
 
   <!-- FsLex/FsYacc Tool Paths -->
   <PropertyGroup>
-    <FsLexPath>$(ArtifactsDir)bin/fslex/$(Configuration)/net9.0/fslex.dll</FsLexPath>
-    <FsYaccPath>$(ArtifactsDir)bin/fsyacc/$(Configuration)/net9.0/fsyacc.dll</FsYaccPath>
+    <FsLexPath>$(ArtifactsDir)bin/fslex/$(Configuration)/net10.0/fslex.dll</FsLexPath>
+    <FsYaccPath>$(ArtifactsDir)bin/fsyacc/$(Configuration)/net10.0/fsyacc.dll</FsYaccPath>
   </PropertyGroup>
 
   <!--

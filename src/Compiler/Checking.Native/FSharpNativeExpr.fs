@@ -381,7 +381,9 @@ module FSharpNativeExpr =
             | SemanticKind.Lambda(parameters, bodyId) ->
                 let bodyExpr = fromNode graph bodyId
                 let returnType = extractReturnType node.Type
-                FSharpNativeExpr.Lambda(parameters, bodyExpr, returnType, node.SRTPResolution)
+                // Convert 3-tuple (name, type, nodeId) to 2-tuple (name, type) for FSharpNativeExpr
+                let params2 = parameters |> List.map (fun (name, ty, _nodeId) -> (name, ty))
+                FSharpNativeExpr.Lambda(params2, bodyExpr, returnType, node.SRTPResolution)
 
             // Bindings
             | SemanticKind.Binding(name, isMutable, _isRecursive, _isEntryPoint) ->

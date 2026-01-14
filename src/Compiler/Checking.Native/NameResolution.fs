@@ -50,6 +50,9 @@ type ResolvedBinding = {
     InlineBody: InlineBody option
     /// For DU constructors: case information for proper UnionCase node creation
     UnionCaseInfo: UnionCaseInfo option
+    /// For [<Literal>] bindings: compile-time constant value for substitution
+    /// When present, VarRef resolution substitutes this value directly at use sites
+    LiteralValue: LiteralValue option
 }
 
 /// A name resolver - codata structure producing bindings on demand

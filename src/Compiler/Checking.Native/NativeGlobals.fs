@@ -307,10 +307,11 @@ let inrefTyCon = mkNTUTypeConRefWithArity "inref" NTUKind.NTUptr 1 TypeLayout.Pl
 /// Uses NTUptr kind - pointer-sized on all platforms
 let outrefTyCon = mkNTUTypeConRefWithArity "outref" NTUKind.NTUptr 1 TypeLayout.PlatformWord
 
-/// Function pointer type: FnPtr<'T, 'R>
-/// Used for callbacks to top-level functions (no closures)
-/// Two type parameters: input type 'T and return type 'R
-let fnptrTyCon = mkNTUTypeConRefWithArity "FnPtr" NTUKind.NTUfnptr 2 TypeLayout.PlatformWord
+/// Function pointer type: FnPtr<'F>
+/// Used for FFI calls and callbacks to top-level functions (no closures)
+/// Single type parameter 'F is the full function type, e.g., FnPtr<int -> unit>
+/// See fsnative-spec/spec/ffi-boundary.md for complete semantics
+let fnptrTyCon = mkNTUTypeConRefWithArity "FnPtr" NTUKind.NTUfnptr 1 TypeLayout.PlatformWord
 
 /// Reactive signal type: Signal<'T>
 /// Signal handle type: Signal<'T>
@@ -395,9 +396,10 @@ let mkExprType elemType = NativeType.TApp(Parameterized.exprTyCon, [elemType])
 /// Create a lazy type: Lazy<'T>
 let mkLazyType elemType = NativeType.TApp(Parameterized.lazyTyCon, [elemType])
 
-/// Create a function pointer type: FnPtr<'TArg, 'TResult>
-/// Used for callbacks to top-level functions (no closures)
-let mkFnPtrType argType resultType = NativeType.TApp(fnptrTyCon, [argType; resultType])
+/// Create a function pointer type: FnPtr<'F>
+/// 'F must be a function type (TFun), e.g., int -> unit or nativeptr<byte> -> int -> int
+/// Used for FFI calls and callbacks to top-level functions (no closures)
+let mkFnPtrType funcType = NativeType.TApp(fnptrTyCon, [funcType])
 
 /// Create a reactive signal type: Signal<'T>
 /// Signals are reactive values that notify effects when they change

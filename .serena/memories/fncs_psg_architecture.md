@@ -25,9 +25,9 @@ The Program Semantic Graph (PSG) is:
                                       │
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           PARSER (from FCS)                                  │
+│                              PARSER                                          │
 │  F# parser producing SynExpr, SynModule, etc.                               │
-│  (Largely unchanged from FCS - syntax is F# syntax)                         │
+│  (Standard F# syntax representation)                                        │
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │
                                       ▼
@@ -87,8 +87,8 @@ type PSGNode = {
     // SRTP resolution (if applicable)
     SRTPResolution: WitnessResolution option
     
-    // Symbol information (PRESERVED from FCS)
-    Symbol: FSharpSymbol option
+    // Source location for diagnostics and navigation
+    // (Symbol tracking handled by SemanticGraph)
     
     // Graph structure
     Children: NodeId list
@@ -125,15 +125,15 @@ let srtpInfo = resolveWitness "$" argType env.Witnesses
 // srtpInfo is attached to the PSG node
 ```
 
-### 3. Symbol Information Flows Through
+### 3. Source Locations Preserved
 
-FCS-style symbol information is preserved for design-time:
+Source ranges flow through the entire pipeline for diagnostics and navigation:
 
 ```fsharp
 // When building PSG node for `Console.Write "hello"`
-let symbol = lookupSymbol "Console.Write" env  // FSharpSymbol
-let node = { ... Symbol = Some symbol ... }
-// Later: GetToolTip can use node.Symbol
+let range = rangeToSourceRange synExpr.Range
+let node = { ... Range = range ... }
+// Later: Diagnostics reference node.Range
 ```
 
 ## Contract: FNCS → Firefly
@@ -141,7 +141,7 @@ let node = { ... Symbol = Some symbol ... }
 FNCS guarantees:
 1. All types are native (no BCL types anywhere)
 2. All SRTP constraints are resolved
-3. All symbols have source locations
+3. All nodes have source locations
 4. No `obj` or boxing exists
 5. The graph is semantically valid
 
@@ -155,9 +155,10 @@ Firefly assumes:
 
 ### FNCS (builds PSG)
 - `src/Compiler/Checking.Native/NativeService.fs` - Public API
-- `src/Compiler/Checking.Native/CheckExpressions.fs` - Type checking
+- `src/Compiler/Checking.Native/Expressions/Coordinator.fs` - Expression dispatch
+- `src/Compiler/Checking.Native/Expressions/*.fs` - Modular type checking
 - `src/Compiler/Checking.Native/SemanticGraph.fs` - Graph structure
-- `src/Compiler/Checking.Native/SRTPResolution.fs` - SRTP resolution
+- `src/Compiler/Checking.Native/Unify.fs` - Constraint solving
 
 ### Firefly (consumes PSG)
 - `src/Core/IngestionPipeline.fs` - PSG consumption entry point
@@ -181,6 +182,6 @@ Previously, Firefly built the PSG from FCS output. This architecture has been su
 1. FNCS produces complete PSG with native types
 2. No BCL types in PSG
 3. SRTP resolved for all generic calls
-4. Symbol information preserved for design-time
-5. Source locations available for diagnostics
+4. Source locations preserved for diagnostics
+5. Intrinsics properly typed and marked
 6. Firefly can consume PSG without type checking

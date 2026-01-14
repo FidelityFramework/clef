@@ -144,120 +144,14 @@ struct SelfRef {
 
 **The Fix:** Explicit layout control. Types should determine layout. Use repr-like attributes when needed.
 
-## F# Compiler (FCS) Specific Anti-Patterns
+## Historical Anti-Patterns (Resolved)
 
-These are patterns observed in the fsharp compiler that should be avoided:
+These anti-patterns from the original FCS-based approach have been resolved by FNCS's clean-sheet implementation:
 
-### Anti-Pattern 16: IL Import Assumption
-**The Problem:** 3.2MB/59 files (the entire type-checking layer) assume IL machinery exists for importing types from assemblies.
-
-**Why it's bad:** Creates massive dependency on .NET runtime concepts that don't exist in native compilation.
-
-**The Fix:** Native types from the ground up. Type information comes from source, not assemblies.
-
-### Anti-Pattern 17: Separate AST and Typed Tree
-**The Problem:** FCS maintains `SynExpr` (syntax) and `FSharpExpr` (typed) as separate structures requiring correlation.
-
-**Why it's bad:** Requires complex "Baker" logic to correlate trees. Creates unnecessary intermediate representations.
-
-**The Fix:** Unified representation where types are attached during construction. The output IS the semantic graph.
-
-### Anti-Pattern 18: BCL Type Dependencies
-**The Problem:** Type system assumes BCL types exist (`System.String`, `System.Int32`, etc.).
-
-**Why it's bad:** Couples type checking to .NET runtime. Native strings are UTF-8 `NativeStr`, not BCL `System.String`.
-
-**The Fix:** Native type primitives from the start. `string` means `NativeStr`, not `System.String`.
-
-### Anti-Pattern 19: Soft-Delete Reachability (when not needed)
-**The Problem:** Marking nodes as unreachable but preserving structure (needed for dual-tree zipper navigation).
-
-**Why it's bad:** Keeps dead code in the graph. Only necessary when correlating separate trees.
-
-**The Fix:** Hard prune before handoff. With unified representation, unreachable nodes serve no purpose.
-
-### Anti-Pattern 20: SRTP as Post-Hoc Overlay
-**The Problem:** Resolving statically resolved type parameters after the typed tree is constructed.
-
-**Why it's bad:** Creates additional pass over the tree. Resolution information not intrinsic to nodes.
-
-**The Fix:** SRTP resolution during type checking. Resolved member attached to node during construction.
-
-### Anti-Pattern 21: Global Mutable State in Solver
-**The Problem:** Global mutable state in constraint solving (e.g., shared substitution tables).
-
-**Why it's bad:** Makes reasoning about solver behavior difficult. Parallel solving becomes complex.
-
-**The Fix:** Immutable substitution threading. Use persistent data structures for constraint environments.
-
-## Downstream Type Flow Anti-Patterns
-
-These anti-patterns occur when FNCS provides correct type information but downstream consumers (like Firefly/Alex) ignore or discard it.
-
-### Anti-Pattern 22: Ignoring FNCS TypeLayout in Downstream Mapping
-
-**The Problem (January 2026):** FNCS correctly defines string type layout:
-```fsharp
-// FNCS NativeGlobals.fs - CORRECT
-let stringTyCon = mkTypeConRef "string" 0 (TypeLayout.Inline(16, 8))  // Fat pointer
-```
-
-But downstream `mapType` ignores this and returns wrong type:
-```fsharp
-// Firefly FNCSTransfer.fs - WRONG
-| "string" -> Pointer  // Ignores that FNCS knows strings are fat pointers!
-```
-
-**Why it's critical:** The type information IS the contract. When downstream code ignores it, type mismatches manifest as mysterious MLIR errors far from the source.
-
-**The Fix:** Downstream code must respect FNCS type semantics. `mapType` must return `NativeStrType` (fat pointer struct) for strings, matching the `TypeLayout.Inline(16, 8)` that FNCS defines.
-
-### Anti-Pattern 23: Hardcoding Function Signatures Instead of Using Node.Type
-
-**The Problem:** PSG nodes carry `Type: NativeType` from FNCS. But downstream code ignores it:
-```fsharp
-// WRONG - Hardcoded signature ignores valueNode.Type
-| SemanticKind.Lambda _ ->
-    let signature = "(!llvm.ptr) -> !llvm.ptr"  // HARDCODED!
-    ...
-```
-
-**Why it's bad:** FNCS resolved the types. The node has `TFun(stringType, intType)`. Using hardcoded signatures breaks the principled type flow.
-
-**The Fix:** Derive signatures from the actual types:
-```fsharp
-// RIGHT - Use the type FNCS provided
-match valueNode.Type with
-| NativeType.TFun(paramTy, retTy) ->
-    sprintf "(%s) -> %s"
-        (Serialize.mlirType (mapType paramTy))
-        (Serialize.mlirType (mapType retTy))
-```
-
-### Anti-Pattern 24: "Fallback" Logic That Discards Type Information
-
-**The Problem:** Creating fallback paths for "wasn't traversed yet" scenarios that use hardcoded types instead of querying the graph.
-
-**Why it's bad:** The graph contains everything. FNCS put the types there. The zipper provides "attention" to any node. There's no legitimate "wasn't traversed yet" if you use the architecture correctly.
-
-**The Principle:** Type information flows: FNCS → PSG nodes → `mapType` → `Serialize.mlirType` → MLIR string. Every step must preserve the semantics. Fallbacks that hardcode types break this chain.
-
----
-
-## Summary: The Big Ones
-
-| Priority | Anti-Pattern | Why Critical |
-|----------|--------------|--------------|
-| 1 | Skip occurs check | Non-termination, infinite types |
-| 2 | Self-referential structs | Memory corruption after move |
-| 3 | **Separate AST/typed tree** | Requires Baker-style correlation |
-| 4 | Type erasure for native | Requires boxing, GC |
-| 5 | **IL machinery preservation** | Cognitive overhead, BCL leakage |
-| 6 | HashMap for substitutions | Inefficiency, chain explosion |
-| 7 | Unsoundness for ergonomics | Memory guarantees broken |
-| 8 | **BCL type dependencies** | Native types can't compile |
-| 9 | **Soft-delete when unified** | Keeps dead code unnecessarily |
-| 10 | **SRTP as post-hoc overlay** | Extra pass, non-intrinsic |
+- **IL Import Assumption**: FNCS has no IL machinery - types come from source only
+- **Separate AST/Typed Tree**: FNCS attaches types during construction, no correlation needed
+- **BCL Type Dependencies**: FNCS uses NTU types exclusively
+- **SRTP as Post-Hoc Overlay**: FNCS resolves SRTP during type checking
 
 ## Sources
 
