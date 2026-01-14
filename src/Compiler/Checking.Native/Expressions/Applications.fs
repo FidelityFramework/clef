@@ -34,15 +34,33 @@ type CheckSynTypeFn = TypeEnv -> SynType -> NativeType
 /// Check if name is forward pipe operator
 let private isPipeRight name = name = "op_PipeRight"
 
+/// Extract function name from SynExpr for inline lookup
+/// Used to check if a function application target has InlineBody before checking
+let private tryGetFunctionName (expr: SynExpr) : string option =
+    match expr with
+    | SynExpr.Ident(ident) -> Some ident.idText
+    | SynExpr.LongIdent(_, SynLongIdent(ids, _, _), _, _) ->
+        Some (ids |> List.map (fun id -> id.idText) |> String.concat ".")
+    | _ -> None
+
 /// Check if name is backward pipe operator
 let private isPipeLeft name = name = "op_PipeLeft"
+
+/// Check if an intrinsic is a forward pipe operator
+let private isIntrinsicPipeRight (info: IntrinsicInfo) = 
+    info.Operation = "op_PipeRight"
+
+/// Check if an intrinsic is a backward pipe operator
+let private isIntrinsicPipeLeft (info: IntrinsicInfo) = 
+    info.Operation = "op_PipeLeft"
 
 //-------------------------------------------------------------------------
 // Function Application: SynExpr.App
 //-------------------------------------------------------------------------
 
 /// Check function application.
-/// Handles: pipe operator reduction, intrinsic saturation, DU constructor detection.
+/// Handles: inline expansion (escape analysis), pipe operator reduction,
+/// intrinsic saturation, DU constructor detection.
 let checkApp
     (checkExpr: CheckExprFn)
     (env: TypeEnv)
@@ -53,10 +71,46 @@ let checkApp
     (range: SourceRange)
     : SemanticNode =
 
-    // NOTE: Inline expansion is tracked via InlineBody on bindings
-    // but NOT performed during type checking because it requires
-    // capturing the definition-time environment (closure semantics).
-    // The PSG records inline bodies; downstream analysis can use them.
+    // INLINE EXPANSION: Check if this is a call to a function with InlineBody
+    // This is critical for escape analysis - when a function allocates on stack
+    // and returns a reference, inlining moves the allocation to the caller's frame.
+    //
+    // Example: `Console.readln()` allocates a buffer and returns a fat pointer.
+    // Without inlining: buffer is in readln's frame, pointer dangles after return.
+    // With inlining: buffer is in caller's frame, pointer valid through caller's scope.
+    let inlineExpansionResult =
+        match tryGetFunctionName funcExpr with
+        | Some funcName ->
+            match tryLookupBinding funcName env with
+            | Some binding when binding.InlineBody.IsSome ->
+                let inlineBody = binding.InlineBody.Value
+                // Check the argument first (always needed for substitution)
+                let argNode = checkExpr env builder argExpr
+
+                // Create environment with parameter bound to argument's value
+                // This substitutes the argument for the parameter in the body
+                match inlineBody.Parameters with
+                | [paramName] ->
+                    // Single-parameter function - direct substitution
+                    let inlineEnv = addBinding paramName argNode.Type false (Some argNode.Id) env
+                    // Check the body in the new environment - allocations now in caller's frame
+                    Some (checkExpr inlineEnv builder inlineBody.Body)
+                | [] ->
+                    // No parameters (shouldn't happen for unit - unit has a parameter)
+                    Some (checkExpr env builder inlineBody.Body)
+                | _ ->
+                    // Multi-parameter function - partial application
+                    // For now, don't inline partial applications (would need closure handling)
+                    None
+            | _ -> None
+        | None -> None
+
+    // If we successfully inlined, return the expanded result
+    match inlineExpansionResult with
+    | Some expandedNode -> expandedNode
+    | None ->
+
+    // Normal path: no inline expansion (either no InlineBody or multi-arg partial application)
     let funcNode = checkExpr env builder funcExpr
     let argNode = checkExpr env builder argExpr
 
@@ -159,7 +213,7 @@ let checkApp
             match builder.Nodes.TryFind innerFuncId with
             | Some innerNode ->
                 match innerNode.Kind with
-                // PIPE REDUCTION: Forward pipe (|>)
+                // PIPE REDUCTION: Forward pipe (|>) - VarRef form
                 // App(App(|>, x), f) -> App(f, [x])
                 | SemanticKind.VarRef(name, _) when isPipeRight name ->
                     match existingArgs with
@@ -170,9 +224,30 @@ let checkApp
                     | _ ->
                         // Unexpected structure - keep as-is
                         (funcNode.Id, [argNode.Id])
-                // PIPE REDUCTION: Backward pipe (<|)
+                // PIPE REDUCTION: Forward pipe (|>) - Intrinsic form
+                // When pipe is recognized as intrinsic during type checking
+                | SemanticKind.Intrinsic info when isIntrinsicPipeRight info ->
+                    match existingArgs with
+                    | [valueId] ->
+                        // argNode is the function, valueId is the value
+                        // Transform: f(x) instead of (|>)(x)(f)
+                        (argNode.Id, [valueId])
+                    | _ ->
+                        // Unexpected structure - keep as-is
+                        (funcNode.Id, [argNode.Id])
+                // PIPE REDUCTION: Backward pipe (<|) - VarRef form
                 // App(App(<|, f), x) -> App(f, [x])
                 | SemanticKind.VarRef(name, _) when isPipeLeft name ->
+                    match existingArgs with
+                    | [funcRefId] ->
+                        // funcRefId is the function, argNode is the value
+                        // Transform: f(x) instead of (<|)(f)(x)
+                        (funcRefId, [argNode.Id])
+                    | _ ->
+                        // Unexpected structure - keep as-is
+                        (funcNode.Id, [argNode.Id])
+                // PIPE REDUCTION: Backward pipe (<|) - Intrinsic form
+                | SemanticKind.Intrinsic info when isIntrinsicPipeLeft info ->
                     match existingArgs with
                     | [funcRefId] ->
                         // funcRefId is the function, argNode is the value

@@ -129,7 +129,8 @@ let tryGetFunctionParams
 /// Check a single binding
 /// Returns the semantic node, optionally an InlineBody for transparent function expansion,
 /// the isMutable flag, and optionally a LiteralValue for [<Literal>] bindings.
-/// FNCS is inline-by-default: all function bodies are captured for potential expansion.
+/// InlineBody is captured only for functions explicitly marked `inline` - this enables
+/// escape analysis where allocations are lifted to the caller's frame.
 let checkBinding
     (checkExpr: CheckExprFn)
     (checkSynType: CheckSynTypeFn)
@@ -138,7 +139,7 @@ let checkBinding
     (binding: SynBinding)
     : SemanticNode * InlineBody option * bool * LiteralValue option =
 
-    let (SynBinding(_, _, _, isMutable, attrs, _, _, headPat, _, expr, bindingRange, _, _)) = binding
+    let (SynBinding(_, _, isInline, isMutable, attrs, _, _, headPat, _, expr, bindingRange, _, _)) = binding
     let range = rangeToSourceRange bindingRange
     let name = getBindingName binding
     let isEntryPoint = hasEntryPointAttribute attrs
@@ -223,15 +224,20 @@ let checkBinding
         // Lambda's Parent field must point back to Binding for SSA name assignment
         builder.SetParent(lambdaNode.Id, bindingNode.Id)
 
-        // Capture inline body for transparent function expansion
-        // FNCS inline-by-default: all functions are transparent to the compiler
-        let inlineBody: InlineBody = {
-            Parameters = lambdaParams |> List.map (fun (name, _, _) -> name)  // Just the parameter names
-            Body = expr                                  // The original SynExpr
-            Range = rangeToSourceRange bindingRange     // Source range for error reporting
-        }
+        // Capture inline body only for functions explicitly marked `inline`
+        // This enables escape analysis - inline functions have their allocations
+        // moved to the caller's frame, ensuring pointers remain valid.
+        let inlineBodyOpt =
+            if isInline then
+                Some {
+                    Parameters = lambdaParams |> List.map (fun (name, _, _) -> name)
+                    Body = expr
+                    Range = rangeToSourceRange bindingRange
+                }
+            else
+                None
 
-        (bindingNode, Some inlineBody, isMutable, literalValue)
+        (bindingNode, inlineBodyOpt, isMutable, literalValue)
 
     | None ->
         // Regular value binding (not a function - no inline body)
@@ -282,7 +288,7 @@ let checkLetOrUse
     let bindingNodes = bindingResults |> List.map (fun (node, _, _, _) -> node)
 
     // Add bindings to environment for body
-    // FNCS inline-by-default: use addInlineBinding for functions with bodies
+    // Use addInlineBinding for functions marked `inline` to enable escape analysis
     let bodyEnv =
         List.zip bindings bindingResults
         |> List.fold (fun env (binding, (node, inlineBodyOpt, isMutable, literalValueOpt)) ->

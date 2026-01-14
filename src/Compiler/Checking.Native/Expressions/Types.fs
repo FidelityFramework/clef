@@ -274,7 +274,7 @@ let addBinding (name: string) (ty: NativeType) (isMutable: bool) (nodeId: NodeId
     { env with Resolution = NR.registerBinding name binding env.Resolution }
 
 /// Add a binding with inline body for transparent function expansion
-/// FNCS is inline-by-default: all functions are transparent unless marked opaque
+/// Only functions explicitly marked `inline` get their bodies captured
 let addInlineBinding (name: string) (ty: NativeType) (nodeId: NodeId option) (inlineBody: NR.InlineBody) (env: TypeEnv) : TypeEnv =
     let binding: NR.ResolvedBinding = {
         QualifiedName = name

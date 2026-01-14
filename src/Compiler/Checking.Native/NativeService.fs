@@ -492,7 +492,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     | [] -> simpleName
                     | _ -> (modPath |> String.concat ".") + "." + simpleName)
 
-        // FNCS inline-by-default: capture function bodies for transparent expansion
+        // Capture function bodies for `inline` functions (escape analysis)
         // Handle recursive vs non-recursive bindings differently
         let (finalEnv, nodes) =
             if isRec then
