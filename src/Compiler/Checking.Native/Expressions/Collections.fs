@@ -302,7 +302,9 @@ let checkMatchLambda
         argNode.Id
 
     // Create match expression over the synthetic argument
-    let matchNodeChildIds = syntheticArgNodeId :: (matchCases |> List.map (fun matchCase -> matchCase.Body))
+    let matchNodeChildIds = syntheticArgNodeId :: (matchCases |> List.collect (fun mc ->
+        let guardAndBody = match mc.Guard with Some g -> [g; mc.Body] | None -> [mc.Body]
+        mc.PatternBindings @ guardAndBody))
     let matchNode = builder.Create(
         SemanticKind.Match(syntheticArgNodeId, matchCases),
         resultType,

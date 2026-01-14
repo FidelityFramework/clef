@@ -278,6 +278,39 @@ let checkApp
             | None ->
                 // Inner node not found (shouldn't happen) - keep curried
                 (funcNode.Id, [argNode.Id])
+        | SemanticKind.VarRef(_, Some defId) ->
+            // PARTIAL APPLICATION SATURATION (within same scope only):
+            // VarRef with definition - check if the definition is a partial application
+            // that was created in the SAME expression context.
+            //
+            // This handles: (f x) y -> f x y  (nested applications in same expression)
+            //
+            // We do NOT flatten across binding boundaries because:
+            // 1. The argument nodes from a module-level binding are in a different scope
+            // 2. Their SSA values wouldn't be available in the call context
+            //
+            // For module-level partial applications like:
+            //   let partial = f x
+            //   partial y
+            // The partial application needs to be emitted as a wrapper function or closure,
+            // which is handled separately (TODO: PartialApplication SemanticKind).
+            match builder.Nodes.TryFind defId with
+            | Some defNode ->
+                match defNode.Kind with
+                | SemanticKind.Application(innerFuncId, existingArgs) ->
+                    // Direct Application node (same expression context) - safe to flatten
+                    (innerFuncId, existingArgs @ [argNode.Id])
+                | SemanticKind.Binding _ ->
+                    // Module-level binding - do NOT flatten across scope boundary
+                    // The partial application is in a different scope; its arguments
+                    // won't be available in the current context.
+                    (funcNode.Id, [argNode.Id])
+                | _ ->
+                    // Definition is not an Application - regular call
+                    (funcNode.Id, [argNode.Id])
+            | None ->
+                // Definition not found - regular call
+                (funcNode.Id, [argNode.Id])
         | _ ->
             // Regular function application - keep curried structure
             (funcNode.Id, [argNode.Id])
@@ -299,8 +332,20 @@ let checkApp
             | SemanticKind.Application(innerFuncId, innerArgs) ->
                 // Recursively flatten: App(App(f, a), b) -> App(f, [a; b])
                 flattenApplication innerFuncId (innerArgs @ args)
+            | SemanticKind.VarRef(_, Some defId) ->
+                // Only follow VarRef if the definition is a direct Application
+                // Do NOT follow through Binding nodes (different scope)
+                match builder.Nodes.TryFind defId with
+                | Some defNode ->
+                    match defNode.Kind with
+                    | SemanticKind.Application(innerFuncId, innerArgs) ->
+                        flattenApplication innerFuncId (innerArgs @ args)
+                    | _ ->
+                        // Not a direct Application - stop here
+                        (funcId, args)
+                | None -> (funcId, args)
             | _ ->
-                // Base case: not an Application, return as-is
+                // Base case: not an Application or VarRef to Application
                 (funcId, args)
         | None ->
             // Node not found, return as-is
@@ -313,19 +358,31 @@ let checkApp
     // SemanticKind.UnionCase instead of Application. This enables Alex to
     // witness the DU construction directly without string matching.
     //
-    // Check if targetFuncId is a VarRef to a DU constructor binding
-    let isUnionCaseConstruction =
+    // Two cases to handle:
+    // 1. VarRef to a constructor binding (e.g., first use of IntVal)
+    // 2. Existing UnionCase with None payload (e.g., IntVal created by Identity.fs,
+    //    now being applied with an argument)
+    let unionCaseInfo =
         match builder.Nodes.TryFind targetFuncId with
         | Some targetNode ->
             match targetNode.Kind with
             | SemanticKind.VarRef(name, _) ->
+                // Case 1: VarRef to constructor binding
                 match tryLookupBinding name env with
                 | Some binding -> binding.UnionCaseInfo
                 | None -> None
+            | SemanticKind.UnionCase(caseName, caseIndex, None) ->
+                // Case 2: Existing UnionCase with no payload - we're applying the argument
+                // Extract UnionType from node's type (which is TFun(payloadType, unionType))
+                let unionType =
+                    match targetNode.Type with
+                    | NativeType.TFun(_, retTy) -> retTy  // Return type is the union type
+                    | ty -> ty  // Fallback to the type itself
+                Some { CaseName = caseName; UnionType = unionType; CaseIndex = caseIndex }
             | _ -> None
         | None -> None
 
-    match isUnionCaseConstruction with
+    match unionCaseInfo with
     | Some caseInfo ->
         // DU constructor application: create UnionCase node
         // For single-arg case like `IntVal 42`, payload is the argument

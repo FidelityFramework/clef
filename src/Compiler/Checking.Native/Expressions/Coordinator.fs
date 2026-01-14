@@ -1039,14 +1039,15 @@ and checkMatchBang (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode
         let (pattern, _patBindings) = checkPattern env pat scrutineeNode.Type range
         let guardNode = guardOpt |> Option.map (checkExpr env builder)
         let bodyNode = checkExpr env builder resultExpr
-        { Pattern = pattern; Guard = guardNode |> Option.map (fun g -> g.Id); Body = bodyNode.Id })
+        { Pattern = pattern; PatternBindings = []; Guard = guardNode |> Option.map (fun g -> g.Id); Body = bodyNode.Id })
     let resultType = if List.isEmpty matchCases then env.Globals.UnitType else freshTypeVar range
     builder.Create(
         SemanticKind.Match(scrutineeNode.Id, matchCases),
         resultType,
         range,
         children = scrutineeNode.Id :: (matchCases |> List.collect (fun mc ->
-            match mc.Guard with Some gid -> [gid; mc.Body] | None -> [mc.Body])))
+            let guardAndBody = match mc.Guard with Some gid -> [gid; mc.Body] | None -> [mc.Body]
+            mc.PatternBindings @ guardAndBody)))
 
 /// Check DotNamedIndexedPropertySet: obj.Prop[idx] <- value
 and checkDotNamedIndexedPropertySet (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (env: TypeEnv) (builder: NodeBuilder) (objExpr: SynExpr) (longId: Ident list) (indexExpr: SynExpr) (valueExpr: SynExpr) (range: SourceRange) : SemanticNode =

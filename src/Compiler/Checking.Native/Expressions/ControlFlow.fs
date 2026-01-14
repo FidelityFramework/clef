@@ -178,7 +178,9 @@ let checkMatch
         SemanticKind.Match(scrutineeNode.Id, matchCases),
         resultTy,
         range,
-        children = scrutineeNode.Id :: (matchCases |> List.map (fun c -> c.Body)))
+        children = scrutineeNode.Id :: (matchCases |> List.collect (fun c ->
+            let guardAndBody = match c.Guard with Some g -> [g; c.Body] | None -> [c.Body]
+            c.PatternBindings @ guardAndBody)))
 
 //-------------------------------------------------------------------------
 // Try-with expressions
@@ -212,7 +214,9 @@ let checkTryWith
         SemanticKind.Match(handlerScrutinee.Id, cases),
         tryNode.Type,
         range,
-        children = handlerScrutinee.Id :: (cases |> List.map (fun c -> c.Body)))
+        children = handlerScrutinee.Id :: (cases |> List.collect (fun c ->
+            let guardAndBody = match c.Guard with Some g -> [g; c.Body] | None -> [c.Body]
+            c.PatternBindings @ guardAndBody)))
 
     builder.Create(
         SemanticKind.TryWith(tryNode.Id, handlerNode.Id),

@@ -242,13 +242,100 @@ let checkBinding
     | None ->
         // Regular value binding (not a function - no inline body)
         let exprNode = checkExpr env builder expr
+
+        // ETA-EXPANSION for partial applications:
+        // When a binding's value has function type (TFun), it's a partial application
+        // that should be eta-expanded to a proper Lambda. This enables Alex to emit
+        // it as a callable function rather than an opaque value.
+        //
+        // Example: let helloGreeter = greet "Hello"
+        //   - greet has type: string -> string -> unit
+        //   - greet "Hello" has type: string -> unit
+        //   - This should become: let helloGreeter name = greet "Hello" name
+        //
+        // We recursively expand all function arguments:
+        //   TFun(a, TFun(b, c)) expands to: fun x y -> (expr x y)
+
+        // Helper to flatten nested Applications: App(App(f, [a]), [b]) -> App(f, [a; b])
+        let rec flattenForEta (funcId: NodeId) (args: NodeId list) : NodeId * NodeId list =
+            match builder.Nodes.TryFind funcId with
+            | Some node ->
+                match node.Kind with
+                | SemanticKind.Application(innerFuncId, innerArgs) ->
+                    flattenForEta innerFuncId (innerArgs @ args)
+                | _ -> (funcId, args)
+            | None -> (funcId, args)
+
+        let rec etaExpand (funcExprId: NodeId) (funcType: NativeType) (accParams: (string * NativeType * NodeId) list) (counter: int) : SemanticNode =
+            match funcType with
+            | NativeType.TFun(domainTy, rangeTy) ->
+                // Create synthetic parameter for this currying level
+                let paramName = sprintf "_eta%d" counter
+                let paramNode = builder.Create(
+                    SemanticKind.PatternBinding(paramName),
+                    domainTy,
+                    range,
+                    arena = env.CurrentArena)
+
+                // Create VarRef to the parameter
+                let paramVarRef = builder.Create(
+                    SemanticKind.VarRef(paramName, Some paramNode.Id),
+                    domainTy,
+                    range,
+                    arena = env.CurrentArena)
+
+                // Flatten nested applications before adding new argument
+                // This handles: (greet "Hello") _eta0 -> greet "Hello" _eta0
+                let (targetFuncId, existingArgs) = flattenForEta funcExprId []
+                let allArgs = existingArgs @ [paramVarRef.Id]
+
+                // Create flattened Application
+                let appNode = builder.Create(
+                    SemanticKind.Application(targetFuncId, allArgs),
+                    rangeTy,
+                    range,
+                    children = targetFuncId :: allArgs)
+
+                // Recursively expand if result is still a function type
+                etaExpand appNode.Id rangeTy ((paramName, domainTy, paramNode.Id) :: accParams) (counter + 1)
+
+            | _ ->
+                // Base case: not a function type anymore
+                // Build Lambda with all accumulated parameters
+                let lambdaParams = List.rev accParams
+                let bodyId = funcExprId
+
+                if List.isEmpty lambdaParams then
+                    // No eta-expansion needed - return original expression
+                    builder.Nodes.[funcExprId]
+                else
+                    // Build the function type from parameters
+                    let paramTypes = lambdaParams |> List.map (fun (_, ty, _) -> ty)
+                    let funcType = mkFunctionType paramTypes funcType
+
+                    builder.Create(
+                        SemanticKind.Lambda(lambdaParams, bodyId),
+                        funcType,
+                        range,
+                        children = [bodyId])
+
+        // Check if eta-expansion is needed
+        let finalExprNode =
+            match exprNode.Type with
+            | NativeType.TFun _ ->
+                // Partial application - eta-expand to Lambda
+                etaExpand exprNode.Id exprNode.Type [] 0
+            | _ ->
+                // Not a function type - use as-is
+                exprNode
+
         let node = builder.Create(
             SemanticKind.Binding(name, isMutable, false, isEntryPoint),
-            exprNode.Type,
+            finalExprNode.Type,
             range,
-            children = [exprNode.Id])
+            children = [finalExprNode.Id])
         // Establish bidirectional parent-child link
-        builder.SetParent(exprNode.Id, node.Id)
+        builder.SetParent(finalExprNode.Id, node.Id)
         (node, None, isMutable, literalValue)
 
 //-------------------------------------------------------------------------
@@ -339,16 +426,19 @@ let checkMatchClause
 
     // Create PSG nodes for pattern bindings and add to environment
     // Following ML/FStar convention: pattern binding IS the definition
-    let bodyEnv =
+    // Collect NodeIds for inclusion in MatchCase (enables SSA assignment traversal)
+    let (bodyEnv, patternBindingIds) =
         patBindings
-        |> List.fold (fun env (name, ty) ->
+        |> List.fold (fun (env, ids) (name, ty) ->
             let patternBindingNode = builder.Create(
                 SemanticKind.PatternBinding(name),
                 ty,
                 range,
                 arena = env.CurrentArena)
-            addBinding name ty false (Some patternBindingNode.Id) env
-        ) env
+            let env' = addBinding name ty false (Some patternBindingNode.Id) env
+            (env', patternBindingNode.Id :: ids)
+        ) (env, [])
+    let patternBindingIds = List.rev patternBindingIds  // Preserve order
 
     // Check guard if present
     let guardNode = guardOpt |> Option.map (checkExpr bodyEnv builder)
@@ -362,5 +452,6 @@ let checkMatchClause
     addConstraint (Constraint.Equals(bodyNode.Type, resultTy, range)) env
 
     { Pattern = pattern
+      PatternBindings = patternBindingIds
       Guard = guardNode |> Option.map (fun n -> n.Id)
       Body = bodyNode.Id }

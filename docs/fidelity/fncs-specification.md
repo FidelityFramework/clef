@@ -880,6 +880,138 @@ The computation expression builder determines which pattern applies. Sequential 
 
 ---
 
+## Part 13: Pattern Matching Semantics
+
+Pattern matching is foundational to ML-family languages. This section specifies how pattern variables flow from discriminated union scrutinee to bound variables in case bodies.
+
+### 13.1 MatchCase Structure
+
+A `MatchCase` represents one arm of a match expression:
+
+```fsharp
+type MatchCase = {
+    /// The pattern to match (Const, Var, UnionCase, etc.)
+    Pattern: Pattern
+    /// PatternBinding NodeIds for variables bound by this pattern
+    PatternBindings: NodeId list
+    /// Optional guard expression (when clause)
+    Guard: NodeId option
+    /// The body to execute if matched
+    Body: NodeId
+}
+```
+
+**Key principle**: `PatternBindings` contains NodeIds that are part of the traversal path, ensuring SSA assignment visits them.
+
+### 13.2 PatternBinding Lifecycle
+
+A `PatternBinding` represents a variable introduced by a pattern:
+
+```fsharp
+// Pattern: IntVal x
+//         ↓
+// PatternBinding node with name = "x", type = int
+```
+
+**Lifecycle phases:**
+
+1. **Creation** (FNCS pattern checking): When FNCS processes a pattern like `IntVal x`, it creates a PatternBinding node with the variable name and inferred type.
+
+2. **SSA Assignment** (traversal): The `foldWithSCFRegions` traversal visits PatternBinding nodes as children of Match, assigning them SSA values.
+
+3. **VarBindings Population** (BeforeRegion hook): Before traversing the case body, the pattern variable name must be bound to its SSA in the VarBindings map.
+
+4. **Usage** (case body): VarRef nodes in the case body look up the pattern variable in VarBindings.
+
+### 13.3 Match Traversal Semantics
+
+The traversal order for Match expressions ensures pattern variables are bound before use:
+
+```
+Match (scrutineeId, cases)
+    │
+    ├─→ Walk scrutinee (produces scrutinee SSA)
+    │
+    └─→ For each case:
+        │
+        ├─→ BeforeRegion(MatchCaseRegion idx)
+        │       │
+        │       └─→ Extract payload from scrutinee
+        │       └─→ Bind PatternBindings to VarBindings
+        │
+        ├─→ Walk PatternBinding nodes (assigns SSAs)
+        ├─→ Walk optional guard
+        ├─→ Walk case body (can reference pattern variables)
+        │
+        └─→ AfterRegion(MatchCaseRegion idx)
+```
+
+**The Lambda Parallel**: Just as Lambda `preBindParams` binds parameters to VarBindings before body traversal, the Match `BeforeRegion` hook must bind pattern variables before case body traversal.
+
+### 13.4 DU Payload Extraction
+
+When entering a match case, the payload must be extracted from the scrutinee:
+
+**DU Memory Layout** (from native-type-universe.md):
+```
+┌──────────┬─────────┬───────────────────────┐
+│ Tag (i8) │ padding │ Payload (variant data) │
+└──────────┴─────────┴───────────────────────┘
+```
+
+**Extraction sequence:**
+```mlir
+; Scrutinee: !llvm.struct<(i8, payload_type)>
+%tag = llvm.extractvalue %scrutinee[0] : !llvm.struct<...> -> i8
+%payload = llvm.extractvalue %scrutinee[1] : !llvm.struct<...> -> payload_type
+
+; For multi-field payload, further extraction:
+%field0 = llvm.extractvalue %payload[0] : payload_type -> field0_type
+%field1 = llvm.extractvalue %payload[1] : payload_type -> field1_type
+```
+
+**Single-field optimization**: For DU cases with a single field (e.g., `IntVal of int`), the payload IS the bound value - no additional extraction needed.
+
+### 13.5 VarBindings Population
+
+The `BeforeRegion` hook for `MatchCaseRegion` must:
+
+1. **Look up the Match node** using `parentId`
+2. **Get the case** at index `idx`
+3. **Get scrutinee SSA** from prior traversal results
+4. **Extract payload** from scrutinee for this case's tag
+5. **For each PatternBinding** in `case.PatternBindings`:
+   - Get the binding's name and type from the node
+   - Get the appropriate payload field (single-field: entire payload; multi-field: indexed extraction)
+   - Add to VarBindings: `name → (payloadSSA, payloadType)`
+
+```fsharp
+// Pseudo-code for BeforeRegion(MatchCaseRegion idx):
+let matchNode = graph.Nodes.[parentId]
+let case = matchNode.Cases.[idx]
+let scrutineeSSA = recallNodeResult scrutineeId
+let payloadSSA = extractPayload scrutineeSSA case.Pattern.Tag
+
+for binding in case.PatternBindings do
+    let node = graph.Nodes.[binding]
+    match node.Kind with
+    | SemanticKind.PatternBinding name ->
+        let bindingType = mapType node.Type
+        VarBindings.add name (payloadSSA, bindingType)
+```
+
+### 13.6 Pattern Matching Compilation Summary
+
+| Phase | Responsibility | Output |
+|-------|----------------|--------|
+| **FNCS Checking** | Create PatternBinding nodes | PSG with pattern structure |
+| **SSA Assignment** | Assign SSAs to PatternBindings | Coeffect map |
+| **BeforeRegion Hook** | Extract payload, bind to VarBindings | State update |
+| **Case Body Traversal** | VarRefs resolve pattern variables | MLIR ops |
+| **witnessMatch** | Generate scf.if chain with extractions | MLIR module |
+
+---
+
 ## Appendix A: Type Mapping Reference
 
 ### Primitive Types

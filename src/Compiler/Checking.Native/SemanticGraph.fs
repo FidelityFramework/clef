@@ -274,6 +274,9 @@ type IntrinsicInfo = {
 type MatchCase = {
     /// The pattern to match
     Pattern: Pattern
+    /// PatternBinding NodeIds for variables bound by this pattern.
+    /// Following Lambda convention: includes NodeIds so they're in traversal path for SSA assignment.
+    PatternBindings: NodeId list
     /// Optional guard expression
     Guard: NodeId option
     /// The body to execute if matched
@@ -750,10 +753,10 @@ module Reachability =
             []  // Unresolved reference - no semantic edges
         // Match: follow scrutinee and case bodies
         | SemanticKind.Match (scrutinee, cases) ->
+            // Include PatternBindings so they're in traversal path for SSA assignment
             scrutinee :: (cases |> List.collect (fun c ->
-                match c.Guard with
-                | Some g -> [c.Body; g]
-                | None -> [c.Body]))
+                let guardAndBody = match c.Guard with Some g -> [g; c.Body] | None -> [c.Body]
+                c.PatternBindings @ guardAndBody))
         // Sequential: follow all nodes
         | SemanticKind.Sequential nodes ->
             nodes
@@ -1213,8 +1216,10 @@ module Traversal =
                             cases
                             |> List.fold (fun (state, idx) case ->
                                 let state = hook.BeforeRegion state parentId (MatchCaseRegion idx)
+                                // Walk PatternBinding nodes (for SSA assignment)
+                                let state = case.PatternBindings |> List.fold walk state
                                 // Walk optional guard
-                                let state = 
+                                let state =
                                     match case.Guard with
                                     | Some guardId -> walk state guardId
                                     | None -> state
