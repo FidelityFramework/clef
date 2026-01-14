@@ -1010,6 +1010,110 @@ for binding in case.PatternBindings do
 | **Case Body Traversal** | VarRefs resolve pattern variables | MLIR ops |
 | **witnessMatch** | Generate scf.if chain with extractions | MLIR module |
 
+### 13.7 Tuple Pattern Matching
+
+When the scrutinee is a tuple of discriminated unions, pattern extraction requires a **two-step process** for each tuple element.
+
+**Example:**
+
+```fsharp
+type Number = IntVal of int | FloatVal of float
+
+let add (a: Number) (b: Number) : Number =
+    match a, b with
+    | IntVal x, IntVal y -> IntVal (x + y)
+    | FloatVal x, FloatVal y -> FloatVal (x + y)
+    | _ -> IntVal 0
+```
+
+**Scrutinee Memory Layout:**
+
+The scrutinee `(a, b)` is a tuple of two DUs:
+
+```
+Tuple scrutinee: struct<(Number, Number)>
+┌─────────────────────────────┬─────────────────────────────┐
+│ Number (tag + payload)      │ Number (tag + payload)      │
+└─────────────────────────────┴─────────────────────────────┘
+       element 0                      element 1
+```
+
+Each `Number` has the standard DU layout:
+
+```
+Number: struct<(i8, i64)>
+┌──────────┬─────────────────────┐
+│ Tag (i8) │ Payload (i64/f64)   │
+└──────────┴─────────────────────┘
+```
+
+**Two-Step Extraction Sequence:**
+
+For a pattern like `IntVal x, IntVal y`, each binding requires:
+
+1. **Extract tuple element** at index `i` → yields the DU struct
+2. **Extract DU payload** from field `[1]` → yields the bound value
+
+```mlir
+; Step 1: Extract tuple element 0 (first Number)
+%du0 = llvm.extractvalue %scrutinee[0] : !llvm.struct<(struct<(i8, i64)>, struct<(i8, i64)>)> -> !llvm.struct<(i8, i64)>
+
+; Step 2: Extract payload from DU (field 1)
+%payload0 = llvm.extractvalue %du0[1] : !llvm.struct<(i8, i64)> -> i64
+
+; Step 3: Convert if needed (e.g., i64 to index for int)
+%x = arith.index_cast %payload0 : i64 to index
+
+; Repeat for element 1 → %y
+```
+
+**Tag Comparison for Tuple Patterns:**
+
+Each element's tag must be checked independently:
+
+```mlir
+; Extract tags from both tuple elements
+%tag0 = llvm.extractvalue %du0[0] : !llvm.struct<(i8, i64)> -> i8
+%tag1 = llvm.extractvalue %du1[0] : !llvm.struct<(i8, i64)> -> i8
+
+; Check if both are IntVal (tag 0)
+%isInt0 = arith.cmpi eq, %tag0, %c0 : i8
+%isInt1 = arith.cmpi eq, %tag1, %c0 : i8
+
+; Combine with AND for the case guard
+%bothInt = arith.andi %isInt0, %isInt1 : i1
+```
+
+**Pattern.Tuple Structure:**
+
+FNCS represents tuple patterns with `Pattern.Tuple`:
+
+```fsharp
+type Pattern =
+    | Const of obj * FidType
+    | Var of string * FidType
+    | Union of caseName: string * tagIndex: int * payload: Pattern option * unionType: FidType
+    | Tuple of elements: Pattern list  // Tuple pattern
+    | Wild of FidType
+```
+
+When processing `Pattern.Tuple elements`:
+
+1. Iterate over `elements` with index `i`
+2. For each element pattern (typically `Pattern.Union`):
+   - Extract tuple element at index `i`
+   - Apply single-DU extraction logic to get payload
+   - Bind pattern variables to VarBindings
+
+**Compilation Flow:**
+
+| Step | Single DU | Tuple of DUs |
+|------|-----------|--------------|
+| **Scrutinee** | `DU struct` | `struct<(DU1, DU2, ...)>` |
+| **Tag extraction** | `extractvalue %s[0]` | `extractvalue %s[i][0]` per element |
+| **Payload extraction** | `extractvalue %s[1]` | `extractvalue %s[i]` then `extractvalue %du[1]` |
+| **Guard condition** | Single tag check | AND of all element tag checks |
+
 ---
 
 ## Appendix A: Type Mapping Reference
@@ -1093,6 +1197,8 @@ These parse as standard F# (attributes, operators) but have special semantics in
 | Part 10: Access Kind Enforcement | **Specified** | Pending in FNCS |
 | Part 11: Peripheral Descriptors | **Specified** | Pending (Farscape integration) |
 | Part 12: Ownership/Coeffects | Reserved | Future |
+| Part 12: SCF Regions | **Specified** | Implemented in Firefly |
+| Part 13: Pattern Matching | **Specified** | Implemented in Firefly |
 
 ---
 
