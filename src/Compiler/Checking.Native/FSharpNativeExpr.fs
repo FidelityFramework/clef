@@ -612,7 +612,7 @@ module FSharpNativeExpr =
         | Pattern.Wildcard -> NativePattern.Wildcard
         | Pattern.Var(name, ty) -> NativePattern.Named(name, ty)
         | Pattern.Const value -> NativePattern.Literal value
-        | Pattern.Union(caseName, payload, _unionType) ->
+        | Pattern.Union(caseName, _tagIndex, payload, _unionType) ->
             let args = payload |> Option.map (fun p -> [convertPattern p]) |> Option.defaultValue []
             NativePattern.Constructor(caseName, args)
         | Pattern.Tuple elements ->

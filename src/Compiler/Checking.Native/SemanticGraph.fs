@@ -289,7 +289,9 @@ and [<RequireQualifiedAccess>] Pattern =
     | Var of name: string * ty: NativeType
     | Wildcard
     | Tuple of elements: Pattern list
-    | Union of caseName: string * payload: Pattern option * unionType: NativeType
+    /// Union case pattern with resolved tag index for pattern matching compilation
+    /// tagIndex: zero-based index of this case in the union (resolved from UnionCaseInfo)
+    | Union of caseName: string * tagIndex: int * payload: Pattern option * unionType: NativeType
     | Record of fields: (string * Pattern) list * recordType: NativeType
     | Array of elements: Pattern list
     | Or of Pattern * Pattern

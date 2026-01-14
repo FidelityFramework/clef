@@ -81,11 +81,19 @@ let rec checkPattern
                 (Pattern.Var(caseName, expectedTy), [(caseName, expectedTy)])
             | _ ->
                 // Uppercase or qualified - nullary constructor
-                (Pattern.Union(caseName, None, expectedTy), [])
+                // Look up binding to get tag index from UnionCaseInfo
+                let tagIndex =
+                    match tryLookupBinding caseName env with
+                    | Some binding ->
+                        match binding.UnionCaseInfo with
+                        | Some caseInfo -> caseInfo.CaseIndex
+                        | None -> 0  // Fallback for non-DU constructors
+                    | None -> 0  // Fallback
+                (Pattern.Union(caseName, tagIndex, None, expectedTy), [])
         | SynArgPats.Pats pats ->
             // Constructor with arguments (e.g., Some x, Error e)
-            // Look up constructor binding to get payload types (FCS TyconRef.Deref pattern)
-            let payloadTypes =
+            // Look up constructor binding to get payload types and tag index (FCS TyconRef.Deref pattern)
+            let (payloadTypes, tagIndex) =
                 match tryLookupBinding caseName env with
                 | Some binding ->
                     // Extract domain types from constructor's function type
@@ -95,10 +103,16 @@ let rec checkPattern
                         match ty with
                         | NativeType.TFun(domain, range) -> extractDomains range (domain :: acc)
                         | _ -> List.rev acc
-                    extractDomains binding.Type []
+                    let types = extractDomains binding.Type []
+                    // Extract tag index from UnionCaseInfo
+                    let idx =
+                        match binding.UnionCaseInfo with
+                        | Some caseInfo -> caseInfo.CaseIndex
+                        | None -> 0  // Fallback for non-DU constructors
+                    (types, idx)
                 | None ->
                     // Fallback: use fresh type variables (will be constrained later)
-                    pats |> List.map (fun _ -> freshTypeVar range)
+                    (pats |> List.map (fun _ -> freshTypeVar range), 0)
 
             let (argPatterns, argBindings) =
                 List.zip pats payloadTypes
@@ -106,10 +120,18 @@ let rec checkPattern
                     checkPattern checkSynType env p argTy range)
                 |> List.unzip
             let payload = if List.isEmpty argPatterns then None else Some (Pattern.Tuple argPatterns)
-            (Pattern.Union(caseName, payload, expectedTy), List.concat argBindings)
+            (Pattern.Union(caseName, tagIndex, payload, expectedTy), List.concat argBindings)
         | SynArgPats.NamePatPairs _ ->
             // Named pattern pairs (e.g., { Field = pat })
-            (Pattern.Union(caseName, None, expectedTy), [])
+            // Look up binding to get tag index from UnionCaseInfo
+            let tagIndex =
+                match tryLookupBinding caseName env with
+                | Some binding ->
+                    match binding.UnionCaseInfo with
+                    | Some caseInfo -> caseInfo.CaseIndex
+                    | None -> 0
+                | None -> 0
+            (Pattern.Union(caseName, tagIndex, None, expectedTy), [])
 
     | SynPat.As(lhsPat, rhsPat, _) ->
         // Pattern alias: pat as name
