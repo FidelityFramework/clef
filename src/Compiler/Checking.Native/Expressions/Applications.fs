@@ -282,6 +282,32 @@ let checkApp
             // Regular function application - keep curried structure
             (funcNode.Id, [argNode.Id])
 
+    // RECURSIVE FLATTENING:
+    // After pipe reduction, the targetFuncId may itself be an Application node.
+    // For example: `readln() |> greet prefix` after pipe reduction becomes:
+    //   targetFuncId = App(greet, [prefix])  (an Application!)
+    //   allArgs = [readln_result]
+    //
+    // This must be flattened to: App(greet, [prefix; readln_result])
+    //
+    // Without this, Alex sees "Application as function" which it can't handle.
+    // See memory: curried_call_flattening_insight
+    let rec flattenApplication (funcId: NodeId) (args: NodeId list) : NodeId * NodeId list =
+        match builder.Nodes.TryFind funcId with
+        | Some node ->
+            match node.Kind with
+            | SemanticKind.Application(innerFuncId, innerArgs) ->
+                // Recursively flatten: App(App(f, a), b) -> App(f, [a; b])
+                flattenApplication innerFuncId (innerArgs @ args)
+            | _ ->
+                // Base case: not an Application, return as-is
+                (funcId, args)
+        | None ->
+            // Node not found, return as-is
+            (funcId, args)
+
+    let (targetFuncId, allArgs) = flattenApplication targetFuncId allArgs
+
     // DU CONSTRUCTOR DETECTION:
     // If the target function is a DU constructor (has UnionCaseInfo), create
     // SemanticKind.UnionCase instead of Application. This enables Alex to

@@ -1,8 +1,26 @@
 # Curried Call Flattening Insight (January 2026)
 
-## STATUS: RESOLVED
+## STATUS: RESOLVED ✅ (January 2026)
 
-The fix was applied to FNCS CheckExpressions.fs - added `flattenTargetApplication` recursive helper after pipe reduction to flatten when `targetFuncId` points to an Application node.
+The fix was applied to FNCS Applications.fs (not CheckExpressions.fs). Added `flattenApplication` recursive helper that runs AFTER the initial `(targetFuncId, allArgs)` computation to recursively flatten when `targetFuncId` points to an Application node.
+
+**Location**: `/src/Compiler/Checking.Native/Expressions/Applications.fs` lines ~285-305
+
+**Implementation**:
+```fsharp
+let rec flattenApplication (funcId: NodeId) (args: NodeId list) : NodeId * NodeId list =
+    match builder.Nodes.TryFind funcId with
+    | Some node ->
+        match node.Kind with
+        | SemanticKind.Application(innerFuncId, innerArgs) ->
+            flattenApplication innerFuncId (innerArgs @ args)
+        | _ -> (funcId, args)
+    | None -> (funcId, args)
+
+let (targetFuncId, allArgs) = flattenApplication targetFuncId allArgs
+```
+
+**Verified**: All samples 01-04 compile and run correctly.
 
 ---
 
