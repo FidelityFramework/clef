@@ -158,14 +158,29 @@ Most values are stack-allocated:
 
 ### Arena Allocation
 
+> **Status (January 2026)**: Arena is fully implemented as an FNCS intrinsic type and compiles to working native code.
+
 For values that outlive their scope but have bounded lifetime:
 
 ```fsharp
-withArena (fun arena ->
-    let data = arena.alloc<Data>()
-    // ... use data ...
-) // Entire arena freed here
+// Current implementation (January 2026)
+let arenaMem = NativePtr.stackalloc<byte> 4096
+let mutable arena = Arena.fromPointer (NativePtr.toNativeInt arenaMem) 4096
+
+let buffer = Arena.alloc &arena 256  // Returns nativeint
+let bufferPtr = NativePtr.ofNativeInt<byte> buffer
+// ... use buffer ...
+// Entire arena freed when arenaMem's stack frame exits
 ```
+
+**Arena Type**: `Arena<[<Measure>] 'lifetime>` with NTUCompound(3) layout (base, capacity, position).
+
+**Arena Operations**:
+- `fromPointer: nativeint -> int -> Arena<'lifetime>` - Create from backing memory
+- `alloc: Arena<'lifetime> byref -> int -> nativeint` - Bump allocate
+- `allocAligned: Arena<'lifetime> byref -> int -> int -> nativeint` - Aligned allocation
+- `remaining: Arena<'lifetime> -> int` - Query remaining capacity
+- `reset: Arena<'lifetime> byref -> unit` - Reset to empty
 
 **Benefits:**
 - Bulk deallocation (fast)
@@ -268,8 +283,24 @@ let value = Ptr.read<uint32, Peripheral, ReadOnly> gpioAddr
 4. **Region safety**: Memory region misuse is a type error
 5. **FFI compatibility**: Can produce C-compatible layouts
 
+## The Lifetime Inference Principle
+
+Lifetime management parallels type inference:
+- Types: You CAN write `let x: int = 5`, usually write `let x = 5`
+- Lifetimes: You CAN write explicit `Arena<'lifetime>`, ideally let compiler infer
+
+Three levels of control:
+1. **Level 3 (Explicit)**: `let hello (arena: byref<Arena<'lifetime>>)` - full control
+2. **Level 2 (Hints)**: `arena { }` computation expression or `[<UseArena>]` attribute
+3. **Level 1 (Inferred)**: Write standard F#, compiler performs escape analysis
+
+See `arena_developer_experience_design` memory in Firefly for detailed progression.
+
 ## References
 
+- SpeakEZ Blog: "Lifetime Inference" (January 2026) - Unifying principle
+- SpeakEZ Blog: "Memory Management By Choice" (May 2025)
+- SpeakEZ Blog: "ByRef Resolved" (May 2025)
 - Rust Reference: Type Layout
 - Rust repr(transparent) RFC
 - MLton: Unboxed representation

@@ -237,6 +237,8 @@ type IntrinsicModule =
     | Effect        // Side effect operations (create, createWithCleanup, dispose)
     | Memo          // Memoized computation operations (create, get)
     | Batch         // Update batching operations (run)
+    // Memory management
+    | Arena         // Arena allocation (fromPointer, alloc, allocAligned, remaining, reset)
 
 /// Category of intrinsic - guides how Alex should emit it
 [<RequireQualifiedAccess>]
@@ -730,7 +732,8 @@ module Reachability =
         | IntrinsicModule.Convert
         | IntrinsicModule.Crypto
         | IntrinsicModule.Bits
-        | IntrinsicModule.FnPtr -> true  // FnPtr.fromSymbol, invoke, ofFunction handled by Alex
+        | IntrinsicModule.FnPtr
+        | IntrinsicModule.Arena -> true  // Arena.fromPointer, alloc, etc. handled by Alex
 
     /// Extract semantic references from a node's Kind (call targets, definition refs, etc.)
     /// Used by traversal to ensure all semantic children are visited.

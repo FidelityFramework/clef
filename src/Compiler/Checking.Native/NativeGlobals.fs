@@ -329,6 +329,15 @@ let effectTyCon = mkTypeConRef "Effect" 0 TypeLayout.PlatformWord
 /// Memos recompute when their signal dependencies change
 let memoTyCon = mkTypeConRef "Memo" 1 TypeLayout.PlatformWord
 
+/// Arena type: Arena<'lifetime>
+/// Bump allocator for deterministic memory management.
+/// Measure parameter tracks lifetime scope.
+/// Layout: { Base: nativeint, Capacity: int, Position: int } = 3 platform words
+let arenaTyCon =
+    mkTypeConRefWithMeasures "Arena"
+        [TypeParamKind.Measure]  // 'lifetime is a measure parameter
+        (TypeLayout.NTUCompound 3)  // 3 platform-word fields
+
 let private parameterizedTyConsByName =
     [ ("option", Parameterized.optionTyCon)
       ("voption", Parameterized.voptionTyCon)
@@ -350,7 +359,9 @@ let private parameterizedTyConsByName =
       // Reactive signals (SolidJS-inspired)
       ("Signal", signalTyCon)
       ("Effect", effectTyCon)
-      ("Memo", memoTyCon) ]
+      ("Memo", memoTyCon)
+      // Memory management
+      ("Arena", arenaTyCon) ]
     |> Map.ofList
 
 /// Try to find a primitive type constructor by name
@@ -412,6 +423,10 @@ let effectType = NativeType.TApp(effectTyCon, [])
 /// Create a memoized value type: Memo<'T>
 /// Memos cache derived values that recompute when dependencies change
 let mkMemoType elemType = NativeType.TApp(memoTyCon, [elemType])
+
+/// Create an arena type: Arena<'lifetime>
+/// Arenas provide deterministic bump allocation with lifetime tracking
+let mkArenaType lifetimeMeasure = NativeType.TApp(arenaTyCon, [lifetimeMeasure])
 
 //-------------------------------------------------------------------------
 // Built-in F# Intrinsic Functions

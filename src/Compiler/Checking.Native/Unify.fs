@@ -128,6 +128,23 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
     | NativeType.TApp(tc, [elem1]), NativeType.TNativePtr elem2 when tc.Name = "nativeptr" ->
         unify elem1 elem2 range
 
+    // Handle TByref vs TApp(byref/inref/outref, [elem]) - both represent the same concept
+    // TApp(byref, ...) maps to TByref(..., InOut)
+    | NativeType.TByref(elem1, ByrefKind.InOut), NativeType.TApp(tc, [elem2]) when tc.Name = "byref" ->
+        unify elem1 elem2 range
+    | NativeType.TApp(tc, [elem1]), NativeType.TByref(elem2, ByrefKind.InOut) when tc.Name = "byref" ->
+        unify elem1 elem2 range
+    // TApp(inref, ...) maps to TByref(..., In)
+    | NativeType.TByref(elem1, ByrefKind.In), NativeType.TApp(tc, [elem2]) when tc.Name = "inref" ->
+        unify elem1 elem2 range
+    | NativeType.TApp(tc, [elem1]), NativeType.TByref(elem2, ByrefKind.In) when tc.Name = "inref" ->
+        unify elem1 elem2 range
+    // TApp(outref, ...) maps to TByref(..., Out)
+    | NativeType.TByref(elem1, ByrefKind.Out), NativeType.TApp(tc, [elem2]) when tc.Name = "outref" ->
+        unify elem1 elem2 range
+    | NativeType.TApp(tc, [elem1]), NativeType.TByref(elem2, ByrefKind.Out) when tc.Name = "outref" ->
+        unify elem1 elem2 range
+
     // Anonymous record types - must match on isStruct (struct vs reference)
     | NativeType.TAnon(fields1, isStruct1), NativeType.TAnon(fields2, isStruct2) ->
         if isStruct1 <> isStruct2 then

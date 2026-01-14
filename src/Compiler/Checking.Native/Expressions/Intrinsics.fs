@@ -59,6 +59,7 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         | "NativeStr" -> Some (IntrinsicModule.NativeStr, opPart)
         | "NativeDefault" -> Some (IntrinsicModule.NativeDefault, opPart)
         | "Math" -> Some (IntrinsicModule.Math, opPart)
+        | "Arena" -> Some (IntrinsicModule.Arena, opPart)
         | _ -> None
 
 //-------------------------------------------------------------------------
@@ -456,6 +457,47 @@ let private resolveMathOp (op: string) (globals: NativeGlobals) (_range: SourceR
     | unknown ->
         UnknownOperation $"Unknown Math intrinsic: Math.{unknown}"
 
+/// Resolve Arena.* operations (deterministic memory allocation)
+let private resolveArenaOp (op: string) (globals: NativeGlobals) (range: SourceRange) : IntrinsicResolution =
+    let fullName = "Arena." + op
+    // Create fresh measure parameter for lifetime tracking
+    let lifetimeParam = freshTypeParam "'lifetime" TypeParamKind.Measure range
+    let lifetimeMeasure = NativeType.TMeasure (MVar lifetimeParam)
+    let arenaType = mkArenaType lifetimeMeasure
+    let arenaByrefType = NativeType.TByref(arenaType, ByrefKind.InOut)
+    match op with
+    | "fromPointer" ->
+        // nativeint -> int -> Arena<'lifetime>
+        let ty = NativeType.TForall([lifetimeParam],
+            NativeType.TFun(Types.nintType,
+                NativeType.TFun(globals.IntType, arenaType)))
+        Resolved (mkIntrinsic IntrinsicModule.Arena op IntrinsicCategory.Memory fullName, ty)
+    | "alloc" ->
+        // Arena<'lifetime> byref -> int -> nativeint
+        let ty = NativeType.TForall([lifetimeParam],
+            NativeType.TFun(arenaByrefType,
+                NativeType.TFun(globals.IntType, Types.nintType)))
+        Resolved (mkIntrinsic IntrinsicModule.Arena op IntrinsicCategory.Memory fullName, ty)
+    | "allocAligned" ->
+        // Arena<'lifetime> byref -> int -> int -> nativeint
+        let ty = NativeType.TForall([lifetimeParam],
+            NativeType.TFun(arenaByrefType,
+                NativeType.TFun(globals.IntType,
+                    NativeType.TFun(globals.IntType, Types.nintType))))
+        Resolved (mkIntrinsic IntrinsicModule.Arena op IntrinsicCategory.Memory fullName, ty)
+    | "remaining" ->
+        // Arena<'lifetime> -> int
+        let ty = NativeType.TForall([lifetimeParam],
+            NativeType.TFun(arenaType, globals.IntType))
+        Resolved (mkIntrinsic IntrinsicModule.Arena op IntrinsicCategory.Memory fullName, ty)
+    | "reset" ->
+        // Arena<'lifetime> byref -> unit
+        let ty = NativeType.TForall([lifetimeParam],
+            NativeType.TFun(arenaByrefType, globals.UnitType))
+        Resolved (mkIntrinsic IntrinsicModule.Arena op IntrinsicCategory.Memory fullName, ty)
+    | unknown ->
+        UnknownOperation $"Unknown Arena intrinsic: Arena.{unknown}. Available: fromPointer, alloc, allocAligned, remaining, reset"
+
 //-------------------------------------------------------------------------
 // Main Module Intrinsic Dispatcher
 //-------------------------------------------------------------------------
@@ -485,6 +527,7 @@ let resolveModuleIntrinsic
     | IntrinsicModule.Effect -> resolveEffectOp op globals range
     | IntrinsicModule.Memo -> resolveMemoOp op globals range
     | IntrinsicModule.Batch -> resolveBatchOp op globals range
+    | IntrinsicModule.Arena -> resolveArenaOp op globals range
     | IntrinsicModule.Math -> resolveMathOp op globals range
     | IntrinsicModule.Convert -> NotAnIntrinsic  // Conversions handled separately (float, int, etc.)
     | IntrinsicModule.Operators -> NotAnIntrinsic  // Operators handled separately
