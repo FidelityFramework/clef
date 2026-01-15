@@ -60,6 +60,8 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         | "NativeDefault" -> Some (IntrinsicModule.NativeDefault, opPart)
         | "Math" -> Some (IntrinsicModule.Math, opPart)
         | "Arena" -> Some (IntrinsicModule.Arena, opPart)
+        | "DateTime" -> Some (IntrinsicModule.DateTime, opPart)
+        | "TimeSpan" -> Some (IntrinsicModule.TimeSpan, opPart)
         | _ -> None
 
 //-------------------------------------------------------------------------
@@ -498,6 +500,106 @@ let private resolveArenaOp (op: string) (globals: NativeGlobals) (range: SourceR
     | unknown ->
         UnknownOperation $"Unknown Arena intrinsic: Arena.{unknown}. Available: fromPointer, alloc, allocAligned, remaining, reset"
 
+/// Resolve DateTime.* operations (BCL-compatible date/time)
+let private resolveDateTimeOp (op: string) (globals: NativeGlobals) (_range: SourceRange) : IntrinsicResolution =
+    let fullName = "DateTime." + op
+    match op with
+    // Static constructors
+    | "now" ->
+        // unit -> int64 (milliseconds since Unix epoch)
+        let ty = NativeType.TFun(globals.UnitType, globals.Int64Type)
+        Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.Platform fullName, ty)
+    | "utcNow" ->
+        // unit -> int64 (milliseconds since Unix epoch, same as now for UTC)
+        let ty = NativeType.TFun(globals.UnitType, globals.Int64Type)
+        Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.Platform fullName, ty)
+    // Component extractors (from milliseconds since epoch)
+    | "hour" ->
+        // int64 -> int (0-23)
+        let ty = NativeType.TFun(globals.Int64Type, globals.IntType)
+        Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.Arithmetic fullName, ty)
+    | "minute" ->
+        // int64 -> int (0-59)
+        let ty = NativeType.TFun(globals.Int64Type, globals.IntType)
+        Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.Arithmetic fullName, ty)
+    | "second" ->
+        // int64 -> int (0-59)
+        let ty = NativeType.TFun(globals.Int64Type, globals.IntType)
+        Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.Arithmetic fullName, ty)
+    | "millisecond" ->
+        // int64 -> int (0-999)
+        let ty = NativeType.TFun(globals.Int64Type, globals.IntType)
+        Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.Arithmetic fullName, ty)
+    // Formatting
+    | "toTimeString" ->
+        // int64 -> int -> string (ms since epoch, tzOffset -> "HH:MM:SS.mmm")
+        let ty = NativeType.TFun(globals.Int64Type, NativeType.TFun(globals.IntType, globals.StringType))
+        Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.StringOp fullName, ty)
+    | "toDateString" ->
+        // int64 -> int -> string (ms since epoch, tzOffset -> "YYYY-MM-DD")
+        let ty = NativeType.TFun(globals.Int64Type, NativeType.TFun(globals.IntType, globals.StringType))
+        Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.StringOp fullName, ty)
+    | "toString" ->
+        // int64 -> int -> string (ms since epoch, tzOffset -> "YYYY-MM-DD HH:MM:SS")
+        let ty = NativeType.TFun(globals.Int64Type, NativeType.TFun(globals.IntType, globals.StringType))
+        Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.StringOp fullName, ty)
+    | "toDateTimeString" ->
+        // int64 -> int -> string (ms since epoch, tzOffset -> "YYYY-MM-DDTHH:MM:SS.mmm")
+        // Full ISO 8601 style datetime with milliseconds
+        let ty = NativeType.TFun(globals.Int64Type, NativeType.TFun(globals.IntType, globals.StringType))
+        Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.StringOp fullName, ty)
+    | unknown ->
+        UnknownOperation $"Unknown DateTime intrinsic: DateTime.{unknown}. Available: now, utcNow, hour, minute, second, millisecond, toTimeString, toDateString, toString, toDateTimeString"
+
+/// Resolve TimeSpan.* operations
+let private resolveTimeSpanOp (op: string) (globals: NativeGlobals) (_range: SourceRange) : IntrinsicResolution =
+    let fullName = "TimeSpan." + op
+    match op with
+    // Constructors (return milliseconds as int64)
+    | "fromMilliseconds" ->
+        // int64 -> int64
+        let ty = NativeType.TFun(globals.Int64Type, globals.Int64Type)
+        Resolved (mkIntrinsic IntrinsicModule.TimeSpan op IntrinsicCategory.Arithmetic fullName, ty)
+    | "fromSeconds" ->
+        // int64 -> int64 (converts to milliseconds)
+        let ty = NativeType.TFun(globals.Int64Type, globals.Int64Type)
+        Resolved (mkIntrinsic IntrinsicModule.TimeSpan op IntrinsicCategory.Arithmetic fullName, ty)
+    | "fromMinutes" ->
+        // int64 -> int64 (converts to milliseconds)
+        let ty = NativeType.TFun(globals.Int64Type, globals.Int64Type)
+        Resolved (mkIntrinsic IntrinsicModule.TimeSpan op IntrinsicCategory.Arithmetic fullName, ty)
+    | "fromHours" ->
+        // int64 -> int64 (converts to milliseconds)
+        let ty = NativeType.TFun(globals.Int64Type, globals.Int64Type)
+        Resolved (mkIntrinsic IntrinsicModule.TimeSpan op IntrinsicCategory.Arithmetic fullName, ty)
+    // Component extractors (from milliseconds)
+    | "totalMilliseconds" ->
+        // int64 -> int64 (identity for internal representation)
+        let ty = NativeType.TFun(globals.Int64Type, globals.Int64Type)
+        Resolved (mkIntrinsic IntrinsicModule.TimeSpan op IntrinsicCategory.Arithmetic fullName, ty)
+    | "totalSeconds" ->
+        // int64 -> int64 (ms / 1000)
+        let ty = NativeType.TFun(globals.Int64Type, globals.Int64Type)
+        Resolved (mkIntrinsic IntrinsicModule.TimeSpan op IntrinsicCategory.Arithmetic fullName, ty)
+    | "hours" ->
+        // int64 -> int (hours component)
+        let ty = NativeType.TFun(globals.Int64Type, globals.IntType)
+        Resolved (mkIntrinsic IntrinsicModule.TimeSpan op IntrinsicCategory.Arithmetic fullName, ty)
+    | "minutes" ->
+        // int64 -> int (minutes component 0-59)
+        let ty = NativeType.TFun(globals.Int64Type, globals.IntType)
+        Resolved (mkIntrinsic IntrinsicModule.TimeSpan op IntrinsicCategory.Arithmetic fullName, ty)
+    | "seconds" ->
+        // int64 -> int (seconds component 0-59)
+        let ty = NativeType.TFun(globals.Int64Type, globals.IntType)
+        Resolved (mkIntrinsic IntrinsicModule.TimeSpan op IntrinsicCategory.Arithmetic fullName, ty)
+    | "milliseconds" ->
+        // int64 -> int (milliseconds component 0-999)
+        let ty = NativeType.TFun(globals.Int64Type, globals.IntType)
+        Resolved (mkIntrinsic IntrinsicModule.TimeSpan op IntrinsicCategory.Arithmetic fullName, ty)
+    | unknown ->
+        UnknownOperation $"Unknown TimeSpan intrinsic: TimeSpan.{unknown}. Available: fromMilliseconds, fromSeconds, fromMinutes, fromHours, totalMilliseconds, totalSeconds, hours, minutes, seconds, milliseconds"
+
 //-------------------------------------------------------------------------
 // Main Module Intrinsic Dispatcher
 //-------------------------------------------------------------------------
@@ -529,6 +631,8 @@ let resolveModuleIntrinsic
     | IntrinsicModule.Batch -> resolveBatchOp op globals range
     | IntrinsicModule.Arena -> resolveArenaOp op globals range
     | IntrinsicModule.Math -> resolveMathOp op globals range
+    | IntrinsicModule.DateTime -> resolveDateTimeOp op globals range
+    | IntrinsicModule.TimeSpan -> resolveTimeSpanOp op globals range
     | IntrinsicModule.Convert -> NotAnIntrinsic  // Conversions handled separately (float, int, etc.)
     | IntrinsicModule.Operators -> NotAnIntrinsic  // Operators handled separately
     | IntrinsicModule.Unchecked -> NotAnIntrinsic  // Rejected via BCL check

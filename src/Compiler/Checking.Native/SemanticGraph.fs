@@ -231,6 +231,9 @@ type IntrinsicModule =
     | Convert       // Type conversions (float, int, int64, byte, etc. - numeric↔numeric)
     | Crypto        // Cryptographic operations (sha1, base64Encode, base64Decode)
     | Bits          // Bit manipulation and byte order (htons, ntohs, float↔int bits)
+    // Time and date operations (BCL-compatible DateTime/TimeSpan)
+    | DateTime      // DateTime operations (now, utcNow, today, toString, components)
+    | TimeSpan      // TimeSpan operations (fromMilliseconds, fromSeconds, components)
     // Reactive signals (SolidJS-inspired native signals)
     | FnPtr         // Function pointer operations (fromSymbol, invoke, ofFunction)
     | Signal        // Reactive signal operations (create, get, set, update)
@@ -738,7 +741,9 @@ module Reachability =
         | IntrinsicModule.Crypto
         | IntrinsicModule.Bits
         | IntrinsicModule.FnPtr
-        | IntrinsicModule.Arena -> true  // Arena.fromPointer, alloc, etc. handled by Alex
+        | IntrinsicModule.Arena
+        | IntrinsicModule.DateTime
+        | IntrinsicModule.TimeSpan -> true  // Time operations handled by Alex
 
     /// Extract semantic references from a node's Kind (call targets, definition refs, etc.)
     /// Used by traversal to ensure all semantic children are visited.
