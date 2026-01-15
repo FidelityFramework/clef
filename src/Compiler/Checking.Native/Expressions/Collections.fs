@@ -161,11 +161,7 @@ let checkRecord
                         // Record type not in RecordDefs - internal error in resolution
                         addNativeError DiagnosticCodes.FS0001_GenericError recordRange
                             (sprintf "Internal error: record type '%s' not found in RecordDefs" tyCon.Name) env
-                | NativeType.TRecord(tyCon, _) ->
-                    // TRecord should not be created - field info is accessed via SemanticGraph.Types lookup
-                    // If we get here, there's a bug in type construction
-                    addNativeError DiagnosticCodes.FS0001_GenericError recordRange
-                        (sprintf "Internal error: unexpected TRecord type '%s'. Field info should use TApp + RecordDefs lookup." tyCon.Name) env
+                // Named records use TApp with field lookup via RecordDefs
                 | NativeType.TError _ ->
                     // Already an error - don't add more diagnostics
                     ()

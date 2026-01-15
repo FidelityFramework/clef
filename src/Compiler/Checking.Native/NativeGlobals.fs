@@ -912,13 +912,7 @@ let rec isValueType ty =
     | NativeType.TForall(_, body) -> isValueType body
     | NativeType.TMeasure _ -> true  // Phantom type
     | NativeType.TAnon(_, isStruct) -> isStruct  // Struct anon records are value types
-    | NativeType.TRecord(tc, _) -> 
-        match tc.Layout with
-        | TypeLayout.Inline _ -> true
-        | TypeLayout.PlatformWord -> true
-        | TypeLayout.FatPointer -> true
-        | TypeLayout.NTUCompound _ -> true
-        | _ -> false
+    // Named records use TApp - handled above via tc.Layout check
     | NativeType.TUnion(tc, _) ->
         match tc.Layout with
         | TypeLayout.Inline _ -> true

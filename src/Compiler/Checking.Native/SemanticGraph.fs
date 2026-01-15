@@ -870,8 +870,7 @@ module Reachability =
             getTypeNames domain @ getTypeNames range
         | NativeType.TTuple(elements, _) ->
             elements |> List.collect getTypeNames
-        | NativeType.TRecord(tycon, fields) ->
-            tycon.Name :: (fields |> List.collect (fun (_, t) -> getTypeNames t))
+        // Named records use TApp - handled above via tycon.FieldCount > 0 check
         | NativeType.TUnion(tycon, cases) ->
             tycon.Name :: (cases |> List.collect (fun c -> c.Fields |> List.collect (fun (_, t) -> getTypeNames t)))
         | NativeType.TNativePtr(inner) ->

@@ -499,10 +499,10 @@ and [<RequireQualifiedAccess; NoComparison>] NativeType =
     /// Anonymous record type: {| field1: T1; field2: T2 |}
     /// isStruct: true for struct anonymous records (value type), false for reference type
     | TAnon of fields: (string * NativeType) list * isStruct: bool
-    
-    /// Record type with named fields
-    | TRecord of tycon: TypeConRef * fields: (string * NativeType) list
-    
+
+    // Named records are TApp(tyconRef, []) where tyconRef.FieldCount > 0
+    // Fields accessed via tryGetRecordFields lookup (ML-family pattern)
+
     /// Discriminated union type
     | TUnion of tycon: TypeConRef * cases: UnionCase list
     
@@ -593,7 +593,7 @@ let rec layoutOf (ty: NativeType) : TypeLayout =
     | NativeType.TMeasure _ -> TypeLayout.Inline(0, 1)  // Phantom type
     | NativeType.TAnon(_, isStruct) when isStruct -> TypeLayout.Inline(-1, -1) // Size depends on fields
     | NativeType.TAnon(_, _) -> TypeLayout.Reference ArenaAffinity.CurrentActor
-    | NativeType.TRecord(tycon, _) -> tycon.Layout
+    // Named records use TApp - layout comes from tycon.Layout (handled above)
     | NativeType.TUnion(tycon, _) -> tycon.Layout
     | NativeType.TError _ -> TypeLayout.Opaque
 
@@ -712,7 +712,7 @@ let instantiate (typars: TypeParam list) (args: NativeType list) (body: NativeTy
         | NativeType.TByref(elem, kind) -> NativeType.TByref(go elem, kind)
         | NativeType.TNativePtr elem -> NativeType.TNativePtr(go elem)
         | NativeType.TAnon(fields, isStruct) -> NativeType.TAnon(fields |> List.map (fun (n, t) -> (n, go t)), isStruct)
-        | NativeType.TRecord(tc, fields) -> NativeType.TRecord(tc, fields |> List.map (fun (n, t) -> (n, go t)))
+        // Named records use TApp - handled above (type args substituted)
         | NativeType.TUnion(tc, cases) -> 
             NativeType.TUnion(tc, cases |> List.map (fun c -> 
                 { c with Fields = c.Fields |> List.map (fun (n, t) -> (n, go t)) }))
@@ -752,9 +752,7 @@ let rec formatType (ty: NativeType) : string =
     | NativeType.TAnon(fields, isStruct) ->
         let fieldsStr = fields |> List.map (fun (n, t) -> $"{n}: {formatType t}") |> String.concat "; "
         if isStruct then $"struct {{| {fieldsStr} |}}" else $"{{| {fieldsStr} |}}"
-    | NativeType.TRecord(tc, fields) ->
-        let fieldsStr = fields |> List.map (fun (n, t) -> $"{n}: {formatType t}") |> String.concat "; "
-        $"{tc.Name} {{ {fieldsStr} }}"
+    // Named records use TApp - formatted above (just shows type name)
     | NativeType.TUnion(tc, _) -> tc.Name
     | NativeType.TError msg -> $"<error: {msg}>"
 

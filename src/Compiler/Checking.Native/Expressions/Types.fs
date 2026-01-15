@@ -473,8 +473,9 @@ let resolveRecordTypeFromFields
                 let typeName = Set.minElement intersection
                 match Map.tryFind typeName env.RecordDefs with
                 | Some recordInfo ->
-                    // Return TApp - field information is accessed via SemanticGraph.Types → TypeDef lookup
-                    Result.Ok (mkSimpleType recordInfo.TypeCon)
+                    // Spec Section 4.2: Use TApp for records (single representation invariant)
+                    // Fields accessed via tryGetRecordFields lookup per Section 7.2
+                    Result.Ok (NativeType.TApp(recordInfo.TypeCon, []))
                 | None ->
                     // INTERNAL ERROR: Field label resolution found this type name,
                     // so it MUST exist in RecordDefs.

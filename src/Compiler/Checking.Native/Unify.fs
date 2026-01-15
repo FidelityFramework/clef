@@ -159,17 +159,8 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
             unify ty1 ty2 range
         ) sorted1 sorted2
     
-    // Record types
-    | NativeType.TRecord(tc1, fields1), NativeType.TRecord(tc2, fields2) ->
-        if tc1.Name <> tc2.Name || tc1.Module <> tc2.Module then
-            raise (UnificationException(TypeMismatch(t1, t2, range)))
-        // Fields should match by name
-        List.iter2 (fun (n1, ty1) (n2, ty2) ->
-            if n1 <> n2 then
-                raise (UnificationException(TypeMismatch(t1, t2, range)))
-            unify ty1 ty2 range
-        ) fields1 fields2
-    
+    // Named records use TApp - unified above by TypeConRef identity
+
     // Union types
     | NativeType.TUnion(tc1, _), NativeType.TUnion(tc2, _) ->
         if tc1.Name <> tc2.Name || tc1.Module <> tc2.Module then

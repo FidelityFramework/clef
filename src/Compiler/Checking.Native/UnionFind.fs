@@ -105,10 +105,9 @@ let rec applySubst (ty: NativeType) : NativeType =
     
     | NativeType.TAnon(fields, isStruct) ->
         NativeType.TAnon(fields |> List.map (fun (n, t) -> (n, applySubst t)), isStruct)
-    
-    | NativeType.TRecord(tc, fields) ->
-        NativeType.TRecord(tc, fields |> List.map (fun (n, t) -> (n, applySubst t)))
-    
+
+    // Named records use TApp - handled above (empty args)
+
     | NativeType.TUnion(tc, cases) ->
         NativeType.TUnion(tc, cases |> List.map (fun c ->
             { c with Fields = c.Fields |> List.map (fun (n, t) -> (n, applySubst t)) }))
@@ -157,10 +156,9 @@ let rec occursIn (typar: TypeParam) (ty: NativeType) : bool =
     
     | NativeType.TAnon(fields, _) ->
         fields |> List.exists (fun (_, t) -> occursIn typar t)
-    
-    | NativeType.TRecord(_, fields) ->
-        fields |> List.exists (fun (_, t) -> occursIn typar t)
-    
+
+    // Named records use TApp - handled above (empty args)
+
     | NativeType.TUnion(_, cases) ->
         cases |> List.exists (fun c ->
             c.Fields |> List.exists (fun (_, t) -> occursIn typar t))
@@ -212,10 +210,9 @@ let rec freeTypeVars (ty: NativeType) : Set<TypeParamId> =
     
     | NativeType.TAnon(fields, _) ->
         fields |> List.map (fun (_, t) -> freeTypeVars t) |> Set.unionMany
-    
-    | NativeType.TRecord(_, fields) ->
-        fields |> List.map (fun (_, t) -> freeTypeVars t) |> Set.unionMany
-    
+
+    // Named records use TApp - handled above (empty args)
+
     | NativeType.TUnion(_, cases) ->
         cases 
         |> List.collect (fun c -> c.Fields |> List.map snd)
@@ -276,8 +273,7 @@ let rec collectFreeTypeParams (ty: NativeType) : TypeParam list =
     | NativeType.TAnon(fields, _) ->
         fields |> List.collect (fun (_, t) -> collectFreeTypeParams t)
 
-    | NativeType.TRecord(_, fields) ->
-        fields |> List.collect (fun (_, t) -> collectFreeTypeParams t)
+    // Named records use TApp - handled above (empty args)
 
     | NativeType.TUnion(_, cases) ->
         cases
