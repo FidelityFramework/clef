@@ -530,6 +530,22 @@ let private resolveDateTimeOp (op: string) (globals: NativeGlobals) (_range: Sou
         // int64 -> int (0-999)
         let ty = NativeType.TFun(globals.Int64Type, globals.IntType)
         Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.Arithmetic fullName, ty)
+    // Timezone / Local time
+    | "utcOffset" ->
+        // unit -> int (local timezone offset in seconds from UTC, e.g., -18000 for EST)
+        // Uses platform localtime_r() to get tm_gmtoff
+        let ty = NativeType.TFun(globals.UnitType, globals.IntType)
+        Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.Platform fullName, ty)
+    | "toLocal" ->
+        // int64 -> int64 (converts UTC milliseconds to local milliseconds)
+        // Mirrors BCL DateTime.ToLocalTime() pattern
+        let ty = NativeType.TFun(globals.Int64Type, globals.Int64Type)
+        Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.Platform fullName, ty)
+    | "toUtc" ->
+        // int64 -> int64 (converts local milliseconds to UTC milliseconds)
+        // Mirrors BCL DateTime.ToUniversalTime() pattern
+        let ty = NativeType.TFun(globals.Int64Type, globals.Int64Type)
+        Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.Platform fullName, ty)
     // Formatting
     | "toTimeString" ->
         // int64 -> int -> string (ms since epoch, tzOffset -> "HH:MM:SS.mmm")
@@ -549,7 +565,7 @@ let private resolveDateTimeOp (op: string) (globals: NativeGlobals) (_range: Sou
         let ty = NativeType.TFun(globals.Int64Type, NativeType.TFun(globals.IntType, globals.StringType))
         Resolved (mkIntrinsic IntrinsicModule.DateTime op IntrinsicCategory.StringOp fullName, ty)
     | unknown ->
-        UnknownOperation $"Unknown DateTime intrinsic: DateTime.{unknown}. Available: now, utcNow, hour, minute, second, millisecond, toTimeString, toDateString, toString, toDateTimeString"
+        UnknownOperation $"Unknown DateTime intrinsic: DateTime.{unknown}. Available: now, utcNow, hour, minute, second, millisecond, utcOffset, toLocal, toUtc, toTimeString, toDateString, toString, toDateTimeString"
 
 /// Resolve TimeSpan.* operations
 let private resolveTimeSpanOp (op: string) (globals: NativeGlobals) (_range: SourceRange) : IntrinsicResolution =
