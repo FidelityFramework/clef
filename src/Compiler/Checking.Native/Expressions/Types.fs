@@ -159,6 +159,29 @@ type CheckerCallbacks = {
 // Environment Creation
 //-------------------------------------------------------------------------
 
+/// Get UnionCaseInfo for known union case constructors
+/// This follows the FCS TyconRef.Deref pattern - union case info is looked up, not embedded
+let private tryGetUnionCaseInfo (name: string) (ty: NativeType) : NR.UnionCaseInfo option =
+    // Unwrap TForall to get to the actual type
+    let resultType =
+        match ty with
+        | NativeType.TForall(_, NativeType.TFun(_, ret)) -> ret  // Constructor with payload
+        | NativeType.TForall(_, ret) -> ret  // Nullary constructor
+        | NativeType.TFun(_, ret) -> ret  // Non-polymorphic constructor with payload
+        | _ -> ty
+
+    match name with
+    // Option constructors (case 0 = None, case 1 = Some)
+    | "None" -> Some { CaseName = "None"; UnionType = resultType; CaseIndex = 0 }
+    | "Some" -> Some { CaseName = "Some"; UnionType = resultType; CaseIndex = 1 }
+    // ValueOption constructors (case 0 = ValueNone, case 1 = ValueSome)
+    | "ValueNone" -> Some { CaseName = "ValueNone"; UnionType = resultType; CaseIndex = 0 }
+    | "ValueSome" -> Some { CaseName = "ValueSome"; UnionType = resultType; CaseIndex = 1 }
+    // Result constructors (case 0 = Ok, case 1 = Error)
+    | "Ok" -> Some { CaseName = "Ok"; UnionType = resultType; CaseIndex = 0 }
+    | "Error" -> Some { CaseName = "Error"; UnionType = resultType; CaseIndex = 1 }
+    | _ -> None
+
 /// Create a type environment with built-in bindings from globals
 let createTypeEnv (globals: NativeGlobals) : TypeEnv =
     // Convert built-in bindings from globals to ResolvedBindings and build resolver
@@ -171,7 +194,7 @@ let createTypeEnv (globals: NativeGlobals) : TypeEnv =
                 IsMutable = false
                 NodeId = None
                 InlineBody = None
-                UnionCaseInfo = None
+                UnionCaseInfo = tryGetUnionCaseInfo name ty  // Detect union case constructors
                 LiteralValue = None
             }
             NR.registerBinding name binding ctx

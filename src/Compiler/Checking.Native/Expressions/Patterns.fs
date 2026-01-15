@@ -99,8 +99,10 @@ let rec checkPattern
                     // Extract domain types from constructor's function type
                     // e.g., IntVal : int -> Number has type TFun(int, Number)
                     // e.g., Pair : int -> string -> T has type TFun(int, TFun(string, T))
+                    // e.g., Some : forall 'a. 'a -> option<'a> (need to unwrap TForall first)
                     let rec extractDomains ty acc =
                         match ty with
+                        | NativeType.TForall(_, inner) -> extractDomains inner acc  // Unwrap polymorphic types
                         | NativeType.TFun(domain, range) -> extractDomains range (domain :: acc)
                         | _ -> List.rev acc
                     let types = extractDomains binding.Type []
