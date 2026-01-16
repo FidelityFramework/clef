@@ -494,7 +494,23 @@ let checkTypeApp
 // Lambda Expression
 //-------------------------------------------------------------------------
 
+/// Collect all VarRef names from a semantic node tree (recursive traversal)
+let private collectVarRefs (builder: NodeBuilder) (nodeId: NodeId) : Set<string> =
+    let nodes = builder.Nodes
+    let rec collect (nodeId: NodeId) (acc: Set<string>) : Set<string> =
+        match Map.tryFind nodeId nodes with
+        | None -> acc
+        | Some node ->
+            let acc =
+                match node.Kind with
+                | SemanticKind.VarRef(name, _) -> Set.add name acc
+                | _ -> acc
+            // Recurse into children
+            node.Children |> List.fold (fun a childId -> collect childId a) acc
+    collect nodeId Set.empty
+
 /// Check lambda expression: fun args -> body
+/// Includes capture analysis for closure generation (MLKit-style flat closures).
 let checkLambda
     (checkExpr: CheckExprFn)
     (extractLambdaParams: TypeEnv -> SynSimplePats -> SourceRange -> (string * NativeType) list)
@@ -524,16 +540,47 @@ let checkLambda
 
     let lambdaParams = List.rev (fst paramNodesAndEnv)
     let bodyEnv = snd paramNodesAndEnv
+    let paramNames = lambdaParams |> List.map (fun (name, _, _) -> name) |> Set.ofList
 
     // Check body
     let bodyNode = checkExpr bodyEnv builder bodyExpr
 
-    // Build function type
-    let paramTypes = lambdaParams |> List.map (fun (_, ty, _) -> ty)
-    let funcType = mkFunctionType paramTypes bodyNode.Type
+    // Capture analysis: find VarRefs in body that are NOT lambda parameters
+    // These are variables captured from the enclosing scope (closure captures)
+    let bodyVarRefs = collectVarRefs builder bodyNode.Id
+    let capturedNames = Set.difference bodyVarRefs paramNames
 
+    // Build CaptureInfo for each captured variable by looking up in outer environment
+    let captures =
+        capturedNames
+        |> Set.toList
+        |> List.choose (fun name ->
+            match tryLookupBinding name env with
+            | Some binding ->
+                Some {
+                    CaptureInfo.Name = name
+                    Type = binding.Type
+                    IsMutable = binding.IsMutable
+                    SourceNodeId = binding.NodeId
+                }
+            | None ->
+                // Not found in environment - could be a global/intrinsic, not a capture
+                None)
+
+    // Build function type
+    // For unit-parameterized lambdas (fun () -> body), paramTypes is empty
+    // but we still need to create unit -> bodyType, not just bodyType
+    let paramTypes = lambdaParams |> List.map (fun (_, ty, _) -> ty)
+    let funcType =
+        if List.isEmpty paramTypes then
+            NativeType.TFun(env.Globals.UnitType, bodyNode.Type)
+        else
+            mkFunctionType paramTypes bodyNode.Type
+
+    // Children includes parameter PatternBindings + body for proper traversal
+    let paramNodeIds = lambdaParams |> List.map (fun (_, _, nodeId) -> nodeId)
     builder.Create(
-        SemanticKind.Lambda(lambdaParams, bodyNode.Id),
+        SemanticKind.Lambda(lambdaParams, bodyNode.Id, captures),
         funcType,
         range,
-        children = [bodyNode.Id])
+        children = paramNodeIds @ [bodyNode.Id])

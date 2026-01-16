@@ -423,11 +423,13 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
             SemanticKind.PatternBinding("_"),
             argType,
             range)
+        // DotLambda (_.Property) - synthetic lambda, no captures from outer scope
+        // Children includes parameter PatternBinding + body for proper traversal
         builder.Create(
-            SemanticKind.Lambda([("_", argType, paramNode.Id)], innerNode.Id),
+            SemanticKind.Lambda([("_", argType, paramNode.Id)], innerNode.Id, []),
             NativeType.TFun(argType, innerNode.Type),
             range,
-            children = [innerNode.Id])
+            children = [paramNode.Id; innerNode.Id])
 
     //---------------------------------------------------------------------
     // DotNamedIndexedPropertySet: obj.Prop[idx] <- value

@@ -270,6 +270,24 @@ type IntrinsicInfo = {
 }
 
 //-------------------------------------------------------------------------
+// Closure Capture Information
+//-------------------------------------------------------------------------
+
+/// Information about a variable captured by a lambda (closure).
+/// Capture analysis is performed during FNCS type checking as part of scope resolution.
+/// MLKit-style flat closures: immutable bindings captured by value, mutable by reference.
+type CaptureInfo = {
+    /// Name of the captured variable
+    Name: string
+    /// Type of the captured variable
+    Type: NativeType
+    /// Whether the captured variable is mutable (determines ByRef vs ByValue capture)
+    IsMutable: bool
+    /// NodeId of the binding that defines this variable (for SSA lookup in Alex)
+    SourceNodeId: NodeId option
+}
+
+//-------------------------------------------------------------------------
 // Pattern Matching
 //-------------------------------------------------------------------------
 
@@ -319,8 +337,10 @@ type SemanticKind =
     | Application of func: NodeId * args: NodeId list
     
     /// Lambda expression: fun x -> body
-    /// Parameters include name, type, and PatternBinding NodeId for SSA assignment
-    | Lambda of parameters: (string * NativeType * NodeId) list * body: NodeId
+    /// Parameters include name, type, and PatternBinding NodeId for SSA assignment.
+    /// Captures list contains variables captured from enclosing scope (computed during type checking).
+    /// Empty captures list = no closure environment needed (simple function pointer).
+    | Lambda of parameters: (string * NativeType * NodeId) list * body: NodeId * captures: CaptureInfo list
     
     /// Literal value
     | Literal of value: LiteralValue
@@ -771,7 +791,7 @@ module Reachability =
         | SemanticKind.Binding _ ->
             node.Children
         // Lambda: follow body
-        | SemanticKind.Lambda (_, bodyId) ->
+        | SemanticKind.Lambda (_, bodyId, _) ->
             [bodyId]
         // Control flow: follow branches
         | SemanticKind.IfThenElse (guard, thenB, elseB) ->
@@ -1236,9 +1256,12 @@ module Traversal =
                             ) (state, 0)
                             |> fst
 
-                        // Lambda: body is a region
-                        | SemanticKind.Lambda (_params, bodyId), Some hook ->
+                        // Lambda: body is a region, but parameters are walked first
+                        | SemanticKind.Lambda (params', bodyId, _captures), Some hook ->
                             let parentId = node.Id
+                            // Walk parameter PatternBindings first (for SSA assignment)
+                            let paramNodeIds = params' |> List.map (fun (_, _, nodeId) -> nodeId)
+                            let state = paramNodeIds |> List.fold walk state
                             // Lambda body is a region
                             let state = hook.BeforeRegion state parentId LambdaBodyRegion
                             let state = walk state bodyId

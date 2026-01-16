@@ -378,11 +378,13 @@ module FSharpNativeExpr =
                 FSharpNativeExpr.Application(funcExpr, argExprs, node.Type, node.SRTPResolution)
 
             // Lambda expressions
-            | SemanticKind.Lambda(parameters, bodyId) ->
+            | SemanticKind.Lambda(parameters, bodyId, _captures) ->
                 let bodyExpr = fromNode graph bodyId
                 let returnType = extractReturnType node.Type
                 // Convert 3-tuple (name, type, nodeId) to 2-tuple (name, type) for FSharpNativeExpr
                 let params2 = parameters |> List.map (fun (name, ty, _nodeId) -> (name, ty))
+                // Note: captures are available via the SemanticKind but FSharpNativeExpr.Lambda
+                // doesn't include them - they're accessed via the PSG node during code generation
                 FSharpNativeExpr.Lambda(params2, bodyExpr, returnType, node.SRTPResolution)
 
             // Bindings

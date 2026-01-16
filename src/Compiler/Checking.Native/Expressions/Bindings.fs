@@ -207,11 +207,14 @@ let checkBinding
         // For now, rely on primitive operators having TForall in NativeGlobals.
 
         // Create Lambda node with parameter NodeIds for SSA assignment
+        // Named function bindings don't capture from outer scope (they ARE the outer scope)
+        // Children includes parameter PatternBindings + body for proper traversal
+        let paramNodeIds = lambdaParams |> List.map (fun (_, _, nodeId) -> nodeId)
         let lambdaNode = builder.Create(
-            SemanticKind.Lambda(lambdaParams, bodyNode.Id),
+            SemanticKind.Lambda(lambdaParams, bodyNode.Id, []),
             funcType,
             range,
-            children = [bodyNode.Id])
+            children = paramNodeIds @ [bodyNode.Id])
 
         // Create Binding node wrapping the Lambda
         let bindingNode = builder.Create(
@@ -255,16 +258,12 @@ let checkBinding
         //
         // We recursively expand all function arguments:
         //   TFun(a, TFun(b, c)) expands to: fun x y -> (expr x y)
-
-        // Helper to flatten nested Applications: App(App(f, [a]), [b]) -> App(f, [a; b])
-        let rec flattenForEta (funcId: NodeId) (args: NodeId list) : NodeId * NodeId list =
-            match builder.Nodes.TryFind funcId with
-            | Some node ->
-                match node.Kind with
-                | SemanticKind.Application(innerFuncId, innerArgs) ->
-                    flattenForEta innerFuncId (innerArgs @ args)
-                | _ -> (funcId, args)
-            | None -> (funcId, args)
+        //
+        // CRITICAL: We do NOT flatten applications across currying boundaries.
+        // If makeCounter : int -> (unit -> int), then:
+        //   makeCounter 0 : unit -> int  (returns a closure)
+        // Eta-expanding this creates: fun _eta0 -> (makeCounter 0) _eta0
+        // NOT: fun _eta0 -> makeCounter 0 _eta0  (which would pass 2 args to makeCounter)
 
         let rec etaExpand (funcExprId: NodeId) (funcType: NativeType) (accParams: (string * NativeType * NodeId) list) (counter: int) : SemanticNode =
             match funcType with
@@ -284,17 +283,14 @@ let checkBinding
                     range,
                     arena = env.CurrentArena)
 
-                // Flatten nested applications before adding new argument
-                // This handles: (greet "Hello") _eta0 -> greet "Hello" _eta0
-                let (targetFuncId, existingArgs) = flattenForEta funcExprId []
-                let allArgs = existingArgs @ [paramVarRef.Id]
-
-                // Create flattened Application
+                // Apply ONE eta parameter to the current expression
+                // Do NOT flatten - each currying level is a separate application
+                // This preserves: (makeCounter 0) _eta0 as App(App(makeCounter,[0]), [_eta0])
                 let appNode = builder.Create(
-                    SemanticKind.Application(targetFuncId, allArgs),
+                    SemanticKind.Application(funcExprId, [paramVarRef.Id]),
                     rangeTy,
                     range,
-                    children = targetFuncId :: allArgs)
+                    children = [funcExprId; paramVarRef.Id])
 
                 // Recursively expand if result is still a function type
                 etaExpand appNode.Id rangeTy ((paramName, domainTy, paramNode.Id) :: accParams) (counter + 1)
@@ -313,20 +309,33 @@ let checkBinding
                     let paramTypes = lambdaParams |> List.map (fun (_, ty, _) -> ty)
                     let funcType = mkFunctionType paramTypes funcType
 
+                    // Eta-expanded lambdas don't capture anything new
+                    // Children includes parameter PatternBindings + body for proper traversal
+                    let paramNodeIds = lambdaParams |> List.map (fun (_, _, nodeId) -> nodeId)
                     builder.Create(
-                        SemanticKind.Lambda(lambdaParams, bodyId),
+                        SemanticKind.Lambda(lambdaParams, bodyId, []),
                         funcType,
                         range,
-                        children = [bodyId])
+                        children = paramNodeIds @ [bodyId])
 
         // Check if eta-expansion is needed
+        // CRITICAL: Only eta-expand VarRefs to functions (true partial application)
+        // Do NOT eta-expand Applications that return functions (closure factories)
+        // e.g., `let counter = makeCounter 0` should NOT become `fun () -> makeCounter 0 ()`
+        //       because makeCounter 0 returns a closure that should be stored directly
         let finalExprNode =
-            match exprNode.Type with
-            | NativeType.TFun _ ->
-                // Partial application - eta-expand to Lambda
+            match exprNode.Type, exprNode.Kind with
+            | NativeType.TFun _, SemanticKind.VarRef _ ->
+                // VarRef with function type = partial application, needs eta-expansion
                 etaExpand exprNode.Id exprNode.Type [] 0
+            | NativeType.TFun _, SemanticKind.Application _ ->
+                // Application returning function = closure factory, store result directly
+                exprNode
+            | NativeType.TFun _, SemanticKind.Lambda _ ->
+                // Lambda with function type = higher-order function, store directly
+                exprNode
             | _ ->
-                // Not a function type - use as-is
+                // Not a function type or other cases - use as-is
                 exprNode
 
         let node = builder.Create(
