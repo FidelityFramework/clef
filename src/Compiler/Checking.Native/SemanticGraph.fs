@@ -137,6 +137,7 @@ module PlatformContext =
         | NTUKind.NTUuuid -> 16  // 128-bit UUID
         | NTUKind.NTUdatetime -> 8  // 64-bit ticks
         | NTUKind.NTUtimespan -> 8  // 64-bit duration
+        | NTUKind.NTUlazy -> -1  // Size depends on element type (PRD-14)
         | NTUKind.NTUother -> -1  // Unknown
     
     /// Resolve the alignment for an NTU kind on this platform
@@ -165,6 +166,7 @@ module PlatformContext =
         | NTUKind.NTUuuid -> 8  // 64-bit aligned (two i64s)
         | NTUKind.NTUdatetime -> 8  // 64-bit aligned
         | NTUKind.NTUtimespan -> 8  // 64-bit aligned
+        | NTUKind.NTUlazy -> 8  // Pointer-aligned (PRD-14)
         | NTUKind.NTUother -> -1
 
 //-------------------------------------------------------------------------
@@ -240,6 +242,8 @@ type IntrinsicModule =
     | Effect        // Side effect operations (create, createWithCleanup, dispose)
     | Memo          // Memoized computation operations (create, get)
     | Batch         // Update batching operations (run)
+    // Deferred computation (PRD-14)
+    | Lazy          // Lazy values (create, force, isValueCreated)
     // Memory management
     | Arena         // Arena allocation (fromPointer, alloc, allocAligned, remaining, reset)
 
@@ -458,6 +462,21 @@ type SemanticKind =
     /// Following ML/FStar convention where the pattern binding IS the definition.
     /// The type is carried in SemanticNode.Type, name identifies the binding.
     | PatternBinding of name: string
+
+    //-----------------------------------------------------------------------
+    // Lazy Computation (PRD-14)
+    //-----------------------------------------------------------------------
+    
+    /// Lazy expression: lazy expr or Lazy.create (fun () -> expr)
+    /// Creates a deferred computation that is memoized on first force.
+    /// body: The computation to defer (will be wrapped as unit -> 'T thunk)
+    /// captures: Variables captured from enclosing scope (reuses closure machinery)
+    | LazyExpr of body: NodeId * captures: CaptureInfo list
+    
+    /// Force a lazy value: Lazy.force lazyValue
+    /// Evaluates the thunk if not yet computed, returns cached result otherwise.
+    /// lazyValue: The Lazy<'T> to force
+    | LazyForce of lazyValue: NodeId
 
     /// Error node (for recovery)
     | Error of message: string
@@ -774,7 +793,8 @@ module Reachability =
         | IntrinsicModule.FnPtr
         | IntrinsicModule.Arena
         | IntrinsicModule.DateTime
-        | IntrinsicModule.TimeSpan -> true  // Time operations handled by Alex
+        | IntrinsicModule.TimeSpan
+        | IntrinsicModule.Lazy -> true  // Lazy operations handled by Alex (PRD-14)
 
     /// Extract semantic references from a node's Kind (call targets, definition refs, etc.)
     /// Used by traversal to ensure all semantic children are visited.
@@ -879,6 +899,11 @@ module Reachability =
         // The actual connection to implementation functions happens in computeReachable
         | SemanticKind.Intrinsic _ ->
             node.Children  // Follow any children (arguments)
+        // Lazy (PRD-14): deferred computation
+        | SemanticKind.LazyExpr (bodyId, _captures) ->
+            [bodyId]  // Follow the deferred computation body
+        | SemanticKind.LazyForce lazyValueId ->
+            [lazyValueId]  // Follow the lazy value to force
         // Leaf nodes with no semantic references
         | SemanticKind.Literal _ ->
             []

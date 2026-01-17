@@ -405,7 +405,8 @@ let mkRefType elemType = NativeType.TApp(Parameterized.refTyCon, [elemType])
 let mkExprType elemType = NativeType.TApp(Parameterized.exprTyCon, [elemType])
 
 /// Create a lazy type: Lazy<'T>
-let mkLazyType elemType = NativeType.TApp(Parameterized.lazyTyCon, [elemType])
+/// PRD-14: Use TLazy directly for proper struct layout (not TApp with Reference layout)
+let mkLazyType elemType = NativeType.TLazy elemType
 
 /// Create a function pointer type: FnPtr<'F>
 /// 'F must be a function type (TFun), e.g., int -> unit or nativeptr<byte> -> int -> int
@@ -920,4 +921,5 @@ let rec isValueType ty =
         | TypeLayout.FatPointer -> true
         | TypeLayout.NTUCompound _ -> true
         | _ -> false
+    | NativeType.TLazy _ -> true  // Lazy<'T> is a value type struct (PRD-14)
     | NativeType.TError _ -> false

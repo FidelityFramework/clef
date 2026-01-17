@@ -938,14 +938,26 @@ and checkLongIdentSet (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticN
             range)
 
 /// Check Lazy: lazy expr
+/// PRD-14: Creates LazyExpr node with a thunk (unit -> 'T) wrapping the body
 and checkLazy (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (env: TypeEnv) (builder: NodeBuilder) (innerExpr: SynExpr) (range: SourceRange) : SemanticNode =
     let innerNode = checkExpr env builder innerExpr
     let lazyType = mkLazyType innerNode.Type
-    builder.Create(
-        SemanticKind.Application(innerNode.Id, []),
-        lazyType,
+
+    // Create a thunk Lambda: unit -> 'T
+    // The thunk takes a unit parameter and returns the lazy body
+    let thunkType = NativeType.TFun(env.Globals.UnitType, innerNode.Type)
+    let thunkLambda = builder.Create(
+        SemanticKind.Lambda([("_unit", env.Globals.UnitType, NodeId -1)], innerNode.Id, [], None),
+        thunkType,
         range,
         children = [innerNode.Id])
+
+    // Create LazyExpr with the thunk as the body
+    builder.Create(
+        SemanticKind.LazyExpr(thunkLambda.Id, []),
+        lazyType,
+        range,
+        children = [thunkLambda.Id])
 
 /// Check Assert: assert expr
 and checkAssert (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (env: TypeEnv) (builder: NodeBuilder) (condExpr: SynExpr) (range: SourceRange) : SemanticNode =

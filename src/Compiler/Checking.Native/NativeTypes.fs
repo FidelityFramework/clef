@@ -131,6 +131,10 @@ type NTUKind =
     /// Decimal (128-bit)
     | NTUdecimal
     
+    /// Lazy computation (thunk with memoization)
+    /// PRD-14: Foundation of the Lazy Stack
+    | NTUlazy
+    
     //-----------------------------------------------------------------------
     // Compound value types (platform-independent fixed size)
     //-----------------------------------------------------------------------
@@ -234,6 +238,7 @@ module NTUKind =
         | NTUKind.NTUchar -> "char"
         | NTUKind.NTUunit -> "unit"
         | NTUKind.NTUdecimal -> "decimal"
+        | NTUKind.NTUlazy -> "Lazy"
         | NTUKind.NTUuuid -> "Uuid"
         | NTUKind.NTUdatetime -> "DateTime"
         | NTUKind.NTUtimespan -> "TimeSpan"
@@ -512,6 +517,10 @@ and [<RequireQualifiedAccess; NoComparison>] NativeType =
     /// Native pointer: nativeptr<T>
     | TNativePtr of element: NativeType
     
+    /// Lazy computation: Lazy<T>
+    /// PRD-14: Deferred computation with memoization
+    | TLazy of element: NativeType
+    
     /// Error type (used during recovery from type errors)
     | TError of message: string
 
@@ -595,6 +604,7 @@ let rec layoutOf (ty: NativeType) : TypeLayout =
     | NativeType.TAnon(_, _) -> TypeLayout.Reference ArenaAffinity.CurrentActor
     // Named records use TApp - layout comes from tycon.Layout (handled above)
     | NativeType.TUnion(tycon, _) -> tycon.Layout
+    | NativeType.TLazy _ -> TypeLayout.Inline(-1, -1)  // Size depends on element type (PRD-14)
     | NativeType.TError _ -> TypeLayout.Opaque
 
 /// Compute memory layout for a record from its fields.
@@ -713,9 +723,10 @@ let instantiate (typars: TypeParam list) (args: NativeType list) (body: NativeTy
         | NativeType.TNativePtr elem -> NativeType.TNativePtr(go elem)
         | NativeType.TAnon(fields, isStruct) -> NativeType.TAnon(fields |> List.map (fun (n, t) -> (n, go t)), isStruct)
         // Named records use TApp - handled above (type args substituted)
-        | NativeType.TUnion(tc, cases) -> 
-            NativeType.TUnion(tc, cases |> List.map (fun c -> 
+        | NativeType.TUnion(tc, cases) ->
+            NativeType.TUnion(tc, cases |> List.map (fun c ->
                 { c with Fields = c.Fields |> List.map (fun (n, t) -> (n, go t)) }))
+        | NativeType.TLazy elem -> NativeType.TLazy(go elem)  // PRD-14
         | NativeType.TMeasure _ -> ty
         | NativeType.TError _ -> ty
     
@@ -754,6 +765,7 @@ let rec formatType (ty: NativeType) : string =
         if isStruct then $"struct {{| {fieldsStr} |}}" else $"{{| {fieldsStr} |}}"
     // Named records use TApp - formatted above (just shows type name)
     | NativeType.TUnion(tc, _) -> tc.Name
+    | NativeType.TLazy elem -> $"Lazy<{formatType elem}>"  // PRD-14
     | NativeType.TError msg -> $"<error: {msg}>"
 
 and formatMeasure (m: Measure) : string =

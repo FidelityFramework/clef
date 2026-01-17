@@ -128,6 +128,10 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
     | NativeType.TApp(tc, [elem1]), NativeType.TNativePtr elem2 when tc.Name = "nativeptr" ->
         unify elem1 elem2 range
 
+    // Lazy types (PRD-14)
+    | NativeType.TLazy elem1, NativeType.TLazy elem2 ->
+        unify elem1 elem2 range
+
     // Handle TByref vs TApp(byref/inref/outref, [elem]) - both represent the same concept
     // TApp(byref, ...) maps to TByref(..., InOut)
     | NativeType.TByref(elem1, ByrefKind.InOut), NativeType.TApp(tc, [elem2]) when tc.Name = "byref" ->
@@ -250,6 +254,8 @@ let canUnify (t1: NativeType) (t2: NativeType) : bool =
             check d1 d2 && check r1 r2
         | NativeType.TTuple(e1, s1), NativeType.TTuple(e2, s2) ->
             s1 = s2 && List.length e1 = List.length e2 && List.forall2 check e1 e2
+        | NativeType.TLazy e1, NativeType.TLazy e2 ->
+            check e1 e2  // PRD-14
         | NativeType.TError _, _ -> true
         | _, NativeType.TError _ -> true
         | _ -> false

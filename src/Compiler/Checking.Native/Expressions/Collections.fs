@@ -193,6 +193,9 @@ let checkRecord
                 | NativeType.TNativePtr _ ->
                     addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
                         "Expected record type, got native pointer type" env
+                | NativeType.TLazy _ ->
+                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                        "Expected record type, got Lazy<'T> type" env  // PRD-14
                 resolvedTy
             | Result.Error((code, message)) ->
                 addNativeError code recordRange message env

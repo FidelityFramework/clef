@@ -599,6 +599,29 @@ module FSharpNativeExpr =
             | SemanticKind.PatternBinding name ->
                 FSharpNativeExpr.Variable(name, node.Type, false, Some nodeId)
 
+            // Lazy expressions (PRD-14)
+            | SemanticKind.LazyExpr(bodyId, _captures) ->
+                // Convert lazy body to an expression
+                let bodyExpr = fromNode graph bodyId
+                // For now, wrap as a special intrinsic call - Alex will handle
+                FSharpNativeExpr.Intrinsic(
+                    { Module = IntrinsicModule.Lazy
+                      Operation = "create"
+                      Category = IntrinsicCategory.Pure
+                      FullName = "Lazy.create" },
+                    [bodyExpr],
+                    node.Type)
+
+            | SemanticKind.LazyForce lazyValueId ->
+                let lazyExpr = fromNode graph lazyValueId
+                FSharpNativeExpr.Intrinsic(
+                    { Module = IntrinsicModule.Lazy
+                      Operation = "force"
+                      Category = IntrinsicCategory.Pure
+                      FullName = "Lazy.force" },
+                    [lazyExpr],
+                    node.Type)
+
             // Error
             | SemanticKind.Error message ->
                 FSharpNativeExpr.Error(message, node.Range)

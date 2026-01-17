@@ -111,7 +111,10 @@ let rec applySubst (ty: NativeType) : NativeType =
     | NativeType.TUnion(tc, cases) ->
         NativeType.TUnion(tc, cases |> List.map (fun c ->
             { c with Fields = c.Fields |> List.map (fun (n, t) -> (n, applySubst t)) }))
-    
+
+    | NativeType.TLazy elem ->
+        NativeType.TLazy(applySubst elem)  // PRD-14
+
     | NativeType.TMeasure _ -> ty
     | NativeType.TError _ -> ty
 
@@ -162,7 +165,10 @@ let rec occursIn (typar: TypeParam) (ty: NativeType) : bool =
     | NativeType.TUnion(_, cases) ->
         cases |> List.exists (fun c ->
             c.Fields |> List.exists (fun (_, t) -> occursIn typar t))
-    
+
+    | NativeType.TLazy elem ->
+        occursIn typar elem  // PRD-14
+
     | NativeType.TMeasure m -> occursInMeasure typar m
     | NativeType.TError _ -> false
 
@@ -214,11 +220,14 @@ let rec freeTypeVars (ty: NativeType) : Set<TypeParamId> =
     // Named records use TApp - handled above (empty args)
 
     | NativeType.TUnion(_, cases) ->
-        cases 
+        cases
         |> List.collect (fun c -> c.Fields |> List.map snd)
         |> List.map freeTypeVars
         |> Set.unionMany
-    
+
+    | NativeType.TLazy elem ->
+        freeTypeVars elem  // PRD-14
+
     | NativeType.TMeasure m -> freeTypeVarsInMeasure m
     | NativeType.TError _ -> Set.empty
 
@@ -279,6 +288,9 @@ let rec collectFreeTypeParams (ty: NativeType) : TypeParam list =
         cases
         |> List.collect (fun c -> c.Fields |> List.map snd)
         |> List.collect collectFreeTypeParams
+
+    | NativeType.TLazy elem ->
+        collectFreeTypeParams elem  // PRD-14
 
     | NativeType.TMeasure _ -> []  // Measure type params handled separately
     | NativeType.TError _ -> []

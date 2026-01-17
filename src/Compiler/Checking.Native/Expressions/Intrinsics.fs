@@ -56,6 +56,7 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         | "Effect" -> Some (IntrinsicModule.Effect, opPart)
         | "Memo" -> Some (IntrinsicModule.Memo, opPart)
         | "Batch" -> Some (IntrinsicModule.Batch, opPart)
+        | "Lazy" -> Some (IntrinsicModule.Lazy, opPart)
         | "NativeStr" -> Some (IntrinsicModule.NativeStr, opPart)
         | "NativeDefault" -> Some (IntrinsicModule.NativeDefault, opPart)
         | "Math" -> Some (IntrinsicModule.Math, opPart)
@@ -446,6 +447,29 @@ let private resolveBatchOp (op: string) (globals: NativeGlobals) (_range: Source
     | unknown ->
         UnknownOperation $"Unknown Batch intrinsic: Batch.{unknown}. Available: run"
 
+/// Resolve Lazy.* operations (PRD-14: Deferred computation with memoization)
+let private resolveLazyOp (op: string) (globals: NativeGlobals) (range: SourceRange) : IntrinsicResolution =
+    let fullName = "Lazy." + op
+    let tyParamSpec = freshTypeParam "'T" TypeParamKind.Type range
+    let tyParam = NativeType.TVar tyParamSpec
+    let lazyType = mkLazyType tyParam
+    match op with
+    | "create" ->
+        // (unit -> 'T) -> Lazy<'T>
+        let thunkFn = NativeType.TFun(globals.UnitType, tyParam)
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(thunkFn, lazyType))
+        Resolved (mkIntrinsic IntrinsicModule.Lazy op IntrinsicCategory.Pure fullName, ty)
+    | "force" ->
+        // Lazy<'T> -> 'T
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(lazyType, tyParam))
+        Resolved (mkIntrinsic IntrinsicModule.Lazy op IntrinsicCategory.Pure fullName, ty)
+    | "isValueCreated" ->
+        // Lazy<'T> -> bool
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(lazyType, globals.BoolType))
+        Resolved (mkIntrinsic IntrinsicModule.Lazy op IntrinsicCategory.Pure fullName, ty)
+    | unknown ->
+        UnknownOperation $"Unknown Lazy intrinsic: Lazy.{unknown}. Available: create, force, isValueCreated"
+
 /// Resolve Math.* operations
 let private resolveMathOp (op: string) (globals: NativeGlobals) (_range: SourceRange) : IntrinsicResolution =
     let fullName = "Math." + op
@@ -645,6 +669,7 @@ let resolveModuleIntrinsic
     | IntrinsicModule.Effect -> resolveEffectOp op globals range
     | IntrinsicModule.Memo -> resolveMemoOp op globals range
     | IntrinsicModule.Batch -> resolveBatchOp op globals range
+    | IntrinsicModule.Lazy -> resolveLazyOp op globals range
     | IntrinsicModule.Arena -> resolveArenaOp op globals range
     | IntrinsicModule.Math -> resolveMathOp op globals range
     | IntrinsicModule.DateTime -> resolveDateTimeOp op globals range
