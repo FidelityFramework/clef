@@ -82,11 +82,13 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// Lambda expression: fun x y -> body
+    /// enclosingFunction: None at module level, Some "parentName" for nested functions (PRD-13)
     | Lambda of
         parameters: (string * NativeType) list *
         body: FSharpNativeExpr *
         returnType: NativeType *
-        srtp: WitnessResolution option
+        srtp: WitnessResolution option *
+        enclosingFunction: string option
 
     /// Function application: f arg1 arg2
     | Application of
@@ -378,14 +380,15 @@ module FSharpNativeExpr =
                 FSharpNativeExpr.Application(funcExpr, argExprs, node.Type, node.SRTPResolution)
 
             // Lambda expressions
-            | SemanticKind.Lambda(parameters, bodyId, _captures) ->
+            | SemanticKind.Lambda(parameters, bodyId, _captures, enclosingFunction) ->
                 let bodyExpr = fromNode graph bodyId
                 let returnType = extractReturnType node.Type
                 // Convert 3-tuple (name, type, nodeId) to 2-tuple (name, type) for FSharpNativeExpr
                 let params2 = parameters |> List.map (fun (name, ty, _nodeId) -> (name, ty))
                 // Note: captures are available via the SemanticKind but FSharpNativeExpr.Lambda
                 // doesn't include them - they're accessed via the PSG node during code generation
-                FSharpNativeExpr.Lambda(params2, bodyExpr, returnType, node.SRTPResolution)
+                // PRD-13: Include enclosingFunction for debugging nested function identity
+                FSharpNativeExpr.Lambda(params2, bodyExpr, returnType, node.SRTPResolution, enclosingFunction)
 
             // Bindings
             | SemanticKind.Binding(name, isMutable, _isRecursive, _isEntryPoint) ->
@@ -690,10 +693,11 @@ module FSharpNativeExpr =
             let srtpStr = srtp |> Option.map (fun r -> sprintf " [SRTP: %s -> %s]" r.Operator r.ResolvedMember) |> Option.defaultValue ""
             sprintf "%sApp(%s, [%s])%s" pad funcStr argsStr srtpStr
 
-        | FSharpNativeExpr.Lambda(params', body, _retTy, _srtp) ->
+        | FSharpNativeExpr.Lambda(params', body, _retTy, _srtp, enclosingFunc) ->
             let paramsStr = params' |> List.map fst |> String.concat ", "
             let bodyStr = prettyPrint (indent + 1) body
-            sprintf "%sLambda(%s) ->\n%s" pad paramsStr bodyStr
+            let enclosingStr = enclosingFunc |> Option.map (sprintf " [enclosing: %s]") |> Option.defaultValue ""
+            sprintf "%sLambda(%s)%s ->\n%s" pad paramsStr enclosingStr bodyStr
 
         | FSharpNativeExpr.LetBinding(name, isMut, value, body, _ty) ->
             let mutStr = if isMut then "mutable " else ""
@@ -736,7 +740,7 @@ module FSharpNativeExpr =
         | FSharpNativeExpr.Literal(value, _) -> sprintf "Literal(%A)" value
         | FSharpNativeExpr.Variable(name, _, _, _) -> sprintf "Var(%s)" name
         | FSharpNativeExpr.Application(_, args, _, _) -> sprintf "App(..., %d args)" (List.length args)
-        | FSharpNativeExpr.Lambda(params', _, _, _) -> sprintf "Lambda(%d params)" (List.length params')
+        | FSharpNativeExpr.Lambda(params', _, _, _, _) -> sprintf "Lambda(%d params)" (List.length params')
         | FSharpNativeExpr.LetBinding(name, _, _, _, _) -> sprintf "Let(%s)" name
         | FSharpNativeExpr.LetRecBindings(bindings, _) -> sprintf "LetRec(%d bindings)" (List.length bindings)
         | FSharpNativeExpr.Sequential(exprs, _) -> sprintf "Seq(%d)" (List.length exprs)

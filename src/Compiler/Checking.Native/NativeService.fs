@@ -424,7 +424,7 @@ let checkLetBinding (binding: SynBinding) : CheckResult =
     NodeId.reset()
 
     // InlineBody, isMutable and literalValue discarded - see function doc comment for rationale
-    let (node, _inlineBody, _isMutable, _literalValue) = checkBinding checkExpr checkSynType env builder binding
+    let (node, _inlineBody, _isMutable, _literalValue) = checkBinding checkExpr checkSynType env builder binding None
     let diagnostics = solveAndGetDiagnostics !(env.Constraints)
 
     buildResult builder [node] Map.empty diagnostics
@@ -495,40 +495,45 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
         // Capture function bodies for `inline` functions (escape analysis)
         // Handle recursive vs non-recursive bindings differently
         let (finalEnv, nodes) =
-            if isRec then
-                // RECURSIVE BINDINGS: Two-pass approach
-                // Pass 1: Add all binding names with fresh type variables to environment
-                // This allows mutual recursion - each binding can reference all others
-                let placeholders =
+            match isRec with
+            | true ->
+                // PRD-13: RECURSIVE BINDINGS - Pre-create Binding nodes for NodeIds
+                // This enables self-referential VarRefs to resolve correctly
+                let preCreatedBindings =
                     bindings
                     |> List.map (fun binding ->
                         let simpleName = getBindingName binding
                         let placeholderTy = freshTypeVar range
-                        (binding, simpleName, placeholderTy))
-                
+                        let (SynBinding(_, _, _, isMutable, attrs, _, _, _, _, _, _, _, _)) = binding
+                        let isEntryPoint = hasEntryPointAttribute attrs
+                        let node = builder.Create(
+                            SemanticKind.Binding(simpleName, isMutable, true, isEntryPoint),
+                            placeholderTy,
+                            range,
+                            children = [])
+                        (binding, simpleName, placeholderTy, node))
+
+                // Add all bindings to environment WITH their NodeIds
                 let envWithAllNames =
-                    placeholders
-                    |> List.fold (fun accEnv (_, simpleName, placeholderTy) ->
+                    preCreatedBindings
+                    |> List.fold (fun accEnv (_, simpleName, placeholderTy, preCreatedNode) ->
                         bindingNameSuffixes simpleName
                         |> List.fold (fun env qname ->
-                            addBinding qname placeholderTy false None env
+                            addBinding qname placeholderTy false (Some preCreatedNode.Id) env
                         ) accEnv
                     ) env
-                
-                // Pass 2: Check all bodies with all names in scope
-                // Add constraints to unify placeholder types with inferred types
-                let (updatedEnv, checkedBindings) =
-                    placeholders
-                    |> List.fold (fun (accEnv, accResults) (binding, simpleName, placeholderTy) ->
-                        let (node, inlineBodyOpt, isMutable, literalValueOpt) = checkBinding checkExpr checkSynType envWithAllNames builder binding
 
-                        // Unify the placeholder type with the inferred type
-                        // This ensures references to this binding get the correct type
+                // Check all bodies - VarRefs now resolve to pre-created NodeIds
+                let (updatedEnv, checkedBindings) =
+                    preCreatedBindings
+                    |> List.fold (fun (accEnv, accResults) (binding, simpleName, placeholderTy, preCreatedNode) ->
+                        let (node, inlineBodyOpt, isMutable, literalValueOpt) =
+                            checkBinding checkExpr checkSynType envWithAllNames builder binding (Some preCreatedNode)
+
+                        // Unify placeholder type with inferred type
                         addConstraint (Constraint.Equals(placeholderTy, node.Type, range)) accEnv
 
-                        // Update the binding in environment with the actual node ID and inline body
-                        // CRITICAL: Use actual isMutable flag for module-level mutable variables
-                        // [<Literal>] bindings are registered for compile-time substitution
+                        // Update environment with actual types and inline bodies
                         let envWithNode =
                             bindingNameSuffixes simpleName
                             |> List.fold (fun env qname ->
@@ -540,14 +545,14 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
 
                         (envWithNode, (node, inlineBodyOpt, simpleName) :: accResults)
                     ) (envWithAllNames, [])
-                
+
                 let nodes = checkedBindings |> List.map (fun (node, _, _) -> node) |> List.rev
                 (updatedEnv, nodes)
-            else
+            | false ->
                 // NON-RECURSIVE BINDINGS: Sequential processing (existing behavior)
                 // Each binding can only reference bindings that came before it
                 bindings |> List.fold (fun (accEnv, accNodes) binding ->
-                    let (node, inlineBodyOpt, isMutable, literalValueOpt) = checkBinding checkExpr checkSynType accEnv builder binding
+                    let (node, inlineBodyOpt, isMutable, literalValueOpt) = checkBinding checkExpr checkSynType accEnv builder binding None
                     // Add the binding to environment so later bindings can reference it
                     // Register under all qualified name suffixes (handles AutoOpen modules)
                     // CRITICAL: Use actual isMutable flag for module-level mutable variables

@@ -344,7 +344,7 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
             ("srtpResolution", srtpStr)
         ]
 
-    | FSharpNativeExpr.Lambda(parameters, body, returnType, srtp) ->
+    | FSharpNativeExpr.Lambda(parameters, body, returnType, srtp, enclosingFunction) ->
         let paramsJson =
             parameters
             |> List.map (fun (name, ty) ->
@@ -361,12 +361,17 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
                 ("resolvedMember", escapeJsonString r.ResolvedMember)
               ]
             | None -> "null"
+        let enclosingStr =
+            match enclosingFunction with
+            | Some name -> sprintf "{\"Some\": \"%s\"}" (escapeJsonString name)
+            | None -> "{\"None\": true}"
         buildJsonObject pretty indent [
             ("kind", escapeJsonString "Lambda")
             ("parameters", paramsJson)
             ("body", bodyJson)
             ("returnType", sprintf "%A" returnType |> escapeJsonString)
             ("srtpResolution", srtpStr)
+            ("enclosingFunction", enclosingStr)
         ]
 
     | FSharpNativeExpr.LetBinding(name, isMutable, value, body, ty) ->

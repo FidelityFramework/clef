@@ -425,8 +425,9 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
             range)
         // DotLambda (_.Property) - synthetic lambda, no captures from outer scope
         // Children includes parameter PatternBinding + body for proper traversal
+        // Inherit enclosing function context for nested function qualification
         builder.Create(
-            SemanticKind.Lambda([("_", argType, paramNode.Id)], innerNode.Id, []),
+            SemanticKind.Lambda([("_", argType, paramNode.Id)], innerNode.Id, [], env.EnclosingFunction),
             NativeType.TFun(argType, innerNode.Type),
             range,
             children = [paramNode.Id; innerNode.Id])

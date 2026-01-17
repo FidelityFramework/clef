@@ -131,12 +131,15 @@ let tryGetFunctionParams
 /// the isMutable flag, and optionally a LiteralValue for [<Literal>] bindings.
 /// InlineBody is captured only for functions explicitly marked `inline` - this enables
 /// escape analysis where allocations are lifted to the caller's frame.
+/// PRD-13: preCreatedBinding allows recursive bindings to provide a pre-created Binding node
+/// so that VarRefs can resolve to it before the body is checked.
 let checkBinding
     (checkExpr: CheckExprFn)
     (checkSynType: CheckSynTypeFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
     (binding: SynBinding)
+    (preCreatedBinding: SemanticNode option)
     : SemanticNode * InlineBody option * bool * LiteralValue option =
 
     let (SynBinding(_, _, isInline, isMutable, attrs, _, _, headPat, _, expr, bindingRange, _, _)) = binding
@@ -175,7 +178,11 @@ let checkBinding
             ) ([], env)
 
         let lambdaParams = List.rev (fst paramNodesAndEnv)
-        let bodyEnv = snd paramNodesAndEnv
+        let bodyEnvWithParams = snd paramNodesAndEnv
+        
+        // PRD-13: Set this function as the enclosing function for nested bindings
+        // This enables qualified names like "factorialTail_loop" for nested functions
+        let bodyEnv = { bodyEnvWithParams with EnclosingFunction = Some name }
 
         // Check body with extended environment
         let bodyNode = checkExpr bodyEnv builder expr
@@ -209,19 +216,28 @@ let checkBinding
         // Create Lambda node with parameter NodeIds for SSA assignment
         // Named function bindings don't capture from outer scope (they ARE the outer scope)
         // Children includes parameter PatternBindings + body for proper traversal
+        // PRD-13: Pass enclosingFunction for qualified name generation in Alex
         let paramNodeIds = lambdaParams |> List.map (fun (_, _, nodeId) -> nodeId)
         let lambdaNode = builder.Create(
-            SemanticKind.Lambda(lambdaParams, bodyNode.Id, []),
+            SemanticKind.Lambda(lambdaParams, bodyNode.Id, [], env.EnclosingFunction),
             funcType,
             range,
             children = paramNodeIds @ [bodyNode.Id])
 
-        // Create Binding node wrapping the Lambda
-        let bindingNode = builder.Create(
-            SemanticKind.Binding(name, isMutable, false, isEntryPoint),
-            funcType,
-            range,
-            children = [lambdaNode.Id])
+        // PRD-13: Use pre-created Binding if provided (for recursive bindings)
+        // Otherwise create a new Binding node wrapping the Lambda
+        let bindingNode =
+            match preCreatedBinding with
+            | Some preCreated ->
+                // Link pre-created Binding to the Lambda we just created
+                builder.SetChildren(preCreated.Id, [lambdaNode.Id])
+                preCreated
+            | None ->
+                builder.Create(
+                    SemanticKind.Binding(name, isMutable, false, isEntryPoint),
+                    funcType,
+                    range,
+                    children = [lambdaNode.Id])
 
         // Establish bidirectional parent-child link
         // Lambda's Parent field must point back to Binding for SSA name assignment
@@ -311,9 +327,10 @@ let checkBinding
 
                     // Eta-expanded lambdas don't capture anything new
                     // Children includes parameter PatternBindings + body for proper traversal
+                    // Eta-expanded lambdas are synthetic - no enclosingFunction context
                     let paramNodeIds = lambdaParams |> List.map (fun (_, _, nodeId) -> nodeId)
                     builder.Create(
-                        SemanticKind.Lambda(lambdaParams, bodyId, []),
+                        SemanticKind.Lambda(lambdaParams, bodyId, [], None),
                         funcType,
                         range,
                         children = paramNodeIds @ [bodyId])
@@ -338,11 +355,18 @@ let checkBinding
                 // Not a function type or other cases - use as-is
                 exprNode
 
-        let node = builder.Create(
-            SemanticKind.Binding(name, isMutable, false, isEntryPoint),
-            finalExprNode.Type,
-            range,
-            children = [finalExprNode.Id])
+        // PRD-13: Use pre-created Binding if provided (for recursive bindings)
+        let node =
+            match preCreatedBinding with
+            | Some preCreated ->
+                builder.SetChildren(preCreated.Id, [finalExprNode.Id])
+                preCreated
+            | None ->
+                builder.Create(
+                    SemanticKind.Binding(name, isMutable, false, isEntryPoint),
+                    finalExprNode.Type,
+                    range,
+                    children = [finalExprNode.Id])
         // Establish bidirectional parent-child link
         builder.SetParent(finalExprNode.Id, node.Id)
         (node, None, isMutable, literalValue)
@@ -352,6 +376,8 @@ let checkBinding
 //-------------------------------------------------------------------------
 
 /// Check a let-or-use binding
+/// PRD-13: For recursive bindings (let rec), pre-create Binding nodes to get NodeIds
+/// so that self-referential VarRefs can resolve correctly.
 let checkLetOrUse
     (checkExpr: CheckExprFn)
     (checkSynType: CheckSynTypeFn)
@@ -363,54 +389,75 @@ let checkLetOrUse
 
     let bindings = letOrUse.Bindings
     let bodyExpr = letOrUse.Body
-    let isRec = letOrUse.IsRecursive
 
-    // First pass: add all bindings to environment (for recursive bindings)
-    let bindingEnv =
-        if isRec then
-            bindings |> List.fold (fun env binding ->
-                let name = getBindingName binding
-                let ty = freshTypeVar range
-                addBinding name ty false None env
-            ) env
-        else
-            env
-
-    // Check each binding (returns SemanticNode * InlineBody option * bool * LiteralValue option)
-    let bindingResults = bindings |> List.map (fun binding ->
-        checkBinding checkExpr checkSynType bindingEnv builder binding)
-
-    // Extract just the nodes for the semantic graph
-    let bindingNodes = bindingResults |> List.map (fun (node, _, _, _) -> node)
-
-    // Add bindings to environment for body
-    // Use addInlineBinding for functions marked `inline` to enable escape analysis
-    let bodyEnv =
-        List.zip bindings bindingResults
-        |> List.fold (fun env (binding, (node, inlineBodyOpt, isMutable, literalValueOpt)) ->
+    // Helper: extend environment with binding results
+    let extendEnvWithResults baseEnv bindingList (results: (SemanticNode * InlineBody option * bool * LiteralValue option) list) =
+        List.zip bindingList results
+        |> List.fold (fun env (binding, (node: SemanticNode, inlineBodyOpt, isMutable, literalValueOpt)) ->
             let name = getBindingName binding
             match inlineBodyOpt, literalValueOpt with
             | Some inlineBody, _ ->
-                // Function with inline body - add with transparency
                 addInlineBinding name node.Type (Some node.Id) inlineBody env
             | None, Some litVal ->
-                // [<Literal>] binding - add for compile-time substitution
                 addLiteralBinding name node.Type (Some node.Id) litVal env
             | None, None ->
-                // Regular value binding - use the isMutable flag from checkBinding
                 addBinding name node.Type isMutable (Some node.Id) env
-        ) bindingEnv
+        ) baseEnv
 
-    // Check body
-    let bodyNode = checkExpr bodyEnv builder bodyExpr
+    // Helper: build final Sequential node
+    let buildSequential bindingNodes bodyNode =
+        let allIds = (bindingNodes |> List.map (fun (n: SemanticNode) -> n.Id)) @ [bodyNode.Id]
+        builder.Create(
+            SemanticKind.Sequential allIds,
+            bodyNode.Type,
+            range,
+            children = allIds)
 
-    // Create sequential node for bindings + body
-    let allIds = (bindingNodes |> List.map (fun n -> n.Id)) @ [bodyNode.Id]
-    builder.Create(
-        SemanticKind.Sequential allIds,
-        bodyNode.Type,
-        range,
-        children = allIds)
+    match letOrUse.IsRecursive with
+    | true ->
+        // PRD-13: RECURSIVE BINDINGS
+        // Pre-create Binding nodes to get NodeIds before checking bodies
+        let preCreatedBindings =
+            bindings |> List.map (fun binding ->
+                let name = getBindingName binding
+                let ty = freshTypeVar range
+                let (SynBinding(_, _, _, isMutable, attrs, _, _, _, _, _, _, _, _)) = binding
+                let isEntryPoint = hasEntryPointAttribute attrs
+                let node = builder.Create(
+                    SemanticKind.Binding(name, isMutable, true, isEntryPoint),
+                    ty,
+                    range,
+                    children = [])
+                (binding, name, ty, node))
+
+        // Add all bindings to environment WITH their NodeIds
+        let envWithBindings =
+            preCreatedBindings
+            |> List.fold (fun env (_, name, ty, node) ->
+                addBinding name ty false (Some node.Id) env
+            ) env
+
+        // Check each binding body - VarRefs now resolve to pre-created NodeIds
+        let bindingResults =
+            preCreatedBindings
+            |> List.map (fun (binding, _, _, preCreatedNode) ->
+                checkBinding checkExpr checkSynType envWithBindings builder binding (Some preCreatedNode))
+
+        let bindingNodes = bindingResults |> List.map (fun (node, _, _, _) -> node)
+        let bodyEnv = extendEnvWithResults envWithBindings bindings bindingResults
+        let bodyNode = checkExpr bodyEnv builder bodyExpr
+        buildSequential bindingNodes bodyNode
+
+    | false ->
+        // NON-RECURSIVE BINDINGS: Standard sequential processing
+        let bindingResults =
+            bindings |> List.map (fun binding ->
+                checkBinding checkExpr checkSynType env builder binding None)
+
+        let bindingNodes = bindingResults |> List.map (fun (node, _, _, _) -> node)
+        let bodyEnv = extendEnvWithResults env bindings bindingResults
+        let bodyNode = checkExpr bodyEnv builder bodyExpr
+        buildSequential bindingNodes bodyNode
 
 //-------------------------------------------------------------------------
 // Match Clause Handling

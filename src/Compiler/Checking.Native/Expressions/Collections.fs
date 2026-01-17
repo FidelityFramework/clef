@@ -310,8 +310,9 @@ let checkMatchLambda
     // Wrap in lambda with PatternBinding NodeId for SSA assignment
     // This is a synthetic lambda for the function keyword - no outer captures
     // Children includes parameter PatternBinding + body for proper traversal
+    // Inherit enclosing function context for nested function qualification
     builder.Create(
-        SemanticKind.Lambda([(syntheticArgName, domainType, syntheticParamNode.Id)], matchNode.Id, []),
+        SemanticKind.Lambda([(syntheticArgName, domainType, syntheticParamNode.Id)], matchNode.Id, [], env.EnclosingFunction),
         NativeType.TFun(domainType, resultType),
         range,
         children = [syntheticParamNode.Id; matchNode.Id])

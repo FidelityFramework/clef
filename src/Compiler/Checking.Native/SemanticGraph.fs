@@ -340,7 +340,8 @@ type SemanticKind =
     /// Parameters include name, type, and PatternBinding NodeId for SSA assignment.
     /// Captures list contains variables captured from enclosing scope (computed during type checking).
     /// Empty captures list = no closure environment needed (simple function pointer).
-    | Lambda of parameters: (string * NativeType * NodeId) list * body: NodeId * captures: CaptureInfo list
+    /// enclosingFunction: None at module level, Some "parentName" for nested functions (PRD-13).
+    | Lambda of parameters: (string * NativeType * NodeId) list * body: NodeId * captures: CaptureInfo list * enclosingFunction: string option
     
     /// Literal value
     | Literal of value: LiteralValue
@@ -692,6 +693,16 @@ type NodeBuilder() =
             nodes <- Map.add childId updated nodes
         | None -> ()  // Node not found (shouldn't happen)
 
+    /// Set children on an existing node (for recursive bindings)
+    /// PRD-13: Recursive bindings pre-create Binding nodes to get NodeIds,
+    /// then set children after the Lambda is created.
+    member _.SetChildren(nodeId: NodeId, children: NodeId list) =
+        match Map.tryFind nodeId nodes with
+        | Some node ->
+            let updated = { node with Children = children }
+            nodes <- Map.add nodeId updated nodes
+        | None -> ()
+
     /// Build the semantic graph
     member _.Build(entryPoints: NodeId list) : SemanticGraph =
         { Nodes = nodes
@@ -791,7 +802,7 @@ module Reachability =
         | SemanticKind.Binding _ ->
             node.Children
         // Lambda: follow body
-        | SemanticKind.Lambda (_, bodyId, _) ->
+        | SemanticKind.Lambda (_, bodyId, _, _) ->
             [bodyId]
         // Control flow: follow branches
         | SemanticKind.IfThenElse (guard, thenB, elseB) ->
@@ -1257,7 +1268,7 @@ module Traversal =
                             |> fst
 
                         // Lambda: body is a region, but parameters are walked first
-                        | SemanticKind.Lambda (params', bodyId, _captures), Some hook ->
+                        | SemanticKind.Lambda (params', bodyId, _captures, _enclosingFunction), Some hook ->
                             let parentId = node.Id
                             // Walk parameter PatternBindings first (for SSA assignment)
                             let paramNodeIds = params' |> List.map (fun (_, _, nodeId) -> nodeId)

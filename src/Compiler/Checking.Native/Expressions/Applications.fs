@@ -578,9 +578,10 @@ let checkLambda
             mkFunctionType paramTypes bodyNode.Type
 
     // Children includes parameter PatternBindings + body for proper traversal
+    // Anonymous lambdas inherit the current enclosing function context
     let paramNodeIds = lambdaParams |> List.map (fun (_, _, nodeId) -> nodeId)
     builder.Create(
-        SemanticKind.Lambda(lambdaParams, bodyNode.Id, captures),
+        SemanticKind.Lambda(lambdaParams, bodyNode.Id, captures, env.EnclosingFunction),
         funcType,
         range,
         children = paramNodeIds @ [bodyNode.Id])

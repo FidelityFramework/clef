@@ -119,6 +119,9 @@ type TypeEnv = {
     CurrentArena: ArenaAffinity
     /// Enclosing function return type (for return checking)
     ExpectedReturnType: NativeType option
+    /// Enclosing function name for nested bindings (None at module level)
+    /// PRD-13: Used to qualify nested function names for MLIR emission
+    EnclosingFunction: string option
 }
 
 //-------------------------------------------------------------------------
@@ -210,6 +213,7 @@ let createTypeEnv (globals: NativeGlobals) : TypeEnv =
         Diagnostics = ref []
         CurrentArena = ArenaAffinity.CurrentActor
         ExpectedReturnType = None
+        EnclosingFunction = None
     }
 
 //-------------------------------------------------------------------------
