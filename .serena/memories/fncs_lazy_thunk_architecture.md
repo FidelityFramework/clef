@@ -43,7 +43,21 @@ Separating semantics from implementation allows:
 - DCont strategy (future): delimited continuation capture
 - Other strategies as targets require
 
+## Implementation Notes (January 2026)
+
+The initial implementation attempted a `{code_ptr, env_ptr}` model with null env_ptr.
+This was WRONG - it ignored the flat closure architecture just established in PRD-11.
+
+**Correct approach:** Lazy is an EXTENDED flat closure:
+```
+Lazy<T> = {computed: i1, value: T, code_ptr: ptr, cap₀, cap₁, ...}
+```
+
+See `compose_from_standing_art_principle` memory for the general lesson.
+
 ## Related
 
 - `/home/hhh/repos/fsnative/docs/fidelity/FNCS_Lazy_Seq_Coroutine_Intrinsics.md`
 - `/home/hhh/repos/Firefly/.serena/memories/computation_strategy_architecture.md`
+- `compose_from_standing_art_principle` - Critical architectural principle
+- `lazy_thunk_calling_convention` - Option B decision details

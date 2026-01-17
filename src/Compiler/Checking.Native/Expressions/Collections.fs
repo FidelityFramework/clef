@@ -315,7 +315,7 @@ let checkMatchLambda
     // Children includes parameter PatternBinding + body for proper traversal
     // Inherit enclosing function context for nested function qualification
     builder.Create(
-        SemanticKind.Lambda([(syntheticArgName, domainType, syntheticParamNode.Id)], matchNode.Id, [], env.EnclosingFunction),
+        SemanticKind.Lambda([(syntheticArgName, domainType, syntheticParamNode.Id)], matchNode.Id, [], env.EnclosingFunction, LambdaContext.RegularClosure),
         NativeType.TFun(domainType, resultType),
         range,
         children = [syntheticParamNode.Id; matchNode.Id])

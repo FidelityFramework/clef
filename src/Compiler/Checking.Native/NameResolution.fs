@@ -53,6 +53,10 @@ type ResolvedBinding = {
     /// For [<Literal>] bindings: compile-time constant value for substitution
     /// When present, VarRef resolution substitutes this value directly at use sites
     LiteralValue: LiteralValue option
+    /// Whether this binding was defined at module level (top-level)
+    /// Module-level bindings are referenced by address, not captured in closures
+    /// PRD-14: Critical for correct capture analysis in lambda/lazy expressions
+    IsModuleLevel: bool
 }
 
 /// A name resolver - codata structure producing bindings on demand

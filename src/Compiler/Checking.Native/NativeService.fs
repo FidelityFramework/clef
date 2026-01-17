@@ -519,7 +519,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     |> List.fold (fun accEnv (_, simpleName, placeholderTy, preCreatedNode) ->
                         bindingNameSuffixes simpleName
                         |> List.fold (fun env qname ->
-                            addBinding qname placeholderTy false (Some preCreatedNode.Id) env
+                            addBinding qname placeholderTy false (Some preCreatedNode.Id) true env  // Module-level bindings
                         ) accEnv
                     ) env
 
@@ -540,7 +540,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                 match inlineBodyOpt, literalValueOpt with
                                 | Some inlineBody, _ -> addInlineBinding qname node.Type (Some node.Id) inlineBody env
                                 | None, Some litVal -> addLiteralBinding qname node.Type (Some node.Id) litVal env
-                                | None, None -> addBinding qname node.Type isMutable (Some node.Id) env
+                                | None, None -> addBinding qname node.Type isMutable (Some node.Id) true env  // Module-level bindings
                             ) accEnv
 
                         (envWithNode, (node, inlineBodyOpt, simpleName) :: accResults)
@@ -565,7 +565,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                             match inlineBodyOpt, literalValueOpt with
                             | Some inlineBody, _ -> addInlineBinding qname node.Type (Some node.Id) inlineBody env
                             | None, Some litVal -> addLiteralBinding qname node.Type (Some node.Id) litVal env
-                            | None, None -> addBinding qname node.Type isMutable (Some node.Id) env
+                            | None, None -> addBinding qname node.Type isMutable (Some node.Id) true env  // Module-level bindings
                         ) accEnv
                     (updatedEnv, node :: accNodes)
                 ) (env, [])
@@ -810,7 +810,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // Use TApp - field information is carried in the TypeDef node (SemanticGraph.Types lookup)
                     // This follows the FCS pattern: TyconRef.Deref for metadata, not embedded in type refs
                     let recordType = mkSimpleType tyCon
-                    let updatedEnv = addBinding typeName recordType false None updatedEnv
+                    let updatedEnv = addBinding typeName recordType false None true updatedEnv  // Type constructors are module-level
                     
                     // Create semantic node with field information for downstream consumers
                     let fieldDefs = fieldInfos |> List.map (fun (name, ty) -> (name, ty))
@@ -849,7 +849,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         |> List.fold (fun env name -> addTypeDef name tyCon env) accEnv
                     // For structs (including [<Struct>] attributed), register constructor as binding
                     let structType = mkSimpleType tyCon
-                    let updatedEnv = if isStruct then addBinding typeName structType false None updatedEnv else updatedEnv
+                    let updatedEnv = if isStruct then addBinding typeName structType false None true updatedEnv else updatedEnv  // Type constructors are module-level
                     let defKind =
                         if isStruct then TypeDefKind.StructDef
                         else match kind with

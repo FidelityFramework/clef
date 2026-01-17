@@ -92,7 +92,7 @@ let checkApp
                 match inlineBody.Parameters with
                 | [paramName] ->
                     // Single-parameter function - direct substitution
-                    let inlineEnv = addBinding paramName argNode.Type false (Some argNode.Id) env
+                    let inlineEnv = addBinding paramName argNode.Type false (Some argNode.Id) false env  // Inline params are local
                     // Check the body in the new environment - allocations now in caller's frame
                     Some (checkExpr inlineEnv builder inlineBody.Body)
                 | [] ->
@@ -397,12 +397,41 @@ let checkApp
             range,
             children = allArgs)
     | None ->
-        // Regular function application
-        builder.Create(
-            SemanticKind.Application(targetFuncId, allArgs),
-            resultTy,
-            range,
-            children = targetFuncId :: allArgs)
+        // Check for semantic intrinsics that should become specific SemanticKinds
+        // PRD-14: Lazy.force becomes LazyForce
+        match builder.Nodes.TryFind targetFuncId with
+        | Some targetNode ->
+            match targetNode.Kind with
+            | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Lazy && info.Operation = "force" ->
+                // Lazy.force lazyVal -> LazyForce(lazyVal)
+                match allArgs with
+                | [lazyValId] ->
+                    builder.Create(
+                        SemanticKind.LazyForce(lazyValId),
+                        resultTy,
+                        range,
+                        children = [lazyValId])
+                | _ ->
+                    // Unexpected arity - fall through to regular Application
+                    builder.Create(
+                        SemanticKind.Application(targetFuncId, allArgs),
+                        resultTy,
+                        range,
+                        children = targetFuncId :: allArgs)
+            | _ ->
+                // Regular function application
+                builder.Create(
+                    SemanticKind.Application(targetFuncId, allArgs),
+                    resultTy,
+                    range,
+                    children = targetFuncId :: allArgs)
+        | None ->
+            // Target not found - regular application
+            builder.Create(
+                SemanticKind.Application(targetFuncId, allArgs),
+                resultTy,
+                range,
+                children = targetFuncId :: allArgs)
 
 //-------------------------------------------------------------------------
 // Type Application: SynExpr.TypeApp
@@ -495,7 +524,8 @@ let checkTypeApp
 //-------------------------------------------------------------------------
 
 /// Collect all VarRef names from a semantic node tree (recursive traversal)
-let private collectVarRefs (builder: NodeBuilder) (nodeId: NodeId) : Set<string> =
+/// Made public for reuse in checkLazy (PRD-14)
+let collectVarRefs (builder: NodeBuilder) (nodeId: NodeId) : Set<string> =
     let nodes = builder.Nodes
     let rec collect (nodeId: NodeId) (acc: Set<string>) : Set<string> =
         match Map.tryFind nodeId nodes with
@@ -508,6 +538,33 @@ let private collectVarRefs (builder: NodeBuilder) (nodeId: NodeId) : Set<string>
             // Recurse into children
             node.Children |> List.fold (fun a childId -> collect childId a) acc
     collect nodeId Set.empty
+
+/// Compute captures for a body node, excluding given parameter names
+/// Reusable for Lambda (checkLambda) and Lazy (checkLazy) capture analysis
+/// PRD-14: Both Lambda and Lazy use MLKit-style flat closures with inlined captures
+/// CRITICAL: Only LOCAL bindings are captured; module-level bindings are referenced by address
+let computeCaptures (builder: NodeBuilder) (env: TypeEnv) (bodyNodeId: NodeId) (excludeNames: Set<string>) : CaptureInfo list =
+    let bodyVarRefs = collectVarRefs builder bodyNodeId
+    let capturedNames = Set.difference bodyVarRefs excludeNames
+    capturedNames
+    |> Set.toList
+    |> List.choose (fun name ->
+        match tryLookupBinding name env with
+        | Some binding ->
+            // PRD-14: Module-level bindings are NOT captured - they're referenced by address
+            // Only local bindings (from enclosing function scopes) become closure captures
+            if binding.IsModuleLevel then
+                None  // Reference by address, not capture
+            else
+                Some {
+                    CaptureInfo.Name = name
+                    Type = binding.Type
+                    IsMutable = binding.IsMutable
+                    SourceNodeId = binding.NodeId
+                }
+        | None ->
+            // Not found in environment - could be a global/intrinsic, not a capture
+            None)
 
 /// Check lambda expression: fun args -> body
 /// Includes capture analysis for closure generation (MLKit-style flat closures).
@@ -534,7 +591,7 @@ let checkLambda
                 ty,
                 range,
                 arena = env.CurrentArena)
-            let newEnv = addBinding name ty false (Some paramNode.Id) env
+            let newEnv = addBinding name ty false (Some paramNode.Id) false env  // Parameters are always local
             ((name, ty, paramNode.Id) :: acc, newEnv)
         ) ([], env)
 
@@ -547,25 +604,8 @@ let checkLambda
 
     // Capture analysis: find VarRefs in body that are NOT lambda parameters
     // These are variables captured from the enclosing scope (closure captures)
-    let bodyVarRefs = collectVarRefs builder bodyNode.Id
-    let capturedNames = Set.difference bodyVarRefs paramNames
-
-    // Build CaptureInfo for each captured variable by looking up in outer environment
-    let captures =
-        capturedNames
-        |> Set.toList
-        |> List.choose (fun name ->
-            match tryLookupBinding name env with
-            | Some binding ->
-                Some {
-                    CaptureInfo.Name = name
-                    Type = binding.Type
-                    IsMutable = binding.IsMutable
-                    SourceNodeId = binding.NodeId
-                }
-            | None ->
-                // Not found in environment - could be a global/intrinsic, not a capture
-                None)
+    // Use computeCaptures helper (PRD-14: shared with checkLazy)
+    let captures = computeCaptures builder env bodyNode.Id paramNames
 
     // Build function type
     // For unit-parameterized lambdas (fun () -> body), paramTypes is empty
@@ -581,7 +621,7 @@ let checkLambda
     // Anonymous lambdas inherit the current enclosing function context
     let paramNodeIds = lambdaParams |> List.map (fun (_, _, nodeId) -> nodeId)
     builder.Create(
-        SemanticKind.Lambda(lambdaParams, bodyNode.Id, captures, env.EnclosingFunction),
+        SemanticKind.Lambda(lambdaParams, bodyNode.Id, captures, env.EnclosingFunction, LambdaContext.RegularClosure),
         funcType,
         range,
         children = paramNodeIds @ [bodyNode.Id])

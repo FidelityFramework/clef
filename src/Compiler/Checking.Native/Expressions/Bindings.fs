@@ -173,7 +173,7 @@ let checkBinding
                     paramTy,
                     range,
                     arena = env.CurrentArena)
-                let newEnv = addBinding paramName paramTy false (Some paramNode.Id) env
+                let newEnv = addBinding paramName paramTy false (Some paramNode.Id) false env  // Parameters are always local
                 ((paramName, paramTy, paramNode.Id) :: acc, newEnv)
             ) ([], env)
 
@@ -219,7 +219,7 @@ let checkBinding
         // PRD-13: Pass enclosingFunction for qualified name generation in Alex
         let paramNodeIds = lambdaParams |> List.map (fun (_, _, nodeId) -> nodeId)
         let lambdaNode = builder.Create(
-            SemanticKind.Lambda(lambdaParams, bodyNode.Id, [], env.EnclosingFunction),
+            SemanticKind.Lambda(lambdaParams, bodyNode.Id, [], env.EnclosingFunction, LambdaContext.RegularClosure),
             funcType,
             range,
             children = paramNodeIds @ [bodyNode.Id])
@@ -330,7 +330,7 @@ let checkBinding
                     // Eta-expanded lambdas are synthetic - no enclosingFunction context
                     let paramNodeIds = lambdaParams |> List.map (fun (_, _, nodeId) -> nodeId)
                     builder.Create(
-                        SemanticKind.Lambda(lambdaParams, bodyId, [], None),
+                        SemanticKind.Lambda(lambdaParams, bodyId, [], None, LambdaContext.RegularClosure),
                         funcType,
                         range,
                         children = paramNodeIds @ [bodyId])
@@ -401,7 +401,7 @@ let checkLetOrUse
             | None, Some litVal ->
                 addLiteralBinding name node.Type (Some node.Id) litVal env
             | None, None ->
-                addBinding name node.Type isMutable (Some node.Id) env
+                addBinding name node.Type isMutable (Some node.Id) env.EnclosingFunction.IsNone env
         ) baseEnv
 
     // Helper: build final Sequential node
@@ -434,7 +434,7 @@ let checkLetOrUse
         let envWithBindings =
             preCreatedBindings
             |> List.fold (fun env (_, name, ty, node) ->
-                addBinding name ty false (Some node.Id) env
+                addBinding name ty false (Some node.Id) env.EnclosingFunction.IsNone env
             ) env
 
         // Check each binding body - VarRefs now resolve to pre-created NodeIds
@@ -491,7 +491,7 @@ let checkMatchClause
                 ty,
                 range,
                 arena = env.CurrentArena)
-            let env' = addBinding name ty false (Some patternBindingNode.Id) env
+            let env' = addBinding name ty false (Some patternBindingNode.Id) env.EnclosingFunction.IsNone env
             (env', patternBindingNode.Id :: ids)
         ) (env, [])
     let patternBindingIds = List.rev patternBindingIds  // Preserve order

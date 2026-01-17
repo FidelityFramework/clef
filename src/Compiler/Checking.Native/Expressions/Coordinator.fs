@@ -427,7 +427,7 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
         // Children includes parameter PatternBinding + body for proper traversal
         // Inherit enclosing function context for nested function qualification
         builder.Create(
-            SemanticKind.Lambda([("_", argType, paramNode.Id)], innerNode.Id, [], env.EnclosingFunction),
+            SemanticKind.Lambda([("_", argType, paramNode.Id)], innerNode.Id, [], env.EnclosingFunction, LambdaContext.RegularClosure),
             NativeType.TFun(argType, innerNode.Type),
             range,
             children = [paramNode.Id; innerNode.Id])
@@ -939,22 +939,32 @@ and checkLongIdentSet (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticN
 
 /// Check Lazy: lazy expr
 /// PRD-14: Creates LazyExpr node with a thunk (unit -> 'T) wrapping the body
+/// Thunk calling convention (Option B): thunk receives lazy struct pointer and extracts its own captures
+/// Captures are computed using the same analysis as Lambda (MLKit-style flat closures)
 and checkLazy (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (env: TypeEnv) (builder: NodeBuilder) (innerExpr: SynExpr) (range: SourceRange) : SemanticNode =
     let innerNode = checkExpr env builder innerExpr
     let lazyType = mkLazyType innerNode.Type
 
+    // Capture analysis: find VarRefs in body that are NOT the unit parameter
+    // These are variables captured from the enclosing scope
+    // PRD-14: Lazy values are "extended flat closures" with inlined captures
+    let unitParamName = "_unit"
+    let captures = computeCaptures builder env innerNode.Id (Set.singleton unitParamName)
+
     // Create a thunk Lambda: unit -> 'T
     // The thunk takes a unit parameter and returns the lazy body
+    // Thunk captures the same variables as the lazy expression
     let thunkType = NativeType.TFun(env.Globals.UnitType, innerNode.Type)
     let thunkLambda = builder.Create(
-        SemanticKind.Lambda([("_unit", env.Globals.UnitType, NodeId -1)], innerNode.Id, [], None),
+        SemanticKind.Lambda([("_unit", env.Globals.UnitType, NodeId -1)], innerNode.Id, captures, env.EnclosingFunction, LambdaContext.LazyThunk),
         thunkType,
         range,
         children = [innerNode.Id])
 
     // Create LazyExpr with the thunk as the body
+    // LazyExpr stores the same captures (they're inlined in the lazy struct)
     builder.Create(
-        SemanticKind.LazyExpr(thunkLambda.Id, []),
+        SemanticKind.LazyExpr(thunkLambda.Id, captures),
         lazyType,
         range,
         children = [thunkLambda.Id])

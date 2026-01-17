@@ -32,7 +32,7 @@ match parseAndCheck testSource "test.fs" with
                 printfn "  *** MISMATCH! node.Children <> childIds ***"
         | SemanticKind.Binding(name, _, _) ->
             printfn "  Binding: %s" name
-        | SemanticKind.Lambda(_, bodyId, _, _) ->
+        | SemanticKind.Lambda(_, bodyId, _, _, _) ->
             printfn "  Lambda body: %A" bodyId
         | _ -> ()
         printfn ""

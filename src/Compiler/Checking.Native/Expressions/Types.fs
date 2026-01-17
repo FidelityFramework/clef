@@ -199,6 +199,7 @@ let createTypeEnv (globals: NativeGlobals) : TypeEnv =
                 InlineBody = None
                 UnionCaseInfo = tryGetUnionCaseInfo name ty  // Detect union case constructors
                 LiteralValue = None
+                IsModuleLevel = true  // Built-in/intrinsic bindings are always module-level
             }
             NR.registerBinding name binding ctx
         ) (NR.createContext ())
@@ -288,7 +289,12 @@ let addNullWarning (r: range) (env: TypeEnv) : unit =
 //-------------------------------------------------------------------------
 
 /// Add a binding to the environment using compositional resolution
-let addBinding (name: string) (ty: NativeType) (isMutable: bool) (nodeId: NodeId option) (env: TypeEnv) : TypeEnv =
+/// PRD-14: Tracks IsModuleLevel for correct capture analysis
+/// isModuleLevel must be explicitly specified by the caller based on binding semantics:
+/// - Parameters (function, loop, inline) → false (always local)
+/// - Let bindings → env.EnclosingFunction.IsNone (depends on scope)
+/// - Type definitions → true (always module-level)
+let addBinding (name: string) (ty: NativeType) (isMutable: bool) (nodeId: NodeId option) (isModuleLevel: bool) (env: TypeEnv) : TypeEnv =
     let binding: NR.ResolvedBinding = {
         QualifiedName = name
         Type = ty
@@ -297,6 +303,7 @@ let addBinding (name: string) (ty: NativeType) (isMutable: bool) (nodeId: NodeId
         InlineBody = None
         UnionCaseInfo = None
         LiteralValue = None
+        IsModuleLevel = isModuleLevel
     }
     { env with Resolution = NR.registerBinding name binding env.Resolution }
 
@@ -311,10 +318,12 @@ let addInlineBinding (name: string) (ty: NativeType) (nodeId: NodeId option) (in
         InlineBody = Some inlineBody
         UnionCaseInfo = None
         LiteralValue = None
+        IsModuleLevel = env.EnclosingFunction.IsNone
     }
     { env with Resolution = NR.registerBinding name binding env.Resolution }
 
 /// Add a DU constructor binding with case info for proper UnionCase node creation
+/// DU types are always defined at module scope, so constructors are module-level
 let addUnionCaseBinding (name: string) (ty: NativeType) (caseInfo: NR.UnionCaseInfo) (env: TypeEnv) : TypeEnv =
     let binding: NR.ResolvedBinding = {
         QualifiedName = name
@@ -324,6 +333,7 @@ let addUnionCaseBinding (name: string) (ty: NativeType) (caseInfo: NR.UnionCaseI
         InlineBody = None
         UnionCaseInfo = Some caseInfo
         LiteralValue = None
+        IsModuleLevel = true  // DU constructors are always module-level
     }
     { env with Resolution = NR.registerBinding name binding env.Resolution }
 
@@ -338,6 +348,7 @@ let addLiteralBinding (name: string) (ty: NativeType) (nodeId: NodeId option) (l
         InlineBody = None
         UnionCaseInfo = None
         LiteralValue = Some litValue
+        IsModuleLevel = env.EnclosingFunction.IsNone
     }
     { env with Resolution = NR.registerBinding name binding env.Resolution }
 

@@ -99,7 +99,7 @@ let checkFor
     addConstraint (Constraint.Equals(endNode.Type, env.Globals.IntType, range)) env
 
     // Add loop variable to environment
-    let bodyEnv = addBinding ident.idText env.Globals.IntType false None env
+    let bodyEnv = addBinding ident.idText env.Globals.IntType false None false env  // Loop vars are local
     let bodyNode = checkExpr bodyEnv builder bodyExpr
 
     builder.Create(
@@ -248,7 +248,7 @@ let checkForEach
             ident.idText, freshTypeVar range
         | _ -> "_", freshTypeVar range
     // Add loop variable to environment
-    let loopEnv = addBinding varName varType false None env
+    let loopEnv = addBinding varName varType false None false env  // Loop vars are local
     let bodyNode = checkExpr loopEnv builder bodyExpr
     builder.Create(
         SemanticKind.ForEach(varName, enumNode.Id, bodyNode.Id),

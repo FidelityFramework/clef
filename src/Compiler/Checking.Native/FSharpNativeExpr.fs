@@ -380,7 +380,7 @@ module FSharpNativeExpr =
                 FSharpNativeExpr.Application(funcExpr, argExprs, node.Type, node.SRTPResolution)
 
             // Lambda expressions
-            | SemanticKind.Lambda(parameters, bodyId, _captures, enclosingFunction) ->
+            | SemanticKind.Lambda(parameters, bodyId, _captures, enclosingFunction, _context) ->
                 let bodyExpr = fromNode graph bodyId
                 let returnType = extractReturnType node.Type
                 // Convert 3-tuple (name, type, nodeId) to 2-tuple (name, type) for FSharpNativeExpr

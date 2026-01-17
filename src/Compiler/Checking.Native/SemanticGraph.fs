@@ -291,6 +291,19 @@ type CaptureInfo = {
     SourceNodeId: NodeId option
 }
 
+
+/// Context in which a Lambda operates, affecting how captures are extracted at runtime.
+/// Set by FNCS during construction, observed by Alex during code generation.
+/// This enables Alex to know extraction indices without searching the graph.
+[<RequireQualifiedAccess>]
+type LambdaContext =
+    /// Standard closure: extract captures from {code_ptr, cap0, cap1, ...} at indices 1, 2, ...
+    | RegularClosure
+    /// Lazy thunk: extract captures from {computed, value, code_ptr, cap0, cap1, ...} at indices 3, 4, ...
+    | LazyThunk
+    /// Future: sequence generator context
+    | SeqGenerator
+
 //-------------------------------------------------------------------------
 // Pattern Matching
 //-------------------------------------------------------------------------
@@ -345,7 +358,8 @@ type SemanticKind =
     /// Captures list contains variables captured from enclosing scope (computed during type checking).
     /// Empty captures list = no closure environment needed (simple function pointer).
     /// enclosingFunction: None at module level, Some "parentName" for nested functions (PRD-13).
-    | Lambda of parameters: (string * NativeType * NodeId) list * body: NodeId * captures: CaptureInfo list * enclosingFunction: string option
+    /// context: Set by FNCS to indicate how captures should be extracted (RegularClosure, LazyThunk, etc.)
+    | Lambda of parameters: (string * NativeType * NodeId) list * body: NodeId * captures: CaptureInfo list * enclosingFunction: string option * context: LambdaContext
     
     /// Literal value
     | Literal of value: LiteralValue
@@ -822,7 +836,7 @@ module Reachability =
         | SemanticKind.Binding _ ->
             node.Children
         // Lambda: follow body
-        | SemanticKind.Lambda (_, bodyId, _, _) ->
+        | SemanticKind.Lambda (_, bodyId, _, _, _) ->
             [bodyId]
         // Control flow: follow branches
         | SemanticKind.IfThenElse (guard, thenB, elseB) ->
@@ -1293,7 +1307,7 @@ module Traversal =
                             |> fst
 
                         // Lambda: body is a region, but parameters are walked first
-                        | SemanticKind.Lambda (params', bodyId, _captures, _enclosingFunction), Some hook ->
+                        | SemanticKind.Lambda (params', bodyId, _captures, _enclosingFunction, _context), Some hook ->
                             let parentId = node.Id
                             // Walk parameter PatternBindings first (for SSA assignment)
                             let paramNodeIds = params' |> List.map (fun (_, _, nodeId) -> nodeId)
