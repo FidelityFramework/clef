@@ -115,6 +115,9 @@ let rec applySubst (ty: NativeType) : NativeType =
     | NativeType.TLazy elem ->
         NativeType.TLazy(applySubst elem)  // PRD-14
 
+    | NativeType.TSeq elem ->
+        NativeType.TSeq(applySubst elem)  // PRD-15
+
     | NativeType.TMeasure _ -> ty
     | NativeType.TError _ -> ty
 
@@ -168,6 +171,9 @@ let rec occursIn (typar: TypeParam) (ty: NativeType) : bool =
 
     | NativeType.TLazy elem ->
         occursIn typar elem  // PRD-14
+
+    | NativeType.TSeq elem ->
+        occursIn typar elem  // PRD-15
 
     | NativeType.TMeasure m -> occursInMeasure typar m
     | NativeType.TError _ -> false
@@ -227,6 +233,9 @@ let rec freeTypeVars (ty: NativeType) : Set<TypeParamId> =
 
     | NativeType.TLazy elem ->
         freeTypeVars elem  // PRD-14
+
+    | NativeType.TSeq elem ->
+        freeTypeVars elem  // PRD-15
 
     | NativeType.TMeasure m -> freeTypeVarsInMeasure m
     | NativeType.TError _ -> Set.empty
@@ -291,6 +300,9 @@ let rec collectFreeTypeParams (ty: NativeType) : TypeParam list =
 
     | NativeType.TLazy elem ->
         collectFreeTypeParams elem  // PRD-14
+
+    | NativeType.TSeq elem ->
+        collectFreeTypeParams elem  // PRD-15
 
     | NativeType.TMeasure _ -> []  // Measure type params handled separately
     | NativeType.TError _ -> []

@@ -60,4 +60,4 @@ See `compose_from_standing_art_principle` memory for the general lesson.
 - `/home/hhh/repos/fsnative/docs/fidelity/FNCS_Lazy_Seq_Coroutine_Intrinsics.md`
 - `/home/hhh/repos/Firefly/.serena/memories/computation_strategy_architecture.md`
 - `compose_from_standing_art_principle` - Critical architectural principle
-- `lazy_thunk_calling_convention` - Option B decision details
+- `lazy_thunk_calling_convention` - Struct pointer passing convention details

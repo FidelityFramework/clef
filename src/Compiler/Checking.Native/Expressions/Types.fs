@@ -122,6 +122,9 @@ type TypeEnv = {
     /// Enclosing function name for nested bindings (None at module level)
     /// PRD-13: Used to qualify nested function names for MLIR emission
     EnclosingFunction: string option
+    /// Enclosing seq expression (for yield checking)
+    /// PRD-15: Used to track which sequence a yield belongs to
+    EnclosingSeqExpr: NodeId option
 }
 
 //-------------------------------------------------------------------------
@@ -215,6 +218,7 @@ let createTypeEnv (globals: NativeGlobals) : TypeEnv =
         CurrentArena = ArenaAffinity.CurrentActor
         ExpectedReturnType = None
         EnclosingFunction = None
+        EnclosingSeqExpr = None
     }
 
 //-------------------------------------------------------------------------

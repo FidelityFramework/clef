@@ -622,6 +622,39 @@ module FSharpNativeExpr =
                     [lazyExpr],
                     node.Type)
 
+            // Seq expressions (PRD-15)
+            | SemanticKind.SeqExpr(bodyId, _captures) ->
+                // Convert seq body (MoveNext thunk) to an expression
+                let bodyExpr = fromNode graph bodyId
+                // For now, wrap as a special intrinsic call - Alex will handle
+                FSharpNativeExpr.Intrinsic(
+                    { Module = IntrinsicModule.Seq
+                      Operation = "create"
+                      Category = IntrinsicCategory.Pure
+                      FullName = "Seq.create" },
+                    [bodyExpr],
+                    node.Type)
+
+            | SemanticKind.Yield valueId ->
+                let valueExpr = fromNode graph valueId
+                FSharpNativeExpr.Intrinsic(
+                    { Module = IntrinsicModule.Seq
+                      Operation = "yield"
+                      Category = IntrinsicCategory.Pure
+                      FullName = "Seq.yield" },
+                    [valueExpr],
+                    node.Type)
+
+            | SemanticKind.YieldBang seqId ->
+                let seqExpr = fromNode graph seqId
+                FSharpNativeExpr.Intrinsic(
+                    { Module = IntrinsicModule.Seq
+                      Operation = "yieldFrom"
+                      Category = IntrinsicCategory.Pure
+                      FullName = "Seq.yieldFrom" },
+                    [seqExpr],
+                    node.Type)
+
             // Error
             | SemanticKind.Error message ->
                 FSharpNativeExpr.Error(message, node.Range)

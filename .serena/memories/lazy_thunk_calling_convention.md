@@ -1,6 +1,6 @@
 # Lazy Thunk Calling Convention (January 2026)
 
-## Decision: Option B - Thunk Receives Lazy Struct Pointer
+## Decision: Struct Pointer Passing
 
 The thunk receives a pointer to the lazy struct and extracts its own captures.
 This provides clean separation of concerns - the force site doesn't need to know
@@ -29,7 +29,7 @@ llvm.func @thunk(%lazy_ptr: ptr) -> T {
 %result = llvm.call %code_ptr(%lazy_ptr) : (ptr) -> T
 ```
 
-## Why Option B?
+## Why Struct Pointer Passing?
 
 1. **Force is uniform** - Same code regardless of capture count
 2. **Thunk knows its own layout** - Via LazyLayout coeffect from SSAAssignment
@@ -62,6 +62,6 @@ Lazy<T> = {computed: i1, value: T, code_ptr: ptr, cap₀, cap₁, ...}
 
 ## Related Memories
 
-- `lazy_seq_flat_closure_architecture`
-- `prd14_course_correction_jan2026`
-- `true_flat_closures_implementation`
+- `lazy_seq_flat_closure_architecture` (Firefly)
+- `true_flat_closures_implementation` (Firefly)
+- `compose_from_standing_art_principle` (FNCS)

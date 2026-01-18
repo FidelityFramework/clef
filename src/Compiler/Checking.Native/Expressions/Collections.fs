@@ -196,6 +196,9 @@ let checkRecord
                 | NativeType.TLazy _ ->
                     addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
                         "Expected record type, got Lazy<'T> type" env  // PRD-14
+                | NativeType.TSeq _ ->
+                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                        "Expected record type, got seq<'T> type" env  // PRD-15
                 resolvedTy
             | Result.Error((code, message)) ->
                 addNativeError code recordRange message env

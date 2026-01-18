@@ -57,6 +57,7 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         | "Memo" -> Some (IntrinsicModule.Memo, opPart)
         | "Batch" -> Some (IntrinsicModule.Batch, opPart)
         | "Lazy" -> Some (IntrinsicModule.Lazy, opPart)
+        | "Seq" -> Some (IntrinsicModule.Seq, opPart)
         | "NativeStr" -> Some (IntrinsicModule.NativeStr, opPart)
         | "NativeDefault" -> Some (IntrinsicModule.NativeDefault, opPart)
         | "Math" -> Some (IntrinsicModule.Math, opPart)
@@ -471,6 +472,61 @@ let private resolveLazyOp (op: string) (globals: NativeGlobals) (range: SourceRa
     | unknown ->
         UnknownOperation $"Unknown Lazy intrinsic: Lazy.{unknown}. Available: create, force, isValueCreated"
 
+/// Resolve Seq.* operations (PRD-15: Sequence generation and consumption)
+let private resolveSeqOp (op: string) (globals: NativeGlobals) (range: SourceRange) : IntrinsicResolution =
+    let fullName = "Seq." + op
+    let tyParamSpecT = freshTypeParam "'T" TypeParamKind.Type range
+    let tyParamT = NativeType.TVar tyParamSpecT
+    let seqT = mkSeqType tyParamT
+    match op with
+    | "toArray" ->
+        // seq<'T> -> 'T[]
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, mkArrayType tyParamT))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "toList" ->
+        // seq<'T> -> 'T list
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, mkListType tyParamT))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "iter" ->
+        // ('T -> unit) -> seq<'T> -> unit
+        let actionFn = NativeType.TFun(tyParamT, globals.UnitType)
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(actionFn, NativeType.TFun(seqT, globals.UnitType)))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "map" ->
+        // ('T -> 'U) -> seq<'T> -> seq<'U>
+        let tyParamSpecU = freshTypeParam "'U" TypeParamKind.Type range
+        let tyParamU = NativeType.TVar tyParamSpecU
+        let mapFn = NativeType.TFun(tyParamT, tyParamU)
+        let seqU = mkSeqType tyParamU
+        let ty = NativeType.TForall([tyParamSpecT; tyParamSpecU], NativeType.TFun(mapFn, NativeType.TFun(seqT, seqU)))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "filter" ->
+        // ('T -> bool) -> seq<'T> -> seq<'T>
+        let predFn = NativeType.TFun(tyParamT, globals.BoolType)
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(predFn, NativeType.TFun(seqT, seqT)))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "fold" ->
+        // ('S -> 'T -> 'S) -> 'S -> seq<'T> -> 'S
+        let tyParamSpecS = freshTypeParam "'S" TypeParamKind.Type range
+        let tyParamS = NativeType.TVar tyParamSpecS
+        let foldFn = NativeType.TFun(tyParamS, NativeType.TFun(tyParamT, tyParamS))
+        let ty = NativeType.TForall([tyParamSpecS; tyParamSpecT], NativeType.TFun(foldFn, NativeType.TFun(tyParamS, NativeType.TFun(seqT, tyParamS))))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "isEmpty" ->
+        // seq<'T> -> bool
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, globals.BoolType))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "head" ->
+        // seq<'T> -> 'T
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, tyParamT))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "length" ->
+        // seq<'T> -> int
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, globals.IntType))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | unknown ->
+        UnknownOperation $"Unknown Seq intrinsic: Seq.{unknown}. Available: toArray, toList, iter, map, filter, fold, isEmpty, head, length"
+
 /// Resolve Math.* operations
 let private resolveMathOp (op: string) (globals: NativeGlobals) (_range: SourceRange) : IntrinsicResolution =
     let fullName = "Math." + op
@@ -690,6 +746,7 @@ let resolveModuleIntrinsic
     | IntrinsicModule.Memo -> resolveMemoOp op globals range
     | IntrinsicModule.Batch -> resolveBatchOp op globals range
     | IntrinsicModule.Lazy -> resolveLazyOp op globals range
+    | IntrinsicModule.Seq -> resolveSeqOp op globals range
     | IntrinsicModule.Arena -> resolveArenaOp op globals range
     | IntrinsicModule.Math -> resolveMathOp op globals range
     | IntrinsicModule.DateTime -> resolveDateTimeOp op globals range

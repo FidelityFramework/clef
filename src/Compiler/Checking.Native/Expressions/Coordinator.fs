@@ -79,6 +79,15 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
         checkDotlessIndexGet checkExpr env builder objExpr indexExpr range
 
     //---------------------------------------------------------------------
+    // Sequence expression: seq { ... }
+    // PRD-15: Parser produces App(Ident("seq"), ComputationExpr(false, body))
+    // The F# spec says seq expressions are "directly elaborated" - not via builder lookup
+    //---------------------------------------------------------------------
+    | SynExpr.App(_, _, SynExpr.Ident(ident), SynExpr.ComputationExpr(_, compExpr, _), _)
+        when ident.idText = "seq" ->
+        checkSeq checkExpr env builder compExpr range
+
+    //---------------------------------------------------------------------
     // Function application
     //---------------------------------------------------------------------
     | SynExpr.App(_, _isInfix, funcExpr, argExpr, _) ->
@@ -319,25 +328,43 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
     //---------------------------------------------------------------------
     // ComputationExpr: async { ... }, seq { ... }, etc.
     //---------------------------------------------------------------------
-    | SynExpr.ComputationExpr(_, compExpr, _) ->
-        let compNode = checkExpr env builder compExpr
-        builder.Create(
-            SemanticKind.Sequential [compNode.Id],
-            compNode.Type,
-            range,
-            children = [compNode.Id])
+    // ComputationExpr: seq { ... } or other { ... }
+    // PRD-15: Built-in seq expressions use hasSeqBuilder=true
+    //---------------------------------------------------------------------
+    | SynExpr.ComputationExpr(hasSeqBuilder, compExpr, _) ->
+        if hasSeqBuilder then
+            // seq { ... } - built-in sequence expression
+            checkSeq checkExpr env builder compExpr range
+        else
+            // Other computation expressions (async, task, etc.) - treat as passthrough for now
+            let compNode = checkExpr env builder compExpr
+            builder.Create(
+                SemanticKind.Sequential [compNode.Id],
+                compNode.Type,
+                range,
+                children = [compNode.Id])
 
     //---------------------------------------------------------------------
     // YieldOrReturn: yield expr or return expr
+    // PRD-15: In seq context, yield creates a Yield node
     //---------------------------------------------------------------------
-    | SynExpr.YieldOrReturn(_flags, expr, _, _trivia) ->
-        checkExpr env builder expr
+    | SynExpr.YieldOrReturn((isYield, _isReturn), expr, _, _trivia) ->
+        if isYield && env.EnclosingSeqExpr.IsSome then
+            checkYield checkExpr env builder expr range
+        else
+            // return expr or yield outside seq - just evaluate the expression
+            checkExpr env builder expr
 
     //---------------------------------------------------------------------
     // YieldOrReturnFrom: yield! expr or return! expr
+    // PRD-15: In seq context, yield! creates a YieldBang node
     //---------------------------------------------------------------------
-    | SynExpr.YieldOrReturnFrom(_flags, expr, _, _trivia) ->
-        checkExpr env builder expr
+    | SynExpr.YieldOrReturnFrom((isYield, _isReturn), expr, _, _trivia) ->
+        if isYield && env.EnclosingSeqExpr.IsSome then
+            checkYieldBang checkExpr env builder expr range
+        else
+            // return! expr or yield! outside seq - just evaluate the expression
+            checkExpr env builder expr
 
     //---------------------------------------------------------------------
     // DoBang: do! expr
@@ -968,6 +995,101 @@ and checkLazy (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (en
         lazyType,
         range,
         children = [thunkLambda.Id])
+
+/// Check seq expression: seq { ... }
+/// PRD-15: Creates a SeqExpr with a MoveNext thunk (LambdaContext.SeqGenerator)
+and checkSeq (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (env: TypeEnv) (builder: NodeBuilder) (bodyExpr: SynExpr) (range: SourceRange) : SemanticNode =
+    // Check the body with EnclosingSeqExpr set as a marker (NodeId -1 = inside seq)
+    // This enables checkYield to validate that yield appears inside a seq
+    let bodyEnv = { env with EnclosingSeqExpr = Some (NodeId -1) }
+    let bodyNode = checkExpr bodyEnv builder bodyExpr
+
+    // Infer element type from Yield nodes in the body
+    // yield returns unit, so we look at the type of the VALUE being yielded
+    let rec findYieldValueType (nodeId: NodeId) : NativeType option =
+        match Map.tryFind nodeId builder.Nodes with
+        | None -> None
+        | Some node ->
+            match node.Kind with
+            | SemanticKind.Yield valueId ->
+                // Found a yield - get the type of the value expression
+                match Map.tryFind valueId builder.Nodes with
+                | Some valueNode -> Some valueNode.Type
+                | None -> None
+            | _ ->
+                // Recurse into children
+                node.Children |> List.tryPick findYieldValueType
+
+    let elementType =
+        match findYieldValueType bodyNode.Id with
+        | Some ty -> ty
+        | None -> freshTypeVar range  // No yields found, use type variable
+    let seqType = mkSeqType elementType
+    
+    // Capture analysis: find VarRefs in body that are NOT local to the seq
+    // PRD-15: Seq values are "extended flat closures" with inlined captures
+    let captures = computeCaptures builder env bodyNode.Id Set.empty
+    
+    // Create MoveNext thunk: (seq_ptr: nativeptr<Seq<T>>) -> bool
+    // The thunk receives pointer to the seq struct, extracts its captures
+    // Returns true if a value was yielded, false if exhausted
+    let seqPtrType = NativeType.TNativePtr seqType
+    let moveNextType = NativeType.TFun(seqPtrType, env.Globals.BoolType)
+    let moveNextLambda = builder.Create(
+        SemanticKind.Lambda([("_seq_ptr", seqPtrType, NodeId -1)], bodyNode.Id, captures, env.EnclosingFunction, LambdaContext.SeqGenerator),
+        moveNextType,
+        range,
+        children = [bodyNode.Id])
+    
+    // Create SeqExpr with the MoveNext thunk as body
+    builder.Create(
+        SemanticKind.SeqExpr(moveNextLambda.Id, captures),
+        seqType,
+        range,
+        children = [moveNextLambda.Id])
+
+/// Check yield: yield value
+/// PRD-15: Produces a single value in the sequence
+and checkYield (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (env: TypeEnv) (builder: NodeBuilder) (valueExpr: SynExpr) (range: SourceRange) : SemanticNode =
+    // Validate that yield appears inside a seq expression
+    match env.EnclosingSeqExpr with
+    | None ->
+        // Return error node - yield outside seq context
+        builder.Create(
+            SemanticKind.Error "yield may only appear directly in a seq expression",
+            env.Globals.UnitType,
+            range)
+    | Some _ ->
+        let valueNode = checkExpr env builder valueExpr
+        // yield is an effectful operation - it stores the value but returns unit
+        // The value's type is captured in the Yield node for codegen, but the
+        // expression type is unit (yield doesn't return a value to the caller)
+        builder.Create(
+            SemanticKind.Yield valueNode.Id,
+            env.Globals.UnitType,
+            range,
+            children = [valueNode.Id])
+
+/// Check yield!: yield! seq
+/// PRD-15: Flattens another sequence into this one
+and checkYieldBang (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (env: TypeEnv) (builder: NodeBuilder) (seqExpr: SynExpr) (range: SourceRange) : SemanticNode =
+    // Validate that yield! appears inside a seq expression
+    match env.EnclosingSeqExpr with
+    | None ->
+        // Return error node - yield! outside seq context
+        builder.Create(
+            SemanticKind.Error "yield! may only appear directly in a seq expression",
+            env.Globals.UnitType,
+            range)
+    | Some _ ->
+        let seqNode = checkExpr env builder seqExpr
+        // yield! is an effectful operation - it flattens a seq but returns unit
+        // The element type is inferred from the seqNode for codegen purposes
+        builder.Create(
+            SemanticKind.YieldBang seqNode.Id,
+            env.Globals.UnitType,
+            range,
+            children = [seqNode.Id])
 
 /// Check Assert: assert expr
 and checkAssert (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (env: TypeEnv) (builder: NodeBuilder) (condExpr: SynExpr) (range: SourceRange) : SemanticNode =

@@ -395,9 +395,6 @@ let mkArrayType elemType = NativeType.TApp(Parameterized.arrayTyCon, [elemType])
 /// Create a list type: 'T list
 let mkListType elemType = NativeType.TApp(Parameterized.listTyCon, [elemType])
 
-/// Create a sequence type: seq<'T>
-let mkSeqType elemType = NativeType.TApp(Parameterized.seqTyCon, [elemType])
-
 /// Create a ref type: 'T ref
 let mkRefType elemType = NativeType.TApp(Parameterized.refTyCon, [elemType])
 
@@ -407,6 +404,10 @@ let mkExprType elemType = NativeType.TApp(Parameterized.exprTyCon, [elemType])
 /// Create a lazy type: Lazy<'T>
 /// PRD-14: Use TLazy directly for proper struct layout (not TApp with Reference layout)
 let mkLazyType elemType = NativeType.TLazy elemType
+
+/// Create a seq type: seq<'T>
+/// PRD-15: Use TSeq directly for proper struct layout (not TApp with Reference layout)
+let mkSeqType elemType = NativeType.TSeq elemType
 
 /// Create a function pointer type: FnPtr<'F>
 /// 'F must be a function type (TFun), e.g., int -> unit or nativeptr<byte> -> int -> int
@@ -923,4 +924,5 @@ let rec isValueType ty =
         | TypeLayout.NTUCompound _ -> true
         | _ -> false
     | NativeType.TLazy _ -> true  // Lazy<'T> is a value type struct (PRD-14)
+    | NativeType.TSeq _ -> true  // seq<'T> is a value type struct (PRD-15)
     | NativeType.TError _ -> false

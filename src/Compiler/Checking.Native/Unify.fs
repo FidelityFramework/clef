@@ -132,6 +132,24 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
     | NativeType.TLazy elem1, NativeType.TLazy elem2 ->
         unify elem1 elem2 range
 
+    // Handle TLazy vs TApp(Lazy, [elem]) - both represent the same concept
+    // TLazy is the canonical form (has proper struct layout), TApp comes from type syntax parsing
+    | NativeType.TLazy elem1, NativeType.TApp(tc, [elem2]) when tc.Name = "Lazy" || tc.Name = "lazy" ->
+        unify elem1 elem2 range
+    | NativeType.TApp(tc, [elem1]), NativeType.TLazy elem2 when tc.Name = "Lazy" || tc.Name = "lazy" ->
+        unify elem1 elem2 range
+
+    // Seq types (PRD-15)
+    | NativeType.TSeq elem1, NativeType.TSeq elem2 ->
+        unify elem1 elem2 range
+
+    // Handle TSeq vs TApp(seq, [elem]) - both represent the same concept
+    // TSeq is the canonical form (has proper struct layout), TApp comes from type syntax parsing
+    | NativeType.TSeq elem1, NativeType.TApp(tc, [elem2]) when tc.Name = "seq" ->
+        unify elem1 elem2 range
+    | NativeType.TApp(tc, [elem1]), NativeType.TSeq elem2 when tc.Name = "seq" ->
+        unify elem1 elem2 range
+
     // Handle TByref vs TApp(byref/inref/outref, [elem]) - both represent the same concept
     // TApp(byref, ...) maps to TByref(..., InOut)
     | NativeType.TByref(elem1, ByrefKind.InOut), NativeType.TApp(tc, [elem2]) when tc.Name = "byref" ->

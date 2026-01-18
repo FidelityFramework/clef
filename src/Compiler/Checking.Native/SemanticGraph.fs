@@ -138,6 +138,7 @@ module PlatformContext =
         | NTUKind.NTUdatetime -> 8  // 64-bit ticks
         | NTUKind.NTUtimespan -> 8  // 64-bit duration
         | NTUKind.NTUlazy -> -1  // Size depends on element type (PRD-14)
+        | NTUKind.NTUseq -> -1  // Size depends on element type (PRD-15)
         | NTUKind.NTUother -> -1  // Unknown
     
     /// Resolve the alignment for an NTU kind on this platform
@@ -167,6 +168,7 @@ module PlatformContext =
         | NTUKind.NTUdatetime -> 8  // 64-bit aligned
         | NTUKind.NTUtimespan -> 8  // 64-bit aligned
         | NTUKind.NTUlazy -> 8  // Pointer-aligned (PRD-14)
+        | NTUKind.NTUseq -> 8  // Pointer-aligned (PRD-15)
         | NTUKind.NTUother -> -1
 
 //-------------------------------------------------------------------------
@@ -244,6 +246,7 @@ type IntrinsicModule =
     | Batch         // Update batching operations (run)
     // Deferred computation (PRD-14)
     | Lazy          // Lazy values (create, force, isValueCreated)
+    | Seq           // Sequence generation (seq { }, toArray, toList, etc.) - PRD-15
     // Memory management
     | Arena         // Arena allocation (fromPointer, alloc, allocAligned, remaining, reset)
     // Platform introspection (compile-time constants)
@@ -493,6 +496,26 @@ type SemanticKind =
     /// Evaluates the thunk if not yet computed, returns cached result otherwise.
     /// lazyValue: The Lazy<'T> to force
     | LazyForce of lazyValue: NodeId
+
+    //-----------------------------------------------------------------------
+    // Sequence Expressions (PRD-15)
+    //-----------------------------------------------------------------------
+    
+    /// Sequence expression: seq { yield/yield!/for/while/if/let ... }
+    /// A resumable computation producing values on demand.
+    /// body: The computation that yields values (contains Yield/YieldBang nodes)
+    /// captures: Variables captured from enclosing scope (reuses closure machinery)
+    | SeqExpr of body: NodeId * captures: CaptureInfo list
+    
+    /// Yield a value in a sequence: yield value
+    /// Produces a single value in the sequence.
+    /// value: The value to yield
+    | Yield of value: NodeId
+    
+    /// Yield all values from another sequence: yield! seq
+    /// Flattens another sequence into this one.
+    /// seq: The nested sequence to flatten
+    | YieldBang of seq: NodeId
 
     /// Error node (for recovery)
     | Error of message: string
@@ -811,6 +834,7 @@ module Reachability =
         | IntrinsicModule.DateTime
         | IntrinsicModule.TimeSpan
         | IntrinsicModule.Lazy  // Lazy operations handled by Alex (PRD-14)
+        | IntrinsicModule.Seq  // Seq operations handled by Alex (PRD-15)
         | IntrinsicModule.Platform -> true  // Platform introspection (sizeof, wordSize)
 
     /// Extract semantic references from a node's Kind (call targets, definition refs, etc.)
@@ -921,6 +945,13 @@ module Reachability =
             [bodyId]  // Follow the deferred computation body
         | SemanticKind.LazyForce lazyValueId ->
             [lazyValueId]  // Follow the lazy value to force
+        // Seq (PRD-15): sequence expressions
+        | SemanticKind.SeqExpr (bodyId, _captures) ->
+            [bodyId]  // Follow the sequence body (MoveNext thunk)
+        | SemanticKind.Yield valueId ->
+            [valueId]  // Follow the yielded value
+        | SemanticKind.YieldBang seqId ->
+            [seqId]  // Follow the nested sequence
         // Leaf nodes with no semantic references
         | SemanticKind.Literal _ ->
             []
