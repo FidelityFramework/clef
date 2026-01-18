@@ -63,6 +63,7 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         | "Arena" -> Some (IntrinsicModule.Arena, opPart)
         | "DateTime" -> Some (IntrinsicModule.DateTime, opPart)
         | "TimeSpan" -> Some (IntrinsicModule.TimeSpan, opPart)
+        | "Platform" -> Some (IntrinsicModule.Platform, opPart)
         | _ -> None
 
 //-------------------------------------------------------------------------
@@ -640,6 +641,25 @@ let private resolveTimeSpanOp (op: string) (globals: NativeGlobals) (_range: Sou
     | unknown ->
         UnknownOperation $"Unknown TimeSpan intrinsic: TimeSpan.{unknown}. Available: fromMilliseconds, fromSeconds, fromMinutes, fromHours, totalMilliseconds, totalSeconds, hours, minutes, seconds, milliseconds"
 
+/// Resolve Platform.* operations (compile-time platform introspection)
+let private resolvePlatformOp (op: string) (globals: NativeGlobals) (range: SourceRange) : IntrinsicResolution =
+    let fullName = "Platform." + op
+    match op with
+    | "sizeof" ->
+        // sizeof<'T> : int - returns size of type in bytes
+        // Polymorphic: forall 'T. unit -> int
+        // Alex resolves 'T to compute size based on target architecture
+        let tyParamSpec = freshTypeParam "'T" TypeParamKind.Type range
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(globals.UnitType, globals.IntType))
+        Resolved (mkIntrinsic IntrinsicModule.Platform op IntrinsicCategory.Pure fullName, ty)
+    | "wordSize" ->
+        // wordSize : unit -> int - returns platform word size in bytes (8 on x86_64, 4 on 32-bit)
+        // Function form for consistency with other intrinsics and Architecture integration
+        let ty = NativeType.TFun(globals.UnitType, globals.IntType)
+        Resolved (mkIntrinsic IntrinsicModule.Platform op IntrinsicCategory.Pure fullName, ty)
+    | unknown ->
+        UnknownOperation $"Unknown Platform intrinsic: Platform.{unknown}. Available: sizeof, wordSize"
+
 //-------------------------------------------------------------------------
 // Main Module Intrinsic Dispatcher
 //-------------------------------------------------------------------------
@@ -674,6 +694,7 @@ let resolveModuleIntrinsic
     | IntrinsicModule.Math -> resolveMathOp op globals range
     | IntrinsicModule.DateTime -> resolveDateTimeOp op globals range
     | IntrinsicModule.TimeSpan -> resolveTimeSpanOp op globals range
+    | IntrinsicModule.Platform -> resolvePlatformOp op globals range
     | IntrinsicModule.Convert -> NotAnIntrinsic  // Conversions handled separately (float, int, etc.)
     | IntrinsicModule.Operators -> NotAnIntrinsic  // Operators handled separately
     | IntrinsicModule.Unchecked -> NotAnIntrinsic  // Rejected via BCL check

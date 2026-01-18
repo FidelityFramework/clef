@@ -622,9 +622,10 @@ module BuiltInFunctions =
             ("abs", NativeType.TForall([absParam], NativeType.TFun(absVar, absVar)))
             
             // sizeof<'T> : int (type-level function, returns int)
-            // Note: This is a type function, not a value function
-            // For now, model as unit -> int (will be specialized)
-            ("sizeof", NativeType.TFun(Types.unitType, Types.intType))
+            // Polymorphic: forall 'T. unit -> int
+            // Alex resolves the type 'T to compute size based on target architecture
+            let sizeofParam = freshTypeParam "'T"
+            ("sizeof", NativeType.TForall([sizeofParam], NativeType.TFun(Types.unitType, Types.intType)))
             
             // Floating point special values
             ("nan", Types.floatType)   // Not a function, a value

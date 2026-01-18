@@ -246,6 +246,8 @@ type IntrinsicModule =
     | Lazy          // Lazy values (create, force, isValueCreated)
     // Memory management
     | Arena         // Arena allocation (fromPointer, alloc, allocAligned, remaining, reset)
+    // Platform introspection (compile-time constants)
+    | Platform      // Platform info (wordSize, sizeof)
 
 /// Category of intrinsic - guides how Alex should emit it
 [<RequireQualifiedAccess>]
@@ -808,7 +810,8 @@ module Reachability =
         | IntrinsicModule.Arena
         | IntrinsicModule.DateTime
         | IntrinsicModule.TimeSpan
-        | IntrinsicModule.Lazy -> true  // Lazy operations handled by Alex (PRD-14)
+        | IntrinsicModule.Lazy  // Lazy operations handled by Alex (PRD-14)
+        | IntrinsicModule.Platform -> true  // Platform introspection (sizeof, wordSize)
 
     /// Extract semantic references from a node's Kind (call targets, definition refs, etc.)
     /// Used by traversal to ensure all semantic children are visited.
