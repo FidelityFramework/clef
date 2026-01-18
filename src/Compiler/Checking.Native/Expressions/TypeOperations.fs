@@ -39,11 +39,14 @@ let checkTyped
     let annotatedTy = checkSynType env synType
     // Add equality constraint
     addConstraint (Constraint.Equals(innerNode.Type, annotatedTy, range)) env
-    builder.Create(
+    let node = builder.Create(
         SemanticKind.TypeAnnotation(innerNode.Id, annotatedTy),
         annotatedTy,
         range,
         children = [innerNode.Id])
+    // PRD-13: Set bidirectional parent link for scope chain
+    builder.SetParent(innerNode.Id, node.Id)
+    node
 
 //-------------------------------------------------------------------------
 // AddressOf: &expr or &&expr

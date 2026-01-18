@@ -13,6 +13,7 @@ open FSharp.Native.Compiler.Checking.Native.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.NameResolution
 open FSharp.Native.Compiler.Checking.Native.Expressions.Types
 open FSharp.Native.Compiler.Checking.Native.Expressions.Literals
+open FSharp.Native.Compiler.Checking.Native.Expressions.Applications
 
 //-------------------------------------------------------------------------
 // Callback Types
@@ -214,15 +215,32 @@ let checkBinding
         // For now, rely on primitive operators having TForall in NativeGlobals.
 
         // Create Lambda node with parameter NodeIds for SSA assignment
-        // Named function bindings don't capture from outer scope (they ARE the outer scope)
         // Children includes parameter PatternBindings + body for proper traversal
         // PRD-13: Pass enclosingFunction for qualified name generation in Alex
         let paramNodeIds = lambdaParams |> List.map (fun (_, _, nodeId) -> nodeId)
+        let lambdaChildren = paramNodeIds @ [bodyNode.Id]
+
+        // PRD-13: Compute captures for nested functions
+        // Top-level functions (env.EnclosingFunction = None) never capture.
+        // Nested functions may capture variables from enclosing scope.
+        // Exclude: the function's own parameters AND the function's own name (for recursive self-reference)
+        let paramNames = lambdaParams |> List.map (fun (pname, _, _) -> pname) |> Set.ofList
+        let excludeNames = Set.add name paramNames
+        let captures =
+            if env.EnclosingFunction.IsSome then
+                computeCaptures builder env bodyNode.Id excludeNames
+            else
+                []
+
         let lambdaNode = builder.Create(
-            SemanticKind.Lambda(lambdaParams, bodyNode.Id, [], env.EnclosingFunction, LambdaContext.RegularClosure),
+            SemanticKind.Lambda(lambdaParams, bodyNode.Id, captures, env.EnclosingFunction, LambdaContext.RegularClosure),
             funcType,
             range,
-            children = paramNodeIds @ [bodyNode.Id])
+            children = lambdaChildren)
+
+        // PRD-13: Set parent on all children (params and body) for scope chain
+        for childId in lambdaChildren do
+            builder.SetParent(childId, lambdaNode.Id)
 
         // PRD-13: Use pre-created Binding if provided (for recursive bindings)
         // Otherwise create a new Binding node wrapping the Lambda
@@ -329,11 +347,16 @@ let checkBinding
                     // Children includes parameter PatternBindings + body for proper traversal
                     // Eta-expanded lambdas are synthetic - no enclosingFunction context
                     let paramNodeIds = lambdaParams |> List.map (fun (_, _, nodeId) -> nodeId)
-                    builder.Create(
+                    let lambdaChildren = paramNodeIds @ [bodyId]
+                    let lambdaNode = builder.Create(
                         SemanticKind.Lambda(lambdaParams, bodyId, [], None, LambdaContext.RegularClosure),
                         funcType,
                         range,
-                        children = paramNodeIds @ [bodyId])
+                        children = lambdaChildren)
+                    // PRD-13: Set parent on all children for scope chain
+                    for childId in lambdaChildren do
+                        builder.SetParent(childId, lambdaNode.Id)
+                    lambdaNode
 
         // Check if eta-expansion is needed
         // CRITICAL: Only eta-expand VarRefs to functions (true partial application)
@@ -405,13 +428,18 @@ let checkLetOrUse
         ) baseEnv
 
     // Helper: build final Sequential node
+    // PRD-13: Sets bidirectional parent-child links so nested bindings know their scope
     let buildSequential bindingNodes bodyNode =
         let allIds = (bindingNodes |> List.map (fun (n: SemanticNode) -> n.Id)) @ [bodyNode.Id]
-        builder.Create(
+        let seqNode = builder.Create(
             SemanticKind.Sequential allIds,
             bodyNode.Type,
             range,
             children = allIds)
+        // Set parent on all children (bidirectional link)
+        for childId in allIds do
+            builder.SetParent(childId, seqNode.Id)
+        seqNode
 
     match letOrUse.IsRecursive with
     | true ->
