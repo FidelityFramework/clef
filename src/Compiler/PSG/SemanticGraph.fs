@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-/// The semantic graph output structure for Firefly consumption.
-/// Types are attached during construction (unified representation).
-module FSharp.Native.Compiler.Checking.Native.SemanticGraph
+/// The Program Semantic Graph (PSG) - the unified representation for Firefly.
+/// Types are attached during construction. Baker enriches with module classifications.
+module FSharp.Native.Compiler.PSG.SemanticGraph
 
 open System.Collections.Generic
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
@@ -309,6 +309,42 @@ type LambdaContext =
     /// Future: sequence generator context
     | SeqGenerator
 
+
+/// How a node should be emitted during code generation.
+/// Set by FNCS during construction, observed by Alex uniformly during emission.
+/// This moves traversal/emission decisions from Alex to FNCS (architectural fix, January 2026).
+[<RequireQualifiedAccess>]
+type EmissionStrategy =
+    /// Standard inline emission: emit this node as encountered during traversal.
+    /// Most nodes use this strategy.
+    | Inline
+    /// Separate function: this node's parent handles its emission specially.
+    /// Used for Lambda bodies (emitted as function definitions) and SeqExpr bodies
+    /// (emitted as MoveNext implementations). Alex should NOT traverse into these
+    /// nodes during normal tree walk - the parent witness emits them separately.
+    /// 
+    /// captureCount: Number of captures in the enclosing Lambda/SeqExpr.
+    /// SSA assignment uses this to start body SSAs after capture extraction SSAs.
+    /// For bodies with 0 captures, SSAs start at 0. For N captures, SSAs start at N.
+    | SeparateFunction of captureCount: int
+    /// Module-level value binding: emit at start of main function.
+    /// Used for module-level let bindings that require initialization (lazy, etc.).
+    /// Alex processes these as main's prologue - SSAs continue from these into main body.
+    | MainPrologue
+
+//-------------------------------------------------------------------------
+// Module Classification
+//-------------------------------------------------------------------------
+
+/// Classification of module members for code generation.
+/// Computed by Baker, stored on SemanticGraph.
+type ModuleClassification = {
+    Name: string
+    ModuleInit: NodeId list
+    Definitions: NodeId list
+    EntryPoint: NodeId option
+}
+
 //-------------------------------------------------------------------------
 // Pattern Matching
 //-------------------------------------------------------------------------
@@ -466,6 +502,9 @@ type SemanticKind =
     | ObjectExpr of interfaceType: NativeType * members: NodeId list
     
     /// Module definition
+    /// Contains the module name and all member node IDs.
+    /// Baker enriches this with classification metadata (moduleInit/definitions/entryPoint)
+    /// that Alex consumes for code generation.
     | ModuleDef of name: string * members: NodeId list
     
     /// Type definition
@@ -597,6 +636,11 @@ type SemanticNode = {
     /// Soft-delete marker for reachability analysis
     /// When false, node is unreachable but preserved for debugging/analysis
     IsReachable: bool
+    
+    /// How this node should be emitted during code generation.
+    /// Most nodes are Inline (emitted during traversal).
+    /// Lambda/SeqExpr bodies are SeparateFunction (parent handles emission).
+    EmissionStrategy: EmissionStrategy
 }
 
 //-------------------------------------------------------------------------
@@ -623,6 +667,10 @@ type SemanticGraph = {
     /// Carries quotation-resolved platform information for Alex to use when
     /// lowering platform-dependent types to concrete MLIR types.
     Platform: PlatformContext option
+
+    /// Module classifications (moduleInit/definitions/entryPoint per module).
+    /// Computed lazily from node EmissionStrategy. Observed by Alex as coeffect.
+    ModuleClassifications: Lazy<Map<NodeId, ModuleClassification>>
 }
 
 module SemanticGraph =
@@ -639,7 +687,44 @@ module SemanticGraph =
     /// Create a lazy types index from nodes
     let mkTypesIndex (nodes: Map<NodeId, SemanticNode>) : Lazy<Map<string, NodeId>> =
         lazy (extractTypesIndex nodes)
-    
+
+    /// Extract module classifications from nodes (lazy computation)
+    let private extractModuleClassifications (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, ModuleClassification> =
+        nodes
+        |> Map.values
+        |> Seq.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.ModuleDef(name, memberIds) ->
+                let mutable moduleInit = []
+                let mutable definitions = []
+                let mutable entryPoint = None
+                for memberId in memberIds do
+                    match Map.tryFind memberId nodes with
+                    | Some memberNode ->
+                        match memberNode.Kind with
+                        | SemanticKind.Binding(_, _, _, isEntryPoint) ->
+                            if isEntryPoint then
+                                entryPoint <- Some memberId
+                                definitions <- memberId :: definitions
+                            elif memberNode.EmissionStrategy = EmissionStrategy.MainPrologue then
+                                moduleInit <- memberId :: moduleInit
+                            else
+                                definitions <- memberId :: definitions
+                        | _ -> definitions <- memberId :: definitions
+                    | None -> ()
+                Some (node.Id, {
+                    Name = name
+                    ModuleInit = List.rev moduleInit
+                    Definitions = List.rev definitions
+                    EntryPoint = entryPoint
+                })
+            | _ -> None)
+        |> Map.ofSeq
+
+    /// Create lazy module classifications from nodes
+    let mkModuleClassifications (nodes: Map<NodeId, SemanticNode>) : Lazy<Map<NodeId, ModuleClassification>> =
+        lazy (extractModuleClassifications nodes)
+
     /// Recall a type definition by name (codata observation)
     let recallType (name: string) (graph: SemanticGraph) : NodeId option =
         graph.Types.Value |> Map.tryFind name
@@ -651,8 +736,9 @@ module SemanticGraph =
         Modules = Map.empty
         Types = lazy Map.empty
         Platform = None
+        ModuleClassifications = lazy Map.empty
     }
-    
+
     /// Create an empty semantic graph with platform context
     let emptyWithPlatform (platform: PlatformContext) : SemanticGraph = {
         Nodes = Map.empty
@@ -660,6 +746,7 @@ module SemanticGraph =
         Modules = Map.empty
         Types = lazy Map.empty
         Platform = Some platform
+        ModuleClassifications = lazy Map.empty
     }
     
     /// Set the platform context on a graph
@@ -720,7 +807,7 @@ type NodeBuilder() =
     member _.Create(kind: SemanticKind, ty: NativeType, range: SourceRange, 
                     ?srtp: WitnessResolution, ?arena: ArenaAffinity, 
                     ?layout: TypeLayout, ?children: NodeId list, 
-                    ?parent: NodeId) : SemanticNode =
+                    ?parent: NodeId, ?emission: EmissionStrategy) : SemanticNode =
         let id = NodeId.fresh()
         let node = {
             Id = id
@@ -734,6 +821,7 @@ type NodeBuilder() =
             Parent = parent
             Metadata = Map.empty
             IsReachable = true  // Default to reachable; soft-delete marks false
+            EmissionStrategy = defaultArg emission EmissionStrategy.Inline
         }
         nodes <- Map.add id node nodes
         node
@@ -760,6 +848,15 @@ type NodeBuilder() =
             let updated = { node with Children = children }
             nodes <- Map.add nodeId updated nodes
         | None -> ()
+    
+    /// Set emission strategy on an existing node
+    /// Used to mark Lambda/SeqExpr bodies as SeparateFunction after creation.
+    member _.SetEmissionStrategy(nodeId: NodeId, strategy: EmissionStrategy) =
+        match Map.tryFind nodeId nodes with
+        | Some node ->
+            let updated = { node with EmissionStrategy = strategy }
+            nodes <- Map.add nodeId updated nodes
+        | None -> ()
 
     /// Build the semantic graph
     member _.Build(entryPoints: NodeId list) : SemanticGraph =
@@ -767,15 +864,17 @@ type NodeBuilder() =
           EntryPoints = entryPoints
           Modules = Map.empty
           Types = SemanticGraph.mkTypesIndex nodes
-          Platform = None }
-    
+          Platform = None
+          ModuleClassifications = SemanticGraph.mkModuleClassifications nodes }
+
     /// Build the semantic graph with platform context
     member _.BuildWithPlatform(entryPoints: NodeId list, platform: PlatformContext) : SemanticGraph =
         { Nodes = nodes
           EntryPoints = entryPoints
           Modules = Map.empty
           Types = SemanticGraph.mkTypesIndex nodes
-          Platform = Some platform }
+          Platform = Some platform
+          ModuleClassifications = SemanticGraph.mkModuleClassifications nodes }
     
     /// Reset the builder
     member _.Reset() =

@@ -273,12 +273,14 @@
     See Checking.Native/ for the new native-first type checking implementation.
     -->
 
+    <!-- PSG - Program Semantic Graph (the unified representation for Firefly) -->
+    <Compile Include="PSG\SemanticGraph.fs" />
+
     <!-- Checking.Native - Native Type Checker (BCL-free, unified representation) -->
     <!-- NativeTypes.fs moved earlier - foundational types needed by TypedTree -->
     <Compile Include="Checking.Native\NativeGlobals.fs" />
     <Compile Include="Checking.Native\UnionFind.fs" />
     <Compile Include="Checking.Native\Unify.fs" />
-    <Compile Include="Checking.Native\SemanticGraph.fs" />
     <Compile Include="Checking.Native\NameResolution.fs" />
     <!-- Expressions - Modular expression checking -->
     <!-- Handler modules (no circular dependencies - use callback pattern) -->
@@ -302,6 +304,11 @@
     <Compile Include="Checking.Native\Infrastructure\PhaseTypes.fs" />
     <Compile Include="Checking.Native\Infrastructure\PhaseEmitter.fs" />
     <Compile Include="Checking.Native\NativeService.fs" />
+
+    <!-- Baker - Post-construction semantic enrichment (peer to Checking.Native) -->
+    <Compile Include="Baker\Metadata.fs" />
+    <Compile Include="Baker\ModuleInit.fs" />
+    <Compile Include="Baker\Pipeline.fs" />
 
     <!-- Project - Unified project loading and checking (DRY - single source of truth) -->
     <Compile Include="Project\FidprojLoader.fs" />

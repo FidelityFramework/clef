@@ -10,7 +10,7 @@ open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.UnionFind
-open FSharp.Native.Compiler.Checking.Native.SemanticGraph
+open FSharp.Native.Compiler.PSG.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.Expressions.Types
 
 //-------------------------------------------------------------------------
@@ -317,8 +317,14 @@ let checkMatchLambda
     // This is a synthetic lambda for the function keyword - no outer captures
     // Children includes parameter PatternBinding + body for proper traversal
     // Inherit enclosing function context for nested function qualification
-    builder.Create(
+    let lambdaNode = builder.Create(
         SemanticKind.Lambda([(syntheticArgName, domainType, syntheticParamNode.Id)], matchNode.Id, [], env.EnclosingFunction, LambdaContext.RegularClosure),
         NativeType.TFun(domainType, resultType),
         range,
         children = [syntheticParamNode.Id; matchNode.Id])
+    
+    // Architectural fix (January 2026): Mark Lambda body as SeparateFunction
+    // Function keyword lambdas have no outer captures (synthetic)
+    builder.SetEmissionStrategy(matchNode.Id, EmissionStrategy.SeparateFunction 0)
+
+    lambdaNode

@@ -19,7 +19,7 @@
 namespace FSharp.Native.Compiler.Checking.Native
 
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
-open FSharp.Native.Compiler.Checking.Native.SemanticGraph
+open FSharp.Native.Compiler.PSG.SemanticGraph
 
 /// Native match case for pattern matching
 [<NoComparison; NoEquality>]

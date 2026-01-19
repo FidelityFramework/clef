@@ -14,7 +14,7 @@ open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
-open FSharp.Native.Compiler.Checking.Native.SemanticGraph
+open FSharp.Native.Compiler.PSG.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.NameResolution
 open FSharp.Native.Compiler.Checking.Native.Expressions.Coordinator
 open FSharp.Native.Compiler.Checking.Native.Expressions.Types
@@ -312,6 +312,11 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
                 let kindStr = node.Kind |> sprintf "%A" |> truncateKind
                 let typeStr = node.Type |> sprintf "%A"
                 let parentId = node.Parent |> Option.map NodeId.value
+                let emissionStr =
+                    match node.EmissionStrategy with
+                    | EmissionStrategy.Inline -> None  // Default, don't clutter output
+                    | EmissionStrategy.SeparateFunction n -> Some (sprintf "SeparateFunction(%d)" n)
+                    | EmissionStrategy.MainPrologue -> Some "MainPrologue"
                 { PhaseTypes.PhaseNodeOutput.Id = NodeId.value id
                   PhaseTypes.PhaseNodeOutput.Kind = kindStr
                   PhaseTypes.PhaseNodeOutput.Type = typeStr
@@ -320,7 +325,8 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
                   PhaseTypes.PhaseNodeOutput.Parent = parentId
                   PhaseTypes.PhaseNodeOutput.Range = Some (sprintf "%s:%d:%d" node.Range.File node.Range.Start.Line node.Range.Start.Column)
                   PhaseTypes.PhaseNodeOutput.SRTPResolution = node.SRTPResolution |> Option.map (sprintf "%A")
-                  PhaseTypes.PhaseNodeOutput.Body = None })
+                  PhaseTypes.PhaseNodeOutput.Body = None
+                  PhaseTypes.PhaseNodeOutput.EmissionStrategy = emissionStr })
         
         let summary =
             if phase.Number >= 4 then
@@ -362,6 +368,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         Types = SemanticGraph.mkTypesIndex resolvedNodes
         // Platform context is set by the project checker based on .fidproj
         Platform = None
+        // Module classifications computed lazily from EmissionStrategy
+        ModuleClassifications = SemanticGraph.mkModuleClassifications resolvedNodes
     }
 
     // Phase 1: Emit structural construction result
@@ -1097,7 +1105,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
     | ParsedInput.SigFile _ ->
         // Signature files not yet supported
         {
-            Graph = { Nodes = Map.empty; EntryPoints = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None }
+            Graph = { Nodes = Map.empty; EntryPoints = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty }
             Diagnostics = [{
                 Severity = NativeDiagnosticSeverity.Warning
                 Code = "FS0000"

@@ -11,7 +11,7 @@ open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.UnionFind
-open FSharp.Native.Compiler.Checking.Native.SemanticGraph
+open FSharp.Native.Compiler.PSG.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.Expressions.Types
 
 // Module alias for qualified access
@@ -620,8 +620,14 @@ let checkLambda
     // Children includes parameter PatternBindings + body for proper traversal
     // Anonymous lambdas inherit the current enclosing function context
     let paramNodeIds = lambdaParams |> List.map (fun (_, _, nodeId) -> nodeId)
-    builder.Create(
+    let lambdaNode = builder.Create(
         SemanticKind.Lambda(lambdaParams, bodyNode.Id, captures, env.EnclosingFunction, LambdaContext.RegularClosure),
         funcType,
         range,
         children = paramNodeIds @ [bodyNode.Id])
+    
+    // Architectural fix (January 2026): Mark Lambda body as SeparateFunction
+    // Pass capture count so SSA assignment starts body SSAs after capture extraction
+    builder.SetEmissionStrategy(bodyNode.Id, EmissionStrategy.SeparateFunction (List.length captures))
+
+    lambdaNode

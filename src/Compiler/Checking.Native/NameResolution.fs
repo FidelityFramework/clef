@@ -12,7 +12,7 @@ module FSharp.Native.Compiler.Checking.Native.NameResolution
 
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
-open FSharp.Native.Compiler.Checking.Native.SemanticGraph
+open FSharp.Native.Compiler.PSG.SemanticGraph
 
 // =============================================================================
 // Core Types

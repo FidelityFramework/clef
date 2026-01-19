@@ -11,7 +11,7 @@ open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.UnionFind
-open FSharp.Native.Compiler.Checking.Native.SemanticGraph
+open FSharp.Native.Compiler.PSG.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.NameResolution
 
 // Import handler modules
@@ -453,11 +453,15 @@ let rec checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Semanti
         // DotLambda (_.Property) - synthetic lambda, no captures from outer scope
         // Children includes parameter PatternBinding + body for proper traversal
         // Inherit enclosing function context for nested function qualification
-        builder.Create(
+        let lambdaNode = builder.Create(
             SemanticKind.Lambda([("_", argType, paramNode.Id)], innerNode.Id, [], env.EnclosingFunction, LambdaContext.RegularClosure),
             NativeType.TFun(argType, innerNode.Type),
             range,
             children = [paramNode.Id; innerNode.Id])
+        // Architectural fix (January 2026): Mark Lambda body as SeparateFunction
+        // DotLambda is synthetic with no captures
+        builder.SetEmissionStrategy(innerNode.Id, EmissionStrategy.SeparateFunction 0)
+        lambdaNode
 
     //---------------------------------------------------------------------
     // DotNamedIndexedPropertySet: obj.Prop[idx] <- value
@@ -987,6 +991,10 @@ and checkLazy (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (en
         thunkType,
         range,
         children = [innerNode.Id])
+    
+    // Architectural fix (January 2026): Mark Lambda body as SeparateFunction
+    // Pass capture count so SSA assignment starts body SSAs after capture extraction
+    builder.SetEmissionStrategy(innerNode.Id, EmissionStrategy.SeparateFunction (List.length captures))
 
     // Create LazyExpr with the thunk as the body
     // LazyExpr stores the same captures (they're inlined in the lazy struct)
@@ -1041,6 +1049,10 @@ and checkSeq (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (env
         range,
         children = [bodyNode.Id])
     
+    // Architectural fix (January 2026): Mark Lambda body as SeparateFunction
+    // Pass capture count so SSA assignment starts body SSAs after capture extraction
+    builder.SetEmissionStrategy(bodyNode.Id, EmissionStrategy.SeparateFunction (List.length captures))
+
     // Create SeqExpr with the MoveNext thunk as body
     builder.Create(
         SemanticKind.SeqExpr(moveNextLambda.Id, captures),

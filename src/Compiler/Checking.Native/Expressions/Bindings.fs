@@ -9,7 +9,7 @@ open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.UnionFind
-open FSharp.Native.Compiler.Checking.Native.SemanticGraph
+open FSharp.Native.Compiler.PSG.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.NameResolution
 open FSharp.Native.Compiler.Checking.Native.Expressions.Types
 open FSharp.Native.Compiler.Checking.Native.Expressions.Literals
@@ -241,6 +241,11 @@ let checkBinding
         // PRD-13: Set parent on all children (params and body) for scope chain
         for childId in lambdaChildren do
             builder.SetParent(childId, lambdaNode.Id)
+        
+        // Architectural fix (January 2026): Mark Lambda body as SeparateFunction
+        // The Lambda witness handles body emission; Alex's walk should skip it.
+        // Pass capture count so SSA assignment starts body SSAs after capture extraction
+        builder.SetEmissionStrategy(bodyNode.Id, EmissionStrategy.SeparateFunction (List.length captures))
 
         // PRD-13: Use pre-created Binding if provided (for recursive bindings)
         // Otherwise create a new Binding node wrapping the Lambda
@@ -356,6 +361,9 @@ let checkBinding
                     // PRD-13: Set parent on all children for scope chain
                     for childId in lambdaChildren do
                         builder.SetParent(childId, lambdaNode.Id)
+                    // Architectural fix (January 2026): Mark Lambda body as SeparateFunction
+                    // Eta-expanded lambdas have no captures
+                    builder.SetEmissionStrategy(bodyId, EmissionStrategy.SeparateFunction 0)
                     lambdaNode
 
         // Check if eta-expansion is needed
@@ -392,6 +400,12 @@ let checkBinding
                     children = [finalExprNode.Id])
         // Establish bidirectional parent-child link
         builder.SetParent(finalExprNode.Id, node.Id)
+        
+        // Module-level value bindings need MainPrologue strategy for SSA scoping.
+        // These are emitted at the start of main - SSAs flow into main's body.
+        if env.EnclosingFunction.IsNone && not isEntryPoint then
+            builder.SetEmissionStrategy(node.Id, EmissionStrategy.MainPrologue)
+        
         (node, None, isMutable, literalValue)
 
 //-------------------------------------------------------------------------

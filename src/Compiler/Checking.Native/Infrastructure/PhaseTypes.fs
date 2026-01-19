@@ -15,13 +15,27 @@ module FSharp.Native.Compiler.Checking.Native.Infrastructure.PhaseTypes
 open System
 
 /// Identifies a phase in the nanopass pipeline
+///
+/// The pipeline is organized into two major sections:
+///   Phases 0-4: Initial construction and type resolution
+///   Baker phases (5-8): Post-construction semantic enrichment
+///
+/// Baker is the counterpart to Alex - where Alex generates MLIR from the
+/// enriched PSG, Baker enriches the PSG with semantic information that
+/// native compilation requires but .NET/FCS never needed.
 [<Struct>]
 type PhaseId =
+    // Initial construction phases (0-4)
     | Parsing
     | Structural
     | Constraints
     | SRTP
     | Reachability
+    // Baker enrichment phases (5-8)
+    | BakerModuleInit     // Module member classification
+    | BakerTypeOverlay    // (Future) SRTP resolution via typed tree zipper
+    | BakerEmission       // (Future) Centralized emission strategy
+    // Final output
     | Final
 
     /// Get the numeric phase number
@@ -32,7 +46,10 @@ type PhaseId =
         | Constraints -> 2
         | SRTP -> 3
         | Reachability -> 4
-        | Final -> 5
+        | BakerModuleInit -> 5
+        | BakerTypeOverlay -> 6
+        | BakerEmission -> 7
+        | Final -> 8
 
     /// Get the phase suffix for file naming
     member this.Suffix =
@@ -42,6 +59,9 @@ type PhaseId =
         | Constraints -> "constraints"
         | SRTP -> "srtp"
         | Reachability -> "reachability"
+        | BakerModuleInit -> "baker_moduleinit"
+        | BakerTypeOverlay -> "baker_typeoverlay"
+        | BakerEmission -> "baker_emission"
         | Final -> "final"
 
     /// Get human-readable phase name
@@ -52,6 +72,9 @@ type PhaseId =
         | Constraints -> "Constraint Solving"
         | SRTP -> "SRTP Resolution"
         | Reachability -> "Reachability Analysis"
+        | BakerModuleInit -> "Baker: Module Initialization"
+        | BakerTypeOverlay -> "Baker: Type Overlay"
+        | BakerEmission -> "Baker: Emission Strategy"
         | Final -> "Final Result"
 
 /// Summary statistics for a phase
@@ -144,6 +167,8 @@ type PhaseNodeOutput = {
     SRTPResolution: string option
     /// Optional node body/content (for debugging)
     Body: string option
+    /// Emission strategy (Inline, SeparateFunction, MainPrologue)
+    EmissionStrategy: string option
 }
 
 /// Phase output structure for JSON emission
@@ -174,4 +199,37 @@ type PhaseDiff = {
     ReachabilityChanges: (int * bool * bool) list  // (id, wasReachable, isReachable)
     /// New SRTP resolutions
     NewSRTPResolutions: int list
+}
+
+//-------------------------------------------------------------------------
+// Baker Phase Output Types
+//-------------------------------------------------------------------------
+
+/// Module classification output for Baker intermediate
+/// This shows exactly how each module's members were classified
+type ModuleClassificationOutput = {
+    /// Module node ID
+    ModuleId: int
+    /// Module name
+    Name: string
+    /// Node IDs requiring initialization (emitted in main prologue)
+    ModuleInit: int list
+    /// Node IDs that are definitions (functions, types)
+    Definitions: int list
+    /// Entry point node ID (if present)
+    EntryPoint: int option
+}
+
+/// Baker ModuleInit phase output
+type BakerModuleInitOutput = {
+    /// Phase summary
+    Summary: PhaseSummary
+    /// Module classifications
+    Modules: ModuleClassificationOutput list
+    /// Total count of moduleInit bindings
+    TotalModuleInitCount: int
+    /// Total count of definitions
+    TotalDefinitionsCount: int
+    /// Entry point modules (modules containing entry points)
+    EntryPointModules: string list
 }

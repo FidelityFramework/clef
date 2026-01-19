@@ -9,7 +9,7 @@ open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.UnionFind
-open FSharp.Native.Compiler.Checking.Native.SemanticGraph
+open FSharp.Native.Compiler.PSG.SemanticGraph
 
 // Module aliases for qualified access
 module NativeTypes = FSharp.Native.Compiler.Checking.Native.NativeTypes

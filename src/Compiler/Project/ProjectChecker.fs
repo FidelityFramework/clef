@@ -8,7 +8,7 @@ open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.NativeService
 
 // Import specific types without opening the whole module to avoid Error/Ok shadowing
-module SemanticGraph = FSharp.Native.Compiler.Checking.Native.SemanticGraph
+module SemanticGraph = FSharp.Native.Compiler.PSG.SemanticGraph
 
 /// Result of checking a complete project.
 type ProjectCheckResult = {
@@ -112,6 +112,7 @@ module ProjectChecker =
                                 Modules = Map.empty
                                 Types = lazy Map.empty
                                 Platform = None
+                                ModuleClassifications = lazy Map.empty
                             }
                             Ok {
                                 Options = options

@@ -11,6 +11,7 @@ open System.IO
 open System.Text
 open FSharp.Native.Compiler.Checking.Native.Infrastructure.PhaseConfig
 open FSharp.Native.Compiler.Checking.Native.Infrastructure.PhaseTypes
+open FSharp.Native.Compiler.PSG.SemanticGraph
 
 // ═══════════════════════════════════════════════════════════════════════════
 // JSON Serialization (minimal, no external dependencies)
@@ -97,31 +98,27 @@ let private serializeSummary (pretty: bool) (summary: PhaseSummary) : string =
     buildJsonObject pretty 1 pairs
 
 /// Serialize a PhaseNodeOutput to JSON
+/// Only emits fields with meaningful values - no "null" clutter
 let private serializeNode (pretty: bool) (indent: int) (node: PhaseNodeOutput) : string =
-    let pairs = [
+    // Required fields - always present
+    let requiredPairs = [
         ("id", string node.Id)
         ("kind", escapeJsonString node.Kind)
         ("type", escapeJsonString node.Type)
         ("isReachable", if node.IsReachable then "true" else "false")
         ("children", buildJsonArray false 0 (node.Children |> List.map string))
-        ("parent",
-            match node.Parent with
-            | Some p -> string p
-            | None -> "null")
-        ("range",
-            match node.Range with
-            | Some r -> escapeJsonString r
-            | None -> "null")
-        ("srtpResolution",
-            match node.SRTPResolution with
-            | Some r -> escapeJsonString r
-            | None -> "null")
-        ("body",
-            match node.Body with
-            | Some b -> escapeJsonString b
-            | None -> "null")
     ]
-    buildJsonObject pretty indent pairs
+    // Optional fields - only include when present
+    let optionalPairs =
+        [
+            node.Parent |> Option.map (fun p -> ("parent", string p))
+            node.Range |> Option.map (fun r -> ("range", escapeJsonString r))
+            node.SRTPResolution |> Option.map (fun r -> ("srtpResolution", escapeJsonString r))
+            node.Body |> Option.map (fun b -> ("body", escapeJsonString b))
+            node.EmissionStrategy |> Option.map (fun s -> ("emissionStrategy", escapeJsonString s))
+        ]
+        |> List.choose id
+    buildJsonObject pretty indent (requiredPairs @ optionalPairs)
 
 /// Serialize a PhaseOutput to JSON
 let serializePhaseOutput (output: PhaseOutput) : string =
@@ -218,6 +215,7 @@ let createNodeOutput
         Range = None
         SRTPResolution = None
         Body = None
+        EmissionStrategy = None
     }
 
 /// Add optional fields to a node output
@@ -229,6 +227,9 @@ let withSRTPResolution (resolution: string) (node: PhaseNodeOutput) =
 
 let withBody (body: string) (node: PhaseNodeOutput) =
     { node with Body = Some body }
+
+let withEmissionStrategy (strategy: string) (node: PhaseNodeOutput) =
+    { node with EmissionStrategy = Some strategy }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Diff Emission (for understanding changes between phases)
@@ -316,7 +317,7 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
     | FSharpNativeExpr.Variable(name, ty, isMutable, defId) ->
         let defIdStr =
             match defId with
-            | Some (SemanticGraph.NodeId id) -> string id
+            | Some (NodeId id) -> string id
             | None -> "null"
         buildJsonObject pretty indent [
             ("kind", escapeJsonString "Variable")
@@ -466,7 +467,7 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
         ]
 
 /// Emit FSharpNativeExpr views for all entry points
-let emitExpressionView (graph: SemanticGraph.SemanticGraph) : unit =
+let emitExpressionView (graph: SemanticGraph) : unit =
     let config = getConfig()
     if not config.EmitIntermediates then ()
     else
@@ -491,7 +492,7 @@ let emitExpressionView (graph: SemanticGraph.SemanticGraph) : unit =
             printfn "[FNCS] Warning: Failed to write expression view: %s" ex.Message
 
 /// Emit pretty-printed text view for debugging
-let emitExpressionText (graph: SemanticGraph.SemanticGraph) : unit =
+let emitExpressionText (graph: SemanticGraph) : unit =
     let config = getConfig()
     if not config.EmitIntermediates then ()
     else

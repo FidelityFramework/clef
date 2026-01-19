@@ -11,7 +11,7 @@ module FSharp.Native.Compiler.Checking.Native.Expressions.Intrinsics
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.UnionFind
-open FSharp.Native.Compiler.Checking.Native.SemanticGraph
+open FSharp.Native.Compiler.PSG.SemanticGraph
 
 //-------------------------------------------------------------------------
 // Result Type for Intrinsic Resolution
@@ -512,6 +512,20 @@ let private resolveSeqOp (op: string) (globals: NativeGlobals) (range: SourceRan
         let foldFn = NativeType.TFun(tyParamS, NativeType.TFun(tyParamT, tyParamS))
         let ty = NativeType.TForall([tyParamSpecS; tyParamSpecT], NativeType.TFun(foldFn, NativeType.TFun(tyParamS, NativeType.TFun(seqT, tyParamS))))
         Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "take" ->
+        // int -> seq<'T> -> seq<'T>
+        // PRD-16: Returns a wrapper sequence that limits to first N elements
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(globals.IntType, NativeType.TFun(seqT, seqT)))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "collect" ->
+        // ('T -> seq<'U>) -> seq<'T> -> seq<'U>
+        // PRD-16: flatMap - maps each element to a sequence, then flattens
+        let tyParamSpecU = freshTypeParam "'U" TypeParamKind.Type range
+        let tyParamU = NativeType.TVar tyParamSpecU
+        let mapperFn = NativeType.TFun(tyParamT, mkSeqType tyParamU)
+        let seqU = mkSeqType tyParamU
+        let ty = NativeType.TForall([tyParamSpecT; tyParamSpecU], NativeType.TFun(mapperFn, NativeType.TFun(seqT, seqU)))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
     | "isEmpty" ->
         // seq<'T> -> bool
         let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, globals.BoolType))
@@ -525,7 +539,7 @@ let private resolveSeqOp (op: string) (globals: NativeGlobals) (range: SourceRan
         let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, globals.IntType))
         Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
     | unknown ->
-        UnknownOperation $"Unknown Seq intrinsic: Seq.{unknown}. Available: toArray, toList, iter, map, filter, fold, isEmpty, head, length"
+        UnknownOperation $"Unknown Seq intrinsic: Seq.{unknown}. Available: toArray, toList, iter, map, filter, fold, take, collect, isEmpty, head, length"
 
 /// Resolve Math.* operations
 let private resolveMathOp (op: string) (globals: NativeGlobals) (_range: SourceRange) : IntrinsicResolution =

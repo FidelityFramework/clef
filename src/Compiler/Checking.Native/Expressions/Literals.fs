@@ -7,7 +7,7 @@ module FSharp.Native.Compiler.Checking.Native.Expressions.Literals
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
-open FSharp.Native.Compiler.Checking.Native.SemanticGraph
+open FSharp.Native.Compiler.PSG.SemanticGraph
 
 //-------------------------------------------------------------------------
 // Constant Type Inference
