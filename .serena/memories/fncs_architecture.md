@@ -129,12 +129,15 @@ Phase 5: FINAL RESULT
 | Module | Location | Purpose |
 |--------|----------|---------|
 | NativeService.fs | Checking.Native/ | Public API, orchestrates checking |
-| SemanticGraph.fs | Checking.Native/ | Graph types, reachability |
-| CheckExpressions.fs | Checking.Native/ | Expression type checking |
-| NativeTypes.fs | Checking.Native/ | Native type representation |
-| Unify.fs | Checking.Native/ | Type unification |
+| SemanticGraph.fs | PSGSaturation/SemanticGraph/ | Graph types, node kinds |
+| Intrinsics.fs | NativeTypedTree/Expressions/ | **FNCS intrinsic resolution (Jan 2026)** |
+| NativeTypes.fs | NativeTypedTree/ | Native type representation |
+| Unify.fs | NativeTypedTree/ | Type unification |
 | SRTPResolution.fs | Checking.Native/ | SRTP constraint solving |
 | Infrastructure/ | Checking.Native/ | Phase config and emission |
+
+> **Note (January 2026)**: Intrinsics moved from CheckExpressions.fs to NativeTypedTree/Expressions/Intrinsics.fs.
+> This reflects the NativeTypedTree architecture where intrinsic resolution is part of expression typing.
 
 ## Enabling Phase Emission
 

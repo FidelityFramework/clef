@@ -482,6 +482,11 @@ let private resolveSeqOp (op: string) (globals: NativeGlobals) (range: SourceRan
     let tyParamT = NativeType.TVar tyParamSpecT
     let seqT = mkSeqType tyParamT
     match op with
+    | "empty" ->
+        // seq<'T> - Returns an empty sequence (polymorphic value)
+        // PRD-16: Foundational sequence producer, added early to unblock BAREWire
+        let ty = NativeType.TForall([tyParamSpecT], seqT)
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
     | "toArray" ->
         // seq<'T> -> 'T[]
         let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, mkArrayType tyParamT))
@@ -542,7 +547,7 @@ let private resolveSeqOp (op: string) (globals: NativeGlobals) (range: SourceRan
         let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, globals.IntType))
         Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
     | unknown ->
-        UnknownOperation $"Unknown Seq intrinsic: Seq.{unknown}. Available: toArray, toList, iter, map, filter, fold, take, collect, isEmpty, head, length"
+        UnknownOperation $"Unknown Seq intrinsic: Seq.{unknown}. Available: empty, toArray, toList, iter, map, filter, fold, take, collect, isEmpty, head, length"
 
 /// Resolve Math.* operations
 let private resolveMathOp (op: string) (globals: NativeGlobals) (_range: SourceRange) : IntrinsicResolution =

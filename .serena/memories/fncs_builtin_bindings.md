@@ -67,20 +67,18 @@ The detection uses `hasStructAttribute` function in `NativeService.fs`.
 See `fncs_architecture` memory § "FNCS Intrinsics (Layer 1 Operations)" for intrinsics.
 See Firefly `binding_architecture_unified` memory for the three-layer architecture.
 
-## Console Module Intrinsics (Added 2026-01-04)
+## Console Module (MIGRATED to Layer 3 - January 2026)
 
-Console operations are FNCS intrinsics (January 2026).
-These are thin wrappers over Sys.* intrinsics for convenient I/O.
+**IMPORTANT**: Console is NO LONGER an FNCS intrinsic. It has been migrated to **Layer 3 user code** in Fidelity.Platform.
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `Console.write` | `string -> unit` | Writes string to stdout (fd 1) |
-| `Console.writeln` | `string -> unit` | Writes string with newline to stdout |
-| `Console.readln` | `unit -> string` | Reads a line from stdin (fd 0) |
-| `Console.error` | `string -> unit` | Writes string to stderr (fd 2) |
-| `Console.errorln` | `string -> unit` | Writes string with newline to stderr |
+Console.* functions in Fidelity.Platform use Sys.* intrinsics internally:
+- `Console.write` → Uses `Sys.write` with fd=1 (stdout)
+- `Console.writeln` → Uses `Sys.write` with fd=1 + newline
+- `Console.readln` → Uses `Sys.read` with fd=0 (stdin)
 
-Implementation: `CheckExpressions.fs` handles `Console.*` similar to Sys, NativePtr, Array.
+**See**: Firefly memory `console_layer3_migration_findings` for migration details.
+
+**User code should**: Either use `Sys.*` intrinsics directly, or properly depend on Fidelity.Platform.
 
 ## Status
 

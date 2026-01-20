@@ -18,6 +18,8 @@ type SourceResolutionError =
     | DependencySourceFileNotFound of name: string * path: string
     /// A source file listed in the project does not exist.
     | ProjectSourceFileNotFound of path: string
+    /// Circular dependency detected.
+    | CircularDependency of chain: string list
 
 module SourceResolutionError =
     /// Format error for display.
@@ -33,45 +35,91 @@ module SourceResolutionError =
             $"Dependency '{name}' source file not found: {path}. Check the [build] sources in its .fidproj."
         | ProjectSourceFileNotFound path ->
             $"Project source file not found: {path}. Check your .fidproj [build] sources."
+        | CircularDependency chain ->
+            let chainStr = String.concat " -> " chain
+            $"Circular dependency detected: {chainStr}"
 
 module SourceResolver =
     /// Normalizes a path to use forward slashes and be absolute.
     let private normalizePath (path: string) =
         Path.GetFullPath(path).Replace('\\', '/')
 
-    /// Gets ordered source files from a dependency by reading its .fidproj.
+    /// Gets ordered source files from a dependency RECURSIVELY by reading its .fidproj.
+    /// Transitive dependencies are resolved first (deepest dependencies come first).
     /// The dependency's .fidproj is the single source of truth for file ordering.
     /// Returns Error if dependency cannot be loaded - this is NEVER silently ignored.
-    let getDependencySources (depName: string) (depPath: string): Result<string list, SourceResolutionError> =
+    /// Uses visited set to detect circular dependencies.
+    let rec private getDependencySourcesRec
+        (depName: string)
+        (depPath: string)
+        (visitedPaths: Set<string>)
+        (visitChain: string list)
+        : Result<string list * Set<string>, SourceResolutionError> =
+
         let normalizedPath = normalizePath depPath
-        if not (Directory.Exists normalizedPath) then
-            Error (DependencyDirectoryNotFound (depName, normalizedPath))
+
+        // Check for circular dependency
+        if Set.contains normalizedPath visitedPaths then
+            Error (CircularDependency (List.rev (depName :: visitChain)))
         else
-            // Look for *.fidproj in the dependency directory
-            let fidprojFiles = Directory.GetFiles(normalizedPath, "*.fidproj")
-            if Array.isEmpty fidprojFiles then
-                Error (DependencyFidprojNotFound (depName, normalizedPath))
+            if not (Directory.Exists normalizedPath) then
+                Error (DependencyDirectoryNotFound (depName, normalizedPath))
             else
-                let fidprojPath = fidprojFiles.[0]  // Use first .fidproj found
-                // Load the dependency project file to get authoritative source ordering
-                match FidprojLoader.load fidprojPath with
-                | Error msg ->
-                    Error (DependencyFidprojLoadError (depName, fidprojPath, msg))
-                | Ok depOptions ->
-                    // Resolve source paths relative to dependency directory
-                    let resolvedPaths =
-                        depOptions.SourceFiles
-                        |> List.map (fun sf -> normalizePath (Path.Combine(normalizedPath, sf)))
+                // Look for *.fidproj in the dependency directory
+                let fidprojFiles = Directory.GetFiles(normalizedPath, "*.fidproj")
+                if Array.isEmpty fidprojFiles then
+                    Error (DependencyFidprojNotFound (depName, normalizedPath))
+                else
+                    let fidprojPath = fidprojFiles.[0]  // Use first .fidproj found
+                    // Load the dependency project file to get authoritative source ordering
+                    match FidprojLoader.load fidprojPath with
+                    | Error msg ->
+                        Error (DependencyFidprojLoadError (depName, fidprojPath, msg))
+                    | Ok depOptions ->
+                        // Mark this path as visited BEFORE recursing
+                        let newVisited = Set.add normalizedPath visitedPaths
+                        let newChain = depName :: visitChain
 
-                    // Check that ALL source files exist - missing files are errors
-                    let missingFiles =
-                        resolvedPaths
-                        |> List.filter (fun p -> not (File.Exists p))
+                        // FIRST: Recursively get sources from THIS dependency's dependencies
+                        // This ensures transitive dependencies are compiled first
+                        let transitiveDepsResult =
+                            depOptions.Dependencies
+                            |> List.filter (fun dep -> dep.Path.IsSome)
+                            |> List.fold (fun acc dep ->
+                                match acc with
+                                | Error e -> Error e
+                                | Ok (accSources, accVisited) ->
+                                    match getDependencySourcesRec dep.Name dep.Path.Value accVisited newChain with
+                                    | Error e -> Error e
+                                    | Ok (depSources, depVisited) ->
+                                        Ok (accSources @ depSources, depVisited)
+                            ) (Ok ([], newVisited))
 
-                    match missingFiles with
-                    | [] -> Ok resolvedPaths
-                    | missing :: _ ->
-                        Error (DependencySourceFileNotFound (depName, missing))
+                        match transitiveDepsResult with
+                        | Error e -> Error e
+                        | Ok (transitiveSources, finalVisited) ->
+                            // THEN: Add this dependency's own sources
+                            let resolvedPaths =
+                                depOptions.SourceFiles
+                                |> List.map (fun sf -> normalizePath (Path.Combine(normalizedPath, sf)))
+
+                            // Check that ALL source files exist - missing files are errors
+                            let missingFiles =
+                                resolvedPaths
+                                |> List.filter (fun p -> not (File.Exists p))
+
+                            match missingFiles with
+                            | [] -> Ok (transitiveSources @ resolvedPaths, finalVisited)
+                            | missing :: _ ->
+                                Error (DependencySourceFileNotFound (depName, missing))
+
+    /// Gets ordered source files from a dependency by reading its .fidproj.
+    /// Handles transitive dependencies automatically (deepest first).
+    /// Returns Error if dependency cannot be loaded - this is NEVER silently ignored.
+    let getDependencySources (depName: string) (depPath: string): Result<string list, SourceResolutionError> =
+        match getDependencySourcesRec depName depPath Set.empty [] with
+        | Error e -> Error e
+        | Ok (sources, _) -> Ok sources
 
     /// Resolves project source files to absolute paths.
     /// Preserves the order as declared in the fidproj.
@@ -97,24 +145,25 @@ module SourceResolver =
     /// Returns Error if any dependency or source file cannot be resolved.
     /// Dependencies with paths are resolved; dependencies without paths are skipped
     /// (they may be package references resolved elsewhere).
+    /// Handles transitive dependencies and avoids duplicates from shared dependencies.
     let getAllSourcesInOrder (options: FidprojOptions): Result<string list, SourceResolutionError> =
-        // Resolve all dependency sources in order
-        // Dependencies are processed in the order they appear in the fidproj
+        // Resolve all dependency sources in order, tracking visited paths across all dependencies
+        // This ensures shared transitive dependencies aren't duplicated
         let dependencySourcesResult =
             options.Dependencies
             |> List.filter (fun dep -> dep.Path.IsSome)  // Only process deps with local paths
             |> List.fold (fun acc dep ->
                 match acc with
                 | Error e -> Error e  // Short-circuit on first error
-                | Ok accSources ->
-                    match getDependencySources dep.Name dep.Path.Value with
+                | Ok (accSources, visited) ->
+                    match getDependencySourcesRec dep.Name dep.Path.Value visited [] with
                     | Error e -> Error e
-                    | Ok depSources -> Ok (accSources @ depSources)
-            ) (Ok [])
+                    | Ok (depSources, newVisited) -> Ok (accSources @ depSources, newVisited)
+            ) (Ok ([], Set.empty))
 
         match dependencySourcesResult with
         | Error e -> Error e
-        | Ok dependencySources ->
+        | Ok (dependencySources, _) ->
             // Then resolve project sources
             match resolveProjectSources options.ProjectDirectory options.SourceFiles with
             | Error e -> Error e
