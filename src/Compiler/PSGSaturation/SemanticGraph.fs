@@ -1,8 +1,9 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 /// The Program Semantic Graph (PSG) - the unified representation for Firefly.
-/// Types are attached during construction. Baker enriches with module classifications.
-module FSharp.Native.Compiler.PSG.SemanticGraph
+/// Types are attached during construction. Saturation passes enrich with state machine structure.
+/// PSGSaturation is FNCS's responsibility - making the PSG semantically complete.
+module FSharp.Native.Compiler.PSGSaturation.SemanticGraph
 
 open System.Collections.Generic
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
@@ -381,6 +382,82 @@ and [<RequireQualifiedAccess>] Pattern =
     | Exception of exnType: NativeType * bindName: string option
 
 //-------------------------------------------------------------------------
+// Sequence State Machine Types (PSG Saturation)
+//-------------------------------------------------------------------------
+
+/// Information about an internal mutable binding in a seq body.
+/// These become fields in the seq struct (after captures).
+/// PSG SATURATION: This structure is populated during saturation phase.
+type SeqInternalStateField = {
+    /// Name of the mutable variable
+    Name: string
+    /// Type of the variable
+    Type: NativeType
+    /// NodeId of the original Binding node
+    BindingId: NodeId
+    /// Index in the seq struct (3 + numCaptures + index)
+    StructIndex: int
+}
+
+/// Information about conditional yields (if inside while).
+/// Supports nested conditionals: if A then if B then yield x → ConditionIds = [A; B]
+type SeqConditionalYieldInfo = {
+    /// NodeId of the outermost IfThenElse
+    IfNodeId: NodeId
+    /// NodeIds of all conditions (for nested ifs, multiple conditions ANDed together)
+    ConditionIds: NodeId list
+}
+
+/// Structure of a while-based sequence body.
+/// seq { <init>; while <cond> do <before-yield>; yield <value>; <post-yield> }
+/// PSG SATURATION: These node references point to existing PSG nodes.
+type SeqWhileBodyInfo = {
+    /// NodeIds of expressions before the while loop (initialization)
+    InitExprs: NodeId list
+    /// NodeId of the WhileLoop node
+    WhileNodeId: NodeId
+    /// NodeId of the while condition
+    ConditionId: NodeId
+    /// NodeIds of expressions before the yield (inside while body)
+    PreYieldExprs: NodeId list
+    /// The single yield point (while-based seqs have one yield per while)
+    YieldNodeId: NodeId
+    /// NodeId of the value expression being yielded
+    YieldValueId: NodeId
+    /// NodeIds of expressions after the yield (inside while body)
+    PostYieldExprs: NodeId list
+    /// Whether there's a conditional around the yield (if x then yield y)
+    ConditionalYield: SeqConditionalYieldInfo option
+}
+
+/// The kind of sequence body structure.
+/// Determined during PSG saturation from analysis of seq body.
+[<RequireQualifiedAccess>]
+type SeqBodyKind =
+    /// Sequential yields: seq { yield 1; yield 2; yield 3 }
+    /// Each yield gets its own state (0 -> 1 -> 2 -> ... -> -1)
+    | Sequential of yields: (NodeId * NodeId) list  // (YieldNodeId, ValueNodeId) pairs
+    /// While-based: seq { while cond do yield x }
+    /// Two-state model (state 0 = init, state 1 = post-yield)
+    | WhileBased of SeqWhileBodyInfo
+
+/// Information about a sequence expression's state machine structure.
+/// PSG SATURATION: This is the saturated form of SeqExpr.
+/// Created during saturation phase by analyzing the SeqExpr body.
+type SeqStateMachineInfo = {
+    /// Original SeqExpr node this was saturated from
+    OriginalSeqExprId: NodeId
+    /// Body structure (sequential vs while-based)
+    BodyKind: SeqBodyKind
+    /// Variables captured from enclosing scope
+    Captures: CaptureInfo list
+    /// Internal mutable state fields (let mutable inside seq body)
+    InternalState: SeqInternalStateField list
+    /// Element type being yielded
+    ElementType: NativeType
+}
+
+//-------------------------------------------------------------------------
 // Semantic Node Kind
 //-------------------------------------------------------------------------
 
@@ -545,7 +622,7 @@ type SemanticKind =
     /// body: The computation that yields values (contains Yield/YieldBang nodes)
     /// captures: Variables captured from enclosing scope (reuses closure machinery)
     | SeqExpr of body: NodeId * captures: CaptureInfo list
-    
+
     /// Yield a value in a sequence: yield value
     /// Produces a single value in the sequence.
     /// value: The value to yield
@@ -671,6 +748,11 @@ type SemanticGraph = {
     /// Module classifications (moduleInit/definitions/entryPoint per module).
     /// Computed lazily from node EmissionStrategy. Observed by Alex as coeffect.
     ModuleClassifications: Lazy<Map<NodeId, ModuleClassification>>
+
+    /// Sequence saturation coeffect - maps SeqExpr NodeIds to their state machine info.
+    /// PSG SATURATION: Computed lazily, analyzed from SeqExpr bodies.
+    /// Alex consumes this directly instead of synthesizing state machine structure.
+    SeqSaturation: Lazy<Map<NodeId, SeqStateMachineInfo>>
 }
 
 module SemanticGraph =
@@ -725,6 +807,262 @@ module SemanticGraph =
     let mkModuleClassifications (nodes: Map<NodeId, SemanticNode>) : Lazy<Map<NodeId, ModuleClassification>> =
         lazy (extractModuleClassifications nodes)
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SEQ SATURATION - Extract state machine structure from SeqExpr nodes
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Check if a node is a literal boolean value
+    let private isLiteralBool (nodes: Map<NodeId, SemanticNode>) (nodeId: NodeId) : bool option =
+        match Map.tryFind nodeId nodes with
+        | Some node ->
+            match node.Kind with
+            | SemanticKind.Literal (LiteralValue.Bool b) -> Some b
+            | _ -> None
+        | None -> None
+
+    /// Collect all Yield nodes in a subtree in document (pre-order) order
+    let rec private collectYieldsInSubtree (nodes: Map<NodeId, SemanticNode>) (nodeId: NodeId) : (NodeId * NodeId) list =
+        match Map.tryFind nodeId nodes with
+        | None -> []
+        | Some node ->
+            match node.Kind with
+            | SemanticKind.IfThenElse (condId, thenId, elseIdOpt) ->
+                match isLiteralBool nodes condId with
+                | Some false ->
+                    match elseIdOpt with
+                    | Some elseId -> collectYieldsInSubtree nodes elseId
+                    | None -> []
+                | Some true ->
+                    collectYieldsInSubtree nodes thenId
+                | None ->
+                    let thenYields = collectYieldsInSubtree nodes thenId
+                    let elseYields =
+                        match elseIdOpt with
+                        | Some elseId -> collectYieldsInSubtree nodes elseId
+                        | None -> []
+                    thenYields @ elseYields
+            | SemanticKind.Yield valueId ->
+                [(nodeId, valueId)]
+            | _ ->
+                node.Children
+                |> List.collect (fun childId -> collectYieldsInSubtree nodes childId)
+
+    /// Collect all mutable bindings in a subtree (internal state fields)
+    let rec private collectMutableBindings (nodes: Map<NodeId, SemanticNode>) (nodeId: NodeId) (numCaptures: int) : SeqInternalStateField list =
+        match Map.tryFind nodeId nodes with
+        | None -> []
+        | Some node ->
+            let thisBinding =
+                match node.Kind with
+                | SemanticKind.Binding (name, isMutable, _, _) when isMutable ->
+                    [{ Name = name; Type = node.Type; BindingId = node.Id; StructIndex = 0 }]  // Index set later
+                | _ -> []
+            let childBindings =
+                node.Children
+                |> List.collect (fun childId -> collectMutableBindings nodes childId numCaptures)
+            thisBinding @ childBindings
+
+    /// Check if a node is a WhileLoop
+    let private isWhileLoop (nodes: Map<NodeId, SemanticNode>) (nodeId: NodeId) : (NodeId * NodeId) option =
+        match Map.tryFind nodeId nodes with
+        | Some node ->
+            match node.Kind with
+            | SemanticKind.WhileLoop (guardId, bodyId) -> Some (guardId, bodyId)
+            | _ -> None
+        | None -> None
+
+    /// Check if a node is a Sequential
+    let private isSequential (nodes: Map<NodeId, SemanticNode>) (nodeId: NodeId) : NodeId list option =
+        match Map.tryFind nodeId nodes with
+        | Some node ->
+            match node.Kind with
+            | SemanticKind.Sequential nodeIds -> Some nodeIds
+            | _ -> None
+        | None -> None
+
+    /// Flatten nested Sequentials into a single list
+    let rec private flattenSequentials (nodes: Map<NodeId, SemanticNode>) (nodeIds: NodeId list) : NodeId list =
+        nodeIds
+        |> List.collect (fun nodeId ->
+            match isSequential nodes nodeId with
+            | Some innerNodes -> flattenSequentials nodes innerNodes
+            | None -> [nodeId])
+
+    /// Check if a node is a conditional yield
+    let private isConditionalYield (nodes: Map<NodeId, SemanticNode>) (nodeId: NodeId) : SeqConditionalYieldInfo option =
+        let rec collectConditions (nId: NodeId) (accConditions: NodeId list) : (NodeId * NodeId list) option =
+            match Map.tryFind nId nodes with
+            | Some node ->
+                match node.Kind with
+                | SemanticKind.IfThenElse (condId, thenId, _) ->
+                    let newConditions = accConditions @ [condId]
+                    match Map.tryFind thenId nodes with
+                    | Some thenNode ->
+                        match thenNode.Kind with
+                        | SemanticKind.IfThenElse _ ->
+                            collectConditions thenId newConditions
+                        | SemanticKind.Yield _ ->
+                            Some (nId, newConditions)
+                        | _ ->
+                            let yields = collectYieldsInSubtree nodes thenId
+                            if not (List.isEmpty yields) then Some (nId, newConditions) else None
+                    | None -> None
+                | _ -> None
+            | None -> None
+        match Map.tryFind nodeId nodes with
+        | Some node ->
+            match node.Kind with
+            | SemanticKind.IfThenElse _ ->
+                match collectConditions nodeId [] with
+                | Some (outerIfId, conditions) ->
+                    Some { IfNodeId = outerIfId; ConditionIds = conditions }
+                | None -> None
+            | _ -> None
+        | None -> None
+
+    /// Analyze body structure for a sequence expression
+    let private analyzeBodyStructure (nodes: Map<NodeId, SemanticNode>) (bodyId: NodeId) (yields: (NodeId * NodeId) list) : SeqBodyKind =
+        let actualBodyId =
+            match Map.tryFind bodyId nodes with
+            | Some node ->
+                match node.Kind with
+                | SemanticKind.Lambda(_, lambdaBodyId, _, _, _) -> lambdaBodyId
+                | _ -> bodyId
+            | None -> bodyId
+
+        let rec findWhileInSequence (nodeList: NodeId list) (accInit: NodeId list) =
+            match nodeList with
+            | [] -> None
+            | nodeId :: remaining ->
+                match isWhileLoop nodes nodeId with
+                | Some (guardId, whileBodyId) ->
+                    Some (List.rev accInit, (nodeId, guardId, whileBodyId))
+                | None ->
+                    match isSequential nodes nodeId with
+                    | Some nestedNodes ->
+                        match findWhileInSequence nestedNodes (nodeId :: accInit) with
+                        | Some result -> Some result
+                        | None -> findWhileInSequence remaining (nodeId :: accInit)
+                    | None ->
+                        findWhileInSequence remaining (nodeId :: accInit)
+
+        match isSequential nodes actualBodyId with
+        | Some nodeList ->
+            match findWhileInSequence nodeList [] with
+            | Some (initExprs, (whileNodeId, conditionId, whileBodyId)) ->
+                match isSequential nodes whileBodyId with
+                | Some whileBodyNodes ->
+                    let whileYields = collectYieldsInSubtree nodes whileBodyId
+                    match whileYields with
+                    | [(yieldNodeId, yieldValueId)] ->
+                        let flattenedBody = flattenSequentials nodes whileBodyNodes
+                        let rec splitAtYield (splitNodes: NodeId list) (pre: NodeId list) =
+                            match splitNodes with
+                            | [] -> (List.rev pre, [])
+                            | nId :: rest ->
+                                let nodeYields = collectYieldsInSubtree nodes nId
+                                if not (List.isEmpty nodeYields) then
+                                    (List.rev pre, rest)
+                                else
+                                    splitAtYield rest (nId :: pre)
+                        let (preYield, postYield) = splitAtYield flattenedBody []
+                        let conditionalYield = whileBodyNodes |> List.tryPick (fun nId -> isConditionalYield nodes nId)
+                        SeqBodyKind.WhileBased {
+                            InitExprs = initExprs
+                            WhileNodeId = whileNodeId
+                            ConditionId = conditionId
+                            PreYieldExprs = preYield
+                            YieldNodeId = yieldNodeId
+                            YieldValueId = yieldValueId
+                            PostYieldExprs = postYield
+                            ConditionalYield = conditionalYield
+                        }
+                    | _ -> SeqBodyKind.Sequential yields
+                | None ->
+                    match Map.tryFind whileBodyId nodes with
+                    | Some whileBodyNode ->
+                        match whileBodyNode.Kind with
+                        | SemanticKind.Yield valueId ->
+                            SeqBodyKind.WhileBased {
+                                InitExprs = initExprs
+                                WhileNodeId = whileNodeId
+                                ConditionId = conditionId
+                                PreYieldExprs = []
+                                YieldNodeId = whileBodyId
+                                YieldValueId = valueId
+                                PostYieldExprs = []
+                                ConditionalYield = None
+                            }
+                        | SemanticKind.IfThenElse (condId, thenId, _) ->
+                            let ifYields = collectYieldsInSubtree nodes thenId
+                            match ifYields with
+                            | [(yieldId, valueId)] ->
+                                SeqBodyKind.WhileBased {
+                                    InitExprs = initExprs
+                                    WhileNodeId = whileNodeId
+                                    ConditionId = conditionId
+                                    PreYieldExprs = []
+                                    YieldNodeId = yieldId
+                                    YieldValueId = valueId
+                                    PostYieldExprs = []
+                                    ConditionalYield = Some { IfNodeId = whileBodyId; ConditionIds = [condId] }
+                                }
+                            | _ -> SeqBodyKind.Sequential yields
+                        | _ -> SeqBodyKind.Sequential yields
+                    | None -> SeqBodyKind.Sequential yields
+            | None -> SeqBodyKind.Sequential yields
+        | None ->
+            match isWhileLoop nodes actualBodyId with
+            | Some (conditionId, whileBodyId) ->
+                let whileYields = collectYieldsInSubtree nodes whileBodyId
+                match whileYields with
+                | [(yieldNodeId, yieldValueId)] ->
+                    SeqBodyKind.WhileBased {
+                        InitExprs = []
+                        WhileNodeId = actualBodyId
+                        ConditionId = conditionId
+                        PreYieldExprs = []
+                        YieldNodeId = yieldNodeId
+                        YieldValueId = yieldValueId
+                        PostYieldExprs = []
+                        ConditionalYield = None
+                    }
+                | _ -> SeqBodyKind.Sequential yields
+            | None -> SeqBodyKind.Sequential yields
+
+    /// Extract sequence saturation info for all SeqExpr nodes
+    let private extractSeqSaturation (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SeqStateMachineInfo> =
+        nodes
+        |> Map.values
+        |> Seq.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.SeqExpr (bodyId, captures) ->
+                let yields = collectYieldsInSubtree nodes bodyId
+                let bodyKind = analyzeBodyStructure nodes bodyId yields
+                let numCaptures = List.length captures
+                let mutableBindings = collectMutableBindings nodes bodyId numCaptures
+                let internalState =
+                    mutableBindings
+                    |> List.mapi (fun i field ->
+                        { field with StructIndex = 3 + numCaptures + i })
+                let elementType =
+                    match node.Type with
+                    | NativeType.TSeq elemTy -> elemTy
+                    | _ -> NativeType.TError "Expected TSeq type for SeqExpr"
+                Some (node.Id, {
+                    OriginalSeqExprId = node.Id
+                    BodyKind = bodyKind
+                    Captures = captures
+                    InternalState = internalState
+                    ElementType = elementType
+                })
+            | _ -> None)
+        |> Map.ofSeq
+
+    /// Create lazy seq saturation coeffect from nodes
+    let mkSeqSaturation (nodes: Map<NodeId, SemanticNode>) : Lazy<Map<NodeId, SeqStateMachineInfo>> =
+        lazy (extractSeqSaturation nodes)
+
     /// Recall a type definition by name (codata observation)
     let recallType (name: string) (graph: SemanticGraph) : NodeId option =
         graph.Types.Value |> Map.tryFind name
@@ -737,6 +1075,7 @@ module SemanticGraph =
         Types = lazy Map.empty
         Platform = None
         ModuleClassifications = lazy Map.empty
+        SeqSaturation = lazy Map.empty
     }
 
     /// Create an empty semantic graph with platform context
@@ -747,6 +1086,7 @@ module SemanticGraph =
         Types = lazy Map.empty
         Platform = Some platform
         ModuleClassifications = lazy Map.empty
+        SeqSaturation = lazy Map.empty
     }
     
     /// Set the platform context on a graph
@@ -865,7 +1205,8 @@ type NodeBuilder() =
           Modules = Map.empty
           Types = SemanticGraph.mkTypesIndex nodes
           Platform = None
-          ModuleClassifications = SemanticGraph.mkModuleClassifications nodes }
+          ModuleClassifications = SemanticGraph.mkModuleClassifications nodes
+          SeqSaturation = SemanticGraph.mkSeqSaturation nodes }
 
     /// Build the semantic graph with platform context
     member _.BuildWithPlatform(entryPoints: NodeId list, platform: PlatformContext) : SemanticGraph =
@@ -874,7 +1215,8 @@ type NodeBuilder() =
           Modules = Map.empty
           Types = SemanticGraph.mkTypesIndex nodes
           Platform = Some platform
-          ModuleClassifications = SemanticGraph.mkModuleClassifications nodes }
+          ModuleClassifications = SemanticGraph.mkModuleClassifications nodes
+          SeqSaturation = SemanticGraph.mkSeqSaturation nodes }
     
     /// Reset the builder
     member _.Reset() =

@@ -11,7 +11,7 @@ open System.IO
 open System.Text
 open FSharp.Native.Compiler.Checking.Native.Infrastructure.PhaseConfig
 open FSharp.Native.Compiler.Checking.Native.Infrastructure.PhaseTypes
-open FSharp.Native.Compiler.PSG.SemanticGraph
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph
 
 // ═══════════════════════════════════════════════════════════════════════════
 // JSON Serialization (minimal, no external dependencies)

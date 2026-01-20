@@ -273,8 +273,9 @@
     See Checking.Native/ for the new native-first type checking implementation.
     -->
 
-    <!-- PSG - Program Semantic Graph (the unified representation for Firefly) -->
-    <Compile Include="PSG\SemanticGraph.fs" />
+    <!-- PSGSaturation - Program Semantic Graph with saturation passes -->
+    <!-- FNCS's responsibility: make the PSG semantically complete -->
+    <Compile Include="PSGSaturation\SemanticGraph.fs" />
 
     <!-- Checking.Native - Native Type Checker (BCL-free, unified representation) -->
     <!-- NativeTypes.fs moved earlier - foundational types needed by TypedTree -->

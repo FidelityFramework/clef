@@ -9,7 +9,7 @@ module FSharp.Native.Compiler.Baker.ModuleInit
 
 open System
 open System.Diagnostics
-open FSharp.Native.Compiler.PSG.SemanticGraph
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.Infrastructure.PhaseTypes
 
 /// Create the Baker ModuleInit phase output for intermediate emission.

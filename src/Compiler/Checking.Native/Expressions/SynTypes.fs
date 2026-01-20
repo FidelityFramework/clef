@@ -11,7 +11,7 @@ open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.UnionFind
-open FSharp.Native.Compiler.PSG.SemanticGraph
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.Expressions.Types
 
 //-------------------------------------------------------------------------

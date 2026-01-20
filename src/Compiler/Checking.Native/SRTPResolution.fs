@@ -8,7 +8,7 @@ module FSharp.Native.Compiler.Checking.Native.SRTPResolution
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
 open FSharp.Native.Compiler.Checking.Native.UnionFind
-open FSharp.Native.Compiler.PSG.SemanticGraph
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph
 
 //-------------------------------------------------------------------------
 // SRTP Types (ordered for forward references)

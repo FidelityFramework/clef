@@ -14,7 +14,7 @@ open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
 open FSharp.Native.Compiler.Checking.Native.NativeGlobals
-open FSharp.Native.Compiler.PSG.SemanticGraph
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.NameResolution
 open FSharp.Native.Compiler.Checking.Native.Expressions.Coordinator
 open FSharp.Native.Compiler.Checking.Native.Expressions.Types
@@ -370,6 +370,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         Platform = None
         // Module classifications computed lazily from EmissionStrategy
         ModuleClassifications = SemanticGraph.mkModuleClassifications resolvedNodes
+        // Seq saturation computed lazily from SeqExpr nodes (codata pattern)
+        SeqSaturation = SemanticGraph.mkSeqSaturation resolvedNodes
     }
 
     // Phase 1: Emit structural construction result
@@ -1105,7 +1107,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
     | ParsedInput.SigFile _ ->
         // Signature files not yet supported
         {
-            Graph = { Nodes = Map.empty; EntryPoints = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty }
+            Graph = { Nodes = Map.empty; EntryPoints = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty }
             Diagnostics = [{
                 Severity = NativeDiagnosticSeverity.Warning
                 Code = "FS0000"

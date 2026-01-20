@@ -16,7 +16,7 @@
 module FSharp.Native.Compiler.Checking.Native.Expressions.Identity
 
 open FSharp.Native.Compiler.Checking.Native.NativeTypes
-open FSharp.Native.Compiler.PSG.SemanticGraph
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph
 open FSharp.Native.Compiler.Checking.Native.Expressions.Types
 open FSharp.Native.Compiler.Checking.Native.Expressions.Intrinsics
 open FSharp.Native.Compiler.Checking.Native.UnionFind
