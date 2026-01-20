@@ -14,17 +14,44 @@ FNCS produces a **PSG (Program Semantic Graph) with native types**:
 
 Firefly consumes the PSG and handles code generation (Alex/Zipper → MLIR → LLVM).
 
+### Directory Structure (January 2026)
+
+```
+src/Compiler/
+├── NativeTypedTree/           # Core native type system
+│   ├── NativeTypes.fs         # NTUKind, NativeType, TypeLayout
+│   ├── NativeGlobals.fs       # Built-in types, Memory regions, Span/Arena
+│   ├── Unify.fs               # Unification with occurs check
+│   ├── UnionFind.fs           # Type variable binding
+│   ├── NativeService.fs       # Public API, orchestration
+│   ├── SRTPResolution.fs      # SRTP constraint solving
+│   ├── NameResolution.fs      # Name/symbol resolution
+│   ├── FSharpNativeExpr.fs    # Expression-centric view
+│   ├── Expressions/           # Modular expression checking
+│   │   ├── Coordinator.fs     # SynExpr dispatch
+│   │   ├── Types.fs           # TypeEnv, helpers
+│   │   ├── Intrinsics.fs      # FNCS intrinsic modules
+│   │   ├── Bindings.fs        # Let/LetRec
+│   │   ├── Applications.fs    # App, TypeApp, Lambda
+│   │   └── ...
+│   └── Infrastructure/        # Phase config, emission
+├── PSGSaturation/             # SemanticGraph, saturation
+│   └── SemanticGraph/
+├── Baker/                     # Type resolution layer
+└── Project/                   # .fidproj handling
+```
+
 ### Core Modules
 
-| Module | Purpose |
-|--------|---------|
-| `NativeGlobals.fs` | Built-in types, NTUKind definitions |
-| `NativeTypes.fs` | NativeType, TypeParam, TypeConRef |
-| `UnionFind.fs` | Type variable binding, path compression |
-| `Unify.fs` | Unification algorithm with occurs check |
-| `SemanticGraph.fs` | PSG structure, reachability |
-| `NativeService.fs` | Public API, orchestration |
-| `Expressions/` | Modular expression checking |
+| Module | Location | Purpose |
+|--------|----------|---------|
+| `NativeGlobals.fs` | NativeTypedTree/ | Built-in types, NTUKind, Memory regions, Span/Arena |
+| `NativeTypes.fs` | NativeTypedTree/ | NativeType, TypeParam, TypeConRef, TypeLayout |
+| `Intrinsics.fs` | NativeTypedTree/Expressions/ | FNCS intrinsic resolution |
+| `UnionFind.fs` | NativeTypedTree/ | Type variable binding, path compression |
+| `Unify.fs` | NativeTypedTree/ | Unification algorithm with occurs check |
+| `SemanticGraph.fs` | PSGSaturation/SemanticGraph/ | PSG structure, reachability |
+| `NativeService.fs` | NativeTypedTree/ | Public API, orchestration |
 
 ### Expression Checking Modules
 
@@ -51,6 +78,38 @@ let checkProject (sources: SourceFile list) (options: CheckOptions) : CheckResul
 // Returns: SemanticGraph with types attached, diagnostics
 ```
 
+## Memory Region Types (NativeGlobals.fs)
+
+FNCS provides type-safe memory regions via measure types:
+
+### Memory Regions
+```fsharp
+module MemoryRegions =
+    let stack      // Stack memory - automatically freed on scope exit
+    let arena      // Arena/heap memory - managed by allocator
+    let sram       // Fast on-chip RAM (embedded)
+    let flash      // Persistent storage (embedded)
+    let peripheral // Memory-mapped I/O registers
+    let dma        // DMA-accessible memory
+    let external'  // Off-chip SDRAM
+```
+
+### Access Modes
+```fsharp
+module AccessModes =
+    let readOnly   // ro - read-only access
+    let writeOnly  // wo - write-only access
+    let readWrite  // rw - read-write access
+```
+
+### Memory Types
+| Type | Description |
+|------|-------------|
+| `Ptr<'T, 'region, 'access>` | Native pointer with region and access tracking |
+| `Span<'T, 'region, 'access>` | Fat pointer (ptr + length) with memory safety |
+| `ReadOnlySpan<'T, 'region>` | Immutable view (ptr + length) |
+| `Arena<'lifetime>` | Bump allocator with lifetime tracking |
+
 ## FNCS Intrinsics
 
 Operations native to the type universe (no external binding needed):
@@ -58,11 +117,13 @@ Operations native to the type universe (no external binding needed):
 | Module | Operations |
 |--------|------------|
 | `Sys` | write, read, exit |
-| `NativePtr` | set, get, add, stackalloc |
+| `NativePtr` | set, get, add, stackalloc, copy, fill |
 | `NativeDefault` | zeroed, unreachable |
-| `Array` | zeroCreate, length, get, set |
-| `Console` | write, writeln, readln |
-| `String` | length, concat |
+| `Array` | zeroCreate, create, init, copy, length, get, set, tryItem, isEmpty |
+| `Arena` | fromPointer, alloc, allocAligned, remaining, reset |
+| `String` | length, concat2, isEmpty, contains, startsWith, endsWith, etc. |
+| `DateTime` | now, fromTicks, addDays, etc. |
+| `TimeSpan` | fromMilliseconds, fromSeconds, totalSeconds, etc. |
 
 ## Related Projects
 
