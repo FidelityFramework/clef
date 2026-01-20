@@ -36,7 +36,7 @@ The Program Semantic Graph (PSG) is:
 │  ─────────────────────────────────────────────────────────────────────────  │
 │  • Native globals (string=UTF-8, option=voption, no obj)                    │
 │  • Constraint generation and unification                                    │
-│  • SRTP resolution during checking (Alloy witnesses)                        │
+│  • SRTP resolution during checking (native witnesses)                       │
 │  • Symbol information attached to nodes                                     │
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │

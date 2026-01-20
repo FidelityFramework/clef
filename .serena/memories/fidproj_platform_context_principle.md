@@ -14,7 +14,7 @@ Platform awareness now flows **FROM THE TOP** via quotation-based binding librar
 Fidelity.Toml (separate TOML 1.0 library, NOT FNCS)
     ↓
 Firefly CLI (orchestrator - all I/O happens here)
-    ↓  extracts: Alloy path, Platform library path, sources
+    ↓  extracts: Fidelity.Platform library path, sources
     ↓  loads: ~/repos/Fidelity.Platform/Linux_x86_64
     ↓  extracts: Expr<PlatformDescriptor> quotations
     ↓

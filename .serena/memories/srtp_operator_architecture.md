@@ -66,7 +66,7 @@ The codebase is in a broken hybrid state:
 **Option B: Full ML Style**
 1. Keep `int`-only standard operators
 2. Add module operators for all numeric types
-3. Update Alloy to use module operators
+3. Use module operators for SRTP resolution
 4. Remove SRTP for arithmetic (keep for formatting operators like `$`)
 
 ## Key Files

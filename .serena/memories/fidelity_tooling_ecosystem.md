@@ -26,7 +26,7 @@
 
 | Repository | Path | Purpose |
 |------------|------|---------|
-| **Alloy** | `~/repos/Alloy` | Native F# standard library (BCL-free) |
+| **Fidelity.Platform** | `~/repos/Fidelity.Platform` | Platform-specific bindings and type layouts |
 | **BAREWire** | `~/repos/BAREWire` | Binary serialization (future) |
 | **Farscape** | `~/repos/Farscape` | Distributed compute (future) |
 

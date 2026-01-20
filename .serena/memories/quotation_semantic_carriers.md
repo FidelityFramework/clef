@@ -71,9 +71,9 @@ FNCS extracts:
 - Memory region (Peripheral → volatile semantics)
 - Layout for proper field offsets
 
-### Alloy Type Descriptors (Future)
+### Type Descriptors (Future)
 
-Alloy may carry type-level semantic information:
+Fidelity.Platform may carry type-level semantic information:
 
 ```fsharp
 [<TypeDescriptor>]
@@ -142,6 +142,6 @@ Quotation semantic carriers are the **Layer 2** mechanism in the unified binding
 |-------|------|----------|
 | Layer 1 | FNCS Intrinsics | `Sys.write`, `NativePtr.set`, `NativeDefault.zeroed` |
 | **Layer 2** | **Quotation Semantic Carriers** | Farscape-generated GTK bindings, BAREWire memory layouts |
-| Layer 3 | User Code | Alloy library, application code |
+| Layer 3 | User Code | Application code |
 
 **Key Insight**: Layer 1 intrinsics are operations native to the type universe (no semantic carrier needed). Layer 2 bindings carry rich metadata (memory layout, alignment, ownership) that cannot be expressed through simple type signatures alone.

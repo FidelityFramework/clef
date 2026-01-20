@@ -86,7 +86,7 @@ These predicates:
 The architectural choice for exposing NTU:
 
 1. **FNCS internally**: Uses NTU prefix for all native types
-2. **Alloy publicly**: Exposes semantic aliases (`platformint`, `platformsize`)
+2. **Fidelity.Platform publicly**: Exposes semantic aliases (`platformint`, `platformsize`)
 3. **Application code**: Uses standard `int` or explicit `platformint`
 
 ```

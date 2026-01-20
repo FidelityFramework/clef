@@ -48,7 +48,7 @@ Fidelity doesn't have SMT proofs, but NTUKind serves the analogous role:
 The fundamental contiguous collection:
 
 ```fsharp
-// FNCS intrinsic type (not Alloy library type)
+// FNCS intrinsic type (not library type)
 type NativeArray<'T> =
     // Pointer to first element
     Pointer: NTUptr<'T>
@@ -132,19 +132,19 @@ Collections integrate with Fidelity's "memory management by choice":
 - Full control over memory layout
 - NTU types with explicit region parameters
 
-## Why Not Alloy Library Collections?
+## Why Not Library Collections?
 
-The user guidance is clear: avoid "over-paralleling BCL" by having a separate Alloy collections library. Instead:
+The user guidance is clear: avoid "over-paralleling BCL" by having a separate collections library. Instead:
 
 1. **FNCS provides primitives** - Array, Span, Slice are intrinsic types
 2. **F# syntax works** - `arr.[i]`, `arr.Length`, `Array.create` all work
 3. **NTU handles platform** - Width resolved by quotations, not library code
-4. **Alloy focuses on domain** - Higher-level abstractions if needed, built on FNCS primitives
+4. **Libraries focus on domain** - Higher-level abstractions if needed, built on FNCS primitives
 
 ## Relationship to Current 507 Errors
 
 The type mismatch errors (`expected 'int64', got 'int'`) stem from:
-1. Alloy code using explicit `int64` where `int` (NTUint) should be used
+1. Code using explicit `int64` where `int` (NTUint) should be used
 2. Missing recognition of NTU type identity in some paths
 
 With proper NTU collections:

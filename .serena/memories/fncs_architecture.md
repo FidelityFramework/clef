@@ -6,7 +6,7 @@
 
 **Firefly's Responsibilities** (Orchestration Layer):
 - Parse `.fidproj` using **Fidelity.Toml** (separate full TOML 1.0 library)
-- Resolve all dependencies (Alloy path, Platform library path)
+- Resolve all dependencies (Fidelity.Platform library path)
 - Load **Fidelity.Platform** binding library and extract quotations
 - Collect source files in correct compilation order
 - Pass everything to FNCS as **parameters**
@@ -54,7 +54,7 @@ FNCS internally uses NTU nomenclature for all platform-generic types:
 
 **Option B Architecture:**
 - FNCS internal: NTU prefix (NTUint, NTUuint, etc.)
-- Alloy public: Semantic aliases (platformint, platformsize)
+- Fidelity.Platform public: Semantic aliases (platformint, platformsize)
 - Application code: Standard `int` or explicit `platformint`
 
 See `ntu_type_system` memory for implementation details.
@@ -161,7 +161,7 @@ This enables:
 ### MLIR Generation (FNCSTransfer)
 - Traverses SemanticGraph from entry points
 - Follows VarRef definitions to inline bodies
-- Platform bindings via Alloy.Primitives.Bindings convention
+- Platform bindings via Fidelity.Platform convention
 - Generates LLVM dialect MLIR
 
 ## FSharpNativeExpr: Expression-Centric View

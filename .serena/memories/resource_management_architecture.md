@@ -48,7 +48,7 @@ From "The Continuation Preservation Paradox":
 - **Lifetime Tied to Continuation**: Region's lifetime tied to the closure/continuation itself
 - **Zero-Runtime Overhead**: No reference counting, no disposal tracking, no finalization queues
 
-## Practical Implications for Alloy
+## Practical Implications for Fidelity.Platform
 
 1. **Remove `System.IDisposable` references** - Not just replace, REMOVE entirely
 2. **No custom IDisposable interface** - The concept doesn't exist in native F#

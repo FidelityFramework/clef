@@ -69,7 +69,7 @@ See Firefly `binding_architecture_unified` memory for the three-layer architectu
 
 ## Console Module Intrinsics (Added 2026-01-04)
 
-Console operations are FNCS intrinsics following Alloy absorption (January 2026).
+Console operations are FNCS intrinsics (January 2026).
 These are thin wrappers over Sys.* intrinsics for convenient I/O.
 
 | Function | Signature | Description |

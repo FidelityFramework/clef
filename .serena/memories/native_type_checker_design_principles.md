@@ -80,7 +80,7 @@ Three-phase approach:
 
 **From F# architecture:** SRTP constraints are solved *during* type checking, not as a separate pass. Solutions are stored in mutable cells and consumed by codegen.
 
-**Principle:** Keep SRTP resolution. It's essential for Alloy's operator overloading (like `$`). The resolution should be captured in the semantic graph for Alex to emit.
+**Principle:** Keep SRTP resolution. It's essential for native operator overloading. The resolution should be captured in the semantic graph for Alex to emit.
 
 ### 6. Hard Prune Before Handoff
 
