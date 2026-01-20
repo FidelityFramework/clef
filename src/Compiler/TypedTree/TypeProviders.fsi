@@ -11,7 +11,7 @@ open System.Collections.Concurrent
 open System.Collections.Generic
 open Internal.Utilities.Library
 open FSharp.Core.CompilerServices
-open FSharp.Native.Compiler.Checking.Native.NativeTypes
+open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 open FSharp.Native.Compiler.Text
 
 type TypeProviderDesignation = TypeProviderDesignation of string

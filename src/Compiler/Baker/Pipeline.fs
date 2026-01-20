@@ -8,8 +8,9 @@
 module FSharp.Native.Compiler.Baker.Pipeline
 
 open System.IO
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph
-open FSharp.Native.Compiler.Checking.Native.Infrastructure.PhaseTypes
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
+open FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
 open FSharp.Native.Compiler.Baker.ModuleInit
 
 //-------------------------------------------------------------------------

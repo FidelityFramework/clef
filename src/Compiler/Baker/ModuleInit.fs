@@ -9,8 +9,10 @@ module FSharp.Native.Compiler.Baker.ModuleInit
 
 open System
 open System.Diagnostics
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph
-open FSharp.Native.Compiler.Checking.Native.Infrastructure.PhaseTypes
+open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
+open FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
 
 /// Create the Baker ModuleInit phase output for intermediate emission.
 let createOutput (graph: SemanticGraph) (elapsedMs: int64) : BakerModuleInitOutput =

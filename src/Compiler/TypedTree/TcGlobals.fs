@@ -14,7 +14,7 @@ open System.Diagnostics
 
 open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
-open FSharp.Native.Compiler.Checking.Native.NativeTypes
+open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 open FSharp.Native.Compiler.CompilerGlobalState
 open FSharp.Native.Compiler.Features
 open FSharp.Native.Compiler.IO

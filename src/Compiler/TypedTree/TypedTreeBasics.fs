@@ -7,7 +7,7 @@
 module internal FSharp.Native.Compiler.TypedTreeBasics
 
 open Internal.Utilities.Library
-open FSharp.Native.Compiler.Checking.Native.NativeTypes 
+open FSharp.Native.Compiler.NativeTypedTree.NativeTypes 
 open FSharp.Native.Compiler.CompilerGlobalState
 open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.Syntax

@@ -230,6 +230,8 @@
     </Compile>
     <Compile Include="SyntaxTree\LexFilter.fsi" />
     <Compile Include="SyntaxTree\LexFilter.fs" />
+    <!-- Native types - foundational types for native compilation, needed by TypedTree and tainted -->
+    <Compile Include="NativeTypedTree\NativeTypes.fs" />
     <Compile Include="TypedTree\tainted.fsi" />
     <Compile Include="TypedTree\tainted.fs" />
     <Compile Include="TypedTree\TypeProviders.fsi" />
@@ -238,8 +240,6 @@
     <Compile Include="TypedTree\QuotationPickler.fs" />
     <Compile Include="TypedTree\CompilerGlobalState.fsi" />
     <Compile Include="TypedTree\CompilerGlobalState.fs" />
-    <!-- Native types - foundational types for native compilation, needed by TypedTree -->
-    <Compile Include="Checking.Native\NativeTypes.fs" />
     <Compile Include="TypedTree\TypedTree.fsi" />
     <Compile Include="TypedTree\TypedTree.fs" />
     <Compile Include="TypedTree\TypedTreeBasics.fsi" />
@@ -270,43 +270,50 @@
     <!--
     OLD CHECKING FOLDER REMOVED - All type-checking depended on IL indirection layer.
     The native type checker is being rebuilt from scratch without IL/BCL dependencies.
-    See Checking.Native/ for the new native-first type checking implementation.
+    See NativeTypedTree/ for the new native-first type checking implementation.
     -->
 
     <!-- PSGSaturation - Program Semantic Graph with saturation passes -->
     <!-- FNCS's responsibility: make the PSG semantically complete -->
-    <Compile Include="PSGSaturation\SemanticGraph.fs" />
+    <!-- SemanticGraph split into focused nanopass modules (January 2026) -->
+    <Compile Include="PSGSaturation\SemanticGraph\SeqSaturation.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\Types.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\Core.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\Builder.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\Reachability.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\Traversal.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\Diagnostics.fs" />
 
-    <!-- Checking.Native - Native Type Checker (BCL-free, unified representation) -->
+    <!-- NativeTypedTree - Native Type Checker (BCL-free, unified representation) -->
     <!-- NativeTypes.fs moved earlier - foundational types needed by TypedTree -->
-    <Compile Include="Checking.Native\NativeGlobals.fs" />
-    <Compile Include="Checking.Native\UnionFind.fs" />
-    <Compile Include="Checking.Native\Unify.fs" />
-    <Compile Include="Checking.Native\NameResolution.fs" />
+    <Compile Include="NativeTypedTree\NativeGlobals.fs" />
+    <Compile Include="NativeTypedTree\UnionFind.fs" />
+    <Compile Include="NativeTypedTree\Unify.fs" />
+    <Compile Include="NativeTypedTree\NameResolution.fs" />
     <!-- Expressions - Modular expression checking -->
     <!-- Handler modules (no circular dependencies - use callback pattern) -->
-    <Compile Include="Checking.Native\Expressions\Types.fs" />
-    <Compile Include="Checking.Native\Expressions\Literals.fs" />
-    <Compile Include="Checking.Native\Expressions\Intrinsics.fs" />
-    <Compile Include="Checking.Native\Expressions\Identity.fs" />
-    <Compile Include="Checking.Native\Expressions\SynTypes.fs" />
-    <Compile Include="Checking.Native\Expressions\Patterns.fs" />
-    <Compile Include="Checking.Native\Expressions\ControlFlow.fs" />
-    <Compile Include="Checking.Native\Expressions\TypeOperations.fs" />
-    <Compile Include="Checking.Native\Expressions\Collections.fs" />
-    <Compile Include="Checking.Native\Expressions\Applications.fs" />
-    <Compile Include="Checking.Native\Expressions\Bindings.fs" />
+    <Compile Include="NativeTypedTree\Expressions\Types.fs" />
+    <Compile Include="NativeTypedTree\Expressions\Literals.fs" />
+    <Compile Include="NativeTypedTree\Expressions\Intrinsics.fs" />
+    <Compile Include="NativeTypedTree\Expressions\Identity.fs" />
+    <Compile Include="NativeTypedTree\Expressions\SynTypes.fs" />
+    <Compile Include="NativeTypedTree\Expressions\Patterns.fs" />
+    <Compile Include="NativeTypedTree\Expressions\ControlFlow.fs" />
+    <Compile Include="NativeTypedTree\Expressions\TypeOperations.fs" />
+    <Compile Include="NativeTypedTree\Expressions\Collections.fs" />
+    <Compile Include="NativeTypedTree\Expressions\Applications.fs" />
+    <Compile Include="NativeTypedTree\Expressions\Bindings.fs" />
     <!-- Coordinator - Thin dispatcher that ties modules together -->
-    <Compile Include="Checking.Native\Expressions\Coordinator.fs" />
-    <Compile Include="Checking.Native\SRTPResolution.fs" />
-    <Compile Include="Checking.Native\FSharpNativeExpr.fs" />
+    <Compile Include="NativeTypedTree\Expressions\Coordinator.fs" />
+    <Compile Include="NativeTypedTree\SRTPResolution.fs" />
+    <Compile Include="NativeTypedTree\FSharpNativeExpr.fs" />
     <!-- Infrastructure - Nanopass phase configuration and intermediate emission -->
-    <Compile Include="Checking.Native\Infrastructure\PhaseConfig.fs" />
-    <Compile Include="Checking.Native\Infrastructure\PhaseTypes.fs" />
-    <Compile Include="Checking.Native\Infrastructure\PhaseEmitter.fs" />
-    <Compile Include="Checking.Native\NativeService.fs" />
+    <Compile Include="NativeTypedTree\Infrastructure\PhaseConfig.fs" />
+    <Compile Include="NativeTypedTree\Infrastructure\PhaseTypes.fs" />
+    <Compile Include="NativeTypedTree\Infrastructure\PhaseEmitter.fs" />
+    <Compile Include="NativeTypedTree\NativeService.fs" />
 
-    <!-- Baker - Post-construction semantic enrichment (peer to Checking.Native) -->
+    <!-- Baker - Post-construction semantic enrichment (peer to NativeTypedTree) -->
     <Compile Include="Baker\Metadata.fs" />
     <Compile Include="Baker\ModuleInit.fs" />
     <Compile Include="Baker\Pipeline.fs" />

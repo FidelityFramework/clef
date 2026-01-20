@@ -4,18 +4,19 @@ namespace FSharp.Native.Compiler.Project
 
 open System.IO
 open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.Checking.Native.NativeTypes
+open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 open FSharp.Native.Compiler.NativeService
-
-// Import specific types without opening the whole module to avoid Error/Ok shadowing
-module SemanticGraph = FSharp.Native.Compiler.PSGSaturation.SemanticGraph
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
+// Import Diagnostics types qualified to avoid shadowing Result.Error/Ok
+module SGDiag = FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 /// Result of checking a complete project.
 type ProjectCheckResult = {
     /// Project configuration.
     Options: FidprojOptions
     /// Check result with SemanticGraph.
-    CheckResult: SemanticGraph.CheckResult
+    CheckResult: SGDiag.CheckResult
     /// All source files that were checked (absolute path, content).
     SourceFiles: (string * string) list
     /// Parse errors by file (if any).
@@ -106,7 +107,7 @@ module ProjectChecker =
 
                         if Map.isEmpty parseErrors |> not then
                             // Return partial result with parse errors
-                            let emptyGraph: SemanticGraph.SemanticGraph = {
+                            let emptyGraph: SemanticGraph = {
                                 Nodes = Map.empty
                                 EntryPoints = []
                                 Modules = Map.empty
@@ -129,9 +130,9 @@ module ProjectChecker =
                             let checkResultWithPlatform =
                                 match options.PlatformPath with
                                 | Some platformPath ->
-                                    let platformCtx = SemanticGraph.PlatformContext.fromPlatformPath platformPath
+                                    let platformCtx = PlatformContext.fromPlatformPath platformPath
                                     { checkResult with 
-                                        Graph = SemanticGraph.SemanticGraph.withPlatform platformCtx checkResult.Graph }
+                                        Graph = SemanticGraph.withPlatform platformCtx checkResult.Graph }
                                 | None -> checkResult
 
                             Ok {
@@ -210,9 +211,9 @@ module ProjectChecker =
                         let checkResultWithPlatform =
                             match options.PlatformPath with
                             | Some platformPath ->
-                                let platformCtx = SemanticGraph.PlatformContext.fromPlatformPath platformPath
+                                let platformCtx = PlatformContext.fromPlatformPath platformPath
                                 { checkResult with 
-                                    Graph = SemanticGraph.SemanticGraph.withPlatform platformCtx checkResult.Graph }
+                                    Graph = SemanticGraph.withPlatform platformCtx checkResult.Graph }
                             | None -> checkResult
 
                         Ok {
@@ -223,7 +224,7 @@ module ProjectChecker =
                         }
 
     /// Get diagnostics for a specific file from a checked project.
-    let getDiagnosticsForFile (result: ProjectCheckResult) (filePath: string): SemanticGraph.Diagnostic list =
+    let getDiagnosticsForFile (result: ProjectCheckResult) (filePath: string): SGDiag.Diagnostic list =
         let normalizedPath = normalizePath filePath
         result.CheckResult.Diagnostics
         |> List.filter (fun d -> normalizePath d.Range.File = normalizedPath)
@@ -231,7 +232,7 @@ module ProjectChecker =
     /// Check if a project check result has any errors.
     let hasErrors (result: ProjectCheckResult): bool =
         not (Map.isEmpty result.ParseErrors) ||
-        SemanticGraph.CheckResult.hasErrors result.CheckResult
+        SGDiag.CheckResult.hasErrors result.CheckResult
 
     /// Get all error messages from a project check result.
     let getErrorMessages (result: ProjectCheckResult): string list =
@@ -243,7 +244,7 @@ module ProjectChecker =
 
         let checkErrorMsgs =
             result.CheckResult.Diagnostics
-            |> List.filter (fun d -> d.Severity = SemanticGraph.NativeDiagnosticSeverity.Error)
+            |> List.filter (fun d -> d.Severity = SGDiag.NativeDiagnosticSeverity.Error)
             |> List.map (fun d -> $"{d.Range.File}:{d.Range.Start.Line}: {d.Message}")
 
         parseErrorMsgs @ checkErrorMsgs

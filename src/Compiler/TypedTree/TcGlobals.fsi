@@ -86,7 +86,7 @@ module internal FSharpLib =
 
 [<NoEquality; NoComparison; StructuredFormatDisplay("{DebugText}")>]
 type internal BuiltinAttribInfo =
-    | AttribInfo of FSharp.Native.Compiler.Checking.Native.NativeTypes.TypeConRef * TypedTree.TyconRef
+    | AttribInfo of FSharp.Native.Compiler.NativeTypedTree.NativeTypes.TypeConRef * TypedTree.TyconRef
 
     /// For debugging
     override ToString: unit -> string
@@ -97,7 +97,7 @@ type internal BuiltinAttribInfo =
 
     member TyconRef: TypedTree.TyconRef
 
-    member TypeRef: FSharp.Native.Compiler.Checking.Native.NativeTypes.TypeConRef
+    member TypeRef: FSharp.Native.Compiler.NativeTypedTree.NativeTypes.TypeConRef
 
 [<Literal>]
 val internal tname_InternalsVisibleToAttribute: string = "System.Runtime.CompilerServices.InternalsVisibleToAttribute"
@@ -166,7 +166,7 @@ type internal TcGlobals =
 
     member FindSysAttrib: nm: string -> BuiltinAttribInfo
 
-    member FindSysTypeRef: nm: string -> FSharp.Native.Compiler.Checking.Native.NativeTypes.TypeConRef
+    member FindSysTypeRef: nm: string -> FSharp.Native.Compiler.NativeTypedTree.NativeTypes.TypeConRef
 
     member isSpliceOperator: TypedTree.ValRef -> bool
 
@@ -182,7 +182,7 @@ type internal TcGlobals =
 
     member TryFindSysAttrib: nm: string -> BuiltinAttribInfo option
 
-    member TryFindSysTypeRef: nm: string -> FSharp.Native.Compiler.Checking.Native.NativeTypes.TypeConRef option
+    member TryFindSysTypeRef: nm: string -> FSharp.Native.Compiler.NativeTypedTree.NativeTypes.TypeConRef option
 
     member TryFindSysTyconRef: path: string list -> nm: string -> TypedTree.EntityRef option
 

@@ -492,7 +492,7 @@ type nonTerminalId =
     | NONTERM_moduleSpfns
     | NONTERM_moduleSpfn
     | NONTERM_valSpfn
-    | NONTERM_optLiteralValueSpfn
+    | NONTERM_optNativeLiteralSpfn
     | NONTERM_moduleSpecBlock
     | NONTERM_tyconSpfnList
     | NONTERM_tyconSpfn
@@ -1291,9 +1291,9 @@ let prodIdxToNonTerminal (prodIdx:int) =
     | 64 -> NONTERM_moduleSpfn 
     | 65 -> NONTERM_moduleSpfn 
     | 66 -> NONTERM_valSpfn 
-    | 67 -> NONTERM_optLiteralValueSpfn 
-    | 68 -> NONTERM_optLiteralValueSpfn 
-    | 69 -> NONTERM_optLiteralValueSpfn 
+    | 67 -> NONTERM_optNativeLiteralSpfn 
+    | 68 -> NONTERM_optNativeLiteralSpfn 
+    | 69 -> NONTERM_optNativeLiteralSpfn 
     | 70 -> NONTERM_moduleSpecBlock 
     | 71 -> NONTERM_moduleSpecBlock 
     | 72 -> NONTERM_moduleSpecBlock 
@@ -3797,7 +3797,7 @@ let _fsyacc_reductions = lazy [|
             let _8 = parseState.GetInput(8) :?> 'gentype_nameop in
             let _9 = parseState.GetInput(9) :?> 'gentype_opt_explicitValTyparDecls in
             let _11 = parseState.GetInput(11) :?> 'gentype_topTypeWithTypeConstraints in
-            let _12 = parseState.GetInput(12) :?> 'gentype_optLiteralValueSpfn in
+            let _12 = parseState.GetInput(12) :?> 'gentype_optNativeLiteralSpfn in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
@@ -3830,7 +3830,7 @@ let _fsyacc_reductions = lazy [|
                              None, None 
                    )
 # 766 "pars.fsy"
-                 : 'gentype_optLiteralValueSpfn));
+                 : 'gentype_optNativeLiteralSpfn));
 # 3834 "net9.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -3842,7 +3842,7 @@ let _fsyacc_reductions = lazy [|
                              Some(mEquals), Some(_2) 
                    )
 # 769 "pars.fsy"
-                 : 'gentype_optLiteralValueSpfn));
+                 : 'gentype_optNativeLiteralSpfn));
 # 3846 "net9.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -3856,7 +3856,7 @@ let _fsyacc_reductions = lazy [|
                              Some(mEquals), Some(_3) 
                    )
 # 773 "pars.fsy"
-                 : 'gentype_optLiteralValueSpfn));
+                 : 'gentype_optNativeLiteralSpfn));
 # 3860 "net9.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleSpfns in
@@ -4243,13 +4243,13 @@ let _fsyacc_reductions = lazy [|
             let _7 = parseState.GetInput(7) :?> 'gentype_opt_explicitValTyparDecls in
             let _9 = parseState.GetInput(9) :?> 'gentype_topTypeWithTypeConstraints in
             let _10 = parseState.GetInput(10) :?> 'gentype_classMemberSpfnGetSet in
-            let _11 = parseState.GetInput(11) :?> 'gentype_optLiteralValueSpfn in
+            let _11 = parseState.GetInput(11) :?> 'gentype_optNativeLiteralSpfn in
             Microsoft.FSharp.Core.Operators.box
                 (
                    (
 # 969 "pars.fsy"
                             if Option.isSome _2 then errorR(Error(FSComp.SR.parsVisibilityDeclarationsShouldComePriorToIdentifier(), rhs parseState 2))
-                            let isInline, doc, vis2, id, explicitValTyparDecls, (ty, arity), (mEquals, optLiteralValue) = (Option.isSome _4), grabXmlDoc(parseState, _1, 1), _5, _6, _7, _9, _11
+                            let isInline, doc, vis2, id, explicitValTyparDecls, (ty, arity), (mEquals, optNativeLiteral) = (Option.isSome _4), grabXmlDoc(parseState, _1, 1), _5, _6, _7, _9, _11
                             let mWith, (getSet, getSetRangeOpt, getterAccess, setterAccess) = _10
                             let vis2 =
                                 match getterAccess, setterAccess with
@@ -4264,7 +4264,7 @@ let _fsyacc_reductions = lazy [|
                                 |> fun m -> (m, _1) ||> unionRangeWithListBy (fun (a: SynAttributeList) -> a.Range)
                                 |> unionRangeWithXmlDoc doc
                                 |> fun m ->
-                                    match optLiteralValue with
+                                    match optNativeLiteral with
                                     | None -> m
                                     | Some e -> unionRanges m e.Range
                              
@@ -4274,7 +4274,7 @@ let _fsyacc_reductions = lazy [|
                              |> List.iter (function None -> () | Some access -> errorR(Error(FSComp.SR.parsAccessibilityModsIllegalForAbstract(), access.Range)))
                             let flags = flags (getSetAdjuster arity)
                             let trivia = { LeadingKeyword = leadingKeyword; InlineKeyword = _4; WithKeyword = mWith; EqualsRange = mEquals }
-                            let valSpfn = SynValSig(_1, id, explicitValTyparDecls, ty, arity, isInline, false, doc, vis2, optLiteralValue, mWhole, trivia)
+                            let valSpfn = SynValSig(_1, id, explicitValTyparDecls, ty, arity, isInline, false, doc, vis2, optNativeLiteral, mWhole, trivia)
                             let trivia: SynMemberSigMemberTrivia = { GetSetKeywords = getSetRangeOpt }
                             SynMemberSig.Member(valSpfn, flags, mWhole, trivia) 
                    )

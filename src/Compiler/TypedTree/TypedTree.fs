@@ -13,7 +13,7 @@ open Internal.Utilities.Library.Extras
 open Internal.Utilities.Rational
 
 open FSharp.Native.Compiler 
-open FSharp.Native.Compiler.Checking.Native.NativeTypes 
+open FSharp.Native.Compiler.NativeTypedTree.NativeTypes 
 // ILX.Types removed - FNCS doesn't emit IL for discriminated unions
 open FSharp.Native.Compiler.CompilerGlobalState
 open FSharp.Native.Compiler.DiagnosticsLogger

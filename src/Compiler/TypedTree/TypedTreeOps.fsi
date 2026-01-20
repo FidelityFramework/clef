@@ -8,7 +8,7 @@ open System.Collections.Immutable
 open Internal.Utilities.Collections
 open Internal.Utilities.Library
 open Internal.Utilities.Rational
-open FSharp.Native.Compiler.Checking.Native.NativeTypes
+open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 open FSharp.Native.Compiler.DiagnosticsLogger
 open FSharp.Native.Compiler.CompilerGlobalState
 open FSharp.Native.Compiler.Syntax

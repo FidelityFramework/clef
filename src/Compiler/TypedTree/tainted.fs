@@ -7,7 +7,7 @@ namespace FSharp.Native.Compiler
 open System
 open Internal.Utilities.Library 
 open FSharp.Core.CompilerServices
-open FSharp.Native.Compiler.Checking.Native.NativeTypes
+open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.Text.Range
 

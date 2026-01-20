@@ -15,7 +15,7 @@ open Internal.Utilities.Library
 open Internal.Utilities.FSharpEnvironment  
 open FSharp.Core.CompilerServices
 open FSharp.Quotations
-open FSharp.Native.Compiler.Checking.Native.NativeTypes
+open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 open FSharp.Native.Compiler.DiagnosticsLogger
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.Text

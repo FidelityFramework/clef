@@ -1,7 +1,7 @@
 module internal Internal.Utilities.TypeHashing
 
 open Internal.Utilities.Rational
-open FSharp.Native.Compiler.Checking.Native.NativeTypes
+open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.TcGlobals
 open FSharp.Native.Compiler.Text
