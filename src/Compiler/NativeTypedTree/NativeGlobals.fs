@@ -1187,6 +1187,15 @@ module BuiltInFunctions =
             ("List.forall2", NativeType.TForall([listForall2TParam; listForall2UParam],
                 NativeType.TFun(listForall2PredType, NativeType.TFun(listForall2List1Type, NativeType.TFun(listForall2List2Type, Types.boolType)))))
 
+            // List.ofSeq : forall 'T. seq<'T> -> 'T list
+            // Alias for Seq.toList - same decomposition via Baker
+            let listOfSeqTParam = freshTypeParam "'T"
+            let listOfSeqTVar = NativeType.TVar listOfSeqTParam
+            let listOfSeqSeqType = NativeType.TSeq(listOfSeqTVar)
+            let listOfSeqResultType = NativeType.TList(listOfSeqTVar)
+            ("List.ofSeq", NativeType.TForall([listOfSeqTParam],
+                NativeType.TFun(listOfSeqSeqType, listOfSeqResultType)))
+
             //
             // Map module - additional functions
             //
@@ -1985,6 +1994,14 @@ module BuiltInFunctions =
 
             // String.fromBytes : byte[] -> string (UTF-8 decoding)
             ("String.fromBytes", NativeType.TFun(mkArrayType Types.uint8Type, Types.stringType))
+
+            // String.concat2 : string -> string -> string (binary concatenation)
+            // Used when + operator is applied to strings
+            ("String.concat2", NativeType.TFun(Types.stringType, NativeType.TFun(Types.stringType, Types.stringType)))
+
+            // String.concat : string list -> string (concatenate list of strings)
+            let concatListType = NativeType.TList(Types.stringType)
+            ("String.concat", NativeType.TFun(concatListType, Types.stringType))
         ]
 
 //-------------------------------------------------------------------------

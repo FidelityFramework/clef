@@ -32,6 +32,7 @@ open FSharp.Native.Compiler.Baker.ShadowAST
 open FSharp.Native.Compiler.Baker.Ingredients.RecipeBuilder
 open FSharp.Native.Compiler.Baker.Ingredients.Primitives
 open FSharp.Native.Compiler.Baker.Ingredients.Patterns
+open FSharp.Native.Compiler.Baker.Recipes.SeqRecipes
 
 //=============================================================================
 // BRIDGE: Convert Recipe results to Decomposition.Result
@@ -550,7 +551,11 @@ let tryDecompose
         // sumBy projects to numeric type, default to int
         let numType = stateType |> Option.defaultValue Types.intType
         Some (runRecipe ctx (listSumByRecipe projection xs elemType numType))
-    
+
+    // Cross-module alias: List.ofSeq = Seq.toList
+    | "ofSeq", [xs] ->
+        Some (runRecipe ctx (seqToListRecipe xs elemType))
+
     // Primitive operations - Alex witnesses directly
     | "empty", _
     | "isEmpty", _

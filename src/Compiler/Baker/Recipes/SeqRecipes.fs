@@ -512,7 +512,8 @@ let private seqAppendRecipe
 //=============================================================================
 
 /// Seq.toList xs → iterate and cons each element
-let private seqToListRecipe
+/// Also aliased as List.ofSeq
+let seqToListRecipe
     (inputSeqId: NodeId)
     (elemType: NativeType)
     : Recipe<NodeId> =

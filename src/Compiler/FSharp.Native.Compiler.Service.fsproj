@@ -322,11 +322,11 @@
     <Compile Include="Baker\Ingredients\Patterns.fs" />
     <!-- Baker Recipes - HOF decomposition templates (PRD-13a) -->
     <Compile Include="Baker\Recipes\Decomposition.fs" />
+    <Compile Include="Baker\Recipes\SeqRecipes.fs" />
     <Compile Include="Baker\Recipes\ListRecipes.fs" />
     <Compile Include="Baker\Recipes\MapRecipes.fs" />
     <Compile Include="Baker\Recipes\SetRecipes.fs" />
     <Compile Include="Baker\Recipes\OptionRecipes.fs" />
-    <Compile Include="Baker\Recipes\SeqRecipes.fs" />
     <Compile Include="Baker\HOFDecomposition.fs" />
 
     <Compile Include="NativeTypedTree\NativeService.fs" />

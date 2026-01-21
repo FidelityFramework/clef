@@ -413,9 +413,30 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     PhaseEmitter.emitExpressionView finalGraph
     PhaseEmitter.emitExpressionText finalGraph
 
+    // Filter diagnostics to only those from source files with reachable code
+    // This prevents reporting errors from unreachable dependency code (e.g., unused
+    // parts of transitive dependencies like BAREWire)
+    // 
+    // Strategy: Get all source files that have reachable nodes, then filter
+    // diagnostics to only those from files with reachable code.
+    let reachableSourceFiles =
+        finalGraph.Nodes
+        |> Map.values
+        |> Seq.map (fun node -> node.Range.File)
+        |> Seq.filter (fun f -> f <> "")  // Filter out empty/dummy ranges
+        |> Set.ofSeq
+    
+    let filteredDiagnostics =
+        diagnostics
+        |> List.filter (fun d ->
+            // Keep diagnostic if its source file has reachable code
+            // If no file info (empty string), keep the diagnostic (conservative)
+            let file = d.Range.File
+            file = "" || Set.contains file reachableSourceFiles)
+
     {
         Graph = finalGraph
-        Diagnostics = diagnostics
+        Diagnostics = filteredDiagnostics
     }
 
 //-------------------------------------------------------------------------
