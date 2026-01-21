@@ -66,6 +66,7 @@ let isCompilerProvidedIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Set
     | IntrinsicModule.List
     | IntrinsicModule.Option
+    | IntrinsicModule.Result
     | IntrinsicModule.Platform -> true  // Platform introspection (sizeof, wordSize)
 
 /// Extract semantic references from a node's Kind (call targets, definition refs, etc.)

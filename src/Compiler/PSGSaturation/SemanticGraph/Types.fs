@@ -85,6 +85,7 @@ type IntrinsicModule =
     | Set           // Immutable set operations (empty, add, contains, remove, union, intersect)
     | List          // Immutable list operations (head, tail, length, map, filter, fold, etc.)
     | Option        // Option operations (map, bind, defaultValue, isSome, isNone)
+    | Result        // Result operations (map, bind, mapError, isOk, isError, defaultValue)
 
 /// Category of intrinsic - guides how Alex should emit it
 [<RequireQualifiedAccess>]

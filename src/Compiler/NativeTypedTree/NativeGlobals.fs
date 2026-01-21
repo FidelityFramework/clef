@@ -1938,6 +1938,76 @@ module BuiltInFunctions =
                 NativeType.TFun(optGetOptionType, optGetTVar)))
 
             // =====================================================================
+            // Result Module - Error handling operations
+            // =====================================================================
+
+            // Result.map : forall 'T 'U 'E. ('T -> 'U) -> Result<'T, 'E> -> Result<'U, 'E>
+            let resMapTParam = freshTypeParam "'T"
+            let resMapUParam = freshTypeParam "'U"
+            let resMapEParam = freshTypeParam "'E"
+            let resMapTVar = NativeType.TVar resMapTParam
+            let resMapUVar = NativeType.TVar resMapUParam
+            let resMapEVar = NativeType.TVar resMapEParam
+            let resMapInputType = mkResultType resMapTVar resMapEVar
+            let resMapResultType = mkResultType resMapUVar resMapEVar
+            let resMapFn = NativeType.TFun(resMapTVar, resMapUVar)
+            ("Result.map", NativeType.TForall([resMapTParam; resMapUParam; resMapEParam],
+                NativeType.TFun(resMapFn, NativeType.TFun(resMapInputType, resMapResultType))))
+
+            // Result.bind : forall 'T 'U 'E. ('T -> Result<'U, 'E>) -> Result<'T, 'E> -> Result<'U, 'E>
+            let resBindTParam = freshTypeParam "'T"
+            let resBindUParam = freshTypeParam "'U"
+            let resBindEParam = freshTypeParam "'E"
+            let resBindTVar = NativeType.TVar resBindTParam
+            let resBindUVar = NativeType.TVar resBindUParam
+            let resBindEVar = NativeType.TVar resBindEParam
+            let resBindInputType = mkResultType resBindTVar resBindEVar
+            let resBindResultType = mkResultType resBindUVar resBindEVar
+            let resBindFn = NativeType.TFun(resBindTVar, resBindResultType)
+            ("Result.bind", NativeType.TForall([resBindTParam; resBindUParam; resBindEParam],
+                NativeType.TFun(resBindFn, NativeType.TFun(resBindInputType, resBindResultType))))
+
+            // Result.mapError : forall 'T 'E 'F. ('E -> 'F) -> Result<'T, 'E> -> Result<'T, 'F>
+            let resMapErrTParam = freshTypeParam "'T"
+            let resMapErrEParam = freshTypeParam "'E"
+            let resMapErrFParam = freshTypeParam "'F"
+            let resMapErrTVar = NativeType.TVar resMapErrTParam
+            let resMapErrEVar = NativeType.TVar resMapErrEParam
+            let resMapErrFVar = NativeType.TVar resMapErrFParam
+            let resMapErrInputType = mkResultType resMapErrTVar resMapErrEVar
+            let resMapErrResultType = mkResultType resMapErrTVar resMapErrFVar
+            let resMapErrFn = NativeType.TFun(resMapErrEVar, resMapErrFVar)
+            ("Result.mapError", NativeType.TForall([resMapErrTParam; resMapErrEParam; resMapErrFParam],
+                NativeType.TFun(resMapErrFn, NativeType.TFun(resMapErrInputType, resMapErrResultType))))
+
+            // Result.isOk : forall 'T 'E. Result<'T, 'E> -> bool
+            let resIsOkTParam = freshTypeParam "'T"
+            let resIsOkEParam = freshTypeParam "'E"
+            let resIsOkTVar = NativeType.TVar resIsOkTParam
+            let resIsOkEVar = NativeType.TVar resIsOkEParam
+            let resIsOkType = mkResultType resIsOkTVar resIsOkEVar
+            ("Result.isOk", NativeType.TForall([resIsOkTParam; resIsOkEParam],
+                NativeType.TFun(resIsOkType, Types.boolType)))
+
+            // Result.isError : forall 'T 'E. Result<'T, 'E> -> bool
+            let resIsErrTParam = freshTypeParam "'T"
+            let resIsErrEParam = freshTypeParam "'E"
+            let resIsErrTVar = NativeType.TVar resIsErrTParam
+            let resIsErrEVar = NativeType.TVar resIsErrEParam
+            let resIsErrType = mkResultType resIsErrTVar resIsErrEVar
+            ("Result.isError", NativeType.TForall([resIsErrTParam; resIsErrEParam],
+                NativeType.TFun(resIsErrType, Types.boolType)))
+
+            // Result.defaultValue : forall 'T 'E. 'T -> Result<'T, 'E> -> 'T
+            let resDefValTParam = freshTypeParam "'T"
+            let resDefValEParam = freshTypeParam "'E"
+            let resDefValTVar = NativeType.TVar resDefValTParam
+            let resDefValEVar = NativeType.TVar resDefValEParam
+            let resDefValType = mkResultType resDefValTVar resDefValEVar
+            ("Result.defaultValue", NativeType.TForall([resDefValTParam; resDefValEParam],
+                NativeType.TFun(resDefValTVar, NativeType.TFun(resDefValType, resDefValTVar))))
+
+            // =====================================================================
             // Bits Module - Byte manipulation and bit reinterpretation
             // =====================================================================
 
@@ -1994,14 +2064,6 @@ module BuiltInFunctions =
 
             // String.fromBytes : byte[] -> string (UTF-8 decoding)
             ("String.fromBytes", NativeType.TFun(mkArrayType Types.uint8Type, Types.stringType))
-
-            // String.concat2 : string -> string -> string (binary concatenation)
-            // Used when + operator is applied to strings
-            ("String.concat2", NativeType.TFun(Types.stringType, NativeType.TFun(Types.stringType, Types.stringType)))
-
-            // String.concat : string list -> string (concatenate list of strings)
-            let concatListType = NativeType.TList(Types.stringType)
-            ("String.concat", NativeType.TFun(concatListType, Types.stringType))
         ]
 
 //-------------------------------------------------------------------------

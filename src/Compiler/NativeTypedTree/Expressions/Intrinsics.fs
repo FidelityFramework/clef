@@ -34,11 +34,11 @@ let private mkIntrinsic (modl: IntrinsicModule) (op: string) (cat: IntrinsicCate
     { Module = modl; Operation = op; Category = cat; FullName = fullName }
 
 //-------------------------------------------------------------------------
-// Module-Qualified Intrinsic Parsing
+// Qualified Intrinsic Parsing
 //-------------------------------------------------------------------------
 
-/// Parse "Module.operation" into (IntrinsicModule, operation) tuple.
-/// Returns None if not a recognized intrinsic module prefix.
+/// Parse "Prefix.operation" into (IntrinsicModule, operation) tuple.
+/// Returns None if not a recognized intrinsic prefix.
 let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
     match name.IndexOf('.') with
     | -1 -> None
@@ -73,10 +73,11 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         | "Set" -> Some (IntrinsicModule.Set, opPart)
         | "List" -> Some (IntrinsicModule.List, opPart)
         | "Option" -> Some (IntrinsicModule.Option, opPart)
+        | "Result" -> Some (IntrinsicModule.Result, opPart)
         | _ -> None
 
 //-------------------------------------------------------------------------
-// Per-Module Intrinsic Resolvers
+// Intrinsic Resolvers by Category
 //-------------------------------------------------------------------------
 
 /// Resolve NativePtr.* operations
@@ -840,10 +841,10 @@ let private resolveCollectionOp (modl: IntrinsicModule) (moduleName: string) (op
         UnknownOperation ("Unknown " + moduleName + " intrinsic: " + fullName + ". Available: " + available)
 
 //-------------------------------------------------------------------------
-// Main Module Intrinsic Dispatcher
+// Intrinsic Dispatcher
 //-------------------------------------------------------------------------
 
-/// Resolve a module-qualified intrinsic using proper pattern matching.
+/// Resolve a qualified intrinsic using proper pattern matching.
 /// This is the main dispatch function - NO string prefix matching.
 let resolveModuleIntrinsic
     (modl: IntrinsicModule)
@@ -881,6 +882,7 @@ let resolveModuleIntrinsic
     | IntrinsicModule.Set -> resolveCollectionOp IntrinsicModule.Set "Set" op globals range
     | IntrinsicModule.List -> resolveCollectionOp IntrinsicModule.List "List" op globals range
     | IntrinsicModule.Option -> resolveCollectionOp IntrinsicModule.Option "Option" op globals range
+    | IntrinsicModule.Result -> resolveCollectionOp IntrinsicModule.Result "Result" op globals range
     | IntrinsicModule.Convert -> NotAnIntrinsic  // Conversions handled separately (float, int, etc.)
     | IntrinsicModule.Operators -> NotAnIntrinsic  // Operators handled separately
     | IntrinsicModule.Unchecked -> NotAnIntrinsic  // Rejected via BCL check
