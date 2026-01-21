@@ -150,6 +150,42 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
     | NativeType.TApp(tc, [elem1]), NativeType.TSeq elem2 when tc.Name = "seq" ->
         unify elem1 elem2 range
 
+    // List types (PRD-13a)
+    | NativeType.TList elem1, NativeType.TList elem2 ->
+        unify elem1 elem2 range
+
+    // Handle TList vs TApp(list/List, [elem]) - both represent the same concept
+    // TList is the canonical form, TApp comes from type syntax parsing
+    | NativeType.TList elem1, NativeType.TApp(tc, [elem2]) when tc.Name = "list" || tc.Name = "List" ->
+        unify elem1 elem2 range
+    | NativeType.TApp(tc, [elem1]), NativeType.TList elem2 when tc.Name = "list" || tc.Name = "List" ->
+        unify elem1 elem2 range
+
+    // Map types (PRD-13a)
+    | NativeType.TMap(k1, v1), NativeType.TMap(k2, v2) ->
+        unify k1 k2 range
+        unify v1 v2 range
+
+    // Handle TMap vs TApp(Map, [k; v]) - both represent the same concept
+    // TMap is the canonical form, TApp comes from type syntax parsing
+    | NativeType.TMap(k1, v1), NativeType.TApp(tc, [k2; v2]) when tc.Name = "Map" ->
+        unify k1 k2 range
+        unify v1 v2 range
+    | NativeType.TApp(tc, [k1; v1]), NativeType.TMap(k2, v2) when tc.Name = "Map" ->
+        unify k1 k2 range
+        unify v1 v2 range
+
+    // Set types (PRD-13a)
+    | NativeType.TSet elem1, NativeType.TSet elem2 ->
+        unify elem1 elem2 range
+
+    // Handle TSet vs TApp(Set, [elem]) - both represent the same concept
+    // TSet is the canonical form, TApp comes from type syntax parsing
+    | NativeType.TSet elem1, NativeType.TApp(tc, [elem2]) when tc.Name = "Set" ->
+        unify elem1 elem2 range
+    | NativeType.TApp(tc, [elem1]), NativeType.TSet elem2 when tc.Name = "Set" ->
+        unify elem1 elem2 range
+
     // Handle TByref vs TApp(byref/inref/outref, [elem]) - both represent the same concept
     // TApp(byref, ...) maps to TByref(..., InOut)
     | NativeType.TByref(elem1, ByrefKind.InOut), NativeType.TApp(tc, [elem2]) when tc.Name = "byref" ->
@@ -274,6 +310,14 @@ let canUnify (t1: NativeType) (t2: NativeType) : bool =
             s1 = s2 && List.length e1 = List.length e2 && List.forall2 check e1 e2
         | NativeType.TLazy e1, NativeType.TLazy e2 ->
             check e1 e2  // PRD-14
+        | NativeType.TSeq e1, NativeType.TSeq e2 ->
+            check e1 e2  // PRD-15
+        | NativeType.TList e1, NativeType.TList e2 ->
+            check e1 e2  // PRD-13a
+        | NativeType.TMap(k1, v1), NativeType.TMap(k2, v2) ->
+            check k1 k2 && check v1 v2  // PRD-13a
+        | NativeType.TSet e1, NativeType.TSet e2 ->
+            check e1 e2  // PRD-13a
         | NativeType.TError _, _ -> true
         | _, NativeType.TError _ -> true
         | _ -> false

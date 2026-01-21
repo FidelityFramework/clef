@@ -51,26 +51,97 @@ let extractLambdaParams
             | SynSimplePat.Typed(SynSimplePat.Id(ident, _, _, _, _, _), synType, _) ->
                 // Type annotation provided - convert to native type
                 (ident.idText, checkSynType env synType)
-            | _ ->
-                ("_", freshTypeVar range))
+            | SynSimplePat.Typed(SynSimplePat.Typed _, _, _) ->
+                // Double-typed pattern - unusual but handle gracefully
+                failwith "Double type annotation in lambda parameter not supported"
+            | SynSimplePat.Typed(SynSimplePat.Attrib(innerInner, _, _), synType, _) ->
+                // Typed attributed pattern - (name: Type) with attributes
+                match innerInner with
+                | SynSimplePat.Id(ident, _, _, _, _, _) ->
+                    (ident.idText, checkSynType env synType)
+                | other ->
+                    failwith ("Unsupported typed attributed lambda parameter: " + other.GetType().Name)
+            | SynSimplePat.Attrib(innerPat, _, _) ->
+                // Attributed pattern - extract the inner identifier
+                match innerPat with
+                | SynSimplePat.Id(ident, _, _, _, _, _) ->
+                    (ident.idText, freshTypeVar range)
+                | SynSimplePat.Typed(SynSimplePat.Id(ident, _, _, _, _, _), synType, _) ->
+                    (ident.idText, checkSynType env synType)
+                | other ->
+                    failwith ("Unsupported attributed lambda parameter: " + other.GetType().Name))
 
 //-------------------------------------------------------------------------
 // Binding Name Extraction
 //-------------------------------------------------------------------------
 
+/// Marker returned by getBindingName for tuple patterns
+/// This tells checkBinding to use special tuple destructuring logic
+[<Literal>]
+let TuplePatternMarker = "__TUPLE_PATTERN__"
+
 /// Get the name from a binding
+/// NOTE: For tuple patterns, returns TuplePatternMarker to trigger special handling in checkBinding.
 let getBindingName (binding: SynBinding) : string =
     let (SynBinding(_, _, _, _, _, _, _, headPat, _, _, _, _, _)) = binding
-    match headPat with
-    | SynPat.Named(SynIdent(ident, _), _, _, _) -> ident.idText
-    | SynPat.LongIdent(longDotId, _, _, _, _, _) ->
-        longDotId.LongIdent |> List.last |> fun id -> id.idText
-    | _ -> "_"
+    let rec getNameFromPat pat =
+        match pat with
+        | SynPat.Named(SynIdent(ident, _), _, _, _) -> ident.idText
+        | SynPat.LongIdent(longDotId, _, _, _, _, _) ->
+            longDotId.LongIdent |> List.last |> fun id -> id.idText
+        | SynPat.Paren(innerPat, _) ->
+            // Unwrap parentheses - (name) is the same as name
+            getNameFromPat innerPat
+        | SynPat.Typed(innerPat, _, _) ->
+            // Type annotation - (name : Type) extracts name
+            getNameFromPat innerPat
+        | SynPat.Tuple _ ->
+            // Return marker to trigger tuple destructuring in checkBinding
+            TuplePatternMarker
+        | SynPat.Wild _ ->
+            // Wildcard pattern: let _ = expr
+            "_"
+        | SynPat.Const(SynConst.Unit, _) ->
+            // Unit pattern: let () = expr
+            "_"
+        | other ->
+            // Explicit diagnostic for unhandled patterns
+            // This should never reach here for valid F# - if it does, we need to add support
+            failwith ("Unsupported pattern in let binding: " + other.GetType().Name + ". Please report this as a bug with your source code.")
+    getNameFromPat headPat
 
 /// Check if a binding is mutable
 let isBindingMutable (binding: SynBinding) : bool =
     let (SynBinding(_, _, _, isMutable, _, _, _, _, _, _, _, _, _)) = binding
     isMutable
+
+/// Extract element names from a tuple pattern (for tuple destructuring)
+/// Returns list of (name, isWildcard) pairs
+let rec extractTupleElements (pat: SynPat) : (string * bool) list =
+    match pat with
+    | SynPat.Tuple(_, elements, _, _) ->
+        elements |> List.collect extractTupleElements
+    | SynPat.Paren(inner, _) ->
+        extractTupleElements inner
+    | SynPat.Typed(inner, _, _) ->
+        extractTupleElements inner
+    | SynPat.Named(SynIdent(ident, _), _, _, _) ->
+        [(ident.idText, false)]
+    | SynPat.Wild _ ->
+        [("_", true)]
+    | SynPat.Const(SynConst.Unit, _) ->
+        [("_", true)]
+    | other ->
+        failwith ("Unsupported pattern in tuple destructuring: " + other.GetType().Name)
+
+/// Get the head pattern from a binding, unwrapping Paren
+let getHeadPattern (binding: SynBinding) : SynPat =
+    let (SynBinding(_, _, _, _, _, _, _, headPat, _, _, _, _, _)) = binding
+    let rec unwrap pat =
+        match pat with
+        | SynPat.Paren(inner, _) -> unwrap inner
+        | other -> other
+    unwrap headPat
 
 //-------------------------------------------------------------------------
 // Function Parameter Extraction
@@ -160,6 +231,99 @@ let checkBinding
             | _ -> None  // Non-constant [<Literal>] - will be caught by type checker
         else
             None
+
+    //-------------------------------------------------------------------------
+    // PRD-13a: Tuple Destructuring
+    // let (a, b) = expr  desugars to:
+    //   let __tuple_N = expr
+    //   let a = TupleGet(__tuple_N, 0)
+    //   let b = TupleGet(__tuple_N, 1)
+    //-------------------------------------------------------------------------
+    let checkTupleDestructure () =
+        // Extract element names from the tuple pattern
+        let elementInfo = extractTupleElements (getHeadPattern binding)
+
+        // Check the RHS expression - this gives us the tuple value
+        let tupleExprNode = checkExpr env builder expr
+
+        // Create fresh type variables for each tuple element
+        let elementTypes = elementInfo |> List.map (fun (_, _) -> freshTypeVar range)
+
+        // Constrain the RHS to be a tuple of the correct arity (reference tuple, not struct)
+        let expectedTupleType = NativeType.TTuple(elementTypes, false)
+        addConstraint (Constraint.Equals(tupleExprNode.Type, expectedTupleType, range)) env
+
+        // Create a hidden binding for the tuple
+        // Use NodeId.fresh() to get a unique identifier for the hidden name
+        let hiddenName = sprintf "__tuple_%d" (NodeId.value (NodeId.fresh()))
+        let hiddenBinding = builder.Create(
+            SemanticKind.Binding(hiddenName, isMutable, false, false),
+            tupleExprNode.Type,
+            range,
+            children = [tupleExprNode.Id])
+        builder.SetParent(tupleExprNode.Id, hiddenBinding.Id)
+
+        // Create TupleGet nodes and bindings for each element
+        let elementBindings =
+            elementInfo |> List.mapi (fun i (elemName, isWildcard) ->
+                let elemType = elementTypes.[i]
+
+                // Create VarRef to the hidden tuple
+                let tupleRef = builder.Create(
+                    SemanticKind.VarRef(hiddenName, Some hiddenBinding.Id),
+                    tupleExprNode.Type,
+                    range,
+                    arena = env.CurrentArena)
+
+                // Create TupleGet node
+                let tupleGetNode = builder.Create(
+                    SemanticKind.TupleGet(tupleRef.Id, i),
+                    elemType,
+                    range,
+                    children = [tupleRef.Id])
+                builder.SetParent(tupleRef.Id, tupleGetNode.Id)
+
+                // Create binding for the element (unless wildcard)
+                let bindingName = if isWildcard then sprintf "_discard_%d" i else elemName
+                let elemBinding = builder.Create(
+                    SemanticKind.Binding(bindingName, isMutable, false, false),
+                    elemType,
+                    range,
+                    children = [tupleGetNode.Id])
+                builder.SetParent(tupleGetNode.Id, elemBinding.Id)
+
+                (elemName, elemType, elemBinding, isWildcard))
+
+        // Create Sequential containing all bindings
+        let allBindingNodes = hiddenBinding :: (elementBindings |> List.map (fun (_, _, b, _) -> b))
+        let allBindingIds = allBindingNodes |> List.map (fun n -> n.Id)
+
+        // The type of the Sequential is unit (the bindings introduce names but produce no value)
+        let seqNode = builder.Create(
+            SemanticKind.Sequential allBindingIds,
+            env.Globals.UnitType,
+            range,
+            children = allBindingIds)
+
+        // Set parents
+        for bindingId in allBindingIds do
+            builder.SetParent(bindingId, seqNode.Id)
+
+        // Store element binding info in metadata for environment extension
+        // Format: comma-separated "name:nodeId" pairs
+        let elementBindingInfo =
+            elementBindings
+            |> List.filter (fun (_, _, _, isWildcard) -> not isWildcard)
+            |> List.map (fun (name, _, binding, _) -> sprintf "%s:%d" name (NodeId.value binding.Id))
+            |> String.concat ","
+        let seqNodeWithMeta = builder.SetMetadata(seqNode.Id, "TupleBindings", MetadataValue.String elementBindingInfo)
+
+        (seqNodeWithMeta, None, isMutable, None)
+
+    // Check if this is a tuple pattern - handle it specially
+    if name = TuplePatternMarker then
+        checkTupleDestructure ()
+    else
 
     // Check if this is a function definition (has parameters)
     match tryGetFunctionParams checkSynType headPat env range with
@@ -435,13 +599,39 @@ let checkLetOrUse
         List.zip bindingList results
         |> List.fold (fun env (binding, (node: SemanticNode, inlineBodyOpt, isMutable, literalValueOpt)) ->
             let name = getBindingName binding
-            match inlineBodyOpt, literalValueOpt with
-            | Some inlineBody, _ ->
-                addInlineBinding name node.Type (Some node.Id) inlineBody env
-            | None, Some litVal ->
-                addLiteralBinding name node.Type (Some node.Id) litVal env
-            | None, None ->
-                addBinding name node.Type isMutable (Some node.Id) env.EnclosingFunction.IsNone env
+            // PRD-13a: Handle tuple destructuring
+            if name = TuplePatternMarker then
+                // Read tuple binding info from metadata
+                match node.Metadata.TryFind "TupleBindings" with
+                | Some (MetadataValue.String bindingInfo) when bindingInfo <> "" ->
+                    // Parse "name1:nodeId1,name2:nodeId2,..."
+                    bindingInfo.Split(',')
+                    |> Array.fold (fun env part ->
+                        let parts = part.Split(':')
+                        if parts.Length = 2 then
+                            let elemName = parts.[0]
+                            let nodeIdVal = int parts.[1]
+                            let elemNodeId = NodeId nodeIdVal
+                            // Get the element type from the binding node
+                            let elemType =
+                                match builder.Nodes.TryFind elemNodeId with
+                                | Some elemNode -> elemNode.Type
+                                | None -> freshTypeVar node.Range  // Fallback
+                            addBinding elemName elemType isMutable (Some elemNodeId) env.EnclosingFunction.IsNone env
+                        else
+                            env
+                    ) env
+                | _ ->
+                    // No bindings to add (all wildcards)
+                    env
+            else
+                match inlineBodyOpt, literalValueOpt with
+                | Some inlineBody, _ ->
+                    addInlineBinding name node.Type (Some node.Id) inlineBody env
+                | None, Some litVal ->
+                    addLiteralBinding name node.Type (Some node.Id) litVal env
+                | None, None ->
+                    addBinding name node.Type isMutable (Some node.Id) env.EnclosingFunction.IsNone env
         ) baseEnv
 
     // Helper: build final Sequential node

@@ -70,6 +70,16 @@ type NodeBuilder() =
             nodes <- Map.add nodeId updated nodes
         | None -> ()
 
+    /// Set metadata on an existing node and return the updated node
+    /// PRD-13a: Used for tuple destructuring to store element binding info
+    member _.SetMetadata(nodeId: NodeId, key: string, value: MetadataValue) : SemanticNode =
+        match Map.tryFind nodeId nodes with
+        | Some node ->
+            let updated = { node with Metadata = Map.add key value node.Metadata }
+            nodes <- Map.add nodeId updated nodes
+            updated
+        | None -> failwith ("Node not found: " + string (let (NodeId n) = nodeId in n))
+
     /// Build the semantic graph
     member _.Build(entryPoints: NodeId list) : SemanticGraph =
         { Nodes = nodes

@@ -60,6 +60,11 @@ let isCompilerProvidedIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.TimeSpan
     | IntrinsicModule.Lazy  // Lazy operations handled by Alex (PRD-14)
     | IntrinsicModule.Seq  // Seq operations handled by Alex (PRD-15)
+    // PRD-13a: Collection operations handled by Alex
+    | IntrinsicModule.Map
+    | IntrinsicModule.Set
+    | IntrinsicModule.List
+    | IntrinsicModule.Option
     | IntrinsicModule.Platform -> true  // Platform introspection (sizeof, wordSize)
 
 /// Extract semantic references from a node's Kind (call targets, definition refs, etc.)
@@ -106,6 +111,8 @@ let getSemanticReferences (node: SemanticNode) : NodeId list =
     // Expressions with sub-expressions
     | SemanticKind.TupleExpr elements ->
         elements
+    | SemanticKind.TupleGet(tupleId, _) ->
+        [tupleId]
     | SemanticKind.ArrayExpr elements ->
         elements
     | SemanticKind.ListExpr elements ->

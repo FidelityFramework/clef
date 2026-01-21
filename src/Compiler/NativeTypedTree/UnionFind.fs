@@ -118,6 +118,18 @@ let rec applySubst (ty: NativeType) : NativeType =
     | NativeType.TSeq elem ->
         NativeType.TSeq(applySubst elem)  // PRD-15
 
+    // PRD-13a: Immutable collection types
+    | NativeType.TList elem ->
+        NativeType.TList(applySubst elem)
+
+    | NativeType.TMap(keyTy, valueTy) ->
+        NativeType.TMap(applySubst keyTy, applySubst valueTy)
+
+    | NativeType.TSet elem ->
+        NativeType.TSet(applySubst elem)
+
+    // Note: option<'T> is handled via TUnion - it's a discriminated union
+
     | NativeType.TMeasure _ -> ty
     | NativeType.TError _ -> ty
 
@@ -174,6 +186,18 @@ let rec occursIn (typar: TypeParam) (ty: NativeType) : bool =
 
     | NativeType.TSeq elem ->
         occursIn typar elem  // PRD-15
+
+    // PRD-13a: Immutable collection types
+    | NativeType.TList elem ->
+        occursIn typar elem
+
+    | NativeType.TMap(keyTy, valueTy) ->
+        occursIn typar keyTy || occursIn typar valueTy
+
+    | NativeType.TSet elem ->
+        occursIn typar elem
+
+    // Note: option<'T> is handled via TUnion - it's a discriminated union
 
     | NativeType.TMeasure m -> occursInMeasure typar m
     | NativeType.TError _ -> false
@@ -236,6 +260,18 @@ let rec freeTypeVars (ty: NativeType) : Set<TypeParamId> =
 
     | NativeType.TSeq elem ->
         freeTypeVars elem  // PRD-15
+
+    // PRD-13a: Immutable collection types
+    | NativeType.TList elem ->
+        freeTypeVars elem
+
+    | NativeType.TMap(keyTy, valueTy) ->
+        Set.union (freeTypeVars keyTy) (freeTypeVars valueTy)
+
+    | NativeType.TSet elem ->
+        freeTypeVars elem
+
+    // Note: option<'T> is handled via TUnion - it's a discriminated union
 
     | NativeType.TMeasure m -> freeTypeVarsInMeasure m
     | NativeType.TError _ -> Set.empty
@@ -303,6 +339,18 @@ let rec collectFreeTypeParams (ty: NativeType) : TypeParam list =
 
     | NativeType.TSeq elem ->
         collectFreeTypeParams elem  // PRD-15
+
+    // PRD-13a: Immutable collection types
+    | NativeType.TList elem ->
+        collectFreeTypeParams elem
+
+    | NativeType.TMap(keyTy, valueTy) ->
+        collectFreeTypeParams keyTy @ collectFreeTypeParams valueTy
+
+    | NativeType.TSet elem ->
+        collectFreeTypeParams elem
+
+    // Note: option<'T> is handled via TUnion - it's a discriminated union
 
     | NativeType.TMeasure _ -> []  // Measure type params handled separately
     | NativeType.TError _ -> []

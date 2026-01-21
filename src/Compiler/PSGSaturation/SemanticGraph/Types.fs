@@ -79,6 +79,11 @@ type IntrinsicModule =
     | Seq           // Sequence generation (seq { }, toArray, toList, etc.)
     | Arena         // Arena allocation (fromPointer, alloc, allocAligned, remaining, reset)
     | Platform      // Platform info (wordSize, sizeof)
+    // PRD-13a: Core Collections
+    | Map           // Immutable map operations (empty, add, tryFind, containsKey, values, keys, etc.)
+    | Set           // Immutable set operations (empty, add, contains, remove, union, intersect)
+    | List          // Immutable list operations (head, tail, length, map, filter, fold, etc.)
+    | Option        // Option operations (map, bind, defaultValue, isSome, isNone)
 
 /// Category of intrinsic - guides how Alex should emit it
 [<RequireQualifiedAccess>]
@@ -226,6 +231,7 @@ type SemanticKind =
     | SeqExpr of body: NodeId * captures: CaptureInfo list
     | Yield of value: NodeId
     | YieldBang of seq: NodeId
+    | TupleGet of tuple: NodeId * index: int
     | Error of message: string
 
 /// Kind of type definition

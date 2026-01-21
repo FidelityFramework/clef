@@ -1199,6 +1199,7 @@ These parse as standard F# (attributes, operators) but have special semantics in
 | Part 12: Ownership/Coeffects | Reserved | Future |
 | Part 12: SCF Regions | **Specified** | Implemented in Firefly |
 | Part 13: Pattern Matching | **Specified** | Implemented in Firefly |
+| Part 14: Collection HOF Decomposition | **Specified** | Design phase |
 
 ---
 
@@ -1350,6 +1351,209 @@ Hint: <Actionable guidance for resolution>
 ```
 
 NORMATIVE: Hints SHALL provide actionable guidance. Generic "see documentation" hints are insufficient.
+
+---
+
+---
+
+## Part 14: Collection HOF Decomposition (Baker)
+
+### 14.1 Overview
+
+Collection higher-order functions (HOFs) like `List.map`, `List.fold`, `Seq.collect`, etc. must be decomposed into primitive operations that the code generator (Alex) can witness directly. This decomposition occurs in the **Baker** component of FNCS.
+
+**Architectural Principle**: PSGSaturation (Baker) decomposes; Alex witnesses. Alex never implements collection algorithms—it sees only primitives.
+
+```
+FNCS Type Checking
+        ↓
+PSGSaturation (Baker Decomposition)
+        ↓
+PSG Graph (contains full algorithmic structure)
+        ↓
+Alex (witnesses primitives → MLIR)
+```
+
+### 14.2 Primitive vs HOF Operations
+
+**Primitive Operations** (Alex witnesses directly):
+
+| Collection | Primitives |
+|------------|------------|
+| `List<'T>` | `empty`, `isEmpty`, `head`, `tail`, `cons` |
+| `Map<'K,'V>` | `empty`, `isEmpty`, `node`, `left`, `right`, `key`, `value` |
+| `Set<'T>` | `empty`, `isEmpty`, `node`, `left`, `right`, `element` |
+| `Option<'T>` | `some`, `none`, `isSome`, `isNone`, `get` |
+| `Seq<'T>` | `moveNext`, `current`, `dispose` (iterator protocol) |
+
+**HOF Operations** (Baker decomposes):
+
+| Collection | HOFs |
+|------------|------|
+| `List<'T>` | `map`, `fold`, `filter`, `exists`, `forall`, `length`, `rev`, `append`, `collect` |
+| `Map<'K,'V>` | `add`, `tryFind`, `containsKey`, `toList`, `keys`, `values`, `forall` |
+| `Set<'T>` | `add`, `contains`, `remove`, `union`, `intersect`, `difference` |
+| `Option<'T>` | `map`, `bind`, `filter`, `defaultValue` |
+| `Seq<'T>` | `map`, `filter`, `collect`, `take`, `skip`, `fold`, `iter` |
+
+### 14.3 Decomposition Model
+
+When Baker encounters a HOF application in the PSG, it expands it into a structure using only primitive operations.
+
+**Example: List.map**
+
+```fsharp
+// Source
+List.map f xs
+
+// Baker decomposes to (conceptually):
+let rec loop xs =
+    if List.isEmpty xs then List.empty
+    else List.cons (f (List.head xs)) (loop (List.tail xs))
+loop xs
+```
+
+**Example: Seq.collect (state machine)**
+
+```fsharp
+// Source
+Seq.collect f xs
+
+// Baker decomposes to an iterator state machine with:
+// - State enum: Initial | InOuter | InInner | Done
+// - MoveNext with state transitions
+// - Current property
+// - Multiple iterator fields
+```
+
+### 14.4 Two-Level Shadow AST Model
+
+PSG nodes created by Baker have no corresponding source syntax. To provide **editing transparency** for developers (distinguishing "code I wrote" from "compiler-saturated code"), Baker maintains a **two-level shadow model**:
+
+#### Level 1: Semantic Shadow (Developer-Facing)
+
+Captures the **meaning** of the expansion, not every PSG node. This is what tooling displays.
+
+```fsharp
+/// For simple recursive patterns (List operations)
+type RecursivePatternShadow = {
+    Operation: string           // "List.map"
+    BaseCase: string            // "empty list → empty list"
+    RecursiveCase: string       // "cons(f(head), recurse(tail))"
+    SourceRefs: Map<string, NodeId>  // Links to real source nodes
+}
+
+/// For state machines (Seq operations)
+type StateMachineShadow = {
+    States: string list
+    OuterSource: ShadowRef
+    InnerMapper: ShadowRef option
+    YieldPoints: YieldPoint list
+    Transitions: Transition list
+}
+
+/// Reference to real source vs synthesized
+type ShadowRef =
+    | Real of NodeId           // Points to source-derived PSG node
+    | Synthetic of ShadowId    // Points to synthesized shadow node
+```
+
+#### Level 2: PSG Nodes (Compiler-Facing)
+
+The full PSG structure with all `SemanticNode` records. This is what Alex witnesses. The shadow doesn't mirror this 1:1.
+
+### 14.5 XParsec Template Integration
+
+Baker decomposition uses XParsec-style templates that produce **both** PSG nodes and semantic shadow simultaneously:
+
+```fsharp
+type Expanded<'a> = {
+    Value: 'a                    // The PSG node(s)
+    Shadow: ShadowExpr           // Semantic description
+    Provenance: Provenance       // Link to inspiring source
+}
+```
+
+The template IS the documentation—when you read the template, you understand both what PSG is built AND what the semantic shadow captures.
+
+**Key principle**: No separate construction pass. Shadow is built alongside PSG in a single traversal.
+
+### 14.6 Provenance Tracking
+
+Every shadow node tracks its origin:
+
+```fsharp
+type Provenance = {
+    /// The source PSG node that triggered expansion
+    InspiringNode: NodeId
+    /// Original source range (for IDE navigation)
+    SourceRange: SourceRange
+    /// What HOF was expanded (e.g., "Seq.collect")
+    ExpandedOperation: string
+    /// Nesting depth (for nested expansions)
+    Depth: int
+}
+```
+
+### 14.7 Tooling Integration
+
+The shadow AST enables design-time tooling:
+
+**IDE Expansion View:**
+```
+// Expanded from List.map at MyFile.fs:42:5
+// Pattern: Recursive
+//   Base case: empty list → empty list
+//   Recursive: cons(f(head), recurse(tail))
+//   Source refs: f → line 42, xs → line 42
+
+[Expand to see full PSG structure...]
+```
+
+**State Machine View:**
+```
+// Expanded from Seq.collect at MyFile.fs:58:9
+// State Machine: Initial → InOuter → InInner → Done
+//   Outer source: «xs» (line 58)
+//   Inner mapper: «f» (line 58)
+//   Yields: innerEnum.Current when in InInner state
+
+[View state transition diagram...]
+```
+
+### 14.8 Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `Baker/ShadowAST.fs` | Shadow types, rendering, provenance |
+| `Baker/Recipes/Decomposition.fs` | Context, Result types, helpers |
+| `Baker/Recipes/ListRecipes.fs` | List HOF templates |
+| `Baker/Recipes/MapRecipes.fs` | Map HOF templates |
+| `Baker/Recipes/SetRecipes.fs` | Set HOF templates |
+| `Baker/Recipes/OptionRecipes.fs` | Option HOF templates |
+| `Baker/Recipes/SeqRecipes.fs` | Seq state machine templates |
+| `Baker/HOFDecomposition.fs` | Orchestration, shadow registry |
+
+### 14.9 Anti-Patterns
+
+1. **Alex implementing algorithms** — Wrong layer. Decomposition belongs in Baker.
+2. **1:1 shadow-to-PSG mapping** — Shadow is semantic, not syntactic.
+3. **Separate shadow construction pass** — Shadow must be built alongside PSG.
+4. **Ad-hoc patterns per operation** — All decompositions use same infrastructure.
+5. **Forgetting provenance** — Every shadow node must link back to source.
+
+### 14.10 Specification Status
+
+| Component | Status |
+|-----------|--------|
+| Primitive witnesses (Alex) | **Implemented** |
+| List decomposition | Placeholder |
+| Map decomposition | Placeholder |
+| Set decomposition | Placeholder |
+| Option decomposition | Draft |
+| Seq state machines | Design |
+| Shadow AST infrastructure | Design |
+| Tooling integration | Future |
 
 ---
 

@@ -159,7 +159,23 @@ type NTUKind =
     /// Sequence/generator (resumable computation producing values on demand)
     /// PRD-15: Simple Sequence Expressions
     | NTUseq
-    
+
+    //-----------------------------------------------------------------------
+    // Collection types (PRD-13a: Core Collections)
+    //-----------------------------------------------------------------------
+
+    /// Immutable singly-linked list
+    /// PRD-13a: Core Collections
+    | NTUlist
+
+    /// Immutable key-value map (balanced BST)
+    /// PRD-13a: Core Collections
+    | NTUmap
+
+    /// Immutable set (balanced BST)
+    /// PRD-13a: Core Collections
+    | NTUset
+
     //-----------------------------------------------------------------------
     // Compound value types (platform-independent fixed size)
     //-----------------------------------------------------------------------
@@ -286,6 +302,9 @@ module PlatformContext =
         | NTUKind.NTUtimespan -> 8  // 64-bit duration
         | NTUKind.NTUlazy -> -1  // Size depends on element type (PRD-14)
         | NTUKind.NTUseq -> -1  // Size depends on element type (PRD-15)
+        | NTUKind.NTUlist -> ctx.PointerSize  // Pointer to cons cell (PRD-13a)
+        | NTUKind.NTUmap -> ctx.PointerSize  // Pointer to tree root (PRD-13a)
+        | NTUKind.NTUset -> ctx.PointerSize  // Pointer to tree root (PRD-13a)
         | NTUKind.NTUother -> -1  // Unknown
 
     /// Resolve the alignment for an NTU kind on this platform
@@ -316,6 +335,9 @@ module PlatformContext =
         | NTUKind.NTUtimespan -> 8  // 64-bit aligned
         | NTUKind.NTUlazy -> 8  // Pointer-aligned (PRD-14)
         | NTUKind.NTUseq -> 8  // Pointer-aligned (PRD-15)
+        | NTUKind.NTUlist -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
+        | NTUKind.NTUmap -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
+        | NTUKind.NTUset -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
         | NTUKind.NTUother -> -1
 
 /// Helpers for NTUKind
@@ -383,6 +405,9 @@ module NTUKind =
         | NTUKind.NTUdecimal -> "decimal"
         | NTUKind.NTUlazy -> "Lazy"
         | NTUKind.NTUseq -> "Seq"
+        | NTUKind.NTUlist -> "List"
+        | NTUKind.NTUmap -> "Map"
+        | NTUKind.NTUset -> "Set"
         | NTUKind.NTUuuid -> "Uuid"
         | NTUKind.NTUdatetime -> "DateTime"
         | NTUKind.NTUtimespan -> "TimeSpan"
@@ -668,7 +693,19 @@ and [<RequireQualifiedAccess; NoComparison>] NativeType =
     /// Sequence type: Seq<T>
     /// PRD-15: Resumable computation producing values on demand
     | TSeq of element: NativeType
-    
+
+    /// List type: List<T>
+    /// PRD-13a: Immutable singly-linked list
+    | TList of element: NativeType
+
+    /// Map type: Map<K, V>
+    /// PRD-13a: Immutable key-value map (balanced BST)
+    | TMap of keyType: NativeType * valueType: NativeType
+
+    /// Set type: Set<T>
+    /// PRD-13a: Immutable set (balanced BST)
+    | TSet of element: NativeType
+
     /// Error type (used during recovery from type errors)
     | TError of message: string
 
@@ -820,6 +857,9 @@ let rec layoutOf (ty: NativeType) : TypeLayout =
     | NativeType.TUnion(tycon, _) -> tycon.Layout
     | NativeType.TLazy _ -> TypeLayout.Inline(-1, -1)  // Size depends on element type (PRD-14)
     | NativeType.TSeq _ -> TypeLayout.Inline(-1, -1)  // Size depends on element type (PRD-15)
+    | NativeType.TList _ -> TypeLayout.PlatformWord  // Pointer to cons cell (PRD-13a)
+    | NativeType.TMap _ -> TypeLayout.PlatformWord  // Pointer to tree root (PRD-13a)
+    | NativeType.TSet _ -> TypeLayout.PlatformWord  // Pointer to tree root (PRD-13a)
     | NativeType.TError _ -> TypeLayout.Opaque
 
 /// Compute memory layout for a record from its fields.
@@ -943,6 +983,9 @@ let instantiate (typars: TypeParam list) (args: NativeType list) (body: NativeTy
                 { c with Fields = c.Fields |> List.map (fun (n, t) -> (n, go t)) }))
         | NativeType.TLazy elem -> NativeType.TLazy(go elem)  // PRD-14
         | NativeType.TSeq elem -> NativeType.TSeq(go elem)  // PRD-15
+        | NativeType.TList elem -> NativeType.TList(go elem)  // PRD-13a
+        | NativeType.TMap(k, v) -> NativeType.TMap(go k, go v)  // PRD-13a
+        | NativeType.TSet elem -> NativeType.TSet(go elem)  // PRD-13a
         | NativeType.TMeasure _ -> ty
         | NativeType.TError _ -> ty
     
@@ -983,6 +1026,9 @@ let rec formatType (ty: NativeType) : string =
     | NativeType.TUnion(tc, _) -> tc.Name
     | NativeType.TLazy elem -> $"Lazy<{formatType elem}>"  // PRD-14
     | NativeType.TSeq elem -> $"seq<{formatType elem}>"  // PRD-15
+    | NativeType.TList elem -> $"List<{formatType elem}>"  // PRD-13a
+    | NativeType.TMap(k, v) -> $"Map<{formatType k}, {formatType v}>"  // PRD-13a
+    | NativeType.TSet elem -> $"Set<{formatType elem}>"  // PRD-13a
     | NativeType.TError msg -> $"<error: {msg}>"
 
 and formatMeasure (m: Measure) : string =

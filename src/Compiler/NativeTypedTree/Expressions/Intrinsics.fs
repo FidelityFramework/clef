@@ -68,6 +68,11 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         | "DateTime" -> Some (IntrinsicModule.DateTime, opPart)
         | "TimeSpan" -> Some (IntrinsicModule.TimeSpan, opPart)
         | "Platform" -> Some (IntrinsicModule.Platform, opPart)
+        // PRD-13a: Core Collections
+        | "Map" -> Some (IntrinsicModule.Map, opPart)
+        | "Set" -> Some (IntrinsicModule.Set, opPart)
+        | "List" -> Some (IntrinsicModule.List, opPart)
+        | "Option" -> Some (IntrinsicModule.Option, opPart)
         | _ -> None
 
 //-------------------------------------------------------------------------
@@ -160,8 +165,8 @@ let private resolveSysOp (op: string) (globals: NativeGlobals) (range: SourceRan
         let ty = NativeType.TFun(globals.UnitType, globals.Int64Type)
         Resolved (mkIntrinsic IntrinsicModule.Sys op IntrinsicCategory.Platform fullName, ty)
     | "nanosleep" ->
-        // int -> unit
-        let ty = NativeType.TFun(globals.IntType, globals.UnitType)
+        // int64 -> unit (nanoseconds require 64-bit precision)
+        let ty = NativeType.TFun(globals.Int64Type, globals.UnitType)
         Resolved (mkIntrinsic IntrinsicModule.Sys op IntrinsicCategory.Platform fullName, ty)
     | unknown ->
         UnknownOperation $"Unknown Sys intrinsic: Sys.{unknown}"
@@ -201,8 +206,21 @@ let private resolveStringOp (op: string) (globals: NativeGlobals) (_range: Sourc
     | "replace" ->
         let ty = NativeType.TFun(stringType, NativeType.TFun(stringType, NativeType.TFun(stringType, stringType)))
         Resolved (mkIntrinsic IntrinsicModule.String op IntrinsicCategory.StringOp fullName, ty)
+    | "concat" ->
+        // string -> string list -> string (separator, strings)
+        let stringListType = mkListType stringType
+        let ty = NativeType.TFun(stringType, NativeType.TFun(stringListType, stringType))
+        Resolved (mkIntrinsic IntrinsicModule.String op IntrinsicCategory.StringOp fullName, ty)
+    | "toBytes" ->
+        // string -> byte[] (UTF-8 encoding)
+        let ty = NativeType.TFun(stringType, mkArrayType Types.uint8Type)
+        Resolved (mkIntrinsic IntrinsicModule.String op IntrinsicCategory.StringOp fullName, ty)
+    | "fromBytes" ->
+        // byte[] -> string (UTF-8 decoding)
+        let ty = NativeType.TFun(mkArrayType Types.uint8Type, stringType)
+        Resolved (mkIntrinsic IntrinsicModule.String op IntrinsicCategory.StringOp fullName, ty)
     | unknown ->
-        UnknownOperation $"Unknown String intrinsic: String.{unknown}. Available: concat2, length, isEmpty, contains, startsWith, endsWith, substring, trim, trimStart, trimEnd, toUpper, toLower, charAt, indexOf, replace"
+        UnknownOperation $"Unknown String intrinsic: String.{unknown}. Available: concat2, concat, length, isEmpty, contains, startsWith, endsWith, substring, trim, trimStart, trimEnd, toUpper, toLower, charAt, indexOf, replace, toBytes, fromBytes"
 
 /// Resolve Array.* operations
 let private resolveArrayOp (op: string) (globals: NativeGlobals) (range: SourceRange) : IntrinsicResolution =
@@ -239,8 +257,27 @@ let private resolveArrayOp (op: string) (globals: NativeGlobals) (range: SourceR
     | "isEmpty" ->
         let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(arrayType, globals.BoolType))
         Resolved (mkIntrinsic IntrinsicModule.Array op IntrinsicCategory.Memory fullName, ty)
+    | "blit" ->
+        // 'T[] -> int -> 'T[] -> int -> int -> unit
+        // (source, sourceIndex, target, targetIndex, count)
+        let ty = NativeType.TForall([tyParamSpec],
+            NativeType.TFun(arrayType,
+                NativeType.TFun(globals.IntType,
+                    NativeType.TFun(arrayType,
+                        NativeType.TFun(globals.IntType,
+                            NativeType.TFun(globals.IntType, globals.UnitType))))))
+        Resolved (mkIntrinsic IntrinsicModule.Array op IntrinsicCategory.Memory fullName, ty)
+    | "collect" ->
+        // ('T -> 'U[]) -> 'T[] -> 'U[]
+        let tyParamSpecU = freshTypeParam "'U" TypeParamKind.Type range
+        let tyParamU = NativeType.TVar tyParamSpecU
+        let arrayTypeU = mkArrayType tyParamU
+        let mapperFn = NativeType.TFun(tyParam, arrayTypeU)
+        let ty = NativeType.TForall([tyParamSpec; tyParamSpecU],
+            NativeType.TFun(mapperFn, NativeType.TFun(arrayType, arrayTypeU)))
+        Resolved (mkIntrinsic IntrinsicModule.Array op IntrinsicCategory.Memory fullName, ty)
     | unknown ->
-        UnknownOperation $"Unknown Array intrinsic: Array.{unknown}. Available: zeroCreate, create, init, copy, length, get, set, tryItem, isEmpty"
+        UnknownOperation $"Unknown Array intrinsic: Array.{unknown}. Available: zeroCreate, create, init, copy, length, get, set, tryItem, isEmpty, blit, collect"
 
 /// Resolve Parse.* operations (string → numeric)
 let private resolveParseOp (op: string) (globals: NativeGlobals) (_range: SourceRange) : IntrinsicResolution =
@@ -318,30 +355,22 @@ let private resolveCryptoOp (op: string) (globals: NativeGlobals) (_range: Sourc
     | unknown ->
         UnknownOperation $"Unknown Crypto intrinsic: Crypto.{unknown}. Available: sha1, base64Encode, base64Decode"
 
-/// Resolve Bits.* operations
-let private resolveBitsOp (op: string) (_globals: NativeGlobals) (_range: SourceRange) : IntrinsicResolution =
+/// Resolve Bits.* operations - unified lookup from NativeGlobals.BuiltInBindings
+let private resolveBitsOp (op: string) (globals: NativeGlobals) (_range: SourceRange) : IntrinsicResolution =
     let fullName = "Bits." + op
-    match op with
-    | "htons" | "ntohs" ->
-        let ty = NativeType.TFun(Types.uint16Type, Types.uint16Type)
+    match Map.tryFind fullName globals.BuiltInBindings with
+    | Some ty ->
         Resolved (mkIntrinsic IntrinsicModule.Bits op IntrinsicCategory.Pure fullName, ty)
-    | "htonl" | "ntohl" ->
-        let ty = NativeType.TFun(Types.uint32Type, Types.uint32Type)
-        Resolved (mkIntrinsic IntrinsicModule.Bits op IntrinsicCategory.Pure fullName, ty)
-    | "float32ToInt32Bits" ->
-        let ty = NativeType.TFun(Types.float32Type, Types.int32Type)
-        Resolved (mkIntrinsic IntrinsicModule.Bits op IntrinsicCategory.Pure fullName, ty)
-    | "int32BitsToFloat32" ->
-        let ty = NativeType.TFun(Types.int32Type, Types.float32Type)
-        Resolved (mkIntrinsic IntrinsicModule.Bits op IntrinsicCategory.Pure fullName, ty)
-    | "float64ToInt64Bits" ->
-        let ty = NativeType.TFun(Types.floatType, Types.int64Type)
-        Resolved (mkIntrinsic IntrinsicModule.Bits op IntrinsicCategory.Pure fullName, ty)
-    | "int64BitsToFloat64" ->
-        let ty = NativeType.TFun(Types.int64Type, Types.floatType)
-        Resolved (mkIntrinsic IntrinsicModule.Bits op IntrinsicCategory.Pure fullName, ty)
-    | unknown ->
-        UnknownOperation $"Unknown Bits intrinsic: Bits.{unknown}. Available: htons, ntohs, htonl, ntohl, float32ToInt32Bits, int32BitsToFloat32, float64ToInt64Bits, int64BitsToFloat64"
+    | None ->
+        // Build list of available operations for error message
+        let prefix = "Bits."
+        let available =
+            globals.BuiltInBindings
+            |> Map.toList
+            |> List.filter (fun (name, _) -> name.StartsWith(prefix))
+            |> List.map (fun (name, _) -> name.Substring(prefix.Length))
+            |> String.concat ", "
+        UnknownOperation ("Unknown Bits intrinsic: " + fullName + ". Available: " + available)
 
 /// Resolve FnPtr.* operations
 let private resolveFnPtrOp (op: string) (globals: NativeGlobals) (range: SourceRange) : IntrinsicResolution =
@@ -546,8 +575,36 @@ let private resolveSeqOp (op: string) (globals: NativeGlobals) (range: SourceRan
         // seq<'T> -> int
         let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, globals.IntType))
         Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "append" ->
+        // seq<'T> -> seq<'T> -> seq<'T>
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, NativeType.TFun(seqT, seqT)))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "tryPick" ->
+        // ('T -> 'U option) -> seq<'T> -> 'U option
+        let tyParamSpecU = freshTypeParam "'U" TypeParamKind.Type range
+        let tyParamU = NativeType.TVar tyParamSpecU
+        let pickerFn = NativeType.TFun(tyParamT, mkOptionType tyParamU)
+        let ty = NativeType.TForall([tyParamSpecT; tyParamSpecU],
+            NativeType.TFun(pickerFn, NativeType.TFun(seqT, mkOptionType tyParamU)))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "minBy" ->
+        // ('T -> 'U) -> seq<'T> -> 'T
+        let tyParamSpecU = freshTypeParam "'U" TypeParamKind.Type range
+        let tyParamU = NativeType.TVar tyParamSpecU
+        let projFn = NativeType.TFun(tyParamT, tyParamU)
+        let ty = NativeType.TForall([tyParamSpecT; tyParamSpecU],
+            NativeType.TFun(projFn, NativeType.TFun(seqT, tyParamT)))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "max" ->
+        // seq<'T> -> 'T
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, tyParamT))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "min" ->
+        // seq<'T> -> 'T
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, tyParamT))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
     | unknown ->
-        UnknownOperation $"Unknown Seq intrinsic: Seq.{unknown}. Available: empty, toArray, toList, iter, map, filter, fold, take, collect, isEmpty, head, length"
+        UnknownOperation $"Unknown Seq intrinsic: Seq.{unknown}. Available: empty, toArray, toList, iter, map, filter, fold, take, collect, isEmpty, head, length, append, tryPick, minBy, max, min"
 
 /// Resolve Math.* operations
 let private resolveMathOp (op: string) (globals: NativeGlobals) (_range: SourceRange) : IntrinsicResolution =
@@ -739,6 +796,29 @@ let private resolvePlatformOp (op: string) (globals: NativeGlobals) (range: Sour
         UnknownOperation $"Unknown Platform intrinsic: Platform.{unknown}. Available: sizeof, wordSize"
 
 //-------------------------------------------------------------------------
+// PRD-13a: Core Collection Intrinsics (Unified Lookup)
+//-------------------------------------------------------------------------
+
+/// Unified resolver for collection intrinsics (Map, Set, List, Option).
+/// Looks up type from NativeGlobals.BuiltInBindings - the single source of truth.
+/// All collection operations are Pure category.
+let private resolveCollectionOp (modl: IntrinsicModule) (moduleName: string) (op: string) (globals: NativeGlobals) (_range: SourceRange) : IntrinsicResolution =
+    let fullName = moduleName + "." + op
+    match Map.tryFind fullName globals.BuiltInBindings with
+    | Some ty ->
+        Resolved (mkIntrinsic modl op IntrinsicCategory.Pure fullName, ty)
+    | None ->
+        // Build list of available operations for error message
+        let prefix = moduleName + "."
+        let available =
+            globals.BuiltInBindings
+            |> Map.toList
+            |> List.filter (fun (name, _) -> name.StartsWith(prefix))
+            |> List.map (fun (name, _) -> name.Substring(prefix.Length))
+            |> String.concat ", "
+        UnknownOperation ("Unknown " + moduleName + " intrinsic: " + fullName + ". Available: " + available)
+
+//-------------------------------------------------------------------------
 // Main Module Intrinsic Dispatcher
 //-------------------------------------------------------------------------
 
@@ -774,6 +854,11 @@ let resolveModuleIntrinsic
     | IntrinsicModule.DateTime -> resolveDateTimeOp op globals range
     | IntrinsicModule.TimeSpan -> resolveTimeSpanOp op globals range
     | IntrinsicModule.Platform -> resolvePlatformOp op globals range
+    // PRD-13a: Core Collections - unified lookup from NativeGlobals.BuiltInBindings
+    | IntrinsicModule.Map -> resolveCollectionOp IntrinsicModule.Map "Map" op globals range
+    | IntrinsicModule.Set -> resolveCollectionOp IntrinsicModule.Set "Set" op globals range
+    | IntrinsicModule.List -> resolveCollectionOp IntrinsicModule.List "List" op globals range
+    | IntrinsicModule.Option -> resolveCollectionOp IntrinsicModule.Option "Option" op globals range
     | IntrinsicModule.Convert -> NotAnIntrinsic  // Conversions handled separately (float, int, etc.)
     | IntrinsicModule.Operators -> NotAnIntrinsic  // Operators handled separately
     | IntrinsicModule.Unchecked -> NotAnIntrinsic  // Rejected via BCL check
@@ -821,6 +906,12 @@ let tryResolveOperator (name: string) (range: SourceRange) : (IntrinsicInfo * Na
         let info = mkIntrinsic IntrinsicModule.Operators name IntrinsicCategory.Arithmetic name
         let ty = NativeType.TFun(tyParam, NativeType.TFun(tyParam, tyParam))
         Some (info, ty)
+    | "op_LogicalNot" ->
+        // Bitwise complement (~~~): 'T -> 'T
+        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+        let info = mkIntrinsic IntrinsicModule.Operators "op_LogicalNot" IntrinsicCategory.Arithmetic name
+        let ty = NativeType.TFun(tyParam, tyParam)
+        Some (info, ty)
     | "op_LeftShift" | "op_RightShift" ->
         // Shift: 'T -> int -> 'T
         let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
@@ -863,6 +954,52 @@ let tryResolveOperator (name: string) (range: SourceRange) : (IntrinsicInfo * Na
         let funcTy = NativeType.TFun(tyT1, NativeType.TFun(tyT2, NativeType.TFun(tyT3, tyU)))
         let ty = NativeType.TFun(tupleTy, NativeType.TFun(funcTy, tyU))
         Some (info, ty)
+    // PRD-13a: Tuple accessors and comparison functions
+    | "fst" ->
+        // ('T1 * 'T2) -> 'T1
+        let tyT1 = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+        let tyT2 = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+        let info = mkIntrinsic IntrinsicModule.Operators "fst" IntrinsicCategory.Pure name
+        let tupleTy = NativeType.TTuple([tyT1; tyT2], false)
+        let ty = NativeType.TFun(tupleTy, tyT1)
+        Some (info, ty)
+    | "snd" ->
+        // ('T1 * 'T2) -> 'T2
+        let tyT1 = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+        let tyT2 = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+        let info = mkIntrinsic IntrinsicModule.Operators "snd" IntrinsicCategory.Pure name
+        let tupleTy = NativeType.TTuple([tyT1; tyT2], false)
+        let ty = NativeType.TFun(tupleTy, tyT2)
+        Some (info, ty)
+    | "max" ->
+        // 'T -> 'T -> 'T (polymorphic comparison)
+        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+        let info = mkIntrinsic IntrinsicModule.Operators "max" IntrinsicCategory.Comparison name
+        let ty = NativeType.TFun(tyParam, NativeType.TFun(tyParam, tyParam))
+        Some (info, ty)
+    | "min" ->
+        // 'T -> 'T -> 'T (polymorphic comparison)
+        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+        let info = mkIntrinsic IntrinsicModule.Operators "min" IntrinsicCategory.Comparison name
+        let ty = NativeType.TFun(tyParam, NativeType.TFun(tyParam, tyParam))
+        Some (info, ty)
+    // PRD-13a: List cons operator
+    | "op_ColonColon" ->
+        // ('T * list<'T>) -> list<'T> (cons: prepend element to list - takes tuple, not curried)
+        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+        let listTy = NativeType.TList(tyParam)
+        let tupleTy = NativeType.TTuple([tyParam; listTy], false)
+        let info = mkIntrinsic IntrinsicModule.List "cons" IntrinsicCategory.Pure name
+        let ty = NativeType.TFun(tupleTy, listTy)
+        Some (info, ty)
+    // PRD-13a: List append operator (@)
+    | "op_Append" ->
+        // list<'T> -> list<'T> -> list<'T> (concatenate two lists)
+        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+        let listTy = NativeType.TList(tyParam)
+        let info = mkIntrinsic IntrinsicModule.List "append" IntrinsicCategory.Pure name
+        let ty = NativeType.TFun(listTy, NativeType.TFun(listTy, listTy))
+        Some (info, ty)
     | _ -> None
 
 /// Check if a name is an operator that should be an intrinsic
@@ -884,8 +1021,10 @@ let tryResolveConversion (name: string) (globals: NativeGlobals) (range: SourceR
 
     match name with
     | "float" | "float64" | "double" -> mkConvIntrinsic "toFloat" globals.FloatType
-    | "int" | "int32" -> mkConvIntrinsic "toInt" globals.IntType
+    | "int" -> mkConvIntrinsic "toInt" globals.IntType           // Platform word (NTUint)
+    | "int32" -> mkConvIntrinsic "toInt32" Types.int32Type       // Fixed 32-bit (NTUint32)
     | "int64" -> mkConvIntrinsic "toInt64" globals.Int64Type
+    | "uint" -> mkConvIntrinsic "toUInt" Types.uintType           // Platform word unsigned (NTUuint)
     | "byte" | "uint8" -> mkConvIntrinsic "toByte" Types.uint8Type
     | "sbyte" | "int8" -> mkConvIntrinsic "toSByte" Types.int8Type
     | "int16" -> mkConvIntrinsic "toInt16" Types.int16Type

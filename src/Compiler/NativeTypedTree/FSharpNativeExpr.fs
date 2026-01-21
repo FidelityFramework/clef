@@ -188,6 +188,12 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
         elements: FSharpNativeExpr list *
         ty: NativeType
 
+    /// Tuple element access: fst tuple, snd tuple, or tuple destructuring
+    | TupleGet of
+        tuple: FSharpNativeExpr *
+        index: int *
+        ty: NativeType
+
     /// Array expression: [| e1; e2; ... |]
     | ArrayExpr of
         elements: FSharpNativeExpr list *
@@ -471,6 +477,11 @@ module FSharpNativeExpr =
             | SemanticKind.TupleExpr elementIds ->
                 let elements = elementIds |> List.map (fromNode graph)
                 FSharpNativeExpr.TupleExpr(elements, node.Type)
+
+            // Tuple element access (tuple destructuring)
+            | SemanticKind.TupleGet(tupleId, index) ->
+                let tuple = fromNode graph tupleId
+                FSharpNativeExpr.TupleGet(tuple, index, node.Type)
 
             // Array expression
             | SemanticKind.ArrayExpr elementIds ->
@@ -813,6 +824,7 @@ module FSharpNativeExpr =
         | FSharpNativeExpr.RecordExpr(fields, _, _) -> sprintf "Record(%d fields)" (List.length fields)
         | FSharpNativeExpr.UnionCase(name, _, _) -> sprintf "Case(%s)" name
         | FSharpNativeExpr.TupleExpr(elements, _) -> sprintf "Tuple(%d)" (List.length elements)
+        | FSharpNativeExpr.TupleGet(_, index, _) -> sprintf "TupleGet[%d]" index
         | FSharpNativeExpr.ArrayExpr(elements, _) -> sprintf "Array(%d)" (List.length elements)
         | FSharpNativeExpr.ListExpr(elements, _) -> sprintf "List(%d)" (List.length elements)
         | FSharpNativeExpr.FieldGet(_, name, _) -> sprintf "FieldGet(.%s)" name

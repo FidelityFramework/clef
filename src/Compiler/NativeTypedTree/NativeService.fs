@@ -28,6 +28,10 @@ open FSharp.Native.Compiler.NativeTypedTree.Expressions.Bindings
 module PhaseConfig = FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
 module PhaseTypes = FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
 module PhaseEmitter = FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseEmitter
+
+// Baker modules - HOF decomposition (PRD-13a)
+module HOFDecomposition = FSharp.Native.Compiler.Baker.HOFDecomposition
+
 open FSharp.Native.Compiler.NativeTypedTree.UnionFind
 open FSharp.Native.Compiler.NativeTypedTree.Unify
 open FSharp.Native.Compiler.DiagnosticsLogger
@@ -383,7 +387,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     // Phase 4: Reachability analysis
     // Use soft-delete (mark IsReachable = false) or hard prune based on config
-    let finalGraph =
+    let reachableGraph =
         if PhaseConfig.useSoftDeleteReachability() then
             let markedGraph = markUnreachable graph
             emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability markedGraph diagnostics
@@ -392,6 +396,15 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             let prunedGraph = pruneUnreachable graph
             emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability prunedGraph diagnostics
             prunedGraph
+
+    // Phase 4.5: HOF Decomposition (Baker/Recipes - PRD-13a)
+    // Expand higher-order collection operations (List.map, List.fold, etc.)
+    // into primitive recursive structures that Alex can witness directly
+    // Note: This also produces a shadow registry for tooling, but we
+    // currently only use the graph. Shadow registry can be plumbed through
+    // when tooling integration is added.
+    let decompositionResult = HOFDecomposition.run reachableGraph
+    let finalGraph = decompositionResult.Graph
 
     // Phase 5: Emit final result
     emitPhaseIfEnabled PhaseTypes.PhaseId.Final finalGraph diagnostics
@@ -915,13 +928,24 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
 
         (nestedEnv, [moduleNode])
 
-    | SynModuleDecl.Open(target, _) ->
+    | SynModuleDecl.Open(target, range) ->
         // Open statements affect name resolution - compose into resolver
+        // FNCS has NO BCL - only source-defined modules can be opened
         let updatedEnv =
             match target with
             | SynOpenDeclTarget.ModuleOrNamespace(longId, _) ->
                 let ns = longId.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
-                addOpen ns env
+                // Whitelist: FSharp.Native.* IS native compilation - always allow
+                // Blacklist: Other FSharp.*, System.*, Microsoft.* are BCL - block
+                if ns.StartsWith("FSharp.Native.") || ns = "FSharp.Native" then
+                    // Native compilation namespace - allow
+                    addOpen ns env
+                elif ns.StartsWith("System.") || ns.StartsWith("FSharp.") || ns.StartsWith("Microsoft.") then
+                    addNativeError DiagnosticCodes.FS8500_BclReferenceNotAllowed range
+                        (sprintf "Cannot open namespace '%s'. BCL namespaces are not available in native compilation. Use intrinsics instead." ns) env
+                    env
+                else
+                    addOpen ns env
             | SynOpenDeclTarget.Type _ ->
                 // open type - not currently supported in native
                 env

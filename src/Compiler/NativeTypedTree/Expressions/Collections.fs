@@ -202,6 +202,17 @@ let checkRecord
                 | NativeType.TSeq _ ->
                     addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
                         "Expected record type, got seq<'T> type" env  // PRD-15
+                // PRD-13a: Collection types
+                | NativeType.TList _ ->
+                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                        "Expected record type, got list<'T> type. Use list syntax [a; b; c]" env
+                | NativeType.TMap _ ->
+                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                        "Expected record type, got Map<'K,'V> type. Use Map.ofList or Map.add" env
+                | NativeType.TSet _ ->
+                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                        "Expected record type, got Set<'T> type. Use Set.ofList or Set.add" env
+                // Note: option<'T> is handled via TUnion - it's a discriminated union
                 resolvedTy
             | Result.Error((code, message)) ->
                 addNativeError code recordRange message env

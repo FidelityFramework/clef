@@ -311,12 +311,24 @@
     <Compile Include="NativeTypedTree\Infrastructure\PhaseConfig.fs" />
     <Compile Include="NativeTypedTree\Infrastructure\PhaseTypes.fs" />
     <Compile Include="NativeTypedTree\Infrastructure\PhaseEmitter.fs" />
-    <Compile Include="NativeTypedTree\NativeService.fs" />
-
     <!-- Baker - Post-construction semantic enrichment (peer to NativeTypedTree) -->
     <Compile Include="Baker\Metadata.fs" />
+    <Compile Include="Baker\ShadowAST.fs" />
     <Compile Include="Baker\ModuleInit.fs" />
     <Compile Include="Baker\Pipeline.fs" />
+    <!-- Baker Ingredients - Combinator primitives and patterns (PRD-13a) -->
+    <Compile Include="Baker\Ingredients\RecipeBuilder.fs" />
+    <Compile Include="Baker\Ingredients\Primitives.fs" />
+    <Compile Include="Baker\Ingredients\Patterns.fs" />
+    <!-- Baker Recipes - HOF decomposition templates (PRD-13a) -->
+    <Compile Include="Baker\Recipes\Decomposition.fs" />
+    <Compile Include="Baker\Recipes\ListRecipes.fs" />
+    <Compile Include="Baker\Recipes\MapRecipes.fs" />
+    <Compile Include="Baker\Recipes\SetRecipes.fs" />
+    <Compile Include="Baker\Recipes\OptionRecipes.fs" />
+    <Compile Include="Baker\HOFDecomposition.fs" />
+
+    <Compile Include="NativeTypedTree\NativeService.fs" />
 
     <!-- Project - Unified project loading and checking (DRY - single source of truth) -->
     <Compile Include="Project\FidprojLoader.fs" />
