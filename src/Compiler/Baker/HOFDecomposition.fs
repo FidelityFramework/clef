@@ -40,6 +40,7 @@ module MapRecipes = FSharp.Native.Compiler.Baker.Recipes.MapRecipes
 module SetRecipes = FSharp.Native.Compiler.Baker.Recipes.SetRecipes
 module OptionRecipes = FSharp.Native.Compiler.Baker.Recipes.OptionRecipes
 module SeqRecipes = FSharp.Native.Compiler.Baker.Recipes.SeqRecipes
+module MatchRecipes = FSharp.Native.Compiler.Baker.Recipes.MatchRecipes
 
 //-------------------------------------------------------------------------
 // Type Extraction Helpers
@@ -274,7 +275,7 @@ type private NodeDecomposition = {
     ShadowTree: ShadowTree option
 }
 
-/// Try to decompose a single Application node
+/// Try to decompose a single Application node or Match expression
 let private tryDecomposeNode 
     (graph: SemanticGraph) 
     (node: SemanticNode) 
@@ -304,6 +305,19 @@ let private tryDecomposeNode
                 | None -> None
             | _ -> None
         | None -> None
+    
+    | SemanticKind.Match (scrutineeId, cases) ->
+        // Match expressions are decomposed to IfThenElse decision trees
+        let ctx = mkContext node.Range node.Type graph.Platform "Match" node.Id
+        let result = MatchRecipes.decomposeMatch ctx scrutineeId cases node.Type
+        Some {
+            OriginalNodeId = node.Id
+            NewNodes = result.NewNodes
+            ReplacementNodeId = result.ResultNodeId
+            AuxFunctions = result.AuxFunctions
+            ShadowTree = result.ShadowTree
+        }
+    
     | _ -> None
 
 /// Apply decomposition to the entire graph
@@ -348,6 +362,38 @@ let private applyDecompositions
                 | SemanticKind.Sequential nodes ->
                     let newNodes = nodes |> List.map (fun n -> if n = decomp.OriginalNodeId then decomp.ReplacementNodeId else n)
                     SemanticKind.Sequential newNodes
+                | SemanticKind.Lambda (params', body, captures, enclosing, lambdaCtx) ->
+                    let newBody = if body = decomp.OriginalNodeId then decomp.ReplacementNodeId else body
+                    if newBody <> body then
+                        eprintfn "[BAKER] Updated Lambda %d body: %d -> %d" (NodeId.value node.Id) (NodeId.value body) (NodeId.value newBody)
+                    SemanticKind.Lambda (params', newBody, captures, enclosing, lambdaCtx)
+                | SemanticKind.LazyExpr (body, captures) ->
+                    let newBody = if body = decomp.OriginalNodeId then decomp.ReplacementNodeId else body
+                    SemanticKind.LazyExpr (newBody, captures)
+                | SemanticKind.SeqExpr (body, captures) ->
+                    let newBody = if body = decomp.OriginalNodeId then decomp.ReplacementNodeId else body
+                    SemanticKind.SeqExpr (newBody, captures)
+                | SemanticKind.WhileLoop (guard, body) ->
+                    let newGuard = if guard = decomp.OriginalNodeId then decomp.ReplacementNodeId else guard
+                    let newBody = if body = decomp.OriginalNodeId then decomp.ReplacementNodeId else body
+                    SemanticKind.WhileLoop (newGuard, newBody)
+                | SemanticKind.ForLoop (var, start, finish, isUp, body) ->
+                    let newStart = if start = decomp.OriginalNodeId then decomp.ReplacementNodeId else start
+                    let newFinish = if finish = decomp.OriginalNodeId then decomp.ReplacementNodeId else finish
+                    let newBody = if body = decomp.OriginalNodeId then decomp.ReplacementNodeId else body
+                    SemanticKind.ForLoop (var, newStart, newFinish, isUp, newBody)
+                | SemanticKind.ForEach (var, coll, body) ->
+                    let newColl = if coll = decomp.OriginalNodeId then decomp.ReplacementNodeId else coll
+                    let newBody = if body = decomp.OriginalNodeId then decomp.ReplacementNodeId else body
+                    SemanticKind.ForEach (var, newColl, newBody)
+                | SemanticKind.TryWith (body, handler) ->
+                    let newBody = if body = decomp.OriginalNodeId then decomp.ReplacementNodeId else body
+                    let newHandler = if handler = decomp.OriginalNodeId then decomp.ReplacementNodeId else handler
+                    SemanticKind.TryWith (newBody, newHandler)
+                | SemanticKind.TryFinally (body, cleanup) ->
+                    let newBody = if body = decomp.OriginalNodeId then decomp.ReplacementNodeId else body
+                    let newCleanup = if cleanup = decomp.OriginalNodeId then decomp.ReplacementNodeId else cleanup
+                    SemanticKind.TryFinally (newBody, newCleanup)
                 | SemanticKind.Binding (_name, _isMut, _isRec, _isEntry) ->
                     // Binding children are the bound value - update if needed
                     node.Kind  // Keep as-is, children update handles this
@@ -392,6 +438,15 @@ type DecompositionResult = {
 /// Returns the transformed graph with HOFs decomposed to primitives,
 /// plus a shadow registry for tooling transparency.
 let run (graph: SemanticGraph) : DecompositionResult =
+    // Debug: count Match nodes before decomposition
+    let matchNodesBefore = 
+        graph.Nodes 
+        |> Map.values 
+        |> Seq.filter (fun n -> n.IsReachable && match n.Kind with SemanticKind.Match _ -> true | _ -> false)
+        |> Seq.length
+    if matchNodesBefore > 0 then
+        eprintfn "[BAKER] Found %d reachable Match node(s) to decompose" matchNodesBefore
+    
     // Find all reachable Application nodes that need decomposition
     let decompositions =
         graph.Nodes
@@ -400,6 +455,8 @@ let run (graph: SemanticGraph) : DecompositionResult =
         |> Seq.choose (tryDecomposeNode graph)
         |> List.ofSeq
     
+    eprintfn "[BAKER] Total decompositions: %d" (List.length decompositions)
+    
     if List.isEmpty decompositions then
         // No decompositions needed
         { Graph = graph; ShadowRegistry = ShadowRegistry.empty }
@@ -407,6 +464,16 @@ let run (graph: SemanticGraph) : DecompositionResult =
         // Apply all decompositions and collect shadow trees
         let transformedGraph = applyDecompositions graph decompositions
         let shadowRegistry = collectShadowTrees decompositions
+        
+        // Debug: count Match nodes after decomposition
+        let matchNodesAfter = 
+            transformedGraph.Nodes 
+            |> Map.values 
+            |> Seq.filter (fun n -> n.IsReachable && match n.Kind with SemanticKind.Match _ -> true | _ -> false)
+            |> Seq.length
+        if matchNodesAfter > 0 then
+            eprintfn "[BAKER] WARNING: %d Match node(s) still remain after decomposition" matchNodesAfter
+        
         { Graph = transformedGraph; ShadowRegistry = shadowRegistry }
 
 /// Run HOF decomposition returning just the graph (for backward compatibility)

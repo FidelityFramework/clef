@@ -704,3 +704,61 @@ let emptySeq (elemType: NativeType) : Recipe<NodeId> =
         FullName = "Seq.empty"
     }
     createAndEmit (SemanticKind.Intrinsic info) seqType
+
+
+//=============================================================================
+// UNION/DISCRIMINATED UNION PRIMITIVES
+//=============================================================================
+
+/// Extract a field from a struct/record/union by name
+/// Used for pattern matching to extract tag and payload
+let fieldGet (exprId: NodeId) (fieldName: string) (fieldType: NativeType) : Recipe<NodeId> =
+    createWithChildren (SemanticKind.FieldGet (exprId, fieldName)) fieldType [exprId]
+
+/// Extract the tag (discriminator) from a discriminated union value
+/// Tag is always at field index 0, stored as i8
+let extractTag (unionId: NodeId) : Recipe<NodeId> =
+    fieldGet unionId "Tag" Types.int8Type
+
+/// Extract payload field at a specific index from a discriminated union
+/// Payload fields are named "Item1", "Item2", etc. (1-based for F# compatibility)
+let extractPayloadField (unionId: NodeId) (index: int) (fieldType: NativeType) : Recipe<NodeId> =
+    let fieldName = sprintf "Item%d" (index + 1)  // F# uses 1-based naming
+    fieldGet unionId fieldName fieldType
+
+/// Create an i8 literal (used for tag constants)
+let int8Lit (value: int) : Recipe<NodeId> =
+    createAndEmit (SemanticKind.Literal (NativeLiteral.Int (int64 value, NTUKind.NTUint8))) Types.int8Type
+
+/// Compare two values for equality, returning bool
+/// Used for tag comparison in pattern matching
+let compareEq (leftId: NodeId) (rightId: NodeId) (operandType: NativeType) : Recipe<NodeId> =
+    let funcType = NativeType.TFun (operandType, NativeType.TFun (operandType, Types.boolType))
+    let info = {
+        Module = IntrinsicModule.Operators
+        Operation = "op_Equality"
+        Category = IntrinsicCategory.Comparison
+        FullName = "op_Equality"
+    }
+    recipe {
+        let! funcId = createAndEmit (SemanticKind.Intrinsic info) funcType
+        return! createWithChildren (SemanticKind.Application (funcId, [leftId; rightId])) Types.boolType [funcId; leftId; rightId]
+    }
+
+/// Compare tag value against expected tag index
+/// Returns true if scrutinee's tag equals expected
+let compareTagEq (scrutineeId: NodeId) (expectedTag: int) : Recipe<NodeId> =
+    recipe {
+        let! actualTagId = extractTag scrutineeId
+        let! expectedTagId = int8Lit expectedTag
+        return! compareEq actualTagId expectedTagId Types.int8Type
+    }
+
+/// Create a union case value (union construction)
+/// caseName: Name of the case (e.g., "Some", "IntVal")
+/// caseIndex: Tag index for this case
+/// payload: Optional payload node (None for nullary cases)
+/// unionType: The full union type
+let unionCase (caseName: string) (caseIndex: int) (payload: NodeId option) (unionType: NativeType) : Recipe<NodeId> =
+    createWithChildren (SemanticKind.UnionCase (caseName, caseIndex, payload)) unionType 
+        (match payload with Some p -> [p] | None -> [])

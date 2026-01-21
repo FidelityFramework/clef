@@ -1,5 +1,6 @@
 # Coeffect Analysis
 
+> **Formal spec:** `~/repos/fslang-spec/spec/native-compilation-model.md` (§Coeffect Analysis)
 > **Full documentation:** `/home/hhh/repos/Firefly/docs/Coeffect_Analysis_Architecture.md`
 
 ## Key Distinction

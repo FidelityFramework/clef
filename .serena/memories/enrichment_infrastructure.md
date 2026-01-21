@@ -1,5 +1,6 @@
 # PSG Enrichment Infrastructure
 
+> **Formal spec:** `~/repos/fslang-spec/spec/native-compilation-model.md` (§Enrichment)
 > **Full documentation:** `/home/hhh/repos/Firefly/docs/PSG_Enrichment_Architecture.md`
 
 ## Key Concepts

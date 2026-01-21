@@ -1,35 +1,61 @@
-/// PhaseConfig - Global configuration for FNCS nanopass intermediate emission
+/// PhaseConfig - Configuration for compiler intermediate artifact emission
 ///
-/// This module controls whether phase intermediates are emitted during compilation.
-/// Each nanopass phase can emit its work product for inspection when enabled.
+/// Artifacts are numbered ordinally across the entire compilation pipeline.
+/// This allows `ls` to show them in pipeline order regardless of which
+/// compiler stage produced them.
 ///
-/// Usage:
-///   PhaseConfig.enableAllPhases "/path/to/intermediates"
-///   // ... run compilation ...
-///   // Intermediates written to fncs_phase_*.json files
+/// FNCS artifacts (01-05):
+///   01_psg0.json              - PSG₀: Initial typed tree with reachability
+///   02_intrinsic_recipes.json - Intrinsic elaboration recipes
+///   03_psg1.json              - PSG₁: After intrinsic fold-in
+///   04_saturation_recipes.json- Saturation recipes (Baker)
+///   05_psg2.json              - PSG₂: Final saturated PSG to Alex
+///
+/// Alex artifacts (06-08):
+///   06_coeffects.json         - Coeffect analysis (SSA, mutability, etc.)
+///   07_output.mlir            - MLIR output
+///   08_output.ll              - LLVM IR (future)
 module FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
 
 open System
 
-/// Configuration for a single nanopass phase
-type PhaseSettings = {
-    /// Whether to emit this phase's intermediate
-    Enabled: bool
-    /// Custom file suffix (e.g., "parsing" -> fncs_phase_0_parsing.json)
-    Suffix: string
-}
+/// Artifact identifiers - ordinal across entire pipeline
+[<RequireQualifiedAccess>]
+module ArtifactId =
+    // FNCS artifacts
+    let [<Literal>] Psg0 = 1               // Initial PSG with reachability
+    let [<Literal>] IntrinsicRecipes = 2   // Intrinsic elaboration recipes
+    let [<Literal>] Psg1 = 3               // After intrinsic fold-in
+    let [<Literal>] SaturationRecipes = 4  // Baker saturation recipes
+    let [<Literal>] Psg2 = 5               // Final saturated PSG
 
-/// Global configuration for nanopass intermediate emission
-type NanopassConfig = {
+    // Alex artifacts (reserved for Firefly side)
+    let [<Literal>] Coeffects = 6          // Coeffect analysis
+    let [<Literal>] Mlir = 7               // MLIR output
+    let [<Literal>] Llvm = 8               // LLVM IR
+
+/// Get the filename for an artifact (without directory)
+let artifactFilename (id: int) : string =
+    match id with
+    | 1 -> "01_psg0.json"
+    | 2 -> "02_intrinsic_recipes.json"
+    | 3 -> "03_psg1.json"
+    | 4 -> "04_saturation_recipes.json"
+    | 5 -> "05_psg2.json"
+    | 6 -> "06_coeffects.json"
+    | 7 -> "07_output.mlir"
+    | 8 -> "08_output.ll"
+    | n -> sprintf "%02d_unknown.json" n
+
+/// Global configuration for artifact emission
+type ArtifactConfig = {
     /// Master switch for intermediate emission
     EmitIntermediates: bool
     /// Output directory for intermediate files
     OutputDir: string
-    /// Use soft-delete for reachability (preserve full graph structure)
-    SoftDeleteReachability: bool
-    /// Individual phase settings
-    PhaseSettings: Map<int, PhaseSettings>
-    /// Include node bodies in output (can be verbose)
+    /// Which artifacts to emit (by ordinal ID)
+    EnabledArtifacts: Set<int>
+    /// Include node bodies in PSG output (verbose)
     IncludeNodeBodies: bool
     /// Include source ranges in output
     IncludeRanges: bool
@@ -38,28 +64,16 @@ type NanopassConfig = {
 }
 
 /// Default configuration - all emission disabled
-let defaultConfig : NanopassConfig = {
+let defaultConfig : ArtifactConfig = {
     EmitIntermediates = false
     OutputDir = ""
-    SoftDeleteReachability = false
-    PhaseSettings = Map.empty
+    EnabledArtifacts = Set.empty
     IncludeNodeBodies = false
     IncludeRanges = true
     PrettyPrint = true
 }
 
-/// Default phase suffixes
-let private defaultPhaseSuffixes = [
-    (0, "parsing")
-    (1, "structural")
-    (2, "constraints")
-    (3, "srtp")
-    (4, "reachability")
-    (5, "final")
-]
-
 /// Global mutable configuration
-/// Note: Mutable for easy integration with CLI flags. Thread-safety managed by caller.
 let mutable private currentConfig = defaultConfig
 
 /// Get current configuration
@@ -68,87 +82,102 @@ let getConfig () = currentConfig
 /// Check if intermediates should be emitted
 let shouldEmit () = currentConfig.EmitIntermediates
 
-/// Check if a specific phase should be emitted
+/// Check if a specific artifact should be emitted
+let shouldEmitArtifact (id: int) =
+    currentConfig.EmitIntermediates && currentConfig.EnabledArtifacts.Contains(id)
+
+// Legacy compatibility - shouldEmitPhase maps to shouldEmitArtifact
 let shouldEmitPhase (phase: int) =
-    currentConfig.EmitIntermediates &&
-    match currentConfig.PhaseSettings.TryFind phase with
-    | Some settings -> settings.Enabled
-    | None -> false  // Unknown phases are not emitted
+    // Map old phase numbers to new artifact IDs
+    let artifactId =
+        match phase with
+        | 1 -> ArtifactId.Psg0  // "structural" -> psg0
+        | 4 -> ArtifactId.Psg0  // "reachability" -> psg0 (combined now)
+        | 5 -> ArtifactId.Psg1  // "baker_moduleinit" -> psg1
+        | 8 -> ArtifactId.Psg2  // "final" -> psg2
+        | _ -> phase
+    shouldEmitArtifact artifactId
 
 /// Get output directory
 let getOutputDir () = currentConfig.OutputDir
 
-/// Check if soft-delete reachability is enabled
-let useSoftDeleteReachability () = currentConfig.SoftDeleteReachability
+/// Get the file path for an artifact
+let getArtifactFilePath (id: int) : string option =
+    if not (shouldEmitArtifact id) then
+        None
+    else
+        let filename = artifactFilename id
+        Some (System.IO.Path.Combine(currentConfig.OutputDir, filename))
 
-/// Enable all phases with default settings
-let enableAllPhases (outputDir: string) =
-    let phaseSettings =
-        defaultPhaseSuffixes
-        |> List.map (fun (phase, suffix) ->
-            phase, { Enabled = true; Suffix = suffix })
-        |> Map.ofList
+// Legacy compatibility
+let getPhaseFilePath (phase: int) =
+    let artifactId =
+        match phase with
+        | 1 -> ArtifactId.Psg0
+        | 4 -> ArtifactId.Psg0
+        | 5 -> ArtifactId.Psg1
+        | 8 -> ArtifactId.Psg2
+        | _ -> phase
+    getArtifactFilePath artifactId
 
+/// Enable all FNCS artifacts (1-5)
+let enableAllFncsArtifacts (outputDir: string) =
     currentConfig <- {
         EmitIntermediates = true
         OutputDir = outputDir
-        SoftDeleteReachability = true  // Enable soft-delete for debugging
-        PhaseSettings = phaseSettings
-        IncludeNodeBodies = true       // Include bodies for full visibility
-        IncludeRanges = true
-        PrettyPrint = true
-    }
-
-/// Enable specific phases only
-let enablePhases (outputDir: string) (phases: int list) =
-    let phaseSettings =
-        defaultPhaseSuffixes
-        |> List.filter (fun (phase, _) -> List.contains phase phases)
-        |> List.map (fun (phase, suffix) ->
-            phase, { Enabled = true; Suffix = suffix })
-        |> Map.ofList
-
-    currentConfig <- {
-        EmitIntermediates = true
-        OutputDir = outputDir
-        SoftDeleteReachability = List.contains 4 phases  // Enable soft-delete if phase 4 requested
-        PhaseSettings = phaseSettings
+        EnabledArtifacts = Set.ofList [1; 2; 3; 4; 5]
         IncludeNodeBodies = true
         IncludeRanges = true
         PrettyPrint = true
     }
 
+/// Enable all artifacts including Alex (1-8)
+let enableAllArtifacts (outputDir: string) =
+    currentConfig <- {
+        EmitIntermediates = true
+        OutputDir = outputDir
+        EnabledArtifacts = Set.ofList [1; 2; 3; 4; 5; 6; 7; 8]
+        IncludeNodeBodies = true
+        IncludeRanges = true
+        PrettyPrint = true
+    }
+
+// Legacy compatibility
+let enableAllPhases (outputDir: string) = enableAllArtifacts outputDir
+
+/// Enable specific artifacts only
+let enableArtifacts (outputDir: string) (ids: int list) =
+    currentConfig <- {
+        EmitIntermediates = true
+        OutputDir = outputDir
+        EnabledArtifacts = Set.ofList ids
+        IncludeNodeBodies = true
+        IncludeRanges = true
+        PrettyPrint = true
+    }
+
+// Legacy compatibility
+let enablePhases (outputDir: string) (phases: int list) = enableArtifacts outputDir phases
+
 /// Disable all emission (reset to default)
 let disableEmission () =
     currentConfig <- defaultConfig
 
-/// Set configuration directly (for testing or custom configurations)
-let setConfig (config: NanopassConfig) =
+/// Set configuration directly
+let setConfig (config: ArtifactConfig) =
     currentConfig <- config
-
-/// Get the file path for a phase intermediate
-let getPhaseFilePath (phase: int) =
-    if not (shouldEmitPhase phase) then
-        None
-    else
-        match currentConfig.PhaseSettings.TryFind phase with
-        | Some settings ->
-            let filename = sprintf "fncs_phase_%d_%s.json" phase settings.Suffix
-            Some (System.IO.Path.Combine(currentConfig.OutputDir, filename))
-        | None -> None
 
 /// Configuration summary for logging
 let getConfigSummary () =
     if not currentConfig.EmitIntermediates then
-        "Phase emission: disabled"
+        "Artifact emission: disabled"
     else
-        let enabledPhases =
-            currentConfig.PhaseSettings
-            |> Map.toList
-            |> List.filter (fun (_, s) -> s.Enabled)
-            |> List.map (fun (p, s) -> sprintf "%d_%s" p s.Suffix)
+        let enabled =
+            currentConfig.EnabledArtifacts
+            |> Set.toList
+            |> List.map artifactFilename
             |> String.concat ", "
-        sprintf "Phase emission: enabled [%s] -> %s (soft-delete: %b)"
-            enabledPhases
-            currentConfig.OutputDir
-            currentConfig.SoftDeleteReachability
+        sprintf "Artifact emission: enabled [%s] -> %s" enabled currentConfig.OutputDir
+
+// Legacy - soft delete is always used now
+let useSoftDeleteReachability () = true

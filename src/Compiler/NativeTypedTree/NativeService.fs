@@ -32,6 +32,11 @@ module PhaseEmitter = FSharp.Native.Compiler.NativeTypedTree.Infrastructure.Phas
 // Baker modules - HOF decomposition (PRD-13a)
 module HOFDecomposition = FSharp.Native.Compiler.Baker.HOFDecomposition
 
+// Nanopass modules - Four-pass elaboration pipeline (January 2026)
+module IntrinsicElaboration = FSharp.Native.Compiler.Nanopass.IntrinsicElaboration
+module BakerSaturation = FSharp.Native.Compiler.Nanopass.BakerSaturation
+module RecipeSerialization = FSharp.Native.Compiler.Nanopass.Serialization
+
 open FSharp.Native.Compiler.NativeTypedTree.UnionFind
 open FSharp.Native.Compiler.NativeTypedTree.Unify
 open FSharp.Native.Compiler.DiagnosticsLogger
@@ -427,14 +432,29 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability prunedGraph diagnostics
             prunedGraph
 
-    // Phase 4.5: HOF Decomposition (Baker/Recipes - PRD-13a)
-    // Expand higher-order collection operations (List.map, List.fold, etc.)
-    // into primitive recursive structures that Alex can witness directly
-    // Note: This also produces a shadow registry for tooling, but we
-    // currently only use the graph. Shadow registry can be plumbed through
-    // when tooling integration is added.
-    let decompositionResult = HOFDecomposition.run reachableGraph
-    let finalGraph = decompositionResult.Graph
+    //=========================================================================
+    // Four-Pass Elaboration Pipeline (January 2026)
+    // See: docs/PSG_Elaboration_Fold_Architecture.md
+    //
+    // PSG₀ (reachableGraph) → Pass 1 → Intrinsic Recipes → Pass 2 → PSG₁
+    //                       → Pass 3 → Saturation Recipes → Pass 4 → PSG₂
+    //=========================================================================
+
+    // Pass 1: Intrinsic Fan-Out - Create intrinsic elaboration recipes
+    let intrinsicRecipes = IntrinsicElaboration.fanOut reachableGraph
+    RecipeSerialization.emitIntrinsicRecipes intrinsicRecipes  // Artifact 02
+
+    // Pass 2: Intrinsic Fold-In - Build PSG₁ with intrinsic elaborations
+    let psg1 = IntrinsicElaboration.foldIn intrinsicRecipes reachableGraph
+    if PhaseConfig.shouldEmit() then
+        emitPhaseIfEnabled PhaseTypes.PhaseId.BakerModuleInit psg1 diagnostics  // Artifact 03
+
+    // Pass 3: Saturation Fan-Out - Create Baker decomposition recipes
+    let saturationRecipes = BakerSaturation.fanOut psg1
+    RecipeSerialization.emitSaturationRecipes saturationRecipes  // Artifact 04
+
+    // Pass 4: Saturation Fold-In - Build PSG₂ with decomposed structures
+    let finalGraph = BakerSaturation.foldIn saturationRecipes psg1
 
     // Phase 5: Emit final result
     emitPhaseIfEnabled PhaseTypes.PhaseId.Final finalGraph diagnostics
