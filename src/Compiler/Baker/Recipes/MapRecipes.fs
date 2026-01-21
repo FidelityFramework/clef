@@ -58,9 +58,23 @@ let private mapToListRecipe
     (keyType: NativeType)
     (valueType: NativeType)
     : Recipe<NodeId> =
-    
+
     // Use the AVL in-order traversal pattern
     inOrderTraversalMap mapNodeId keyType valueType
+
+//=============================================================================
+// MAP.TOSEQ: toSeq m → lazy in-order traversal yielding (key, value) pairs
+// PRD-16: Returns seq<'K * 'V> for lazy enumeration
+//=============================================================================
+
+let private mapToSeqRecipe
+    (mapNodeId: NodeId)
+    (keyType: NativeType)
+    (valueType: NativeType)
+    : Recipe<NodeId> =
+
+    // Use the lazy in-order seq traversal pattern for pairs
+    inOrderPairsSeq mapNodeId keyType valueType
 
 //=============================================================================
 // MAP.TRYFIND: tryFind k m → binary search returning Option<value>
@@ -109,7 +123,8 @@ let private mapContainsKeyRecipe
     }
 
 //=============================================================================
-// MAP.KEYS: keys m → list of keys via in-order traversal
+// MAP.KEYS: keys m → lazy seq of keys via in-order traversal
+// PRD-16: Returns seq<'K> for lazy enumeration
 //=============================================================================
 
 let private mapKeysRecipe
@@ -117,74 +132,13 @@ let private mapKeysRecipe
     (keyType: NativeType)
     (valueType: NativeType)
     : Recipe<NodeId> =
-    
-    let mapType = NativeType.TMap (keyType, valueType)
-    let keyListType = NativeType.TList keyType
-    let loopFuncType = NativeType.TFun (mapType, keyListType)
-    
-    recipe {
-        // Parameter: tree
-        let! treeParamId = patternBinding "tree" mapType
-        do! bindVariable "tree" treeParamId mapType
-        
-        // Base case: []
-        let! emptyListId = emptyList keyType
-        
-        // Guard: isEmpty tree
-        let! isEmptyId = mapIsEmpty treeParamId keyType valueType
-        
-        // Get key, left, right
-        let! nodeKeyId = mapKey treeParamId keyType valueType
-        let! leftId = mapLeft treeParamId keyType valueType
-        let! rightId = mapRight treeParamId keyType valueType
-        
-        // Recursive calls
-        let! loopRefLeft = varRef "keys" None loopFuncType
-        let! leftKeysId = app1 loopRefLeft leftId keyListType
-        
-        let! loopRefRight = varRef "keys" None loopFuncType
-        let! rightKeysId = app1 loopRefRight rightId keyListType
-        
-        // Create singleton list: [key]
-        let! singletonId = cons nodeKeyId emptyListId keyType
-        
-        // Concatenate: leftKeys @ [key] @ rightKeys
-        let appendInfo = {
-            Module = IntrinsicModule.List
-            Operation = "append"
-            Category = IntrinsicCategory.Pure
-            FullName = "List.append"
-        }
-        let appendFuncType = NativeType.TFun (keyListType, NativeType.TFun (keyListType, keyListType))
-        let! appendFunc1 = createAndEmit (SemanticKind.Intrinsic appendInfo) appendFuncType
-        let! midResultId = app2 appendFunc1 leftKeysId singletonId keyListType
-        
-        let! appendFunc2 = createAndEmit (SemanticKind.Intrinsic appendInfo) appendFuncType
-        let! fullResultId = app2 appendFunc2 midResultId rightKeysId keyListType
-        
-        // If-then-else
-        let! ifNodeId = ifThenElse isEmptyId emptyListId fullResultId keyListType
-        
-        // Lambda
-        let lambdaKind = SemanticKind.Lambda (
-            [("tree", mapType, treeParamId)],
-            ifNodeId,
-            [],
-            Some "keys",
-            LambdaContext.RegularClosure
-        )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
-        
-        // Binding
-        let! bindingId = letRecBind "keys" lambdaId loopFuncType
-        
-        // Initial call
-        let! loopCallRefId = varRef "keys" (Some bindingId) loopFuncType
-        return! app1 loopCallRefId mapNodeId keyListType
-    }
+
+    // Use the in-order seq traversal pattern
+    inOrderKeysSeq mapNodeId keyType valueType
 
 //=============================================================================
-// MAP.VALUES: values m → list of values via in-order traversal
+// MAP.VALUES: values m → lazy seq of values via in-order traversal
+// PRD-16: Returns seq<'V> for lazy enumeration
 //=============================================================================
 
 let private mapValuesRecipe
@@ -192,71 +146,9 @@ let private mapValuesRecipe
     (keyType: NativeType)
     (valueType: NativeType)
     : Recipe<NodeId> =
-    
-    let mapType = NativeType.TMap (keyType, valueType)
-    let valueListType = NativeType.TList valueType
-    let loopFuncType = NativeType.TFun (mapType, valueListType)
-    
-    recipe {
-        // Parameter: tree
-        let! treeParamId = patternBinding "tree" mapType
-        do! bindVariable "tree" treeParamId mapType
-        
-        // Base case: []
-        let! emptyListId = emptyList valueType
-        
-        // Guard: isEmpty tree
-        let! isEmptyId = mapIsEmpty treeParamId keyType valueType
-        
-        // Get value, left, right
-        let! nodeValueId = mapValue treeParamId keyType valueType
-        let! leftId = mapLeft treeParamId keyType valueType
-        let! rightId = mapRight treeParamId keyType valueType
-        
-        // Recursive calls
-        let! loopRefLeft = varRef "values" None loopFuncType
-        let! leftValsId = app1 loopRefLeft leftId valueListType
-        
-        let! loopRefRight = varRef "values" None loopFuncType
-        let! rightValsId = app1 loopRefRight rightId valueListType
-        
-        // Create singleton list: [value]
-        let! singletonId = cons nodeValueId emptyListId valueType
-        
-        // Concatenate: leftVals @ [value] @ rightVals
-        let appendInfo = {
-            Module = IntrinsicModule.List
-            Operation = "append"
-            Category = IntrinsicCategory.Pure
-            FullName = "List.append"
-        }
-        let appendFuncType = NativeType.TFun (valueListType, NativeType.TFun (valueListType, valueListType))
-        let! appendFunc1 = createAndEmit (SemanticKind.Intrinsic appendInfo) appendFuncType
-        let! midResultId = app2 appendFunc1 leftValsId singletonId valueListType
-        
-        let! appendFunc2 = createAndEmit (SemanticKind.Intrinsic appendInfo) appendFuncType
-        let! fullResultId = app2 appendFunc2 midResultId rightValsId valueListType
-        
-        // If-then-else
-        let! ifNodeId = ifThenElse isEmptyId emptyListId fullResultId valueListType
-        
-        // Lambda
-        let lambdaKind = SemanticKind.Lambda (
-            [("tree", mapType, treeParamId)],
-            ifNodeId,
-            [],
-            Some "values",
-            LambdaContext.RegularClosure
-        )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
-        
-        // Binding
-        let! bindingId = letRecBind "values" lambdaId loopFuncType
-        
-        // Initial call
-        let! loopCallRefId = varRef "values" (Some bindingId) loopFuncType
-        return! app1 loopCallRefId mapNodeId valueListType
-    }
+
+    // Use the in-order seq traversal pattern
+    inOrderValuesSeq mapNodeId keyType valueType
 
 //=============================================================================
 // MAP.FORALL: forall p m → check predicate on all (key, value) pairs
@@ -288,7 +180,10 @@ let tryDecompose
     match operation, args with
     | "toList", [m] ->
         Some (runRecipe ctx (mapToListRecipe m keyType valueType))
-    
+
+    | "toSeq", [m] ->
+        Some (runRecipe ctx (mapToSeqRecipe m keyType valueType))
+
     | "tryFind", [k; m] ->
         Some (runRecipe ctx (mapTryFindRecipe k m keyType valueType))
     

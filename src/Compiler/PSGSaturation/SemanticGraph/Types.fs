@@ -77,6 +77,7 @@ type IntrinsicModule =
     | Batch         // Update batching operations (run)
     | Lazy          // Lazy values (create, force, isValueCreated)
     | Seq           // Sequence generation (seq { }, toArray, toList, etc.)
+    | SeqEnumerator // Sequence enumerator operations (moveNext, current) - PRD-15/16
     | Arena         // Arena allocation (fromPointer, alloc, allocAligned, remaining, reset)
     | Platform      // Platform info (wordSize, sizeof)
     // PRD-13a: Core Collections

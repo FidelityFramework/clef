@@ -694,6 +694,11 @@ and [<RequireQualifiedAccess; NoComparison>] NativeType =
     /// PRD-15: Resumable computation producing values on demand
     | TSeq of element: NativeType
 
+    /// Sequence enumerator type: SeqEnumerator<T>
+    /// PRD-15/16: State machine for iterating over a seq
+    /// This is the mutable iteration state returned by Seq.getEnumerator
+    | TSeqEnumerator of element: NativeType
+
     /// List type: List<T>
     /// PRD-13a: Immutable singly-linked list
     | TList of element: NativeType
@@ -857,6 +862,7 @@ let rec layoutOf (ty: NativeType) : TypeLayout =
     | NativeType.TUnion(tycon, _) -> tycon.Layout
     | NativeType.TLazy _ -> TypeLayout.Inline(-1, -1)  // Size depends on element type (PRD-14)
     | NativeType.TSeq _ -> TypeLayout.Inline(-1, -1)  // Size depends on element type (PRD-15)
+    | NativeType.TSeqEnumerator _ -> TypeLayout.Inline(-1, -1)  // Size depends on seq state machine (PRD-15/16)
     | NativeType.TList _ -> TypeLayout.PlatformWord  // Pointer to cons cell (PRD-13a)
     | NativeType.TMap _ -> TypeLayout.PlatformWord  // Pointer to tree root (PRD-13a)
     | NativeType.TSet _ -> TypeLayout.PlatformWord  // Pointer to tree root (PRD-13a)
@@ -983,6 +989,7 @@ let instantiate (typars: TypeParam list) (args: NativeType list) (body: NativeTy
                 { c with Fields = c.Fields |> List.map (fun (n, t) -> (n, go t)) }))
         | NativeType.TLazy elem -> NativeType.TLazy(go elem)  // PRD-14
         | NativeType.TSeq elem -> NativeType.TSeq(go elem)  // PRD-15
+        | NativeType.TSeqEnumerator elem -> NativeType.TSeqEnumerator(go elem)  // PRD-15/16
         | NativeType.TList elem -> NativeType.TList(go elem)  // PRD-13a
         | NativeType.TMap(k, v) -> NativeType.TMap(go k, go v)  // PRD-13a
         | NativeType.TSet elem -> NativeType.TSet(go elem)  // PRD-13a
@@ -1026,6 +1033,7 @@ let rec formatType (ty: NativeType) : string =
     | NativeType.TUnion(tc, _) -> tc.Name
     | NativeType.TLazy elem -> $"Lazy<{formatType elem}>"  // PRD-14
     | NativeType.TSeq elem -> $"seq<{formatType elem}>"  // PRD-15
+    | NativeType.TSeqEnumerator elem -> $"SeqEnumerator<{formatType elem}>"  // PRD-15/16
     | NativeType.TList elem -> $"List<{formatType elem}>"  // PRD-13a
     | NativeType.TMap(k, v) -> $"Map<{formatType k}, {formatType v}>"  // PRD-13a
     | NativeType.TSet elem -> $"Set<{formatType elem}>"  // PRD-13a

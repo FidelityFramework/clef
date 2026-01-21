@@ -919,6 +919,253 @@ let avlInsertSet
         // Initial call
         let! loopCallRefId = varRef "insert" (Some bindingId) loopFuncType
         let! initialCallId = app1 loopCallRefId inputTreeId setType
-        
+
         return initialCallId
+    }
+
+//=============================================================================
+// IN-ORDER SEQ TRAVERSAL PATTERNS (PRD-16 - Lazy Map/Set Enumeration)
+//=============================================================================
+
+/// Generate an in-order seq traversal of a Map's keys.
+///
+/// Produces the PSG equivalent of:
+/// ```fsharp
+/// let keys map =
+///     let rec traverse tree =
+///         seq {
+///             if not (Map.isEmpty tree) then
+///                 yield! traverse (Map.left tree)
+///                 yield (Map.key tree)
+///                 yield! traverse (Map.right tree)
+///         }
+///     in traverse map
+/// ```
+///
+/// This creates a lazy seq that yields keys in sorted order during traversal.
+let inOrderKeysSeq
+    (inputMapId: NodeId)
+    (keyType: NativeType)
+    (valueType: NativeType)
+    : Recipe<NodeId> =
+
+    let mapType = NativeType.TMap (keyType, valueType)
+    let seqKeyType = NativeType.TSeq keyType
+    let traverseFuncType = NativeType.TFun (mapType, seqKeyType)
+
+    recipe {
+        // Parameter: tree
+        let! treeParamId = patternBinding "tree" mapType
+        do! bindVariable "tree" treeParamId mapType
+
+        // Guard: isEmpty tree
+        let! isEmptyId = mapIsEmpty treeParamId keyType valueType
+
+        // Get key, left, right
+        let! nodeKeyId = mapKey treeParamId keyType valueType
+        let! leftId = mapLeft treeParamId keyType valueType
+        let! rightId = mapRight treeParamId keyType valueType
+
+        // Recursive calls to traverse
+        let! traverseRefLeft = varRef "traverse" None traverseFuncType
+        let! leftSeqId = app1 traverseRefLeft leftId seqKeyType
+
+        let! traverseRefRight = varRef "traverse" None traverseFuncType
+        let! rightSeqId = app1 traverseRefRight rightId seqKeyType
+
+        // Build seq body: yield! left; yield key; yield! right
+        let! yieldLeftId = yieldBang leftSeqId keyType
+        let! yieldKeyId = yield' nodeKeyId keyType
+        let! yieldRightId = yieldBang rightSeqId keyType
+
+        // Sequential body: yieldLeft; yieldKey; yieldRight
+        let seqKind = SemanticKind.Sequential [yieldLeftId; yieldKeyId; yieldRightId]
+        let seqChildren = [yieldLeftId; yieldKeyId; yieldRightId]
+        let! seqBodyId = createWithChildren seqKind Types.unitType seqChildren
+
+        // If isEmpty then empty seq else seq body
+        let! emptySeqId = emptySeq keyType
+        let! condBodyId = ifThenElse isEmptyId emptySeqId seqBodyId seqKeyType
+
+        // Wrap in SeqExpr (captures the tree parameter)
+        let capture: CaptureInfo = { Name = "tree"; Type = mapType; IsMutable = false; SourceNodeId = Some treeParamId }
+        let! seqExprId = seqExpr condBodyId [capture] keyType
+
+        // Lambda: fun tree -> seq { ... }
+        let lambdaKind = SemanticKind.Lambda (
+            [("tree", mapType, treeParamId)],
+            seqExprId,
+            [],
+            Some "traverse",
+            LambdaContext.RegularClosure
+        )
+        let! lambdaId = createWithChildren lambdaKind traverseFuncType [seqExprId]
+
+        // Binding: let rec traverse = ...
+        let! bindingId = letRecBind "traverse" lambdaId traverseFuncType
+
+        // Initial call: traverse inputMap
+        let! traverseCallRefId = varRef "traverse" (Some bindingId) traverseFuncType
+        return! app1 traverseCallRefId inputMapId seqKeyType
+    }
+
+/// Generate an in-order seq traversal of a Map's values.
+///
+/// Same structure as inOrderKeysSeq but yields values instead of keys.
+let inOrderValuesSeq
+    (inputMapId: NodeId)
+    (keyType: NativeType)
+    (valueType: NativeType)
+    : Recipe<NodeId> =
+
+    let mapType = NativeType.TMap (keyType, valueType)
+    let seqValueType = NativeType.TSeq valueType
+    let traverseFuncType = NativeType.TFun (mapType, seqValueType)
+
+    recipe {
+        // Parameter: tree
+        let! treeParamId = patternBinding "tree" mapType
+        do! bindVariable "tree" treeParamId mapType
+
+        // Guard: isEmpty tree
+        let! isEmptyId = mapIsEmpty treeParamId keyType valueType
+
+        // Get value, left, right
+        let! nodeValueId = mapValue treeParamId keyType valueType
+        let! leftId = mapLeft treeParamId keyType valueType
+        let! rightId = mapRight treeParamId keyType valueType
+
+        // Recursive calls to traverse
+        let! traverseRefLeft = varRef "traverse" None traverseFuncType
+        let! leftSeqId = app1 traverseRefLeft leftId seqValueType
+
+        let! traverseRefRight = varRef "traverse" None traverseFuncType
+        let! rightSeqId = app1 traverseRefRight rightId seqValueType
+
+        // Build seq body: yield! left; yield value; yield! right
+        let! yieldLeftId = yieldBang leftSeqId valueType
+        let! yieldValueId = yield' nodeValueId valueType
+        let! yieldRightId = yieldBang rightSeqId valueType
+
+        // Sequential body: yieldLeft; yieldValue; yieldRight
+        let seqKind = SemanticKind.Sequential [yieldLeftId; yieldValueId; yieldRightId]
+        let seqChildren = [yieldLeftId; yieldValueId; yieldRightId]
+        let! seqBodyId = createWithChildren seqKind Types.unitType seqChildren
+
+        // If isEmpty then empty seq else seq body
+        let! emptySeqId = emptySeq valueType
+        let! condBodyId = ifThenElse isEmptyId emptySeqId seqBodyId seqValueType
+
+        // Wrap in SeqExpr (captures the tree parameter)
+        let capture: CaptureInfo = { Name = "tree"; Type = mapType; IsMutable = false; SourceNodeId = Some treeParamId }
+        let! seqExprId = seqExpr condBodyId [capture] valueType
+
+        // Lambda: fun tree -> seq { ... }
+        let lambdaKind = SemanticKind.Lambda (
+            [("tree", mapType, treeParamId)],
+            seqExprId,
+            [],
+            Some "traverse",
+            LambdaContext.RegularClosure
+        )
+        let! lambdaId = createWithChildren lambdaKind traverseFuncType [seqExprId]
+
+        // Binding: let rec traverse = ...
+        let! bindingId = letRecBind "traverse" lambdaId traverseFuncType
+
+        // Initial call: traverse inputMap
+        let! traverseCallRefId = varRef "traverse" (Some bindingId) traverseFuncType
+        return! app1 traverseCallRefId inputMapId seqValueType
+    }
+
+/// Generate an in-order seq traversal of a Map's key-value pairs.
+///
+/// Produces the PSG equivalent of:
+/// ```fsharp
+/// let toSeq map =
+///     let rec traverse tree =
+///         seq {
+///             if not (Map.isEmpty tree) then
+///                 yield! traverse (Map.left tree)
+///                 yield (Map.key tree, Map.value tree)
+///                 yield! traverse (Map.right tree)
+///         }
+///     in traverse map
+/// ```
+///
+/// This creates a lazy seq that yields (key, value) pairs in sorted order.
+/// Used by Map.toSeq for BAREWire and other consumers requiring lazy enumeration.
+let inOrderPairsSeq
+    (inputMapId: NodeId)
+    (keyType: NativeType)
+    (valueType: NativeType)
+    : Recipe<NodeId> =
+
+    let mapType = NativeType.TMap (keyType, valueType)
+    let pairType = NativeType.TTuple ([keyType; valueType], false)
+    let seqPairType = NativeType.TSeq pairType
+    let traverseFuncType = NativeType.TFun (mapType, seqPairType)
+
+    recipe {
+        // Parameter: tree
+        let! treeParamId = patternBinding "tree" mapType
+        do! bindVariable "tree" treeParamId mapType
+
+        // Guard: isEmpty tree
+        let! isEmptyId = mapIsEmpty treeParamId keyType valueType
+
+        // Get key, value, left, right
+        let! nodeKeyId = mapKey treeParamId keyType valueType
+        let! nodeValueId = mapValue treeParamId keyType valueType
+        let! leftId = mapLeft treeParamId keyType valueType
+        let! rightId = mapRight treeParamId keyType valueType
+
+        // Create (key, value) tuple
+        let tupleKind = SemanticKind.TupleExpr [nodeKeyId; nodeValueId]
+        let! ctx = getContext
+        let tupleNode = mkNode ctx tupleKind pairType
+        do! emitNode tupleNode
+        let tupleId = tupleNode.Id
+
+        // Recursive calls to traverse
+        let! traverseRefLeft = varRef "traverse" None traverseFuncType
+        let! leftSeqId = app1 traverseRefLeft leftId seqPairType
+
+        let! traverseRefRight = varRef "traverse" None traverseFuncType
+        let! rightSeqId = app1 traverseRefRight rightId seqPairType
+
+        // Build seq body: yield! left; yield (key, value); yield! right
+        let! yieldLeftId = yieldBang leftSeqId pairType
+        let! yieldPairId = yield' tupleId pairType
+        let! yieldRightId = yieldBang rightSeqId pairType
+
+        // Sequential body: yieldLeft; yieldPair; yieldRight
+        let seqKind = SemanticKind.Sequential [yieldLeftId; yieldPairId; yieldRightId]
+        let seqChildren = [yieldLeftId; yieldPairId; yieldRightId]
+        let! seqBodyId = createWithChildren seqKind Types.unitType seqChildren
+
+        // If isEmpty then empty seq else seq body
+        let! emptySeqId = emptySeq pairType
+        let! condBodyId = ifThenElse isEmptyId emptySeqId seqBodyId seqPairType
+
+        // Wrap in SeqExpr (captures the tree parameter)
+        let capture: CaptureInfo = { Name = "tree"; Type = mapType; IsMutable = false; SourceNodeId = Some treeParamId }
+        let! seqExprId = seqExpr condBodyId [capture] pairType
+
+        // Lambda: fun tree -> seq { ... }
+        let lambdaKind = SemanticKind.Lambda (
+            [("tree", mapType, treeParamId)],
+            seqExprId,
+            [],
+            Some "traverse",
+            LambdaContext.RegularClosure
+        )
+        let! lambdaId = createWithChildren lambdaKind traverseFuncType [seqExprId]
+
+        // Binding: let rec traverse = ...
+        let! bindingId = letRecBind "traverse" lambdaId traverseFuncType
+
+        // Initial call: traverse inputMap
+        let! traverseCallRefId = varRef "traverse" (Some bindingId) traverseFuncType
+        return! app1 traverseCallRefId inputMapId seqPairType
     }

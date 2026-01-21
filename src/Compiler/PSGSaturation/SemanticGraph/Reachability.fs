@@ -60,6 +60,7 @@ let isCompilerProvidedIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.TimeSpan
     | IntrinsicModule.Lazy  // Lazy operations handled by Alex (PRD-14)
     | IntrinsicModule.Seq  // Seq operations handled by Alex (PRD-15)
+    | IntrinsicModule.SeqEnumerator  // SeqEnumerator operations handled by Alex (PRD-15/16)
     // PRD-13a: Collection operations handled by Alex
     | IntrinsicModule.Map
     | IntrinsicModule.Set

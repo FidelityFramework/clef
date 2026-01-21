@@ -606,6 +606,27 @@ let private resolveSeqOp (op: string) (globals: NativeGlobals) (range: SourceRan
     | unknown ->
         UnknownOperation $"Unknown Seq intrinsic: Seq.{unknown}. Available: empty, toArray, toList, iter, map, filter, fold, take, collect, isEmpty, head, length, append, tryPick, minBy, max, min"
 
+/// Resolve SeqEnumerator.* operations (PRD-15/16: Sequence iteration state machine)
+let private resolveSeqEnumeratorOp (op: string) (globals: NativeGlobals) (range: SourceRange) : IntrinsicResolution =
+    let fullName = "SeqEnumerator." + op
+    let tyParamSpecT = freshTypeParam "'T" TypeParamKind.Type range
+    let tyParamT = NativeType.TVar tyParamSpecT
+    let enumT = NativeType.TSeqEnumerator tyParamT
+    match op with
+    | "moveNext" ->
+        // SeqEnumerator<'T> -> bool
+        // Advances the enumerator to the next element, returns false if at end
+        // Memory category because it mutates enumerator state
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(enumT, globals.BoolType))
+        Resolved (mkIntrinsic IntrinsicModule.SeqEnumerator op IntrinsicCategory.Memory fullName, ty)
+    | "current" ->
+        // SeqEnumerator<'T> -> 'T
+        // Gets the current element (undefined behavior if moveNext not called or returned false)
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(enumT, tyParamT))
+        Resolved (mkIntrinsic IntrinsicModule.SeqEnumerator op IntrinsicCategory.Pure fullName, ty)
+    | unknown ->
+        UnknownOperation $"Unknown SeqEnumerator intrinsic: SeqEnumerator.{unknown}. Available: moveNext, current"
+
 /// Resolve Math.* operations
 let private resolveMathOp (op: string) (globals: NativeGlobals) (_range: SourceRange) : IntrinsicResolution =
     let fullName = "Math." + op
@@ -849,6 +870,7 @@ let resolveModuleIntrinsic
     | IntrinsicModule.Batch -> resolveBatchOp op globals range
     | IntrinsicModule.Lazy -> resolveLazyOp op globals range
     | IntrinsicModule.Seq -> resolveSeqOp op globals range
+    | IntrinsicModule.SeqEnumerator -> resolveSeqEnumeratorOp op globals range
     | IntrinsicModule.Arena -> resolveArenaOp op globals range
     | IntrinsicModule.Math -> resolveMathOp op globals range
     | IntrinsicModule.DateTime -> resolveDateTimeOp op globals range

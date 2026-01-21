@@ -118,6 +118,9 @@ let rec applySubst (ty: NativeType) : NativeType =
     | NativeType.TSeq elem ->
         NativeType.TSeq(applySubst elem)  // PRD-15
 
+    | NativeType.TSeqEnumerator elem ->
+        NativeType.TSeqEnumerator(applySubst elem)  // PRD-15/16
+
     // PRD-13a: Immutable collection types
     | NativeType.TList elem ->
         NativeType.TList(applySubst elem)
@@ -186,6 +189,9 @@ let rec occursIn (typar: TypeParam) (ty: NativeType) : bool =
 
     | NativeType.TSeq elem ->
         occursIn typar elem  // PRD-15
+
+    | NativeType.TSeqEnumerator elem ->
+        occursIn typar elem  // PRD-15/16
 
     // PRD-13a: Immutable collection types
     | NativeType.TList elem ->
@@ -260,6 +266,9 @@ let rec freeTypeVars (ty: NativeType) : Set<TypeParamId> =
 
     | NativeType.TSeq elem ->
         freeTypeVars elem  // PRD-15
+
+    | NativeType.TSeqEnumerator elem ->
+        freeTypeVars elem  // PRD-15/16
 
     // PRD-13a: Immutable collection types
     | NativeType.TList elem ->
@@ -339,6 +348,9 @@ let rec collectFreeTypeParams (ty: NativeType) : TypeParam list =
 
     | NativeType.TSeq elem ->
         collectFreeTypeParams elem  // PRD-15
+
+    | NativeType.TSeqEnumerator elem ->
+        collectFreeTypeParams elem  // PRD-15/16
 
     // PRD-13a: Immutable collection types
     | NativeType.TList elem ->

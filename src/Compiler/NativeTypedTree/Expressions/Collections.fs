@@ -202,6 +202,9 @@ let checkRecord
                 | NativeType.TSeq _ ->
                     addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
                         "Expected record type, got seq<'T> type" env  // PRD-15
+                | NativeType.TSeqEnumerator _ ->
+                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                        "Expected record type, got SeqEnumerator<'T> type" env  // PRD-15/16
                 // PRD-13a: Collection types
                 | NativeType.TList _ ->
                     addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange

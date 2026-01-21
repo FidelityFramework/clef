@@ -150,6 +150,10 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
     | NativeType.TApp(tc, [elem1]), NativeType.TSeq elem2 when tc.Name = "seq" ->
         unify elem1 elem2 range
 
+    // SeqEnumerator types (PRD-15/16)
+    | NativeType.TSeqEnumerator elem1, NativeType.TSeqEnumerator elem2 ->
+        unify elem1 elem2 range
+
     // List types (PRD-13a)
     | NativeType.TList elem1, NativeType.TList elem2 ->
         unify elem1 elem2 range
@@ -312,6 +316,8 @@ let canUnify (t1: NativeType) (t2: NativeType) : bool =
             check e1 e2  // PRD-14
         | NativeType.TSeq e1, NativeType.TSeq e2 ->
             check e1 e2  // PRD-15
+        | NativeType.TSeqEnumerator e1, NativeType.TSeqEnumerator e2 ->
+            check e1 e2  // PRD-15/16
         | NativeType.TList e1, NativeType.TList e2 ->
             check e1 e2  // PRD-13a
         | NativeType.TMap(k1, v1), NativeType.TMap(k2, v2) ->

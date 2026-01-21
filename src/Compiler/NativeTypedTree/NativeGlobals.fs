@@ -935,23 +935,25 @@ module BuiltInFunctions =
             ("Map.remove", NativeType.TForall([removeKParam; removeVParam],
                 NativeType.TFun(removeKVar, NativeType.TFun(removeMapType, removeMapType))))
 
-            // Map.keys : forall 'K 'V. Map<'K, 'V> -> 'K list
+            // Map.keys : forall 'K 'V. Map<'K, 'V> -> seq<'K>
+            // PRD-16: Returns lazy sequence for in-order traversal of keys
             let keysKParam = freshTypeParam "'K"
             let keysVParam = freshTypeParam "'V"
             let keysKVar = NativeType.TVar keysKParam
             let keysVVar = NativeType.TVar keysVParam
             let keysMapType = NativeType.TMap(keysKVar, keysVVar)
-            let keysResultType = NativeType.TList(keysKVar)
+            let keysResultType = NativeType.TSeq(keysKVar)
             ("Map.keys", NativeType.TForall([keysKParam; keysVParam],
                 NativeType.TFun(keysMapType, keysResultType)))
 
-            // Map.values : forall 'K 'V. Map<'K, 'V> -> 'V list
+            // Map.values : forall 'K 'V. Map<'K, 'V> -> seq<'V>
+            // PRD-16: Returns lazy sequence for in-order traversal of values
             let valuesKParam = freshTypeParam "'K"
             let valuesVParam = freshTypeParam "'V"
             let valuesKVar = NativeType.TVar valuesKParam
             let valuesVVar = NativeType.TVar valuesVParam
             let valuesMapType = NativeType.TMap(valuesKVar, valuesVVar)
-            let valuesResultType = NativeType.TList(valuesVVar)
+            let valuesResultType = NativeType.TSeq(valuesVVar)
             ("Map.values", NativeType.TForall([valuesKParam; valuesVParam],
                 NativeType.TFun(valuesMapType, valuesResultType)))
 
@@ -965,6 +967,18 @@ module BuiltInFunctions =
             let toListResultType = NativeType.TList(toListPairType)
             ("Map.toList", NativeType.TForall([toListKParam; toListVParam],
                 NativeType.TFun(toListMapType, toListResultType)))
+
+            // Map.toSeq : forall 'K 'V. Map<'K, 'V> -> seq<'K * 'V>
+            // PRD-16: Lazy enumeration over map key-value pairs
+            let toSeqKParam = freshTypeParam "'K"
+            let toSeqVParam = freshTypeParam "'V"
+            let toSeqKVar = NativeType.TVar toSeqKParam
+            let toSeqVVar = NativeType.TVar toSeqVParam
+            let toSeqMapType = NativeType.TMap(toSeqKVar, toSeqVVar)
+            let toSeqPairType = NativeType.TTuple([toSeqKVar; toSeqVVar], true)  // struct tuple
+            let toSeqResultType = NativeType.TSeq(toSeqPairType)
+            ("Map.toSeq", NativeType.TForall([toSeqKParam; toSeqVParam],
+                NativeType.TFun(toSeqMapType, toSeqResultType)))
 
             // Map.forall : forall 'K 'V. ('K -> 'V -> bool) -> Map<'K, 'V> -> bool
             let forallKParam = freshTypeParam "'K"
@@ -1371,6 +1385,225 @@ module BuiltInFunctions =
             let setMaxSetType = NativeType.TSet(setMaxTVar)
             ("Set.maxElement", NativeType.TForall([setMaxTParam],
                 NativeType.TFun(setMaxSetType, setMaxTVar)))
+
+            //
+            // Seq module - lazy sequence operations (PRD-15/16)
+            //
+            // PRIMITIVES (Alex witnesses directly):
+            //   - Seq.empty, Seq.getEnumerator
+            //   - SeqEnumerator.moveNext, SeqEnumerator.current
+            //
+            // HOFs (Baker decomposes using primitives):
+            //   - Producers: map, filter, collect, append
+            //   - Consumers: toList, toArray, fold, tryPick, max, minBy
+            //
+
+            // Seq.empty : forall 'T. seq<'T>
+            // PRIMITIVE: Returns empty sequence (no-op state machine)
+            let seqEmptyTParam = freshTypeParam "'T"
+            let seqEmptyTVar = NativeType.TVar seqEmptyTParam
+            let seqEmptyType = NativeType.TSeq(seqEmptyTVar)
+            ("Seq.empty", NativeType.TForall([seqEmptyTParam], seqEmptyType))
+
+            // Seq.toList : forall 'T. seq<'T> -> 'T list
+            // HOF: Decomposes to iteration loop using enumerator primitives
+            let seqToListTParam = freshTypeParam "'T"
+            let seqToListTVar = NativeType.TVar seqToListTParam
+            let seqToListSeqType = NativeType.TSeq(seqToListTVar)
+            let seqToListResultType = NativeType.TList(seqToListTVar)
+            ("Seq.toList", NativeType.TForall([seqToListTParam],
+                NativeType.TFun(seqToListSeqType, seqToListResultType)))
+
+            // Seq.toArray : forall 'T. seq<'T> -> 'T[]
+            // HOF: Decomposes to iteration loop, builds array
+            let seqToArrayTParam = freshTypeParam "'T"
+            let seqToArrayTVar = NativeType.TVar seqToArrayTParam
+            let seqToArraySeqType = NativeType.TSeq(seqToArrayTVar)
+            let seqToArrayResultType = mkArrayType seqToArrayTVar
+            ("Seq.toArray", NativeType.TForall([seqToArrayTParam],
+                NativeType.TFun(seqToArraySeqType, seqToArrayResultType)))
+
+            // Seq.map : forall 'T 'U. ('T -> 'U) -> seq<'T> -> seq<'U>
+            // HOF: Decomposes to seq { for x in xs do yield f x }
+            let seqMapTParam = freshTypeParam "'T"
+            let seqMapUParam = freshTypeParam "'U"
+            let seqMapTVar = NativeType.TVar seqMapTParam
+            let seqMapUVar = NativeType.TVar seqMapUParam
+            let seqMapInputType = NativeType.TSeq(seqMapTVar)
+            let seqMapResultType = NativeType.TSeq(seqMapUVar)
+            let seqMapFnType = NativeType.TFun(seqMapTVar, seqMapUVar)
+            ("Seq.map", NativeType.TForall([seqMapTParam; seqMapUParam],
+                NativeType.TFun(seqMapFnType, NativeType.TFun(seqMapInputType, seqMapResultType))))
+
+            // Seq.filter : forall 'T. ('T -> bool) -> seq<'T> -> seq<'T>
+            // HOF: Decomposes to seq { for x in xs do if p x then yield x }
+            let seqFilterTParam = freshTypeParam "'T"
+            let seqFilterTVar = NativeType.TVar seqFilterTParam
+            let seqFilterSeqType = NativeType.TSeq(seqFilterTVar)
+            let seqFilterPredType = NativeType.TFun(seqFilterTVar, Types.boolType)
+            ("Seq.filter", NativeType.TForall([seqFilterTParam],
+                NativeType.TFun(seqFilterPredType, NativeType.TFun(seqFilterSeqType, seqFilterSeqType))))
+
+            // Seq.collect : forall 'T 'U. ('T -> seq<'U>) -> seq<'T> -> seq<'U>
+            // HOF: Decomposes to seq { for x in xs do yield! f x }
+            let seqCollectTParam = freshTypeParam "'T"
+            let seqCollectUParam = freshTypeParam "'U"
+            let seqCollectTVar = NativeType.TVar seqCollectTParam
+            let seqCollectUVar = NativeType.TVar seqCollectUParam
+            let seqCollectInputType = NativeType.TSeq(seqCollectTVar)
+            let seqCollectResultType = NativeType.TSeq(seqCollectUVar)
+            let seqCollectFnType = NativeType.TFun(seqCollectTVar, seqCollectResultType)
+            ("Seq.collect", NativeType.TForall([seqCollectTParam; seqCollectUParam],
+                NativeType.TFun(seqCollectFnType, NativeType.TFun(seqCollectInputType, seqCollectResultType))))
+
+            // Seq.append : forall 'T. seq<'T> -> seq<'T> -> seq<'T>
+            // HOF: Decomposes to seq { yield! xs; yield! ys }
+            let seqAppendTParam = freshTypeParam "'T"
+            let seqAppendTVar = NativeType.TVar seqAppendTParam
+            let seqAppendSeqType = NativeType.TSeq(seqAppendTVar)
+            ("Seq.append", NativeType.TForall([seqAppendTParam],
+                NativeType.TFun(seqAppendSeqType, NativeType.TFun(seqAppendSeqType, seqAppendSeqType))))
+
+            // Seq.fold : forall 'T 'State. ('State -> 'T -> 'State) -> 'State -> seq<'T> -> 'State
+            // HOF: Decomposes to iteration loop with accumulator
+            let seqFoldTParam = freshTypeParam "'T"
+            let seqFoldSParam = freshTypeParam "'State"
+            let seqFoldTVar = NativeType.TVar seqFoldTParam
+            let seqFoldSVar = NativeType.TVar seqFoldSParam
+            let seqFoldSeqType = NativeType.TSeq(seqFoldTVar)
+            let seqFoldFnType = NativeType.TFun(seqFoldSVar, NativeType.TFun(seqFoldTVar, seqFoldSVar))
+            ("Seq.fold", NativeType.TForall([seqFoldTParam; seqFoldSParam],
+                NativeType.TFun(seqFoldFnType, NativeType.TFun(seqFoldSVar, NativeType.TFun(seqFoldSeqType, seqFoldSVar)))))
+
+            // Seq.tryPick : forall 'T 'U. ('T -> 'U option) -> seq<'T> -> 'U option
+            // HOF: Decomposes to iteration loop until Some
+            let seqTryPickTParam = freshTypeParam "'T"
+            let seqTryPickUParam = freshTypeParam "'U"
+            let seqTryPickTVar = NativeType.TVar seqTryPickTParam
+            let seqTryPickUVar = NativeType.TVar seqTryPickUParam
+            let seqTryPickSeqType = NativeType.TSeq(seqTryPickTVar)
+            let seqTryPickResultType = mkOptionType seqTryPickUVar
+            let seqTryPickFnType = NativeType.TFun(seqTryPickTVar, seqTryPickResultType)
+            ("Seq.tryPick", NativeType.TForall([seqTryPickTParam; seqTryPickUParam],
+                NativeType.TFun(seqTryPickFnType, NativeType.TFun(seqTryPickSeqType, seqTryPickResultType))))
+
+            // Seq.max : forall 'T. seq<'T> -> 'T (requires comparison)
+            // HOF: Decomposes to iteration loop tracking max
+            let seqMaxTParam = freshTypeParam "'T"
+            let seqMaxTVar = NativeType.TVar seqMaxTParam
+            let seqMaxSeqType = NativeType.TSeq(seqMaxTVar)
+            ("Seq.max", NativeType.TForall([seqMaxTParam],
+                NativeType.TFun(seqMaxSeqType, seqMaxTVar)))
+
+            // Seq.min : forall 'T. seq<'T> -> 'T (requires comparison)
+            // HOF: Decomposes to iteration loop tracking min
+            let seqMinTParam = freshTypeParam "'T"
+            let seqMinTVar = NativeType.TVar seqMinTParam
+            let seqMinSeqType = NativeType.TSeq(seqMinTVar)
+            ("Seq.min", NativeType.TForall([seqMinTParam],
+                NativeType.TFun(seqMinSeqType, seqMinTVar)))
+
+            // Seq.minBy : forall 'T 'U. ('T -> 'U) -> seq<'T> -> 'T (requires comparison on 'U)
+            // HOF: Decomposes to iteration loop tracking min by projection
+            let seqMinByTParam = freshTypeParam "'T"
+            let seqMinByUParam = freshTypeParam "'U"
+            let seqMinByTVar = NativeType.TVar seqMinByTParam
+            let seqMinByUVar = NativeType.TVar seqMinByUParam
+            let seqMinBySeqType = NativeType.TSeq(seqMinByTVar)
+            let seqMinByFnType = NativeType.TFun(seqMinByTVar, seqMinByUVar)
+            ("Seq.minBy", NativeType.TForall([seqMinByTParam; seqMinByUParam],
+                NativeType.TFun(seqMinByFnType, NativeType.TFun(seqMinBySeqType, seqMinByTVar))))
+
+            // Seq.maxBy : forall 'T 'U. ('T -> 'U) -> seq<'T> -> 'T (requires comparison on 'U)
+            // HOF: Decomposes to iteration loop tracking max by projection
+            let seqMaxByTParam = freshTypeParam "'T"
+            let seqMaxByUParam = freshTypeParam "'U"
+            let seqMaxByTVar = NativeType.TVar seqMaxByTParam
+            let seqMaxByUVar = NativeType.TVar seqMaxByUParam
+            let seqMaxBySeqType = NativeType.TSeq(seqMaxByTVar)
+            let seqMaxByFnType = NativeType.TFun(seqMaxByTVar, seqMaxByUVar)
+            ("Seq.maxBy", NativeType.TForall([seqMaxByTParam; seqMaxByUParam],
+                NativeType.TFun(seqMaxByFnType, NativeType.TFun(seqMaxBySeqType, seqMaxByTVar))))
+
+            // Seq.exists : forall 'T. ('T -> bool) -> seq<'T> -> bool
+            // HOF: Decomposes to iteration with short-circuit
+            let seqExistsTParam = freshTypeParam "'T"
+            let seqExistsTVar = NativeType.TVar seqExistsTParam
+            let seqExistsSeqType = NativeType.TSeq(seqExistsTVar)
+            let seqExistsPredType = NativeType.TFun(seqExistsTVar, Types.boolType)
+            ("Seq.exists", NativeType.TForall([seqExistsTParam],
+                NativeType.TFun(seqExistsPredType, NativeType.TFun(seqExistsSeqType, Types.boolType))))
+
+            // Seq.forall : forall 'T. ('T -> bool) -> seq<'T> -> bool
+            // HOF: Decomposes to iteration with short-circuit
+            let seqForallTParam = freshTypeParam "'T"
+            let seqForallTVar = NativeType.TVar seqForallTParam
+            let seqForallSeqType = NativeType.TSeq(seqForallTVar)
+            let seqForallPredType = NativeType.TFun(seqForallTVar, Types.boolType)
+            ("Seq.forall", NativeType.TForall([seqForallTParam],
+                NativeType.TFun(seqForallPredType, NativeType.TFun(seqForallSeqType, Types.boolType))))
+
+            // Seq.length : forall 'T. seq<'T> -> int
+            // HOF: Decomposes to iteration counting elements
+            let seqLengthTParam = freshTypeParam "'T"
+            let seqLengthTVar = NativeType.TVar seqLengthTParam
+            let seqLengthSeqType = NativeType.TSeq(seqLengthTVar)
+            ("Seq.length", NativeType.TForall([seqLengthTParam],
+                NativeType.TFun(seqLengthSeqType, Types.intType)))
+
+            // Seq.isEmpty : forall 'T. seq<'T> -> bool
+            // HOF: Decomposes to single moveNext check
+            let seqIsEmptyTParam = freshTypeParam "'T"
+            let seqIsEmptyTVar = NativeType.TVar seqIsEmptyTParam
+            let seqIsEmptySeqType = NativeType.TSeq(seqIsEmptyTVar)
+            ("Seq.isEmpty", NativeType.TForall([seqIsEmptyTParam],
+                NativeType.TFun(seqIsEmptySeqType, Types.boolType)))
+
+            // Seq.head : forall 'T. seq<'T> -> 'T
+            // HOF: Decomposes to single iteration step
+            let seqHeadTParam = freshTypeParam "'T"
+            let seqHeadTVar = NativeType.TVar seqHeadTParam
+            let seqHeadSeqType = NativeType.TSeq(seqHeadTVar)
+            ("Seq.head", NativeType.TForall([seqHeadTParam],
+                NativeType.TFun(seqHeadSeqType, seqHeadTVar)))
+
+            // Seq.tryHead : forall 'T. seq<'T> -> 'T option
+            // HOF: Decomposes to single iteration step returning option
+            let seqTryHeadTParam = freshTypeParam "'T"
+            let seqTryHeadTVar = NativeType.TVar seqTryHeadTParam
+            let seqTryHeadSeqType = NativeType.TSeq(seqTryHeadTVar)
+            let seqTryHeadResultType = mkOptionType seqTryHeadTVar
+            ("Seq.tryHead", NativeType.TForall([seqTryHeadTParam],
+                NativeType.TFun(seqTryHeadSeqType, seqTryHeadResultType)))
+
+            //
+            // Seq enumerator primitives (for iteration - Alex witnesses directly)
+            //
+
+            // Seq.getEnumerator : forall 'T. seq<'T> -> SeqEnumerator<'T>
+            // PRIMITIVE: Initialize state machine for iteration
+            let seqGetEnumTParam = freshTypeParam "'T"
+            let seqGetEnumTVar = NativeType.TVar seqGetEnumTParam
+            let seqGetEnumSeqType = NativeType.TSeq(seqGetEnumTVar)
+            let seqGetEnumResultType = NativeType.TSeqEnumerator(seqGetEnumTVar)
+            ("Seq.getEnumerator", NativeType.TForall([seqGetEnumTParam],
+                NativeType.TFun(seqGetEnumSeqType, seqGetEnumResultType)))
+
+            // SeqEnumerator.moveNext : forall 'T. SeqEnumerator<'T> -> bool
+            // PRIMITIVE: Advance state machine, return whether value available
+            let seqMoveNextTParam = freshTypeParam "'T"
+            let seqMoveNextTVar = NativeType.TVar seqMoveNextTParam
+            let seqMoveNextEnumType = NativeType.TSeqEnumerator(seqMoveNextTVar)
+            ("SeqEnumerator.moveNext", NativeType.TForall([seqMoveNextTParam],
+                NativeType.TFun(seqMoveNextEnumType, Types.boolType)))
+
+            // SeqEnumerator.current : forall 'T. SeqEnumerator<'T> -> 'T
+            // PRIMITIVE: Get current value from state machine
+            let seqCurrentTParam = freshTypeParam "'T"
+            let seqCurrentTVar = NativeType.TVar seqCurrentTParam
+            let seqCurrentEnumType = NativeType.TSeqEnumerator(seqCurrentTVar)
+            ("SeqEnumerator.current", NativeType.TForall([seqCurrentTParam],
+                NativeType.TFun(seqCurrentEnumType, seqCurrentTVar)))
 
             //
             // List module - additional functions
@@ -1885,6 +2118,7 @@ let rec isValueType ty =
         | _ -> false
     | NativeType.TLazy _ -> true  // Lazy<'T> is a value type struct (PRD-14)
     | NativeType.TSeq _ -> true  // seq<'T> is a value type struct (PRD-15)
+    | NativeType.TSeqEnumerator _ -> true  // SeqEnumerator<'T> is a value type struct (PRD-15/16)
     // PRD-13a: Immutable collection types (reference types - pointer to nodes)
     | NativeType.TList _ -> false  // list<'T> is a reference type (linked list nodes)
     | NativeType.TMap _ -> false  // Map<'K,'V> is a reference type (tree nodes)

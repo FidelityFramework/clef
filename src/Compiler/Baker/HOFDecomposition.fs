@@ -39,6 +39,7 @@ module ListRecipes = FSharp.Native.Compiler.Baker.Recipes.ListRecipes
 module MapRecipes = FSharp.Native.Compiler.Baker.Recipes.MapRecipes
 module SetRecipes = FSharp.Native.Compiler.Baker.Recipes.SetRecipes
 module OptionRecipes = FSharp.Native.Compiler.Baker.Recipes.OptionRecipes
+module SeqRecipes = FSharp.Native.Compiler.Baker.Recipes.SeqRecipes
 
 //-------------------------------------------------------------------------
 // Type Extraction Helpers
@@ -72,6 +73,12 @@ let private extractOptionInnerType (ty: NativeType) : NativeType option =
         Some innerTy
     | _ -> None
 
+/// Extract element type from a Seq type
+let private extractSeqElementType (ty: NativeType) : NativeType option =
+    match ty with
+    | NativeType.TSeq elemTy -> Some elemTy
+    | _ -> None
+
 //-------------------------------------------------------------------------
 // Decomposition Decision Logic
 //-------------------------------------------------------------------------
@@ -94,9 +101,11 @@ let private shouldDecompose (info: IntrinsicInfo) : bool =
     | IntrinsicModule.List, "minBy" -> true
     | IntrinsicModule.List, "max" -> true
     | IntrinsicModule.List, "forall2" -> true
+    | IntrinsicModule.List, "sumBy" -> true
     
-    // Map HOFs (placeholder - need AVL implementation)
+    // Map HOFs - AVL tree algorithms
     | IntrinsicModule.Map, "toList" -> true
+    | IntrinsicModule.Map, "toSeq" -> true  // PRD-16: Lazy enumeration
     | IntrinsicModule.Map, "tryFind" -> true
     | IntrinsicModule.Map, "add" -> true
     | IntrinsicModule.Map, "containsKey" -> true
@@ -116,13 +125,38 @@ let private shouldDecompose (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Option, "map" -> true
     | IntrinsicModule.Option, "bind" -> true
     | IntrinsicModule.Option, "filter" -> true
-    
+
+    // Seq HOFs - Producers (return lazy seq)
+    | IntrinsicModule.Seq, "map" -> true
+    | IntrinsicModule.Seq, "filter" -> true
+    | IntrinsicModule.Seq, "collect" -> true
+    | IntrinsicModule.Seq, "append" -> true
+
+    // Seq HOFs - Consumers (iterate seq)
+    | IntrinsicModule.Seq, "toList" -> true
+    | IntrinsicModule.Seq, "toArray" -> true
+    | IntrinsicModule.Seq, "fold" -> true
+    | IntrinsicModule.Seq, "tryPick" -> true
+    | IntrinsicModule.Seq, "max" -> true
+    | IntrinsicModule.Seq, "min" -> true
+    | IntrinsicModule.Seq, "minBy" -> true
+    | IntrinsicModule.Seq, "maxBy" -> true
+    | IntrinsicModule.Seq, "exists" -> true
+    | IntrinsicModule.Seq, "forall" -> true
+    | IntrinsicModule.Seq, "length" -> true
+    | IntrinsicModule.Seq, "isEmpty" -> true
+    | IntrinsicModule.Seq, "head" -> true
+    | IntrinsicModule.Seq, "tryHead" -> true
+
     // Primitives - Alex witnesses directly
     | IntrinsicModule.List, ("empty" | "isEmpty" | "head" | "tail" | "cons") -> false
     | IntrinsicModule.Map, ("empty" | "isEmpty") -> false
     | IntrinsicModule.Set, ("empty" | "isEmpty") -> false
     | IntrinsicModule.Option, ("isSome" | "isNone" | "get" | "defaultValue" | "some" | "none") -> false
-    
+    // Seq primitives - Alex witnesses directly
+    | IntrinsicModule.Seq, "empty" -> false
+    | IntrinsicModule.Seq, "getEnumerator" -> false
+
     // Everything else - don't decompose
     | _ -> false
 
@@ -201,6 +235,28 @@ let private applyRecipe
         | Some innerType ->
             let outputType = extractOptionInnerType returnType
             OptionRecipes.tryDecompose ctx info.Operation args innerType outputType
+        | None -> None
+    
+    | IntrinsicModule.Seq ->
+        // Extract element type from the seq argument (usually the last arg)
+        let seqArgType =
+            args
+            |> List.tryLast
+            |> Option.bind (fun argId -> SemanticGraph.tryGetNode argId graph)
+            |> Option.map (fun node -> node.Type)
+            |> Option.bind extractSeqElementType
+        
+        match seqArgType with
+        | Some elemType ->
+            let outputElemType = extractSeqElementType returnType
+            // Extract state type for fold operations
+            let stateType =
+                if info.Operation = "fold" then
+                    args |> List.tryItem 1
+                    |> Option.bind (fun argId -> SemanticGraph.tryGetNode argId graph)
+                    |> Option.map (fun node -> node.Type)
+                else None
+            SeqRecipes.tryDecompose ctx info.Operation args elemType outputElemType stateType
         | None -> None
     
     | _ -> None

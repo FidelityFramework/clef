@@ -413,6 +413,14 @@ let andAlso (leftId: NodeId) (rightId: NodeId) : Recipe<NodeId> =
         return! ifThenElse leftId rightId falseVal Types.boolType
     }
 
+/// Boolean NOT: if a then false else true
+let not' (valueId: NodeId) : Recipe<NodeId> =
+    recipe {
+        let! trueVal = boolLit true
+        let! falseVal = boolLit false
+        return! ifThenElse valueId falseVal trueVal Types.boolType
+    }
+
 
 //=============================================================================
 // MAP PRIMITIVES (AVL Tree)
@@ -680,3 +688,33 @@ let compareIsGreater (compareResultId: NodeId) : Recipe<NodeId> =
         let! zero = intLit 0
         return! gt compareResultId zero Types.intType
     }
+
+//=============================================================================
+// SEQ PRIMITIVES (PRD-15/16 - Lazy Sequences)
+//=============================================================================
+
+/// Create a seq expression: seq { body }
+/// The body should contain Yield/YieldBang nodes
+let seqExpr (bodyId: NodeId) (captures: CaptureInfo list) (elemType: NativeType) : Recipe<NodeId> =
+    let seqType = NativeType.TSeq elemType
+    createWithChildren (SemanticKind.SeqExpr (bodyId, captures)) seqType [bodyId]
+
+/// Yield a single value in a seq expression
+let yield' (valueId: NodeId) (elemType: NativeType) : Recipe<NodeId> =
+    createWithChildren (SemanticKind.Yield valueId) elemType [valueId]
+
+/// Yield all values from a nested seq (yield!)
+/// Used to compose/flatten nested sequences
+let yieldBang (seqId: NodeId) (elemType: NativeType) : Recipe<NodeId> =
+    createWithChildren (SemanticKind.YieldBang seqId) elemType [seqId]
+
+/// Create an empty seq: Seq.empty<'T>
+let emptySeq (elemType: NativeType) : Recipe<NodeId> =
+    let seqType = NativeType.TSeq elemType
+    let info = {
+        Module = IntrinsicModule.Seq
+        Operation = "empty"
+        Category = IntrinsicCategory.Pure
+        FullName = "Seq.empty"
+    }
+    createAndEmit (SemanticKind.Intrinsic info) seqType

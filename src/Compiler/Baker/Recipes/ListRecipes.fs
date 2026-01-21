@@ -432,6 +432,31 @@ let private listMaxRecipe
     }
 
 //=============================================================================
+// LIST.SUMBY: sumBy f xs → fold (fun acc x -> acc + f x) 0 xs
+//=============================================================================
+
+let private listSumByRecipe
+    (projectionNodeId: NodeId)
+    (inputListId: NodeId)
+    (elemType: NativeType)
+    (numericType: NativeType)
+    : Recipe<NodeId> =
+    
+    // sumBy f xs = fold (\acc x -> acc + f x) 0 xs
+    foldLeft
+        (intLit 0)  // Initial sum is 0
+        (fun accId headId ->
+            recipe {
+                // Project element to numeric value
+                let! projectedValue = app1 projectionNodeId headId numericType
+                // Add to accumulator
+                return! add accId projectedValue numericType
+            })
+        inputListId
+        elemType
+        numericType
+
+//=============================================================================
 // LIST.FORALL2: forall2 f xs ys → all pairs satisfy f
 //=============================================================================
 
@@ -520,6 +545,11 @@ let tryDecompose
     | "forall2", [predicate; xs; ys] ->
         // For forall2, both lists have same element type for now
         Some (runRecipe ctx (listForall2Recipe predicate xs ys elemType elemType))
+    
+    | "sumBy", [projection; xs] ->
+        // sumBy projects to numeric type, default to int
+        let numType = stateType |> Option.defaultValue Types.intType
+        Some (runRecipe ctx (listSumByRecipe projection xs elemType numType))
     
     // Primitive operations - Alex witnesses directly
     | "empty", _
