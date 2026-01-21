@@ -25,21 +25,28 @@ module FSharp.Native.Compiler.Baker.Recipes.Decomposition
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Elaboration
 open FSharp.Native.Compiler.Baker.ShadowAST
 
 //-------------------------------------------------------------------------
-// Metadata Keys for Expanded Nodes
+// Legacy Metadata Keys (deprecated - use ElaborationMetadata instead)
 //-------------------------------------------------------------------------
 
+// These aliases exist for backward compatibility during migration.
+// New code should use ElaborationMetadata.Kind/For/Id directly.
+
 /// Metadata key indicating this node was expanded by Baker
+/// DEPRECATED: Use ElaborationMetadata.Kind = "Baker" instead
 [<Literal>]
 let MetadataKey_BakerExpanded = "BakerExpanded"
 
 /// Metadata key storing the original HOF name (e.g., "List.map")
+/// DEPRECATED: Use ElaborationMetadata.For instead
 [<Literal>]
 let MetadataKey_ExpandedFrom = "ExpandedFrom"
 
 /// Metadata key storing the expansion ID (links related nodes)
+/// DEPRECATED: Use ElaborationMetadata.Id instead
 [<Literal>]
 let MetadataKey_ExpansionId = "ExpansionId"
 
@@ -47,12 +54,9 @@ let MetadataKey_ExpansionId = "ExpansionId"
 // Node ID Generation
 //-------------------------------------------------------------------------
 
-/// Thread-safe expansion ID counter
-let private nextExpansionId = ref 0
-
-/// Generate a fresh expansion ID for grouping related expanded nodes
-let freshExpansionId () : int =
-    System.Threading.Interlocked.Increment(nextExpansionId)
+/// Generate a fresh expansion ID for grouping related expanded nodes.
+/// Uses the unified freshId() for consistency across all elaboration types.
+let freshExpansionId () : int = freshId()
 
 //-------------------------------------------------------------------------
 // Decomposition Context
@@ -101,34 +105,27 @@ let mkNestedContext (parent: Context) (hofName: string) : Context =
         ExpansionId = freshExpansionId ()
         ShadowBuilder = ShadowBuilder(nestedProvenance) }
 
-/// Add Baker expansion metadata to a node
+/// Add Baker expansion metadata to a node using unified Elaboration API
 let markAsExpanded (ctx: Context) (node: SemanticNode) : SemanticNode =
-    let metadata = 
-        node.Metadata
-        |> Map.add MetadataKey_BakerExpanded (MetadataValue.Bool true)
-        |> Map.add MetadataKey_ExpandedFrom (MetadataValue.String ctx.OriginalHOF)
-        |> Map.add MetadataKey_ExpansionId (MetadataValue.Int ctx.ExpansionId)
-    { node with Metadata = metadata }
+    markBaker ctx.OriginalHOF ctx.ExpansionId node
 
-/// Create a base node with expansion metadata
+/// Create a base node with expansion metadata using unified Elaboration API
 let mkExpandedNode (ctx: Context) (kind: SemanticKind) (ty: NativeType) : SemanticNode =
     let id = NodeId.fresh()
-    { Id = id
-      Kind = kind
-      Range = ctx.SourceRange  // Inherit source range for debugging
-      Type = ty
-      SRTPResolution = None
-      ArenaAffinity = ArenaAffinity.CurrentActor
-      LayoutHint = None
-      Children = []
-      Parent = None
-      Metadata = 
-        Map.empty
-        |> Map.add MetadataKey_BakerExpanded (MetadataValue.Bool true)
-        |> Map.add MetadataKey_ExpandedFrom (MetadataValue.String ctx.OriginalHOF)
-        |> Map.add MetadataKey_ExpansionId (MetadataValue.Int ctx.ExpansionId)
-      IsReachable = true
-      EmissionStrategy = EmissionStrategy.Inline }
+    let baseNode =
+        { Id = id
+          Kind = kind
+          Range = ctx.SourceRange  // Inherit source range for debugging
+          Type = ty
+          SRTPResolution = None
+          ArenaAffinity = ArenaAffinity.CurrentActor
+          LayoutHint = None
+          Children = []
+          Parent = None
+          Metadata = Map.empty
+          IsReachable = true
+          EmissionStrategy = EmissionStrategy.Inline }
+    markBaker ctx.OriginalHOF ctx.ExpansionId baseNode
 
 //-------------------------------------------------------------------------
 // Decomposition Result

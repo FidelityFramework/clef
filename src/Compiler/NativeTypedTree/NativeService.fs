@@ -325,6 +325,32 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
                     | EmissionStrategy.Inline -> None  // Default, don't clutter output
                     | EmissionStrategy.SeparateFunction n -> Some (sprintf "SeparateFunction(%d)" n)
                     | EmissionStrategy.MainPrologue -> Some "MainPrologue"
+                // Extract elaboration info from metadata (unified scheme)
+                // Check new keys first, fall back to legacy Baker keys for transition
+                let elaborationKind =
+                    match Map.tryFind ElaborationMetadata.Kind node.Metadata with
+                    | Some (MetadataValue.String kind) -> Some kind
+                    | _ ->
+                        // Legacy Baker key fallback
+                        match Map.tryFind "BakerExpanded" node.Metadata with
+                        | Some (MetadataValue.Bool true) -> Some "Baker"
+                        | _ -> None
+                let elaborationFor =
+                    match Map.tryFind ElaborationMetadata.For node.Metadata with
+                    | Some (MetadataValue.String forConstruct) -> Some forConstruct
+                    | _ ->
+                        // Legacy Baker key fallback
+                        match Map.tryFind "ExpandedFrom" node.Metadata with
+                        | Some (MetadataValue.String name) -> Some name
+                        | _ -> None
+                let elaborationId =
+                    match Map.tryFind ElaborationMetadata.Id node.Metadata with
+                    | Some (MetadataValue.Int id) -> Some id
+                    | _ ->
+                        // Legacy Baker key fallback
+                        match Map.tryFind "ExpansionId" node.Metadata with
+                        | Some (MetadataValue.Int id) -> Some id
+                        | _ -> None
                 { PhaseTypes.PhaseNodeOutput.Id = NodeId.value id
                   PhaseTypes.PhaseNodeOutput.Kind = kindStr
                   PhaseTypes.PhaseNodeOutput.Type = typeStr
@@ -334,7 +360,11 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
                   PhaseTypes.PhaseNodeOutput.Range = Some (sprintf "%s:%d:%d" node.Range.File node.Range.Start.Line node.Range.Start.Column)
                   PhaseTypes.PhaseNodeOutput.SRTPResolution = node.SRTPResolution |> Option.map (sprintf "%A")
                   PhaseTypes.PhaseNodeOutput.Body = None
-                  PhaseTypes.PhaseNodeOutput.EmissionStrategy = emissionStr })
+                  PhaseTypes.PhaseNodeOutput.EmissionStrategy = emissionStr
+                  // Elaboration fields (unified - source-based nodes have None)
+                  PhaseTypes.PhaseNodeOutput.ElaborationKind = elaborationKind
+                  PhaseTypes.PhaseNodeOutput.ElaborationFor = elaborationFor
+                  PhaseTypes.PhaseNodeOutput.ElaborationId = elaborationId })
         
         let summary =
             if phase.Number >= 4 then

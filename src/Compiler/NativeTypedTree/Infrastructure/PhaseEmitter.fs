@@ -120,6 +120,10 @@ let private serializeNode (pretty: bool) (indent: int) (node: PhaseNodeOutput) :
             node.SRTPResolution |> Option.map (fun r -> ("srtpResolution", escapeJsonString r))
             node.Body |> Option.map (fun b -> ("body", escapeJsonString b))
             node.EmissionStrategy |> Option.map (fun s -> ("emissionStrategy", escapeJsonString s))
+            // Elaboration fields (unified - source-based nodes have no elaboration)
+            node.ElaborationKind |> Option.map (fun k -> ("elaborationKind", escapeJsonString k))
+            node.ElaborationFor |> Option.map (fun f -> ("elaborationFor", escapeJsonString f))
+            node.ElaborationId |> Option.map (fun id -> ("elaborationId", string id))
         ]
         |> List.choose id
     buildJsonObject pretty indent (requiredPairs @ optionalPairs)
@@ -220,6 +224,10 @@ let createNodeOutput
         SRTPResolution = None
         Body = None
         EmissionStrategy = None
+        // Elaboration defaults (None = source-based, not elaborated)
+        ElaborationKind = None
+        ElaborationFor = None
+        ElaborationId = None
     }
 
 /// Add optional fields to a node output
@@ -234,6 +242,14 @@ let withBody (body: string) (node: PhaseNodeOutput) =
 
 let withEmissionStrategy (strategy: string) (node: PhaseNodeOutput) =
     { node with EmissionStrategy = Some strategy }
+
+/// Set elaboration info on a node (for "pierce the veil" debugging)
+/// Source-based nodes should NOT call this (they have no elaboration metadata).
+let withElaboration (kind: string) (forConstruct: string) (id: int) (node: PhaseNodeOutput) =
+    { node with
+        ElaborationKind = Some kind
+        ElaborationFor = Some forConstruct
+        ElaborationId = Some id }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Diff Emission (for understanding changes between phases)

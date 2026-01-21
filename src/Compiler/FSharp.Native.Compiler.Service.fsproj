@@ -278,6 +278,7 @@
     <!-- SemanticGraph split into focused nanopass modules (January 2026) -->
     <Compile Include="PSGSaturation\SemanticGraph\SeqSaturation.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Types.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\Elaboration.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Core.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Builder.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Reachability.fs" />

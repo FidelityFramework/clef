@@ -20,44 +20,30 @@ module FSharp.Native.Compiler.Baker.Ingredients.Primitives
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Elaboration
 open FSharp.Native.Compiler.Baker.Ingredients.RecipeBuilder
-
-//=============================================================================
-// INTERNAL: Metadata Keys
-//=============================================================================
-
-[<Literal>]
-let private MetadataKey_BakerExpanded = "BakerExpanded"
-
-[<Literal>]
-let private MetadataKey_ExpandedFrom = "ExpandedFrom"
-
-[<Literal>]
-let private MetadataKey_ExpansionId = "ExpansionId"
 
 //=============================================================================
 // INTERNAL: Low-level node construction
 //=============================================================================
 
-/// INTERNAL: Create a base node with expansion metadata
+/// INTERNAL: Create a base node with expansion metadata using unified Elaboration API
 let internal mkNode (ctx: RecipeContext) (kind: SemanticKind) (ty: NativeType) : SemanticNode =
     let id = NodeId.fresh()
-    { Id = id
-      Kind = kind
-      Range = ctx.SourceRange
-      Type = ty
-      SRTPResolution = None
-      ArenaAffinity = ArenaAffinity.CurrentActor
-      LayoutHint = None
-      Children = []
-      Parent = None
-      Metadata = 
-        Map.empty
-        |> Map.add MetadataKey_BakerExpanded (MetadataValue.Bool true)
-        |> Map.add MetadataKey_ExpandedFrom (MetadataValue.String ctx.OriginalHOF)
-        |> Map.add MetadataKey_ExpansionId (MetadataValue.Int ctx.ExpansionId)
-      IsReachable = true
-      EmissionStrategy = EmissionStrategy.Inline }
+    let baseNode =
+        { Id = id
+          Kind = kind
+          Range = ctx.SourceRange
+          Type = ty
+          SRTPResolution = None
+          ArenaAffinity = ArenaAffinity.CurrentActor
+          LayoutHint = None
+          Children = []
+          Parent = None
+          Metadata = Map.empty
+          IsReachable = true
+          EmissionStrategy = EmissionStrategy.Inline }
+    markBaker ctx.OriginalHOF ctx.ExpansionId baseNode
 
 /// INTERNAL: Create node and emit it
 let internal createAndEmit (kind: SemanticKind) (ty: NativeType) : Recipe<NodeId> =

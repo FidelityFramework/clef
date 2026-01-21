@@ -169,6 +169,21 @@ type PhaseNodeOutput = {
     Body: string option
     /// Emission strategy (Inline, SeparateFunction, MainPrologue)
     EmissionStrategy: string option
+
+    // Elaboration Fields (for "pierce the veil" debugging)
+    // Source-based nodes have all None/false; elaborated nodes have values.
+    //
+    // Elaboration kinds:
+    //   - "Intrinsic": Synthesized to implement intrinsic semantics
+    //   - "Baker": Added during HOF decomposition (List.map → recursion)
+    //   - "Coeffect": Added during PSGElaboration nanopasses
+
+    /// What kind of elaboration created this node (None = source-based)
+    ElaborationKind: string option
+    /// What construct triggered the elaboration (e.g., "List.map", "Console.write")
+    ElaborationFor: string option
+    /// Links related nodes from the same elaboration expansion
+    ElaborationId: int option
 }
 
 /// Phase output structure for JSON emission

@@ -273,6 +273,38 @@ type MetadataValue =
     | NodeIdList of NodeId list
 
 //-------------------------------------------------------------------------
+// Elaboration Metadata Keys
+//-------------------------------------------------------------------------
+
+/// Metadata keys for tracking compiler-elaborated nodes.
+///
+/// PSG nodes fall into categories:
+///   - Source-based: Direct from user's AST (no elaboration metadata)
+///   - Elaborated: Synthesized by compiler (has elaboration metadata)
+///
+/// A for-loop is structurally identical whether from source or elaboration.
+/// The ONLY distinction is the presence of these metadata keys.
+[<RequireQualifiedAccess>]
+module ElaborationMetadata =
+    /// What kind of elaboration created this node.
+    /// Values: "Intrinsic" | "Baker" | "Coeffect"
+    ///   - Intrinsic: Elaborated to implement an intrinsic's semantics
+    ///   - Baker: Added during HOF decomposition (List.map → recursion)
+    ///   - Coeffect: Added during PSGElaboration nanopasses
+    [<Literal>]
+    let Kind = "Elaboration.Kind"
+
+    /// What construct triggered the elaboration.
+    /// Examples: "List.map", "Console.write", "lazy", "seq"
+    [<Literal>]
+    let For = "Elaboration.For"
+
+    /// Links related nodes from the same elaboration expansion (int).
+    /// All nodes created for a single elaboration share the same ID.
+    [<Literal>]
+    let Id = "Elaboration.Id"
+
+//-------------------------------------------------------------------------
 // Semantic Node
 //-------------------------------------------------------------------------
 
