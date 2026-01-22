@@ -473,6 +473,23 @@ module FSharpNativeExpr =
                 let payloadExpr = payloadIdOpt |> Option.map (fromNode graph)
                 FSharpNativeExpr.UnionCase(caseName, payloadExpr, node.Type)
 
+            // DU Operations (January 2026) - internal compiler operations
+            // These are lowered during code generation, not user-visible expressions
+            | SemanticKind.DUGetTag (duValueId, _) ->
+                // Represents tag extraction - use FieldGet representation for now
+                let duExpr = fromNode graph duValueId
+                FSharpNativeExpr.FieldGet(duExpr, "Tag", node.Type)
+
+            | SemanticKind.DUEliminate (duValueId, _caseIndex, caseName, _payloadType) ->
+                // Represents type-safe payload extraction - use FieldGet representation
+                let duExpr = fromNode graph duValueId
+                FSharpNativeExpr.FieldGet(duExpr, caseName, node.Type)
+
+            | SemanticKind.DUConstruct (caseName, _caseIndex, payloadIdOpt, _arenaHint) ->
+                // Represents DU construction - use UnionCase representation
+                let payloadExpr = payloadIdOpt |> Option.map (fromNode graph)
+                FSharpNativeExpr.UnionCase(caseName, payloadExpr, node.Type)
+
             // Tuple expression
             | SemanticKind.TupleExpr elementIds ->
                 let elements = elementIds |> List.map (fromNode graph)

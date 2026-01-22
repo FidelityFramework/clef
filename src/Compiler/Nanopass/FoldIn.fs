@@ -65,6 +65,13 @@ let private updateKindRefs (replacementMap: Map<NodeId, NodeId>) (kind: Semantic
         SemanticKind.RecordExpr (updatedFields, Option.map update copyFrom)
     | SemanticKind.UnionCase (name, idx, payload) ->
         SemanticKind.UnionCase (name, idx, Option.map update payload)
+    // DU Operations (January 2026)
+    | SemanticKind.DUGetTag (duValue, duType) ->
+        SemanticKind.DUGetTag (update duValue, duType)
+    | SemanticKind.DUEliminate (duValue, caseIdx, caseName, payloadType) ->
+        SemanticKind.DUEliminate (update duValue, caseIdx, caseName, payloadType)
+    | SemanticKind.DUConstruct (caseName, caseIdx, payload, arenaHint) ->
+        SemanticKind.DUConstruct (caseName, caseIdx, Option.map update payload, Option.map update arenaHint)
     | SemanticKind.TupleExpr elements ->
         SemanticKind.TupleExpr (List.map update elements)
     | SemanticKind.ArrayExpr elements ->
@@ -134,15 +141,74 @@ let private updateChildRefs (replacementMap: Map<NodeId, NodeId>) (children: Nod
     children |> List.map (updateRef replacementMap)
 
 //=============================================================================
+// GRAPH INTEGRITY VALIDATION
+//=============================================================================
+
+/// Collect all reachable nodes from entry points by traversing children
+let private collectReachableNodes (nodes: Map<NodeId, SemanticNode>) (entryPoints: NodeId list) : Set<NodeId> =
+    let rec traverse (visited: Set<NodeId>) (nodeId: NodeId) : Set<NodeId> =
+        if Set.contains nodeId visited then
+            visited
+        else
+            match Map.tryFind nodeId nodes with
+            | None -> visited
+            | Some node ->
+                let visited' = Set.add nodeId visited
+                node.Children |> List.fold traverse visited'
+
+    entryPoints |> List.fold traverse Set.empty
+
+/// Validate that NEW nodes from recipes are properly connected to the graph.
+/// This catches the specific bug where saturation nodes become orphaned due to
+/// broken parent/child edges after fold-in.
+///
+/// We only validate new nodes from recipes, not the entire graph, because:
+/// - TypeDef nodes (Platform types, user types) may not be children of entry points
+/// - Those are metadata nodes, not executable code
+/// - The critical invariant is: newly created nodes MUST be reachable
+let private validateRecipeNodes (passName: string) (recipeSet: RecipeSet) (graph: SemanticGraph) : unit =
+    // Collect all new node IDs from recipes
+    let newNodeIds =
+        recipeSet.Recipes
+        |> Map.toSeq |> Seq.map snd
+        |> Seq.collect (fun r -> r.NewNodes |> Seq.map (fun n -> n.Id))
+        |> Set.ofSeq
+
+    if Set.isEmpty newNodeIds then
+        // No new nodes to validate
+        ()
+    else
+        // Check which new nodes are reachable from entry points
+        let reachableNodes = collectReachableNodes graph.Nodes graph.EntryPoints
+        let unreachableNewNodes = Set.difference newNodeIds reachableNodes
+
+        if not (Set.isEmpty unreachableNewNodes) then
+            // Build diagnostic showing orphaned new nodes
+            let orphanedSample =
+                unreachableNewNodes
+                |> Set.toList
+                |> List.truncate 10
+                |> List.map (fun id ->
+                    match Map.tryFind id graph.Nodes with
+                    | Some node -> sprintf "%d (%A)" (NodeId.value id) node.Kind
+                    | None -> sprintf "%d (NOT IN GRAPH!)" (NodeId.value id))
+
+            failwithf "[%s] Recipe nodes not reachable from entry points! Created %d new nodes but %d are orphaned. Orphaned nodes: %s. This indicates broken parent/child edges after fold-in."
+                passName
+                (Set.count newNodeIds)
+                (Set.count unreachableNewNodes)
+                (String.concat ", " orphanedSample)
+
+//=============================================================================
 // FOLD-IN PASS
 //=============================================================================
 
 /// Fold a RecipeSet into a PSG, producing a fresh PSG.
-/// 
+///
 /// This is Pass 2 (Intrinsic Fold-In) or Pass 4 (Saturation Fold-In).
-let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
+let foldIn (passName: string) (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
     let replacementMap = recipeSet.ReplacementMap
-    
+
     // Collect all new nodes from recipes
     let newNodesFromRecipes =
         recipeSet.Recipes
@@ -150,45 +216,77 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         |> Seq.collect (fun r -> r.NewNodes)
         |> Seq.map (fun n -> n.Id, n)
         |> Map.ofSeq
-    
+
     // Build the new nodes map:
     // 1. Add new nodes from recipes
     // 2. For existing nodes: include if not being replaced, with updated references
+    // 3. If a new node exists at the same NodeId, the new node wins (in-place replacement)
     let newNodes =
         graph.Nodes
         |> Map.fold (fun acc nodeId node ->
             if RecipeSet.hasRecipe nodeId recipeSet then
                 // This node is being replaced - don't include it
                 acc
+            elif Map.containsKey nodeId acc then
+                // A new node already exists at this ID (e.g., Binding replacing PatternBinding)
+                // Keep the new node - it has the proper value source
+                acc
             else
                 // Update references and include
                 let updatedKind = updateKindRefs replacementMap node.Kind
                 let updatedChildren = updateChildRefs replacementMap node.Children
                 let updatedParent = node.Parent |> Option.map (updateRef replacementMap)
-                let updatedNode = 
-                    { node with 
+                let updatedNode =
+                    { node with
                         Kind = updatedKind
                         Children = updatedChildren
                         Parent = updatedParent }
                 Map.add nodeId updatedNode acc
         ) newNodesFromRecipes
+
+    //=========================================================================
+    // PARENT EDGE LINKAGE
+    //=========================================================================
+    // Recipe-created nodes have Parent = None. We now establish Parent edges
+    // based on Children relationships, making the graph fully traversable.
+    //
+    // For each node, we look at its Children and set each child's Parent to
+    // point back to this node.
+    //=========================================================================
+    let nodesWithParents =
+        newNodes
+        |> Map.fold (fun acc parentId parentNode ->
+            parentNode.Children
+            |> List.fold (fun acc' childId ->
+                match Map.tryFind childId acc' with
+                | Some childNode ->
+                    let updatedChild = { childNode with Parent = Some parentId }
+                    Map.add childId updatedChild acc'
+                | None -> acc'
+            ) acc
+        ) newNodes
     
     // Update entry points if any were replaced
-    let updatedEntryPoints = 
+    let updatedEntryPoints =
         graph.EntryPoints |> List.map (updateRef replacementMap)
-    
+
     // Update module mappings
     let updatedModules =
         graph.Modules
         |> Map.map (fun _path nodeIds -> nodeIds |> List.map (updateRef replacementMap))
-    
+
     // Build fresh graph
-    {
-        Nodes = newNodes
+    let resultGraph = {
+        Nodes = nodesWithParents
         EntryPoints = updatedEntryPoints
         Modules = updatedModules
-        Types = SemanticGraph.mkTypesIndex newNodes
+        Types = SemanticGraph.mkTypesIndex nodesWithParents
         Platform = graph.Platform
-        ModuleClassifications = SemanticGraph.mkModuleClassifications newNodes
-        SeqSaturation = SemanticGraph.mkSeqSaturation newNodes
+        ModuleClassifications = SemanticGraph.mkModuleClassifications nodesWithParents
+        SeqSaturation = SemanticGraph.mkSeqSaturation nodesWithParents
     }
+
+    // Validate recipe nodes are reachable - catch orphaned nodes immediately
+    validateRecipeNodes passName recipeSet resultGraph
+
+    resultGraph

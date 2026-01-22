@@ -203,6 +203,12 @@ type SemanticKind =
     | TryFinally of body: NodeId * cleanup: NodeId
     | RecordExpr of fields: (string * NodeId) list * copyFrom: NodeId option
     | UnionCase of caseName: string * caseIndex: int * payload: NodeId option
+    /// Extract tag from a DU value (returns i8 or i16 depending on case count)
+    | DUGetTag of duValue: NodeId * duType: NativeType
+    /// Type-safe payload extraction via case eliminator (pointer bitcast + typed extraction)
+    | DUEliminate of duValue: NodeId * caseIndex: int * caseName: string * payloadType: NativeType
+    /// Construct a DU value in the specified arena (or implicit arena if None)
+    | DUConstruct of caseName: string * caseIndex: int * payload: NodeId option * arenaHint: NodeId option
     | TupleExpr of elements: NodeId list
     | ArrayExpr of elements: NodeId list
     | ListExpr of elements: NodeId list

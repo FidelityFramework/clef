@@ -57,40 +57,116 @@ let private bindPatternVar (name: string) (valueId: NodeId) (ty: NativeType) : R
 // PATTERN COMPILATION
 //=============================================================================
 
-/// Compile a single pattern case to a conditional expression.
-/// Returns (guard expression, body with bindings).
-let rec private compilePattern
+/// Extract bindings from a pattern WITHOUT creating guard condition.
+/// Used for the last case in exhaustive matching where we know it will match.
+/// Returns just the new binding NodeIds.
+let rec private extractPatternBindings
     (scrutineeId: NodeId)
     (pattern: Pattern)
-    (_patternBindings: NodeId list)
+    (patternBindings: NodeId list)
+    : Recipe<NodeId list> =
+
+    match pattern with
+    | Pattern.Wildcard | Pattern.Var _ | Pattern.Null ->
+        // No bindings to extract
+        recipe { return patternBindings }
+
+    | Pattern.Union (caseName, tagIndex, payload, _unionType) ->
+        // Extract payload bindings, reusing original PatternBinding NodeIds
+        match payload with
+        | Some (Pattern.Var (name, ty)) ->
+            recipe {
+                let! payloadId = duEliminate scrutineeId caseName tagIndex ty
+                let originalBindingId = List.head patternBindings
+                let! bindingId = letBindAt originalBindingId name payloadId ty
+                return [bindingId]
+            }
+        | Some (Pattern.Tuple [Pattern.Var (name, ty)]) ->
+            // Single-element tuple - treat as direct value
+            recipe {
+                let! payloadId = duEliminate scrutineeId caseName tagIndex ty
+                let originalBindingId = List.head patternBindings
+                let! bindingId = letBindAt originalBindingId name payloadId ty
+                return [bindingId]
+            }
+        | Some (Pattern.Tuple elements) ->
+            recipe {
+                let elementTypes =
+                    elements
+                    |> List.map (fun elem ->
+                        match elem with
+                        | Pattern.Var (_, ty) -> ty
+                        | _ -> failwithf "Unsupported tuple element pattern in DU payload")
+                let tuplePayloadType = NativeType.TTuple (elementTypes, false)
+                let! tuplePayloadId = duEliminate scrutineeId caseName tagIndex tuplePayloadType
+
+                let! bindings =
+                    elements
+                    |> List.mapi (fun index elem ->
+                        match elem with
+                        | Pattern.Var (name, ty) ->
+                            recipe {
+                                let! elementId = createWithChildren (SemanticKind.TupleGet (tuplePayloadId, index)) ty [tuplePayloadId]
+                                let originalBindingId = patternBindings.[index]
+                                let! bindingId = letBindAt originalBindingId name elementId ty
+                                return bindingId
+                            }
+                        | other ->
+                            failwithf "Unsupported tuple element pattern: %A" other)
+                    |> sequence
+                return bindings
+            }
+        | None ->
+            recipe { return [] }
+        | Some other ->
+            failwithf "extractPatternBindings: Unsupported union payload pattern: %A" other
+
+    | Pattern.Tuple _ | Pattern.Const _ ->
+        // For now, return original bindings
+        recipe { return patternBindings }
+
+    | _ ->
+        recipe { return patternBindings }
+
+/// Compile a single pattern case to a conditional expression.
+/// Returns (guard expression, body, new binding NodeIds).
+/// The new binding NodeIds replace the old PatternBinding NodeIds - they have
+/// proper value sources (e.g., FieldGet for DU payload extraction).
+and private compilePattern
+    (scrutineeId: NodeId)
+    (pattern: Pattern)
+    (patternBindings: NodeId list)
     (guard: NodeId option)
     (body: NodeId)
     (_resultType: NativeType)
-    : Recipe<NodeId * NodeId> =
-    
+    : Recipe<NodeId * NodeId * NodeId list> =
+
     match pattern with
     | Pattern.Wildcard ->
         // Wildcard always matches - guard is "true", body is unchanged
+        // No new bindings - use original PatternBindings
         recipe {
             let! trueId = boolLit true
             // Apply guard if present
             match guard with
-            | Some guardId -> return (guardId, body)
-            | None -> return (trueId, body)
+            | Some guardId -> return (guardId, body, patternBindings)
+            | None -> return (trueId, body, patternBindings)
         }
-    
+
     | Pattern.Var (_name, _ty) ->
         // Variable pattern: bind scrutinee to name, always matches
+        // No new bindings - use original PatternBindings
         recipe {
             let! trueId = boolLit true
             // The pattern binding node should already exist, body uses it
             match guard with
-            | Some guardId -> return (guardId, body)
-            | None -> return (trueId, body)
+            | Some guardId -> return (guardId, body, patternBindings)
+            | None -> return (trueId, body, patternBindings)
         }
-    
+
     | Pattern.Const literal ->
         // Constant pattern: compare scrutinee to literal
+        // No new bindings - use original PatternBindings
         recipe {
             let literalType = literalToType literal
             let! literalId = createAndEmit (SemanticKind.Literal literal) literalType
@@ -98,56 +174,119 @@ let rec private compilePattern
             match guard with
             | Some guardId ->
                 let! combinedGuard = andAlso compareId guardId
-                return (combinedGuard, body)
+                return (combinedGuard, body, patternBindings)
             | None ->
-                return (compareId, body)
+                return (compareId, body, patternBindings)
         }
-    
-    | Pattern.Union (_caseName, tagIndex, _payload, _unionType) ->
+
+    | Pattern.Union (caseName, tagIndex, payload, unionType) ->
         // Union pattern: compare tag, then extract and bind payload
+        // Use letBindAt to create Bindings AT THE SAME NodeIds as PatternBindings
+        // This way VarRefs in the body continue to resolve correctly
         recipe {
-            let! tagMatches = compareTagEq scrutineeId tagIndex
-            
-            // If there's a payload pattern, we need to extract and bind it
-            // For now, payload bindings are handled via PatternBinding nodes
-            // that are already in the PSG (created during type checking)
-            
+            // Use DUGetTag for type-safe tag extraction
+            let! tagId = duGetTag scrutineeId unionType
+            let! tagLitId = int8Lit tagIndex
+            let! tagMatches = compareEq tagId tagLitId Types.int8Type
+
+            // Extract and bind payload, reusing original PatternBinding NodeIds
+            let! newBindings =
+                match payload with
+                | Some (Pattern.Var (name, ty)) ->
+                    // Single variable binding - reuse the PatternBinding's NodeId
+                    recipe {
+                        let! payloadId = duEliminate scrutineeId caseName tagIndex ty
+                        // Use letBindAt to create Binding at the original PatternBinding's NodeId
+                        let originalBindingId = List.head patternBindings
+                        let! bindingId = letBindAt originalBindingId name payloadId ty
+                        return [bindingId]
+                    }
+                | Some (Pattern.Tuple [Pattern.Var (name, ty)]) ->
+                    // Single-element tuple - F# represents `Case of T` as a 1-tuple
+                    // Treat this as a direct value, not a tuple
+                    recipe {
+                        let! payloadId = duEliminate scrutineeId caseName tagIndex ty
+                        let originalBindingId = List.head patternBindings
+                        let! bindingId = letBindAt originalBindingId name payloadId ty
+                        return [bindingId]
+                    }
+                | Some (Pattern.Tuple elements) ->
+                    // Multi-field tuple payload like `SomeCase of int * float`:
+                    // Each element reuses its corresponding PatternBinding NodeId
+                    recipe {
+                        // Build the tuple type from element types
+                        let elementTypes =
+                            elements
+                            |> List.map (fun elem ->
+                                match elem with
+                                | Pattern.Var (_, ty) -> ty
+                                | _ -> failwithf "Unsupported tuple element pattern in DU payload")
+                        let tuplePayloadType = NativeType.TTuple (elementTypes, false)
+
+                        // Extract the whole tuple payload
+                        let! tuplePayloadId = duEliminate scrutineeId caseName tagIndex tuplePayloadType
+
+                        // Extract and bind each element, reusing original PatternBinding NodeIds
+                        let! bindings =
+                            elements
+                            |> List.mapi (fun index elem ->
+                                match elem with
+                                | Pattern.Var (name, ty) ->
+                                    recipe {
+                                        // TupleGet extracts element at index from the tuple
+                                        let! elementId = createWithChildren (SemanticKind.TupleGet (tuplePayloadId, index)) ty [tuplePayloadId]
+                                        // Reuse the original PatternBinding's NodeId
+                                        let originalBindingId = patternBindings.[index]
+                                        let! bindingId = letBindAt originalBindingId name elementId ty
+                                        return bindingId
+                                    }
+                                | other ->
+                                    failwithf "Unsupported tuple element pattern: %A" other)
+                            |> sequence
+                        return bindings
+                    }
+                | None ->
+                    // No payload - no bindings needed (nullary case like None)
+                    recipe { return [] }
+                | Some other ->
+                    failwithf "Unsupported union payload pattern: %A" other
+
             match guard with
             | Some guardId ->
                 let! combinedGuard = andAlso tagMatches guardId
-                return (combinedGuard, body)
+                return (combinedGuard, body, newBindings)
             | None ->
-                return (tagMatches, body)
+                return (tagMatches, body, newBindings)
         }
-    
+
     | Pattern.Tuple _elements ->
         // Tuple pattern: extract each element and match recursively
         // For now, treat as always-match (bindings handled by PatternBinding nodes)
         recipe {
             let! trueId = boolLit true
             match guard with
-            | Some guardId -> return (guardId, body)
-            | None -> return (trueId, body)
+            | Some guardId -> return (guardId, body, patternBindings)
+            | None -> return (trueId, body, patternBindings)
         }
-    
+
     | Pattern.Null ->
         // Null pattern: check if value is null (for reference types)
         // In native F#, this is rare - most types are non-nullable
         recipe {
             let! trueId = boolLit true  // Simplified - treat as always match for now
             match guard with
-            | Some guardId -> return (guardId, body)
-            | None -> return (trueId, body)
+            | Some guardId -> return (guardId, body, patternBindings)
+            | None -> return (trueId, body, patternBindings)
         }
-    
+
     | _ ->
         // Other patterns (Record, Array, Or, And, As, IsType, Exception)
         // Treat as always-match for now, expand as needed
         recipe {
             let! trueId = boolLit true
             match guard with
-            | Some guardId -> return (guardId, body)
-            | None -> return (trueId, body)
+            | Some guardId -> return (guardId, body, patternBindings)
+            | None -> return (trueId, body, patternBindings)
         }
 
 /// Map NTUKind to NativeType
@@ -230,46 +369,42 @@ let matchDecomposeRecipe
     (cases: MatchCase list)
     (resultType: NativeType)
     : Recipe<NodeId> =
-    
+
     let rec buildDecisionTree (remainingCases: MatchCase list) : Recipe<NodeId> =
         match remainingCases with
         | [] ->
             // No more cases - this shouldn't happen with exhaustive patterns
             // Return unit or error value
             createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
-        
+
         | [lastCase] ->
-            // Last case - could be wildcard, just return body
-            // CRITICAL: Include PatternBindings in the body structure
-            match lastCase.Pattern with
-            | Pattern.Wildcard ->
-                // Wildcard with no guard - wrap body with any bindings
-                wrapWithPatternBindings lastCase.PatternBindings lastCase.Body resultType
-            | _ ->
-                // Non-wildcard last case - still need conditional
-                recipe {
-                    let! (_guardExpr, _bodyWithBindings) = 
-                        compilePattern scrutineeId lastCase.Pattern lastCase.PatternBindings lastCase.Guard lastCase.Body resultType
-                    // For last case, wrap body with bindings (assuming exhaustive matching)
-                    return! wrapWithPatternBindings lastCase.PatternBindings lastCase.Body resultType
-                }
-        
+            // Last case - assuming exhaustive matching, this case WILL match.
+            // Only extract bindings, don't create guard nodes (they'd be orphaned).
+            // CRITICAL: Use extractPatternBindings, NOT compilePattern, to avoid
+            // creating unused tag-check nodes that become orphans after fold-in.
+            recipe {
+                let! newBindings = extractPatternBindings scrutineeId lastCase.Pattern lastCase.PatternBindings
+                return! wrapWithPatternBindings newBindings lastCase.Body resultType
+            }
+
         | case :: rest ->
             recipe {
                 // Compile this case's pattern to a guard condition
-                let! (guardExpr, _bodyWithBindings) = 
+                // compilePattern returns (guard, body, newBindings)
+                // newBindings replaces case.PatternBindings with properly-sourced Binding nodes
+                let! (guardExpr, _body, newBindings) =
                     compilePattern scrutineeId case.Pattern case.PatternBindings case.Guard case.Body resultType
-                
-                // Wrap case body with its PatternBindings
-                let! bodyWithBindings = wrapWithPatternBindings case.PatternBindings case.Body resultType
-                
+
+                // Wrap case body with NEW bindings (not old PatternBindings)
+                let! bodyWithBindings = wrapWithPatternBindings newBindings case.Body resultType
+
                 // Build the else branch (rest of the cases)
                 let! elseResult = buildDecisionTree rest
-                
+
                 // Build: if guardExpr then bodyWithBindings else elseResult
                 return! ifThenElse guardExpr bodyWithBindings elseResult resultType
             }
-    
+
     buildDecisionTree cases
 
 //=============================================================================

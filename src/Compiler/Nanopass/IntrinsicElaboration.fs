@@ -56,4 +56,4 @@ let fanOut (graph: SemanticGraph) : RecipeSet =
 /// Builds fresh PSG with intrinsic elaborations applied.
 /// Uses generic FoldIn - the recipes from Pass 1 drive the transformation.
 let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
-    FoldIn.foldIn recipeSet graph
+    FoldIn.foldIn "Intrinsic Fold-In" recipeSet graph

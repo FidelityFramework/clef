@@ -144,6 +144,7 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
 let private needsSaturationBasic (node: SemanticNode) : bool =
     match node.Kind with
     | SemanticKind.Match _ -> true
+    | SemanticKind.UnionCase _ -> true  // DU construction needs lowering to DUConstruct
     | SemanticKind.Application _ -> true  // May or may not need decomposition, checked in recipe creation
     | _ -> false
 
@@ -268,6 +269,28 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
         let result = MatchRecipes.decomposeMatch ctx scrutineeId cases node.Type
         Some (toRecipe node.Id "Match" result)
 
+    | SemanticKind.UnionCase (caseName, caseIndex, payload) ->
+        // Transform UnionCase to DUConstruct (lowered form for Alex)
+        // DUConstruct adds arenaHint parameter (None = stack allocation)
+        let ctx = mkContext node.Range node.Type graph.Platform "UnionCase" node.Id
+        let newKind = SemanticKind.DUConstruct (caseName, caseIndex, payload, None)
+        let newNode = 
+            { Id = NodeId.fresh()
+              Kind = newKind
+              Range = node.Range
+              Type = node.Type
+              SRTPResolution = node.SRTPResolution
+              ArenaAffinity = node.ArenaAffinity
+              LayoutHint = node.LayoutHint
+              Children = node.Children
+              Parent = None
+              Metadata = node.Metadata
+              IsReachable = true
+              EmissionStrategy = node.EmissionStrategy }
+            |> markBaker "UnionCase" ctx.ExpansionId
+        let result = mkResultNoShadow [newNode] newNode.Id []
+        Some (toRecipe node.Id "UnionCase" result)
+
     | _ -> None  // Other node types don't need saturation
 
 /// Run Pass 3: Saturation Fan-Out
@@ -283,4 +306,4 @@ let fanOut (graph: SemanticGraph) : RecipeSet =
 /// Builds fresh PSG with saturation structures applied.
 /// Uses generic FoldIn - the recipes from Pass 3 drive the transformation.
 let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
-    FoldIn.foldIn recipeSet graph
+    FoldIn.foldIn "Saturation Fold-In" recipeSet graph

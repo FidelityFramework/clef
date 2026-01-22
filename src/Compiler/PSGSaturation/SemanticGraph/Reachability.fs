@@ -123,6 +123,13 @@ let getSemanticReferences (node: SemanticNode) : NodeId list =
         (fields |> List.map snd) @ (Option.toList copyFrom)
     | SemanticKind.UnionCase (_, _, payload) ->
         Option.toList payload
+    // DU Operations (January 2026)
+    | SemanticKind.DUGetTag (duValue, _) ->
+        [duValue]
+    | SemanticKind.DUEliminate (duValue, _, _, _) ->
+        [duValue]
+    | SemanticKind.DUConstruct (_, _, payload, arenaHint) ->
+        (Option.toList payload) @ (Option.toList arenaHint)
     | SemanticKind.FieldGet (expr, _) ->
         [expr]
     | SemanticKind.FieldSet (expr, _, value) ->

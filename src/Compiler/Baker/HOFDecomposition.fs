@@ -321,21 +321,22 @@ let private tryDecomposeNode
     | _ -> None
 
 /// Apply decomposition to the entire graph
-let private applyDecompositions 
-    (graph: SemanticGraph) 
-    (decompositions: NodeDecomposition list) 
+let private applyDecompositions
+    (graph: SemanticGraph)
+    (decompositions: NodeDecomposition list)
     : SemanticGraph =
-    
+
     // Collect all new nodes
-    let allNewNodes = 
+    let allNewNodes =
         decompositions
         |> List.collect (fun d -> d.NewNodes @ d.AuxFunctions)
     
     // Add new nodes to the graph
+    // NOTE: Parent edges are established in FoldIn.fs, not here
     let graphWithNewNodes =
         allNewNodes
         |> List.fold (fun g node -> SemanticGraph.addNode node g) graph
-    
+
     // Update references: for each decomposed node, update parent references
     // to point to the replacement node instead
     let updateNodeReferences (g: SemanticGraph) (decomp: NodeDecomposition) : SemanticGraph =

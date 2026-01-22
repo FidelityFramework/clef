@@ -45,6 +45,23 @@ let internal mkNode (ctx: RecipeContext) (kind: SemanticKind) (ty: NativeType) :
           EmissionStrategy = EmissionStrategy.Inline }
     markBaker ctx.OriginalHOF ctx.ExpansionId baseNode
 
+/// INTERNAL: Create a node at a SPECIFIC NodeId (for replacing PatternBindings in-place)
+let internal mkNodeAt (ctx: RecipeContext) (nodeId: NodeId) (kind: SemanticKind) (ty: NativeType) : SemanticNode =
+    let baseNode =
+        { Id = nodeId
+          Kind = kind
+          Range = ctx.SourceRange
+          Type = ty
+          SRTPResolution = None
+          ArenaAffinity = ArenaAffinity.CurrentActor
+          LayoutHint = None
+          Children = []
+          Parent = None
+          Metadata = Map.empty
+          IsReachable = true
+          EmissionStrategy = EmissionStrategy.Inline }
+    markBaker ctx.OriginalHOF ctx.ExpansionId baseNode
+
 /// INTERNAL: Create node and emit it
 let internal createAndEmit (kind: SemanticKind) (ty: NativeType) : Recipe<NodeId> =
     recipe {
@@ -253,6 +270,20 @@ let letBind (name: string) (valueNodeId: NodeId) (ty: NativeType) : Recipe<NodeI
         let! nodeId = createWithChildren kind ty [valueNodeId]
         do! bindVariable name nodeId ty
         return nodeId
+    }
+
+/// Create a let binding at a SPECIFIC NodeId (for DU saturation).
+/// This replaces an existing PatternBinding in-place, keeping the same NodeId
+/// so VarRefs continue to resolve correctly.
+let letBindAt (targetNodeId: NodeId) (name: string) (valueNodeId: NodeId) (ty: NativeType) : Recipe<NodeId> =
+    recipe {
+        let! ctx = getContext
+        let kind = SemanticKind.Binding (name, false, false, false)
+        let baseNode = mkNodeAt ctx targetNodeId kind ty
+        let node = { baseNode with Children = [valueNodeId] }
+        do! emitNode node
+        do! bindVariable name targetNodeId ty
+        return targetNodeId
     }
 
 /// Create a recursive let binding
@@ -715,13 +746,55 @@ let emptySeq (elemType: NativeType) : Recipe<NodeId> =
 let fieldGet (exprId: NodeId) (fieldName: string) (fieldType: NativeType) : Recipe<NodeId> =
     createWithChildren (SemanticKind.FieldGet (exprId, fieldName)) fieldType [exprId]
 
-/// Extract the tag (discriminator) from a discriminated union value
-/// Tag is always at field index 0, stored as i8
+//-----------------------------------------------------------------------------
+// Discriminated Union Operations (Pointer-based, Type-safe)
+//-----------------------------------------------------------------------------
+
+/// Extract the tag (discriminator) from a discriminated union value.
+/// Uses DUGetTag for proper pointer-based DU handling.
+let duGetTag (unionId: NodeId) (unionType: NativeType) : Recipe<NodeId> =
+    createWithChildren (SemanticKind.DUGetTag (unionId, unionType)) Types.int8Type [unionId]
+
+/// Type-safe payload extraction from a discriminated union via case eliminator.
+/// This generates a DUEliminate node that:
+/// 1. Bitcasts the DU pointer to the case-specific struct pointer type
+/// 2. Loads and extracts the payload with the correct type
+///
+/// caseName: The name of the union case (e.g., "FloatVal")
+/// caseIndex: The tag value for this case (0-based)
+/// payloadType: The NativeType of the payload for this specific case
+let duEliminate (unionId: NodeId) (caseName: string) (caseIndex: int) (payloadType: NativeType) : Recipe<NodeId> =
+    createWithChildren (SemanticKind.DUEliminate (unionId, caseIndex, caseName, payloadType)) payloadType [unionId]
+
+/// Construct a discriminated union value in an arena.
+///
+/// caseName: The name of the union case
+/// caseIndex: The tag value for this case
+/// payload: Optional payload node (None for nullary cases like None)
+/// arenaHint: Optional arena to allocate in (None uses implicit arena)
+let duConstruct (caseName: string) (caseIndex: int) (payload: NodeId option) (arenaHint: NodeId option) (resultType: NativeType) : Recipe<NodeId> =
+    let children =
+        match payload, arenaHint with
+        | Some p, Some a -> [p; a]
+        | Some p, None -> [p]
+        | None, Some a -> [a]
+        | None, None -> []
+    createWithChildren (SemanticKind.DUConstruct (caseName, caseIndex, payload, arenaHint)) resultType children
+
+//-----------------------------------------------------------------------------
+// Legacy Tag Extraction (delegates to duGetTag)
+//-----------------------------------------------------------------------------
+
+/// Extract the tag (discriminator) from a discriminated union value.
+/// DEPRECATED: Use duGetTag with explicit union type for new code.
+/// Tag is always at field index 0, stored as i8.
 let extractTag (unionId: NodeId) : Recipe<NodeId> =
+    // Legacy path: use FieldGet for backward compatibility until all callers migrate
     fieldGet unionId "Tag" Types.int8Type
 
-/// Extract payload field at a specific index from a discriminated union
-/// Payload fields are named "Item1", "Item2", etc. (1-based for F# compatibility)
+/// Extract payload field at a specific index from a discriminated union.
+/// DEPRECATED: Use duEliminate with explicit case info for new code.
+/// This legacy function uses FieldGet which doesn't preserve case type info.
 let extractPayloadField (unionId: NodeId) (index: int) (fieldType: NativeType) : Recipe<NodeId> =
     let fieldName = sprintf "Item%d" (index + 1)  // F# uses 1-based naming
     fieldGet unionId fieldName fieldType
