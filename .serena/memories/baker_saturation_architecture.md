@@ -1,12 +1,21 @@
 # Baker Saturation Architecture
 
 ## Core Principle
-Baker decomposes complex constructs into PSG sub-trees of primitives. Alex witnesses primitives; Baker creates structure.
+Baker decomposes **F# language machinery** into PSG sub-trees of primitives. Alex witnesses primitives; Baker creates structure.
 
 **What Baker Decomposes:**
 - HOFs (List.map, fold, filter) → primitives (isEmpty, head, tail, cons)
 - Match expressions → IfThenElse chains with DUGetTag/DUEliminate
 - UnionCase → DUConstruct
+- Seq expressions → state machines
+- Lazy values → thunk closures with memoization
+
+**What Baker Does NOT Handle:**
+- Entry points (`_start` wrapper) → Intrinsic Elaboration (Pass 1/2)
+- Platform syscalls → Alex Bindings
+- Type resolution → FNCS type checker
+
+See `entry_point_elaboration_architecture` memory for entry point handling.
 
 See `discriminated_union_pipeline` memory for DU-specific details.
 
