@@ -169,6 +169,25 @@ let private resolveSysOp (op: string) (globals: NativeGlobals) (range: SourceRan
         // int64 -> unit (nanoseconds require 64-bit precision)
         let ty = NativeType.TFun(globals.Int64Type, globals.UnitType)
         Resolved (mkIntrinsic IntrinsicModule.Sys op IntrinsicCategory.Platform fullName, ty)
+
+    // Freestanding entry point intrinsics
+    // These are used by IntrinsicElaboration to build the _start wrapper
+    | "stackArgc" ->
+        // unit -> int (load argc from stack at program entry)
+        let ty = NativeType.TFun(globals.UnitType, globals.IntType)
+        Resolved (mkIntrinsic IntrinsicModule.Sys op IntrinsicCategory.Platform fullName, ty)
+    | "stackArgv" ->
+        // unit -> nativeptr<nativeptr<byte>> (load argv from stack at program entry)
+        let argvType = NativeType.TNativePtr (NativeType.TNativePtr Types.uint8Type)
+        let ty = NativeType.TFun(globals.UnitType, argvType)
+        Resolved (mkIntrinsic IntrinsicModule.Sys op IntrinsicCategory.Platform fullName, ty)
+    | "emptyStringArray" ->
+        // unit -> string array (returns empty string array for _start wrapper)
+        // Used by IntrinsicElaboration to provide an empty argv for F# main functions
+        let stringArrayType = mkArrayType globals.StringType
+        let ty = NativeType.TFun(globals.UnitType, stringArrayType)
+        Resolved (mkIntrinsic IntrinsicModule.Sys op IntrinsicCategory.Platform fullName, ty)
+
     | unknown ->
         UnknownOperation $"Unknown Sys intrinsic: Sys.{unknown}"
 

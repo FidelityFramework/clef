@@ -123,21 +123,28 @@ module ProjectChecker =
                                 ParseErrors = parseErrors
                             }
                         else
-                            // Check all parsed inputs together
-                            let checkResult = checkParsedInputs parsedInputs
-                            
-                            // Set platform context on the graph if platform path is available
-                            let checkResultWithPlatform =
+                            // Build platform context BEFORE checking
+                            // This is critical: the platform context must be set on the graph
+                            // BEFORE the nanopass pipeline runs (which includes entry point elaboration)
+                            let platformContext =
                                 match options.PlatformPath with
                                 | Some platformPath ->
-                                    let platformCtx = PlatformContext.fromPlatformPath platformPath
-                                    { checkResult with 
-                                        Graph = SemanticGraph.withPlatform platformCtx checkResult.Graph }
-                                | None -> checkResult
+                                    let basePlatformCtx = PlatformContext.fromPlatformPath platformPath
+                                    // Set FreestandingStartup if this is a freestanding build
+                                    if options.OutputKind = OutputKind.Freestanding then
+                                        Some { basePlatformCtx with
+                                                 FreestandingStartup = FreestandingStartup.forPlatform basePlatformCtx.PlatformId }
+                                    else
+                                        Some basePlatformCtx
+                                | None -> None
+
+                            // Check all parsed inputs together with platform context
+                            // The platform context is set on the graph BEFORE entry point elaboration
+                            let checkResult = checkParsedInputsWithPlatform parsedInputs platformContext
 
                             Ok {
                                 Options = options
-                                CheckResult = checkResultWithPlatform
+                                CheckResult = checkResult
                                 SourceFiles = sourceFiles
                                 ParseErrors = Map.empty
                             }
@@ -204,21 +211,27 @@ module ProjectChecker =
                                 | Result.Ok parsed -> Some parsed
                                 | Result.Error _ -> None)
 
-                        // Check all parsed inputs together
-                        let checkResult = checkParsedInputs parsedInputs
-                        
-                        // Set platform context on the graph if platform path is available
-                        let checkResultWithPlatform =
+                        // Build platform context BEFORE checking
+                        // This is critical: the platform context must be set on the graph
+                        // BEFORE the nanopass pipeline runs (which includes entry point elaboration)
+                        let platformContext =
                             match options.PlatformPath with
                             | Some platformPath ->
-                                let platformCtx = PlatformContext.fromPlatformPath platformPath
-                                { checkResult with 
-                                    Graph = SemanticGraph.withPlatform platformCtx checkResult.Graph }
-                            | None -> checkResult
+                                let basePlatformCtx = PlatformContext.fromPlatformPath platformPath
+                                // Set FreestandingStartup if this is a freestanding build
+                                if options.OutputKind = OutputKind.Freestanding then
+                                    Some { basePlatformCtx with
+                                             FreestandingStartup = FreestandingStartup.forPlatform basePlatformCtx.PlatformId }
+                                else
+                                    Some basePlatformCtx
+                            | None -> None
+
+                        // Check all parsed inputs together with platform context
+                        let checkResult = checkParsedInputsWithPlatform parsedInputs platformContext
 
                         Ok {
                             Options = options
-                            CheckResult = checkResultWithPlatform
+                            CheckResult = checkResult
                             SourceFiles = sourceFiles
                             ParseErrors = parseErrors
                         }

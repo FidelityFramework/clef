@@ -391,7 +391,8 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
         PhaseEmitter.emitPhase output
 
 /// Build a CheckResult from builder state and diagnostics
-let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) : CheckResult =
+/// platformContext: Optional platform context for freestanding builds (enables entry point elaboration)
+let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) (platformContext: PlatformContext option) : CheckResult =
     let entryPoints = findEntryPoints builder.Nodes topLevelNodes
 
     // CRITICAL: Apply type substitutions to resolve type variables after constraint solving.
@@ -409,8 +410,9 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         Modules = modulePaths
         // Types extracted lazily from witnessed TypeDef nodes (codata pattern)
         Types = SemanticGraph.mkTypesIndex resolvedNodes
-        // Platform context is set by the project checker based on .fidproj
-        Platform = None
+        // Platform context - set by project checker for freestanding builds
+        // This must be set BEFORE entry point elaboration runs in the nanopass pipeline
+        Platform = platformContext
         // Module classifications computed lazily from EmissionStrategy
         ModuleClassifications = SemanticGraph.mkModuleClassifications resolvedNodes
         // Seq saturation computed lazily from SeqExpr nodes (codata pattern)
@@ -449,12 +451,16 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     if PhaseConfig.shouldEmit() then
         emitPhaseIfEnabled PhaseTypes.PhaseId.BakerModuleInit psg1 diagnostics  // Artifact 03
 
+    // Pass 2.5: Entry Point Elaboration (Freestanding mode only)
+    // Adds _start wrapper that calls main with argc/argv from stack
+    let psg1WithEntryPoints = IntrinsicElaboration.elaborateEntryPoints psg1
+
     // Pass 3: Saturation Fan-Out - Create Baker decomposition recipes
-    let saturationRecipes = BakerSaturation.fanOut psg1
+    let saturationRecipes = BakerSaturation.fanOut psg1WithEntryPoints
     RecipeSerialization.emitSaturationRecipes saturationRecipes  // Artifact 04
 
     // Pass 4: Saturation Fold-In - Build PSG₂ with decomposed structures
-    let finalGraph = BakerSaturation.foldIn saturationRecipes psg1
+    let finalGraph = BakerSaturation.foldIn saturationRecipes psg1WithEntryPoints
 
     // Phase 5: Emit final result
     emitPhaseIfEnabled PhaseTypes.PhaseId.Final finalGraph diagnostics
@@ -504,7 +510,7 @@ let checkExpression (expr: SynExpr) : CheckResult =
     let node = checkExpr env builder expr
     let diagnostics = solveAndGetDiagnostics !(env.Constraints)
 
-    buildResult builder [node] Map.empty diagnostics
+    buildResult builder [node] Map.empty diagnostics None
 
 //-------------------------------------------------------------------------
 // Type Checking: Binding Level
@@ -525,7 +531,7 @@ let checkLetBinding (binding: SynBinding) : CheckResult =
     let (node, _inlineBody, _isMutable, _literalValue) = checkBinding checkExpr checkSynType env builder binding None
     let diagnostics = solveAndGetDiagnostics !(env.Constraints)
 
-    buildResult builder [node] Map.empty diagnostics
+    buildResult builder [node] Map.empty diagnostics None
 
 //-------------------------------------------------------------------------
 // Type Checking: Module Level
@@ -1076,7 +1082,7 @@ let checkModuleDeclarations (decls: SynModuleDecl list) : CheckResult =
     let (_finalEnv, nodes) = checkModuleDecls env builder ctx decls
     let diagnostics = solveAndGetDiagnostics !(env.Constraints)
 
-    buildResult builder nodes Map.empty diagnostics
+    buildResult builder nodes Map.empty diagnostics None
 
 //-------------------------------------------------------------------------
 // Type Checking: Module or Namespace Level
@@ -1155,13 +1161,16 @@ let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
 
     let diagnostics = solveAndGetDiagnostics !(initialEnv.Constraints)
 
-    buildResult builder allNodes modulePaths diagnostics
+    buildResult builder allNodes modulePaths diagnostics None
 
-/// Check multiple parsed implementation files together.
+/// Check multiple parsed implementation files together with optional platform context.
 /// Files are processed in order, with earlier files' bindings available to later files.
 /// This is essential for multi-file compilation where dependencies must be loaded first.
 /// After checking, reachability analysis prunes the graph to only what's used.
-let checkParsedInputs (inputs: ParsedInput list) : CheckResult =
+///
+/// platformContext: Optional platform context. When Some, enables entry point elaboration
+/// for freestanding builds (adds _start wrapper that calls main).
+let checkParsedInputsWithPlatform (inputs: ParsedInput list) (platformContext: PlatformContext option) : CheckResult =
     let globals = createNativeGlobals()
     let initialEnv = createTypeEnv globals
     let builder = NodeBuilder()
@@ -1197,7 +1206,12 @@ let checkParsedInputs (inputs: ParsedInput list) : CheckResult =
     let constraintDiags = solveAndGetDiagnostics !(initialEnv.Constraints)
     let allDiagnostics = constraintDiags @ (List.rev !(initialEnv.Diagnostics))
 
-    buildResult builder allNodes modulePaths allDiagnostics
+    buildResult builder allNodes modulePaths allDiagnostics platformContext
+
+/// Check multiple parsed implementation files together (backward compatible version).
+/// Use checkParsedInputsWithPlatform for freestanding builds that need entry point elaboration.
+let checkParsedInputs (inputs: ParsedInput list) : CheckResult =
+    checkParsedInputsWithPlatform inputs None
 
 /// Check parsed input (implementation or signature file)
 let checkParsedInput (input: ParsedInput) : CheckResult =
