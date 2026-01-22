@@ -27,37 +27,42 @@ open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
 open FSharp.Native.Compiler.Baker.ShadowAST
-open FSharp.Native.Compiler.Baker.Ingredients.RecipeBuilder
+open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
 open FSharp.Native.Compiler.Baker.Ingredients.Primitives
 open FSharp.Native.Compiler.Baker.Ingredients.Patterns
 
 //=============================================================================
-// BRIDGE: Convert Recipe results to Decomposition.Result
+// BRIDGE: Convert SaturationParser results to Decomposition.Result
 //=============================================================================
 
-/// Convert a Decomposition.Context to a RecipeBuilder.RecipeContext
-let private toRecipeContext (ctx: Context) : RecipeContext =
-    { SourceRange = ctx.SourceRange
-      OriginalHOF = ctx.OriginalHOF
+/// Convert a Decomposition.Context to a SaturationState
+let private toSaturationState (ctx: Context) : SaturationState =
+    { EmittedNodes = []
+      Bindings = Map.empty
       ExpansionId = ctx.ExpansionId
+      OriginalHOF = ctx.OriginalHOF
+      SourceRange = ctx.SourceRange
       InspiringNode = ctx.InspiringNode
       Platform = ctx.Platform }
 
-/// Run a recipe and convert to Decomposition.Result
-let private runRecipe (ctx: Context) (recipe: Recipe<NodeId>) : Result =
-    let recipeCtx = toRecipeContext ctx
-    let resultNodeId, nodes = run recipeCtx recipe
-    mkResultNoShadow nodes resultNodeId []
+/// Run a saturation parser and convert to Decomposition.Result
+let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Result =
+    let initialState = toSaturationState ctx
+    match parser initialState with
+    | Matched resultNodeId, finalState ->
+        mkResultNoShadow (List.rev finalState.EmittedNodes) resultNodeId []
+    | NoMatch reason, _ ->
+        failwithf "Saturation failed: %s" reason
 
 //=============================================================================
 // MAP.TOLIST: toList m → in-order traversal to list of (key, value) pairs
 //=============================================================================
 
-let private mapToListRecipe
+let private mapToListParser
     (mapNodeId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     // Use the AVL in-order traversal pattern
     inOrderTraversalMap mapNodeId keyType valueType
@@ -67,11 +72,11 @@ let private mapToListRecipe
 // PRD-16: Returns seq<'K * 'V> for lazy enumeration
 //=============================================================================
 
-let private mapToSeqRecipe
+let private mapToSeqParser
     (mapNodeId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     // Use the lazy in-order seq traversal pattern for pairs
     inOrderPairsSeq mapNodeId keyType valueType
@@ -80,12 +85,12 @@ let private mapToSeqRecipe
 // MAP.TRYFIND: tryFind k m → binary search returning Option<value>
 //=============================================================================
 
-let private mapTryFindRecipe
+let private mapTryFindParser
     (keyNodeId: NodeId)
     (mapNodeId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
     
     // Use the AVL binary search pattern
     binarySearchMap keyNodeId mapNodeId keyType valueType
@@ -94,13 +99,13 @@ let private mapTryFindRecipe
 // MAP.ADD: add k v m → AVL insertion with (simplified) rebalancing
 //=============================================================================
 
-let private mapAddRecipe
+let private mapAddParser
     (keyNodeId: NodeId)
     (valueNodeId: NodeId)
     (mapNodeId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
     
     // Use the AVL insert pattern
     avlInsertMap keyNodeId valueNodeId mapNodeId keyType valueType
@@ -109,15 +114,15 @@ let private mapAddRecipe
 // MAP.CONTAINSKEY: containsKey k m → binary search returning bool
 //=============================================================================
 
-let private mapContainsKeyRecipe
+let private mapContainsKeyParser
     (keyNodeId: NodeId)
     (mapNodeId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
     
     // Implement as isSome (tryFind k m)
-    recipe {
+    saturation {
         let! optionResult = binarySearchMap keyNodeId mapNodeId keyType valueType
         return! isSome optionResult valueType
     }
@@ -127,11 +132,11 @@ let private mapContainsKeyRecipe
 // PRD-16: Returns seq<'K> for lazy enumeration
 //=============================================================================
 
-let private mapKeysRecipe
+let private mapKeysParser
     (mapNodeId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     // Use the in-order seq traversal pattern
     inOrderKeysSeq mapNodeId keyType valueType
@@ -141,11 +146,11 @@ let private mapKeysRecipe
 // PRD-16: Returns seq<'V> for lazy enumeration
 //=============================================================================
 
-let private mapValuesRecipe
+let private mapValuesParser
     (mapNodeId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     // Use the in-order seq traversal pattern
     inOrderValuesSeq mapNodeId keyType valueType
@@ -154,12 +159,12 @@ let private mapValuesRecipe
 // MAP.FORALL: forall p m → check predicate on all (key, value) pairs
 //=============================================================================
 
-let private mapForallRecipe
+let private mapForallParser
     (predicateNodeId: NodeId)
     (mapNodeId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
     
     // Use the AVL forall pattern
     treeForallMap predicateNodeId mapNodeId keyType valueType
@@ -179,28 +184,28 @@ let tryDecompose
     
     match operation, args with
     | "toList", [m] ->
-        Some (runRecipe ctx (mapToListRecipe m keyType valueType))
+        Some (runSaturation ctx (mapToListParser m keyType valueType))
 
     | "toSeq", [m] ->
-        Some (runRecipe ctx (mapToSeqRecipe m keyType valueType))
+        Some (runSaturation ctx (mapToSeqParser m keyType valueType))
 
     | "tryFind", [k; m] ->
-        Some (runRecipe ctx (mapTryFindRecipe k m keyType valueType))
+        Some (runSaturation ctx (mapTryFindParser k m keyType valueType))
     
     | "add", [k; v; m] ->
-        Some (runRecipe ctx (mapAddRecipe k v m keyType valueType))
+        Some (runSaturation ctx (mapAddParser k v m keyType valueType))
     
     | "containsKey", [k; m] ->
-        Some (runRecipe ctx (mapContainsKeyRecipe k m keyType valueType))
+        Some (runSaturation ctx (mapContainsKeyParser k m keyType valueType))
     
     | "keys", [m] ->
-        Some (runRecipe ctx (mapKeysRecipe m keyType valueType))
+        Some (runSaturation ctx (mapKeysParser m keyType valueType))
     
     | "values", [m] ->
-        Some (runRecipe ctx (mapValuesRecipe m keyType valueType))
+        Some (runSaturation ctx (mapValuesParser m keyType valueType))
     
     | "forall", [p; m] ->
-        Some (runRecipe ctx (mapForallRecipe p m keyType valueType))
+        Some (runSaturation ctx (mapForallParser p m keyType valueType))
     
     // Primitive operations - Alex witnesses directly
     | "empty", _

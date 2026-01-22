@@ -37,65 +37,69 @@ open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
 open FSharp.Native.Compiler.Baker.ShadowAST
-open FSharp.Native.Compiler.Baker.Ingredients.RecipeBuilder
+open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
 open FSharp.Native.Compiler.Baker.Ingredients.Primitives
-open FSharp.Native.Compiler.Baker.Ingredients.Patterns
 
 //=============================================================================
-// BRIDGE: Convert Recipe results to Decomposition.Result
+// BRIDGE: Convert SaturationParser results to Decomposition.Result
 //=============================================================================
 
-/// Convert a Decomposition.Context to a RecipeBuilder.RecipeContext
-let private toRecipeContext (ctx: Context) : RecipeContext =
-    { SourceRange = ctx.SourceRange
-      OriginalHOF = ctx.OriginalHOF
+/// Convert a Decomposition.Context to a SaturationState
+let private toSaturationState (ctx: Context) : SaturationState =
+    { EmittedNodes = []
+      Bindings = Map.empty
       ExpansionId = ctx.ExpansionId
+      OriginalHOF = ctx.OriginalHOF
+      SourceRange = ctx.SourceRange
       InspiringNode = ctx.InspiringNode
       Platform = ctx.Platform }
 
-/// Run a recipe and convert to Decomposition.Result
-let private runRecipe (ctx: Context) (recipe: Recipe<NodeId>) : Result =
-    let recipeCtx = toRecipeContext ctx
-    let resultNodeId, nodes = run recipeCtx recipe
-    mkResultNoShadow nodes resultNodeId []
+/// Run a saturation parser and convert to Decomposition.Result
+let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Result =
+    let initialState = toSaturationState ctx
+    match parser initialState with
+    | Matched resultNodeId, finalState ->
+        mkResultNoShadow (List.rev finalState.EmittedNodes) resultNodeId []
+    | NoMatch reason, _ ->
+        failwithf "Saturation failed: %s" reason
+
+//=============================================================================
+// HELPER: Create intrinsic node
+//=============================================================================
+
+let private intrinsicNode (info: IntrinsicInfo) (ty: NativeType) : SaturationParser<NodeId> =
+    fun state ->
+        let node = mkNode state (SemanticKind.Intrinsic info) ty []
+        Matched node.Id, SaturationState.addNode node state
+
+let private unitLit : SaturationParser<NodeId> =
+    fun state ->
+        let node = mkNode state (SemanticKind.Literal NativeLiteral.Unit) Types.unitType []
+        Matched node.Id, SaturationState.addNode node state
+
+let private whileLoop (conditionId: NodeId) (bodyId: NodeId) : SaturationParser<NodeId> =
+    fun state ->
+        let node = mkNode state (SemanticKind.WhileLoop (conditionId, bodyId)) Types.unitType [conditionId; bodyId]
+        Matched node.Id, SaturationState.addNode node state
 
 //=============================================================================
 // CONSUMER PATTERN: Iterate seq with enumerator
 //=============================================================================
 
 /// Generate an enumerator-based iteration over a seq.
-///
-/// Produces the PSG equivalent of:
-/// ```fsharp
-/// let enum = Seq.getEnumerator xs
-/// let rec loop acc =
-///     if SeqEnumerator.moveNext enum then
-///         let elem = SeqEnumerator.current enum
-///         loop (combine acc elem)
-///     else
-///         acc
-/// in loop initialAcc
-/// ```
-///
-/// Parameters:
-/// - initialAcc: Recipe that produces the initial accumulator value
-/// - combine: Function taking (accId, elemId) -> Recipe<NodeId>
-/// - inputSeqId: The seq to iterate over
-/// - elemType: Element type of the seq
-/// - accType: Type of the accumulator (and result)
 let private seqFoldLeft
-    (initialAcc: Recipe<NodeId>)
-    (combine: NodeId -> NodeId -> Recipe<NodeId>)
+    (initialAcc: SaturationParser<NodeId>)
+    (combine: NodeId -> NodeId -> SaturationParser<NodeId>)
     (inputSeqId: NodeId)
     (elemType: NativeType)
     (accType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let seqType = NativeType.TSeq elemType
     let enumType = NativeType.TSeqEnumerator elemType
     let loopFuncType = NativeType.TFun (accType, accType)
 
-    recipe {
+    saturation {
         // Get enumerator: let enum = Seq.getEnumerator xs
         let getEnumInfo = {
             Module = IntrinsicModule.Seq
@@ -104,12 +108,12 @@ let private seqFoldLeft
             FullName = "Seq.getEnumerator"
         }
         let getEnumFuncType = NativeType.TFun (seqType, enumType)
-        let! getEnumFuncId = createAndEmit (SemanticKind.Intrinsic getEnumInfo) getEnumFuncType
+        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
         let! enumId = app1 getEnumFuncId inputSeqId enumType
 
         // Create parameter for accumulator
         let! accParamId = patternBinding "acc" accType
-        do! bindVariable "acc" accParamId accType
+        do! withBinding "acc" accParamId accType
 
         // MoveNext check: SeqEnumerator.moveNext enum
         let moveNextInfo = {
@@ -119,7 +123,7 @@ let private seqFoldLeft
             FullName = "SeqEnumerator.moveNext"
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
+        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
         let! hasNextId = app1 moveNextFuncId enumId Types.boolType
 
         // Get current element: SeqEnumerator.current enum
@@ -130,7 +134,7 @@ let private seqFoldLeft
             FullName = "SeqEnumerator.current"
         }
         let currentFuncType = NativeType.TFun (enumType, elemType)
-        let! currentFuncId = createAndEmit (SemanticKind.Intrinsic currentInfo) currentFuncType
+        let! currentFuncId = intrinsicNode currentInfo currentFuncType
         let! elemId = app1 currentFuncId enumId elemType
 
         // Combine: combine acc elem
@@ -148,6 +152,7 @@ let private seqFoldLeft
         let! ifNodeId = ifThenElse hasNextId recurseCallId accRefId accType
 
         // Lambda: fun acc -> if...
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("acc", accType, accParamId)],
             ifNodeId,
@@ -155,7 +160,9 @@ let private seqFoldLeft
             Some "loop",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
+        let lambdaNode = mkNode state lambdaKind loopFuncType [ifNodeId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
 
         // Recursive binding
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
@@ -165,27 +172,23 @@ let private seqFoldLeft
 
         // Initial call: loop initAcc
         let! loopCallRefId = varRef "loop" (Some bindingId) loopFuncType
-        let! initialCallId = app1 loopCallRefId initAccId accType
-
-        return initialCallId
+        return! app1 loopCallRefId initAccId accType
     }
 
 /// Generate a boolean short-circuit iteration over a seq.
-///
-/// Used for exists and forall operations.
 let private seqBoolFold
     (baseValue: bool)
     (shortCircuitValue: bool)
-    (predicate: NodeId -> Recipe<NodeId>)
+    (predicate: NodeId -> SaturationParser<NodeId>)
     (inputSeqId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let seqType = NativeType.TSeq elemType
     let enumType = NativeType.TSeqEnumerator elemType
     let loopFuncType = NativeType.TFun (Types.unitType, Types.boolType)
 
-    recipe {
+    saturation {
         // Get enumerator
         let getEnumInfo = {
             Module = IntrinsicModule.Seq
@@ -194,7 +197,7 @@ let private seqBoolFold
             FullName = "Seq.getEnumerator"
         }
         let getEnumFuncType = NativeType.TFun (seqType, enumType)
-        let! getEnumFuncId = createAndEmit (SemanticKind.Intrinsic getEnumInfo) getEnumFuncType
+        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
         let! enumId = app1 getEnumFuncId inputSeqId enumType
 
         // MoveNext
@@ -205,7 +208,7 @@ let private seqBoolFold
             FullName = "SeqEnumerator.moveNext"
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
+        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
         let! hasNextId = app1 moveNextFuncId enumId Types.boolType
 
         // Get current
@@ -216,7 +219,7 @@ let private seqBoolFold
             FullName = "SeqEnumerator.current"
         }
         let currentFuncType = NativeType.TFun (enumType, elemType)
-        let! currentFuncId = createAndEmit (SemanticKind.Intrinsic currentInfo) currentFuncType
+        let! currentFuncId = intrinsicNode currentInfo currentFuncType
         let! elemId = app1 currentFuncId enumId elemType
 
         // Apply predicate
@@ -227,7 +230,7 @@ let private seqBoolFold
 
         // Recursive call
         let! loopRefId = varRef "loop" None loopFuncType
-        let! unitId = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
+        let! unitId = unitLit
         let! recurseCallId = app1 loopRefId unitId Types.boolType
 
         // Inner if: if pred then shortCircuit else recurse
@@ -241,6 +244,7 @@ let private seqBoolFold
 
         // Lambda (takes unit, returns bool)
         let! unitParamId = patternBinding "_" Types.unitType
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("_", Types.unitType, unitParamId)],
             outerIfId,
@@ -248,45 +252,34 @@ let private seqBoolFold
             Some "loop",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [outerIfId]
+        let lambdaNode = mkNode state lambdaKind loopFuncType [outerIfId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
 
         // Binding
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
 
         // Initial call
         let! loopCallRefId = varRef "loop" (Some bindingId) loopFuncType
-        let! unitForCall = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
-        let! initialCallId = app1 loopCallRefId unitForCall Types.boolType
-
-        return initialCallId
+        let! unitForCall = unitLit
+        return! app1 loopCallRefId unitForCall Types.boolType
     }
 
 //=============================================================================
 // PRODUCER: SEQ.MAP
 //=============================================================================
 
-/// Seq.map f xs → seq { for x in xs -> f x }
-///
-/// Creates a new seq that lazily applies f to each element.
 let private seqMapRecipe
     (mapperNodeId: NodeId)
     (inputSeqId: NodeId)
     (inputElemType: NativeType)
     (outputElemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let inputSeqType = NativeType.TSeq inputElemType
-    let _outputSeqType = NativeType.TSeq outputElemType  // for clarity, not used
     let enumType = NativeType.TSeqEnumerator inputElemType
 
-    recipe {
-        // The seq expression body iterates the input and yields transformed elements
-        // seq {
-        //     let enum = getEnumerator xs
-        //     while moveNext enum do
-        //         yield f (current enum)
-        // }
-
+    saturation {
         // Get enumerator
         let getEnumInfo = {
             Module = IntrinsicModule.Seq
@@ -295,7 +288,7 @@ let private seqMapRecipe
             FullName = "Seq.getEnumerator"
         }
         let getEnumFuncType = NativeType.TFun (inputSeqType, enumType)
-        let! getEnumFuncId = createAndEmit (SemanticKind.Intrinsic getEnumInfo) getEnumFuncType
+        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
         let! enumId = app1 getEnumFuncId inputSeqId enumType
 
         // MoveNext
@@ -306,7 +299,7 @@ let private seqMapRecipe
             FullName = "SeqEnumerator.moveNext"
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
+        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
         let! conditionId = app1 moveNextFuncId enumId Types.boolType
 
         // Get current element
@@ -317,7 +310,7 @@ let private seqMapRecipe
             FullName = "SeqEnumerator.current"
         }
         let currentFuncType = NativeType.TFun (enumType, inputElemType)
-        let! currentFuncId = createAndEmit (SemanticKind.Intrinsic currentInfo) currentFuncType
+        let! currentFuncId = intrinsicNode currentInfo currentFuncType
         let! elemId = app1 currentFuncId enumId inputElemType
 
         // Apply mapper: f elem
@@ -327,31 +320,28 @@ let private seqMapRecipe
         let! yieldId = yield' mappedId outputElemType
 
         // While loop: while moveNext do yield f(current)
-        let! whileBodyId = createWithChildren (SemanticKind.WhileLoop (conditionId, yieldId)) Types.unitType [conditionId; yieldId]
+        let! whileBodyId = whileLoop conditionId yieldId
 
         // Seq expression wrapping the iteration
         let capture: CaptureInfo = { Name = "xs"; Type = inputSeqType; IsMutable = false; SourceNodeId = Some inputSeqId }
         let mapperCapture: CaptureInfo = { Name = "f"; Type = NativeType.TFun(inputElemType, outputElemType); IsMutable = false; SourceNodeId = Some mapperNodeId }
-        let! seqExprId = seqExpr whileBodyId [capture; mapperCapture] outputElemType
-
-        return seqExprId
+        return! seqExpr whileBodyId [capture; mapperCapture] outputElemType
     }
 
 //=============================================================================
 // PRODUCER: SEQ.FILTER
 //=============================================================================
 
-/// Seq.filter p xs → seq { for x in xs do if p x then yield x }
 let private seqFilterRecipe
     (predicateNodeId: NodeId)
     (inputSeqId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let seqType = NativeType.TSeq elemType
     let enumType = NativeType.TSeqEnumerator elemType
 
-    recipe {
+    saturation {
         // Get enumerator
         let getEnumInfo = {
             Module = IntrinsicModule.Seq
@@ -360,7 +350,7 @@ let private seqFilterRecipe
             FullName = "Seq.getEnumerator"
         }
         let getEnumFuncType = NativeType.TFun (seqType, enumType)
-        let! getEnumFuncId = createAndEmit (SemanticKind.Intrinsic getEnumInfo) getEnumFuncType
+        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
         let! enumId = app1 getEnumFuncId inputSeqId enumType
 
         // MoveNext
@@ -371,7 +361,7 @@ let private seqFilterRecipe
             FullName = "SeqEnumerator.moveNext"
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
+        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
         let! conditionId = app1 moveNextFuncId enumId Types.boolType
 
         // Get current
@@ -382,7 +372,7 @@ let private seqFilterRecipe
             FullName = "SeqEnumerator.current"
         }
         let currentFuncType = NativeType.TFun (enumType, elemType)
-        let! currentFuncId = createAndEmit (SemanticKind.Intrinsic currentInfo) currentFuncType
+        let! currentFuncId = intrinsicNode currentInfo currentFuncType
         let! elemId = app1 currentFuncId enumId elemType
 
         // Apply predicate
@@ -392,39 +382,36 @@ let private seqFilterRecipe
         let! yieldId = yield' elemId elemType
 
         // Unit for else branch
-        let! unitId = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
+        let! unitId = unitLit
 
         // If predicate then yield else skip
         let! conditionalYieldId = ifThenElse predResultId yieldId unitId Types.unitType
 
         // While loop
-        let! whileBodyId = createWithChildren (SemanticKind.WhileLoop (conditionId, conditionalYieldId)) Types.unitType [conditionId; conditionalYieldId]
+        let! whileBodyId = whileLoop conditionId conditionalYieldId
 
         // Seq expression
         let capture: CaptureInfo = { Name = "xs"; Type = seqType; IsMutable = false; SourceNodeId = Some inputSeqId }
         let predCapture: CaptureInfo = { Name = "p"; Type = NativeType.TFun(elemType, Types.boolType); IsMutable = false; SourceNodeId = Some predicateNodeId }
-        let! seqExprId = seqExpr whileBodyId [capture; predCapture] elemType
-
-        return seqExprId
+        return! seqExpr whileBodyId [capture; predCapture] elemType
     }
 
 //=============================================================================
 // PRODUCER: SEQ.COLLECT (flatMap/bind)
 //=============================================================================
 
-/// Seq.collect f xs → seq { for x in xs do yield! f x }
 let private seqCollectRecipe
     (mapperNodeId: NodeId)
     (inputSeqId: NodeId)
     (inputElemType: NativeType)
     (outputElemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let inputSeqType = NativeType.TSeq inputElemType
     let outputSeqType = NativeType.TSeq outputElemType
     let enumType = NativeType.TSeqEnumerator inputElemType
 
-    recipe {
+    saturation {
         // Get enumerator
         let getEnumInfo = {
             Module = IntrinsicModule.Seq
@@ -433,7 +420,7 @@ let private seqCollectRecipe
             FullName = "Seq.getEnumerator"
         }
         let getEnumFuncType = NativeType.TFun (inputSeqType, enumType)
-        let! getEnumFuncId = createAndEmit (SemanticKind.Intrinsic getEnumInfo) getEnumFuncType
+        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
         let! enumId = app1 getEnumFuncId inputSeqId enumType
 
         // MoveNext
@@ -444,7 +431,7 @@ let private seqCollectRecipe
             FullName = "SeqEnumerator.moveNext"
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
+        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
         let! conditionId = app1 moveNextFuncId enumId Types.boolType
 
         // Get current
@@ -455,7 +442,7 @@ let private seqCollectRecipe
             FullName = "SeqEnumerator.current"
         }
         let currentFuncType = NativeType.TFun (enumType, inputElemType)
-        let! currentFuncId = createAndEmit (SemanticKind.Intrinsic currentInfo) currentFuncType
+        let! currentFuncId = intrinsicNode currentInfo currentFuncType
         let! elemId = app1 currentFuncId enumId inputElemType
 
         // Apply mapper to get inner seq: f elem
@@ -465,30 +452,27 @@ let private seqCollectRecipe
         let! yieldBangId = yieldBang innerSeqId outputElemType
 
         // While loop
-        let! whileBodyId = createWithChildren (SemanticKind.WhileLoop (conditionId, yieldBangId)) Types.unitType [conditionId; yieldBangId]
+        let! whileBodyId = whileLoop conditionId yieldBangId
 
         // Seq expression
         let capture: CaptureInfo = { Name = "xs"; Type = inputSeqType; IsMutable = false; SourceNodeId = Some inputSeqId }
         let mapperCapture: CaptureInfo = { Name = "f"; Type = NativeType.TFun(inputElemType, outputSeqType); IsMutable = false; SourceNodeId = Some mapperNodeId }
-        let! seqExprId = seqExpr whileBodyId [capture; mapperCapture] outputElemType
-
-        return seqExprId
+        return! seqExpr whileBodyId [capture; mapperCapture] outputElemType
     }
 
 //=============================================================================
 // PRODUCER: SEQ.APPEND
 //=============================================================================
 
-/// Seq.append xs ys → seq { yield! xs; yield! ys }
 let private seqAppendRecipe
     (seq1Id: NodeId)
     (seq2Id: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let seqType = NativeType.TSeq elemType
 
-    recipe {
+    saturation {
         // yield! xs
         let! yieldBang1Id = yieldBang seq1Id elemType
 
@@ -496,15 +480,16 @@ let private seqAppendRecipe
         let! yieldBang2Id = yieldBang seq2Id elemType
 
         // Sequential: yield! xs; yield! ys
+        let! state = getState
         let seqKind = SemanticKind.Sequential [yieldBang1Id; yieldBang2Id]
-        let! seqBodyId = createWithChildren seqKind Types.unitType [yieldBang1Id; yieldBang2Id]
+        let seqBodyNode = mkNode state seqKind Types.unitType [yieldBang1Id; yieldBang2Id]
+        do! emit seqBodyNode
+        let seqBodyId = seqBodyNode.Id
 
         // Seq expression
         let capture1: CaptureInfo = { Name = "xs"; Type = seqType; IsMutable = false; SourceNodeId = Some seq1Id }
         let capture2: CaptureInfo = { Name = "ys"; Type = seqType; IsMutable = false; SourceNodeId = Some seq2Id }
-        let! seqExprId = seqExpr seqBodyId [capture1; capture2] elemType
-
-        return seqExprId
+        return! seqExpr seqBodyId [capture1; capture2] elemType
     }
 
 //=============================================================================
@@ -516,24 +501,22 @@ let private seqAppendRecipe
 let seqToListRecipe
     (inputSeqId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let listType = NativeType.TList elemType
 
     // Fold over seq, accumulating reversed list, then reverse at end
-    // This is O(n) instead of O(n²) for naive append approach
     let consToAcc accId elemId =
-        recipe {
+        saturation {
             // Prepend: elem :: acc (builds reversed list)
             return! cons elemId accId elemType
         }
 
-    recipe {
+    saturation {
         let! reversedList =
             seqFoldLeft (emptyList elemType) consToAcc inputSeqId elemType listType
 
         // Reverse the accumulated list
-        // Use List.rev intrinsic (Baker will decompose this if needed)
         let revInfo = {
             Module = IntrinsicModule.List
             Operation = "rev"
@@ -541,7 +524,7 @@ let seqToListRecipe
             FullName = "List.rev"
         }
         let revFuncType = NativeType.TFun (listType, listType)
-        let! revFuncId = createAndEmit (SemanticKind.Intrinsic revInfo) revFuncType
+        let! revFuncId = intrinsicNode revInfo revFuncType
         return! app1 revFuncId reversedList listType
     }
 
@@ -549,21 +532,20 @@ let seqToListRecipe
 // CONSUMER: SEQ.TOARRAY
 //=============================================================================
 
-/// Seq.toArray xs → collect to list then convert to array
 let private seqToArrayRecipe
     (inputSeqId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let listType = NativeType.TList elemType
     let arrayType = mkArrayType elemType
 
     let consToAcc accId elemId =
-        recipe {
+        saturation {
             return! cons elemId accId elemType
         }
 
-    recipe {
+    saturation {
         // First convert to list
         let! listId =
             seqFoldLeft (emptyList elemType) consToAcc inputSeqId elemType listType
@@ -576,7 +558,7 @@ let private seqToArrayRecipe
             FullName = "List.rev"
         }
         let revFuncType = NativeType.TFun (listType, listType)
-        let! revFuncId = createAndEmit (SemanticKind.Intrinsic revInfo) revFuncType
+        let! revFuncId = intrinsicNode revInfo revFuncType
         let! reversedListId = app1 revFuncId listId listType
 
         // Convert list to array using List.toArray intrinsic
@@ -587,7 +569,7 @@ let private seqToArrayRecipe
             FullName = "List.toArray"
         }
         let toArrayFuncType = NativeType.TFun (listType, arrayType)
-        let! toArrayFuncId = createAndEmit (SemanticKind.Intrinsic toArrayInfo) toArrayFuncType
+        let! toArrayFuncId = intrinsicNode toArrayInfo toArrayFuncType
         return! app1 toArrayFuncId reversedListId arrayType
     }
 
@@ -595,17 +577,16 @@ let private seqToArrayRecipe
 // CONSUMER: SEQ.FOLD
 //=============================================================================
 
-/// Seq.fold f s xs → iterate applying f to accumulator
 let private seqFoldRecipe
     (folderNodeId: NodeId)
     (stateNodeId: NodeId)
     (inputSeqId: NodeId)
     (elemType: NativeType)
     (stateType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let applyFolder accId elemId =
-        recipe {
+        saturation {
             // f acc elem
             return! app2 folderNodeId accId elemId stateType
         }
@@ -616,12 +597,11 @@ let private seqFoldRecipe
 // CONSUMER: SEQ.EXISTS
 //=============================================================================
 
-/// Seq.exists p xs → short-circuit on first true
 let private seqExistsRecipe
     (predicateNodeId: NodeId)
     (inputSeqId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     seqBoolFold
         false   // base: empty seq → false
@@ -634,24 +614,17 @@ let private seqExistsRecipe
 // CONSUMER: SEQ.FORALL
 //=============================================================================
 
-/// Seq.forall p xs → short-circuit on first false
 let private seqForallRecipe
     (predicateNodeId: NodeId)
     (inputSeqId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
-    // forall: short-circuit when predicate returns false
-    // We invert the logic: check "not pred" and short-circuit on true
     seqBoolFold
         true    // base: empty seq → true (vacuously true)
         false   // short-circuit: predicate false → false
         (fun elemId ->
-            recipe {
-                // We want to short-circuit when pred is FALSE
-                // boolFold short-circuits when result = shortCircuitValue
-                // So we return the predicate result directly
-                // and set shortCircuitValue = false
+            saturation {
                 return! app1 predicateNodeId elemId Types.boolType
             })
         inputSeqId
@@ -661,16 +634,15 @@ let private seqForallRecipe
 // CONSUMER: SEQ.LENGTH
 //=============================================================================
 
-/// Seq.length xs → count elements
 let private seqLengthRecipe
     (inputSeqId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     seqFoldLeft
         (intLit 0)
         (fun accId _elemId ->
-            recipe {
+            saturation {
                 let! one = intLit 1
                 return! add accId one Types.intType
             })
@@ -682,16 +654,15 @@ let private seqLengthRecipe
 // CONSUMER: SEQ.ISEMPTY
 //=============================================================================
 
-/// Seq.isEmpty xs → check if first moveNext fails
 let private seqIsEmptyRecipe
     (inputSeqId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let seqType = NativeType.TSeq elemType
     let enumType = NativeType.TSeqEnumerator elemType
 
-    recipe {
+    saturation {
         // Get enumerator
         let getEnumInfo = {
             Module = IntrinsicModule.Seq
@@ -700,7 +671,7 @@ let private seqIsEmptyRecipe
             FullName = "Seq.getEnumerator"
         }
         let getEnumFuncType = NativeType.TFun (seqType, enumType)
-        let! getEnumFuncId = createAndEmit (SemanticKind.Intrinsic getEnumInfo) getEnumFuncType
+        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
         let! enumId = app1 getEnumFuncId inputSeqId enumType
 
         // Check if first moveNext fails
@@ -711,7 +682,7 @@ let private seqIsEmptyRecipe
             FullName = "SeqEnumerator.moveNext"
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
+        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
         let! hasElementId = app1 moveNextFuncId enumId Types.boolType
 
         // isEmpty = not hasElement
@@ -722,16 +693,15 @@ let private seqIsEmptyRecipe
 // CONSUMER: SEQ.HEAD
 //=============================================================================
 
-/// Seq.head xs → get first element (throws if empty)
 let private seqHeadRecipe
     (inputSeqId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let seqType = NativeType.TSeq elemType
     let enumType = NativeType.TSeqEnumerator elemType
 
-    recipe {
+    saturation {
         // Get enumerator
         let getEnumInfo = {
             Module = IntrinsicModule.Seq
@@ -740,7 +710,7 @@ let private seqHeadRecipe
             FullName = "Seq.getEnumerator"
         }
         let getEnumFuncType = NativeType.TFun (seqType, enumType)
-        let! getEnumFuncId = createAndEmit (SemanticKind.Intrinsic getEnumInfo) getEnumFuncType
+        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
         let! enumId = app1 getEnumFuncId inputSeqId enumType
 
         // Move to first element
@@ -751,10 +721,8 @@ let private seqHeadRecipe
             FullName = "SeqEnumerator.moveNext"
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
+        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
         let! _hasElementId = app1 moveNextFuncId enumId Types.boolType
-        // Note: In a full implementation, we'd check hasElement and throw if false
-        // For now, assume non-empty (Alex can add runtime check)
 
         // Get current element
         let currentInfo = {
@@ -764,7 +732,7 @@ let private seqHeadRecipe
             FullName = "SeqEnumerator.current"
         }
         let currentFuncType = NativeType.TFun (enumType, elemType)
-        let! currentFuncId = createAndEmit (SemanticKind.Intrinsic currentInfo) currentFuncType
+        let! currentFuncId = intrinsicNode currentInfo currentFuncType
         return! app1 currentFuncId enumId elemType
     }
 
@@ -772,17 +740,16 @@ let private seqHeadRecipe
 // CONSUMER: SEQ.TRYHEAD
 //=============================================================================
 
-/// Seq.tryHead xs → Some first element or None
 let private seqTryHeadRecipe
     (inputSeqId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let seqType = NativeType.TSeq elemType
     let enumType = NativeType.TSeqEnumerator elemType
     let optionType = NativeType.TApp (Parameterized.optionTyCon, [elemType])
 
-    recipe {
+    saturation {
         // Get enumerator
         let getEnumInfo = {
             Module = IntrinsicModule.Seq
@@ -791,7 +758,7 @@ let private seqTryHeadRecipe
             FullName = "Seq.getEnumerator"
         }
         let getEnumFuncType = NativeType.TFun (seqType, enumType)
-        let! getEnumFuncId = createAndEmit (SemanticKind.Intrinsic getEnumInfo) getEnumFuncType
+        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
         let! enumId = app1 getEnumFuncId inputSeqId enumType
 
         // Check if has element
@@ -802,7 +769,7 @@ let private seqTryHeadRecipe
             FullName = "SeqEnumerator.moveNext"
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
+        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
         let! hasElementId = app1 moveNextFuncId enumId Types.boolType
 
         // Get current if exists
@@ -813,7 +780,7 @@ let private seqTryHeadRecipe
             FullName = "SeqEnumerator.current"
         }
         let currentFuncType = NativeType.TFun (enumType, elemType)
-        let! currentFuncId = createAndEmit (SemanticKind.Intrinsic currentInfo) currentFuncType
+        let! currentFuncId = intrinsicNode currentInfo currentFuncType
         let! elemId = app1 currentFuncId enumId elemType
 
         // Some elem
@@ -830,20 +797,19 @@ let private seqTryHeadRecipe
 // CONSUMER: SEQ.TRYPICK
 //=============================================================================
 
-/// Seq.tryPick f xs → first Some result from f
 let private seqTryPickRecipe
     (chooserNodeId: NodeId)
     (inputSeqId: NodeId)
     (inputElemType: NativeType)
     (outputElemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let seqType = NativeType.TSeq inputElemType
     let enumType = NativeType.TSeqEnumerator inputElemType
     let optionType = NativeType.TApp (Parameterized.optionTyCon, [outputElemType])
     let loopFuncType = NativeType.TFun (Types.unitType, optionType)
 
-    recipe {
+    saturation {
         // Get enumerator
         let getEnumInfo = {
             Module = IntrinsicModule.Seq
@@ -852,7 +818,7 @@ let private seqTryPickRecipe
             FullName = "Seq.getEnumerator"
         }
         let getEnumFuncType = NativeType.TFun (seqType, enumType)
-        let! getEnumFuncId = createAndEmit (SemanticKind.Intrinsic getEnumInfo) getEnumFuncType
+        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
         let! enumId = app1 getEnumFuncId inputSeqId enumType
 
         // MoveNext
@@ -863,7 +829,7 @@ let private seqTryPickRecipe
             FullName = "SeqEnumerator.moveNext"
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
+        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
         let! hasNextId = app1 moveNextFuncId enumId Types.boolType
 
         // Get current
@@ -874,7 +840,7 @@ let private seqTryPickRecipe
             FullName = "SeqEnumerator.current"
         }
         let currentFuncType = NativeType.TFun (enumType, inputElemType)
-        let! currentFuncId = createAndEmit (SemanticKind.Intrinsic currentInfo) currentFuncType
+        let! currentFuncId = intrinsicNode currentInfo currentFuncType
         let! elemId = app1 currentFuncId enumId inputElemType
 
         // Apply chooser
@@ -885,7 +851,7 @@ let private seqTryPickRecipe
 
         // Recursive call
         let! loopRefId = varRef "loop" None loopFuncType
-        let! unitId = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
+        let! unitId = unitLit
         let! recurseCallId = app1 loopRefId unitId optionType
 
         // Inner if: if isSome result then result else recurse
@@ -899,6 +865,7 @@ let private seqTryPickRecipe
 
         // Lambda
         let! unitParamId = patternBinding "_" Types.unitType
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("_", Types.unitType, unitParamId)],
             outerIfId,
@@ -906,14 +873,16 @@ let private seqTryPickRecipe
             Some "loop",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [outerIfId]
+        let lambdaNode = mkNode state lambdaKind loopFuncType [outerIfId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
 
         // Binding
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
 
         // Initial call
         let! loopCallRefId = varRef "loop" (Some bindingId) loopFuncType
-        let! unitForCall = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
+        let! unitForCall = unitLit
         return! app1 loopCallRefId unitForCall optionType
     }
 
@@ -921,17 +890,17 @@ let private seqTryPickRecipe
 // CONSUMER: SEQ.MAX
 //=============================================================================
 
-/// Seq.max xs → maximum element
 let private seqMaxRecipe
     (inputSeqId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let seqType = NativeType.TSeq elemType
     let enumType = NativeType.TSeqEnumerator elemType
+    let loopFuncType = NativeType.TFun (elemType, elemType)
 
-    recipe {
-        // Get first element as initial max
+    saturation {
+        // Get enumerator and first element
         let getEnumInfo = {
             Module = IntrinsicModule.Seq
             Operation = "getEnumerator"
@@ -939,7 +908,7 @@ let private seqMaxRecipe
             FullName = "Seq.getEnumerator"
         }
         let getEnumFuncType = NativeType.TFun (seqType, enumType)
-        let! getEnumFuncId = createAndEmit (SemanticKind.Intrinsic getEnumInfo) getEnumFuncType
+        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
         let! enumId = app1 getEnumFuncId inputSeqId enumType
 
         let moveNextInfo = {
@@ -949,7 +918,7 @@ let private seqMaxRecipe
             FullName = "SeqEnumerator.moveNext"
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
+        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
         let! _ = app1 moveNextFuncId enumId Types.boolType
 
         let currentInfo = {
@@ -959,14 +928,12 @@ let private seqMaxRecipe
             FullName = "SeqEnumerator.current"
         }
         let currentFuncType = NativeType.TFun (enumType, elemType)
-        let! currentFuncId = createAndEmit (SemanticKind.Intrinsic currentInfo) currentFuncType
+        let! currentFuncId = intrinsicNode currentInfo currentFuncType
         let! firstElemId = app1 currentFuncId enumId elemType
 
-        // Now fold over remaining elements
-        let loopFuncType = NativeType.TFun (elemType, elemType)
-
+        // Create loop parameter
         let! maxParamId = patternBinding "currentMax" elemType
-        do! bindVariable "currentMax" maxParamId elemType
+        do! withBinding "currentMax" maxParamId elemType
 
         // Check if more elements
         let! hasNextId = app1 moveNextFuncId enumId Types.boolType
@@ -990,6 +957,7 @@ let private seqMaxRecipe
         let! ifNodeId = ifThenElse hasNextId recurseCallId currentMaxReturnId elemType
 
         // Lambda
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("currentMax", elemType, maxParamId)],
             ifNodeId,
@@ -997,7 +965,9 @@ let private seqMaxRecipe
             Some "loop",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
+        let lambdaNode = mkNode state lambdaKind loopFuncType [ifNodeId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
 
         // Binding
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
@@ -1011,17 +981,16 @@ let private seqMaxRecipe
 // CONSUMER: SEQ.MIN
 //=============================================================================
 
-/// Seq.min xs → minimum element
 let private seqMinRecipe
     (inputSeqId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let seqType = NativeType.TSeq elemType
     let enumType = NativeType.TSeqEnumerator elemType
+    let loopFuncType = NativeType.TFun (elemType, elemType)
 
-    recipe {
-        // Get first element as initial min
+    saturation {
         let getEnumInfo = {
             Module = IntrinsicModule.Seq
             Operation = "getEnumerator"
@@ -1029,7 +998,7 @@ let private seqMinRecipe
             FullName = "Seq.getEnumerator"
         }
         let getEnumFuncType = NativeType.TFun (seqType, enumType)
-        let! getEnumFuncId = createAndEmit (SemanticKind.Intrinsic getEnumInfo) getEnumFuncType
+        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
         let! enumId = app1 getEnumFuncId inputSeqId enumType
 
         let moveNextInfo = {
@@ -1039,7 +1008,7 @@ let private seqMinRecipe
             FullName = "SeqEnumerator.moveNext"
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
+        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
         let! _ = app1 moveNextFuncId enumId Types.boolType
 
         let currentInfo = {
@@ -1049,14 +1018,11 @@ let private seqMinRecipe
             FullName = "SeqEnumerator.current"
         }
         let currentFuncType = NativeType.TFun (enumType, elemType)
-        let! currentFuncId = createAndEmit (SemanticKind.Intrinsic currentInfo) currentFuncType
+        let! currentFuncId = intrinsicNode currentInfo currentFuncType
         let! firstElemId = app1 currentFuncId enumId elemType
 
-        // Fold over remaining elements
-        let loopFuncType = NativeType.TFun (elemType, elemType)
-
         let! minParamId = patternBinding "currentMin" elemType
-        do! bindVariable "currentMin" minParamId elemType
+        do! withBinding "currentMin" minParamId elemType
 
         let! hasNextId = app1 moveNextFuncId enumId Types.boolType
         let! nextElemId = app1 currentFuncId enumId elemType
@@ -1071,6 +1037,7 @@ let private seqMinRecipe
         let! currentMinReturnId = varRef "currentMin" (Some minParamId) elemType
         let! ifNodeId = ifThenElse hasNextId recurseCallId currentMinReturnId elemType
 
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("currentMin", elemType, minParamId)],
             ifNodeId,
@@ -1078,7 +1045,9 @@ let private seqMinRecipe
             Some "loop",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
+        let lambdaNode = mkNode state lambdaKind loopFuncType [ifNodeId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
 
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
 
@@ -1090,19 +1059,18 @@ let private seqMinRecipe
 // CONSUMER: SEQ.MINBY
 //=============================================================================
 
-/// Seq.minBy f xs → element with minimum f value
 let private seqMinByRecipe
     (projectionNodeId: NodeId)
     (inputSeqId: NodeId)
     (elemType: NativeType)
     (keyType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let seqType = NativeType.TSeq elemType
     let enumType = NativeType.TSeqEnumerator elemType
+    let loopFuncType = NativeType.TFun (elemType, elemType)
 
-    recipe {
-        // Get first element
+    saturation {
         let getEnumInfo = {
             Module = IntrinsicModule.Seq
             Operation = "getEnumerator"
@@ -1110,7 +1078,7 @@ let private seqMinByRecipe
             FullName = "Seq.getEnumerator"
         }
         let getEnumFuncType = NativeType.TFun (seqType, enumType)
-        let! getEnumFuncId = createAndEmit (SemanticKind.Intrinsic getEnumInfo) getEnumFuncType
+        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
         let! enumId = app1 getEnumFuncId inputSeqId enumType
 
         let moveNextInfo = {
@@ -1120,7 +1088,7 @@ let private seqMinByRecipe
             FullName = "SeqEnumerator.moveNext"
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
+        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
         let! _ = app1 moveNextFuncId enumId Types.boolType
 
         let currentInfo = {
@@ -1130,24 +1098,19 @@ let private seqMinByRecipe
             FullName = "SeqEnumerator.current"
         }
         let currentFuncType = NativeType.TFun (enumType, elemType)
-        let! currentFuncId = createAndEmit (SemanticKind.Intrinsic currentInfo) currentFuncType
+        let! currentFuncId = intrinsicNode currentInfo currentFuncType
         let! firstElemId = app1 currentFuncId enumId elemType
 
-        // Fold with projection comparison
-        let loopFuncType = NativeType.TFun (elemType, elemType)
-
         let! minParamId = patternBinding "currentMin" elemType
-        do! bindVariable "currentMin" minParamId elemType
+        do! withBinding "currentMin" minParamId elemType
 
         let! hasNextId = app1 moveNextFuncId enumId Types.boolType
         let! nextElemId = app1 currentFuncId enumId elemType
 
-        // Project both elements
         let! currentMinRefId = varRef "currentMin" (Some minParamId) elemType
         let! currentMinKeyId = app1 projectionNodeId currentMinRefId keyType
         let! nextKeyId = app1 projectionNodeId nextElemId keyType
 
-        // Compare keys
         let! isLessId = lt nextKeyId currentMinKeyId keyType
         let! newMinId = ifThenElse isLessId nextElemId currentMinRefId elemType
 
@@ -1157,6 +1120,7 @@ let private seqMinByRecipe
         let! currentMinReturnId = varRef "currentMin" (Some minParamId) elemType
         let! ifNodeId = ifThenElse hasNextId recurseCallId currentMinReturnId elemType
 
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("currentMin", elemType, minParamId)],
             ifNodeId,
@@ -1164,7 +1128,9 @@ let private seqMinByRecipe
             Some "loop",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
+        let lambdaNode = mkNode state lambdaKind loopFuncType [ifNodeId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
 
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
 
@@ -1176,18 +1142,18 @@ let private seqMinByRecipe
 // CONSUMER: SEQ.MAXBY
 //=============================================================================
 
-/// Seq.maxBy f xs → element with maximum f value
 let private seqMaxByRecipe
     (projectionNodeId: NodeId)
     (inputSeqId: NodeId)
     (elemType: NativeType)
     (keyType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let seqType = NativeType.TSeq elemType
     let enumType = NativeType.TSeqEnumerator elemType
+    let loopFuncType = NativeType.TFun (elemType, elemType)
 
-    recipe {
+    saturation {
         let getEnumInfo = {
             Module = IntrinsicModule.Seq
             Operation = "getEnumerator"
@@ -1195,7 +1161,7 @@ let private seqMaxByRecipe
             FullName = "Seq.getEnumerator"
         }
         let getEnumFuncType = NativeType.TFun (seqType, enumType)
-        let! getEnumFuncId = createAndEmit (SemanticKind.Intrinsic getEnumInfo) getEnumFuncType
+        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
         let! enumId = app1 getEnumFuncId inputSeqId enumType
 
         let moveNextInfo = {
@@ -1205,7 +1171,7 @@ let private seqMaxByRecipe
             FullName = "SeqEnumerator.moveNext"
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
+        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
         let! _ = app1 moveNextFuncId enumId Types.boolType
 
         let currentInfo = {
@@ -1215,13 +1181,11 @@ let private seqMaxByRecipe
             FullName = "SeqEnumerator.current"
         }
         let currentFuncType = NativeType.TFun (enumType, elemType)
-        let! currentFuncId = createAndEmit (SemanticKind.Intrinsic currentInfo) currentFuncType
+        let! currentFuncId = intrinsicNode currentInfo currentFuncType
         let! firstElemId = app1 currentFuncId enumId elemType
 
-        let loopFuncType = NativeType.TFun (elemType, elemType)
-
         let! maxParamId = patternBinding "currentMax" elemType
-        do! bindVariable "currentMax" maxParamId elemType
+        do! withBinding "currentMax" maxParamId elemType
 
         let! hasNextId = app1 moveNextFuncId enumId Types.boolType
         let! nextElemId = app1 currentFuncId enumId elemType
@@ -1239,6 +1203,7 @@ let private seqMaxByRecipe
         let! currentMaxReturnId = varRef "currentMax" (Some maxParamId) elemType
         let! ifNodeId = ifThenElse hasNextId recurseCallId currentMaxReturnId elemType
 
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("currentMax", elemType, maxParamId)],
             ifNodeId,
@@ -1246,7 +1211,9 @@ let private seqMaxByRecipe
             Some "loop",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
+        let lambdaNode = mkNode state lambdaKind loopFuncType [ifNodeId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
 
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
 
@@ -1273,64 +1240,64 @@ let tryDecompose
     // Producers
     | "map", [mapper; xs] ->
         let outElem = outputElemType |> Option.defaultValue elemType
-        Some (runRecipe ctx (seqMapRecipe mapper xs elemType outElem))
+        Some (runSaturation ctx (seqMapRecipe mapper xs elemType outElem))
 
     | "filter", [predicate; xs] ->
-        Some (runRecipe ctx (seqFilterRecipe predicate xs elemType))
+        Some (runSaturation ctx (seqFilterRecipe predicate xs elemType))
 
     | "collect", [mapper; xs] ->
         let outElem = outputElemType |> Option.defaultValue elemType
-        Some (runRecipe ctx (seqCollectRecipe mapper xs elemType outElem))
+        Some (runSaturation ctx (seqCollectRecipe mapper xs elemType outElem))
 
     | "append", [xs; ys] ->
-        Some (runRecipe ctx (seqAppendRecipe xs ys elemType))
+        Some (runSaturation ctx (seqAppendRecipe xs ys elemType))
 
     // Consumers
     | "toList", [xs] ->
-        Some (runRecipe ctx (seqToListRecipe xs elemType))
+        Some (runSaturation ctx (seqToListRecipe xs elemType))
 
     | "toArray", [xs] ->
-        Some (runRecipe ctx (seqToArrayRecipe xs elemType))
+        Some (runSaturation ctx (seqToArrayRecipe xs elemType))
 
     | "fold", [folder; state; xs] ->
         let stTy = stateType |> Option.defaultValue elemType
-        Some (runRecipe ctx (seqFoldRecipe folder state xs elemType stTy))
+        Some (runSaturation ctx (seqFoldRecipe folder state xs elemType stTy))
 
     | "exists", [predicate; xs] ->
-        Some (runRecipe ctx (seqExistsRecipe predicate xs elemType))
+        Some (runSaturation ctx (seqExistsRecipe predicate xs elemType))
 
     | "forall", [predicate; xs] ->
-        Some (runRecipe ctx (seqForallRecipe predicate xs elemType))
+        Some (runSaturation ctx (seqForallRecipe predicate xs elemType))
 
     | "length", [xs] ->
-        Some (runRecipe ctx (seqLengthRecipe xs elemType))
+        Some (runSaturation ctx (seqLengthRecipe xs elemType))
 
     | "isEmpty", [xs] ->
-        Some (runRecipe ctx (seqIsEmptyRecipe xs elemType))
+        Some (runSaturation ctx (seqIsEmptyRecipe xs elemType))
 
     | "head", [xs] ->
-        Some (runRecipe ctx (seqHeadRecipe xs elemType))
+        Some (runSaturation ctx (seqHeadRecipe xs elemType))
 
     | "tryHead", [xs] ->
-        Some (runRecipe ctx (seqTryHeadRecipe xs elemType))
+        Some (runSaturation ctx (seqTryHeadRecipe xs elemType))
 
     | "tryPick", [chooser; xs] ->
         let outElem = outputElemType |> Option.defaultValue elemType
-        Some (runRecipe ctx (seqTryPickRecipe chooser xs elemType outElem))
+        Some (runSaturation ctx (seqTryPickRecipe chooser xs elemType outElem))
 
     | "max", [xs] ->
-        Some (runRecipe ctx (seqMaxRecipe xs elemType))
+        Some (runSaturation ctx (seqMaxRecipe xs elemType))
 
     | "min", [xs] ->
-        Some (runRecipe ctx (seqMinRecipe xs elemType))
+        Some (runSaturation ctx (seqMinRecipe xs elemType))
 
     | "minBy", [projection; xs] ->
         let keyType = stateType |> Option.defaultValue elemType
-        Some (runRecipe ctx (seqMinByRecipe projection xs elemType keyType))
+        Some (runSaturation ctx (seqMinByRecipe projection xs elemType keyType))
 
     | "maxBy", [projection; xs] ->
         let keyType = stateType |> Option.defaultValue elemType
-        Some (runRecipe ctx (seqMaxByRecipe projection xs elemType keyType))
+        Some (runSaturation ctx (seqMaxByRecipe projection xs elemType keyType))
 
     // Primitives - Alex witnesses directly
     | "empty", _

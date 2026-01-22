@@ -24,35 +24,42 @@ open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
 open FSharp.Native.Compiler.Baker.ShadowAST
-open FSharp.Native.Compiler.Baker.Ingredients.RecipeBuilder
+open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
 open FSharp.Native.Compiler.Baker.Ingredients.Primitives
 open FSharp.Native.Compiler.Baker.Ingredients.Patterns
 
 //=============================================================================
-// BRIDGE: Convert Recipe results to Decomposition.Result
+// BRIDGE: Convert SaturationParser results to Decomposition.Result
 //=============================================================================
 
-let private toRecipeContext (ctx: Context) : RecipeContext =
-    { SourceRange = ctx.SourceRange
-      OriginalHOF = ctx.OriginalHOF
+/// Convert a Decomposition.Context to a SaturationState
+let private toSaturationState (ctx: Context) : SaturationState =
+    { EmittedNodes = []
+      Bindings = Map.empty
       ExpansionId = ctx.ExpansionId
+      OriginalHOF = ctx.OriginalHOF
+      SourceRange = ctx.SourceRange
       InspiringNode = ctx.InspiringNode
       Platform = ctx.Platform }
 
-let private runRecipe (ctx: Context) (recipe: Recipe<NodeId>) : Result =
-    let recipeCtx = toRecipeContext ctx
-    let resultNodeId, nodes = run recipeCtx recipe
-    mkResultNoShadow nodes resultNodeId []
+/// Run a saturation parser and convert to Decomposition.Result
+let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Result =
+    let initialState = toSaturationState ctx
+    match parser initialState with
+    | Matched resultNodeId, finalState ->
+        mkResultNoShadow (List.rev finalState.EmittedNodes) resultNodeId []
+    | NoMatch reason, _ ->
+        failwithf "Saturation failed: %s" reason
 
 //=============================================================================
 // SET.ADD: add v s → AVL insertion
 //=============================================================================
 
-let private setAddRecipe
+let private setAddParser
     (valueNodeId: NodeId)
     (setNodeId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
     
     // Use the AVL insert pattern for Set
     avlInsertSet valueNodeId setNodeId elemType
@@ -61,11 +68,11 @@ let private setAddRecipe
 // SET.CONTAINS: contains v s → binary search returning bool
 //=============================================================================
 
-let private setContainsRecipe
+let private setContainsParser
     (valueNodeId: NodeId)
     (setNodeId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
     
     // Use the AVL binary search pattern for Set
     binarySearchSet valueNodeId setNodeId elemType
@@ -74,11 +81,11 @@ let private setContainsRecipe
 // SET.REMOVE: remove v s → AVL deletion (simplified - marks as removed)
 //=============================================================================
 
-let private setRemoveRecipe
+let private setRemoveParser
     (valueNodeId: NodeId)
     (setNodeId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
     
     let setType = NativeType.TSet elemType
     let loopFuncType = NativeType.TFun (setType, setType)
@@ -86,10 +93,10 @@ let private setRemoveRecipe
     // AVL deletion is complex (need to handle rebalancing after removal)
     // Simplified implementation: rebuild tree without the value
     // Full AVL deletion would need predecessor/successor finding + rebalance
-    recipe {
+    saturation {
         // Parameter: tree
         let! treeParamId = patternBinding "tree" setType
-        do! bindVariable "tree" treeParamId setType
+        do! withBinding "tree" treeParamId setType
         
         // Base case: empty - return empty (value not found)
         let! emptySetId = emptySet elemType
@@ -143,6 +150,7 @@ let private setRemoveRecipe
         let! outerIfId = ifThenElse isEmptyId emptySetId middleIfId setType
         
         // Lambda
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", setType, treeParamId)],
             outerIfId,
@@ -150,7 +158,9 @@ let private setRemoveRecipe
             Some "remove",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [outerIfId]
+        let lambdaNode = mkNode state lambdaKind loopFuncType [outerIfId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
         
         // Binding
         let! bindingId = letRecBind "remove" lambdaId loopFuncType
@@ -164,24 +174,24 @@ let private setRemoveRecipe
 // SET.UNION: union s1 s2 → merge two sets
 //=============================================================================
 
-let private setUnionRecipe
+let private setUnionParser
     (set1NodeId: NodeId)
     (set2NodeId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
     
     let setType = NativeType.TSet elemType
     let loopFuncType = NativeType.TFun (setType, NativeType.TFun (setType, setType))
     
     // Union: fold insert over set1 starting with set2 as accumulator
     // union s1 s2 = fold add s2 s1
-    recipe {
+    saturation {
         // Parameters: tree1, acc
         let! tree1ParamId = patternBinding "tree1" setType
-        do! bindVariable "tree1" tree1ParamId setType
+        do! withBinding "tree1" tree1ParamId setType
         
         let! accParamId = patternBinding "acc" setType
-        do! bindVariable "acc" accParamId setType
+        do! withBinding "acc" accParamId setType
         
         // Base case: return acc (empty tree adds nothing)
         let! accRefId = varRef "acc" (Some accParamId) setType
@@ -208,6 +218,7 @@ let private setUnionRecipe
         let! ifNodeId = ifThenElse isEmptyId accRefId fullResultId setType
         
         // Lambda
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("tree1", setType, tree1ParamId); ("acc", setType, accParamId)],
             ifNodeId,
@@ -215,7 +226,9 @@ let private setUnionRecipe
             Some "union",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
+        let lambdaNode = mkNode state lambdaKind loopFuncType [ifNodeId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
         
         // Binding
         let! bindingId = letRecBind "union" lambdaId loopFuncType
@@ -229,20 +242,20 @@ let private setUnionRecipe
 // SET.INTERSECT: intersect s1 s2 → elements in both sets
 //=============================================================================
 
-let private setIntersectRecipe
+let private setIntersectParser
     (set1NodeId: NodeId)
     (set2NodeId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
     
     let setType = NativeType.TSet elemType
     let loopFuncType = NativeType.TFun (setType, setType)
     
     // Intersect: fold over s1, add to result only if also in s2
-    recipe {
+    saturation {
         // Parameter: tree
         let! treeParamId = patternBinding "tree" setType
-        do! bindVariable "tree" treeParamId setType
+        do! withBinding "tree" treeParamId setType
         
         // Base case: empty
         let! emptySetId = emptySet elemType
@@ -267,7 +280,7 @@ let private setIntersectRecipe
         
         // Merge left and right results
         // Simplified: union leftResult rightResult
-        let! mergedId = setUnionRecipe leftResultId rightResultId elemType
+        let! mergedId = setUnionParser leftResultId rightResultId elemType
         
         // If in set2, add value to merged result
         let! withValueId = avlInsertSet nodeValueId mergedId elemType
@@ -279,6 +292,7 @@ let private setIntersectRecipe
         let! ifNodeId = ifThenElse isEmptyId emptySetId conditionalId setType
         
         // Lambda
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", setType, treeParamId)],
             ifNodeId,
@@ -286,7 +300,9 @@ let private setIntersectRecipe
             Some "intersect",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
+        let lambdaNode = mkNode state lambdaKind loopFuncType [ifNodeId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
         
         // Binding
         let! bindingId = letRecBind "intersect" lambdaId loopFuncType
@@ -300,20 +316,20 @@ let private setIntersectRecipe
 // SET.DIFFERENCE: difference s1 s2 → elements in s1 but not s2
 //=============================================================================
 
-let private setDifferenceRecipe
+let private setDifferenceParser
     (set1NodeId: NodeId)
     (set2NodeId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
     
     let setType = NativeType.TSet elemType
     let loopFuncType = NativeType.TFun (setType, setType)
     
     // Difference: fold over s1, add to result only if NOT in s2
-    recipe {
+    saturation {
         // Parameter: tree
         let! treeParamId = patternBinding "tree" setType
-        do! bindVariable "tree" treeParamId setType
+        do! withBinding "tree" treeParamId setType
         
         // Base case: empty
         let! emptySetId = emptySet elemType
@@ -337,7 +353,7 @@ let private setDifferenceRecipe
         let! rightResultId = app1 loopRefRight rightId setType
         
         // Merge left and right results
-        let! mergedId = setUnionRecipe leftResultId rightResultId elemType
+        let! mergedId = setUnionParser leftResultId rightResultId elemType
         
         // If NOT in set2, add value to merged result
         let! withValueId = avlInsertSet nodeValueId mergedId elemType
@@ -349,6 +365,7 @@ let private setDifferenceRecipe
         let! ifNodeId = ifThenElse isEmptyId emptySetId conditionalId setType
         
         // Lambda
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", setType, treeParamId)],
             ifNodeId,
@@ -356,7 +373,9 @@ let private setDifferenceRecipe
             Some "difference",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
+        let lambdaNode = mkNode state lambdaKind loopFuncType [ifNodeId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
         
         // Binding
         let! bindingId = letRecBind "difference" lambdaId loopFuncType
@@ -380,22 +399,22 @@ let tryDecompose
     
     match operation, args with
     | "add", [v; s] ->
-        Some (runRecipe ctx (setAddRecipe v s elemType))
+        Some (runSaturation ctx (setAddParser v s elemType))
     
     | "contains", [v; s] ->
-        Some (runRecipe ctx (setContainsRecipe v s elemType))
+        Some (runSaturation ctx (setContainsParser v s elemType))
     
     | "remove", [v; s] ->
-        Some (runRecipe ctx (setRemoveRecipe v s elemType))
+        Some (runSaturation ctx (setRemoveParser v s elemType))
     
     | "union", [s1; s2] ->
-        Some (runRecipe ctx (setUnionRecipe s1 s2 elemType))
+        Some (runSaturation ctx (setUnionParser s1 s2 elemType))
     
     | "intersect", [s1; s2] ->
-        Some (runRecipe ctx (setIntersectRecipe s1 s2 elemType))
+        Some (runSaturation ctx (setIntersectParser s1 s2 elemType))
     
     | "difference", [s1; s2] ->
-        Some (runRecipe ctx (setDifferenceRecipe s1 s2 elemType))
+        Some (runSaturation ctx (setDifferenceParser s1 s2 elemType))
     
     // Primitive operations - Alex witnesses directly
     | "empty", _

@@ -322,8 +322,8 @@
     <Compile Include="Baker\ShadowAST.fs" />
     <Compile Include="Baker\ModuleInit.fs" />
     <Compile Include="Baker\Pipeline.fs" />
-    <!-- Baker Ingredients - Combinator primitives and patterns (PRD-13a) -->
-    <Compile Include="Baker\Ingredients\RecipeBuilder.fs" />
+    <!-- Baker Ingredients - XParsec-centric combinator primitives and patterns (PRD-13a) -->
+    <Compile Include="Baker\Ingredients\SaturationCombinators.fs" />
     <Compile Include="Baker\Ingredients\Primitives.fs" />
     <Compile Include="Baker\Ingredients\Patterns.fs" />
     <!-- Baker Recipes - HOF decomposition templates (PRD-13a) -->

@@ -20,26 +20,31 @@ open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
 open FSharp.Native.Compiler.Baker.ShadowAST
-open FSharp.Native.Compiler.Baker.Ingredients.RecipeBuilder
+open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
 open FSharp.Native.Compiler.Baker.Ingredients.Primitives
 
 //=============================================================================
-// BRIDGE: Convert Recipe results to Decomposition.Result
+// BRIDGE: Convert SaturationParser results to Decomposition.Result
 //=============================================================================
 
-/// Convert a Decomposition.Context to a RecipeBuilder.RecipeContext
-let private toRecipeContext (ctx: Context) : RecipeContext =
-    { SourceRange = ctx.SourceRange
-      OriginalHOF = ctx.OriginalHOF
+/// Convert a Decomposition.Context to a SaturationState
+let private toSaturationState (ctx: Context) : SaturationState =
+    { EmittedNodes = []
+      Bindings = Map.empty
       ExpansionId = ctx.ExpansionId
+      OriginalHOF = ctx.OriginalHOF
+      SourceRange = ctx.SourceRange
       InspiringNode = ctx.InspiringNode
       Platform = ctx.Platform }
 
-/// Run a recipe and convert to Decomposition.Result
-let private runRecipe (ctx: Context) (recipe: Recipe<NodeId>) : Result =
-    let recipeCtx = toRecipeContext ctx
-    let resultNodeId, nodes = run recipeCtx recipe
-    mkResultNoShadow nodes resultNodeId []
+/// Run a saturation parser and convert to Decomposition.Result
+let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Result =
+    let initialState = toSaturationState ctx
+    match parser initialState with
+    | Matched resultNodeId, finalState ->
+        mkResultNoShadow (List.rev finalState.EmittedNodes) resultNodeId []
+    | NoMatch reason, _ ->
+        failwithf "Saturation failed: %s" reason
 
 //=============================================================================
 // PATTERN BINDING HELPERS
@@ -47,8 +52,8 @@ let private runRecipe (ctx: Context) (recipe: Recipe<NodeId>) : Result =
 
 /// Create let bindings for pattern-bound variables
 /// Returns the bound value node ID for use in the body
-let private bindPatternVar (name: string) (valueId: NodeId) (ty: NativeType) : Recipe<NodeId> =
-    recipe {
+let private bindPatternVar (name: string) (valueId: NodeId) (ty: NativeType) : SaturationParser<NodeId> =
+    saturation {
         let! bindingId = letBind name valueId ty
         return bindingId
     }
@@ -64,18 +69,18 @@ let rec private extractPatternBindings
     (scrutineeId: NodeId)
     (pattern: Pattern)
     (patternBindings: NodeId list)
-    : Recipe<NodeId list> =
+    : SaturationParser<NodeId list> =
 
     match pattern with
     | Pattern.Wildcard | Pattern.Var _ | Pattern.Null ->
         // No bindings to extract
-        recipe { return patternBindings }
+        saturation { return patternBindings }
 
     | Pattern.Union (caseName, tagIndex, payload, _unionType) ->
         // Extract payload bindings, reusing original PatternBinding NodeIds
         match payload with
         | Some (Pattern.Var (name, ty)) ->
-            recipe {
+            saturation {
                 let! payloadId = duEliminate scrutineeId caseName tagIndex ty
                 let originalBindingId = List.head patternBindings
                 let! bindingId = letBindAt originalBindingId name payloadId ty
@@ -83,14 +88,14 @@ let rec private extractPatternBindings
             }
         | Some (Pattern.Tuple [Pattern.Var (name, ty)]) ->
             // Single-element tuple - treat as direct value
-            recipe {
+            saturation {
                 let! payloadId = duEliminate scrutineeId caseName tagIndex ty
                 let originalBindingId = List.head patternBindings
                 let! bindingId = letBindAt originalBindingId name payloadId ty
                 return [bindingId]
             }
         | Some (Pattern.Tuple elements) ->
-            recipe {
+            saturation {
                 let elementTypes =
                     elements
                     |> List.map (fun elem ->
@@ -105,7 +110,7 @@ let rec private extractPatternBindings
                     |> List.mapi (fun index elem ->
                         match elem with
                         | Pattern.Var (name, ty) ->
-                            recipe {
+                            saturation {
                                 let! elementId = createWithChildren (SemanticKind.TupleGet (tuplePayloadId, index)) ty [tuplePayloadId]
                                 let originalBindingId = patternBindings.[index]
                                 let! bindingId = letBindAt originalBindingId name elementId ty
@@ -117,14 +122,14 @@ let rec private extractPatternBindings
                 return bindings
             }
         | None ->
-            recipe { return [] }
+            saturation { return [] }
         | Some other ->
             failwithf "extractPatternBindings: Unsupported union payload pattern: %A" other
 
     | Pattern.Tuple elements ->
         // Top-level tuple pattern: extract each element and recursively extract bindings
         let extractElement index elemPattern =
-            recipe {
+            saturation {
                 // Extract this element from the scrutinee tuple
                 let elemType = getPatternType elemPattern
                 let! elemId = createWithChildren (SemanticKind.TupleGet (scrutineeId, index)) elemType [scrutineeId]
@@ -133,7 +138,7 @@ let rec private extractPatternBindings
                 // Recursively extract bindings
                 return! extractPatternBindings elemId elemPattern elemBindings
             }
-        recipe {
+        saturation {
             let! allBindings =
                 elements
                 |> List.mapi extractElement
@@ -143,10 +148,10 @@ let rec private extractPatternBindings
 
     | Pattern.Const _ ->
         // Constant patterns don't create bindings
-        recipe { return patternBindings }
+        saturation { return patternBindings }
 
     | _ ->
-        recipe { return patternBindings }
+        saturation { return patternBindings }
 
 /// Compile a single pattern case to a conditional expression.
 /// Returns (guard expression, body, new binding NodeIds).
@@ -159,13 +164,13 @@ and private compilePattern
     (guard: NodeId option)
     (body: NodeId)
     (_resultType: NativeType)
-    : Recipe<NodeId * NodeId * NodeId list> =
+    : SaturationParser<NodeId * NodeId * NodeId list> =
 
     match pattern with
     | Pattern.Wildcard ->
         // Wildcard always matches - guard is "true", body is unchanged
         // No new bindings - use original PatternBindings
-        recipe {
+        saturation {
             let! trueId = boolLit true
             // Apply guard if present
             match guard with
@@ -176,7 +181,7 @@ and private compilePattern
     | Pattern.Var (_name, _ty) ->
         // Variable pattern: bind scrutinee to name, always matches
         // No new bindings - use original PatternBindings
-        recipe {
+        saturation {
             let! trueId = boolLit true
             // The pattern binding node should already exist, body uses it
             match guard with
@@ -187,7 +192,7 @@ and private compilePattern
     | Pattern.Const literal ->
         // Constant pattern: compare scrutinee to literal
         // No new bindings - use original PatternBindings
-        recipe {
+        saturation {
             let literalType = literalToType literal
             let! literalId = createAndEmit (SemanticKind.Literal literal) literalType
             let! compareId = compareEq scrutineeId literalId literalType
@@ -203,7 +208,7 @@ and private compilePattern
         // Union pattern: compare tag, then extract and bind payload
         // Use letBindAt to create Bindings AT THE SAME NodeIds as PatternBindings
         // This way VarRefs in the body continue to resolve correctly
-        recipe {
+        saturation {
             // Use DUGetTag for type-safe tag extraction
             let! tagId = duGetTag scrutineeId unionType
             let! tagLitId = int8Lit tagIndex
@@ -214,7 +219,7 @@ and private compilePattern
                 match payload with
                 | Some (Pattern.Var (name, ty)) ->
                     // Single variable binding - reuse the PatternBinding's NodeId
-                    recipe {
+                    saturation {
                         let! payloadId = duEliminate scrutineeId caseName tagIndex ty
                         // Use letBindAt to create Binding at the original PatternBinding's NodeId
                         let originalBindingId = List.head patternBindings
@@ -224,7 +229,7 @@ and private compilePattern
                 | Some (Pattern.Tuple [Pattern.Var (name, ty)]) ->
                     // Single-element tuple - F# represents `Case of T` as a 1-tuple
                     // Treat this as a direct value, not a tuple
-                    recipe {
+                    saturation {
                         let! payloadId = duEliminate scrutineeId caseName tagIndex ty
                         let originalBindingId = List.head patternBindings
                         let! bindingId = letBindAt originalBindingId name payloadId ty
@@ -233,7 +238,7 @@ and private compilePattern
                 | Some (Pattern.Tuple elements) ->
                     // Multi-field tuple payload like `SomeCase of int * float`:
                     // Each element reuses its corresponding PatternBinding NodeId
-                    recipe {
+                    saturation {
                         // Build the tuple type from element types
                         let elementTypes =
                             elements
@@ -252,7 +257,7 @@ and private compilePattern
                             |> List.mapi (fun index elem ->
                                 match elem with
                                 | Pattern.Var (name, ty) ->
-                                    recipe {
+                                    saturation {
                                         // TupleGet extracts element at index from the tuple
                                         let! elementId = createWithChildren (SemanticKind.TupleGet (tuplePayloadId, index)) ty [tuplePayloadId]
                                         // Reuse the original PatternBinding's NodeId
@@ -267,7 +272,7 @@ and private compilePattern
                     }
                 | None ->
                     // No payload - no bindings needed (nullary case like None)
-                    recipe { return [] }
+                    saturation { return [] }
                 | Some other ->
                     failwithf "Unsupported union payload pattern: %A" other
 
@@ -283,12 +288,12 @@ and private compilePattern
         // Tuple pattern: extract all elements and wrap in Sequential to ensure
         // TupleGets are emitted BEFORE any control flow from guard combination.
         // Structure: Sequential([TupleGet0; TupleGet1; ...; actualGuard])
-        recipe {
+        saturation {
             // Phase 1: Extract ALL tuple elements
             let! extractedElems =
                 elements
                 |> List.mapi (fun index elemPattern ->
-                    recipe {
+                    saturation {
                         let elemType = getPatternType elemPattern
                         let! elemId = createWithChildren (SemanticKind.TupleGet (scrutineeId, index)) elemType [scrutineeId]
                         return (elemId, elemPattern)
@@ -301,7 +306,7 @@ and private compilePattern
             let! results =
                 extractedElems
                 |> List.mapi (fun index (elemId, elemPattern) ->
-                    recipe {
+                    saturation {
                         let elemBindings = getElementPatternBindings index patternBindings elements
                         return! compilePattern elemId elemPattern elemBindings None body _resultType
                     })
@@ -309,16 +314,16 @@ and private compilePattern
 
             // Combine all guards with AND
             let guards = results |> List.map (fun (g, _, _) -> g)
-            let combineGuards accRecipe g =
-                recipe {
-                    let! acc = accRecipe
+            let combineGuards accParser g =
+                saturation {
+                    let! acc = accParser
                     return! andAlso acc g
                 }
             let! combinedGuard =
                 match guards with
                 | [] -> boolLit true
-                | [g] -> recipe { return g }
-                | g :: rest -> rest |> List.fold combineGuards (recipe { return g })
+                | [g] -> saturation { return g }
+                | g :: rest -> rest |> List.fold combineGuards (saturation { return g })
 
             // Wrap TupleGets + guard in Sequential to hoist TupleGets before control flow
             // Sequential visits children in order, so TupleGets emit before guard's scf.if
@@ -343,7 +348,7 @@ and private compilePattern
     | Pattern.Null ->
         // Null pattern: check if value is null (for reference types)
         // In native F#, this is rare - most types are non-nullable
-        recipe {
+        saturation {
             let! trueId = boolLit true  // Simplified - treat as always match for now
             match guard with
             | Some guardId -> return (guardId, body, patternBindings)
@@ -353,7 +358,7 @@ and private compilePattern
     | _ ->
         // Other patterns (Record, Array, Or, And, As, IsType, Exception)
         // Treat as always-match for now, expand as needed
-        recipe {
+        saturation {
             let! trueId = boolLit true
             match guard with
             | Some guardId -> return (guardId, body, patternBindings)
@@ -438,12 +443,12 @@ let private wrapWithPatternBindings
     (patternBindings: NodeId list)
     (bodyId: NodeId)
     (resultType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
     
     match patternBindings with
     | [] -> 
         // No bindings - just return the body
-        recipe { return bodyId }
+        saturation { return bodyId }
     | bindings ->
         // Wrap: Sequential([binding1; binding2; ...; body])
         // The PatternBinding nodes already exist; we create a Sequential that references them
@@ -468,13 +473,13 @@ let private wrapWithPatternBindings
 /// PatternBinding nodes exist in the graph but are orphaned if not referenced
 /// by the IfThenElse structure. Wrapping them in a Sequential with the body
 /// ensures they're walked during SSA traversal.
-let matchDecomposeRecipe
+let matchDecomposeParser
     (scrutineeId: NodeId)
     (cases: MatchCase list)
     (resultType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
-    let rec buildDecisionTree (remainingCases: MatchCase list) : Recipe<NodeId> =
+    let rec buildDecisionTree (remainingCases: MatchCase list) : SaturationParser<NodeId> =
         match remainingCases with
         | [] ->
             // No more cases - this shouldn't happen with exhaustive patterns
@@ -486,13 +491,13 @@ let matchDecomposeRecipe
             // Only extract bindings, don't create guard nodes (they'd be orphaned).
             // CRITICAL: Use extractPatternBindings, NOT compilePattern, to avoid
             // creating unused tag-check nodes that become orphans after fold-in.
-            recipe {
+            saturation {
                 let! newBindings = extractPatternBindings scrutineeId lastCase.Pattern lastCase.PatternBindings
                 return! wrapWithPatternBindings newBindings lastCase.Body resultType
             }
 
         | case :: rest ->
-            recipe {
+            saturation {
                 // Compile this case's pattern to a guard condition
                 // compilePattern returns (guard, body, newBindings)
                 // newBindings replaces case.PatternBindings with properly-sourced Binding nodes
@@ -524,5 +529,5 @@ let decomposeMatch
     (resultType: NativeType)
     : Result =
     
-    let recipe = matchDecomposeRecipe scrutineeId cases resultType
-    runRecipe ctx recipe
+    let parser = matchDecomposeParser scrutineeId cases resultType
+    runSaturation ctx parser

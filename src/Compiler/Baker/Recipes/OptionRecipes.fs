@@ -19,26 +19,31 @@ open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
 open FSharp.Native.Compiler.Baker.ShadowAST
-open FSharp.Native.Compiler.Baker.Ingredients.RecipeBuilder
+open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
 open FSharp.Native.Compiler.Baker.Ingredients.Primitives
 
 //=============================================================================
-// BRIDGE: Convert Recipe results to Decomposition.Result
+// BRIDGE: Convert SaturationParser results to Decomposition.Result
 //=============================================================================
 
-/// Convert a Decomposition.Context to a RecipeBuilder.RecipeContext
-let private toRecipeContext (ctx: Context) : RecipeContext =
-    { SourceRange = ctx.SourceRange
-      OriginalHOF = ctx.OriginalHOF
+/// Convert a Decomposition.Context to a SaturationState
+let private toSaturationState (ctx: Context) : SaturationState =
+    { EmittedNodes = []
+      Bindings = Map.empty
       ExpansionId = ctx.ExpansionId
+      OriginalHOF = ctx.OriginalHOF
+      SourceRange = ctx.SourceRange
       InspiringNode = ctx.InspiringNode
       Platform = ctx.Platform }
 
-/// Run a recipe and convert to Decomposition.Result
-let private runRecipe (ctx: Context) (recipe: Recipe<NodeId>) : Result =
-    let recipeCtx = toRecipeContext ctx
-    let resultNodeId, nodes = run recipeCtx recipe
-    mkResultNoShadow nodes resultNodeId []
+/// Run a saturation parser and convert to Decomposition.Result
+let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Result =
+    let initialState = toSaturationState ctx
+    match parser initialState with
+    | Matched resultNodeId, finalState ->
+        mkResultNoShadow (List.rev finalState.EmittedNodes) resultNodeId []
+    | NoMatch reason, _ ->
+        failwithf "Saturation failed: %s" reason
 
 //=============================================================================
 // OPTION.MAP: map f opt → if isSome then Some (f (get opt)) else None
@@ -49,22 +54,22 @@ let private optionMapRecipe
     (optionNodeId: NodeId)
     (inputType: NativeType)
     (outputType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let outputOptionType = NativeType.TApp (Parameterized.optionTyCon, [outputType])
-    
-    recipe {
+
+    saturation {
         // Check if option has value
         let! isSomeResult = isSome optionNodeId inputType
-        
+
         // Then branch: Some (f (get opt))
         let! value = optionGet optionNodeId inputType
         let! mapped = app1 mapperNodeId value outputType
         let! someResult = some mapped outputType
-        
+
         // Else branch: None
         let! noneResult = none outputType
-        
+
         // Conditional: if isSome then Some(f(get)) else None
         return! ifThenElse isSomeResult someResult noneResult outputOptionType
     }
@@ -78,21 +83,21 @@ let private optionBindRecipe
     (optionNodeId: NodeId)
     (inputType: NativeType)
     (outputType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let outputOptionType = NativeType.TApp (Parameterized.optionTyCon, [outputType])
-    
-    recipe {
+
+    saturation {
         // Check if option has value
         let! isSomeResult = isSome optionNodeId inputType
-        
+
         // Then branch: f (get opt) - binder returns Option<'U>
         let! value = optionGet optionNodeId inputType
         let! boundResult = app1 binderNodeId value outputOptionType
-        
+
         // Else branch: None
         let! noneResult = none outputType
-        
+
         // Conditional: if isSome then f(get) else None
         return! ifThenElse isSomeResult boundResult noneResult outputOptionType
     }
@@ -105,28 +110,28 @@ let private optionFilterRecipe
     (predicateNodeId: NodeId)
     (optionNodeId: NodeId)
     (valueType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let optionType = NativeType.TApp (Parameterized.optionTyCon, [valueType])
-    
-    recipe {
+
+    saturation {
         // Check if option has value
         let! isSomeResult = isSome optionNodeId valueType
-        
+
         // Get the value
         let! value = optionGet optionNodeId valueType
-        
+
         // Apply predicate
         let! predicateResult = app1 predicateNodeId value Types.boolType
-        
+
         // None for else branches
         let! noneResult = none valueType
-        
+
         // Inner if: if p(value) then opt else None
         // We need a varRef to the original option
         let! optRef = varRef "opt_filter" (Some optionNodeId) optionType
         let! innerIf = ifThenElse predicateResult optRef noneResult optionType
-        
+
         // Outer if: if isSome then innerIf else None
         let! noneOuter = none valueType
         return! ifThenElse isSomeResult innerIf noneOuter optionType
@@ -144,19 +149,19 @@ let tryDecompose
     (inputType: NativeType)
     (outputType: NativeType option)
     : Result option =
-    
+
     match operation, args with
     | "map", [mapper; opt] ->
         let outType = outputType |> Option.defaultValue inputType
-        Some (runRecipe ctx (optionMapRecipe mapper opt inputType outType))
-    
+        Some (runSaturation ctx (optionMapRecipe mapper opt inputType outType))
+
     | "bind", [binder; opt] ->
         let outType = outputType |> Option.defaultValue inputType
-        Some (runRecipe ctx (optionBindRecipe binder opt inputType outType))
-    
+        Some (runSaturation ctx (optionBindRecipe binder opt inputType outType))
+
     | "filter", [predicate; opt] ->
-        Some (runRecipe ctx (optionFilterRecipe predicate opt inputType))
-    
+        Some (runSaturation ctx (optionFilterRecipe predicate opt inputType))
+
     // Primitive operations - Alex witnesses directly
     | "isSome", _
     | "isNone", _
@@ -164,5 +169,5 @@ let tryDecompose
     | "defaultValue", _
     | "some", _
     | "none", _ -> None
-    
+
     | _ -> None

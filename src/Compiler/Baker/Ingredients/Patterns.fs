@@ -1,7 +1,7 @@
 // Copyright (c) 2025-2026 Houston Haynes / SpeakEZ Technologies
 // SPDX-License-Identifier: MIT
 
-/// Baker Patterns - Recursive structure generators.
+/// Baker Patterns - Recursive structure generators using XParsec-style combinators.
 ///
 /// LAYER 2: "Cooking Techniques"
 ///
@@ -20,12 +20,13 @@
 /// Patterns generate HOW (the recursive structure).
 ///
 /// See: docs/fidelity/Baker_Saturation_Architecture.md
+/// See: Serena memory "baker_saturation_architecture"
 module FSharp.Native.Compiler.Baker.Ingredients.Patterns
 
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.Baker.Ingredients.RecipeBuilder
+open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
 open FSharp.Native.Compiler.Baker.Ingredients.Primitives
 
 //=============================================================================
@@ -41,36 +42,21 @@ open FSharp.Native.Compiler.Baker.Ingredients.Primitives
 ///     else combine (List.head xs) (loop (List.tail xs))
 /// in loop inputList
 /// ```
-///
-/// Parameters:
-/// - baseCase: Recipe that produces the value for empty list
-/// - combine: Function taking (headId, recurseResultId) -> Recipe<NodeId>
-/// - inputListId: The list to fold over
-/// - elemType: Element type of the input list
-/// - resultType: Type of the result
 let foldRight
-    (baseCase: Recipe<NodeId>)
-    (combine: NodeId -> NodeId -> Recipe<NodeId>)
+    (baseCase: SaturationParser<NodeId>)
+    (combine: NodeId -> NodeId -> SaturationParser<NodeId>)
     (inputListId: NodeId)
     (elemType: NativeType)
     (resultType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
     
     let listType = NativeType.TList elemType
     let loopFuncType = NativeType.TFun (listType, resultType)
     
-    recipe {
-        // We need to build:
-        // let rec loop xs = if isEmpty xs then base else combine (head xs) (loop (tail xs))
-        // in loop inputList
-        
-        // First, create the recursive function
-        // The body references 'loop' for the recursive call, but we don't have its ID yet.
-        // We'll use a placeholder approach: create the binding first, then the body.
-        
+    saturation {
         // Create parameter for the lambda: xs
         let! xsParamId = patternBinding "xs" listType
-        do! bindVariable "xs" xsParamId listType
+        do! withBinding "xs" xsParamId listType
         
         // Create the base case
         let! baseCaseId = baseCase
@@ -78,12 +64,11 @@ let foldRight
         // Create the guard: List.isEmpty xs
         let! isEmptyId = isEmpty xsParamId elemType
         
-        // Create head and tail: List.head xs, List.tail xs
+        // Create head and tail
         let! headId = head xsParamId elemType
         let! tailId = tail xsParamId elemType
         
-        // Create recursive call reference (placeholder - will be updated)
-        // For now, we create a varRef with None, then update it after binding
+        // Create recursive call reference (will be resolved by name)
         let! loopRefId = varRef "loop" None loopFuncType
         
         // Apply loop to tail: loop (tail xs)
@@ -96,27 +81,18 @@ let foldRight
         let! ifNodeId = ifThenElse isEmptyId baseCaseId combineResultId resultType
         
         // Create the lambda: fun xs -> if...
-        let lambdaKind = SemanticKind.Lambda (
-            [("xs", listType, xsParamId)],
-            ifNodeId,
-            [],
-            Some "loop",
-            LambdaContext.RegularClosure
-        )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
+        let! state = getState
+        let lambdaKind = SemanticKind.Lambda ([("xs", listType, xsParamId)], ifNodeId, [], Some "loop", LambdaContext.RegularClosure)
+        let lambdaNode = mkNode state lambdaKind loopFuncType [ifNodeId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
         
         // Create the recursive binding: let rec loop = fun xs -> ...
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
         
-        // Update the recursive reference to point to the binding
-        // (In a full implementation, we'd need to patch the node. For now,
-        // the varRef with name "loop" will be resolved by the graph structure)
-        
         // Create the initial call: loop inputList
         let! loopCallRefId = varRef "loop" (Some bindingId) loopFuncType
-        let! initialCallId = app1 loopCallRefId inputListId resultType
-        
-        return initialCallId
+        return! app1 loopCallRefId inputListId resultType
     }
 
 //=============================================================================
@@ -140,46 +116,47 @@ let foldRight
 /// - elemType: Element type of the input list
 /// - accType: Type of the accumulator (and result)
 let foldLeft
-    (initialAcc: Recipe<NodeId>)
-    (combine: NodeId -> NodeId -> Recipe<NodeId>)
+    (initialAcc: SaturationParser<NodeId>)
+    (combine: NodeId -> NodeId -> SaturationParser<NodeId>)
     (inputListId: NodeId)
     (elemType: NativeType)
     (accType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let listType = NativeType.TList elemType
     let loopFuncType = NativeType.TFun (accType, NativeType.TFun (listType, accType))
-    
-    recipe {
+
+    saturation {
         // Create parameters: acc, xs
         let! accParamId = patternBinding "acc" accType
-        do! bindVariable "acc" accParamId accType
-        
+        do! withBinding "acc" accParamId accType
+
         let! xsParamId = patternBinding "xs" listType
-        do! bindVariable "xs" xsParamId listType
-        
+        do! withBinding "xs" xsParamId listType
+
         // Base case: return acc
         let! accRefId = varRef "acc" (Some accParamId) accType
-        
+
         // Guard: List.isEmpty xs
         let! isEmptyId = isEmpty xsParamId elemType
-        
+
         // Get head and tail
         let! headId = head xsParamId elemType
         let! tailId = tail xsParamId elemType
-        
+
         // Combine: combine acc (head xs)
         let! accRefForCombine = varRef "acc" (Some accParamId) accType
         let! newAccId = combine accRefForCombine headId
-        
+
         // Recursive call: loop newAcc (tail xs)
         let! loopRefId = varRef "loop" None loopFuncType
         let! recurseCallId = app loopRefId [newAccId; tailId] accType
-        
+
         // If-then-else: if isEmpty then acc else loop(combine, tail)
         let! ifNodeId = ifThenElse isEmptyId accRefId recurseCallId accType
-        
+
         // Lambda: fun acc xs -> if...
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("acc", accType, accParamId); ("xs", listType, xsParamId)],
             ifNodeId,
@@ -187,19 +164,19 @@ let foldLeft
             Some "loop",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
-        
+        let lambdaNode = mkNode state lambdaKind loopFuncType [ifNodeId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
+
         // Recursive binding
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
-        
+
         // Initial accumulator
         let! initAccId = initialAcc
-        
+
         // Initial call: loop initAcc inputList
         let! loopCallRefId = varRef "loop" (Some bindingId) loopFuncType
-        let! initialCallId = app loopCallRefId [initAccId; inputListId] accType
-        
-        return initialCallId
+        return! app loopCallRefId [initAccId; inputListId] accType
     }
 
 //=============================================================================
@@ -224,57 +201,58 @@ let foldLeft
 ///
 /// Used for forall2, exists2, map2, etc.
 let foldLeft2
-    (combine: NodeId -> NodeId -> Recipe<NodeId>)
+    (combine: NodeId -> NodeId -> SaturationParser<NodeId>)
     (list1Id: NodeId)
     (list2Id: NodeId)
     (elemType1: NativeType)
     (elemType2: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let listType1 = NativeType.TList elemType1
     let listType2 = NativeType.TList elemType2
     let loopFuncType = NativeType.TFun (listType1, NativeType.TFun (listType2, Types.boolType))
-    
-    recipe {
+
+    saturation {
         // Parameters: xs, ys
         let! xsParamId = patternBinding "xs" listType1
-        do! bindVariable "xs" xsParamId listType1
-        
+        do! withBinding "xs" xsParamId listType1
+
         let! ysParamId = patternBinding "ys" listType2
-        do! bindVariable "ys" ysParamId listType2
-        
+        do! withBinding "ys" ysParamId listType2
+
         // Guards
         let! isEmptyXsId = isEmpty xsParamId elemType1
         let! isEmptyYsId = isEmpty ysParamId elemType2
-        
+
         // Base case when xs is empty: return isEmpty ys (both must be empty)
         let! isEmptyYsForBase = isEmpty ysParamId elemType2
-        
+
         // Get heads and tails
         let! headXsId = head xsParamId elemType1
         let! headYsId = head ysParamId elemType2
         let! tailXsId = tail xsParamId elemType1
         let! tailYsId = tail ysParamId elemType2
-        
+
         // Combine: predicate (head xs) (head ys)
         let! combineResultId = combine headXsId headYsId
-        
+
         // Recursive call: loop (tail xs) (tail ys)
         let! loopRefId = varRef "loop" None loopFuncType
         let! recurseCallId = app loopRefId [tailXsId; tailYsId] Types.boolType
-        
+
         // Innermost if: if combine then recurse else false
         let! falseForInner = boolLit false
         let! innerIfId = ifThenElse combineResultId recurseCallId falseForInner Types.boolType
-        
+
         // Middle if: if isEmpty ys then false else innerIf
         let! falseForMiddle = boolLit false
         let! middleIfId = ifThenElse isEmptyYsId falseForMiddle innerIfId Types.boolType
-        
+
         // Outer if: if isEmpty xs then (isEmpty ys) else middleIf
         let! outerIfId = ifThenElse isEmptyXsId isEmptyYsForBase middleIfId Types.boolType
-        
+
         // Lambda
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("xs", listType1, xsParamId); ("ys", listType2, ysParamId)],
             outerIfId,
@@ -282,16 +260,16 @@ let foldLeft2
             Some "loop",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [outerIfId]
-        
+        let lambdaNode = mkNode state lambdaKind loopFuncType [outerIfId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
+
         // Binding
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
-        
+
         // Initial call
         let! loopCallRefId = varRef "loop" (Some bindingId) loopFuncType
-        let! initialCallId = app loopCallRefId [list1Id; list2Id] Types.boolType
-        
-        return initialCallId
+        return! app loopCallRefId [list1Id; list2Id] Types.boolType
     }
 
 //=============================================================================
@@ -311,46 +289,47 @@ let foldLeft2
 let boolFold
     (baseValue: bool)
     (shortCircuitValue: bool)
-    (predicate: NodeId -> Recipe<NodeId>)
+    (predicate: NodeId -> SaturationParser<NodeId>)
     (inputListId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let listType = NativeType.TList elemType
     let loopFuncType = NativeType.TFun (listType, Types.boolType)
-    
-    recipe {
+
+    saturation {
         // Parameter: xs
         let! xsParamId = patternBinding "xs" listType
-        do! bindVariable "xs" xsParamId listType
-        
+        do! withBinding "xs" xsParamId listType
+
         // Base case
         let! baseId = boolLit baseValue
-        
+
         // Guard: isEmpty
         let! isEmptyId = isEmpty xsParamId elemType
-        
+
         // Head and tail
         let! headId = head xsParamId elemType
         let! tailId = tail xsParamId elemType
-        
+
         // Apply predicate
         let! predResultId = predicate headId
-        
+
         // Short circuit value
         let! shortCircuitId = boolLit shortCircuitValue
-        
+
         // Recursive call
         let! loopRefId = varRef "loop" None loopFuncType
         let! recurseCallId = app1 loopRefId tailId Types.boolType
-        
+
         // Inner if: if pred then shortCircuit else recurse
         let! innerIfId = ifThenElse predResultId shortCircuitId recurseCallId Types.boolType
-        
+
         // Outer if: if isEmpty then base else innerIf
         let! outerIfId = ifThenElse isEmptyId baseId innerIfId Types.boolType
-        
+
         // Lambda
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("xs", listType, xsParamId)],
             outerIfId,
@@ -358,16 +337,16 @@ let boolFold
             Some "loop",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [outerIfId]
-        
+        let lambdaNode = mkNode state lambdaKind loopFuncType [outerIfId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
+
         // Binding
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
-        
+
         // Initial call
         let! loopCallRefId = varRef "loop" (Some bindingId) loopFuncType
-        let! initialCallId = app1 loopCallRefId inputListId Types.boolType
-        
-        return initialCallId
+        return! app1 loopCallRefId inputListId Types.boolType
     }
 
 
@@ -391,73 +370,48 @@ let inOrderTraversalMap
     (inputTreeId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let mapType = NativeType.TMap (keyType, valueType)
     let pairType = NativeType.TTuple ([keyType; valueType], false)
     let listType = NativeType.TList pairType
     let loopFuncType = NativeType.TFun (mapType, listType)
-    
-    recipe {
+
+    saturation {
         // Parameter: tree
         let! treeParamId = patternBinding "tree" mapType
-        do! bindVariable "tree" treeParamId mapType
-        
+        do! withBinding "tree" treeParamId mapType
+
         // Base case: []
         let! emptyListId = emptyList pairType
-        
+
         // Guard: isEmpty tree
         let! isEmptyId = mapIsEmpty treeParamId keyType valueType
-        
+
         // Get key, value, left, right
         let! keyId = mapKey treeParamId keyType valueType
         let! valueId = mapValue treeParamId keyType valueType
         let! leftId = mapLeft treeParamId keyType valueType
         let! rightId = mapRight treeParamId keyType valueType
-        
+
         // Create (key, value) tuple
+        let! state = getState
         let tupleKind = SemanticKind.TupleExpr [keyId; valueId]
-        let! ctx = getContext
-        let tupleNode = mkNode ctx tupleKind pairType
-        do! emitNode tupleNode
+        let tupleNode = mkNode state tupleKind pairType []
+        do! emit tupleNode
         let tupleId = tupleNode.Id
-        
+
         // Recursive calls
         let! loopRefLeft = varRef "inOrder" None loopFuncType
         let! leftResultId = app1 loopRefLeft leftId listType
-        
+
         let! loopRefRight = varRef "inOrder" None loopFuncType
         let! rightResultId = app1 loopRefRight rightId listType
-        
+
         // Create singleton list: [(key, value)]
         let! singletonId = cons tupleId emptyListId pairType
-        
-        // Append: left @ singleton
-        // We need to implement append inline since we're building PSG
-        // Actually, let's use the simpler approach: fold over left, then cons singleton, then append right
-        // For simplicity, just cons each element: left @ [tuple] @ right
-        // This produces: inOrder(left) @ [(k,v)] @ inOrder(right)
-        
-        // For now, use nested cons pattern: result = cons tuple (right result appended to left result)
-        // Actually the cleanest is: fold_right cons leftResult (singleton @ rightResult)
-        // Let's simplify: build the structure directly
-        
-        // Simpler approach: use fold-based append pattern
-        // result = fold_right cons (cons tuple rightResult) leftResult
-        // But this requires another nested fold...
-        
-        // Even simpler: just return cons tuple (append left right) - not quite right for in-order
-        
-        // Correct approach: fold cons from right: 
-        // append leftResult (cons tuple rightResult)
-        // where append xs ys = fold_right cons ys xs
-        
-        // For MVP: concat in the inefficient way using another recursive structure
-        // Actually let's use: result = leftResult @ [tuple] @ rightResult
-        // where @ is implemented via fold
-        
-        // Temporary simplification: use concatenation intrinsic
-        // This defers the problem but gets the structure correct
+
+        // Use concatenation intrinsic for append operations
         let appendInfo = {
             Module = IntrinsicModule.List
             Operation = "append"
@@ -465,19 +419,30 @@ let inOrderTraversalMap
             FullName = "List.append"
         }
         let appendFuncType = NativeType.TFun (listType, NativeType.TFun (listType, listType))
-        let! appendFunc1 = createAndEmit (SemanticKind.Intrinsic appendInfo) appendFuncType
-        
+
+        // First append intrinsic node
+        let! state1 = getState
+        let appendNode1 = mkNode state1 (SemanticKind.Intrinsic appendInfo) appendFuncType []
+        do! emit appendNode1
+        let appendFunc1 = appendNode1.Id
+
         // leftResult @ singleton
         let! midResultId = app2 appendFunc1 leftResultId singletonId listType
-        
+
+        // Second append intrinsic node
+        let! state2 = getState
+        let appendNode2 = mkNode state2 (SemanticKind.Intrinsic appendInfo) appendFuncType []
+        do! emit appendNode2
+        let appendFunc2 = appendNode2.Id
+
         // midResult @ rightResult
-        let! appendFunc2 = createAndEmit (SemanticKind.Intrinsic appendInfo) appendFuncType
         let! fullResultId = app2 appendFunc2 midResultId rightResultId listType
-        
+
         // If-then-else
         let! ifNodeId = ifThenElse isEmptyId emptyListId fullResultId listType
-        
+
         // Lambda
+        let! state3 = getState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             ifNodeId,
@@ -485,16 +450,16 @@ let inOrderTraversalMap
             Some "inOrder",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
-        
+        let lambdaNode = mkNode state3 lambdaKind loopFuncType [ifNodeId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
+
         // Binding
         let! bindingId = letRecBind "inOrder" lambdaId loopFuncType
-        
+
         // Initial call
         let! loopCallRefId = varRef "inOrder" (Some bindingId) loopFuncType
-        let! initialCallId = app1 loopCallRefId inputTreeId listType
-        
-        return initialCallId
+        return! app1 loopCallRefId inputTreeId listType
     }
 
 /// Generate a binary search on an AVL tree.
@@ -515,56 +480,57 @@ let binarySearchMap
     (inputTreeId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let mapType = NativeType.TMap (keyType, valueType)
     let optionType = NativeType.TApp (Parameterized.optionTyCon, [valueType])
     let loopFuncType = NativeType.TFun (mapType, optionType)
-    
-    recipe {
+
+    saturation {
         // Parameter: tree
         let! treeParamId = patternBinding "tree" mapType
-        do! bindVariable "tree" treeParamId mapType
-        
+        do! withBinding "tree" treeParamId mapType
+
         // Base case: None
         let! noneId = none valueType
-        
+
         // Guard: isEmpty tree
         let! isEmptyId = mapIsEmpty treeParamId keyType valueType
-        
+
         // Get key, value, left, right
         let! nodeKeyId = mapKey treeParamId keyType valueType
         let! nodeValueId = mapValue treeParamId keyType valueType
         let! leftId = mapLeft treeParamId keyType valueType
         let! rightId = mapRight treeParamId keyType valueType
-        
+
         // Compare: compare searchKey nodeKey
         let! cmpResultId = compareTo searchKeyId nodeKeyId keyType
-        
+
         // Check comparison results
         let! isLessId = compareIsLess cmpResultId
         let! isGreaterId = compareIsGreater cmpResultId
-        
+
         // Found case: Some (value tree)
         let! foundId = some nodeValueId valueType
-        
+
         // Recursive calls
         let! loopRefLeft = varRef "search" None loopFuncType
         let! leftSearchId = app1 loopRefLeft leftId optionType
-        
+
         let! loopRefRight = varRef "search" None loopFuncType
         let! rightSearchId = app1 loopRefRight rightId optionType
-        
+
         // Innermost if: if cmp > 0 then search right else found
         let! innerIfId = ifThenElse isGreaterId rightSearchId foundId optionType
-        
+
         // Middle if: if cmp < 0 then search left else innerIf
         let! middleIfId = ifThenElse isLessId leftSearchId innerIfId optionType
-        
+
         // Outer if: if isEmpty then None else middleIf
         let! outerIfId = ifThenElse isEmptyId noneId middleIfId optionType
-        
+
         // Lambda
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             outerIfId,
@@ -572,16 +538,16 @@ let binarySearchMap
             Some "search",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [outerIfId]
-        
+        let lambdaNode = mkNode state lambdaKind loopFuncType [outerIfId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
+
         // Binding
         let! bindingId = letRecBind "search" lambdaId loopFuncType
-        
+
         // Initial call
         let! loopCallRefId = varRef "search" (Some bindingId) loopFuncType
-        let! initialCallId = app1 loopCallRefId inputTreeId optionType
-        
-        return initialCallId
+        return! app1 loopCallRefId inputTreeId optionType
     }
 
 /// Generate AVL tree insertion with balancing.
@@ -603,65 +569,66 @@ let avlInsertMap
     (inputTreeId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let mapType = NativeType.TMap (keyType, valueType)
     let loopFuncType = NativeType.TFun (mapType, mapType)
-    
-    recipe {
+
+    saturation {
         // Parameter: tree
         let! treeParamId = patternBinding "tree" mapType
-        do! bindVariable "tree" treeParamId mapType
-        
+        do! withBinding "tree" treeParamId mapType
+
         // Empty maps for leaf construction
         let! emptyMapId = emptyMap keyType valueType
-        
+
         // Base case: create new leaf node
         let! leafNodeId = mapNode newKeyId newValueId emptyMapId emptyMapId keyType valueType
-        
+
         // Guard: isEmpty tree
         let! isEmptyId = mapIsEmpty treeParamId keyType valueType
-        
+
         // Get existing key, value, left, right
         let! nodeKeyId = mapKey treeParamId keyType valueType
         let! nodeValueId = mapValue treeParamId keyType valueType
         let! leftId = mapLeft treeParamId keyType valueType
         let! rightId = mapRight treeParamId keyType valueType
-        
+
         // Compare: compare newKey nodeKey
         let! cmpResultId = compareTo newKeyId nodeKeyId keyType
-        
+
         // Check comparison results
         let! isLessId = compareIsLess cmpResultId
         let! isGreaterId = compareIsGreater cmpResultId
-        
+
         // Recursive calls
         let! loopRefLeft = varRef "insert" None loopFuncType
         let! newLeftId = app1 loopRefLeft leftId mapType
-        
+
         let! loopRefRight = varRef "insert" None loopFuncType
         let! newRightId = app1 loopRefRight rightId mapType
-        
+
         // Equal case: replace value at this node (same key)
         let! replaceNodeId = mapNode nodeKeyId newValueId leftId rightId keyType valueType
-        
+
         // Greater case: insert into right subtree, keep left
         // Note: For proper AVL we'd balance here, but this is simplified
         let! insertRightNodeId = mapNode nodeKeyId nodeValueId leftId newRightId keyType valueType
-        
+
         // Less case: insert into left subtree, keep right
         let! insertLeftNodeId = mapNode nodeKeyId nodeValueId newLeftId rightId keyType valueType
-        
+
         // Innermost if: if cmp > 0 then insertRight else replaceNode
         let! innerIfId = ifThenElse isGreaterId insertRightNodeId replaceNodeId mapType
-        
+
         // Middle if: if cmp < 0 then insertLeft else innerIf
         let! middleIfId = ifThenElse isLessId insertLeftNodeId innerIfId mapType
-        
+
         // Outer if: if isEmpty then leafNode else middleIf
         let! outerIfId = ifThenElse isEmptyId leafNodeId middleIfId mapType
-        
+
         // Lambda
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             outerIfId,
@@ -669,16 +636,16 @@ let avlInsertMap
             Some "insert",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [outerIfId]
-        
+        let lambdaNode = mkNode state lambdaKind loopFuncType [outerIfId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
+
         // Binding
         let! bindingId = letRecBind "insert" lambdaId loopFuncType
-        
+
         // Initial call
         let! loopCallRefId = varRef "insert" (Some bindingId) loopFuncType
-        let! initialCallId = app1 loopCallRefId inputTreeId mapType
-        
-        return initialCallId
+        return! app1 loopCallRefId inputTreeId mapType
     }
 
 /// Generate a tree forall traversal.
@@ -695,46 +662,47 @@ let treeForallMap
     (inputTreeId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let mapType = NativeType.TMap (keyType, valueType)
     let loopFuncType = NativeType.TFun (mapType, Types.boolType)
-    
-    recipe {
+
+    saturation {
         // Parameter: tree
         let! treeParamId = patternBinding "tree" mapType
-        do! bindVariable "tree" treeParamId mapType
-        
+        do! withBinding "tree" treeParamId mapType
+
         // Base case: true
         let! trueId = boolLit true
-        
+
         // Guard: isEmpty tree
         let! isEmptyId = mapIsEmpty treeParamId keyType valueType
-        
+
         // Get key, value, left, right
         let! nodeKeyId = mapKey treeParamId keyType valueType
         let! nodeValueId = mapValue treeParamId keyType valueType
         let! leftId = mapLeft treeParamId keyType valueType
         let! rightId = mapRight treeParamId keyType valueType
-        
+
         // Apply predicate to (key, value)
         let! predResultId = app2 predicateId nodeKeyId nodeValueId Types.boolType
-        
+
         // Recursive calls
         let! loopRefLeft = varRef "forall" None loopFuncType
         let! leftResultId = app1 loopRefLeft leftId Types.boolType
-        
+
         let! loopRefRight = varRef "forall" None loopFuncType
         let! rightResultId = app1 loopRefRight rightId Types.boolType
-        
+
         // Combine: predResult && leftResult && rightResult
         let! andLeftId = andAlso predResultId leftResultId
         let! andAllId = andAlso andLeftId rightResultId
-        
+
         // If-then-else
         let! ifNodeId = ifThenElse isEmptyId trueId andAllId Types.boolType
-        
+
         // Lambda
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             ifNodeId,
@@ -742,16 +710,16 @@ let treeForallMap
             Some "forall",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [ifNodeId]
-        
+        let lambdaNode = mkNode state lambdaKind loopFuncType [ifNodeId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
+
         // Binding
         let! bindingId = letRecBind "forall" lambdaId loopFuncType
-        
+
         // Initial call
         let! loopCallRefId = varRef "forall" (Some bindingId) loopFuncType
-        let! initialCallId = app1 loopCallRefId inputTreeId Types.boolType
-        
-        return initialCallId
+        return! app1 loopCallRefId inputTreeId Types.boolType
     }
 
 //=============================================================================
@@ -775,54 +743,55 @@ let binarySearchSet
     (searchValueId: NodeId)
     (inputTreeId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let setType = NativeType.TSet elemType
     let loopFuncType = NativeType.TFun (setType, Types.boolType)
-    
-    recipe {
+
+    saturation {
         // Parameter: tree
         let! treeParamId = patternBinding "tree" setType
-        do! bindVariable "tree" treeParamId setType
-        
+        do! withBinding "tree" treeParamId setType
+
         // Base case: false
         let! falseId = boolLit false
-        
+
         // Guard: isEmpty tree
         let! isEmptyId = setIsEmpty treeParamId elemType
-        
+
         // Get value, left, right
         let! nodeValueId = setValue treeParamId elemType
         let! leftId = setLeft treeParamId elemType
         let! rightId = setRight treeParamId elemType
-        
+
         // Compare: compare searchValue nodeValue
         let! cmpResultId = compareTo searchValueId nodeValueId elemType
-        
+
         // Check comparison results
         let! isLessId = compareIsLess cmpResultId
         let! isGreaterId = compareIsGreater cmpResultId
-        
+
         // Found case: true
         let! foundId = boolLit true
-        
+
         // Recursive calls
         let! loopRefLeft = varRef "contains" None loopFuncType
         let! leftSearchId = app1 loopRefLeft leftId Types.boolType
-        
+
         let! loopRefRight = varRef "contains" None loopFuncType
         let! rightSearchId = app1 loopRefRight rightId Types.boolType
-        
+
         // Innermost if: if cmp > 0 then search right else true
         let! innerIfId = ifThenElse isGreaterId rightSearchId foundId Types.boolType
-        
+
         // Middle if: if cmp < 0 then search left else innerIf
         let! middleIfId = ifThenElse isLessId leftSearchId innerIfId Types.boolType
-        
+
         // Outer if: if isEmpty then false else middleIf
         let! outerIfId = ifThenElse isEmptyId falseId middleIfId Types.boolType
-        
+
         // Lambda
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", setType, treeParamId)],
             outerIfId,
@@ -830,16 +799,16 @@ let binarySearchSet
             Some "contains",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [outerIfId]
-        
+        let lambdaNode = mkNode state lambdaKind loopFuncType [outerIfId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
+
         // Binding
         let! bindingId = letRecBind "contains" lambdaId loopFuncType
-        
+
         // Initial call
         let! loopCallRefId = varRef "contains" (Some bindingId) loopFuncType
-        let! initialCallId = app1 loopCallRefId inputTreeId Types.boolType
-        
-        return initialCallId
+        return! app1 loopCallRefId inputTreeId Types.boolType
     }
 
 /// Generate AVL Set insertion.
@@ -847,63 +816,64 @@ let avlInsertSet
     (newValueId: NodeId)
     (inputTreeId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let setType = NativeType.TSet elemType
     let loopFuncType = NativeType.TFun (setType, setType)
-    
-    recipe {
+
+    saturation {
         // Parameter: tree
         let! treeParamId = patternBinding "tree" setType
-        do! bindVariable "tree" treeParamId setType
-        
+        do! withBinding "tree" treeParamId setType
+
         // Empty sets for leaf construction
         let! emptySetId = emptySet elemType
-        
+
         // Base case: create new leaf node
         let! leafNodeId = setNode newValueId emptySetId emptySetId elemType
-        
+
         // Guard: isEmpty tree
         let! isEmptyId = setIsEmpty treeParamId elemType
-        
+
         // Get existing value, left, right
         let! nodeValueId = setValue treeParamId elemType
         let! leftId = setLeft treeParamId elemType
         let! rightId = setRight treeParamId elemType
-        
+
         // Compare: compare newValue nodeValue
         let! cmpResultId = compareTo newValueId nodeValueId elemType
-        
+
         // Check comparison results
         let! isLessId = compareIsLess cmpResultId
         let! isGreaterId = compareIsGreater cmpResultId
-        
+
         // Recursive calls
         let! loopRefLeft = varRef "insert" None loopFuncType
         let! newLeftId = app1 loopRefLeft leftId setType
-        
+
         let! loopRefRight = varRef "insert" None loopFuncType
         let! newRightId = app1 loopRefRight rightId setType
-        
+
         // Equal case: value already exists, return unchanged tree
         let! treeRefId = varRef "tree" (Some treeParamId) setType
-        
+
         // Greater case: insert into right subtree, keep left
         let! insertRightNodeId = setNode nodeValueId leftId newRightId elemType
-        
+
         // Less case: insert into left subtree, keep right
         let! insertLeftNodeId = setNode nodeValueId newLeftId rightId elemType
-        
+
         // Innermost if: if cmp > 0 then insertRight else treeRef (unchanged)
         let! innerIfId = ifThenElse isGreaterId insertRightNodeId treeRefId setType
-        
+
         // Middle if: if cmp < 0 then insertLeft else innerIf
         let! middleIfId = ifThenElse isLessId insertLeftNodeId innerIfId setType
-        
+
         // Outer if: if isEmpty then leafNode else middleIf
         let! outerIfId = ifThenElse isEmptyId leafNodeId middleIfId setType
-        
+
         // Lambda
+        let! state = getState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", setType, treeParamId)],
             outerIfId,
@@ -911,16 +881,16 @@ let avlInsertSet
             Some "insert",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind loopFuncType [outerIfId]
-        
+        let lambdaNode = mkNode state lambdaKind loopFuncType [outerIfId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
+
         // Binding
         let! bindingId = letRecBind "insert" lambdaId loopFuncType
-        
+
         // Initial call
         let! loopCallRefId = varRef "insert" (Some bindingId) loopFuncType
-        let! initialCallId = app1 loopCallRefId inputTreeId setType
-
-        return initialCallId
+        return! app1 loopCallRefId inputTreeId setType
     }
 
 //=============================================================================
@@ -947,16 +917,16 @@ let inOrderKeysSeq
     (inputMapId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let mapType = NativeType.TMap (keyType, valueType)
     let seqKeyType = NativeType.TSeq keyType
     let traverseFuncType = NativeType.TFun (mapType, seqKeyType)
 
-    recipe {
+    saturation {
         // Parameter: tree
         let! treeParamId = patternBinding "tree" mapType
-        do! bindVariable "tree" treeParamId mapType
+        do! withBinding "tree" treeParamId mapType
 
         // Guard: isEmpty tree
         let! isEmptyId = mapIsEmpty treeParamId keyType valueType
@@ -979,9 +949,12 @@ let inOrderKeysSeq
         let! yieldRightId = yieldBang rightSeqId keyType
 
         // Sequential body: yieldLeft; yieldKey; yieldRight
+        let! state1 = getState
         let seqKind = SemanticKind.Sequential [yieldLeftId; yieldKeyId; yieldRightId]
         let seqChildren = [yieldLeftId; yieldKeyId; yieldRightId]
-        let! seqBodyId = createWithChildren seqKind Types.unitType seqChildren
+        let seqBodyNode = mkNode state1 seqKind Types.unitType seqChildren
+        do! emit seqBodyNode
+        let seqBodyId = seqBodyNode.Id
 
         // If isEmpty then empty seq else seq body
         let! emptySeqId = emptySeq keyType
@@ -992,6 +965,7 @@ let inOrderKeysSeq
         let! seqExprId = seqExpr condBodyId [capture] keyType
 
         // Lambda: fun tree -> seq { ... }
+        let! state2 = getState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             seqExprId,
@@ -999,7 +973,9 @@ let inOrderKeysSeq
             Some "traverse",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind traverseFuncType [seqExprId]
+        let lambdaNode = mkNode state2 lambdaKind traverseFuncType [seqExprId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
 
         // Binding: let rec traverse = ...
         let! bindingId = letRecBind "traverse" lambdaId traverseFuncType
@@ -1016,16 +992,16 @@ let inOrderValuesSeq
     (inputMapId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let mapType = NativeType.TMap (keyType, valueType)
     let seqValueType = NativeType.TSeq valueType
     let traverseFuncType = NativeType.TFun (mapType, seqValueType)
 
-    recipe {
+    saturation {
         // Parameter: tree
         let! treeParamId = patternBinding "tree" mapType
-        do! bindVariable "tree" treeParamId mapType
+        do! withBinding "tree" treeParamId mapType
 
         // Guard: isEmpty tree
         let! isEmptyId = mapIsEmpty treeParamId keyType valueType
@@ -1048,9 +1024,12 @@ let inOrderValuesSeq
         let! yieldRightId = yieldBang rightSeqId valueType
 
         // Sequential body: yieldLeft; yieldValue; yieldRight
+        let! state1 = getState
         let seqKind = SemanticKind.Sequential [yieldLeftId; yieldValueId; yieldRightId]
         let seqChildren = [yieldLeftId; yieldValueId; yieldRightId]
-        let! seqBodyId = createWithChildren seqKind Types.unitType seqChildren
+        let seqBodyNode = mkNode state1 seqKind Types.unitType seqChildren
+        do! emit seqBodyNode
+        let seqBodyId = seqBodyNode.Id
 
         // If isEmpty then empty seq else seq body
         let! emptySeqId = emptySeq valueType
@@ -1061,6 +1040,7 @@ let inOrderValuesSeq
         let! seqExprId = seqExpr condBodyId [capture] valueType
 
         // Lambda: fun tree -> seq { ... }
+        let! state2 = getState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             seqExprId,
@@ -1068,7 +1048,9 @@ let inOrderValuesSeq
             Some "traverse",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind traverseFuncType [seqExprId]
+        let lambdaNode = mkNode state2 lambdaKind traverseFuncType [seqExprId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
 
         // Binding: let rec traverse = ...
         let! bindingId = letRecBind "traverse" lambdaId traverseFuncType
@@ -1099,17 +1081,17 @@ let inOrderPairsSeq
     (inputMapId: NodeId)
     (keyType: NativeType)
     (valueType: NativeType)
-    : Recipe<NodeId> =
+    : SaturationParser<NodeId> =
 
     let mapType = NativeType.TMap (keyType, valueType)
     let pairType = NativeType.TTuple ([keyType; valueType], false)
     let seqPairType = NativeType.TSeq pairType
     let traverseFuncType = NativeType.TFun (mapType, seqPairType)
 
-    recipe {
+    saturation {
         // Parameter: tree
         let! treeParamId = patternBinding "tree" mapType
-        do! bindVariable "tree" treeParamId mapType
+        do! withBinding "tree" treeParamId mapType
 
         // Guard: isEmpty tree
         let! isEmptyId = mapIsEmpty treeParamId keyType valueType
@@ -1121,10 +1103,10 @@ let inOrderPairsSeq
         let! rightId = mapRight treeParamId keyType valueType
 
         // Create (key, value) tuple
+        let! state0 = getState
         let tupleKind = SemanticKind.TupleExpr [nodeKeyId; nodeValueId]
-        let! ctx = getContext
-        let tupleNode = mkNode ctx tupleKind pairType
-        do! emitNode tupleNode
+        let tupleNode = mkNode state0 tupleKind pairType []
+        do! emit tupleNode
         let tupleId = tupleNode.Id
 
         // Recursive calls to traverse
@@ -1140,9 +1122,12 @@ let inOrderPairsSeq
         let! yieldRightId = yieldBang rightSeqId pairType
 
         // Sequential body: yieldLeft; yieldPair; yieldRight
+        let! state1 = getState
         let seqKind = SemanticKind.Sequential [yieldLeftId; yieldPairId; yieldRightId]
         let seqChildren = [yieldLeftId; yieldPairId; yieldRightId]
-        let! seqBodyId = createWithChildren seqKind Types.unitType seqChildren
+        let seqBodyNode = mkNode state1 seqKind Types.unitType seqChildren
+        do! emit seqBodyNode
+        let seqBodyId = seqBodyNode.Id
 
         // If isEmpty then empty seq else seq body
         let! emptySeqId = emptySeq pairType
@@ -1153,6 +1138,7 @@ let inOrderPairsSeq
         let! seqExprId = seqExpr condBodyId [capture] pairType
 
         // Lambda: fun tree -> seq { ... }
+        let! state2 = getState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             seqExprId,
@@ -1160,7 +1146,9 @@ let inOrderPairsSeq
             Some "traverse",
             LambdaContext.RegularClosure
         )
-        let! lambdaId = createWithChildren lambdaKind traverseFuncType [seqExprId]
+        let lambdaNode = mkNode state2 lambdaKind traverseFuncType [seqExprId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
 
         // Binding: let rec traverse = ...
         let! bindingId = letRecBind "traverse" lambdaId traverseFuncType

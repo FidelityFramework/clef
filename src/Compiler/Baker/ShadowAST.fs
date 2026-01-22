@@ -448,18 +448,4 @@ module Render =
             tree.Provenance.ExpandedOperation
             tree.Provenance.SourceRange.Start.Line
 
-// ═══════════════════════════════════════════════════════════════════════════
-// EXPANDED RESULT - Combined PSG + Shadow from template
-// ═══════════════════════════════════════════════════════════════════════════
 
-/// Result of an XParsec expansion template - produces both PSG and shadow
-type Expanded<'a> = {
-    /// The PSG value(s) produced
-    Value: 'a
-    /// The shadow tree for this expansion
-    Shadow: ShadowTree
-}
-
-module Expanded =
-    let map (f: 'a -> 'b) (exp: Expanded<'a>) : Expanded<'b> =
-        { Value = f exp.Value; Shadow = exp.Shadow }

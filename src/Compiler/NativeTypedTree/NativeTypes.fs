@@ -217,6 +217,72 @@ type PlatformPredicate =
     | Custom of name: string
 
 //-------------------------------------------------------------------------
+// Freestanding Startup Data (Platform Entry Point)
+//-------------------------------------------------------------------------
+
+/// Freestanding startup configuration for platforms without libc.
+/// This is DATA only - contains offsets, syscall numbers, register names.
+/// Baker provides the BEHAVIOR through ingredients and recipes.
+///
+/// Platform bindings flow: Fidelity.Platform → PlatformContext → RecipeContext → Baker
+[<NoComparison; NoEquality>]
+type FreestandingStartup = {
+    /// Entry point symbol name (typically "_start" for freestanding)
+    EntrySymbol: string
+
+    /// Main function name (what _start calls)
+    MainFunction: string
+
+    /// Offset from stack pointer to argc on entry (bytes)
+    /// Linux x86_64: argc is at [rsp]
+    ArgcOffset: int
+
+    /// Offset from stack pointer to argv pointer array (bytes)
+    /// Linux x86_64: argv is at [rsp + 8]
+    ArgvOffset: int
+
+    /// Exit syscall number
+    /// Linux x86_64: 60 (sys_exit)
+    ExitSyscall: int
+
+    /// Register for syscall number
+    /// Linux x86_64: "rax"
+    SyscallRegister: string
+
+    /// Register for first syscall argument (exit code)
+    /// Linux x86_64: "rdi"
+    Arg0Register: string
+}
+
+module FreestandingStartup =
+    /// Default freestanding startup for Linux x86_64
+    let defaultLinux_x86_64 = {
+        EntrySymbol = "_start"
+        MainFunction = "main"
+        ArgcOffset = 0      // argc at [rsp]
+        ArgvOffset = 8      // argv at [rsp + 8]
+        ExitSyscall = 60    // sys_exit
+        SyscallRegister = "rax"
+        Arg0Register = "rdi"
+    }
+
+    /// Look up freestanding startup config for a platform
+    let forPlatform (platformId: string) : FreestandingStartup option =
+        match platformId with
+        | "Linux_x86_64" -> Some defaultLinux_x86_64
+        | "Linux_aarch64" ->
+            Some {
+                EntrySymbol = "_start"
+                MainFunction = "main"
+                ArgcOffset = 0
+                ArgvOffset = 8
+                ExitSyscall = 93    // sys_exit on aarch64
+                SyscallRegister = "x8"
+                Arg0Register = "x0"
+            }
+        | _ -> None
+
+//-------------------------------------------------------------------------
 // Platform Context (NTU Resolution)
 //-------------------------------------------------------------------------
 
@@ -242,6 +308,9 @@ type PlatformContext = {
 
     /// Evaluated platform predicates (from quotations)
     Predicates: Map<PlatformPredicate, bool>
+
+    /// Freestanding startup configuration (populated for freestanding builds)
+    FreestandingStartup: FreestandingStartup option
 }
 
 /// Platform context operations for NTU type resolution
@@ -260,6 +329,7 @@ module PlatformContext =
             (PlatformPredicate.HasUnalignedAccess, true)
             (PlatformPredicate.HasHardwareFloat, true)
         ]
+        FreestandingStartup = None  // Set when building freestanding binaries
     }
 
     /// Create a platform context from a platform library path

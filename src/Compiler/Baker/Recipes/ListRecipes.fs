@@ -8,7 +8,7 @@
 ///
 /// PRIMITIVE OPERATIONS (Alex witnesses directly):
 /// - empty: returns null pointer
-/// - isEmpty: null check  
+/// - isEmpty: null check
 /// - head: GEP to field 0, load
 /// - tail: GEP to field 1, load
 /// - cons: arena alloc + store head + store tail
@@ -29,29 +29,33 @@ open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
 open FSharp.Native.Compiler.Baker.ShadowAST
-open FSharp.Native.Compiler.Baker.Ingredients.RecipeBuilder
+open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
 open FSharp.Native.Compiler.Baker.Ingredients.Primitives
 open FSharp.Native.Compiler.Baker.Ingredients.Patterns
 open FSharp.Native.Compiler.Baker.Recipes.SeqRecipes
 
 //=============================================================================
-// BRIDGE: Convert Recipe results to Decomposition.Result
+// BRIDGE: Convert SaturationParser results to Decomposition.Result
 //=============================================================================
 
-/// Convert a Decomposition.Context to a RecipeBuilder.RecipeContext
-let private toRecipeContext (ctx: Context) : RecipeContext =
-    { SourceRange = ctx.SourceRange
-      OriginalHOF = ctx.OriginalHOF
+/// Convert a Decomposition.Context to a SaturationState
+let private toSaturationState (ctx: Context) : SaturationState =
+    { EmittedNodes = []
+      Bindings = Map.empty
       ExpansionId = ctx.ExpansionId
+      OriginalHOF = ctx.OriginalHOF
+      SourceRange = ctx.SourceRange
       InspiringNode = ctx.InspiringNode
       Platform = ctx.Platform }
 
-/// Run a recipe and convert to Decomposition.Result
-let private runRecipe (ctx: Context) (recipe: Recipe<NodeId>) : Result =
-    let recipeCtx = toRecipeContext ctx
-    let resultNodeId, nodes = run recipeCtx recipe
-    // For now, skip shadow tree construction - focus on PSG structure
-    mkResultNoShadow nodes resultNodeId []
+/// Run a saturation parser and convert to Decomposition.Result
+let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Result =
+    let initialState = toSaturationState ctx
+    match parser initialState with
+    | Matched resultNodeId, finalState ->
+        mkResultNoShadow (List.rev finalState.EmittedNodes) resultNodeId []
+    | NoMatch reason, _ ->
+        failwithf "Saturation failed: %s" reason
 
 //=============================================================================
 // LIST.MAP: map f xs → cons (f h) (map f t) | [] → []
@@ -62,14 +66,14 @@ let private listMapRecipe
     (inputListId: NodeId)
     (inputElemType: NativeType)
     (outputElemType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let outputListType = NativeType.TList outputElemType
-    
+
     foldRight
         (emptyList outputElemType)
         (fun headId recurseId ->
-            recipe {
+            saturation {
                 let! mappedHead = app1 mapperNodeId headId outputElemType
                 return! cons mappedHead recurseId outputElemType
             })
@@ -85,14 +89,14 @@ let private listFilterRecipe
     (predicateNodeId: NodeId)
     (inputListId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let listType = NativeType.TList elemType
-    
+
     foldRight
         (emptyList elemType)
         (fun headId recurseId ->
-            recipe {
+            saturation {
                 let! shouldInclude = app1 predicateNodeId headId Types.boolType
                 return! guardCons shouldInclude headId recurseId elemType
             })
@@ -110,12 +114,12 @@ let private listFoldRecipe
     (inputListId: NodeId)
     (elemType: NativeType)
     (stateType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     foldLeft
         (ret stateNodeId)  // Initial accumulator is the provided state
         (fun accId headId ->
-            recipe {
+            saturation {
                 // f acc head
                 return! app2 folderNodeId accId headId stateType
             })
@@ -131,8 +135,8 @@ let private listExistsRecipe
     (predicateNodeId: NodeId)
     (inputListId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     boolFold
         false  // Base case: empty list → false
         true   // Short circuit: predicate true → true
@@ -148,8 +152,8 @@ let private listForallRecipe
     (predicateNodeId: NodeId)
     (inputListId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     // forall is "all elements satisfy predicate"
     // Short-circuit on first failure (predicate returns false)
     // boolFold with baseValue=true, shortCircuitValue=false, but we need
@@ -159,7 +163,7 @@ let private listForallRecipe
         true   // Base case: empty list → true (vacuously true)
         false  // Short circuit: predicate false → false
         (fun headId ->
-            recipe {
+            saturation {
                 // Check if predicate returns false
                 let! predResult = app1 predicateNodeId headId Types.boolType
                 // If predResult is false, we want to return true (to trigger short-circuit)
@@ -181,12 +185,12 @@ let private listForallRecipe
 let private listLengthRecipe
     (inputListId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     foldLeft
         (intLit 0)  // Initial count is 0
         (fun accId _headId ->
-            recipe {
+            saturation {
                 let! one = intLit 1
                 return! add accId one Types.intType
             })
@@ -201,14 +205,14 @@ let private listLengthRecipe
 let private listRevRecipe
     (inputListId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let listType = NativeType.TList elemType
-    
+
     foldLeft
         (emptyList elemType)  // Start with empty accumulator
         (fun accId headId ->
-            recipe {
+            saturation {
                 // Prepend head to accumulator: h :: acc
                 return! cons headId accId elemType
             })
@@ -224,16 +228,16 @@ let private listAppendRecipe
     (list1Id: NodeId)
     (list2Id: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let listType = NativeType.TList elemType
-    
+
     // append xs ys = fold_right cons ys xs
     // Going right-to-left through xs, cons each element onto ys
     foldRight
         (ret list2Id)  // Base case: return ys
         (fun headId recurseId ->
-            recipe {
+            saturation {
                 return! cons headId recurseId elemType
             })
         list1Id
@@ -250,15 +254,15 @@ let private listCollectRecipe
     (inputListId: NodeId)
     (inputElemType: NativeType)
     (outputElemType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let outputListType = NativeType.TList outputElemType
-    
+
     // collect f xs = fold_right (\h acc -> append (f h) acc) [] xs
     foldRight
         (emptyList outputElemType)
         (fun headId recurseId ->
-            recipe {
+            saturation {
                 // Apply f to get a list
                 let! mappedList = app1 mapperNodeId headId outputListType
                 // Append that list to the accumulated result
@@ -268,7 +272,7 @@ let private listCollectRecipe
                 return! foldRight
                     (ret recurseId)  // Base: return accumulated result
                     (fun h acc ->
-                        recipe {
+                        saturation {
                             return! cons h acc outputElemType
                         })
                     mappedList
@@ -287,13 +291,13 @@ let private listContainsRecipe
     (valueNodeId: NodeId)
     (inputListId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     boolFold
         false  // Empty list doesn't contain anything
         true   // Found! Short-circuit with true
         (fun headId ->
-            recipe {
+            saturation {
                 return! eq headId valueNodeId elemType
             })
         inputListId
@@ -308,12 +312,12 @@ let private listTryPickRecipe
     (inputListId: NodeId)
     (inputElemType: NativeType)
     (outputElemType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     let optionType = NativeType.TApp (Parameterized.optionTyCon, [outputElemType])
     let listType = NativeType.TList inputElemType
     let loopFuncType = NativeType.TFun (listType, optionType)
-    
+
     // tryPick is like exists but returns the first Some result
     // let rec loop xs =
     //     if isEmpty xs then None
@@ -321,41 +325,46 @@ let private listTryPickRecipe
     //         let result = f (head xs)
     //         if isSome result then result
     //         else loop (tail xs)
-    recipe {
+    saturation {
         // Create parameter for xs
         let! xsParamId = patternBinding "xs" listType
-        do! bindVariable "xs" xsParamId listType
-        
+        do! withBinding "xs" xsParamId listType
+
         // Base case: None
         let! noneId = none outputElemType
-        
+
         // Guard: isEmpty xs
         let! isEmptyId = isEmpty xsParamId inputElemType
-        
+
         // Get head and tail
         let! headId = head xsParamId inputElemType
         let! tailId = tail xsParamId inputElemType
-        
+
         // Apply chooser: f (head xs)
         let! resultId = app1 chooserNodeId headId optionType
-        
+
         // Check if result isSome
         let! isSomeId = isSome resultId outputElemType
-        
+
         // Recursive call
         let! loopRefId = varRef "loop" None loopFuncType
         let! recurseId = app1 loopRefId tailId optionType
-        
+
         // Inner if: if isSome result then result else recurse
         let! innerIfId = ifThenElse isSomeId resultId recurseId optionType
-        
+
         // Outer if: if isEmpty then None else innerIf
         let! outerIfId = ifThenElse isEmptyId noneId innerIfId optionType
-        
-        // Create the recursive lambda and binding
-        let! lambdaId = lambda [("xs", listType)] (fun _ -> ret outerIfId) optionType
+
+        // Create the recursive lambda
+        let! state = getState
+        let lambdaKind = SemanticKind.Lambda ([("xs", listType, xsParamId)], outerIfId, [], Some "loop", LambdaContext.RegularClosure)
+        let lambdaNode = mkNode state lambdaKind loopFuncType [outerIfId]
+        do! emit lambdaNode
+        let lambdaId = lambdaNode.Id
+
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
-        
+
         // Initial call
         let! loopCallRefId = varRef "loop" (Some bindingId) loopFuncType
         return! app1 loopCallRefId inputListId optionType
@@ -370,14 +379,14 @@ let private listMinByRecipe
     (inputListId: NodeId)
     (elemType: NativeType)
     (keyType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     // We need a tuple type for (minElem, minKey) but let's simplify:
     // Actually, minBy needs to track both the element and its projected key.
     // For now, use a simpler approach: two accumulators via nested state.
     // This is getting complex - let's use the foldLeft pattern with element only,
     // recomputing the projection each time (less efficient but correct).
-    
+
     // let rec loop minElem xs =
     //     if isEmpty xs then minElem
     //     else
@@ -385,15 +394,15 @@ let private listMinByRecipe
     //         let newMin = if f h < f minElem then h else minElem
     //         loop newMin (tail xs)
     // in loop (head inputList) (tail inputList)
-    
-    recipe {
+
+    saturation {
         // Get first element as initial min
         let! firstElem = head inputListId elemType
         let! restList = tail inputListId elemType
-        
+
         // Fold through the rest
         let combiner = fun currentMinId headId ->
-            recipe {
+            saturation {
                 // Project both elements
                 let! currentMinKey = app1 projectionNodeId currentMinId keyType
                 let! headKey = app1 projectionNodeId headId keyType
@@ -401,9 +410,7 @@ let private listMinByRecipe
                 let! isLess = lt headKey currentMinKey keyType
                 return! ifThenElse isLess headId currentMinId elemType
             }
-        let! result = foldLeft (ret firstElem) combiner restList elemType elemType
-        
-        return result
+        return! foldLeft (ret firstElem) combiner restList elemType elemType
     }
 
 //=============================================================================
@@ -413,23 +420,21 @@ let private listMinByRecipe
 let private listMaxRecipe
     (inputListId: NodeId)
     (elemType: NativeType)
-    : Recipe<NodeId> =
-    
-    recipe {
+    : SaturationParser<NodeId> =
+
+    saturation {
         // Get first element as initial max
         let! firstElem = head inputListId elemType
         let! restList = tail inputListId elemType
-        
+
         // Fold through the rest
         let combiner = fun currentMaxId headId ->
-            recipe {
+            saturation {
                 // if head > currentMax then head else currentMax
                 let! isGreater = gt headId currentMaxId elemType
                 return! ifThenElse isGreater headId currentMaxId elemType
             }
-        let! result = foldLeft (ret firstElem) combiner restList elemType elemType
-        
-        return result
+        return! foldLeft (ret firstElem) combiner restList elemType elemType
     }
 
 //=============================================================================
@@ -441,13 +446,13 @@ let private listSumByRecipe
     (inputListId: NodeId)
     (elemType: NativeType)
     (numericType: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     // sumBy f xs = fold (\acc x -> acc + f x) 0 xs
     foldLeft
         (intLit 0)  // Initial sum is 0
         (fun accId headId ->
-            recipe {
+            saturation {
                 // Project element to numeric value
                 let! projectedValue = app1 projectionNodeId headId numericType
                 // Add to accumulator
@@ -467,12 +472,12 @@ let private listForall2Recipe
     (list2Id: NodeId)
     (elemType1: NativeType)
     (elemType2: NativeType)
-    : Recipe<NodeId> =
-    
+    : SaturationParser<NodeId> =
+
     // Use the foldLeft2 pattern from Patterns.fs
     foldLeft2
         (fun head1Id head2Id ->
-            recipe {
+            saturation {
                 // Apply predicate to both heads
                 return! app2 predicateNodeId head1Id head2Id Types.boolType
             })
@@ -495,66 +500,66 @@ let tryDecompose
     (outputElemType: NativeType option)
     (stateType: NativeType option)
     : Result option =
-    
+
     match operation, args with
     | "map", [mapper; xs] ->
         let outElem = outputElemType |> Option.defaultValue elemType
-        Some (runRecipe ctx (listMapRecipe mapper xs elemType outElem))
-    
+        Some (runSaturation ctx (listMapRecipe mapper xs elemType outElem))
+
     | "fold", [folder; state; xs] ->
         let stTy = stateType |> Option.defaultValue elemType
-        Some (runRecipe ctx (listFoldRecipe folder state xs elemType stTy))
-    
+        Some (runSaturation ctx (listFoldRecipe folder state xs elemType stTy))
+
     | "filter", [predicate; xs] ->
-        Some (runRecipe ctx (listFilterRecipe predicate xs elemType))
-    
+        Some (runSaturation ctx (listFilterRecipe predicate xs elemType))
+
     | "exists", [predicate; xs] ->
-        Some (runRecipe ctx (listExistsRecipe predicate xs elemType))
-    
+        Some (runSaturation ctx (listExistsRecipe predicate xs elemType))
+
     | "forall", [predicate; xs] ->
-        Some (runRecipe ctx (listForallRecipe predicate xs elemType))
-    
+        Some (runSaturation ctx (listForallRecipe predicate xs elemType))
+
     | "length", [xs] ->
-        Some (runRecipe ctx (listLengthRecipe xs elemType))
-    
+        Some (runSaturation ctx (listLengthRecipe xs elemType))
+
     | "rev", [xs] ->
-        Some (runRecipe ctx (listRevRecipe xs elemType))
-    
+        Some (runSaturation ctx (listRevRecipe xs elemType))
+
     | "append", [xs; ys] ->
-        Some (runRecipe ctx (listAppendRecipe xs ys elemType))
-    
+        Some (runSaturation ctx (listAppendRecipe xs ys elemType))
+
     | "collect", [mapper; xs] ->
         let outElem = outputElemType |> Option.defaultValue elemType
-        Some (runRecipe ctx (listCollectRecipe mapper xs elemType outElem))
-    
+        Some (runSaturation ctx (listCollectRecipe mapper xs elemType outElem))
+
     | "contains", [value; xs] ->
-        Some (runRecipe ctx (listContainsRecipe value xs elemType))
-    
+        Some (runSaturation ctx (listContainsRecipe value xs elemType))
+
     | "tryPick", [chooser; xs] ->
         let outElem = outputElemType |> Option.defaultValue elemType
-        Some (runRecipe ctx (listTryPickRecipe chooser xs elemType outElem))
-    
+        Some (runSaturation ctx (listTryPickRecipe chooser xs elemType outElem))
+
     | "minBy", [projection; xs] ->
         // For minBy, we need the key type. For now, assume same as elem type.
         // This should be extracted from the projection function's return type.
         let keyType = stateType |> Option.defaultValue elemType
-        Some (runRecipe ctx (listMinByRecipe projection xs elemType keyType))
-    
+        Some (runSaturation ctx (listMinByRecipe projection xs elemType keyType))
+
     | "max", [xs] ->
-        Some (runRecipe ctx (listMaxRecipe xs elemType))
-    
+        Some (runSaturation ctx (listMaxRecipe xs elemType))
+
     | "forall2", [predicate; xs; ys] ->
         // For forall2, both lists have same element type for now
-        Some (runRecipe ctx (listForall2Recipe predicate xs ys elemType elemType))
-    
+        Some (runSaturation ctx (listForall2Recipe predicate xs ys elemType elemType))
+
     | "sumBy", [projection; xs] ->
         // sumBy projects to numeric type, default to int
         let numType = stateType |> Option.defaultValue Types.intType
-        Some (runRecipe ctx (listSumByRecipe projection xs elemType numType))
+        Some (runSaturation ctx (listSumByRecipe projection xs elemType numType))
 
     // Cross-module alias: List.ofSeq = Seq.toList
     | "ofSeq", [xs] ->
-        Some (runRecipe ctx (seqToListRecipe xs elemType))
+        Some (runSaturation ctx (seqToListRecipe xs elemType))
 
     // Primitive operations - Alex witnesses directly
     | "empty", _
@@ -562,5 +567,5 @@ let tryDecompose
     | "head", _
     | "tail", _
     | "cons", _ -> None
-    
+
     | _ -> None
