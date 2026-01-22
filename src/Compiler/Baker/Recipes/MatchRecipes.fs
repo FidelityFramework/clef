@@ -121,8 +121,28 @@ let rec private extractPatternBindings
         | Some other ->
             failwithf "extractPatternBindings: Unsupported union payload pattern: %A" other
 
-    | Pattern.Tuple _ | Pattern.Const _ ->
-        // For now, return original bindings
+    | Pattern.Tuple elements ->
+        // Top-level tuple pattern: extract each element and recursively extract bindings
+        let extractElement index elemPattern =
+            recipe {
+                // Extract this element from the scrutinee tuple
+                let elemType = getPatternType elemPattern
+                let! elemId = createWithChildren (SemanticKind.TupleGet (scrutineeId, index)) elemType [scrutineeId]
+                // Get pattern bindings for this element
+                let elemBindings = getElementPatternBindings index patternBindings elements
+                // Recursively extract bindings
+                return! extractPatternBindings elemId elemPattern elemBindings
+            }
+        recipe {
+            let! allBindings =
+                elements
+                |> List.mapi extractElement
+                |> sequence
+            return List.concat allBindings
+        }
+
+    | Pattern.Const _ ->
+        // Constant patterns don't create bindings
         recipe { return patternBindings }
 
     | _ ->
@@ -259,14 +279,65 @@ and private compilePattern
                 return (tagMatches, body, newBindings)
         }
 
-    | Pattern.Tuple _elements ->
-        // Tuple pattern: extract each element and match recursively
-        // For now, treat as always-match (bindings handled by PatternBinding nodes)
+    | Pattern.Tuple elements ->
+        // Tuple pattern: extract all elements and wrap in Sequential to ensure
+        // TupleGets are emitted BEFORE any control flow from guard combination.
+        // Structure: Sequential([TupleGet0; TupleGet1; ...; actualGuard])
         recipe {
-            let! trueId = boolLit true
+            // Phase 1: Extract ALL tuple elements
+            let! extractedElems =
+                elements
+                |> List.mapi (fun index elemPattern ->
+                    recipe {
+                        let elemType = getPatternType elemPattern
+                        let! elemId = createWithChildren (SemanticKind.TupleGet (scrutineeId, index)) elemType [scrutineeId]
+                        return (elemId, elemPattern)
+                    })
+                |> sequence
+
+            let tupleGetIds = extractedElems |> List.map fst
+
+            // Phase 2: Compile each element pattern using pre-extracted values
+            let! results =
+                extractedElems
+                |> List.mapi (fun index (elemId, elemPattern) ->
+                    recipe {
+                        let elemBindings = getElementPatternBindings index patternBindings elements
+                        return! compilePattern elemId elemPattern elemBindings None body _resultType
+                    })
+                |> sequence
+
+            // Combine all guards with AND
+            let guards = results |> List.map (fun (g, _, _) -> g)
+            let combineGuards accRecipe g =
+                recipe {
+                    let! acc = accRecipe
+                    return! andAlso acc g
+                }
+            let! combinedGuard =
+                match guards with
+                | [] -> boolLit true
+                | [g] -> recipe { return g }
+                | g :: rest -> rest |> List.fold combineGuards (recipe { return g })
+
+            // Wrap TupleGets + guard in Sequential to hoist TupleGets before control flow
+            // Sequential visits children in order, so TupleGets emit before guard's scf.if
+            let! hoistedGuard =
+                createWithChildren
+                    (SemanticKind.Sequential (tupleGetIds @ [combinedGuard]))
+                    Types.boolType
+                    (tupleGetIds @ [combinedGuard])
+
+            // Collect all bindings
+            let allBindings = results |> List.collect (fun (_, _, bindings) -> bindings)
+
+            // Apply optional outer guard
             match guard with
-            | Some guardId -> return (guardId, body, patternBindings)
-            | None -> return (trueId, body, patternBindings)
+            | Some guardId ->
+                let! finalGuard = andAlso hoistedGuard guardId
+                return (finalGuard, body, allBindings)
+            | None ->
+                return (hoistedGuard, body, allBindings)
         }
 
     | Pattern.Null ->
@@ -322,6 +393,39 @@ and private literalToType (lit: NativeLiteral) : NativeType =
     | NativeLiteral.ByteArray _ -> mkArrayType Types.uint8Type
     | NativeLiteral.UInt16Array _ -> mkArrayType Types.uint16Type
     | NativeLiteral.BigInt _ -> Types.int64Type  // BigInt maps to int64 for now
+
+/// Get the type from a pattern (uses literalToType for Const patterns)
+and private getPatternType (pattern: Pattern) : NativeType =
+    match pattern with
+    | Pattern.Var (_, ty) -> ty
+    | Pattern.Union (_, _, _, ty) -> ty
+    | Pattern.Tuple elements ->
+        NativeType.TTuple (elements |> List.map getPatternType, false)
+    | Pattern.Const lit -> literalToType lit
+    | Pattern.Wildcard -> Types.unitType
+    | Pattern.Null -> Types.unitType
+    | _ -> Types.unitType
+
+/// Count bindings in a pattern (recursive for nested patterns)
+and private countPatternBindings (pattern: Pattern) : int =
+    match pattern with
+    | Pattern.Var _ -> 1
+    | Pattern.Union (_, _, Some payload, _) -> countPatternBindings payload
+    | Pattern.Union (_, _, None, _) -> 0
+    | Pattern.Tuple elements -> elements |> List.sumBy countPatternBindings
+    | _ -> 0
+
+/// Get pattern bindings for a specific tuple element.
+/// Partitions the flat patternBindings list based on each element's binding count.
+and private getElementPatternBindings
+    (index: int)
+    (patternBindings: NodeId list)
+    (elements: Pattern list)
+    : NodeId list =
+    let bindingsPerElement = elements |> List.map countPatternBindings
+    let offset = bindingsPerElement |> List.take index |> List.sum
+    let count = bindingsPerElement.[index]
+    patternBindings |> List.skip offset |> List.take count
 
 //=============================================================================
 // MATCH DECOMPOSITION

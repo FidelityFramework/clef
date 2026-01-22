@@ -1,7 +1,14 @@
 # Baker Saturation Architecture
 
 ## Core Principle
-Baker decomposes HOFs (List.map, fold, filter) into PSG sub-trees of primitives (isEmpty, head, tail, cons). Alex witnesses primitives; Baker creates structure.
+Baker decomposes complex constructs into PSG sub-trees of primitives. Alex witnesses primitives; Baker creates structure.
+
+**What Baker Decomposes:**
+- HOFs (List.map, fold, filter) → primitives (isEmpty, head, tail, cons)
+- Match expressions → IfThenElse chains with DUGetTag/DUEliminate
+- UnionCase → DUConstruct
+
+See `discriminated_union_pipeline` memory for DU-specific details.
 
 ## Three-Layer Combinator Model (The Baking Metaphor)
 

@@ -209,12 +209,19 @@ let private validateRecipeNodes (passName: string) (recipeSet: RecipeSet) (graph
 let foldIn (passName: string) (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
     let replacementMap = recipeSet.ReplacementMap
 
-    // Collect all new nodes from recipes
+    // Collect all new nodes from recipes AND update their cross-recipe references.
+    // This is critical for recipe collision: when Recipe A creates nodes referencing
+    // nodes that Recipe B replaces, A's nodes need their references updated.
     let newNodesFromRecipes =
         recipeSet.Recipes
         |> Map.toSeq |> Seq.map snd
         |> Seq.collect (fun r -> r.NewNodes)
-        |> Seq.map (fun n -> n.Id, n)
+        |> Seq.map (fun n ->
+            // Update references in recipe-created nodes
+            let updatedKind = updateKindRefs replacementMap n.Kind
+            let updatedChildren = updateChildRefs replacementMap n.Children
+            let updatedNode = { n with Kind = updatedKind; Children = updatedChildren }
+            n.Id, updatedNode)
         |> Map.ofSeq
 
     // Build the new nodes map:
