@@ -917,7 +917,41 @@ type RecordTypeInfo = {
 /// Get the layout of a type (may need refinement after solving)
 let rec layoutOf (ty: NativeType) : TypeLayout =
     match ty with
-    | NativeType.TApp(tycon, _) -> tycon.Layout
+    | NativeType.TApp(tycon, args) ->
+        match tycon.Name, tycon.Layout, args with
+        // Option<T>: tag (1 byte) + T - compute from type argument
+        | "option", TypeLayout.Inline(-1, -1), [innerTy] ->
+            let innerLayout = layoutOf innerTy
+            match innerLayout with
+            | TypeLayout.Inline(innerSize, innerAlign) when innerSize >= 0 ->
+                // tag (1 byte) + padding + payload
+                let align = max 1 innerAlign
+                let tagPadding = if innerAlign > 1 then innerAlign - 1 else 0
+                TypeLayout.Inline(1 + tagPadding + innerSize, align)
+            | TypeLayout.PlatformWord ->
+                // tag + padding + word (8 bytes on 64-bit)
+                TypeLayout.Inline(16, 8)
+            | TypeLayout.FatPointer ->
+                // tag + padding + fat ptr (16 bytes)
+                TypeLayout.Inline(24, 8)
+            | _ -> tycon.Layout
+        // Result<T, E>: tag (1 byte) + max(T, E) - compute from type arguments
+        | "result", TypeLayout.Inline(-1, -1), [okTy; errorTy] ->
+            let okLayout = layoutOf okTy
+            let errorLayout = layoutOf errorTy
+            match okLayout, errorLayout with
+            | TypeLayout.Inline(okSize, okAlign), TypeLayout.Inline(errSize, errAlign) when okSize >= 0 && errSize >= 0 ->
+                let maxPayloadSize = max okSize errSize
+                let maxAlign = max okAlign errAlign
+                let align = max 1 maxAlign
+                let tagPadding = if align > 1 then align - 1 else 0
+                TypeLayout.Inline(1 + tagPadding + maxPayloadSize, align)
+            | TypeLayout.PlatformWord, _ | _, TypeLayout.PlatformWord ->
+                TypeLayout.Inline(16, 8)  // tag + padding + word
+            | TypeLayout.FatPointer, _ | _, TypeLayout.FatPointer ->
+                TypeLayout.Inline(24, 8)  // tag + padding + fat ptr
+            | _ -> tycon.Layout
+        | _ -> tycon.Layout
     | NativeType.TTuple(_, isStruct) when isStruct -> TypeLayout.Inline(-1, -1) // Size depends on elements
     | NativeType.TTuple(_, _) -> TypeLayout.Reference ArenaAffinity.CurrentActor
     | NativeType.TFun _ -> TypeLayout.Inline(16, 8)  // Function pointer + closure env

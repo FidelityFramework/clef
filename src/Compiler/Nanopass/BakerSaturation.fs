@@ -273,8 +273,81 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
         // Transform UnionCase to DUConstruct (lowered form for Alex)
         // DUConstruct adds arenaHint parameter (None = stack allocation)
         let ctx = mkContext node.Range node.Type graph.Platform "UnionCase" node.Id
-        let newKind = SemanticKind.DUConstruct (caseName, caseIndex, payload, None)
-        let newNode = 
+
+        // Check if payload needs bit coercion (e.g., float → int64 for DU slot storage)
+        // DU slots use uniform representation; different-typed payloads need reinterpretation
+        let coercedPayload, coercionNodes =
+            match payload with
+            | Some payloadId ->
+                match SemanticGraph.tryGetNode payloadId graph with
+                | Some payloadNode ->
+                    // Get the DU's slot type from its Layout
+                    // Layout = Inline(size, align) where size = tagSize + payloadSize
+                    let needsCoercion, intrinsicName, targetType =
+                        match node.Type with
+                        | NativeType.TApp (tycon, _) ->
+                            match tycon.Layout with
+                            | TypeLayout.Inline (size, _align) when size > 1 ->
+                                // Check payload type vs expected slot type
+                                match payloadNode.Type with
+                                | NativeType.TApp (payloadTycon, _) ->
+                                    match payloadTycon.NTUKind with
+                                    | Some NTUKind.NTUfloat64 ->
+                                        // float64 going into i64 slot
+                                        true, "Bits.float64ToInt64Bits", Types.int64Type
+                                    | Some NTUKind.NTUfloat32 ->
+                                        // float32 going into i32 slot
+                                        true, "Bits.float32ToInt32Bits", Types.int32Type
+                                    | _ -> false, "", Types.unitType
+                                | _ -> false, "", Types.unitType
+                            | _ -> false, "", Types.unitType
+                        | _ -> false, "", Types.unitType
+
+                    if needsCoercion then
+                        // Create Bits intrinsic application
+                        let funcType = NativeType.TFun(payloadNode.Type, targetType)
+                        let intrinsicInfo = {
+                            Module = IntrinsicModule.Bits
+                            Operation = intrinsicName.Replace("Bits.", "")
+                            Category = IntrinsicCategory.Conversion
+                            FullName = intrinsicName
+                        }
+                        let intrinsicNode = {
+                            Id = NodeId.fresh()
+                            Kind = SemanticKind.Intrinsic intrinsicInfo
+                            Range = node.Range
+                            Type = funcType
+                            SRTPResolution = None
+                            ArenaAffinity = ArenaAffinity.CurrentActor
+                            LayoutHint = None
+                            Children = []
+                            Parent = None
+                            Metadata = Map.empty
+                            IsReachable = true
+                            EmissionStrategy = EmissionStrategy.Inline
+                        }
+                        let appNode = {
+                            Id = NodeId.fresh()
+                            Kind = SemanticKind.Application(intrinsicNode.Id, [payloadId])
+                            Range = node.Range
+                            Type = targetType
+                            SRTPResolution = None
+                            ArenaAffinity = ArenaAffinity.CurrentActor
+                            LayoutHint = None
+                            Children = [intrinsicNode.Id; payloadId]
+                            Parent = None
+                            Metadata = Map.empty
+                            IsReachable = true
+                            EmissionStrategy = EmissionStrategy.Inline
+                        }
+                        Some appNode.Id, [intrinsicNode; appNode]
+                    else
+                        payload, []
+                | None -> payload, []
+            | None -> None, []
+
+        let newKind = SemanticKind.DUConstruct (caseName, caseIndex, coercedPayload, None)
+        let newNode =
             { Id = NodeId.fresh()
               Kind = newKind
               Range = node.Range
@@ -282,13 +355,13 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
               SRTPResolution = node.SRTPResolution
               ArenaAffinity = node.ArenaAffinity
               LayoutHint = node.LayoutHint
-              Children = node.Children
+              Children = match coercedPayload with Some id -> [id] | None -> []
               Parent = None
               Metadata = node.Metadata
               IsReachable = true
               EmissionStrategy = node.EmissionStrategy }
             |> markBaker "UnionCase" ctx.ExpansionId
-        let result = mkResultNoShadow [newNode] newNode.Id []
+        let result = mkResultNoShadow (coercionNodes @ [newNode]) newNode.Id []
         Some (toRecipe node.Id "UnionCase" result)
 
     | _ -> None  // Other node types don't need saturation
