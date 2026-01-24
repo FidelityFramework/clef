@@ -170,23 +170,25 @@ and private compilePattern
     | Pattern.Wildcard ->
         // Wildcard always matches - guard is "true", body is unchanged
         // No new bindings - use original PatternBindings
+        // CRITICAL: Only create boolLit when no guard, to avoid orphaned nodes
         saturation {
-            let! trueId = boolLit true
-            // Apply guard if present
             match guard with
             | Some guardId -> return (guardId, body, patternBindings)
-            | None -> return (trueId, body, patternBindings)
+            | None ->
+                let! trueId = boolLit true
+                return (trueId, body, patternBindings)
         }
 
     | Pattern.Var (_name, _ty) ->
         // Variable pattern: bind scrutinee to name, always matches
         // No new bindings - use original PatternBindings
+        // CRITICAL: Only create boolLit when no guard, to avoid orphaned nodes
         saturation {
-            let! trueId = boolLit true
-            // The pattern binding node should already exist, body uses it
             match guard with
             | Some guardId -> return (guardId, body, patternBindings)
-            | None -> return (trueId, body, patternBindings)
+            | None ->
+                let! trueId = boolLit true
+                return (trueId, body, patternBindings)
         }
 
     | Pattern.Const literal ->
@@ -348,21 +350,25 @@ and private compilePattern
     | Pattern.Null ->
         // Null pattern: check if value is null (for reference types)
         // In native F#, this is rare - most types are non-nullable
+        // CRITICAL: Only create boolLit when no guard, to avoid orphaned nodes
         saturation {
-            let! trueId = boolLit true  // Simplified - treat as always match for now
             match guard with
             | Some guardId -> return (guardId, body, patternBindings)
-            | None -> return (trueId, body, patternBindings)
+            | None ->
+                let! trueId = boolLit true  // Simplified - treat as always match for now
+                return (trueId, body, patternBindings)
         }
 
     | _ ->
         // Other patterns (Record, Array, Or, And, As, IsType, Exception)
         // Treat as always-match for now, expand as needed
+        // CRITICAL: Only create boolLit when no guard, to avoid orphaned nodes
         saturation {
-            let! trueId = boolLit true
             match guard with
             | Some guardId -> return (guardId, body, patternBindings)
-            | None -> return (trueId, body, patternBindings)
+            | None ->
+                let! trueId = boolLit true
+                return (trueId, body, patternBindings)
         }
 
 /// Map NTUKind to NativeType

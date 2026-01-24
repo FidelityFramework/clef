@@ -742,12 +742,12 @@ and checkDotlessIndexSet (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> Semant
         range,
         children = allChildNodeIds)
 
-/// Check DotGet: expr.field
+/// Check DotGet: expr.field or expr.field1.field2...
+/// Multi-part paths (e.g., c.Person.Name) create nested FieldGet nodes
 and checkDotGet (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (env: TypeEnv) (builder: NodeBuilder) (expr: SynExpr) (longDotId: SynLongIdent) (range: SourceRange) : SemanticNode =
     let exprNode = checkExpr env builder expr
-    let fieldName = longDotId.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
-    
-    let resolvedType = applySubst exprNode.Type
+    let fieldParts = longDotId.LongIdent |> List.map (fun id -> id.idText)
+
     let isStringType ty =
         match ty with
         | NativeType.TApp(tycon, []) when tycon.Name = "string" -> true
@@ -756,25 +756,31 @@ and checkDotGet (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (
         match ty with
         | NativeType.TApp(tycon, [_]) when tycon.Name = "array" -> true
         | _ -> false
-    
-    let resultTy =
-        match fieldName with
-        | "Pointer" when isStringType resolvedType ->
-            NativeType.TNativePtr(Types.uint8Type)
-        | "Length" when isStringType resolvedType ->
-            env.Globals.IntType
-        | "Length" when isArrayType resolvedType ->
-            env.Globals.IntType
-        | _ ->
-            let ty = freshTypeVar range
-            addConstraint (Constraint.HasMember(exprNode.Type, fieldName, ty, range)) env
-            ty
-    
-    builder.Create(
-        SemanticKind.FieldGet(exprNode.Id, fieldName),
-        resultTy,
-        range,
-        children = [exprNode.Id])
+
+    /// Create a single FieldGet node for one field access
+    let createFieldGet (baseNode: SemanticNode) (fieldName: string) : SemanticNode =
+        let resolvedType = applySubst baseNode.Type
+        let resultTy =
+            match fieldName with
+            | "Pointer" when isStringType resolvedType ->
+                NativeType.TNativePtr(Types.uint8Type)
+            | "Length" when isStringType resolvedType ->
+                env.Globals.IntType
+            | "Length" when isArrayType resolvedType ->
+                env.Globals.IntType
+            | _ ->
+                let ty = freshTypeVar range
+                addConstraint (Constraint.HasMember(baseNode.Type, fieldName, ty, range)) env
+                ty
+        builder.Create(
+            SemanticKind.FieldGet(baseNode.Id, fieldName),
+            resultTy,
+            range,
+            children = [baseNode.Id])
+
+    // Fold over field parts, creating nested FieldGet nodes
+    // e.g., c.Person.Name becomes FieldGet(FieldGet(c, "Person"), "Name")
+    fieldParts |> List.fold createFieldGet exprNode
 
 /// Check Set: target <- value
 and checkSet (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (env: TypeEnv) (builder: NodeBuilder) (targetExpr: SynExpr) (valueExpr: SynExpr) (range: SourceRange) : SemanticNode =
