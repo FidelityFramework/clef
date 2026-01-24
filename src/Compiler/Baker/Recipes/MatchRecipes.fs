@@ -510,14 +510,25 @@ let matchDecomposeParser
                 let! (guardExpr, _body, newBindings) =
                     compilePattern scrutineeId case.Pattern case.PatternBindings case.Guard case.Body resultType
 
-                // Wrap case body with NEW bindings (not old PatternBindings)
-                let! bodyWithBindings = wrapWithPatternBindings newBindings case.Body resultType
-
                 // Build the else branch (rest of the cases)
                 let! elseResult = buildDecisionTree rest
 
-                // Build: if guardExpr then bodyWithBindings else elseResult
-                return! ifThenElse guardExpr bodyWithBindings elseResult resultType
+                // CRITICAL (January 2026): Guard expressions may reference pattern bindings.
+                // When there's a guard, pattern bindings must be hoisted BEFORE the IfThenElse
+                // so VarRefs in the guard can resolve. Without a guard, bindings stay inside
+                // the then-branch (only evaluated if pattern matches).
+                //
+                // With guard:    Sequential([bindings..., IfThenElse(guard, body, else)])
+                // Without guard: IfThenElse(patternCheck, Sequential([bindings..., body]), else)
+                match case.Guard with
+                | Some _ ->
+                    // Guard may reference pattern bindings - hoist them BEFORE IfThenElse
+                    let! ifResult = ifThenElse guardExpr case.Body elseResult resultType
+                    return! wrapWithPatternBindings newBindings ifResult resultType
+                | None ->
+                    // No guard - bindings can stay inside the then-branch
+                    let! bodyWithBindings = wrapWithPatternBindings newBindings case.Body resultType
+                    return! ifThenElse guardExpr bodyWithBindings elseResult resultType
             }
 
     buildDecisionTree cases

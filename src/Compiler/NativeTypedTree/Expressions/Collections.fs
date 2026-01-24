@@ -24,7 +24,8 @@ open FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
 type CheckExprFn = TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode
 
 /// Callback for checking match clauses
-type CheckMatchClauseFn = TypeEnv -> NodeBuilder -> NativeType -> NativeType -> SynMatchClause -> MatchCase
+/// Now includes scrutinee NodeId to enable field extraction for record patterns
+type CheckMatchClauseFn = TypeEnv -> NodeBuilder -> NodeId -> NativeType -> NativeType -> SynMatchClause -> MatchCase
 
 //-------------------------------------------------------------------------
 // Tuple Expressions
@@ -301,11 +302,7 @@ let checkMatchLambda
     let domainType = freshTypeVar range
     let resultType = freshTypeVar range
 
-    // Process each match clause
-    let matchCases = clauses |> List.map (fun clause ->
-        checkMatchClause env builder domainType resultType clause)
-
-    // Create synthetic argument for the lambda
+    // Create synthetic argument for the lambda FIRST (so we have its NodeId for pattern extraction)
     let syntheticArgName = "_arg"
     // Create PatternBinding for the synthetic argument
     let syntheticParamNode = builder.Create(
@@ -319,6 +316,10 @@ let checkMatchLambda
             domainType,
             range)
         argNode.Id
+
+    // Process each match clause with scrutinee ID for pattern binding extraction
+    let matchCases = clauses |> List.map (fun clause ->
+        checkMatchClause env builder syntheticArgNodeId domainType resultType clause)
 
     // Create match expression over the synthetic argument
     let matchNodeChildIds = syntheticArgNodeId :: (matchCases |> List.collect (fun mc ->

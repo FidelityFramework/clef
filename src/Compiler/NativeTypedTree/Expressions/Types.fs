@@ -427,6 +427,22 @@ let addRecordDef (info: RecordTypeInfo) (env: TypeEnv) : TypeEnv =
 let tryLookupRecordDef (name: string) (env: TypeEnv) : RecordTypeInfo option =
     Map.tryFind name env.RecordDefs
 
+/// Try to resolve a field's type from a record type.
+/// Returns Some(fieldType) if the type is a record with the given field, None otherwise.
+/// This is the canonical way to resolve record field types - no SRTP constraints needed.
+let tryResolveRecordFieldType (ty: NativeType) (fieldName: string) (env: TypeEnv) : NativeType option =
+    match applySubst ty with
+    | NativeType.TApp(tycon, _typeArgs) ->
+        // Try to find this type in RecordDefs
+        match tryLookupRecordDef tycon.Name env with
+        | Some recordInfo ->
+            // Look up the field in the record's field list
+            recordInfo.Fields
+            |> List.tryFind (fun (name, _) -> name = fieldName)
+            |> Option.map snd
+        | None -> None
+    | _ -> None
+
 /// Look up field labels (all record types that have a field with this name)
 let lookupFieldLabels (fieldName: string) (env: TypeEnv) : FieldRef list =
     Map.tryFind fieldName env.FieldLabels |> Option.defaultValue []
@@ -515,6 +531,39 @@ let resolveRecordTypeFromFields
 /// Add a constraint to the environment
 let addConstraint (c: Constraint) (env: TypeEnv) : unit =
     env.Constraints := c :: !(env.Constraints)
+
+
+/// Resolve a field's type, handling records directly and falling back to SRTP constraints.
+/// This is the SINGLE entry point for field type resolution - used by both Identity.fs and Coordinator.fs.
+let resolveFieldType (baseType: NativeType) (fieldName: string) (env: TypeEnv) (range: SourceRange) : NativeType =
+    let isStringType ty =
+        match ty with
+        | NativeType.TApp(tycon, []) when tycon.Name = "string" -> true
+        | _ -> false
+    let isArrayType ty =
+        match ty with
+        | NativeType.TApp(tycon, [_]) when tycon.Name = "array" -> true
+        | _ -> false
+
+    let resolvedType = applySubst baseType
+
+    // 1. Check intrinsic members (string.Pointer, string.Length, array.Length)
+    match fieldName with
+    | "Pointer" when isStringType resolvedType ->
+        NativeType.TNativePtr(Types.uint8Type)
+    | "Length" when isStringType resolvedType ->
+        env.Globals.IntType
+    | "Length" when isArrayType resolvedType ->
+        env.Globals.IntType
+    | _ ->
+        // 2. Try record field lookup (no SRTP needed for records)
+        match tryResolveRecordFieldType resolvedType fieldName env with
+        | Some fieldType -> fieldType
+        | None ->
+            // 3. Fall back to SRTP constraint for generic types
+            let ty = freshTypeVar range
+            addConstraint (Constraint.HasMember(baseType, fieldName, ty, range)) env
+            ty
 
 //-------------------------------------------------------------------------
 // Attribute Helpers

@@ -30,13 +30,12 @@ module NativeGlobals = FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 // Identifier Resolution Result
 //-------------------------------------------------------------------------
 
-/// Result of resolving an identifier - used internally
 type private IdentifierResolution =
     | IntrinsicNode of IntrinsicInfo * NativeType
     | BindingNode of string * NativeType * NodeId option
     | LiteralSubstitution of NativeLiteral * NativeType
     | UnionCaseNode of string * NativeType * NR.UnionCaseInfo
-    | MemberAccessNode of baseBinding: NR.ResolvedBinding * baseName: string * memberName: string * resultType: NativeType
+    | MemberAccessNode of baseBinding: NR.ResolvedBinding * baseName: string * memberPath: string list * resultTypes: NativeType list
     | ErrorNode of string * NativeType
 
 //-------------------------------------------------------------------------
@@ -134,41 +133,38 @@ and private resolveBinding (parts: string list) (fullName: string) (env: TypeEnv
         // TODO: Factor this into a proper nanopass for cleaner architecture.
         if parts.Length >= 2 then
             let firstPart = parts.[0]
-            let restParts = parts.[1..] |> String.concat "."
+            let restParts = parts.[1..]  // Keep as list for nested FieldGets
             match tryLookupBinding firstPart env with
             | Some binding ->
-                // Found base binding - determine member type
+                // Found base binding - resolve member path to get types at each step
                 let resolvedType = applySubst binding.Type
-                let resultTy = resolveMemberType resolvedType restParts env range
-                MemberAccessNode (binding, firstPart, restParts, resultTy)
+                let resultTypes = resolveMemberPath resolvedType restParts env range
+                MemberAccessNode (binding, firstPart, restParts, resultTypes)
             | None ->
                 ErrorNode ($"The value or constructor '{fullName}' is not defined.", NativeType.TError $"Undefined: {fullName}")
         else
             ErrorNode ($"The value or constructor '{fullName}' is not defined.", NativeType.TError $"Undefined: {fullName}")
 
-/// Determine the type of a member access (intrinsic string/array members or SRTP constraint)
+/// Determine the type of a member access.
+/// Delegates to Types.resolveFieldType which handles:
+/// 1. Intrinsic members (string.Pointer, string.Length, array.Length)
+/// 2. Record field lookup (no SRTP needed)
+/// 3. SRTP constraint fallback for generic types
 and private resolveMemberType (baseType: NativeType) (memberName: string) (env: TypeEnv) (range: SourceRange) : NativeType =
-    let isStringType ty =
-        match ty with
-        | NativeType.TApp(tycon, []) when tycon.Name = "string" -> true
-        | _ -> false
-    let isArrayType ty =
-        match ty with
-        | NativeType.TApp(tycon, [_]) when tycon.Name = "array" -> true
-        | _ -> false
+    Types.resolveFieldType baseType memberName env range
 
-    match memberName with
-    | "Pointer" when isStringType baseType ->
-        NativeType.TNativePtr(NativeGlobals.Types.uint8Type)
-    | "Length" when isStringType baseType ->
-        env.Globals.IntType
-    | "Length" when isArrayType baseType ->
-        env.Globals.IntType
-    | _ ->
-        // General case: create HasMember constraint for SRTP
-        let ty = freshTypeVar range
-        addConstraint (Constraint.HasMember(baseType, memberName, ty, range)) env
-        ty
+/// Resolve a path of member accesses, returning the type at each step.
+/// For c.Person.Name with c:Contact, returns:
+///   [PersonType; StringType] - types of each field access
+and private resolveMemberPath (baseType: NativeType) (memberPath: string list) (env: TypeEnv) (range: SourceRange) : NativeType list =
+    // Fold over the path, accumulating (currentType, typesList)
+    let (_, types) =
+        memberPath
+        |> List.fold (fun (currentType, acc) memberName ->
+            let memberType = resolveMemberType currentType memberName env range
+            (memberType, acc @ [memberType])
+        ) (baseType, [])
+    types
 
 //-------------------------------------------------------------------------
 // Public API - Used by CheckExpressions
@@ -222,18 +218,27 @@ let resolveIdentifier
             range,
             arena = env.CurrentArena)
 
-    | MemberAccessNode (baseBinding, baseName, memberName, resultTy) ->
-        // LongIdent parsed as member access - create base VarRef then FieldGet
+    | MemberAccessNode (baseBinding, baseName, memberPath, resultTypes) ->
+        // LongIdent parsed as member access - create base VarRef then nested FieldGets
+        // For c.Person.Name: creates VarRef(c), then FieldGet(c, Person), then FieldGet(_, Name)
         let baseNode = builder.Create(
             SemanticKind.VarRef(baseName, baseBinding.NodeId),
             baseBinding.Type,
             range,
             arena = env.CurrentArena)
-        builder.Create(
-            SemanticKind.FieldGet(baseNode.Id, memberName),
-            resultTy,
-            range,
-            children = [baseNode.Id])
+        // Fold over member path and types to create nested FieldGets
+        let (finalNode, _) =
+            (memberPath, resultTypes)
+            ||> List.zip
+            |> List.fold (fun (currentNode: SemanticNode, _) (fieldName, fieldType) ->
+                let fieldNode = builder.Create(
+                    SemanticKind.FieldGet(currentNode.Id, fieldName),
+                    fieldType,
+                    range,
+                    children = [currentNode.Id])
+                (fieldNode, ())
+            ) (baseNode, ())
+        finalNode
 
     | ErrorNode (msg, ty) ->
         let fullName = String.concat "." parts

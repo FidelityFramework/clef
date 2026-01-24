@@ -629,9 +629,9 @@ and checkPattern (env: TypeEnv) (pat: SynPat) (expectedTy: NativeType) (range: S
 // Match Clause Checker
 //-------------------------------------------------------------------------
 
-/// Check a match clause
-and checkMatchClause (env: TypeEnv) (builder: NodeBuilder) (scrutineeTy: NativeType) (resultTy: NativeType) (clause: SynMatchClause) : MatchCase =
-    Bindings.checkMatchClause checkExpr checkPattern env builder scrutineeTy resultTy clause
+/// Check a match clause with scrutinee ID for record pattern field extraction
+and checkMatchClause (env: TypeEnv) (builder: NodeBuilder) (scrutineeId: NodeId) (scrutineeTy: NativeType) (resultTy: NativeType) (clause: SynMatchClause) : MatchCase =
+    Bindings.checkMatchClause checkExpr checkPattern env builder scrutineeId scrutineeTy resultTy clause
 
 //-------------------------------------------------------------------------
 // Inline Helper Functions (simple cases not worth extracting)
@@ -748,30 +748,10 @@ and checkDotGet (checkExpr: TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode) (
     let exprNode = checkExpr env builder expr
     let fieldParts = longDotId.LongIdent |> List.map (fun id -> id.idText)
 
-    let isStringType ty =
-        match ty with
-        | NativeType.TApp(tycon, []) when tycon.Name = "string" -> true
-        | _ -> false
-    let isArrayType ty =
-        match ty with
-        | NativeType.TApp(tycon, [_]) when tycon.Name = "array" -> true
-        | _ -> false
-
     /// Create a single FieldGet node for one field access
+    /// Uses Types.resolveFieldType for canonical field type resolution
     let createFieldGet (baseNode: SemanticNode) (fieldName: string) : SemanticNode =
-        let resolvedType = applySubst baseNode.Type
-        let resultTy =
-            match fieldName with
-            | "Pointer" when isStringType resolvedType ->
-                NativeType.TNativePtr(Types.uint8Type)
-            | "Length" when isStringType resolvedType ->
-                env.Globals.IntType
-            | "Length" when isArrayType resolvedType ->
-                env.Globals.IntType
-            | _ ->
-                let ty = freshTypeVar range
-                addConstraint (Constraint.HasMember(baseNode.Type, fieldName, ty, range)) env
-                ty
+        let resultTy = Types.resolveFieldType baseNode.Type fieldName env range
         builder.Create(
             SemanticKind.FieldGet(baseNode.Id, fieldName),
             resultTy,

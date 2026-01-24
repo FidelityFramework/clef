@@ -698,12 +698,81 @@ let checkLetOrUse
 // Match Clause Handling
 //-------------------------------------------------------------------------
 
-/// Check a match clause
+/// Generate field extraction nodes for record pattern bindings
+/// Returns list of (bindingName, extractionNodeId) pairs
+let rec private generatePatternExtractions
+    (builder: NodeBuilder)
+    (pattern: Pattern)
+    (sourceNodeId: NodeId)
+    (range: SourceRange)
+    (arena: ArenaAffinity)
+    : (string * NodeId) list =
+
+    match pattern with
+    | Pattern.Var (name, _ty) ->
+        // Simple variable binding - the source IS the value
+        [(name, sourceNodeId)]
+
+    | Pattern.Record (fields, _recordType) ->
+        // Record pattern: extract each field and recurse into nested patterns
+        fields
+        |> List.collect (fun (fieldName, fieldPattern) ->
+            // Create FieldGet to extract this field from the source
+            // Type will be inferred from the nested pattern
+            let fieldType =
+                match fieldPattern with
+                | Pattern.Var (_, ty) -> ty
+                | _ -> freshTypeVar range  // Fresh type var for nested patterns
+            let fieldGetNode = builder.Create(
+                SemanticKind.FieldGet(sourceNodeId, fieldName),
+                fieldType,
+                range,
+                arena = arena,
+                children = [sourceNodeId])
+            // Recurse into the field pattern with the FieldGet as the new source
+            generatePatternExtractions builder fieldPattern fieldGetNode.Id range arena)
+
+    | Pattern.Tuple _elements ->
+        // Tuple pattern: would need TupleGet (not yet implemented for pattern matching)
+        // For now, fall through to simple binding
+        []
+
+    | Pattern.Union (_caseName, _tagIndex, payloadOpt, _unionType) ->
+        // Union pattern: would need payload extraction
+        // For now, handle payload if present
+        match payloadOpt with
+        | Some payload -> generatePatternExtractions builder payload sourceNodeId range arena
+        | None -> []
+
+    | Pattern.As (inner, _name) ->
+        // As pattern: recurse into inner
+        generatePatternExtractions builder inner sourceNodeId range arena
+
+    | Pattern.Or (left, _right) ->
+        // Or pattern: both branches bind same vars, use left
+        generatePatternExtractions builder left sourceNodeId range arena
+
+    | Pattern.And (left, right) ->
+        // And pattern: combine bindings from both
+        generatePatternExtractions builder left sourceNodeId range arena @
+        generatePatternExtractions builder right sourceNodeId range arena
+
+    | Pattern.Array elements ->
+        // Array pattern: would need indexed access
+        elements
+        |> List.collect (fun elem -> generatePatternExtractions builder elem sourceNodeId range arena)
+
+    | Pattern.Const _ | Pattern.Wildcard | Pattern.Null | Pattern.IsType _ | Pattern.Exception _ ->
+        // No bindings for these patterns
+        []
+
+/// Check a match clause with scrutinee ID for record pattern field extraction
 let checkMatchClause
     (checkExpr: CheckExprFn)
     (checkPattern: CheckPatternFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
+    (scrutineeId: NodeId)
     (scrutineeTy: NativeType)
     (resultTy: NativeType)
     (clause: SynMatchClause)
@@ -715,20 +784,44 @@ let checkMatchClause
     // Check pattern and extract bindings
     let (pattern, patBindings) = checkPattern env pat scrutineeTy range
 
+    // Generate field extraction nodes for record patterns
+    // This creates FieldGet nodes that provide values for pattern bindings
+    let extractions = generatePatternExtractions builder pattern scrutineeId range env.CurrentArena
+
+    // Create a map from binding name to extraction NodeId
+    let extractionMap = extractions |> Map.ofList
+
     // Create PSG nodes for pattern bindings and add to environment
+    // For record patterns, the PatternBinding's "value" comes from the FieldGet
     // Following ML/FStar convention: pattern binding IS the definition
     // Collect NodeIds for inclusion in MatchCase (enables SSA assignment traversal)
-    let (bodyEnv, patternBindingIds) =
+    let (bodyEnv, patternBindingIds, _fieldGetIds) =
         patBindings
-        |> List.fold (fun (env, ids) (name, ty) ->
-            let patternBindingNode = builder.Create(
-                SemanticKind.PatternBinding(name),
-                ty,
-                range,
-                arena = env.CurrentArena)
+        |> List.fold (fun (env, bindingIds, fieldIds) (name, ty) ->
+            // Check if this binding has a field extraction
+            let (patternBindingNode, newFieldIds) =
+                match Map.tryFind name extractionMap with
+                | Some fieldGetId ->
+                    // Create PatternBinding as a child of the FieldGet
+                    // This connects the binding to its extracted value
+                    let node = builder.Create(
+                        SemanticKind.PatternBinding(name),
+                        ty,
+                        range,
+                        arena = env.CurrentArena,
+                        children = [fieldGetId])
+                    (node, fieldGetId :: fieldIds)
+                | None ->
+                    // No extraction needed (e.g., simple variable pattern matching scrutinee directly)
+                    let node = builder.Create(
+                        SemanticKind.PatternBinding(name),
+                        ty,
+                        range,
+                        arena = env.CurrentArena)
+                    (node, fieldIds)
             let env' = addBinding name ty false (Some patternBindingNode.Id) env.EnclosingFunction.IsNone env
-            (env', patternBindingNode.Id :: ids)
-        ) (env, [])
+            (env', patternBindingNode.Id :: bindingIds, newFieldIds)
+        ) (env, [], [])
     let patternBindingIds = List.rev patternBindingIds  // Preserve order
 
     // Check guard if present

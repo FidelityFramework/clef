@@ -159,7 +159,8 @@ let checkSequential
 //-------------------------------------------------------------------------
 
 /// Callback for checking match clauses
-type CheckMatchClauseFn = TypeEnv -> NodeBuilder -> NativeType -> NativeType -> SynMatchClause -> MatchCase
+/// Now includes scrutinee NodeId to enable field extraction for record patterns
+type CheckMatchClauseFn = TypeEnv -> NodeBuilder -> NodeId -> NativeType -> NativeType -> SynMatchClause -> MatchCase
 
 let checkMatch
     (checkExpr: CheckExprFn)
@@ -175,7 +176,7 @@ let checkMatch
     let resultTy = freshTypeVar range
 
     let matchCases = clauses |> List.map (fun clause ->
-        checkMatchClause env builder scrutineeNode.Type resultTy clause)
+        checkMatchClause env builder scrutineeNode.Id scrutineeNode.Type resultTy clause)
 
     builder.Create(
         SemanticKind.Match(scrutineeNode.Id, matchCases),
@@ -204,14 +205,14 @@ let checkTryWith
     // Exception handlers are like match expressions over the caught exception
     let exnType = env.Globals.ExnType
 
-    // Check each exception clause
-    let cases = withCases |> List.map (checkMatchClause env builder exnType tryNode.Type)
-
-    // Create a synthetic match node for the handlers
+    // Create a synthetic match node for the handlers (create scrutinee first so we have its ID)
     let handlerScrutinee = builder.Create(
         SemanticKind.VarRef("$exn", None),
         exnType,
         range)
+
+    // Check each exception clause with scrutinee ID for pattern binding extraction
+    let cases = withCases |> List.map (checkMatchClause env builder handlerScrutinee.Id exnType tryNode.Type)
 
     let handlerNode = builder.Create(
         SemanticKind.Match(handlerScrutinee.Id, cases),
