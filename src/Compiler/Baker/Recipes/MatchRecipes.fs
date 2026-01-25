@@ -150,8 +150,57 @@ let rec private extractPatternBindings
         // Constant patterns don't create bindings
         saturation { return patternBindings }
 
-    | _ ->
-        saturation { return patternBindings }
+    | Pattern.Record (fields, recordType) ->
+        // Record pattern: extract each field and create bindings.
+        // For each field: create FieldGet, then Binding (or recurse for nested patterns).
+        // Wildcards skip FieldGet creation to avoid orphaned nodes.
+        let expectedFieldCount =
+            match recordType with
+            | NativeType.TApp(tycon, _) -> tycon.FieldCount
+            | _ -> 0
+        if expectedFieldCount > 0 && List.length fields > expectedFieldCount then
+            failwithf "Record pattern has %d fields but record type %A only has %d fields"
+                (List.length fields) recordType expectedFieldCount
+        saturation {
+            let! bindings =
+                fields
+                |> List.mapi (fun index (fieldName, fieldPattern) ->
+                    saturation {
+                        match fieldPattern with
+                        | Pattern.Wildcard ->
+                            // Wildcard - no binding needed, don't create FieldGet (would be orphaned)
+                            return []
+
+                        | Pattern.Var (name, ty) ->
+                            // Direct variable binding - create FieldGet then bind it
+                            let! fieldId = createWithChildren (SemanticKind.FieldGet (scrutineeId, fieldName)) ty [scrutineeId]
+                            if index < List.length patternBindings then
+                                let originalBindingId = patternBindings.[index]
+                                let! bindingId = letBindAt originalBindingId name fieldId ty
+                                return [bindingId]
+                            else
+                                // No original PatternBinding - create new binding
+                                let! bindingId = letBind name fieldId ty
+                                return [bindingId]
+
+                        | nestedPattern ->
+                            // Nested pattern (Record, Tuple, etc.) - create FieldGet and recurse
+                            let fieldType = getPatternType nestedPattern
+                            let! fieldId = createWithChildren (SemanticKind.FieldGet (scrutineeId, fieldName)) fieldType [scrutineeId]
+                            let nestedBindings =
+                                if index < List.length patternBindings then
+                                    let nestedCount = countPatternBindings nestedPattern
+                                    patternBindings |> List.skip index |> List.truncate nestedCount
+                                else []
+                            return! extractPatternBindings fieldId nestedPattern nestedBindings
+                    })
+                |> sequence
+            return List.concat bindings
+        }
+
+    | unsupported ->
+        // HARD ERROR: Unsupported pattern type - do not silently fall through
+        failwithf "extractPatternBindings: Unsupported pattern type: %A. This is a compiler bug - please report." unsupported
 
 /// Compile a single pattern case to a conditional expression.
 /// Returns (guard expression, body, new binding NodeIds).
@@ -359,17 +408,67 @@ and private compilePattern
                 return (trueId, body, patternBindings)
         }
 
-    | _ ->
-        // Other patterns (Record, Array, Or, And, As, IsType, Exception)
-        // Treat as always-match for now, expand as needed
-        // CRITICAL: Only create boolLit when no guard, to avoid orphaned nodes
+    | Pattern.Record (fields, recordType) ->
+        // Record patterns always match structurally (no runtime tag check).
+        // Extract each field and create bindings inline, like Union.
         saturation {
+            // Validate field count
+            let expectedFieldCount =
+                match recordType with
+                | NativeType.TApp(tycon, _) -> tycon.FieldCount
+                | _ -> 0
+            if expectedFieldCount > 0 && List.length fields > expectedFieldCount then
+                failwithf "Record pattern has %d fields but record type %A only has %d fields"
+                    (List.length fields) recordType expectedFieldCount
+
+            // Extract and bind each field
+            let! newBindings =
+                fields
+                |> List.mapi (fun index (fieldName, fieldPattern) ->
+                    saturation {
+                        match fieldPattern with
+                        | Pattern.Wildcard ->
+                            // Wildcard - no binding needed, skip FieldGet to avoid orphaned nodes
+                            return []
+
+                        | Pattern.Var (name, ty) ->
+                            // Direct variable binding - create FieldGet then bind it
+                            let! fieldId = createWithChildren (SemanticKind.FieldGet (scrutineeId, fieldName)) ty [scrutineeId]
+                            if index < List.length patternBindings then
+                                let originalBindingId = patternBindings.[index]
+                                let! bindingId = letBindAt originalBindingId name fieldId ty
+                                return [bindingId]
+                            else
+                                let! bindingId = letBind name fieldId ty
+                                return [bindingId]
+
+                        | nestedPattern ->
+                            // Nested pattern - create FieldGet and recurse
+                            let fieldType = getPatternType nestedPattern
+                            let! fieldId = createWithChildren (SemanticKind.FieldGet (scrutineeId, fieldName)) fieldType [scrutineeId]
+                            let nestedBindings =
+                                if index < List.length patternBindings then
+                                    let nestedCount = countPatternBindings nestedPattern
+                                    patternBindings |> List.skip index |> List.truncate nestedCount
+                                else []
+                            return! extractPatternBindings fieldId nestedPattern nestedBindings
+                    })
+                |> sequence
+
+            let allBindings = List.concat newBindings
+
             match guard with
-            | Some guardId -> return (guardId, body, patternBindings)
+            | Some guardId -> return (guardId, body, allBindings)
             | None ->
                 let! trueId = boolLit true
-                return (trueId, body, patternBindings)
+                return (trueId, body, allBindings)
         }
+
+    | unsupported ->
+        // HARD ERROR: Unsupported pattern type - do not silently fall through
+        // This surfaces missing pattern support immediately rather than causing
+        // cryptic "unbound type variable" errors downstream
+        failwithf "compilePattern: Unsupported pattern type: %A. This is a compiler bug - please report." unsupported
 
 /// Map NTUKind to NativeType
 and private ntuKindToType (kind: NTUKind) : NativeType =
@@ -415,7 +514,16 @@ and private getPatternType (pattern: Pattern) : NativeType =
     | Pattern.Const lit -> literalToType lit
     | Pattern.Wildcard -> Types.unitType
     | Pattern.Null -> Types.unitType
-    | _ -> Types.unitType
+    | Pattern.Record (_, recordType) -> recordType
+    | Pattern.Array elements ->
+        match elements with
+        | [] -> mkArrayType Types.unitType
+        | first :: _ -> mkArrayType (getPatternType first)
+    | Pattern.And (left, _) -> getPatternType left
+    | Pattern.Or (left, _) -> getPatternType left
+    | Pattern.As (inner, _) -> getPatternType inner
+    | Pattern.IsType ty -> ty
+    | Pattern.Exception (exnType, _) -> exnType
 
 /// Count bindings in a pattern (recursive for nested patterns)
 and private countPatternBindings (pattern: Pattern) : int =
@@ -424,7 +532,14 @@ and private countPatternBindings (pattern: Pattern) : int =
     | Pattern.Union (_, _, Some payload, _) -> countPatternBindings payload
     | Pattern.Union (_, _, None, _) -> 0
     | Pattern.Tuple elements -> elements |> List.sumBy countPatternBindings
-    | _ -> 0
+    | Pattern.Record (fields, _) ->
+        fields |> List.sumBy (fun (_, fieldPattern) -> countPatternBindings fieldPattern)
+    | Pattern.Array elements -> elements |> List.sumBy countPatternBindings
+    | Pattern.And (left, right) -> countPatternBindings left + countPatternBindings right
+    | Pattern.Or (left, _) -> countPatternBindings left  // Or patterns must bind same names
+    | Pattern.As (inner, _) -> 1 + countPatternBindings inner  // 1 for the 'as' binding + inner
+    | Pattern.Exception (_, bindName) -> if Option.isSome bindName then 1 else 0
+    | Pattern.Wildcard | Pattern.Null | Pattern.Const _ | Pattern.IsType _ -> 0
 
 /// Get pattern bindings for a specific tuple element.
 /// Partitions the flat patternBindings list based on each element's binding count.

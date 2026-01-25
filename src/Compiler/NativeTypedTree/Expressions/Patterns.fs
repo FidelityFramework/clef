@@ -163,12 +163,36 @@ let rec checkPattern
 
     | SynPat.Record(fields, _) ->
         // Record pattern: { field1 = pat1; ... }
+        // Look up actual field types from record type, not fresh type variables.
+        // Hard failure if lookup fails - surfaces root cause immediately.
         let fieldPats =
             fields
             |> List.map (fun field ->
                 let fieldName = field.FieldName.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
                 let pat = field.Pattern
-                let fieldTy = freshTypeVar range
+                // Look up the field type from the record type (expectedTy)
+                let fieldTy =
+                    match Types.tryResolveRecordFieldType expectedTy fieldName env with
+                    | Some ty -> ty
+                    | None ->
+                        // HARD FAILURE: Field lookup failed - emit diagnostic and fail
+                        // This surfaces the root cause immediately rather than creating
+                        // unbound type variables that cause cryptic downstream errors.
+                        let resolvedTy = applySubst expectedTy
+                        let tyName =
+                            match resolvedTy with
+                            | NativeType.TApp(tycon, _) -> tycon.Name
+                            | NativeType.TVar tv -> sprintf "'%s (unresolved type variable)" tv.Name
+                            | _ -> sprintf "%A" resolvedTy
+                        addDiagnostic {
+                            Severity = NativeDiagnosticSeverity.Error
+                            Code = "FS8720"
+                            Message = sprintf "Record pattern field '%s' not found in type '%s'. Record type may not be registered in RecordDefs, or expectedTy is not resolved." fieldName tyName
+                            Range = range
+                            RelatedNodes = []
+                        } env
+                        // Return a placeholder type for error recovery, but the error is logged
+                        Types.unitType
                 let (pattern, bindings) = checkPattern checkSynType env pat fieldTy range
                 ((fieldName, pattern), bindings))
         let patterns = fieldPats |> List.map fst
