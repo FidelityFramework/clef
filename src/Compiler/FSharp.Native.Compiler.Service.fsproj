@@ -297,13 +297,13 @@
     <Compile Include="NativeTypedTree\Expressions\Intrinsics.fs" />
     <Compile Include="NativeTypedTree\Expressions\Identity.fs" />
     <Compile Include="NativeTypedTree\Expressions\Patterns.fs" />
+    <Compile Include="NativeTypedTree\Expressions\SynTypes.fs" />
     <Compile Include="NativeTypedTree\Expressions\ControlFlow.fs" />
     <Compile Include="NativeTypedTree\Expressions\TypeOperations.fs" />
     <Compile Include="NativeTypedTree\Expressions\Collections.fs" />
     <Compile Include="NativeTypedTree\Expressions\Applications.fs" />
     <Compile Include="NativeTypedTree\Expressions\Bindings.fs" />
     <!-- Coordinator - Thin dispatcher that ties modules together -->
-    <Compile Include="NativeTypedTree\Expressions\Coordinator.fs" />
     <Compile Include="NativeTypedTree\SRTPResolution.fs" />
     <Compile Include="NativeTypedTree\FSharpNativeExpr.fs" />
     <!-- Infrastructure - Nanopass phase configuration and intermediate emission -->

@@ -1076,6 +1076,8 @@ let rec mkFunctionType args result =
     | [arg] -> NativeType.TFun(arg, result)
     | arg :: rest -> NativeType.TFun(arg, mkFunctionType rest result)
 
+
+/// Construct array<'T> type
 /// Substitute type arguments into a forall type
 let instantiate (typars: TypeParam list) (args: NativeType list) (body: NativeType) : NativeType =
     if List.length typars <> List.length args then
@@ -1237,6 +1239,23 @@ module Types =
     // Expr type constructor (arity 1 - for quoted expressions)
     // Usage: NativeType.TApp(Types.exprTyCon, [innerType])
     let exprTyCon = mkTypeConRef "Expr" 1 (TypeLayout.Inline(-1, -1))
+
+    /// Construct array<'T> type
+    let mkArrayType elemType =
+        NativeType.TApp(arrayTyCon, [elemType])
+
+    /// Construct Lazy<'T> type
+    let mkLazyType elemType =
+        NativeType.TLazy elemType
+
+    /// Construct seq<'T> type
+    let mkSeqType elemType =
+        NativeType.TSeq elemType
+
+    /// Construct Expr<'T> type (quotation)
+    let mkExprType exprType =
+        NativeType.TApp(exprTyCon, [exprType])
+
     /// Try to extract NTUKind from a NativeType (for use with NTUKind predicates)
     let tryGetNTUKind (ty: NativeType) : NTUKind option =
         match ty with

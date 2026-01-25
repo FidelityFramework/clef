@@ -20,9 +20,18 @@ open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Reachability
 open FSharp.Native.Compiler.NativeTypedTree.NameResolution
-open FSharp.Native.Compiler.NativeTypedTree.Expressions.Coordinator
 open FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
-open FSharp.Native.Compiler.NativeTypedTree.Expressions.Bindings
+
+// Handler module aliases for qualified dispatch
+module Literals = FSharp.Native.Compiler.NativeTypedTree.Expressions.Literals
+module Identity = FSharp.Native.Compiler.NativeTypedTree.Expressions.Identity
+module Applications = FSharp.Native.Compiler.NativeTypedTree.Expressions.Applications
+module Bindings = FSharp.Native.Compiler.NativeTypedTree.Expressions.Bindings
+module Collections = FSharp.Native.Compiler.NativeTypedTree.Expressions.Collections
+module ControlFlow = FSharp.Native.Compiler.NativeTypedTree.Expressions.ControlFlow
+module TypeOperations = FSharp.Native.Compiler.NativeTypedTree.Expressions.TypeOperations
+module Patterns = FSharp.Native.Compiler.NativeTypedTree.Expressions.Patterns
+module SynTypes = FSharp.Native.Compiler.NativeTypedTree.Expressions.SynTypes
 
 // Infrastructure modules - use qualified names to avoid conflicts
 module PhaseConfig = FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
@@ -501,6 +510,587 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
 /// Check a single expression and return a semantic node.
 /// This is the low-level API for testing the type checker.
+//-------------------------------------------------------------------------
+// Expression Dispatch: Routes SynExpr to handler modules
+// This is a PURE ROUTING function with ZERO type logic.
+// All type checking logic lives in the handler modules.
+//-------------------------------------------------------------------------
+
+/// Check a SynType and convert to NativeType
+let rec private checkSynType (env: TypeEnv) (synType: SynType) : NativeType =
+    SynTypes.checkSynType env synType
+
+/// Check a pattern and return bindings
+and private checkPattern (env: TypeEnv) (pat: SynPat) (expectedTy: NativeType) (range: SourceRange) : Pattern * (string * NativeType) list =
+    Patterns.checkPattern checkSynType env pat expectedTy range
+
+/// Check a match clause with scrutinee ID for record pattern field extraction
+and private checkMatchClause (env: TypeEnv) (builder: NodeBuilder) (scrutineeId: NodeId) (scrutineeTy: NativeType) (resultTy: NativeType) (clause: SynMatchClause) : MatchCase =
+    checkMatchClause' checkExpr checkPattern env builder scrutineeId scrutineeTy resultTy clause
+
+/// Internal match clause checker
+and private checkMatchClause' (checkExpr: CheckExprFn) (checkPattern: TypeEnv -> SynPat -> NativeType -> SourceRange -> Pattern * (string * NativeType) list) (env: TypeEnv) (builder: NodeBuilder) (scrutineeId: NodeId) (scrutineeTy: NativeType) (resultTy: NativeType) (clause: SynMatchClause) : MatchCase =
+    Bindings.checkMatchClause checkExpr checkPattern env builder scrutineeId scrutineeTy resultTy clause
+
+/// Main expression checker. Routes SynExpr to appropriate handlers.
+/// This is a pure dispatcher - all type logic lives in handler modules.
+and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : SemanticNode =
+    let range = rangeToSourceRange syn.Range
+
+    match syn with
+    //---------------------------------------------------------------------
+    // Literals
+    //---------------------------------------------------------------------
+    | SynExpr.Const(constant, _) ->
+        let ty = Literals.typeOfConst constant
+        let litVal = Literals.constToLiteral constant
+        builder.Create(SemanticKind.Literal litVal, ty, range)
+
+    //---------------------------------------------------------------------
+    // Parenthesized expressions (transparent)
+    //---------------------------------------------------------------------
+    | SynExpr.Paren(innerExpr, _, _, _) ->
+        checkExpr env builder innerExpr
+
+    //---------------------------------------------------------------------
+    // Variable references (includes intrinsic dispatch)
+    //---------------------------------------------------------------------
+    | SynExpr.Ident(ident) ->
+        Identity.resolveIdentifier [ident.idText] env builder range ident.idRange
+
+    | SynExpr.LongIdent(_, longDotId, _, _) ->
+        let parts = longDotId.LongIdent |> List.map (fun id -> id.idText)
+        Identity.resolveIdentifier parts env builder range syn.Range
+
+    //---------------------------------------------------------------------
+    // Type annotations
+    //---------------------------------------------------------------------
+    | SynExpr.Typed(innerExpr, synType, _) ->
+        TypeOperations.checkTyped checkExpr checkSynType env builder innerExpr synType range
+
+    //---------------------------------------------------------------------
+    // Tuples
+    //---------------------------------------------------------------------
+    | SynExpr.Tuple(isStruct, exprs, _, _) ->
+        Collections.checkTuple checkExpr env builder isStruct exprs range
+
+    //---------------------------------------------------------------------
+    // F# 6 dotless indexer syntax: expr[index]
+    //---------------------------------------------------------------------
+    | SynExpr.App(_, _, objExpr, SynExpr.ArrayOrListComputed(false, indexExpr, _), _) ->
+        Collections.checkDotlessIndexGet checkExpr env builder objExpr indexExpr range
+
+    //---------------------------------------------------------------------
+    // Sequence expression: seq { ... }
+    //---------------------------------------------------------------------
+    | SynExpr.App(_, _, SynExpr.Ident(ident), SynExpr.ComputationExpr(_, compExpr, _), _)
+        when ident.idText = "seq" ->
+        Collections.checkSeq checkExpr Applications.computeCaptures env builder compExpr range
+
+    //---------------------------------------------------------------------
+    // Function application
+    //---------------------------------------------------------------------
+    | SynExpr.App(_, _isInfix, funcExpr, argExpr, _) ->
+        Applications.checkApp checkExpr env builder funcExpr argExpr syn.Range range
+
+    //---------------------------------------------------------------------
+    // Lambda expressions
+    //---------------------------------------------------------------------
+    | SynExpr.Lambda(_, _, args, bodyExpr, _, _, _) ->
+        Applications.checkLambda checkExpr (Bindings.extractLambdaParams checkSynType) env builder args bodyExpr range
+
+    //---------------------------------------------------------------------
+    // Let bindings
+    //---------------------------------------------------------------------
+    | SynExpr.LetOrUse(letOrUse) ->
+        Bindings.checkLetOrUse checkExpr checkSynType env builder letOrUse range
+
+    //---------------------------------------------------------------------
+    // Sequential expressions
+    //---------------------------------------------------------------------
+    | SynExpr.Sequential(_, _, expr1, expr2, _, _) ->
+        ControlFlow.checkSequential checkExpr env builder expr1 expr2 range
+
+    //---------------------------------------------------------------------
+    // If-then-else
+    //---------------------------------------------------------------------
+    | SynExpr.IfThenElse(condExpr, thenExpr, elseExprOpt, _, _, _, _) ->
+        ControlFlow.checkIfThenElse checkExpr env builder condExpr thenExpr elseExprOpt range
+
+    //---------------------------------------------------------------------
+    // While loops
+    //---------------------------------------------------------------------
+    | SynExpr.While(_, guardExpr, bodyExpr, _) ->
+        ControlFlow.checkWhile checkExpr env builder guardExpr bodyExpr range
+
+    //---------------------------------------------------------------------
+    // For loops
+    //---------------------------------------------------------------------
+    | SynExpr.For(_, _, ident, _, startExpr, direction, endExpr, bodyExpr, _) ->
+        ControlFlow.checkFor checkExpr env builder ident startExpr direction endExpr bodyExpr range
+
+    //---------------------------------------------------------------------
+    // Match expressions
+    //---------------------------------------------------------------------
+    | SynExpr.Match(_, scrutinee, clauses, _, _) ->
+        ControlFlow.checkMatch checkExpr checkMatchClause env builder scrutinee clauses range
+
+    //---------------------------------------------------------------------
+    // Record expressions
+    //---------------------------------------------------------------------
+    | SynExpr.Record(_, copyInfo, fields, recordRange) ->
+        Collections.checkRecord checkExpr env builder copyInfo fields recordRange range
+
+    //---------------------------------------------------------------------
+    // Array/list expressions
+    //---------------------------------------------------------------------
+    | SynExpr.ArrayOrList(isArray, exprs, _) ->
+        Collections.checkArrayOrList checkExpr env builder isArray exprs range
+
+    //---------------------------------------------------------------------
+    // Try-with expressions
+    //---------------------------------------------------------------------
+    | SynExpr.TryWith(tryExpr, withCases, _, _, _, _) ->
+        ControlFlow.checkTryWith checkExpr checkMatchClause env builder tryExpr withCases range
+
+    //---------------------------------------------------------------------
+    // Try-finally expressions
+    //---------------------------------------------------------------------
+    | SynExpr.TryFinally(tryExpr, finallyExpr, _, _, _, _) ->
+        ControlFlow.checkTryFinally checkExpr env builder tryExpr finallyExpr range
+
+    //---------------------------------------------------------------------
+    // Field access
+    //---------------------------------------------------------------------
+    | SynExpr.DotGet(expr, _, longDotId, _) ->
+        Collections.checkDotGet checkExpr env builder expr longDotId range
+
+    //---------------------------------------------------------------------
+    // Assignment - F# 6 dotless indexer set: expr[index] <- value
+    //---------------------------------------------------------------------
+    | SynExpr.Set(SynExpr.App(_, _, objExpr, SynExpr.ArrayOrListComputed(false, indexExpr, _), _), valueExpr, _) ->
+        Collections.checkDotlessIndexSet checkExpr env builder objExpr indexExpr valueExpr range
+
+    //---------------------------------------------------------------------
+    // Assignment - General case
+    //---------------------------------------------------------------------
+    | SynExpr.Set(targetExpr, valueExpr, _) ->
+        Bindings.checkSet checkExpr env builder targetExpr valueExpr range
+
+    //---------------------------------------------------------------------
+    // Do expressions
+    //---------------------------------------------------------------------
+    | SynExpr.Do(expr, _) ->
+        checkExpr env builder expr
+
+    //---------------------------------------------------------------------
+    // Null - REJECTED in F# Native (FS8100)
+    //---------------------------------------------------------------------
+    | SynExpr.Null r ->
+        addNullError r env
+        builder.Create(
+            SemanticKind.Error "null is not supported in native F#",
+            NativeType.TError "null not supported",
+            rangeToSourceRange r)
+
+    //---------------------------------------------------------------------
+    // Quote expressions
+    //---------------------------------------------------------------------
+    | SynExpr.Quote(_, isRaw, quotedExpr, _, _) ->
+        TypeOperations.checkQuote checkExpr env builder isRaw quotedExpr range
+
+    //---------------------------------------------------------------------
+    // Interpolated strings
+    //---------------------------------------------------------------------
+    | SynExpr.InterpolatedString(contents, _synStringKind, synRange) ->
+        Literals.checkInterpolatedString checkExpr env builder contents synRange range
+
+    //---------------------------------------------------------------------
+    // AddressOf: &expr or &&expr
+    //---------------------------------------------------------------------
+    | SynExpr.AddressOf(isByref, innerExpr, _, _) ->
+        TypeOperations.checkAddressOf checkExpr env builder isByref innerExpr range
+
+    //---------------------------------------------------------------------
+    // TypeApp: expr<type1, type2, ...>
+    //---------------------------------------------------------------------
+    | SynExpr.TypeApp(funcExpr, _, typeArgs, _, _, _, _) ->
+        Applications.checkTypeApp checkExpr checkSynType env builder funcExpr typeArgs syn.Range range
+
+    //---------------------------------------------------------------------
+    // ForEach: for x in collection do body
+    //---------------------------------------------------------------------
+    | SynExpr.ForEach(_, _, _, _, pat, enumExpr, bodyExpr, _) ->
+        ControlFlow.checkForEach checkExpr env builder pat enumExpr bodyExpr range
+
+    //---------------------------------------------------------------------
+    // TraitCall: SRTP member invocation
+    //---------------------------------------------------------------------
+    | SynExpr.TraitCall(supportTys, memberSig, argExpr, _) ->
+        Applications.checkTraitCall checkExpr checkSynType env builder supportTys memberSig argExpr range
+
+    //---------------------------------------------------------------------
+    // Upcast: expr :> type
+    //---------------------------------------------------------------------
+    | SynExpr.Upcast(innerExpr, targetType, _) ->
+        TypeOperations.checkUpcast checkExpr checkSynType env builder innerExpr targetType range
+
+    //---------------------------------------------------------------------
+    // InferredUpcast: upcast expr
+    //---------------------------------------------------------------------
+    | SynExpr.InferredUpcast(innerExpr, _) ->
+        TypeOperations.checkInferredUpcast checkExpr env builder innerExpr range
+
+    //---------------------------------------------------------------------
+    // Downcast: expr :?> type
+    //---------------------------------------------------------------------
+    | SynExpr.Downcast(innerExpr, targetType, _) ->
+        TypeOperations.checkDowncast checkExpr checkSynType env builder innerExpr targetType range
+
+    //---------------------------------------------------------------------
+    // InferredDowncast: downcast expr
+    //---------------------------------------------------------------------
+    | SynExpr.InferredDowncast(innerExpr, _) ->
+        TypeOperations.checkInferredDowncast checkExpr env builder innerExpr range
+
+    //---------------------------------------------------------------------
+    // TypeTest: expr :? type
+    //---------------------------------------------------------------------
+    | SynExpr.TypeTest(innerExpr, targetType, _) ->
+        TypeOperations.checkTypeTest checkExpr checkSynType env builder innerExpr targetType range
+
+    //---------------------------------------------------------------------
+    // DotIndexedGet: expr.[index]
+    //---------------------------------------------------------------------
+    | SynExpr.DotIndexedGet(objExpr, indexArgs, _, _) ->
+        Collections.checkDotIndexedGet checkExpr env builder objExpr indexArgs range
+
+    //---------------------------------------------------------------------
+    // DotIndexedSet: expr.[index] <- value
+    //---------------------------------------------------------------------
+    | SynExpr.DotIndexedSet(objExpr, indexArgs, valueExpr, _, _, _) ->
+        Collections.checkDotIndexedSet checkExpr env builder objExpr indexArgs valueExpr range
+
+    //---------------------------------------------------------------------
+    // DotSet: expr.field <- value
+    //---------------------------------------------------------------------
+    | SynExpr.DotSet(objExpr, SynLongIdent(longId, _, _), valueExpr, _) ->
+        Bindings.checkDotSet checkExpr env builder objExpr longId valueExpr range
+
+    //---------------------------------------------------------------------
+    // LongIdentSet: Module.value <- expr
+    //---------------------------------------------------------------------
+    | SynExpr.LongIdentSet(SynLongIdent(longId, _, _), valueExpr, _) ->
+        Bindings.checkLongIdentSet checkExpr env builder longId valueExpr range
+
+    //---------------------------------------------------------------------
+    // Lazy: lazy expr
+    //---------------------------------------------------------------------
+    | SynExpr.Lazy(innerExpr, _) ->
+        Collections.checkLazy checkExpr Applications.computeCaptures env builder innerExpr range
+
+    //---------------------------------------------------------------------
+    // Assert: assert expr
+    //---------------------------------------------------------------------
+    | SynExpr.Assert(condExpr, _) ->
+        ControlFlow.checkAssert checkExpr env builder condExpr range
+
+    //---------------------------------------------------------------------
+    // New: new Type(args)
+    //---------------------------------------------------------------------
+    | SynExpr.New(_, synType, argExpr, _) ->
+        Applications.checkNew checkExpr checkSynType env builder synType argExpr range
+
+    //---------------------------------------------------------------------
+    // ObjExpr: { new Interface with ... }
+    //---------------------------------------------------------------------
+    | SynExpr.ObjExpr(objType, argOption, _, bindings, members, extraImpls, _, _) ->
+        Applications.checkObjExpr checkExpr checkSynType env builder objType argOption bindings members extraImpls range
+
+    //---------------------------------------------------------------------
+    // AnonRecd: {| field = value |}
+    //---------------------------------------------------------------------
+    | SynExpr.AnonRecd(isStruct, copyInfo, recordFields, _, _trivia) ->
+        Collections.checkAnonRecd checkExpr env builder isStruct copyInfo recordFields range
+
+    //---------------------------------------------------------------------
+    // MatchLambda: function | pat -> expr
+    //---------------------------------------------------------------------
+    | SynExpr.MatchLambda(_isExnMatch, _keywordRange, clauses, _matchSeqPoint, _) ->
+        Collections.checkMatchLambda checkExpr checkMatchClause env builder clauses range
+
+    //---------------------------------------------------------------------
+    // ArrayOrListComputed: [| for x in xs -> f x |] or [ for x in xs -> f x ]
+    //---------------------------------------------------------------------
+    | SynExpr.ArrayOrListComputed(isArray, compExpr, _) ->
+        Collections.checkArrayOrListComputed checkExpr env builder isArray compExpr range
+
+    //---------------------------------------------------------------------
+    // ComputationExpr: seq { ... } or other { ... }
+    //---------------------------------------------------------------------
+    | SynExpr.ComputationExpr(hasSeqBuilder, compExpr, _) ->
+        if hasSeqBuilder then
+            Collections.checkSeq checkExpr Applications.computeCaptures env builder compExpr range
+        else
+            let compNode = checkExpr env builder compExpr
+            builder.Create(
+                SemanticKind.Sequential [compNode.Id],
+                compNode.Type,
+                range,
+                children = [compNode.Id])
+
+    //---------------------------------------------------------------------
+    // YieldOrReturn: yield expr or return expr
+    //---------------------------------------------------------------------
+    | SynExpr.YieldOrReturn((isYield, _isReturn), expr, _, _trivia) ->
+        if isYield && env.EnclosingSeqExpr.IsSome then
+            Collections.checkYield checkExpr env builder expr range
+        else
+            checkExpr env builder expr
+
+    //---------------------------------------------------------------------
+    // YieldOrReturnFrom: yield! expr or return! expr
+    //---------------------------------------------------------------------
+    | SynExpr.YieldOrReturnFrom((isYield, _isReturn), expr, _, _trivia) ->
+        if isYield && env.EnclosingSeqExpr.IsSome then
+            Collections.checkYieldBang checkExpr env builder expr range
+        else
+            checkExpr env builder expr
+
+    //---------------------------------------------------------------------
+    // DoBang: do! expr
+    //---------------------------------------------------------------------
+    | SynExpr.DoBang(expr, _, _trivia) ->
+        let exprNode = checkExpr env builder expr
+        builder.Create(
+            SemanticKind.Sequential [exprNode.Id],
+            Types.unitType,
+            range,
+            children = [exprNode.Id])
+
+    //---------------------------------------------------------------------
+    // MatchBang: match! expr with ...
+    //---------------------------------------------------------------------
+    | SynExpr.MatchBang(_, expr, clauses, _, _) ->
+        ControlFlow.checkMatchBang checkExpr checkPattern env builder expr clauses range
+
+    //---------------------------------------------------------------------
+    // WhileBang: while! expr do body
+    //---------------------------------------------------------------------
+    | SynExpr.WhileBang(_, guardExpr, bodyExpr, _) ->
+        let guardNode = checkExpr env builder guardExpr
+        let bodyNode = checkExpr env builder bodyExpr
+        builder.Create(
+            SemanticKind.WhileLoop(guardNode.Id, bodyNode.Id),
+            Types.unitType,
+            range,
+            children = [guardNode.Id; bodyNode.Id])
+
+    //---------------------------------------------------------------------
+    // ImplicitZero: implicit unit in computation expressions
+    //---------------------------------------------------------------------
+    | SynExpr.ImplicitZero _ ->
+        builder.Create(
+            SemanticKind.Literal NativeLiteral.Unit,
+            Types.unitType,
+            range)
+
+    //---------------------------------------------------------------------
+    // SequentialOrImplicitYield: expr1; expr2 in comp expr
+    //---------------------------------------------------------------------
+    | SynExpr.SequentialOrImplicitYield(_, expr1, expr2, _, _) ->
+        let node1 = checkExpr env builder expr1
+        let node2 = checkExpr env builder expr2
+        builder.Create(
+            SemanticKind.Sequential [node1.Id; node2.Id],
+            node2.Type,
+            range,
+            children = [node1.Id; node2.Id])
+
+    //---------------------------------------------------------------------
+    // Fixed: fixed expr (pin pointer)
+    //---------------------------------------------------------------------
+    | SynExpr.Fixed(innerExpr, _) ->
+        let innerNode = checkExpr env builder innerExpr
+        builder.Create(
+            SemanticKind.AddressOf(innerNode.Id, true),
+            NativeType.TByref(innerNode.Type, ByrefKind.InOut),
+            range,
+            children = [innerNode.Id])
+
+    //---------------------------------------------------------------------
+    // Dynamic: expr?name (dynamic member access)
+    //---------------------------------------------------------------------
+    | SynExpr.Dynamic(objExpr, _, memberExpr, _) ->
+        let objNode = checkExpr env builder objExpr
+        let memberNode = checkExpr env builder memberExpr
+        builder.Create(
+            SemanticKind.Application(objNode.Id, [memberNode.Id]),
+            freshTypeVar range,
+            range,
+            children = [objNode.Id; memberNode.Id])
+
+    //---------------------------------------------------------------------
+    // DotLambda: _.Property (shorthand lambda)
+    //---------------------------------------------------------------------
+    | SynExpr.DotLambda(innerExpr, _, _) ->
+        let innerNode = checkExpr env builder innerExpr
+        let argType = freshTypeVar range
+        let paramNode = builder.Create(
+            SemanticKind.PatternBinding("_"),
+            argType,
+            range)
+        let lambdaNode = builder.Create(
+            SemanticKind.Lambda([("_", argType, paramNode.Id)], innerNode.Id, [], env.EnclosingFunction, LambdaContext.RegularClosure),
+            NativeType.TFun(argType, innerNode.Type),
+            range,
+            children = [paramNode.Id; innerNode.Id])
+        builder.SetEmissionStrategy(innerNode.Id, EmissionStrategy.SeparateFunction 0)
+        lambdaNode
+
+    //---------------------------------------------------------------------
+    // DotNamedIndexedPropertySet: obj.Prop[idx] <- value
+    //---------------------------------------------------------------------
+    | SynExpr.DotNamedIndexedPropertySet(objExpr, SynLongIdent(longId, _, _), indexExpr, valueExpr, _) ->
+        Bindings.checkDotNamedIndexedPropertySet checkExpr env builder objExpr longId indexExpr valueExpr range
+
+    //---------------------------------------------------------------------
+    // NamedIndexedPropertySet: Prop(idx) <- value
+    //---------------------------------------------------------------------
+    | SynExpr.NamedIndexedPropertySet(SynLongIdent(longId, _, _), indexExpr, valueExpr, _) ->
+        let indexNode = checkExpr env builder indexExpr
+        let valueNode = checkExpr env builder valueExpr
+        let propName = longId |> List.map (fun id -> id.idText) |> String.concat "."
+        builder.Create(
+            SemanticKind.Error $"NamedIndexedPropertySet '{propName}' - requires context",
+            Types.unitType,
+            range,
+            children = [indexNode.Id; valueNode.Id])
+
+    //---------------------------------------------------------------------
+    // Typar: 'a (type parameter in expression position)
+    //---------------------------------------------------------------------
+    | SynExpr.Typar(SynTypar(ident, _, _), _) ->
+        let typarName = ident.idText
+        builder.Create(
+            SemanticKind.Error $"Type parameter '{typarName}' in expression position",
+            freshTypeVar range,
+            range)
+
+    //---------------------------------------------------------------------
+    // IndexRange: expr.[start..finish]
+    //---------------------------------------------------------------------
+    | SynExpr.IndexRange(startOpt, _, finishOpt, _, _, _) ->
+        let startNode = startOpt |> Option.map (checkExpr env builder)
+        let finishNode = finishOpt |> Option.map (checkExpr env builder)
+        let children = [startNode; finishNode] |> List.choose id |> List.map (fun n -> n.Id)
+        builder.Create(
+            SemanticKind.Error "IndexRange - requires slice support",
+            freshTypeVar range,
+            range,
+            children = children)
+
+    //---------------------------------------------------------------------
+    // IndexFromEnd: ^expr (index from end)
+    //---------------------------------------------------------------------
+    | SynExpr.IndexFromEnd(expr, _) ->
+        let exprNode = checkExpr env builder expr
+        builder.Create(
+            SemanticKind.Application(exprNode.Id, []),
+            Types.intType,
+            range,
+            children = [exprNode.Id])
+
+    //---------------------------------------------------------------------
+    // JoinIn: join ... in ... (query syntax)
+    //---------------------------------------------------------------------
+    | SynExpr.JoinIn(expr1, _, expr2, _) ->
+        let node1 = checkExpr env builder expr1
+        let node2 = checkExpr env builder expr2
+        builder.Create(
+            SemanticKind.Error "JoinIn - query syntax not supported",
+            freshTypeVar range,
+            range,
+            children = [node1.Id; node2.Id])
+
+    //---------------------------------------------------------------------
+    // DebugPoint: debugging information (transparent)
+    //---------------------------------------------------------------------
+    | SynExpr.DebugPoint(_, _, innerExpr) ->
+        checkExpr env builder innerExpr
+
+    //---------------------------------------------------------------------
+    // ArbitraryAfterError: parse recovery node
+    //---------------------------------------------------------------------
+    | SynExpr.ArbitraryAfterError(_, _) ->
+        builder.Create(
+            SemanticKind.Error "Parse error recovery node",
+            NativeType.TError "parse error",
+            range)
+
+    //---------------------------------------------------------------------
+    // FromParseError: parse error wrapper
+    //---------------------------------------------------------------------
+    | SynExpr.FromParseError(innerExpr, _) ->
+        let innerNode = checkExpr env builder innerExpr
+        builder.Create(
+            SemanticKind.Error "Expression contains parse error",
+            innerNode.Type,
+            range,
+            children = [innerNode.Id])
+
+    //---------------------------------------------------------------------
+    // DiscardAfterMissingQualificationAfterDot: A. (incomplete dot access)
+    //---------------------------------------------------------------------
+    | SynExpr.DiscardAfterMissingQualificationAfterDot(innerExpr, _, _) ->
+        let innerNode = checkExpr env builder innerExpr
+        builder.Create(
+            SemanticKind.Error "Incomplete member access (missing qualifier after dot)",
+            freshTypeVar range,
+            range,
+            children = [innerNode.Id])
+
+    //---------------------------------------------------------------------
+    // LibraryOnlyILAssembly: inline IL (FSharp.Core internal)
+    //---------------------------------------------------------------------
+    | SynExpr.LibraryOnlyILAssembly _ ->
+        builder.Create(
+            SemanticKind.Error "Inline IL assembly is not supported in native compilation",
+            NativeType.TError "IL assembly",
+            range)
+
+    //---------------------------------------------------------------------
+    // LibraryOnlyStaticOptimization: static optimization (FSharp.Core internal)
+    //---------------------------------------------------------------------
+    | SynExpr.LibraryOnlyStaticOptimization _ ->
+        builder.Create(
+            SemanticKind.Error "Static optimization is not supported in native compilation",
+            NativeType.TError "static optimization",
+            range)
+
+    //---------------------------------------------------------------------
+    // LibraryOnlyUnionCaseFieldGet: internal union field access
+    //---------------------------------------------------------------------
+    | SynExpr.LibraryOnlyUnionCaseFieldGet(expr, _, _, _) ->
+        let exprNode = checkExpr env builder expr
+        builder.Create(
+            SemanticKind.Error "Library-only union case field get",
+            freshTypeVar range,
+            range,
+            children = [exprNode.Id])
+
+    //---------------------------------------------------------------------
+    // LibraryOnlyUnionCaseFieldSet: internal union field set
+    //---------------------------------------------------------------------
+    | SynExpr.LibraryOnlyUnionCaseFieldSet(expr, _, _, valueExpr, _) ->
+        let exprNode = checkExpr env builder expr
+        let valueNode = checkExpr env builder valueExpr
+        builder.Create(
+            SemanticKind.Error "Library-only union case field set",
+            Types.unitType,
+            range,
+            children = [exprNode.Id; valueNode.Id])
+
 let checkExpression (expr: SynExpr) : CheckResult =
     let env = createTypeEnv()
     let builder = NodeBuilder()
@@ -526,7 +1116,7 @@ let checkLetBinding (binding: SynBinding) : CheckResult =
     NodeId.reset()
 
     // InlineBody, isMutable and literalValue discarded - see function doc comment for rationale
-    let (node, _inlineBody, _isMutable, _literalValue) = checkBinding checkExpr checkSynType env builder binding None
+    let (node, _inlineBody, _isMutable, _literalValue) = Bindings.checkBinding checkExpr checkSynType env builder binding None
     let diagnostics = solveAndGetDiagnostics !(env.Constraints)
 
     buildResult builder [node] Map.empty diagnostics None
@@ -604,7 +1194,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 let preCreatedBindings =
                     bindings
                     |> List.map (fun binding ->
-                        let simpleName = getBindingName binding
+                        let simpleName = Bindings.getBindingName binding
                         let placeholderTy = freshTypeVar range
                         let (SynBinding(_, _, _, isMutable, attrs, _, _, _, _, _, _, _, _)) = binding
                         let isEntryPoint = hasEntryPointAttribute attrs
@@ -630,7 +1220,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     preCreatedBindings
                     |> List.fold (fun (accEnv, accResults) (binding, simpleName, placeholderTy, preCreatedNode) ->
                         let (node, inlineBodyOpt, isMutable, literalValueOpt) =
-                            checkBinding checkExpr checkSynType envWithAllNames builder binding (Some preCreatedNode)
+                            Bindings.checkBinding checkExpr checkSynType envWithAllNames builder binding (Some preCreatedNode)
 
                         // Unify placeholder type with inferred type
                         addConstraint (Constraint.Equals(placeholderTy, node.Type, range)) accEnv
@@ -654,12 +1244,12 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 // NON-RECURSIVE BINDINGS: Sequential processing (existing behavior)
                 // Each binding can only reference bindings that came before it
                 bindings |> List.fold (fun (accEnv, accNodes) binding ->
-                    let (node, inlineBodyOpt, isMutable, literalValueOpt) = checkBinding checkExpr checkSynType accEnv builder binding None
+                    let (node, inlineBodyOpt, isMutable, literalValueOpt) = Bindings.checkBinding checkExpr checkSynType accEnv builder binding None
                     // Add the binding to environment so later bindings can reference it
                     // Register under all qualified name suffixes (handles AutoOpen modules)
                     // CRITICAL: Use actual isMutable flag for module-level mutable variables
                     // [<Literal>] bindings are registered for compile-time substitution
-                    let simpleName = getBindingName binding
+                    let simpleName = Bindings.getBindingName binding
                     let updatedEnv =
                         bindingNameSuffixes simpleName
                         |> List.fold (fun env qname ->

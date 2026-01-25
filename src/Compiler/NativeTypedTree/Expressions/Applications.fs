@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /// Application expression handlers for F# Native.
-/// Handles: App (function application), TypeApp (type application)
+/// Handles: App (function application), Lambda, TypeApp, New, ObjExpr, TraitCall
 /// Includes: Pipe operator reduction, intrinsic saturation, DU constructor detection
 module FSharp.Native.Compiler.NativeTypedTree.Expressions.Applications
 
@@ -634,3 +634,152 @@ let checkLambda
     builder.SetEmissionStrategy(bodyNode.Id, EmissionStrategy.SeparateFunction (List.length captures))
 
     lambdaNode
+
+
+//-------------------------------------------------------------------------
+// New Expression: new Type(args)
+//-------------------------------------------------------------------------
+
+/// Check New: new Type(args)
+let checkNew
+    (checkExpr: CheckExprFn)
+    (checkSynType: CheckSynTypeFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (synType: SynType)
+    (argExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let targetType = checkSynType env synType
+    let argNode = checkExpr env builder argExpr
+    builder.Create(
+        SemanticKind.Application(argNode.Id, []),
+        targetType,
+        range,
+        children = [argNode.Id])
+
+//-------------------------------------------------------------------------
+// Object Expression: { new Interface with ... }
+//-------------------------------------------------------------------------
+
+/// Check ObjExpr: { new Interface with ... }
+let checkObjExpr
+    (checkExpr: CheckExprFn)
+    (checkSynType: CheckSynTypeFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (objType: SynType)
+    (argOption: (SynExpr * Ident option) option)
+    (bindings: SynBinding list)
+    (members: SynMemberDefn list)
+    (extraImpls: SynInterfaceImpl list)
+    (range: SourceRange)
+    : SemanticNode =
+    let interfaceType = checkSynType env objType
+
+    let argNodeIds =
+        match argOption with
+        | Some (argExpr, _asIdent) ->
+            let argNode = checkExpr env builder argExpr
+            [argNode.Id]
+        | None -> []
+
+    let bindingNodes = bindings |> List.map (fun binding ->
+        match binding with
+        | SynBinding(_, _, _, _, _, _, _, _, _, bodyExpr, _, _, _) ->
+            checkExpr env builder bodyExpr)
+
+    let memberNodes = members |> List.collect (fun memberDefn ->
+        match memberDefn with
+        | SynMemberDefn.Member(memberBinding, _) ->
+            match memberBinding with
+            | SynBinding(_, _, _, _, _, _, _, _, _, bodyExpr, _, _, _) ->
+                [checkExpr env builder bodyExpr]
+        | SynMemberDefn.GetSetMember(getOpt, setOpt, _, _) ->
+            [ match getOpt with
+              | Some (SynBinding(_, _, _, _, _, _, _, _, _, bodyExpr, _, _, _)) ->
+                  checkExpr env builder bodyExpr
+              | None -> ()
+              match setOpt with
+              | Some (SynBinding(_, _, _, _, _, _, _, _, _, bodyExpr, _, _, _)) ->
+                  checkExpr env builder bodyExpr
+              | None -> () ]
+        | SynMemberDefn.AutoProperty(synExpr = bodyExpr) ->
+            [checkExpr env builder bodyExpr]
+        | SynMemberDefn.LetBindings(bindings, _, _, _, _) ->
+            bindings |> List.map (fun binding ->
+                match binding with
+                | SynBinding(_, _, _, _, _, _, _, _, _, bodyExpr, _, _, _) ->
+                    checkExpr env builder bodyExpr)
+        | _ -> [])
+
+    let extraImplNodes = extraImpls |> List.collect (fun impl ->
+        match impl with
+        | SynInterfaceImpl(interfaceTy, _, implBindings, implMembers, _) ->
+            let _implType = checkSynType env interfaceTy
+            let implBindingNodes = implBindings |> List.map (fun binding ->
+                match binding with
+                | SynBinding(_, _, _, _, _, _, _, _, _, bodyExpr, _, _, _) ->
+                    checkExpr env builder bodyExpr)
+            let implMemberNodes = implMembers |> List.collect (fun memberDefn ->
+                match memberDefn with
+                | SynMemberDefn.Member(memberBinding, _) ->
+                    match memberBinding with
+                    | SynBinding(_, _, _, _, _, _, _, _, _, bodyExpr, _, _, _) ->
+                        [checkExpr env builder bodyExpr]
+                | _ -> [])
+            implBindingNodes @ implMemberNodes)
+
+    let allMemberNodeIds =
+        argNodeIds @
+        (bindingNodes |> List.map (fun n -> n.Id)) @
+        (memberNodes |> List.map (fun n -> n.Id)) @
+        (extraImplNodes |> List.map (fun n -> n.Id))
+
+    builder.Create(
+        SemanticKind.ObjectExpr(interfaceType, allMemberNodeIds),
+        interfaceType,
+        range,
+        children = allMemberNodeIds)
+
+//-------------------------------------------------------------------------
+// Trait Call: SRTP member invocation
+//-------------------------------------------------------------------------
+
+/// Check TraitCall (SRTP)
+let checkTraitCall
+    (checkExpr: CheckExprFn)
+    (checkSynType: CheckSynTypeFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (supportTys: SynType)
+    (memberSig: SynMemberSig)
+    (argExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let argNode = checkExpr env builder argExpr
+    let constraintType = checkSynType env supportTys
+    let constrainedTypes =
+        match constraintType with
+        | NativeType.TTuple(elemTys, _) -> elemTys
+        | ty -> [ty]
+
+    let memberName =
+        match memberSig with
+        | SynMemberSig.Member(SynValSig(ident = SynIdent(id, _)), _, _, _) -> id.idText
+        | _ -> "unknown_trait"
+
+    let resultType =
+        match memberSig with
+        | SynMemberSig.Member(SynValSig(synType = synRetType), _, _, _) ->
+            checkSynType env synRetType
+        | _ -> freshTypeVar range
+
+    for constrainedTy in constrainedTypes do
+        addConstraint (Constraint.HasMember(constrainedTy, memberName, resultType, range)) env
+
+    builder.Create(
+        SemanticKind.TraitCall(memberName, constrainedTypes, argNode.Id),
+        resultType,
+        range,
+        children = [argNode.Id])

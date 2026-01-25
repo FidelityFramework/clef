@@ -516,16 +516,44 @@ let addConstraint (c: Constraint) (env: TypeEnv) : unit =
 
 /// Resolve a field's type, handling records directly and falling back to SRTP constraints.
 /// This is the SINGLE entry point for field type resolution - used by both Identity.fs and Coordinator.fs.
-let resolveFieldType (baseType: NativeType) (fieldName: string) (env: TypeEnv) (range: SourceRange) : NativeType =
-    let isStringType ty =
-        match ty with
-        | NativeType.TApp(tycon, []) when tycon.Name = "string" -> true
-        | _ -> false
-    let isArrayType ty =
-        match ty with
-        | NativeType.TApp(tycon, [_]) when tycon.Name = "array" -> true
-        | _ -> false
+//-------------------------------------------------------------------------
+// Type Predicate Helpers
+// Shared utilities for checking common type forms
+//-------------------------------------------------------------------------
 
+/// Check if a type is the string type
+let isStringType (ty: NativeType) : bool =
+    match ty with
+    | NativeType.TApp(tycon, []) when tycon.Name = "string" -> true
+    | _ -> false
+
+/// Check if a type is an array type
+let isArrayType (ty: NativeType) : bool =
+    match ty with
+    | NativeType.TApp(tycon, [_]) when tycon.Name = "array" -> true
+    | _ -> false
+
+/// Get the element type of an array type
+let tryGetArrayElementType (ty: NativeType) : NativeType option =
+    match ty with
+    | NativeType.TApp(tycon, [elemType]) when tycon.Name = "array" -> Some elemType
+    | _ -> None
+
+/// Resolve the element type for index operations (array, string, or via constraint)
+let resolveIndexElementType (objType: NativeType) (env: TypeEnv) (range: SourceRange) : NativeType =
+    match objType with
+    | NativeType.TApp(tc, [elemType]) when tc.Name = "array" -> elemType
+    | _ when isStringType objType -> Types.charType
+    | NativeType.TVar _ ->
+        let elemType = freshTypeVar range
+        addConstraint (Constraint.Equals(objType, NativeTypes.Types.mkArrayType elemType, range)) env
+        elemType
+    | _ ->
+        let resultType = freshTypeVar range
+        addConstraint (Constraint.HasMember(objType, "Item", resultType, range)) env
+        resultType
+
+let resolveFieldType (baseType: NativeType) (fieldName: string) (env: TypeEnv) (range: SourceRange) : NativeType =
     let resolvedType = applySubst baseType
 
     // 1. Check intrinsic members (string.Pointer, string.Length, array.Length)

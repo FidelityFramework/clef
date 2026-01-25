@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /// Control flow expression handlers for F# Native.
-/// Handles: If-then-else, While, For, Match, Try-with, Try-finally
+/// Handles: If-then-else, While, For, ForEach, Match, Try-with, Try-finally, Assert, MatchBang
 module FSharp.Native.Compiler.NativeTypedTree.Expressions.ControlFlow
 
 open FSharp.Native.Compiler.Syntax
@@ -260,3 +260,56 @@ let checkForEach
         Types.unitType,
         range,
         children = [enumNode.Id; bodyNode.Id])
+
+
+//-------------------------------------------------------------------------
+// Assert
+//-------------------------------------------------------------------------
+
+/// Check Assert: assert expr
+let checkAssert
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (condExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let condNode = checkExpr env builder condExpr
+    addConstraint (Constraint.Equals(condNode.Type, Types.boolType, range)) env
+    builder.Create(
+        SemanticKind.Application(condNode.Id, []),
+        Types.unitType,
+        range,
+        children = [condNode.Id])
+
+//-------------------------------------------------------------------------
+// MatchBang (computation expression match)
+//-------------------------------------------------------------------------
+
+/// Type alias for pattern checking callback
+type CheckPatternFn = TypeEnv -> SynPat -> NativeType -> SourceRange -> Pattern * (string * NativeType) list
+
+/// Check MatchBang: match! expr with ...
+let checkMatchBang
+    (checkExpr: CheckExprFn)
+    (checkPattern: CheckPatternFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (expr: SynExpr)
+    (clauses: SynMatchClause list)
+    (range: SourceRange)
+    : SemanticNode =
+    let scrutineeNode = checkExpr env builder expr
+    let matchCases = clauses |> List.map (fun (SynMatchClause(pat, guardOpt, resultExpr, _, _, _)) ->
+        let (pattern, _patBindings) = checkPattern env pat scrutineeNode.Type range
+        let guardNode = guardOpt |> Option.map (checkExpr env builder)
+        let bodyNode = checkExpr env builder resultExpr
+        { Pattern = pattern; PatternBindings = []; Guard = guardNode |> Option.map (fun g -> g.Id); Body = bodyNode.Id })
+    let resultType = if List.isEmpty matchCases then Types.unitType else freshTypeVar range
+    builder.Create(
+        SemanticKind.Match(scrutineeNode.Id, matchCases),
+        resultType,
+        range,
+        children = scrutineeNode.Id :: (matchCases |> List.collect (fun mc ->
+            let guardAndBody = match mc.Guard with Some gid -> [gid; mc.Body] | None -> [mc.Body]
+            mc.PatternBindings @ guardAndBody)))

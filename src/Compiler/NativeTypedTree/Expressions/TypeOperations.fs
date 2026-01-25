@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /// Type operation handlers for F# Native.
-/// Handles: Typed (annotation), Upcast, Downcast, TypeTest, AddressOf
+/// Handles: Typed (annotation), Upcast, Downcast, TypeTest, AddressOf, Quote
 module FSharp.Native.Compiler.NativeTypedTree.Expressions.TypeOperations
 
 open FSharp.Native.Compiler.Syntax
@@ -195,5 +195,29 @@ let checkTypeTest
     builder.Create(
         SemanticKind.TypeTest(innerNode.Id, targetTy),
         Types.boolType,
+        range,
+        children = [innerNode.Id])
+
+
+//-------------------------------------------------------------------------
+// Quotations
+//-------------------------------------------------------------------------
+
+/// Check Quote: <@ expr @> or <@@ expr @@>
+let checkQuote
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (isRaw: bool)
+    (quotedExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let innerNode = checkExpr env builder quotedExpr
+    let quotedType =
+        if isRaw then Types.mkExprType (freshTypeVar range)
+        else Types.mkExprType innerNode.Type
+    builder.Create(
+        SemanticKind.Quote(innerNode.Id, not isRaw),
+        quotedType,
         range,
         children = [innerNode.Id])

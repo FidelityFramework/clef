@@ -1,12 +1,17 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 /// Literal and constant handling for F# Native expression checking.
-/// This module handles SynConst → NativeLiteral and type inference for literals.
+/// This module handles SynConst → NativeLiteral and type inference for literals,
+/// and interpolated string expression checking.
 module FSharp.Native.Compiler.NativeTypedTree.Expressions.Literals
 
 open FSharp.Native.Compiler.Syntax
+open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
+open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
+open FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
 
 //-------------------------------------------------------------------------
 // Constant Type Inference
@@ -78,3 +83,52 @@ let rec constToLiteral (c: SynConst) : NativeLiteral =
     | SynConst.SourceIdentifier(_, value, _) -> NativeLiteral.String value
     | SynConst.Bytes(bytes, _, _) -> NativeLiteral.ByteArray bytes
     | SynConst.UInt16s values -> NativeLiteral.UInt16Array values
+
+
+//-------------------------------------------------------------------------
+// Interpolated Strings
+//-------------------------------------------------------------------------
+
+/// Callback type for expression checking
+type CheckExprFn = TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode
+
+/// Check InterpolatedString: $"Hello {name}!"
+/// Converts to String.concat2 applications
+let checkInterpolatedString
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (contents: SynInterpolatedStringPart list)
+    (synRange: range)
+    (range: SourceRange)
+    : SemanticNode =
+    let partExprs =
+        contents |> List.choose (fun part ->
+            match part with
+            | SynInterpolatedStringPart.String(value, partRange) ->
+                if System.String.IsNullOrEmpty(value) then None
+                else Some (SynExpr.Const(SynConst.String(value, SynStringKind.Regular, partRange), partRange))
+            | SynInterpolatedStringPart.FillExpr(fillExpr, _qualifiers) ->
+                Some fillExpr)
+
+    match partExprs with
+    | [] ->
+        builder.Create(
+            SemanticKind.Literal(NativeLiteral.String ""),
+            Types.stringType,
+            range)
+    | [single] ->
+        checkExpr env builder single
+    | first :: rest ->
+        let concat2Ident =
+            SynExpr.LongIdent(
+                false,
+                SynLongIdent([Ident("String", synRange); Ident("concat2", synRange)], [synRange], [None; None]),
+                None,
+                synRange)
+        let resultExpr =
+            rest |> List.fold (fun accExpr nextExpr ->
+                let app1 = SynExpr.App(ExprAtomicFlag.NonAtomic, false, concat2Ident, accExpr, synRange)
+                SynExpr.App(ExprAtomicFlag.NonAtomic, false, app1, nextExpr, synRange)
+            ) first
+        checkExpr env builder resultExpr

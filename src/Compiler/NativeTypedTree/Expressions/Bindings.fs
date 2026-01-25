@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /// Binding handling for F# Native.
-/// Handles: Let, LetRec, Lambda, pattern bindings
+/// Handles: Let, LetRec, Lambda, pattern bindings, Set operations
 module FSharp.Native.Compiler.NativeTypedTree.Expressions.Bindings
 
 open FSharp.Native.Compiler.Syntax
@@ -17,6 +17,9 @@ open FSharp.Native.Compiler.NativeTypedTree.NameResolution
 open FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
 open FSharp.Native.Compiler.NativeTypedTree.Expressions.Literals
 open FSharp.Native.Compiler.NativeTypedTree.Expressions.Applications
+
+// Module alias for qualified access to shared utilities
+module Types = FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
 
 //-------------------------------------------------------------------------
 // Callback Types
@@ -839,3 +842,97 @@ let checkMatchClause
       PatternBindings = patternBindingIds
       Guard = guardNode |> Option.map (fun n -> n.Id)
       Body = bodyNode.Id }
+
+
+//-------------------------------------------------------------------------
+// Set Operations: Assignment expressions
+//-------------------------------------------------------------------------
+
+/// Check Set: target <- value (general assignment)
+let checkSet
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (targetExpr: SynExpr)
+    (valueExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let targetNode = checkExpr env builder targetExpr
+    let valueNode = checkExpr env builder valueExpr
+    addConstraint (Constraint.Equals(targetNode.Type, valueNode.Type, range)) env
+    builder.Create(
+        SemanticKind.Set(targetNode.Id, valueNode.Id),
+        Types.unitType,
+        range,
+        children = [targetNode.Id; valueNode.Id])
+
+/// Check DotSet: expr.field <- value
+let checkDotSet
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (objExpr: SynExpr)
+    (longId: Ident list)
+    (valueExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let objNode = checkExpr env builder objExpr
+    let valueNode = checkExpr env builder valueExpr
+    let fieldName = longId |> List.map (fun id -> id.idText) |> String.concat "."
+    builder.Create(
+        SemanticKind.FieldSet(objNode.Id, fieldName, valueNode.Id),
+        Types.unitType,
+        range,
+        children = [objNode.Id; valueNode.Id])
+
+/// Check LongIdentSet: Module.value <- expr
+let checkLongIdentSet
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (longId: Ident list)
+    (valueExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let valueNode = checkExpr env builder valueExpr
+    let targetName = longId |> List.map (fun id -> id.idText) |> String.concat "."
+    match tryLookupBinding targetName env with
+    | Some binding when binding.IsMutable ->
+        let targetNode = builder.Create(
+            SemanticKind.VarRef(targetName, binding.NodeId),
+            binding.Type,
+            range)
+        builder.Create(
+            SemanticKind.Set(targetNode.Id, valueNode.Id),
+            Types.unitType,
+            range,
+            children = [targetNode.Id; valueNode.Id])
+    | _ ->
+        builder.Create(
+            SemanticKind.Error $"Cannot assign to '{targetName}' (not found or not mutable)",
+            NativeType.TError "assignment error",
+            range)
+
+/// Check DotNamedIndexedPropertySet: obj.Prop[idx] <- value
+let checkDotNamedIndexedPropertySet
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (objExpr: SynExpr)
+    (longId: Ident list)
+    (indexExpr: SynExpr)
+    (valueExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let objNode = checkExpr env builder objExpr
+    let indexNode = checkExpr env builder indexExpr
+    let valueNode = checkExpr env builder valueExpr
+    let propName = longId |> List.map (fun id -> id.idText) |> String.concat "."
+
+    addConstraint (Constraint.HasMember(objNode.Type, propName, freshTypeVar range, range)) env
+
+    builder.Create(
+        SemanticKind.NamedIndexedPropertySet(objNode.Id, propName, indexNode.Id, valueNode.Id),
+        Types.unitType,
+        range,
+        children = [objNode.Id; indexNode.Id; valueNode.Id])

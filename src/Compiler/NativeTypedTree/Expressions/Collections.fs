@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /// Collection expression handlers for F# Native.
-/// Handles: Tuple, Array, List, Record, AnonRecd
+/// Handles: Tuple, Array, List, Record, AnonRecd, Indexing, Field access, Lazy, Seq
 module FSharp.Native.Compiler.NativeTypedTree.Expressions.Collections
 
 open FSharp.Native.Compiler.Syntax
@@ -15,6 +15,10 @@ open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 open FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
+
+// Module aliases for qualified access
+module Types = FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
+module NativeTypes = FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 
 //-------------------------------------------------------------------------
 // Callback Types
@@ -346,3 +350,372 @@ let checkMatchLambda
     builder.SetEmissionStrategy(matchNode.Id, EmissionStrategy.SeparateFunction 0)
 
     lambdaNode
+
+
+//-------------------------------------------------------------------------
+// Indexing Operations
+//-------------------------------------------------------------------------
+
+/// Check dotless indexer get: expr[index]
+let checkDotlessIndexGet
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (objExpr: SynExpr)
+    (indexExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let objNode = checkExpr env builder objExpr
+    let indexNodes =
+        match indexExpr with
+        | SynExpr.Tuple(_, exprs, _, _) -> exprs |> List.map (checkExpr env builder)
+        | _ -> [checkExpr env builder indexExpr]
+
+    match indexNodes with
+    | [single] ->
+        addConstraint (Constraint.Equals(single.Type, Types.intType, range)) env
+    | _ -> ()
+
+    let indexNodeId =
+        match indexNodes with
+        | [single] -> single.Id
+        | multiple ->
+            let multipleNodeIds = multiple |> List.map (fun n -> n.Id)
+            let multipleNodeTypes = multiple |> List.map (fun n -> n.Type)
+            let tupleNode = builder.Create(
+                SemanticKind.TupleExpr(multipleNodeIds),
+                NativeType.TTuple(multipleNodeTypes, false),
+                range,
+                children = multipleNodeIds)
+            tupleNode.Id
+
+    let elementType = resolveIndexElementType (applySubst objNode.Type) env range
+
+    let allChildNodeIds = objNode.Id :: (indexNodes |> List.map (fun n -> n.Id))
+    builder.Create(
+        SemanticKind.IndexGet(objNode.Id, indexNodeId),
+        elementType,
+        range,
+        children = allChildNodeIds)
+
+/// Check dotless indexer set: expr[index] <- value
+let checkDotlessIndexSet
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (objExpr: SynExpr)
+    (indexExpr: SynExpr)
+    (valueExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let objNode = checkExpr env builder objExpr
+    let valueNode = checkExpr env builder valueExpr
+    let indexNodes =
+        match indexExpr with
+        | SynExpr.Tuple(_, exprs, _, _) -> exprs |> List.map (checkExpr env builder)
+        | _ -> [checkExpr env builder indexExpr]
+
+    match indexNodes with
+    | [single] ->
+        addConstraint (Constraint.Equals(single.Type, Types.intType, range)) env
+    | _ -> ()
+
+    let indexNodeId =
+        match indexNodes with
+        | [single] -> single.Id
+        | multiple ->
+            let multipleNodeIds = multiple |> List.map (fun n -> n.Id)
+            let multipleNodeTypes = multiple |> List.map (fun n -> n.Type)
+            let tupleNode = builder.Create(
+                SemanticKind.TupleExpr(multipleNodeIds),
+                NativeType.TTuple(multipleNodeTypes, false),
+                range,
+                children = multipleNodeIds)
+            tupleNode.Id
+
+    let elementType = resolveIndexElementType (applySubst objNode.Type) env range
+    addConstraint (Constraint.Equals(valueNode.Type, elementType, range)) env
+
+    let allChildNodeIds = objNode.Id :: (indexNodes |> List.map (fun n -> n.Id)) @ [valueNode.Id]
+    builder.Create(
+        SemanticKind.IndexSet(objNode.Id, indexNodeId, valueNode.Id),
+        Types.unitType,
+        range,
+        children = allChildNodeIds)
+
+/// Check DotIndexedGet: expr.[index]
+let checkDotIndexedGet
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (objExpr: SynExpr)
+    (indexArgs: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let objNode = checkExpr env builder objExpr
+    let indexNodes =
+        match indexArgs with
+        | SynExpr.Tuple(_, exprs, _, _) -> exprs |> List.map (checkExpr env builder)
+        | indexExpr -> [checkExpr env builder indexExpr]
+
+    match indexNodes with
+    | [single] ->
+        addConstraint (Constraint.Equals(single.Type, Types.intType, range)) env
+    | _ -> ()
+
+    let indexNodeId =
+        match indexNodes with
+        | [single] -> single.Id
+        | multiple ->
+            let multipleNodeIds = multiple |> List.map (fun n -> n.Id)
+            let multipleNodeTypes = multiple |> List.map (fun n -> n.Type)
+            let tupleNode = builder.Create(
+                SemanticKind.TupleExpr(multipleNodeIds),
+                NativeType.TTuple(multipleNodeTypes, false),
+                range,
+                children = multipleNodeIds)
+            tupleNode.Id
+
+    let elementType = resolveIndexElementType (applySubst objNode.Type) env range
+
+    let allChildNodeIds = objNode.Id :: (indexNodes |> List.map (fun n -> n.Id))
+    builder.Create(
+        SemanticKind.IndexGet(objNode.Id, indexNodeId),
+        elementType,
+        range,
+        children = allChildNodeIds)
+
+/// Check DotIndexedSet: expr.[index] <- value
+let checkDotIndexedSet
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (objExpr: SynExpr)
+    (indexArgs: SynExpr)
+    (valueExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let objNode = checkExpr env builder objExpr
+    let indexNodes =
+        match indexArgs with
+        | SynExpr.Tuple(_, exprs, _, _) -> exprs |> List.map (checkExpr env builder)
+        | indexExpr -> [checkExpr env builder indexExpr]
+    let valueNode = checkExpr env builder valueExpr
+    let indexNodeId =
+        match indexNodes with
+        | [single] -> single.Id
+        | multiple ->
+            let multipleNodeIds = multiple |> List.map (fun n -> n.Id)
+            let multipleNodeTypes = multiple |> List.map (fun n -> n.Type)
+            let tupleNode = builder.Create(
+                SemanticKind.TupleExpr(multipleNodeIds),
+                NativeType.TTuple(multipleNodeTypes, false),
+                range,
+                children = multipleNodeIds)
+            tupleNode.Id
+    let allChildNodeIds = objNode.Id :: valueNode.Id :: (indexNodes |> List.map (fun n -> n.Id))
+    builder.Create(
+        SemanticKind.IndexSet(objNode.Id, indexNodeId, valueNode.Id),
+        Types.unitType,
+        range,
+        children = allChildNodeIds)
+
+//-------------------------------------------------------------------------
+// Field Access
+//-------------------------------------------------------------------------
+
+/// Check DotGet: expr.field or expr.field1.field2...
+/// Multi-part paths (e.g., c.Person.Name) create nested FieldGet nodes
+let checkDotGet
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (expr: SynExpr)
+    (longDotId: SynLongIdent)
+    (range: SourceRange)
+    : SemanticNode =
+    let exprNode = checkExpr env builder expr
+    let fieldParts = longDotId.LongIdent |> List.map (fun id -> id.idText)
+
+    /// Create a single FieldGet node for one field access
+    /// Uses Types.resolveFieldType for canonical field type resolution
+    let createFieldGet (baseNode: SemanticNode) (fieldName: string) : SemanticNode =
+        let resultTy = Types.resolveFieldType baseNode.Type fieldName env range
+        builder.Create(
+            SemanticKind.FieldGet(baseNode.Id, fieldName),
+            resultTy,
+            range,
+            children = [baseNode.Id])
+
+    // Fold over field parts, creating nested FieldGet nodes
+    // e.g., c.Person.Name becomes FieldGet(FieldGet(c, "Person"), "Name")
+    fieldParts |> List.fold createFieldGet exprNode
+
+//-------------------------------------------------------------------------
+// Lazy Expressions (PRD-14)
+//-------------------------------------------------------------------------
+
+/// Check Lazy: lazy expr
+/// PRD-14: Creates LazyExpr node with a thunk (unit -> 'T) wrapping the body
+/// Thunk calling convention (Option B): thunk receives lazy struct pointer and extracts its own captures
+/// Captures are computed using the same analysis as Lambda (MLKit-style flat closures)
+let checkLazy
+    (checkExpr: CheckExprFn)
+    (computeCaptures: NodeBuilder -> TypeEnv -> NodeId -> Set<string> -> CaptureInfo list)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (innerExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    let innerNode = checkExpr env builder innerExpr
+    let lazyType = NativeTypes.Types.mkLazyType innerNode.Type
+
+    // Capture analysis: find VarRefs in body that are NOT the unit parameter
+    // These are variables captured from the enclosing scope
+    // PRD-14: Lazy values are "extended flat closures" with inlined captures
+    let unitParamName = "_unit"
+    let captures = computeCaptures builder env innerNode.Id (Set.singleton unitParamName)
+
+    // Create a thunk Lambda: unit -> 'T
+    // The thunk takes a unit parameter and returns the lazy body
+    // Thunk captures the same variables as the lazy expression
+    let thunkType = NativeType.TFun(Types.unitType, innerNode.Type)
+    let thunkLambda = builder.Create(
+        SemanticKind.Lambda([("_unit", Types.unitType, NodeId -1)], innerNode.Id, captures, env.EnclosingFunction, LambdaContext.LazyThunk),
+        thunkType,
+        range,
+        children = [innerNode.Id])
+
+    // Architectural fix (January 2026): Mark Lambda body as SeparateFunction
+    // Pass capture count so SSA assignment starts body SSAs after capture extraction
+    builder.SetEmissionStrategy(innerNode.Id, EmissionStrategy.SeparateFunction (List.length captures))
+
+    // Create LazyExpr with the thunk as the body
+    // LazyExpr stores the same captures (they're inlined in the lazy struct)
+    builder.Create(
+        SemanticKind.LazyExpr(thunkLambda.Id, captures),
+        lazyType,
+        range,
+        children = [thunkLambda.Id])
+
+//-------------------------------------------------------------------------
+// Sequence Expressions (PRD-15)
+//-------------------------------------------------------------------------
+
+/// Check seq expression: seq { ... }
+/// PRD-15: Creates a SeqExpr with a MoveNext thunk (LambdaContext.SeqGenerator)
+let checkSeq
+    (checkExpr: CheckExprFn)
+    (computeCaptures: NodeBuilder -> TypeEnv -> NodeId -> Set<string> -> CaptureInfo list)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (bodyExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    // Check the body with EnclosingSeqExpr set as a marker (NodeId -1 = inside seq)
+    // This enables checkYield to validate that yield appears inside a seq
+    let bodyEnv = { env with EnclosingSeqExpr = Some (NodeId -1) }
+    let bodyNode = checkExpr bodyEnv builder bodyExpr
+
+    // Infer element type from Yield nodes in the body
+    // yield returns unit, so we look at the type of the VALUE being yielded
+    let rec findYieldValueType (nodeId: NodeId) : NativeType option =
+        match Map.tryFind nodeId builder.Nodes with
+        | None -> None
+        | Some node ->
+            match node.Kind with
+            | SemanticKind.Yield valueId ->
+                // Found a yield - get the type of the value expression
+                match Map.tryFind valueId builder.Nodes with
+                | Some valueNode -> Some valueNode.Type
+                | None -> None
+            | _ ->
+                // Recurse into children
+                node.Children |> List.tryPick findYieldValueType
+
+    let elementType =
+        match findYieldValueType bodyNode.Id with
+        | Some ty -> ty
+        | None -> freshTypeVar range  // No yields found, use type variable
+    let seqType = NativeTypes.Types.mkSeqType elementType
+
+    // Capture analysis: find VarRefs in body that are NOT local to the seq
+    // PRD-15: Seq values are "extended flat closures" with inlined captures
+    let captures = computeCaptures builder env bodyNode.Id Set.empty
+
+    // Create MoveNext thunk: (seq_ptr: nativeptr<Seq<T>>) -> bool
+    // The thunk receives pointer to the seq struct, extracts its captures
+    // Returns true if a value was yielded, false if exhausted
+    let seqPtrType = NativeType.TNativePtr seqType
+    let moveNextType = NativeType.TFun(seqPtrType, Types.boolType)
+    let moveNextLambda = builder.Create(
+        SemanticKind.Lambda([("_seq_ptr", seqPtrType, NodeId -1)], bodyNode.Id, captures, env.EnclosingFunction, LambdaContext.SeqGenerator),
+        moveNextType,
+        range,
+        children = [bodyNode.Id])
+
+    // Architectural fix (January 2026): Mark Lambda body as SeparateFunction
+    // Pass capture count so SSA assignment starts body SSAs after capture extraction
+    builder.SetEmissionStrategy(bodyNode.Id, EmissionStrategy.SeparateFunction (List.length captures))
+
+    // Create SeqExpr with the MoveNext thunk as body
+    builder.Create(
+        SemanticKind.SeqExpr(moveNextLambda.Id, captures),
+        seqType,
+        range,
+        children = [moveNextLambda.Id])
+
+/// Check yield: yield value
+/// PRD-15: Produces a single value in the sequence
+let checkYield
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (valueExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    // Validate that yield appears inside a seq expression
+    match env.EnclosingSeqExpr with
+    | None ->
+        // Return error node - yield outside seq context
+        builder.Create(
+            SemanticKind.Error "yield may only appear directly in a seq expression",
+            Types.unitType,
+            range)
+    | Some _ ->
+        let valueNode = checkExpr env builder valueExpr
+        // yield is an effectful operation - it stores the value but returns unit
+        // The value's type is captured in the Yield node for codegen, but the
+        // expression type is unit (yield doesn't return a value to the caller)
+        builder.Create(
+            SemanticKind.Yield valueNode.Id,
+            Types.unitType,
+            range,
+            children = [valueNode.Id])
+
+/// Check yield!: yield! seq
+/// PRD-15: Flattens another sequence into this one
+let checkYieldBang
+    (checkExpr: CheckExprFn)
+    (env: TypeEnv)
+    (builder: NodeBuilder)
+    (seqExpr: SynExpr)
+    (range: SourceRange)
+    : SemanticNode =
+    // Validate that yield! appears inside a seq expression
+    match env.EnclosingSeqExpr with
+    | None ->
+        // Return error node - yield! outside seq context
+        builder.Create(
+            SemanticKind.Error "yield! may only appear directly in a seq expression",
+            Types.unitType,
+            range)
+    | Some _ ->
+        let seqNode = checkExpr env builder seqExpr
+        // yield! is an effectful operation - it flattens a seq but returns unit
+        // The element type is inferred from the seqNode for codegen purposes
+        builder.Create(
+            SemanticKind.YieldBang seqNode.Id,
+            Types.unitType,
+            range,
+            children = [seqNode.Id])
