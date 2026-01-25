@@ -31,7 +31,6 @@ module Collections = FSharp.Native.Compiler.NativeTypedTree.Expressions.Collecti
 module ControlFlow = FSharp.Native.Compiler.NativeTypedTree.Expressions.ControlFlow
 module TypeOperations = FSharp.Native.Compiler.NativeTypedTree.Expressions.TypeOperations
 module Patterns = FSharp.Native.Compiler.NativeTypedTree.Expressions.Patterns
-module SynTypes = FSharp.Native.Compiler.NativeTypedTree.Expressions.SynTypes
 
 // Infrastructure modules - use qualified names to avoid conflicts
 module PhaseConfig = FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
@@ -516,13 +515,9 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 // All type checking logic lives in the handler modules.
 //-------------------------------------------------------------------------
 
-/// Check a SynType and convert to NativeType
-let rec private checkSynType (env: TypeEnv) (synType: SynType) : NativeType =
-    SynTypes.checkSynType env synType
-
 /// Check a pattern and return bindings
-and private checkPattern (env: TypeEnv) (pat: SynPat) (expectedTy: NativeType) (range: SourceRange) : Pattern * (string * NativeType) list =
-    Patterns.checkPattern checkSynType env pat expectedTy range
+let rec private checkPattern (env: TypeEnv) (pat: SynPat) (expectedTy: NativeType) (range: SourceRange) : Pattern * (string * NativeType) list =
+    Patterns.checkPattern env pat expectedTy range
 
 /// Check a match clause with scrutinee ID for record pattern field extraction
 and private checkMatchClause (env: TypeEnv) (builder: NodeBuilder) (scrutineeId: NodeId) (scrutineeTy: NativeType) (resultTy: NativeType) (clause: SynMatchClause) : MatchCase =
@@ -566,7 +561,7 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // Type annotations
     //---------------------------------------------------------------------
     | SynExpr.Typed(innerExpr, synType, _) ->
-        TypeOperations.checkTyped checkExpr checkSynType env builder innerExpr synType range
+        TypeOperations.checkTyped checkExpr env builder innerExpr synType range
 
     //---------------------------------------------------------------------
     // Tuples
@@ -597,13 +592,13 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // Lambda expressions
     //---------------------------------------------------------------------
     | SynExpr.Lambda(_, _, args, bodyExpr, _, _, _) ->
-        Applications.checkLambda checkExpr (Bindings.extractLambdaParams checkSynType) env builder args bodyExpr range
+        Applications.checkLambda checkExpr Bindings.extractLambdaParams env builder args bodyExpr range
 
     //---------------------------------------------------------------------
     // Let bindings
     //---------------------------------------------------------------------
     | SynExpr.LetOrUse(letOrUse) ->
-        Bindings.checkLetOrUse checkExpr checkSynType env builder letOrUse range
+        Bindings.checkLetOrUse checkExpr env builder letOrUse range
 
     //---------------------------------------------------------------------
     // Sequential expressions
@@ -715,7 +710,7 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // TypeApp: expr<type1, type2, ...>
     //---------------------------------------------------------------------
     | SynExpr.TypeApp(funcExpr, _, typeArgs, _, _, _, _) ->
-        Applications.checkTypeApp checkExpr checkSynType env builder funcExpr typeArgs syn.Range range
+        Applications.checkTypeApp checkExpr env builder funcExpr typeArgs syn.Range range
 
     //---------------------------------------------------------------------
     // ForEach: for x in collection do body
@@ -727,13 +722,13 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // TraitCall: SRTP member invocation
     //---------------------------------------------------------------------
     | SynExpr.TraitCall(supportTys, memberSig, argExpr, _) ->
-        Applications.checkTraitCall checkExpr checkSynType env builder supportTys memberSig argExpr range
+        Applications.checkTraitCall checkExpr env builder supportTys memberSig argExpr range
 
     //---------------------------------------------------------------------
     // Upcast: expr :> type
     //---------------------------------------------------------------------
     | SynExpr.Upcast(innerExpr, targetType, _) ->
-        TypeOperations.checkUpcast checkExpr checkSynType env builder innerExpr targetType range
+        TypeOperations.checkUpcast checkExpr env builder innerExpr targetType range
 
     //---------------------------------------------------------------------
     // InferredUpcast: upcast expr
@@ -745,7 +740,7 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // Downcast: expr :?> type
     //---------------------------------------------------------------------
     | SynExpr.Downcast(innerExpr, targetType, _) ->
-        TypeOperations.checkDowncast checkExpr checkSynType env builder innerExpr targetType range
+        TypeOperations.checkDowncast checkExpr env builder innerExpr targetType range
 
     //---------------------------------------------------------------------
     // InferredDowncast: downcast expr
@@ -757,7 +752,7 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // TypeTest: expr :? type
     //---------------------------------------------------------------------
     | SynExpr.TypeTest(innerExpr, targetType, _) ->
-        TypeOperations.checkTypeTest checkExpr checkSynType env builder innerExpr targetType range
+        TypeOperations.checkTypeTest checkExpr env builder innerExpr targetType range
 
     //---------------------------------------------------------------------
     // DotIndexedGet: expr.[index]
@@ -799,13 +794,13 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // New: new Type(args)
     //---------------------------------------------------------------------
     | SynExpr.New(_, synType, argExpr, _) ->
-        Applications.checkNew checkExpr checkSynType env builder synType argExpr range
+        Applications.checkNew checkExpr env builder synType argExpr range
 
     //---------------------------------------------------------------------
     // ObjExpr: { new Interface with ... }
     //---------------------------------------------------------------------
     | SynExpr.ObjExpr(objType, argOption, _, bindings, members, extraImpls, _, _) ->
-        Applications.checkObjExpr checkExpr checkSynType env builder objType argOption bindings members extraImpls range
+        Applications.checkObjExpr checkExpr env builder objType argOption bindings members extraImpls range
 
     //---------------------------------------------------------------------
     // AnonRecd: {| field = value |}
@@ -1116,7 +1111,7 @@ let checkLetBinding (binding: SynBinding) : CheckResult =
     NodeId.reset()
 
     // InlineBody, isMutable and literalValue discarded - see function doc comment for rationale
-    let (node, _inlineBody, _isMutable, _literalValue) = Bindings.checkBinding checkExpr checkSynType env builder binding None
+    let (node, _inlineBody, _isMutable, _literalValue) = Bindings.checkBinding checkExpr env builder binding None
     let diagnostics = solveAndGetDiagnostics !(env.Constraints)
 
     buildResult builder [node] Map.empty diagnostics None
@@ -1220,7 +1215,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     preCreatedBindings
                     |> List.fold (fun (accEnv, accResults) (binding, simpleName, placeholderTy, preCreatedNode) ->
                         let (node, inlineBodyOpt, isMutable, literalValueOpt) =
-                            Bindings.checkBinding checkExpr checkSynType envWithAllNames builder binding (Some preCreatedNode)
+                            Bindings.checkBinding checkExpr envWithAllNames builder binding (Some preCreatedNode)
 
                         // Unify placeholder type with inferred type
                         addConstraint (Constraint.Equals(placeholderTy, node.Type, range)) accEnv
@@ -1244,7 +1239,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 // NON-RECURSIVE BINDINGS: Sequential processing (existing behavior)
                 // Each binding can only reference bindings that came before it
                 bindings |> List.fold (fun (accEnv, accNodes) binding ->
-                    let (node, inlineBodyOpt, isMutable, literalValueOpt) = Bindings.checkBinding checkExpr checkSynType accEnv builder binding None
+                    let (node, inlineBodyOpt, isMutable, literalValueOpt) = Bindings.checkBinding checkExpr accEnv builder binding None
                     // Add the binding to environment so later bindings can reference it
                     // Register under all qualified name suffixes (handles AutoOpen modules)
                     // CRITICAL: Use actual isMutable flag for module-level mutable variables
@@ -1317,10 +1312,10 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
 
                 // Check if this is a type abbreviation
                 match typeRepr with
-                | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.TypeAbbrev(_detail, rhsType, _), _) ->
+                | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.TypeAbbrev(_detail, _rhsType, _), _) ->
                     // Type abbreviation like `type I32 = int32`
                     // Resolve the target type using the current environment
-                    let targetTy = checkSynType accEnv rhsType
+                    let targetTy = failwith "ELIMINATE_SYNTYPE: NTU type required"
                     // Register under all name suffixes (handles AutoOpen modules)
                     let updatedEnv = 
                         typeNameSuffixes 
@@ -1364,14 +1359,14 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                     | SynUnionCaseKind.Fields synFields ->
                                         synFields |> List.map (fun synField ->
                                             match synField with
-                                            | SynField(_, _, idOpt, fieldType, _, _, _, _, _) ->
+                                            | SynField(_, _, idOpt, _fieldType, _, _, _, _, _) ->
                                                 let fieldName = idOpt |> Option.map (fun id -> id.idText)
-                                                let fieldTy = checkSynType accEnv fieldType
+                                                let fieldTy = failwith "ELIMINATE_SYNTYPE: NTU type required"
                                                 (fieldName, fieldTy)
                                         )
-                                    | SynUnionCaseKind.FullType(synType, _) ->
+                                    | SynUnionCaseKind.FullType(_synType, _) ->
                                         // Full type annotation: Case: T1 * T2 -> UnionType
-                                        [(None, checkSynType accEnv synType)]
+                                        [(None, failwith "ELIMINATE_SYNTYPE: NTU type required")]
                                 (caseName, fields)
                         )
 
@@ -1462,11 +1457,11 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         fields
                         |> List.choose (fun synField ->
                             match synField with
-                            | SynField(_, _, idOpt, fieldType, _, _, _, _, _) ->
+                            | SynField(_, _, idOpt, _fieldType, _, _, _, _, _) ->
                                 match idOpt with
                                 | Some ident ->
                                     let fieldName = ident.idText
-                                    let nativeType = checkSynType accEnv fieldType
+                                    let nativeType = failwith "ELIMINATE_SYNTYPE: NTU type required"
                                     Some (fieldName, nativeType)
                                 | None ->
                                     // Anonymous field (tuple-style) - skip for now

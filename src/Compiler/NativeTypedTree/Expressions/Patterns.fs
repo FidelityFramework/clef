@@ -17,20 +17,11 @@ open FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
 open FSharp.Native.Compiler.NativeTypedTree.Expressions.Literals
 
 //-------------------------------------------------------------------------
-// Callback Type for SynType Checking
-//-------------------------------------------------------------------------
-
-/// Callback for checking SynType (to avoid circular dependency)
-type CheckSynTypeFn = TypeEnv -> SynType -> NativeType
-
-//-------------------------------------------------------------------------
 // Pattern Checking
 //-------------------------------------------------------------------------
 
 /// Check a pattern and return (Pattern, bindings)
-/// The checkSynType callback is provided to handle type annotations
 let rec checkPattern
-    (checkSynType: CheckSynTypeFn)
     (env: TypeEnv)
     (pat: SynPat)
     (expectedTy: NativeType)
@@ -48,10 +39,10 @@ let rec checkPattern
         let name = ident.idText
         (Pattern.Var(name, expectedTy), [(name, expectedTy)])
 
-    | SynPat.Typed(innerPat, synType, _) ->
-        let annotatedTy = checkSynType env synType
+    | SynPat.Typed(innerPat, _synType, _) ->
+        let annotatedTy = failwith "ELIMINATE_SYNTYPE: Pattern type annotation - NTU type required"
         addConstraint (Constraint.Equals(expectedTy, annotatedTy, range)) env
-        checkPattern checkSynType env innerPat annotatedTy range
+        checkPattern env innerPat annotatedTy range
 
     | SynPat.Tuple(_, pats, _, _) ->
         let elementTypes = pats |> List.map (fun _ -> freshTypeVar range)
@@ -60,13 +51,13 @@ let rec checkPattern
 
         let (patterns, bindings) =
             List.zip pats elementTypes
-            |> List.map (fun (p, ty) -> checkPattern checkSynType env p ty range)
+            |> List.map (fun (p, ty) -> checkPattern env p ty range)
             |> List.unzip
 
         (Pattern.Tuple patterns, List.concat bindings)
 
     | SynPat.Paren(innerPat, _) ->
-        checkPattern checkSynType env innerPat expectedTy range
+        checkPattern env innerPat expectedTy range
 
     | SynPat.Null _ ->
         (Pattern.Null, [])
@@ -122,7 +113,7 @@ let rec checkPattern
             let (argPatterns, argBindings) =
                 List.zip pats payloadTypes
                 |> List.map (fun (p, argTy) ->
-                    checkPattern checkSynType env p argTy range)
+                    checkPattern env p argTy range)
                 |> List.unzip
             let payload = if List.isEmpty argPatterns then None else Some (Pattern.Tuple argPatterns)
             (Pattern.Union(caseName, tagIndex, payload, expectedTy), List.concat argBindings)
@@ -140,14 +131,14 @@ let rec checkPattern
 
     | SynPat.As(lhsPat, rhsPat, _) ->
         // Pattern alias: pat as name
-        let (lhsPattern, lhsBindings) = checkPattern checkSynType env lhsPat expectedTy range
-        let (_, rhsBindings) = checkPattern checkSynType env rhsPat expectedTy range
+        let (lhsPattern, lhsBindings) = checkPattern env lhsPat expectedTy range
+        let (_, rhsBindings) = checkPattern env rhsPat expectedTy range
         (lhsPattern, lhsBindings @ rhsBindings)
 
     | SynPat.Or(lhsPat, rhsPat, _, _) ->
         // Alternation pattern
-        let (lhsPattern, lhsBindings) = checkPattern checkSynType env lhsPat expectedTy range
-        let (_rhsPattern, _rhsBindings) = checkPattern checkSynType env rhsPat expectedTy range
+        let (lhsPattern, lhsBindings) = checkPattern env lhsPat expectedTy range
+        let (_rhsPattern, _rhsBindings) = checkPattern env rhsPat expectedTy range
         // Use left pattern, but both branches should bind same names
         (lhsPattern, lhsBindings)
 
@@ -157,7 +148,7 @@ let rec checkPattern
         addConstraint (Constraint.Equals(expectedTy, listTy, range)) env
         let (patterns, bindings) =
             pats
-            |> List.map (fun p -> checkPattern checkSynType env p elemTy range)
+            |> List.map (fun p -> checkPattern env p elemTy range)
             |> List.unzip
         (Pattern.Array patterns, List.concat bindings)
 
@@ -193,15 +184,15 @@ let rec checkPattern
                         } env
                         // Return a placeholder type for error recovery, but the error is logged
                         Types.unitType
-                let (pattern, bindings) = checkPattern checkSynType env pat fieldTy range
+                let (pattern, bindings) = checkPattern env pat fieldTy range
                 ((fieldName, pattern), bindings))
         let patterns = fieldPats |> List.map fst
         let bindings = fieldPats |> List.collect snd
         (Pattern.Record(patterns, expectedTy), bindings)
 
-    | SynPat.IsInst(synType, _) ->
+    | SynPat.IsInst(_synType, _) ->
         // Type test pattern: :? Type
-        let testTy = checkSynType env synType
+        let testTy = failwith "ELIMINATE_SYNTYPE: Type test pattern - NTU type required"
         (Pattern.IsType testTy, [])
 
     | SynPat.OptionalVal(ident, _) ->
@@ -217,8 +208,8 @@ let rec checkPattern
         let elemTy = freshTypeVar range
         let listTy = NativeType.TList elemTy
         addConstraint (Constraint.Equals(expectedTy, listTy, range)) env
-        let (lhsPattern, lhsBindings) = checkPattern checkSynType env lhsPat elemTy range
-        let (rhsPattern, rhsBindings) = checkPattern checkSynType env rhsPat listTy range
+        let (lhsPattern, lhsBindings) = checkPattern env lhsPat elemTy range
+        let (rhsPattern, rhsBindings) = checkPattern env rhsPat listTy range
         // Represent as a tuple pattern for head :: tail
         (Pattern.Tuple [lhsPattern; rhsPattern], lhsBindings @ rhsBindings)
 
@@ -226,7 +217,7 @@ let rec checkPattern
         // Conjunction pattern: pat1 & pat2 & ...
         let (patterns, bindings) =
             pats
-            |> List.map (fun p -> checkPattern checkSynType env p expectedTy range)
+            |> List.map (fun p -> checkPattern env p expectedTy range)
             |> List.unzip
         match patterns with
         | [single] -> (single, List.concat bindings)
@@ -234,7 +225,7 @@ let rec checkPattern
 
     | SynPat.Attrib(innerPat, _, _) ->
         // Attributed pattern - ignore attributes, check inner pattern
-        checkPattern checkSynType env innerPat expectedTy range
+        checkPattern env innerPat expectedTy range
 
     | SynPat.QuoteExpr(_, _) ->
         // Quote expression pattern - not supported in native compilation
@@ -249,7 +240,7 @@ let rec checkPattern
 
     | SynPat.FromParseError(innerPat, _) ->
         // Parse error recovery - check inner pattern
-        checkPattern checkSynType env innerPat expectedTy range
+        checkPattern env innerPat expectedTy range
 
     | SynPat.InstanceMember _ ->
         // Instance member pattern - for object expressions (not supported in native)

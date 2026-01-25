@@ -21,25 +21,21 @@ open FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
 /// Callback for checking expressions
 type CheckExprFn = TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode
 
-/// Callback for checking SynType
-type CheckSynTypeFn = TypeEnv -> SynType -> NativeType
-
 //-------------------------------------------------------------------------
 // Type Annotation
 //-------------------------------------------------------------------------
 
 let checkTyped
     (checkExpr: CheckExprFn)
-    (checkSynType: CheckSynTypeFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
     (innerExpr: SynExpr)
-    (synType: SynType)
+    (_synType: SynType)
     (range: SourceRange)
     : SemanticNode =
 
     let innerNode = checkExpr env builder innerExpr
-    let annotatedTy = checkSynType env synType
+    let annotatedTy = failwith "ELIMINATE_SYNTYPE: NTU type required"
     // Add equality constraint
     addConstraint (Constraint.Equals(innerNode.Type, annotatedTy, range)) env
     let node = builder.Create(
@@ -98,16 +94,15 @@ let checkAddressOf
 
 let checkUpcast
     (checkExpr: CheckExprFn)
-    (checkSynType: CheckSynTypeFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
     (innerExpr: SynExpr)
-    (targetType: SynType)
+    (_targetType: SynType)
     (range: SourceRange)
     : SemanticNode =
 
     let innerNode = checkExpr env builder innerExpr
-    let targetTy = checkSynType env targetType
+    let targetTy = failwith "ELIMINATE_SYNTYPE: NTU type required"
     builder.Create(
         SemanticKind.Upcast(innerNode.Id, targetTy),
         targetTy,
@@ -140,16 +135,15 @@ let checkInferredUpcast
 
 let checkDowncast
     (checkExpr: CheckExprFn)
-    (checkSynType: CheckSynTypeFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
     (innerExpr: SynExpr)
-    (targetType: SynType)
+    (_targetType: SynType)
     (range: SourceRange)
     : SemanticNode =
 
     let innerNode = checkExpr env builder innerExpr
-    let targetTy = checkSynType env targetType
+    let targetTy = failwith "ELIMINATE_SYNTYPE: NTU type required"
     builder.Create(
         SemanticKind.Downcast(innerNode.Id, targetTy),
         targetTy,
@@ -182,16 +176,15 @@ let checkInferredDowncast
 
 let checkTypeTest
     (checkExpr: CheckExprFn)
-    (checkSynType: CheckSynTypeFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
     (innerExpr: SynExpr)
-    (targetType: SynType)
+    (_targetType: SynType)
     (range: SourceRange)
     : SemanticNode =
 
     let innerNode = checkExpr env builder innerExpr
-    let targetTy = checkSynType env targetType
+    let targetTy = failwith "ELIMINATE_SYNTYPE: NTU type required"
     builder.Create(
         SemanticKind.TypeTest(innerNode.Id, targetTy),
         Types.boolType,

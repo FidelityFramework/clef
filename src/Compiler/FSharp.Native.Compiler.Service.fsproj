@@ -297,7 +297,6 @@
     <Compile Include="NativeTypedTree\Expressions\Intrinsics.fs" />
     <Compile Include="NativeTypedTree\Expressions\Identity.fs" />
     <Compile Include="NativeTypedTree\Expressions\Patterns.fs" />
-    <Compile Include="NativeTypedTree\Expressions\SynTypes.fs" />
     <Compile Include="NativeTypedTree\Expressions\ControlFlow.fs" />
     <Compile Include="NativeTypedTree\Expressions\TypeOperations.fs" />
     <Compile Include="NativeTypedTree\Expressions\Collections.fs" />

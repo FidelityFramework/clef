@@ -28,9 +28,6 @@ module Types = FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
 /// Callback for checking expressions (to avoid circular dependency)
 type CheckExprFn = TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode
 
-/// Callback for checking SynType
-type CheckSynTypeFn = TypeEnv -> SynType -> NativeType
-
 /// Callback for checking patterns
 type CheckPatternFn = TypeEnv -> SynPat -> NativeType -> SourceRange -> Pattern * (string * NativeType) list
 
@@ -40,8 +37,7 @@ type CheckPatternFn = TypeEnv -> SynPat -> NativeType -> SourceRange -> Pattern 
 
 /// Extract parameter names from lambda arguments
 let extractLambdaParams
-    (checkSynType: CheckSynTypeFn)
-    (env: TypeEnv)
+    (_env: TypeEnv)
     (args: SynSimplePats)
     (range: SourceRange)
     : (string * NativeType) list =
@@ -51,17 +47,17 @@ let extractLambdaParams
             match pat with
             | SynSimplePat.Id(ident, _, _, _, _, _) ->
                 (ident.idText, freshTypeVar range)
-            | SynSimplePat.Typed(SynSimplePat.Id(ident, _, _, _, _, _), synType, _) ->
+            | SynSimplePat.Typed(SynSimplePat.Id(_ident, _, _, _, _, _), _synType, _) ->
                 // Type annotation provided - convert to native type
-                (ident.idText, checkSynType env synType)
+                failwith "ELIMINATE_SYNTYPE: NTU type required"
             | SynSimplePat.Typed(SynSimplePat.Typed _, _, _) ->
                 // Double-typed pattern - unusual but handle gracefully
                 failwith "Double type annotation in lambda parameter not supported"
-            | SynSimplePat.Typed(SynSimplePat.Attrib(innerInner, _, _), synType, _) ->
+            | SynSimplePat.Typed(SynSimplePat.Attrib(innerInner, _, _), _synType, _) ->
                 // Typed attributed pattern - (name: Type) with attributes
                 match innerInner with
-                | SynSimplePat.Id(ident, _, _, _, _, _) ->
-                    (ident.idText, checkSynType env synType)
+                | SynSimplePat.Id(_ident, _, _, _, _, _) ->
+                    failwith "ELIMINATE_SYNTYPE: NTU type required"
                 | other ->
                     failwith ("Unsupported typed attributed lambda parameter: " + other.GetType().Name)
             | SynSimplePat.Attrib(innerPat, _, _) ->
@@ -69,8 +65,8 @@ let extractLambdaParams
                 match innerPat with
                 | SynSimplePat.Id(ident, _, _, _, _, _) ->
                     (ident.idText, freshTypeVar range)
-                | SynSimplePat.Typed(SynSimplePat.Id(ident, _, _, _, _, _), synType, _) ->
-                    (ident.idText, checkSynType env synType)
+                | SynSimplePat.Typed(SynSimplePat.Id(_ident, _, _, _, _, _), _synType, _) ->
+                    failwith "ELIMINATE_SYNTYPE: NTU type required"
                 | other ->
                     failwith ("Unsupported attributed lambda parameter: " + other.GetType().Name))
 
@@ -154,9 +150,8 @@ let getHeadPattern (binding: SynBinding) : SynPat =
 /// For `let f x y = body`, returns Some [(x, ty); (y, ty)]
 /// For `let x = body`, returns None
 let tryGetFunctionParams
-    (checkSynType: CheckSynTypeFn)
     (headPat: SynPat)
-    (env: TypeEnv)
+    (_env: TypeEnv)
     (range: SourceRange)
     : (string * NativeType) list option =
     match headPat with
@@ -174,9 +169,9 @@ let tryGetFunctionParams
                         [("_", Types.unitType)]
                     | SynPat.Named(SynIdent(ident, _), _, _, _) ->
                         [(ident.idText, freshTypeVar range)]
-                    | SynPat.Typed(typedInner, synType, _) ->
+                    | SynPat.Typed(typedInner, _synType, _) ->
                         // Typed pattern like (name: NativeStr)
-                        let annotatedType = checkSynType env synType
+                        let annotatedType = failwith "ELIMINATE_SYNTYPE: NTU type required"
                         match typedInner with
                         | SynPat.Named(SynIdent(ident, _), _, _, _) ->
                             [(ident.idText, annotatedType)]
@@ -185,8 +180,8 @@ let tryGetFunctionParams
                         tuplePats |> List.map (fun tuplePat ->
                             match tuplePat with
                             | SynPat.Named(SynIdent(ident, _), _, _, _) -> (ident.idText, freshTypeVar range)
-                            | SynPat.Typed(SynPat.Named(SynIdent(ident, _), _, _, _), synType, _) ->
-                                (ident.idText, checkSynType env synType)
+                            | SynPat.Typed(SynPat.Named(SynIdent(_ident, _), _, _, _), _synType, _) ->
+                                failwith "ELIMINATE_SYNTYPE: NTU type required"
                             | _ -> ("_", freshTypeVar range))
                     | _ -> [("_", freshTypeVar range)]
                 | SynPat.Named(SynIdent(ident, _), _, _, _) ->
@@ -213,7 +208,6 @@ let tryGetFunctionParams
 /// so that VarRefs can resolve to it before the body is checked.
 let checkBinding
     (checkExpr: CheckExprFn)
-    (checkSynType: CheckSynTypeFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
     (binding: SynBinding)
@@ -329,7 +323,7 @@ let checkBinding
     else
 
     // Check if this is a function definition (has parameters)
-    match tryGetFunctionParams checkSynType headPat env range with
+    match tryGetFunctionParams headPat env range with
     | Some paramBindings ->
         // This is a function definition like `let f x = body` or `let f() = body`
         // Create a Lambda node wrapping the body
@@ -587,7 +581,6 @@ let checkBinding
 /// so that self-referential VarRefs can resolve correctly.
 let checkLetOrUse
     (checkExpr: CheckExprFn)
-    (checkSynType: CheckSynTypeFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
     (letOrUse: SynLetOrUse)
@@ -679,7 +672,7 @@ let checkLetOrUse
         let bindingResults =
             preCreatedBindings
             |> List.map (fun (binding, _, _, preCreatedNode) ->
-                checkBinding checkExpr checkSynType envWithBindings builder binding (Some preCreatedNode))
+                checkBinding checkExpr envWithBindings builder binding (Some preCreatedNode))
 
         let bindingNodes = bindingResults |> List.map (fun (node, _, _, _) -> node)
         let bodyEnv = extendEnvWithResults envWithBindings bindings bindingResults
@@ -690,7 +683,7 @@ let checkLetOrUse
         // NON-RECURSIVE BINDINGS: Standard sequential processing
         let bindingResults =
             bindings |> List.map (fun binding ->
-                checkBinding checkExpr checkSynType env builder binding None)
+                checkBinding checkExpr env builder binding None)
 
         let bindingNodes = bindingResults |> List.map (fun (node, _, _, _) -> node)
         let bodyEnv = extendEnvWithResults env bindings bindingResults

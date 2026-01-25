@@ -27,9 +27,6 @@ module NativeTypes = FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 /// Callback for checking expressions
 type CheckExprFn = TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode
 
-/// Callback for checking SynType
-type CheckSynTypeFn = TypeEnv -> SynType -> NativeType
-
 //-------------------------------------------------------------------------
 // Helper Functions
 //-------------------------------------------------------------------------
@@ -446,11 +443,10 @@ let checkApp
 /// produces a specialized implementation.
 let checkTypeApp
     (checkExpr: CheckExprFn)
-    (checkSynType: CheckSynTypeFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
     (funcExpr: SynExpr)
-    (typeArgs: SynType list)
+    (_typeArgs: SynType list)
     (synRange: range)
     (range: SourceRange)
     : SemanticNode =
@@ -458,7 +454,7 @@ let checkTypeApp
     // Check the function expression
     let funcNode = checkExpr env builder funcExpr
     // Convert type arguments - these are the concrete types being applied
-    let typeArgTypes = typeArgs |> List.map (checkSynType env)
+    let typeArgTypes = failwith "ELIMINATE_SYNTYPE: NTU type required for type args"
 
     // The result type depends on the function being instantiated.
     // If funcNode.Type is a forall type, we should instantiate it with typeArgTypes.
@@ -643,14 +639,13 @@ let checkLambda
 /// Check New: new Type(args)
 let checkNew
     (checkExpr: CheckExprFn)
-    (checkSynType: CheckSynTypeFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
-    (synType: SynType)
+    (_synType: SynType)
     (argExpr: SynExpr)
     (range: SourceRange)
     : SemanticNode =
-    let targetType = checkSynType env synType
+    let targetType = failwith "ELIMINATE_SYNTYPE: NTU type required"
     let argNode = checkExpr env builder argExpr
     builder.Create(
         SemanticKind.Application(argNode.Id, []),
@@ -665,17 +660,16 @@ let checkNew
 /// Check ObjExpr: { new Interface with ... }
 let checkObjExpr
     (checkExpr: CheckExprFn)
-    (checkSynType: CheckSynTypeFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
-    (objType: SynType)
+    (_objType: SynType)
     (argOption: (SynExpr * Ident option) option)
     (bindings: SynBinding list)
     (members: SynMemberDefn list)
     (extraImpls: SynInterfaceImpl list)
     (range: SourceRange)
     : SemanticNode =
-    let interfaceType = checkSynType env objType
+    let interfaceType = failwith "ELIMINATE_SYNTYPE: NTU type required"
 
     let argNodeIds =
         match argOption with
@@ -715,8 +709,8 @@ let checkObjExpr
 
     let extraImplNodes = extraImpls |> List.collect (fun impl ->
         match impl with
-        | SynInterfaceImpl(interfaceTy, _, implBindings, implMembers, _) ->
-            let _implType = checkSynType env interfaceTy
+        | SynInterfaceImpl(_interfaceTy, _, implBindings, implMembers, _) ->
+            let _implType = failwith "ELIMINATE_SYNTYPE: NTU type required"
             let implBindingNodes = implBindings |> List.map (fun binding ->
                 match binding with
                 | SynBinding(_, _, _, _, _, _, _, _, _, bodyExpr, _, _, _) ->
@@ -749,16 +743,15 @@ let checkObjExpr
 /// Check TraitCall (SRTP)
 let checkTraitCall
     (checkExpr: CheckExprFn)
-    (checkSynType: CheckSynTypeFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
-    (supportTys: SynType)
+    (_supportTys: SynType)
     (memberSig: SynMemberSig)
     (argExpr: SynExpr)
     (range: SourceRange)
     : SemanticNode =
     let argNode = checkExpr env builder argExpr
-    let constraintType = checkSynType env supportTys
+    let constraintType = failwith "ELIMINATE_SYNTYPE: NTU type required"
     let constrainedTypes =
         match constraintType with
         | NativeType.TTuple(elemTys, _) -> elemTys
@@ -771,8 +764,8 @@ let checkTraitCall
 
     let resultType =
         match memberSig with
-        | SynMemberSig.Member(SynValSig(synType = synRetType), _, _, _) ->
-            checkSynType env synRetType
+        | SynMemberSig.Member(SynValSig(synType = _synRetType), _, _, _) ->
+            failwith "ELIMINATE_SYNTYPE: NTU type required"
         | _ -> freshTypeVar range
 
     for constrainedTy in constrainedTypes do
