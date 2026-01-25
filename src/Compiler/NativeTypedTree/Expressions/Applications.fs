@@ -446,7 +446,7 @@ let checkTypeApp
     (env: TypeEnv)
     (builder: NodeBuilder)
     (funcExpr: SynExpr)
-    (_typeArgs: SynType list)
+    (typeArgs: SynType list)
     (synRange: range)
     (range: SourceRange)
     : SemanticNode =
@@ -454,7 +454,7 @@ let checkTypeApp
     // Check the function expression
     let funcNode = checkExpr env builder funcExpr
     // Convert type arguments - these are the concrete types being applied
-    let typeArgTypes = failwith "ELIMINATE_SYNTYPE: NTU type required for type args"
+    let typeArgTypes = typeArgs |> List.map (resolveSynType env)
 
     // The result type depends on the function being instantiated.
     // If funcNode.Type is a forall type, we should instantiate it with typeArgTypes.
@@ -641,11 +641,11 @@ let checkNew
     (checkExpr: CheckExprFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
-    (_synType: SynType)
+    (synType: SynType)
     (argExpr: SynExpr)
     (range: SourceRange)
     : SemanticNode =
-    let targetType = failwith "ELIMINATE_SYNTYPE: NTU type required"
+    let targetType = resolveSynType env synType
     let argNode = checkExpr env builder argExpr
     builder.Create(
         SemanticKind.Application(argNode.Id, []),
@@ -662,14 +662,14 @@ let checkObjExpr
     (checkExpr: CheckExprFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
-    (_objType: SynType)
+    (objType: SynType)
     (argOption: (SynExpr * Ident option) option)
     (bindings: SynBinding list)
     (members: SynMemberDefn list)
     (extraImpls: SynInterfaceImpl list)
     (range: SourceRange)
     : SemanticNode =
-    let interfaceType = failwith "ELIMINATE_SYNTYPE: NTU type required"
+    let interfaceType = resolveSynType env objType
 
     let argNodeIds =
         match argOption with
@@ -709,8 +709,8 @@ let checkObjExpr
 
     let extraImplNodes = extraImpls |> List.collect (fun impl ->
         match impl with
-        | SynInterfaceImpl(_interfaceTy, _, implBindings, implMembers, _) ->
-            let _implType = failwith "ELIMINATE_SYNTYPE: NTU type required"
+        | SynInterfaceImpl(interfaceTy, _, implBindings, implMembers, _) ->
+            let _implType = resolveSynType env interfaceTy
             let implBindingNodes = implBindings |> List.map (fun binding ->
                 match binding with
                 | SynBinding(_, _, _, _, _, _, _, _, _, bodyExpr, _, _, _) ->
@@ -745,13 +745,13 @@ let checkTraitCall
     (checkExpr: CheckExprFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
-    (_supportTys: SynType)
+    (supportTys: SynType)
     (memberSig: SynMemberSig)
     (argExpr: SynExpr)
     (range: SourceRange)
     : SemanticNode =
     let argNode = checkExpr env builder argExpr
-    let constraintType = failwith "ELIMINATE_SYNTYPE: NTU type required"
+    let constraintType = resolveSynType env supportTys
     let constrainedTypes =
         match constraintType with
         | NativeType.TTuple(elemTys, _) -> elemTys
@@ -764,8 +764,8 @@ let checkTraitCall
 
     let resultType =
         match memberSig with
-        | SynMemberSig.Member(SynValSig(synType = _synRetType), _, _, _) ->
-            failwith "ELIMINATE_SYNTYPE: NTU type required"
+        | SynMemberSig.Member(SynValSig(synType = synRetType), _, _, _) ->
+            resolveSynType env synRetType
         | _ -> freshTypeVar range
 
     for constrainedTy in constrainedTypes do

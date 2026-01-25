@@ -1,68 +1,66 @@
 # Greenfield Type Resolution (January 2026)
 
-## Status: DELETION COMPLETE
+## Status: BOUNDARY CONVERSION COMPLETE
 
-The following have been deleted:
-- `SynTypes.fs` - old SynType → NativeType conversion
-- `NativeGlobals.fs` - old type constructor registry
-- `tryFindBuiltinTyCon` in NativeTypes.fs
+The SynType elimination work is complete. SynType now exists only transiently at the parser boundary.
 
-## Compiler Breaks (These ARE the Spec)
+## What Was Done
 
-Building FNCS now produces errors that document exactly what greenfield must provide:
+1. **Removed `checkSynType` callback threading** - Eliminated 69 occurrences across 5 modules
+2. **Implemented `resolveSynType`** - Single boundary conversion function in Types.fs
+3. **Updated 21 conversion sites** - All `ELIMINATE_SYNTYPE` markers replaced with direct `resolveSynType env synType` calls
 
-### In Coordinator.fs
+## Architecture
 
-**Type References (env.Globals.*):**
-- `env.Globals.UnitType` - 17 occurrences
-- `env.Globals.IntType` - 4 occurrences  
-- `env.Globals.StringType` - 1 occurrence
-- `env.Globals.CharType` - 3 occurrences
-- `env.Globals.BoolType` - 1 occurrence
+```
+Parser → SynType → resolveSynType → NativeType → Type Checking
+              ↑                          ↓
+              │                          └── NativeType propagates everywhere
+              └── SynType dies here
+```
 
-**Type Constructors:**
-- `mkArrayType` - 3 occurrences
-- `mkExprType` - 2 occurrences
-- `mkLazyType` - 1 occurrence
-- `mkSeqType` - 1 occurrence
+**Key principle**: SynType is transient. It exists because the parser cannot produce fully resolved types without type environment context. Once that context is available (via `env: TypeEnv`), SynType is converted immediately and discarded.
 
-### Across Expression Handlers
+## Files Modified
 
-The `checkSynType` callback is threaded through:
-- `Coordinator.fs` - definition and dispatch
-- `NativeService.fs` - top-level binding checking
-- `Patterns.fs` - pattern type annotations
-- `Bindings.fs` - let binding type annotations
-- `Applications.fs` - TypeApp handling
-- `TypeOperations.fs` - casts and type tests
+| File | Changes |
+|------|---------|
+| `Types.fs` | Added `resolveSynType` and `resolveTypeName` functions |
+| `TypeOperations.fs` | 4 conversion sites updated |
+| `Applications.fs` | 6 conversion sites updated |
+| `Bindings.fs` | 5 conversion sites updated |
+| `Patterns.fs` | 2 conversion sites updated |
+| `NativeService.fs` | 4 conversion sites updated |
 
-## Greenfield Principles
+## Documentation
 
-1. **No central globals registry** - Type resolution should be structural
-2. **Preserve polymorphism** - Don't resolve platform types too early
-3. **NTUKind is the foundation** - All types flow from NTUKind in NativeTypes.fs
-4. **Platform resolution at Alex** - Width/alignment resolved by platform quotations
+See `/docs/fncs/syntype-boundary-conversion.md` for full architectural explanation.
 
-## What Greenfield Must Provide
+## Type Width vs Type Identity
 
-1. **Primitive type constructors** - Direct NativeType construction for unit, int, string, char, bool, array, lazy, seq, expr
+- **Type identity** (FNCS): `int32` → `NativeType.TInt32` 
+- **Type width** (Alex): `NativeType.TInt32` → `i32` (4 bytes on platform X)
 
-2. **SynType → NativeType conversion** - New approach that:
-   - Preserves type variables
-   - Handles type applications
-   - Resolves type abbreviations
-   - Does NOT assume platform width
+NativeType carries type identity; width is resolved downstream by Alex based on target platform.
 
-3. **TypeEnv without Globals** - Either:
-   - Remove `Globals` field entirely, OR
-   - Replace with minimal needed state
+## Remaining Globals
 
-## NOT in Scope
+The `env.Globals` pattern still exists for:
+- `unitType`, `intType`, `stringType`, etc. - Primitive type constants
+- `mkArrayType`, `mkExprType`, etc. - Type constructor helpers
 
-- Intrinsics (separate from type resolution)
-- SRTP resolution (handled by SRTPResolution.fs)
-- Constraint solving (handled by Unify.fs)
+These are convenience accessors to NTUKind-based types in NativeTypes.fs, not a separate registry.
 
-## Files to Create/Modify
+## What Greenfield Provides
 
-TBD after greenfield design is complete.
+1. **Primitive type constructors** - Direct NativeType construction via NativeTypes.Types module
+2. **Type abbreviation resolution** - Via TypeEnv.TypeAbbrevs
+3. **User-defined type resolution** - Via TypeEnv.TypeDefs
+4. **Fresh type variables** - Via `freshTypeVar` for inference
+
+## Not In Scope (Separate Concerns)
+
+- Intrinsics (FNCS CheckExpressions.fs)
+- SRTP resolution (SRTPResolution.fs)
+- Constraint solving (Unify.fs)
+- Platform width (Alex/Backend)

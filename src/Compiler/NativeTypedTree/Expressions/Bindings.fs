@@ -37,7 +37,7 @@ type CheckPatternFn = TypeEnv -> SynPat -> NativeType -> SourceRange -> Pattern 
 
 /// Extract parameter names from lambda arguments
 let extractLambdaParams
-    (_env: TypeEnv)
+    (env: TypeEnv)
     (args: SynSimplePats)
     (range: SourceRange)
     : (string * NativeType) list =
@@ -47,17 +47,17 @@ let extractLambdaParams
             match pat with
             | SynSimplePat.Id(ident, _, _, _, _, _) ->
                 (ident.idText, freshTypeVar range)
-            | SynSimplePat.Typed(SynSimplePat.Id(_ident, _, _, _, _, _), _synType, _) ->
+            | SynSimplePat.Typed(SynSimplePat.Id(ident, _, _, _, _, _), synType, _) ->
                 // Type annotation provided - convert to native type
-                failwith "ELIMINATE_SYNTYPE: NTU type required"
+                (ident.idText, resolveSynType env synType)
             | SynSimplePat.Typed(SynSimplePat.Typed _, _, _) ->
                 // Double-typed pattern - unusual but handle gracefully
                 failwith "Double type annotation in lambda parameter not supported"
-            | SynSimplePat.Typed(SynSimplePat.Attrib(innerInner, _, _), _synType, _) ->
+            | SynSimplePat.Typed(SynSimplePat.Attrib(innerInner, _, _), synType, _) ->
                 // Typed attributed pattern - (name: Type) with attributes
                 match innerInner with
-                | SynSimplePat.Id(_ident, _, _, _, _, _) ->
-                    failwith "ELIMINATE_SYNTYPE: NTU type required"
+                | SynSimplePat.Id(ident, _, _, _, _, _) ->
+                    (ident.idText, resolveSynType env synType)
                 | other ->
                     failwith ("Unsupported typed attributed lambda parameter: " + other.GetType().Name)
             | SynSimplePat.Attrib(innerPat, _, _) ->
@@ -65,8 +65,8 @@ let extractLambdaParams
                 match innerPat with
                 | SynSimplePat.Id(ident, _, _, _, _, _) ->
                     (ident.idText, freshTypeVar range)
-                | SynSimplePat.Typed(SynSimplePat.Id(_ident, _, _, _, _, _), _synType, _) ->
-                    failwith "ELIMINATE_SYNTYPE: NTU type required"
+                | SynSimplePat.Typed(SynSimplePat.Id(ident, _, _, _, _, _), synType, _) ->
+                    (ident.idText, resolveSynType env synType)
                 | other ->
                     failwith ("Unsupported attributed lambda parameter: " + other.GetType().Name))
 
@@ -151,7 +151,7 @@ let getHeadPattern (binding: SynBinding) : SynPat =
 /// For `let x = body`, returns None
 let tryGetFunctionParams
     (headPat: SynPat)
-    (_env: TypeEnv)
+    (env: TypeEnv)
     (range: SourceRange)
     : (string * NativeType) list option =
     match headPat with
@@ -169,9 +169,9 @@ let tryGetFunctionParams
                         [("_", Types.unitType)]
                     | SynPat.Named(SynIdent(ident, _), _, _, _) ->
                         [(ident.idText, freshTypeVar range)]
-                    | SynPat.Typed(typedInner, _synType, _) ->
+                    | SynPat.Typed(typedInner, synType, _) ->
                         // Typed pattern like (name: NativeStr)
-                        let annotatedType = failwith "ELIMINATE_SYNTYPE: NTU type required"
+                        let annotatedType = resolveSynType env synType
                         match typedInner with
                         | SynPat.Named(SynIdent(ident, _), _, _, _) ->
                             [(ident.idText, annotatedType)]
@@ -180,8 +180,8 @@ let tryGetFunctionParams
                         tuplePats |> List.map (fun tuplePat ->
                             match tuplePat with
                             | SynPat.Named(SynIdent(ident, _), _, _, _) -> (ident.idText, freshTypeVar range)
-                            | SynPat.Typed(SynPat.Named(SynIdent(_ident, _), _, _, _), _synType, _) ->
-                                failwith "ELIMINATE_SYNTYPE: NTU type required"
+                            | SynPat.Typed(SynPat.Named(SynIdent(ident, _), _, _, _), synType, _) ->
+                                (ident.idText, resolveSynType env synType)
                             | _ -> ("_", freshTypeVar range))
                     | _ -> [("_", freshTypeVar range)]
                 | SynPat.Named(SynIdent(ident, _), _, _, _) ->

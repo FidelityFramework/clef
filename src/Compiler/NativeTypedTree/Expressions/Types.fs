@@ -634,3 +634,159 @@ let addBclError (name: string) (r: range) (env: TypeEnv) : unit =
     else
         addNativeError DiagnosticCodes.FS8500_BclReferenceNotAllowed r
             $"BCL reference '{name}' is not available in F# Native. The .NET Base Class Library requires the .NET runtime. Use Alloy library equivalents instead." env
+
+//-------------------------------------------------------------------------
+// SynType → NativeType Boundary Conversion
+// This is the ONLY place SynType is converted to NativeType.
+// SynType is transient - it exists only at the parser boundary.
+// After conversion here, only NativeType propagates through type checking.
+//-------------------------------------------------------------------------
+
+/// Resolve a type name to NativeType via NTU lookup.
+/// Checks: TypeAbbrevs, TypeDefs, then NTU primitives.
+let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
+    // 1. Check type abbreviations first
+    match tryLookupTypeAbbrev name env with
+    | Some ty -> Some ty
+    | None ->
+        // 2. Check type definitions
+        match tryLookupTypeDef name env with
+        | Some tyCon -> Some (NativeType.TApp(tyCon, []))
+        | None ->
+            // 3. Check NTU primitives
+            match name with
+            | "int" -> Some NativeTypes.Types.intType
+            | "int8" -> Some NativeTypes.Types.int8Type
+            | "int16" -> Some NativeTypes.Types.int16Type
+            | "int32" -> Some NativeTypes.Types.int32Type
+            | "int64" -> Some NativeTypes.Types.int64Type
+            | "uint" -> Some NativeTypes.Types.uintType
+            | "uint8" | "byte" -> Some NativeTypes.Types.uint8Type
+            | "uint16" -> Some NativeTypes.Types.uint16Type
+            | "uint32" -> Some NativeTypes.Types.uint32Type
+            | "uint64" -> Some NativeTypes.Types.uint64Type
+            | "nativeint" -> Some NativeTypes.Types.nintType
+            | "unativeint" -> Some NativeTypes.Types.unintType
+            | "float" | "double" -> Some NativeTypes.Types.floatType
+            | "float32" | "single" -> Some NativeTypes.Types.float32Type
+            | "bool" -> Some NativeTypes.Types.boolType
+            | "char" -> Some NativeTypes.Types.charType
+            | "string" -> Some NativeTypes.Types.stringType
+            | "unit" -> Some NativeTypes.Types.unitType
+            | "decimal" -> Some NativeTypes.Types.decimalType
+            | _ -> None
+
+/// Convert SynType to NativeType at the parser/checker boundary.
+/// This function is called directly at conversion sites - no callback threading.
+/// SynType dies here; only NativeType propagates into type checking.
+let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
+    match synType with
+    | SynType.LongIdent(SynLongIdent(idents, _, _)) ->
+        // Simple type name: int, string, MyType, Module.Type
+        let name = idents |> List.map (fun id -> id.idText) |> String.concat "."
+        match resolveTypeName name env with
+        | Some ty -> ty
+        | None ->
+            // Unknown type - create error type with name for diagnostics
+            NativeType.TError $"Unknown type: {name}"
+
+    | SynType.App(typeName, _, typeArgs, _, _, _, _) ->
+        // Generic type application: List<int>, Option<string>
+        let baseTy = resolveSynType env typeName
+        let argTys = typeArgs |> List.map (resolveSynType env)
+        match baseTy with
+        | NativeType.TApp(tyCon, []) -> NativeType.TApp(tyCon, argTys)
+        | _ -> baseTy  // If base isn't a type constructor, return as-is
+
+    | SynType.LongIdentApp(typeName, SynLongIdent(_idents, _, _), _, typeArgs, _, _, _) ->
+        // Qualified generic: Module.List<int>
+        let baseTy = resolveSynType env typeName
+        let argTys = typeArgs |> List.map (resolveSynType env)
+        match baseTy with
+        | NativeType.TApp(tyCon, []) -> NativeType.TApp(tyCon, argTys)
+        | _ -> baseTy
+
+    | SynType.Tuple(isStruct, segments, _) ->
+        // Tuple type: int * string * bool
+        let elemTys =
+            segments
+            |> List.choose (function
+                | SynTupleTypeSegment.Type ty -> Some (resolveSynType env ty)
+                | SynTupleTypeSegment.Star _ -> None
+                | SynTupleTypeSegment.Slash _ -> None)
+        NativeType.TTuple(elemTys, isStruct)
+
+    | SynType.Fun(argType, returnType, _, _) ->
+        // Function type: int -> string
+        let argTy = resolveSynType env argType
+        let retTy = resolveSynType env returnType
+        NativeType.TFun(argTy, retTy)
+
+    | SynType.Var(SynTypar(ident, _, _), _) ->
+        // Type variable: 'a, 'T
+        let name = "'" + ident.idText
+        let range = rangeToSourceRange ident.idRange
+        NativeType.TVar(freshTypeParam name TypeParamKind.Type range)
+
+    | SynType.Array(rank, elemType, _) ->
+        // Array type: int[], int[,]
+        let elemTy = resolveSynType env elemType
+        if rank = 1 then
+            NativeTypes.Types.mkArrayType elemTy
+        else
+            // Multi-dimensional arrays - use array of arrays for now
+            List.fold (fun ty _ -> NativeTypes.Types.mkArrayType ty) elemTy [1..rank]
+
+    | SynType.Paren(innerType, _) ->
+        // Parenthesized type: (int)
+        resolveSynType env innerType
+
+    | SynType.Anon _ ->
+        // Anonymous type - create fresh type variable
+        freshTypeVar { File = ""; Start = { Line = 0; Column = 0 }; End = { Line = 0; Column = 0 } }
+
+    | SynType.WithGlobalConstraints(innerType, _, _) ->
+        // Type with constraints - resolve inner, constraints handled separately
+        resolveSynType env innerType
+
+    | SynType.HashConstraint(innerType, _) ->
+        // Flexible type: #ISomething
+        resolveSynType env innerType
+
+    | SynType.WithNull(innerType, _, _, _) ->
+        // Nullable annotation - ignored in F# Native (null-free)
+        resolveSynType env innerType
+
+    | SynType.MeasurePower(baseType, _, _) ->
+        // Measure power - resolve base type
+        resolveSynType env baseType
+
+    | SynType.StaticConstant(_, _)
+    | SynType.StaticConstantNull _
+    | SynType.StaticConstantExpr(_, _)
+    | SynType.StaticConstantNamed(_, _, _) ->
+        // Static constants in types - not supported in native
+        NativeType.TError "Static constants in types not supported"
+
+    | SynType.AnonRecd(isStruct, fields, _) ->
+        // Anonymous record: {| X: int; Y: string |}
+        let fieldTys = fields |> List.map (fun (id, ty) -> (id.idText, resolveSynType env ty))
+        NativeType.TAnon(fieldTys, isStruct)
+
+    | SynType.FromParseError _ ->
+        // Parse error recovery - return error type
+        NativeType.TError "Type from parse error"
+
+    | SynType.Intersection(_, types, _, _) ->
+        // Type intersection - resolve first type for now
+        match types with
+        | ty :: _ -> resolveSynType env ty
+        | [] -> NativeType.TError "Empty type intersection"
+
+    | SynType.Or(lhs, _rhs, _, _) ->
+        // Type union/or - resolve to first type
+        resolveSynType env lhs
+
+    | SynType.SignatureParameter(_, _, _idOpt, ty, _) ->
+        // Signature parameter - resolve the underlying type
+        resolveSynType env ty

@@ -1312,10 +1312,10 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
 
                 // Check if this is a type abbreviation
                 match typeRepr with
-                | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.TypeAbbrev(_detail, _rhsType, _), _) ->
+                | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.TypeAbbrev(_detail, rhsType, _), _) ->
                     // Type abbreviation like `type I32 = int32`
                     // Resolve the target type using the current environment
-                    let targetTy = failwith "ELIMINATE_SYNTYPE: NTU type required"
+                    let targetTy = resolveSynType accEnv rhsType
                     // Register under all name suffixes (handles AutoOpen modules)
                     let updatedEnv = 
                         typeNameSuffixes 
@@ -1359,14 +1359,14 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                     | SynUnionCaseKind.Fields synFields ->
                                         synFields |> List.map (fun synField ->
                                             match synField with
-                                            | SynField(_, _, idOpt, _fieldType, _, _, _, _, _) ->
+                                            | SynField(_, _, idOpt, fieldType, _, _, _, _, _) ->
                                                 let fieldName = idOpt |> Option.map (fun id -> id.idText)
-                                                let fieldTy = failwith "ELIMINATE_SYNTYPE: NTU type required"
+                                                let fieldTy = resolveSynType accEnv fieldType
                                                 (fieldName, fieldTy)
                                         )
-                                    | SynUnionCaseKind.FullType(_synType, _) ->
+                                    | SynUnionCaseKind.FullType(synType, _) ->
                                         // Full type annotation: Case: T1 * T2 -> UnionType
-                                        [(None, failwith "ELIMINATE_SYNTYPE: NTU type required")]
+                                        [(None, resolveSynType accEnv synType)]
                                 (caseName, fields)
                         )
 
@@ -1457,11 +1457,11 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         fields
                         |> List.choose (fun synField ->
                             match synField with
-                            | SynField(_, _, idOpt, _fieldType, _, _, _, _, _) ->
+                            | SynField(_, _, idOpt, fieldType, _, _, _, _, _) ->
                                 match idOpt with
                                 | Some ident ->
                                     let fieldName = ident.idText
-                                    let nativeType = failwith "ELIMINATE_SYNTYPE: NTU type required"
+                                    let nativeType = resolveSynType accEnv fieldType
                                     Some (fieldName, nativeType)
                                 | None ->
                                     // Anonymous field (tuple-style) - skip for now

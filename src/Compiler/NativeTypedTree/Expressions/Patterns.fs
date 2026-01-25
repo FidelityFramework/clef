@@ -39,8 +39,8 @@ let rec checkPattern
         let name = ident.idText
         (Pattern.Var(name, expectedTy), [(name, expectedTy)])
 
-    | SynPat.Typed(innerPat, _synType, _) ->
-        let annotatedTy = failwith "ELIMINATE_SYNTYPE: Pattern type annotation - NTU type required"
+    | SynPat.Typed(innerPat, synType, _) ->
+        let annotatedTy = resolveSynType env synType
         addConstraint (Constraint.Equals(expectedTy, annotatedTy, range)) env
         checkPattern env innerPat annotatedTy range
 
@@ -190,9 +190,9 @@ let rec checkPattern
         let bindings = fieldPats |> List.collect snd
         (Pattern.Record(patterns, expectedTy), bindings)
 
-    | SynPat.IsInst(_synType, _) ->
+    | SynPat.IsInst(synType, _) ->
         // Type test pattern: :? Type
-        let testTy = failwith "ELIMINATE_SYNTYPE: Type test pattern - NTU type required"
+        let testTy = resolveSynType env synType
         (Pattern.IsType testTy, [])
 
     | SynPat.OptionalVal(ident, _) ->
