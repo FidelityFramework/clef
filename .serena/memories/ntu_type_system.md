@@ -107,7 +107,7 @@ uint                  platformuint             NTUuint
    - `TypeConRef` extended with `NTUKind: NTUKind option` field
    - Helper functions: `mkNTUTypeConRef`, `mkNTUTypeConRefWithArity`
 
-2. **NativeGlobals.fs** - NTU-based type constructors:
+2. *(DELETED: NativeGlobals.fs - greenfield pending)*
    - All primitive types use `mkNTUTypeConRef` with appropriate NTU kinds
    - Pointer types (nativeptr, voidptr, byref, inref, outref) use NTUptr
    - Type checking helpers updated to use NTUKind
@@ -130,7 +130,7 @@ uint                  platformuint             NTUuint
 Primary implementation locations in FNCS:
 
 - `src/Compiler/Checking.Native/NativeTypes.fs` - NTUKind definition ✓
-- `src/Compiler/Checking.Native/NativeGlobals.fs` - NTU-based primitives ✓
+- *(DELETED: NativeGlobals.fs)*
 - `src/Compiler/TypedTree/TcGlobals.fs` - TypeConRef usage updated ✓
 - `src/Compiler/Checking.Native/SemanticGraph.fs` - Add platform context field (pending)
 

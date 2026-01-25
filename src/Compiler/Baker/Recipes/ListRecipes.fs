@@ -25,7 +25,7 @@
 module FSharp.Native.Compiler.Baker.Recipes.ListRecipes
 
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
 open FSharp.Native.Compiler.Baker.ShadowAST
@@ -314,7 +314,7 @@ let private listTryPickRecipe
     (outputElemType: NativeType)
     : SaturationParser<NodeId> =
 
-    let optionType = NativeType.TApp (Parameterized.optionTyCon, [outputElemType])
+    let optionType = NativeType.TApp (Types.optionTyCon, [outputElemType])
     let listType = NativeType.TList inputElemType
     let loopFuncType = NativeType.TFun (listType, optionType)
 

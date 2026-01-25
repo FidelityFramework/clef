@@ -29,7 +29,7 @@
 module FSharp.Native.Compiler.Baker.HOFDecomposition
 
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
@@ -68,9 +68,9 @@ let private extractSetElementType (ty: NativeType) : NativeType option =
 /// Note: Option is represented as TApp(optionTyCon, [innerType])
 let private extractOptionInnerType (ty: NativeType) : NativeType option =
     match ty with
-    | NativeType.TApp (tycon, [innerTy]) when tycon = Parameterized.optionTyCon -> 
+    | NativeType.TApp (tycon, [innerTy]) when tycon = Types.optionTyCon -> 
         Some innerTy
-    | NativeType.TApp (tycon, [innerTy]) when tycon = Parameterized.voptionTyCon -> 
+    | NativeType.TApp (tycon, [innerTy]) when tycon = Types.voptionTyCon -> 
         Some innerTy
     | _ -> None
 

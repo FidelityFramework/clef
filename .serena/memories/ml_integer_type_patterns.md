@@ -68,7 +68,7 @@ let z = x +^ y  // TYPE ERROR! Cannot mix Int32 and Int64
 ### Current (Wrong) - BCL-Style Polymorphic
 
 ```fsharp
-// NativeGlobals.fs - WRONG
+// *(DELETED: NativeGlobals.fs)* - WRONG pattern:
 let mkPolymorphicBinaryOp () =
     let tyParam = freshTypeParam "'a"
     let tyVar = NativeType.TVar tyParam
@@ -80,7 +80,7 @@ let mkPolymorphicBinaryOp () =
 ### Target (Correct) - ML-Style Type-Specific
 
 ```fsharp
-// NativeGlobals.fs - CORRECT
+// CORRECT pattern (greenfield implementation):
 // Platform word (int = nativeint on x86_64 = i64)
 ("op_Addition", NativeType.TFun(Types.intType, NativeType.TFun(Types.intType, Types.intType)))
 ("op_Subtraction", NativeType.TFun(Types.intType, NativeType.TFun(Types.intType, Types.intType)))
@@ -103,7 +103,7 @@ Per native spec (fsnative-spec):
 - For loops use `int` (platform word)
 
 ```fsharp
-// NativeGlobals.fs
+// (greenfield implementation)
 let intTyCon = nintTyCon  // int = nativeint (platform word), NOT int32TyCon
 ```
 

@@ -15,7 +15,7 @@
 module FSharp.Native.Compiler.Nanopass.IntrinsicElaboration
 
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Nanopass.Recipe
 

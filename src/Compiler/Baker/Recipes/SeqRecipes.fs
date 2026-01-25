@@ -33,7 +33,7 @@
 module FSharp.Native.Compiler.Baker.Recipes.SeqRecipes
 
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
 open FSharp.Native.Compiler.Baker.ShadowAST
@@ -538,7 +538,7 @@ let private seqToArrayRecipe
     : SaturationParser<NodeId> =
 
     let listType = NativeType.TList elemType
-    let arrayType = mkArrayType elemType
+    let arrayType = NativeType.TApp(Types.arrayTyCon, [elemType])
 
     let consToAcc accId elemId =
         saturation {
@@ -747,7 +747,7 @@ let private seqTryHeadRecipe
 
     let seqType = NativeType.TSeq elemType
     let enumType = NativeType.TSeqEnumerator elemType
-    let optionType = NativeType.TApp (Parameterized.optionTyCon, [elemType])
+    let optionType = NativeType.TApp (Types.optionTyCon, [elemType])
 
     saturation {
         // Get enumerator
@@ -806,7 +806,7 @@ let private seqTryPickRecipe
 
     let seqType = NativeType.TSeq inputElemType
     let enumType = NativeType.TSeqEnumerator inputElemType
-    let optionType = NativeType.TApp (Parameterized.optionTyCon, [outputElemType])
+    let optionType = NativeType.TApp (Types.optionTyCon, [outputElemType])
     let loopFuncType = NativeType.TFun (Types.unitType, optionType)
 
     saturation {

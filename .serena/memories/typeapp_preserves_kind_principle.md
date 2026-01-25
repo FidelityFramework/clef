@@ -69,7 +69,7 @@ In `CheckExpressions.fs`, the TypeApp handler:
 ```fsharp
 | SynExpr.TypeApp(funcExpr, _, typeArgs, _, _, _, _) ->
     let funcNode = checkExpr env builder funcExpr
-    let typeArgTypes = typeArgs |> List.map (checkSynType env)
+    let typeArgTypes = typeArgs |> List.map (... greenfield type resolution ...)
     let resultType = ... // Instantiate TForall with type args
     
     // ARCHITECTURAL PRINCIPLE: Preserve Kind for transparent nodes

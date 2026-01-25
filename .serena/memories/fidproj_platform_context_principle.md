@@ -68,7 +68,7 @@ type ProjectConfig = {
 
 // NativeService.fs - ...never passed here!
 let checkParsedInputs (inputs: ParsedInput list) : CheckResult =
-    let globals = createNativeGlobals()  // NO platform parameter!
+    let globals = ... // greenfield type resolution  // NO platform parameter!
     ...
 ```
 
@@ -98,14 +98,14 @@ let parsePlatformConfig (targetTriple: string) : PlatformConfig =
 ```fsharp
 // NativeService.fs
 let checkParsedInputs (inputs: ParsedInput list) (platform: PlatformConfig) : CheckResult =
-    let globals = createNativeGlobals(platform)  // Platform-aware!
+    let globals = ... // greenfield platform-aware type resolution  // Platform-aware!
     ...
 ```
 
 ### 4. Platform-Aware Type Creation
 ```fsharp
-// NativeGlobals.fs
-let createNativeGlobals (platform: PlatformConfig) =
+// (greenfield implementation)
+// greenfield: platform-aware type resolution
     let wordSize = platform.WordSize / 8  // bytes
     let intTyCon = mkTypeConRef "int" 0 (TypeLayout.PlatformWord)
     // OR if we want early resolution:

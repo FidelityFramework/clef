@@ -7,7 +7,7 @@ module FSharp.Native.Compiler.NativeTypedTree.Expressions.Patterns
 
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.NativeTypedTree.UnionFind
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
@@ -153,7 +153,7 @@ let rec checkPattern
 
     | SynPat.ArrayOrList(isArray, pats, _) ->
         let elemTy = freshTypeVar range
-        let listTy = if isArray then mkArrayType elemTy else mkListType elemTy
+        let listTy = if isArray then NativeType.TApp(Types.arrayTyCon, [elemTy]) else NativeType.TList elemTy
         addConstraint (Constraint.Equals(expectedTy, listTy, range)) env
         let (patterns, bindings) =
             pats
@@ -208,14 +208,14 @@ let rec checkPattern
         // Optional parameter pattern: ?x
         let name = ident.idText
         let innerTy = freshTypeVar range
-        let optTy = mkOptionType innerTy
+        let optTy = NativeType.TApp(Types.optionTyCon, [innerTy])
         addConstraint (Constraint.Equals(expectedTy, optTy, range)) env
         (Pattern.Var(name, optTy), [(name, optTy)])
 
     | SynPat.ListCons(lhsPat, rhsPat, _, _) ->
         // List cons pattern: x :: xs
         let elemTy = freshTypeVar range
-        let listTy = mkListType elemTy
+        let listTy = NativeType.TList elemTy
         addConstraint (Constraint.Equals(expectedTy, listTy, range)) env
         let (lhsPattern, lhsBindings) = checkPattern checkSynType env lhsPat elemTy range
         let (rhsPattern, rhsBindings) = checkPattern checkSynType env rhsPat listTy range

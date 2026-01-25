@@ -4,7 +4,7 @@
 
 FNCS has two mechanisms for operator resolution that can conflict:
 
-### Mechanism 1: Built-in Bindings (NativeGlobals.fs)
+### Mechanism 1: Built-in Bindings *(NativeGlobals.fs DELETED - greenfield pending)*
 ```fsharp
 ("op_Addition", type_signature)
 ```
@@ -18,7 +18,7 @@ Provides dynamic resolution based on the actual type being operated on.
 
 ## The Conflict
 
-If NativeGlobals defines:
+If built-in bindings define:
 ```fsharp
 ("op_Addition", TFun(intType, TFun(intType, intType)))  // Fixed to int!
 ```
@@ -26,7 +26,7 @@ If NativeGlobals defines:
 Then SRTP never gets a chance to resolve for `int64`, `uint8`, etc.
 The type checker sees "expected int, got int64" and fails.
 
-If NativeGlobals defines:
+If built-in bindings define:
 ```fsharp
 ("op_Addition", mkPolymorphicBinaryOp())  // forall 'a. 'a -> 'a -> 'a
 ```
@@ -36,7 +36,7 @@ Then SRTP CAN resolve, but we need proper witness lookup and constraint solving.
 ## Correct Architecture
 
 ### For NTU with SRTP (F# Compatible)
-1. Operators in NativeGlobals are POLYMORPHIC with constraints
+1. Operators in built-in bindings are POLYMORPHIC with constraints
 2. Type inference determines concrete types
 3. SRTP resolution provides witnesses
 4. Witnesses map to type-specific MLIR operations
@@ -71,7 +71,7 @@ The codebase is in a broken hybrid state:
 
 ## Key Files
 
-- `NativeGlobals.fs` - Built-in operator bindings
+- *(DELETED: NativeGlobals.fs)*
 - `SRTPResolution.fs` - SRTP witness infrastructure
 - `CheckExpressions.fs` - Where operator lookup happens
 - `Unify.fs` - Constraint solving

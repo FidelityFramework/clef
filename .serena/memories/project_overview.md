@@ -20,7 +20,7 @@ Firefly consumes the PSG and handles code generation (Alex/Zipper → MLIR → L
 src/Compiler/
 ├── NativeTypedTree/           # Core native type system
 │   ├── NativeTypes.fs         # NTUKind, NativeType, TypeLayout
-│   ├── NativeGlobals.fs       # Built-in types, Memory regions, Span/Arena
+│   ├── *(DELETED: NativeGlobals.fs - greenfield pending)*
 │   ├── Unify.fs               # Unification with occurs check
 │   ├── UnionFind.fs           # Type variable binding
 │   ├── NativeService.fs       # Public API, orchestration
@@ -45,7 +45,7 @@ src/Compiler/
 
 | Module | Location | Purpose |
 |--------|----------|---------|
-| `NativeGlobals.fs` | NativeTypedTree/ | Built-in types, NTUKind, Memory regions, Span/Arena |
+| *(DELETED)* | | *greenfield pending* |
 | `NativeTypes.fs` | NativeTypedTree/ | NativeType, TypeParam, TypeConRef, TypeLayout |
 | `Intrinsics.fs` | NativeTypedTree/Expressions/ | FNCS intrinsic resolution |
 | `UnionFind.fs` | NativeTypedTree/ | Type variable binding, path compression |
@@ -67,7 +67,7 @@ Expressions/
 ├── Patterns.fs       # Pattern matching
 ├── Identity.fs       # Identifier resolution
 ├── Literals.fs       # Constant handling
-├── SynTypes.fs       # SynType checking
+├── *(DELETED: SynTypes.fs - greenfield pending)*
 └── TypeOperations.fs # Cast/TypeTest/AddressOf
 ```
 
@@ -78,7 +78,7 @@ let checkProject (sources: SourceFile list) (options: CheckOptions) : CheckResul
 // Returns: SemanticGraph with types attached, diagnostics
 ```
 
-## Memory Region Types (NativeGlobals.fs)
+## Memory Region Types *(NativeGlobals.fs DELETED - greenfield pending)*
 
 FNCS provides type-safe memory regions via measure types:
 

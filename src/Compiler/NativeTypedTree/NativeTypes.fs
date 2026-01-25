@@ -164,6 +164,10 @@ type NTUKind =
     // Collection types (PRD-13a: Core Collections)
     //-----------------------------------------------------------------------
 
+    /// Mutable contiguous array (fat pointer: ptr + length)
+    /// C-04: Type constructor arity = 1
+    | NTUarray
+
     /// Immutable singly-linked list
     /// PRD-13a: Core Collections
     | NTUlist
@@ -372,6 +376,7 @@ module PlatformContext =
         | NTUKind.NTUtimespan -> 8  // 64-bit duration
         | NTUKind.NTUlazy -> -1  // Size depends on element type (PRD-14)
         | NTUKind.NTUseq -> -1  // Size depends on element type (PRD-15)
+        | NTUKind.NTUarray -> 16  // Fat pointer: ptr + length (C-04)
         | NTUKind.NTUlist -> ctx.PointerSize  // Pointer to cons cell (PRD-13a)
         | NTUKind.NTUmap -> ctx.PointerSize  // Pointer to tree root (PRD-13a)
         | NTUKind.NTUset -> ctx.PointerSize  // Pointer to tree root (PRD-13a)
@@ -405,6 +410,7 @@ module PlatformContext =
         | NTUKind.NTUtimespan -> 8  // 64-bit aligned
         | NTUKind.NTUlazy -> 8  // Pointer-aligned (PRD-14)
         | NTUKind.NTUseq -> 8  // Pointer-aligned (PRD-15)
+        | NTUKind.NTUarray -> 8  // Pointer-aligned (C-04)
         | NTUKind.NTUlist -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
         | NTUKind.NTUmap -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
         | NTUKind.NTUset -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
@@ -475,6 +481,7 @@ module NTUKind =
         | NTUKind.NTUdecimal -> "decimal"
         | NTUKind.NTUlazy -> "Lazy"
         | NTUKind.NTUseq -> "Seq"
+        | NTUKind.NTUarray -> "array"
         | NTUKind.NTUlist -> "List"
         | NTUKind.NTUmap -> "Map"
         | NTUKind.NTUset -> "Set"
@@ -1150,3 +1157,115 @@ and formatMeasure (m: Measure) : string =
     | MProd(m1, m2) -> $"{formatMeasure m1}*{formatMeasure m2}"
     | MInv m -> $"1/{formatMeasure m}"
     | MCon(name, _) -> name
+
+//-------------------------------------------------------------------------
+// Standard Types Module (NTU-based type definitions)
+//-------------------------------------------------------------------------
+
+/// Standard type definitions for native compilation.
+/// These are the canonical type values used throughout the compiler.
+module Types =
+    // Type constructors for primitive types (NTU kinds)
+    // Platform-dependent types use PlatformWord layout (size resolved by Alex)
+    let intTyCon = mkNTUTypeConRef "int" NTUKind.NTUint TypeLayout.PlatformWord
+    // Fixed-width types use Inline layout with known sizes
+    let int8TyCon = mkNTUTypeConRef "int8" NTUKind.NTUint8 (TypeLayout.Inline(1, 1))
+    let int16TyCon = mkNTUTypeConRef "int16" NTUKind.NTUint16 (TypeLayout.Inline(2, 2))
+    let int32TyCon = mkNTUTypeConRef "int32" NTUKind.NTUint32 (TypeLayout.Inline(4, 4))
+    let int64TyCon = mkNTUTypeConRef "int64" NTUKind.NTUint64 (TypeLayout.Inline(8, 8))
+    // Platform-dependent unsigned
+    let uintTyCon = mkNTUTypeConRef "uint" NTUKind.NTUuint TypeLayout.PlatformWord
+    // Fixed-width unsigned
+    let uint8TyCon = mkNTUTypeConRef "uint8" NTUKind.NTUuint8 (TypeLayout.Inline(1, 1))
+    let uint16TyCon = mkNTUTypeConRef "uint16" NTUKind.NTUuint16 (TypeLayout.Inline(2, 2))
+    let uint32TyCon = mkNTUTypeConRef "uint32" NTUKind.NTUuint32 (TypeLayout.Inline(4, 4))
+    let uint64TyCon = mkNTUTypeConRef "uint64" NTUKind.NTUuint64 (TypeLayout.Inline(8, 8))
+    // Native pointer-sized integers (always platform-dependent)
+    let nintTyCon = mkNTUTypeConRef "nativeint" NTUKind.NTUnint TypeLayout.PlatformWord
+    let unintTyCon = mkNTUTypeConRef "unativeint" NTUKind.NTUunint TypeLayout.PlatformWord
+    let float32TyCon = mkNTUTypeConRef "float32" NTUKind.NTUfloat32 (TypeLayout.Inline(4, 4))
+    let floatTyCon = mkNTUTypeConRef "float" NTUKind.NTUfloat64 (TypeLayout.Inline(8, 8))
+    let boolTyCon = mkNTUTypeConRef "bool" NTUKind.NTUbool (TypeLayout.Inline(1, 1))
+    let charTyCon = mkNTUTypeConRef "char" NTUKind.NTUchar (TypeLayout.Inline(4, 4))
+    let unitTyCon = mkNTUTypeConRef "unit" NTUKind.NTUunit (TypeLayout.Inline(0, 1))
+    let stringTyCon = mkNTUTypeConRef "string" NTUKind.NTUstring TypeLayout.FatPointer
+    let decimalTyCon = mkNTUTypeConRef "decimal" NTUKind.NTUdecimal (TypeLayout.Inline(16, 8))
+    let voidptrTyCon = mkNTUTypeConRef "voidptr" NTUKind.NTUptr (TypeLayout.Inline(8, 8))
+    
+    // Array type constructor (arity 1, fat pointer layout)
+    // C-04: No helper function - use TApp(arrayTyCon, [elemType]) directly
+    let arrayTyCon = mkNTUTypeConRefWithArity "array" NTUKind.NTUarray 1 TypeLayout.FatPointer
+
+    // Option type constructor (arity 1) - no specialized DU case, uses TApp
+    // Usage: NativeType.TApp(Types.optionTyCon, [elemType])
+    let optionTyCon = mkTypeConRef "option" 1 (TypeLayout.Inline(-1, -1))
+
+    // Standard type values
+    let intType = mkSimpleType intTyCon
+    let int8Type = mkSimpleType int8TyCon
+    let int16Type = mkSimpleType int16TyCon
+    let int32Type = mkSimpleType int32TyCon
+    let int64Type = mkSimpleType int64TyCon
+    let uintType = mkSimpleType uintTyCon
+    let uint8Type = mkSimpleType uint8TyCon
+    let uint16Type = mkSimpleType uint16TyCon
+    let uint32Type = mkSimpleType uint32TyCon
+    let uint64Type = mkSimpleType uint64TyCon
+    let nintType = mkSimpleType nintTyCon
+    let unintType = mkSimpleType unintTyCon
+    let float32Type = mkSimpleType float32TyCon
+    let floatType = mkSimpleType floatTyCon
+    let boolType = mkSimpleType boolTyCon
+    let charType = mkSimpleType charTyCon
+    let unitType = mkSimpleType unitTyCon
+    let stringType = mkSimpleType stringTyCon
+    let decimalType = mkSimpleType decimalTyCon
+
+    // ValueOption type constructor (arity 1)
+    // Usage: NativeType.TApp(Types.voptionTyCon, [elemType])
+    let voptionTyCon = mkTypeConRef "ValueOption" 1 (TypeLayout.Inline(-1, -1))
+
+    // FnPtr type constructor (arity 1)
+    // Usage: NativeType.TApp(Types.fnPtrTyCon, [funcType])
+    let fnPtrTyCon = mkNTUTypeConRefWithArity "FnPtr" NTUKind.NTUfnptr 1 (TypeLayout.Inline(8, 8))
+
+    // Arena type constructor (arity 1 - lifetime measure parameter)
+    // Usage: NativeType.TApp(Types.arenaTyCon, [lifetimeMeasure])
+    // Layout: fat pointer (ptr to memory region + remaining size)
+    let arenaTyCon = mkTypeConRef "Arena" 1 TypeLayout.FatPointer
+
+    // Expr type constructor (arity 1 - for quoted expressions)
+    // Usage: NativeType.TApp(Types.exprTyCon, [innerType])
+    let exprTyCon = mkTypeConRef "Expr" 1 (TypeLayout.Inline(-1, -1))
+    /// Try to extract NTUKind from a NativeType (for use with NTUKind predicates)
+    let tryGetNTUKind (ty: NativeType) : NTUKind option =
+        match ty with
+        | NativeType.TApp(tycon, _) -> tycon.NTUKind
+        | _ -> None
+
+    /// Check if a type is numeric (integer or float)
+    let isNumericType (ty: NativeType) : bool =
+        match tryGetNTUKind ty with
+        | Some kind -> NTUKind.isNumeric kind
+        | None -> false
+
+    /// Check if a type is an integer (signed or unsigned)
+    let isIntegerType (ty: NativeType) : bool =
+        match tryGetNTUKind ty with
+        | Some kind -> NTUKind.isInteger kind
+        | None -> false
+
+    /// Check if a type is a floating point type
+    let isFloatType (ty: NativeType) : bool =
+        match tryGetNTUKind ty with
+        | Some kind -> NTUKind.isFloatingPoint kind
+        | None -> false
+
+    /// Check if a type is the string type
+    let isStringType (ty: NativeType) : bool =
+        match tryGetNTUKind ty with
+        | Some NTUKind.NTUstring -> true
+        | _ -> false
+
+// Re-export for convenience
+let voidptrTyCon = Types.voidptrTyCon

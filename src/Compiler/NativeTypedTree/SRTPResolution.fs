@@ -6,7 +6,7 @@
 module FSharp.Native.Compiler.NativeTypedTree.SRTPResolution
 
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.NativeTypedTree.UnionFind
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
@@ -98,7 +98,7 @@ type WitnessTable = {
 
 /// Create a witness resolution for numeric operators
 let private numericOpWitness (op: string) (ty: NativeType) : WitnessResolution option =
-    if isNumericType ty then
+    if Types.isNumericType ty then
         Some {
             Operator = op
             ArgType = ty
@@ -188,7 +188,7 @@ let private builtinOps : Map<string, (NativeType -> WitnessResolution option)> =
             // Bitwise operators - integer types only
             for op in bitwise do
                 yield (op, fun ty ->
-                    if isIntegerType ty then numericOpWitness op ty
+                    if Types.isIntegerType ty then numericOpWitness op ty
                     else None)
 
             // Comparison operators - most types
@@ -256,7 +256,7 @@ let private tryResolveViaTable (table: WitnessTable) (memberName: string) (argTy
                 | NativeType.TApp(tc, _) when tc.Name = tyCon.Name -> Some entry.Resolution
                 | _ -> None
             | TypePattern.Numeric ->
-                if isNumericType argType then Some entry.Resolution
+                if Types.isNumericType argType then Some entry.Resolution
                 else None
             | TypePattern.HasTrait traitName ->
                 // Trait-based SRTP resolution is not yet implemented.
@@ -348,16 +348,16 @@ let private categorizeConversion (sourceType: NativeType) (targetType: NativeTyp
     | s, _ when isStringType s -> Parsing
 
     // Int → Float (widening, may lose precision for large ints)
-    | s, t when isIntegerType s && isFloatType t -> Widening
+    | s, t when Types.isIntegerType s && Types.isFloatType t -> Widening
 
     // Float → Int (narrowing, truncates fractional part)
-    | s, t when isFloatType s && isIntegerType t -> Narrowing
+    | s, t when Types.isFloatType s && Types.isIntegerType t -> Narrowing
 
     // Integer to integer - simplified categorization
-    | s, t when isIntegerType s && isIntegerType t -> Widening
+    | s, t when Types.isIntegerType s && Types.isIntegerType t -> Widening
 
     // Float to float
-    | s, t when isFloatType s && isFloatType t -> Widening
+    | s, t when Types.isFloatType s && Types.isFloatType t -> Widening
 
     // Default to narrowing (conservative)
     | _ -> Narrowing
@@ -366,20 +366,20 @@ let private categorizeConversion (sourceType: NativeType) (targetType: NativeTyp
 let private getConversionMLIROp (sourceType: NativeType) (targetType: NativeType) : string =
     match sourceType, targetType with
     // Int → Float
-    | s, t when isIntegerType s && isFloatType t ->
+    | s, t when Types.isIntegerType s && Types.isFloatType t ->
         if isSignedType s then "arith.sitofp" else "arith.uitofp"
 
     // Float → Int
-    | s, t when isFloatType s && isIntegerType t ->
+    | s, t when Types.isFloatType s && Types.isIntegerType t ->
         if isSignedType t then "arith.fptosi" else "arith.fptoui"
 
     // Int → Int (widening/narrowing)
-    | s, t when isIntegerType s && isIntegerType t ->
+    | s, t when Types.isIntegerType s && Types.isIntegerType t ->
         if isSignedType s then "arith.extsi" else "arith.extui"
         // Note: for narrowing, should be "arith.trunci" - need size comparison
 
     // Float → Float
-    | s, t when isFloatType s && isFloatType t ->
+    | s, t when Types.isFloatType s && Types.isFloatType t ->
         "arith.extf"  // or truncf depending on direction
 
     // Formatting
@@ -588,7 +588,7 @@ let addConsoleWriteWitness (table: WitnessTable) : WitnessTable =
 let addWritableStringWitnesses (table: WitnessTable) : WitnessTable =
     let stringEntry = {
         MemberName = "$"
-        ForType = TypePattern.Exact Primitives.stringTyCon
+        ForType = TypePattern.Exact Types.stringTyCon
         Resolution = {
             Operator = "$"
             ArgType = Types.stringType
@@ -600,7 +600,7 @@ let addWritableStringWitnesses (table: WitnessTable) : WitnessTable =
 
     let intEntry = {
         MemberName = "$"
-        ForType = TypePattern.Exact Primitives.intTyCon
+        ForType = TypePattern.Exact Types.intTyCon
         Resolution = {
             Operator = "$"
             ArgType = Types.intType

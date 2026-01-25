@@ -32,7 +32,7 @@ let checkIfThenElse
     let thenNode = checkExpr env builder thenExpr
 
     // Condition must be bool
-    addConstraint (Constraint.Equals(condNode.Type, env.Globals.BoolType, range)) env
+    addConstraint (Constraint.Equals(condNode.Type, Types.boolType, range)) env
 
     match elseExprOpt with
     | Some elseExpr ->
@@ -46,10 +46,10 @@ let checkIfThenElse
             children = [condNode.Id; thenNode.Id; elseNode.Id])
     | None ->
         // If without else must have unit type
-        addConstraint (Constraint.Equals(thenNode.Type, env.Globals.UnitType, range)) env
+        addConstraint (Constraint.Equals(thenNode.Type, Types.unitType, range)) env
         builder.Create(
             SemanticKind.IfThenElse(condNode.Id, thenNode.Id, None),
-            env.Globals.UnitType,
+            Types.unitType,
             range,
             children = [condNode.Id; thenNode.Id])
 
@@ -70,11 +70,11 @@ let checkWhile
     let bodyNode = checkExpr env builder bodyExpr
 
     // Guard must be bool
-    addConstraint (Constraint.Equals(guardNode.Type, env.Globals.BoolType, range)) env
+    addConstraint (Constraint.Equals(guardNode.Type, Types.boolType, range)) env
 
     builder.Create(
         SemanticKind.WhileLoop(guardNode.Id, bodyNode.Id),
-        env.Globals.UnitType,  // While always returns unit
+        Types.unitType,  // While always returns unit
         range,
         children = [guardNode.Id; bodyNode.Id])
 
@@ -98,16 +98,16 @@ let checkFor
     let endNode = checkExpr env builder endExpr
 
     // Start and end must be int
-    addConstraint (Constraint.Equals(startNode.Type, env.Globals.IntType, range)) env
-    addConstraint (Constraint.Equals(endNode.Type, env.Globals.IntType, range)) env
+    addConstraint (Constraint.Equals(startNode.Type, Types.intType, range)) env
+    addConstraint (Constraint.Equals(endNode.Type, Types.intType, range)) env
 
     // Add loop variable to environment
-    let bodyEnv = addBinding ident.idText env.Globals.IntType false None false env  // Loop vars are local
+    let bodyEnv = addBinding ident.idText Types.intType false None false env  // Loop vars are local
     let bodyNode = checkExpr bodyEnv builder bodyExpr
 
     builder.Create(
         SemanticKind.ForLoop(ident.idText, startNode.Id, endNode.Id, direction, bodyNode.Id),
-        env.Globals.UnitType,
+        Types.unitType,
         range,
         children = [startNode.Id; endNode.Id; bodyNode.Id])
 
@@ -203,7 +203,8 @@ let checkTryWith
     let tryNode = checkExpr env builder tryExpr
 
     // Exception handlers are like match expressions over the caught exception
-    let exnType = env.Globals.ExnType
+    // TODO: Define proper exception type for native. Using string as placeholder.
+    let exnType = Types.stringType
 
     // Create a synthetic match node for the handlers (create scrutinee first so we have its ID)
     let handlerScrutinee = builder.Create(
@@ -256,6 +257,6 @@ let checkForEach
     let bodyNode = checkExpr loopEnv builder bodyExpr
     builder.Create(
         SemanticKind.ForEach(varName, enumNode.Id, bodyNode.Id),
-        env.Globals.UnitType,
+        Types.unitType,
         range,
         children = [enumNode.Id; bodyNode.Id])

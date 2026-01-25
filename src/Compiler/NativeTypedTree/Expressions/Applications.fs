@@ -9,7 +9,7 @@ module FSharp.Native.Compiler.NativeTypedTree.Expressions.Applications
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.NativeTypedTree.UnionFind
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
@@ -616,7 +616,7 @@ let checkLambda
     let paramTypes = lambdaParams |> List.map (fun (_, ty, _) -> ty)
     let funcType =
         if List.isEmpty paramTypes then
-            NativeType.TFun(env.Globals.UnitType, bodyNode.Type)
+            NativeType.TFun(Types.unitType, bodyNode.Type)
         else
             mkFunctionType paramTypes bodyNode.Type
 

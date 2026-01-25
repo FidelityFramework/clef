@@ -194,6 +194,6 @@ let checkTypeTest
     let targetTy = checkSynType env targetType
     builder.Create(
         SemanticKind.TypeTest(innerNode.Id, targetTy),
-        env.Globals.BoolType,
+        Types.boolType,
         range,
         children = [innerNode.Id])

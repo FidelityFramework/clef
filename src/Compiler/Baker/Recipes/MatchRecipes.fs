@@ -16,7 +16,7 @@
 module FSharp.Native.Compiler.Baker.Recipes.MatchRecipes
 
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
 open FSharp.Native.Compiler.Baker.ShadowAST
@@ -500,8 +500,8 @@ and private literalToType (lit: NativeLiteral) : NativeType =
     | NativeLiteral.String _ -> Types.stringType
     | NativeLiteral.Unit -> Types.unitType
     | NativeLiteral.Decimal _ -> Types.decimalType
-    | NativeLiteral.ByteArray _ -> mkArrayType Types.uint8Type
-    | NativeLiteral.UInt16Array _ -> mkArrayType Types.uint16Type
+    | NativeLiteral.ByteArray _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint8Type])
+    | NativeLiteral.UInt16Array _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint16Type])
     | NativeLiteral.BigInt _ -> Types.int64Type  // BigInt maps to int64 for now
 
 /// Get the type from a pattern (uses literalToType for Const patterns)
@@ -517,8 +517,8 @@ and private getPatternType (pattern: Pattern) : NativeType =
     | Pattern.Record (_, recordType) -> recordType
     | Pattern.Array elements ->
         match elements with
-        | [] -> mkArrayType Types.unitType
-        | first :: _ -> mkArrayType (getPatternType first)
+        | [] -> NativeType.TApp(Types.arrayTyCon, [Types.unitType])
+        | first :: _ -> NativeType.TApp(Types.arrayTyCon, [getPatternType first])
     | Pattern.And (left, _) -> getPatternType left
     | Pattern.Or (left, _) -> getPatternType left
     | Pattern.As (inner, _) -> getPatternType inner

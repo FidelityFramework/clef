@@ -14,60 +14,21 @@ open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
 
 /// Derive implementation function name from intrinsic info.
 /// Convention: Module.operation → __module_operation (lowercase)
-/// E.g., Signal.create → __signal_create
+/// E.g., FnPtr.fromSymbol → __fnptr_fromSymbol
 let intrinsicImplementationName (info: IntrinsicInfo) : string =
     let moduleName =
         match info.Module with
-        | IntrinsicModule.Signal -> "signal"
-        | IntrinsicModule.Effect -> "effect"
-        | IntrinsicModule.Memo -> "memo"
-        | IntrinsicModule.Batch -> "batch"
         | IntrinsicModule.FnPtr -> "fnptr"
         | _ -> info.Module.ToString().ToLowerInvariant()
     $"__{moduleName}_{info.Operation}"
 
-/// Determine if an intrinsic is compiler-provided (Alex handles directly)
-/// vs library-backed (needs F# implementation function in dependency graph).
+/// Determine if an intrinsic is compiler-provided (Alex handles directly).
 ///
 /// ARCHITECTURAL PRINCIPLE: Core native operations are part of the Native Type Universe
-/// and are realized directly by Alex. Library-backed intrinsics (reactive signals)
-/// require F# implementation functions from libraries like Fidelity.Signal.
-let isCompilerProvidedIntrinsic (info: IntrinsicInfo) : bool =
-    match info.Module with
-    // Library-backed: require F# implementation functions
-    | IntrinsicModule.Signal
-    | IntrinsicModule.Effect
-    | IntrinsicModule.Memo
-    | IntrinsicModule.Batch -> false
-    // Compiler-provided: Alex handles directly, no F# implementation needed
-    | IntrinsicModule.Sys
-    | IntrinsicModule.NativePtr
-    | IntrinsicModule.NativeStr
-    | IntrinsicModule.NativeDefault
-    | IntrinsicModule.String
-    | IntrinsicModule.Array
-    | IntrinsicModule.Math
-    | IntrinsicModule.Unchecked
-    | IntrinsicModule.Operators
-    | IntrinsicModule.Parse
-    | IntrinsicModule.Format
-    | IntrinsicModule.Convert
-    | IntrinsicModule.Crypto
-    | IntrinsicModule.Bits
-    | IntrinsicModule.FnPtr
-    | IntrinsicModule.Arena
-    | IntrinsicModule.DateTime
-    | IntrinsicModule.TimeSpan
-    | IntrinsicModule.Lazy  // Lazy operations handled by Alex (PRD-14)
-    | IntrinsicModule.Seq  // Seq operations handled by Alex (PRD-15)
-    | IntrinsicModule.SeqEnumerator  // SeqEnumerator operations handled by Alex (PRD-15/16)
-    // PRD-13a: Collection operations handled by Alex
-    | IntrinsicModule.Map
-    | IntrinsicModule.Set
-    | IntrinsicModule.List
-    | IntrinsicModule.Option
-    | IntrinsicModule.Result
-    | IntrinsicModule.Platform -> true  // Platform introspection (sizeof, wordSize)
+/// and are realized directly by Alex. All current intrinsics are compiler-provided.
+let isCompilerProvidedIntrinsic (_info: IntrinsicInfo) : bool =
+    // All intrinsic modules are compiler-provided (Alex handles directly)
+    true
 
 /// Extract semantic references from a node's Kind (call targets, definition refs, etc.)
 /// Used by traversal to ensure all semantic children are visited.

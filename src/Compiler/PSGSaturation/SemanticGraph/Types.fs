@@ -71,10 +71,6 @@ type IntrinsicModule =
     | DateTime      // DateTime operations (now, utcNow, today, toString, components)
     | TimeSpan      // TimeSpan operations (fromMilliseconds, fromSeconds, components)
     | FnPtr         // Function pointer operations (fromSymbol, invoke, ofFunction)
-    | Signal        // Reactive signal operations (create, get, set, update)
-    | Effect        // Side effect operations (create, createWithCleanup, dispose)
-    | Memo          // Memoized computation operations (create, get)
-    | Batch         // Update batching operations (run)
     | Lazy          // Lazy values (create, force, isValueCreated)
     | Seq           // Sequence generation (seq { }, toArray, toList, etc.)
     | SeqEnumerator // Sequence enumerator operations (moveNext, current) - PRD-15/16

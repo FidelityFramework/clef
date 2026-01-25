@@ -19,7 +19,7 @@
 module FSharp.Native.Compiler.Baker.Ingredients.Primitives
 
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Elaboration
 open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
@@ -142,7 +142,7 @@ let cons (headNodeId: NodeId) (tailNodeId: NodeId) (elemType: NativeType) : Satu
 /// Create None value: Option.none<'T>
 let none (innerType: NativeType) : SaturationParser<NodeId> =
     fun state ->
-        let optionType = NativeType.TApp (Parameterized.optionTyCon, [innerType])
+        let optionType = NativeType.TApp (Types.optionTyCon, [innerType])
         let info = { Module = IntrinsicModule.Option; Operation = "none"; Category = IntrinsicCategory.Pure; FullName = "Option.none" }
         let node = mkNode state (SemanticKind.Intrinsic info) optionType []
         Matched node.Id, SaturationState.addNode node state
@@ -150,7 +150,7 @@ let none (innerType: NativeType) : SaturationParser<NodeId> =
 /// Create Some value: Option.some x
 let some (valueNodeId: NodeId) (innerType: NativeType) : SaturationParser<NodeId> =
     fun state ->
-        let optionType = NativeType.TApp (Parameterized.optionTyCon, [innerType])
+        let optionType = NativeType.TApp (Types.optionTyCon, [innerType])
         let funcType = NativeType.TFun (innerType, optionType)
         let info = { Module = IntrinsicModule.Option; Operation = "some"; Category = IntrinsicCategory.Pure; FullName = "Option.some" }
         let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
@@ -161,7 +161,7 @@ let some (valueNodeId: NodeId) (innerType: NativeType) : SaturationParser<NodeId
 /// Check if option has value: Option.isSome x
 let isSome (optionNodeId: NodeId) (innerType: NativeType) : SaturationParser<NodeId> =
     fun state ->
-        let optionType = NativeType.TApp (Parameterized.optionTyCon, [innerType])
+        let optionType = NativeType.TApp (Types.optionTyCon, [innerType])
         let funcType = NativeType.TFun (optionType, Types.boolType)
         let info = { Module = IntrinsicModule.Option; Operation = "isSome"; Category = IntrinsicCategory.Pure; FullName = "Option.isSome" }
         let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
@@ -172,7 +172,7 @@ let isSome (optionNodeId: NodeId) (innerType: NativeType) : SaturationParser<Nod
 /// Check if option is None: Option.isNone x
 let isNone (optionNodeId: NodeId) (innerType: NativeType) : SaturationParser<NodeId> =
     fun state ->
-        let optionType = NativeType.TApp (Parameterized.optionTyCon, [innerType])
+        let optionType = NativeType.TApp (Types.optionTyCon, [innerType])
         let funcType = NativeType.TFun (optionType, Types.boolType)
         let info = { Module = IntrinsicModule.Option; Operation = "isNone"; Category = IntrinsicCategory.Pure; FullName = "Option.isNone" }
         let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
@@ -183,7 +183,7 @@ let isNone (optionNodeId: NodeId) (innerType: NativeType) : SaturationParser<Nod
 /// Get value from option: Option.get x (assumes Some)
 let optionGet (optionNodeId: NodeId) (innerType: NativeType) : SaturationParser<NodeId> =
     fun state ->
-        let optionType = NativeType.TApp (Parameterized.optionTyCon, [innerType])
+        let optionType = NativeType.TApp (Types.optionTyCon, [innerType])
         let funcType = NativeType.TFun (optionType, innerType)
         let info = { Module = IntrinsicModule.Option; Operation = "get"; Category = IntrinsicCategory.Pure; FullName = "Option.get" }
         let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []

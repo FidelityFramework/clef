@@ -16,7 +16,7 @@
 module FSharp.Native.Compiler.Nanopass.BakerSaturation
 
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Elaboration
@@ -53,8 +53,8 @@ let private extractSetElementType (ty: NativeType) : NativeType option =
 
 let private extractOptionInnerType (ty: NativeType) : NativeType option =
     match ty with
-    | NativeType.TApp (tycon, [innerTy]) when tycon = Parameterized.optionTyCon -> Some innerTy
-    | NativeType.TApp (tycon, [innerTy]) when tycon = Parameterized.voptionTyCon -> Some innerTy
+    | NativeType.TApp (tycon, [innerTy]) when tycon = Types.optionTyCon -> Some innerTy
+    | NativeType.TApp (tycon, [innerTy]) when tycon = Types.voptionTyCon -> Some innerTy
     | _ -> None
 
 let private extractSeqElementType (ty: NativeType) : NativeType option =

@@ -9,7 +9,6 @@ module FSharp.Native.Compiler.NativeTypedTree.Expressions.Coordinator
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 open FSharp.Native.Compiler.NativeTypedTree.UnionFind
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core

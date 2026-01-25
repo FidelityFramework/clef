@@ -132,7 +132,7 @@ Phase 5: FINAL RESULT
 | SemanticGraph.fs | PSGSaturation/SemanticGraph/ | Graph types, node kinds |
 | Intrinsics.fs | NativeTypedTree/Expressions/ | **FNCS intrinsic resolution (Jan 2026)** |
 | NativeTypes.fs | NativeTypedTree/ | Native type representation |
-| NativeGlobals.fs | NativeTypedTree/ | Type constructors, Memory regions, Span/Arena types |
+| *(DELETED)* | | *Type resolution greenfield pending* |
 | Unify.fs | NativeTypedTree/ | Type unification |
 | SRTPResolution.fs | NativeTypedTree/ | SRTP constraint solving |
 | Infrastructure/ | NativeTypedTree/ | Phase config and emission |

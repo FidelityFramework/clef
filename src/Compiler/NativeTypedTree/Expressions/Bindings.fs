@@ -7,7 +7,7 @@ module FSharp.Native.Compiler.NativeTypedTree.Expressions.Bindings
 
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.NativeTypedTree.UnionFind
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
@@ -168,7 +168,7 @@ let tryGetFunctionParams
                     match innerPat with
                     | SynPat.Const(SynConst.Unit, _) ->
                         // Unit literal - bind to dummy name
-                        [("_", env.Globals.UnitType)]
+                        [("_", Types.unitType)]
                     | SynPat.Named(SynIdent(ident, _), _, _, _) ->
                         [(ident.idText, freshTypeVar range)]
                     | SynPat.Typed(typedInner, synType, _) ->
@@ -190,7 +190,7 @@ let tryGetFunctionParams
                     [(ident.idText, freshTypeVar range)]
                 | SynPat.Const(SynConst.Unit, _) ->
                     // Unit literal - bind to dummy name
-                    [("_", env.Globals.UnitType)]
+                    [("_", Types.unitType)]
                 | _ -> [("_", freshTypeVar range)]
             )
             Some extractedParameters
@@ -301,7 +301,7 @@ let checkBinding
         // The type of the Sequential is unit (the bindings introduce names but produce no value)
         let seqNode = builder.Create(
             SemanticKind.Sequential allBindingIds,
-            env.Globals.UnitType,
+            Types.unitType,
             range,
             children = allBindingIds)
 
@@ -361,11 +361,11 @@ let checkBinding
             // Constrain parameter to string[] (argv)
             match lambdaParams with
             | [(_, paramTy, _)] ->
-                let stringArrayType = mkArrayType env.Globals.StringType
+                let stringArrayType = NativeType.TApp(Types.arrayTyCon, [Types.stringType])
                 addConstraint (Constraint.Equals(paramTy, stringArrayType, range)) env
             | _ -> ()  // Multiple or no params - unusual for entry point
             // Constrain return type to int
-            addConstraint (Constraint.Equals(bodyNode.Type, env.Globals.IntType, range)) env
+            addConstraint (Constraint.Equals(bodyNode.Type, Types.intType, range)) env
 
         // Build function type
         let paramTypes = lambdaParams |> List.map (fun (_, ty, _) -> ty)
@@ -373,13 +373,13 @@ let checkBinding
         // but it's still a function: unit -> returnType
         let funcType =
             if List.isEmpty paramTypes then
-                mkFunctionType [env.Globals.UnitType] bodyNode.Type
+                mkFunctionType [Types.unitType] bodyNode.Type
             else
                 mkFunctionType paramTypes bodyNode.Type
 
         // NOTE: Generalization disabled - it was causing type mismatches.
         // The proper fix requires smarter generalization (only top-level, not nested).
-        // For now, rely on primitive operators having TForall in NativeGlobals.
+        // For now, rely on primitive operators having TForall in Intrinsics.
 
         // Create Lambda node with parameter NodeIds for SSA assignment
         // Children includes parameter PatternBindings + body for proper traversal
@@ -827,7 +827,7 @@ let checkMatchClause
     // Check guard if present
     let guardNode = guardOpt |> Option.map (checkExpr bodyEnv builder)
     guardNode |> Option.iter (fun g ->
-        addConstraint (Constraint.Equals(g.Type, env.Globals.BoolType, range)) env)
+        addConstraint (Constraint.Equals(g.Type, Types.boolType, range)) env)
 
     // Check body
     let bodyNode = checkExpr bodyEnv builder bodyExpr

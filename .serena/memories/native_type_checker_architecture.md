@@ -33,7 +33,7 @@ FNCS uses native types exclusively:
                                    ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      TYPE ENVIRONMENT                               │
-│  NativeGlobals: Built-in types (string→UTF8, option→ValueOption)   │
+│  *(Type resolution greenfield pending)*                             │
 │  NTUKind: Type classification (NTUint, NTUptr, NTUstring, etc.)    │
 │  Platform Context: Quotation-based type width resolution           │
 └─────────────────────────────────────────────────────────────────────┘
@@ -80,7 +80,7 @@ FNCS uses native types exclusively:
 
 ```
 src/Compiler/Checking.Native/
-├── NativeGlobals.fs         # Built-in types, NTUKind definitions
+├── *(DELETED: NativeGlobals.fs - greenfield pending)*
 ├── NativeTypes.fs           # NativeType, TypeParam, TypeConRef
 ├── UnionFind.fs             # Type variable binding, path compression
 ├── Unify.fs                 # Unification algorithm

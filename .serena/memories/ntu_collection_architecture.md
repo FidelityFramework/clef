@@ -157,7 +157,7 @@ With proper NTU collections:
 
 ### FNCS (fsnative)
 - `NativeTypes.fs` - NTUKind enum (already has NTUsize, NTUptr)
-- `NativeGlobals.fs` - Add array intrinsic type constructor
+- *(DELETED: NativeGlobals.fs - greenfield pending)*
 - `CheckExpressions.fs` - Array operation type checking
 - `SemanticGraph.fs` - Platform context for quotation resolution
 

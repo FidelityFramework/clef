@@ -287,7 +287,6 @@
 
     <!-- NativeTypedTree - Native Type Checker (BCL-free, unified representation) -->
     <!-- NativeTypes.fs moved earlier - foundational types needed by TypedTree -->
-    <Compile Include="NativeTypedTree\NativeGlobals.fs" />
     <Compile Include="NativeTypedTree\UnionFind.fs" />
     <Compile Include="NativeTypedTree\Unify.fs" />
     <Compile Include="NativeTypedTree\NameResolution.fs" />
@@ -297,7 +296,6 @@
     <Compile Include="NativeTypedTree\Expressions\Literals.fs" />
     <Compile Include="NativeTypedTree\Expressions\Intrinsics.fs" />
     <Compile Include="NativeTypedTree\Expressions\Identity.fs" />
-    <Compile Include="NativeTypedTree\Expressions\SynTypes.fs" />
     <Compile Include="NativeTypedTree\Expressions\Patterns.fs" />
     <Compile Include="NativeTypedTree\Expressions\ControlFlow.fs" />
     <Compile Include="NativeTypedTree\Expressions\TypeOperations.fs" />

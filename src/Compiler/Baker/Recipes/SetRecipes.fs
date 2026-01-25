@@ -20,7 +20,7 @@
 module FSharp.Native.Compiler.Baker.Recipes.SetRecipes
 
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
 open FSharp.Native.Compiler.Baker.ShadowAST

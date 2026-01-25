@@ -24,7 +24,7 @@
 module FSharp.Native.Compiler.Baker.Ingredients.Patterns
 
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
 open FSharp.Native.Compiler.Baker.Ingredients.Primitives
@@ -483,7 +483,7 @@ let binarySearchMap
     : SaturationParser<NodeId> =
 
     let mapType = NativeType.TMap (keyType, valueType)
-    let optionType = NativeType.TApp (Parameterized.optionTyCon, [valueType])
+    let optionType = NativeType.TApp (Types.optionTyCon, [valueType])
     let loopFuncType = NativeType.TFun (mapType, optionType)
 
     saturation {

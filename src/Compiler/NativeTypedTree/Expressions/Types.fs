@@ -7,7 +7,6 @@ module FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 open FSharp.Native.Compiler.NativeTypedTree.UnionFind
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
@@ -98,8 +97,6 @@ module DiagnosticCodes =
 /// The type checking environment
 [<NoComparison; NoEquality>]
 type TypeEnv = {
-    /// Global type information
-    Globals: NativeGlobals
     /// Compositional name resolution context
     /// BCL is structurally impossible - only source-defined bindings exist
     Resolution: NR.ResolutionContext
@@ -190,27 +187,11 @@ let private tryGetUnionCaseInfo (name: string) (ty: NativeType) : NR.UnionCaseIn
     | "Error" -> Some { CaseName = "Error"; UnionType = resultType; CaseIndex = 1 }
     | _ -> None
 
-/// Create a type environment with built-in bindings from globals
-let createTypeEnv (globals: NativeGlobals) : TypeEnv =
-    // Convert built-in bindings from globals to ResolvedBindings and build resolver
-    let baseResolver =
-        globals.BuiltInBindings
-        |> Map.fold (fun ctx name ty ->
-            let binding: NR.ResolvedBinding = {
-                QualifiedName = name
-                Type = ty
-                IsMutable = false
-                NodeId = None
-                InlineBody = None
-                UnionCaseInfo = tryGetUnionCaseInfo name ty  // Detect union case constructors
-                NativeLiteral = None
-                IsModuleLevel = true  // Built-in/intrinsic bindings are always module-level
-            }
-            NR.registerBinding name binding ctx
-        ) (NR.createContext ())
+/// Create a type environment
+/// Intrinsics are resolved via Intrinsics.fs, not built-in bindings
+let createTypeEnv () : TypeEnv =
     {
-        Globals = globals
-        Resolution = baseResolver
+        Resolution = NR.createContext ()
         TypeDefs = Map.empty
         TypeAbbrevs = Map.empty
         RecordDefs = Map.empty
@@ -552,9 +533,9 @@ let resolveFieldType (baseType: NativeType) (fieldName: string) (env: TypeEnv) (
     | "Pointer" when isStringType resolvedType ->
         NativeType.TNativePtr(Types.uint8Type)
     | "Length" when isStringType resolvedType ->
-        env.Globals.IntType
+        Types.intType
     | "Length" when isArrayType resolvedType ->
-        env.Globals.IntType
+        Types.intType
     | _ ->
         // 2. Try record field lookup (no SRTP needed for records)
         match tryResolveRecordFieldType resolvedType fieldName env with

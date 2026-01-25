@@ -24,7 +24,6 @@ open FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
 open FSharp.Native.Compiler.NativeTypedTree.Expressions.Intrinsics
 open FSharp.Native.Compiler.NativeTypedTree.UnionFind
 module NR = FSharp.Native.Compiler.NativeTypedTree.NameResolution
-module NativeGlobals = FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 
 //-------------------------------------------------------------------------
 // Identifier Resolution Result
@@ -66,7 +65,7 @@ let rec private resolveIdentifierCore
         | None ->
 
         // 2b. Try conversion intrinsics (float, int, etc.)
-        match tryResolveConversion name env.Globals range with
+        match tryResolveConversion name range with
         | Some (info, ty) -> IntrinsicNode (info, ty)
         | None ->
 
@@ -98,7 +97,7 @@ let rec private resolveIdentifierCore
         // 3a. Try module-qualified intrinsic
         match tryParseModuleQualified fullName with
         | Some (modl, op) ->
-            match resolveModuleIntrinsic modl op env.Globals range with
+            match resolveModuleIntrinsic modl op range with
             | Resolved (info, ty) -> IntrinsicNode (info, ty)
             | UnknownOperation msg -> ErrorNode (msg, NativeType.TError msg)
             | NotAnIntrinsic ->

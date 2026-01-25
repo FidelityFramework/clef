@@ -13,7 +13,7 @@ module FSharp.Native.Compiler.NativeService
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
@@ -502,8 +502,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 /// Check a single expression and return a semantic node.
 /// This is the low-level API for testing the type checker.
 let checkExpression (expr: SynExpr) : CheckResult =
-    let globals = createNativeGlobals()
-    let env = createTypeEnv globals
+    let env = createTypeEnv()
     let builder = NodeBuilder()
     NodeId.reset()
 
@@ -522,8 +521,7 @@ let checkExpression (expr: SynExpr) : CheckResult =
 /// 2. The Lambda node's child already contains the checked body for code generation
 /// 3. InlineBody is for environment-based name resolution during multi-binding checking
 let checkLetBinding (binding: SynBinding) : CheckResult =
-    let globals = createNativeGlobals()
-    let env = createTypeEnv globals
+    let env = createTypeEnv()
     let builder = NodeBuilder()
     NodeId.reset()
 
@@ -970,7 +968,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // Other type definitions (delegates, etc.)
                     let node = builder.Create(
                         SemanticKind.TypeDef(typeName, TypeDefKind.ClassDef, []),
-                        accEnv.Globals.UnitType,
+                        Types.unitType,
                         range
                     )
                     (accEnv, node :: accNodes)
@@ -998,7 +996,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
         // Create a ModuleDef node for the nested module
         let moduleNode = builder.Create(
             SemanticKind.ModuleDef(moduleName, childIds),
-            env.Globals.UnitType,
+            Types.unitType,
             range,
             children = childIds
         )
@@ -1054,7 +1052,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
             ident.idText
         (env, [builder.Create(
             SemanticKind.TypeDef(exnName, TypeDefKind.ClassDef, []),
-            env.Globals.ExnType,
+            Types.stringType,  // TODO: Define proper exception type
             range
         )])
 
@@ -1073,8 +1071,7 @@ and private checkModuleDecls (env: TypeEnv) (builder: NodeBuilder) (ctx: ModuleC
 
 /// Check a list of module declarations (public API)
 let checkModuleDeclarations (decls: SynModuleDecl list) : CheckResult =
-    let globals = createNativeGlobals()
-    let env = createTypeEnv globals
+    let env = createTypeEnv()
     let builder = NodeBuilder()
     NodeId.reset()
 
@@ -1120,7 +1117,7 @@ let private checkModuleOrNamespace (env: TypeEnv) (builder: NodeBuilder) (module
 
         let moduleNode = builder.Create(
             SemanticKind.ModuleDef(moduleName, childIds),
-            env.Globals.UnitType,
+            Types.unitType,
             range,
             children = childIds
         )
@@ -1135,8 +1132,7 @@ let private checkModuleOrNamespace (env: TypeEnv) (builder: NodeBuilder) (module
 let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
     let (ParsedImplFileInput(fileName, _isScript, qualifiedNameOfFile, _hashDirectives, contents, _flags, _trivia, _identifiers)) = implFile
 
-    let globals = createNativeGlobals()
-    let initialEnv = createTypeEnv globals
+    let initialEnv = createTypeEnv()
     let builder = NodeBuilder()
     NodeId.reset()
 
@@ -1171,8 +1167,7 @@ let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
 /// platformContext: Optional platform context. When Some, enables entry point elaboration
 /// for freestanding builds (adds _start wrapper that calls main).
 let checkParsedInputsWithPlatform (inputs: ParsedInput list) (platformContext: PlatformContext option) : CheckResult =
-    let globals = createNativeGlobals()
-    let initialEnv = createTypeEnv globals
+    let initialEnv = createTypeEnv()
     let builder = NodeBuilder()
     NodeId.reset()
 
@@ -1271,11 +1266,6 @@ let getNode (id: NodeId) (result: CheckResult) : SemanticNode option =
 let hasErrors (result: CheckResult) : bool =
     CheckResult.hasErrors result
 
-/// Get the native globals (for type reference)
-let getNativeGlobals () : NativeGlobals =
-    createNativeGlobals()
-
 /// Create a fresh type environment
 let createFreshTypeEnv () : TypeEnv =
-    let globals = createNativeGlobals()
-    createTypeEnv globals
+    createTypeEnv()

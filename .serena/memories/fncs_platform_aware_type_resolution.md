@@ -118,7 +118,7 @@ This means:
 ## Files to Modify
 
 1. `NativeTypes.fs` - Add `TypeLayout.PlatformWord` case
-2. `NativeGlobals.fs` - Use `PlatformWord` for `int`, `uint`, `nativeint`, `nativeptr`
+2. *(DELETED: NativeGlobals.fs - greenfield type resolution pending)*
 3. `NativeService.fs` - Thread platform config through checking
 4. `ProjectLoader.fs` - Extract and pass platform config
 5. Alex codegen - Resolve `PlatformWord` to concrete sizes

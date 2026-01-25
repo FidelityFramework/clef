@@ -8,7 +8,7 @@ module FSharp.Native.Compiler.NativeTypedTree.Expressions.Collections
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.Text
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.NativeTypedTree.UnionFind
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
@@ -74,8 +74,8 @@ let checkArrayOrList
             first.Type
 
     let collectionTy =
-        if isArray then mkArrayType elementTy
-        else mkListType elementTy
+        if isArray then NativeType.TApp(Types.arrayTyCon, [elementTy])
+        else NativeType.TList elementTy
 
     let childIds = elementNodes |> List.map (fun n -> n.Id)
     let kind = if isArray then SemanticKind.ArrayExpr childIds else SemanticKind.ListExpr childIds
@@ -97,7 +97,7 @@ let checkArrayOrListComputed
 
     let compNode = checkExpr env builder compExpr
     let elemType = freshTypeVar range
-    let resultType = if isArray then mkArrayType elemType else mkListType elemType
+    let resultType = if isArray then NativeType.TApp(Types.arrayTyCon, [elemType]) else NativeType.TList elemType
     builder.Create(
         SemanticKind.ArrayExpr [compNode.Id],
         resultType,

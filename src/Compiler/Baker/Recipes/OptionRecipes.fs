@@ -15,7 +15,7 @@
 module FSharp.Native.Compiler.Baker.Recipes.OptionRecipes
 
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
+
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
 open FSharp.Native.Compiler.Baker.ShadowAST
@@ -56,7 +56,7 @@ let private optionMapRecipe
     (outputType: NativeType)
     : SaturationParser<NodeId> =
 
-    let outputOptionType = NativeType.TApp (Parameterized.optionTyCon, [outputType])
+    let outputOptionType = NativeType.TApp (Types.optionTyCon, [outputType])
 
     saturation {
         // Check if option has value
@@ -85,7 +85,7 @@ let private optionBindRecipe
     (outputType: NativeType)
     : SaturationParser<NodeId> =
 
-    let outputOptionType = NativeType.TApp (Parameterized.optionTyCon, [outputType])
+    let outputOptionType = NativeType.TApp (Types.optionTyCon, [outputType])
 
     saturation {
         // Check if option has value
@@ -112,7 +112,7 @@ let private optionFilterRecipe
     (valueType: NativeType)
     : SaturationParser<NodeId> =
 
-    let optionType = NativeType.TApp (Parameterized.optionTyCon, [valueType])
+    let optionType = NativeType.TApp (Types.optionTyCon, [valueType])
 
     saturation {
         // Check if option has value

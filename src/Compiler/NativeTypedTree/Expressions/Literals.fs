@@ -6,7 +6,6 @@ module FSharp.Native.Compiler.NativeTypedTree.Expressions.Literals
 
 open FSharp.Native.Compiler.Syntax
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeGlobals
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 
 //-------------------------------------------------------------------------
@@ -14,38 +13,38 @@ open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 //-------------------------------------------------------------------------
 
 /// Get the NativeType of a SynConst
-let rec typeOfConst (globals: NativeGlobals) (c: SynConst) : NativeType =
+let rec typeOfConst (c: SynConst) : NativeType =
     match c with
-    | SynConst.Unit -> globals.UnitType
-    | SynConst.Bool _ -> globals.BoolType
+    | SynConst.Unit -> Types.unitType
+    | SynConst.Bool _ -> Types.boolType
     | SynConst.SByte _ -> Types.int8Type
     | SynConst.Byte _ -> Types.uint8Type
     | SynConst.Int16 _ -> Types.int16Type
     | SynConst.UInt16 _ -> Types.uint16Type
-    | SynConst.Int32 _ -> globals.IntType
+    | SynConst.Int32 _ -> Types.intType
     | SynConst.UInt32 _ -> Types.uintType
-    | SynConst.Int64 _ -> globals.Int64Type
+    | SynConst.Int64 _ -> Types.int64Type
     | SynConst.UInt64 _ -> Types.uint64Type
     | SynConst.IntPtr _ -> Types.nintType
     | SynConst.UIntPtr _ -> Types.unintType
     | SynConst.Single _ -> Types.float32Type
-    | SynConst.Double _ -> globals.FloatType
-    | SynConst.Char _ -> globals.CharType
+    | SynConst.Double _ -> Types.floatType
+    | SynConst.Char _ -> Types.charType
     | SynConst.Decimal _ -> Types.decimalType
-    | SynConst.String _ -> globals.StringType
-    | SynConst.Bytes _ -> mkArrayType Types.uint8Type
-    | SynConst.UInt16s _ -> mkArrayType Types.uint16Type
+    | SynConst.String _ -> Types.stringType
+    | SynConst.Bytes _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint8Type])
+    | SynConst.UInt16s _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint16Type])
     | SynConst.Measure(innerConst, _, synMeasure, _) ->
         // For now, just use the base type; measure annotation is tracked separately
-        let baseType = typeOfConst globals innerConst
+        let baseType = typeOfConst innerConst
         let _ = synMeasure  // Suppress warning
         baseType
     | SynConst.UserNum(_, suffix) ->
         // UserNum with suffix - "I" is bigint, others are user-defined
         match suffix with
-        | "I" -> globals.IntType  // Treat bigint as int for now
-        | _ -> globals.IntType  // Fallback
-    | SynConst.SourceIdentifier _ -> globals.StringType
+        | "I" -> Types.intType  // Treat bigint as int for now
+        | _ -> Types.intType  // Fallback
+    | SynConst.SourceIdentifier _ -> Types.stringType
 
 //-------------------------------------------------------------------------
 // Constant to NativeLiteral Conversion
