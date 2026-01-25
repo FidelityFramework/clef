@@ -2,7 +2,7 @@
 
 ## Summary
 
-FNCS registers F# intrinsic functions and operators as built-in bindings in the type environment. *(NativeGlobals DELETED - greenfield type resolution pending)*
+FNCS registers F# intrinsic functions and operators as built-in bindings in the type environment. (Type resolution via resolveSynType in Types.fs)
 
 ## Categories of Built-in Bindings
 
@@ -47,7 +47,7 @@ The detection uses `hasStructAttribute` function in `NativeService.fs`.
 
 ## Key Files
 
-- *(DELETED: NativeGlobals.fs - greenfield pending)*
+- (See NativeTypes.fs and Types.fs for type system)
 - `src/Compiler/Checking.Native/CheckExpressions.fs` - `createTypeEnv` uses `BuiltInBindings`
 - `src/Compiler/Checking.Native/NativeService.fs` - `hasStructAttribute` for struct detection
 
