@@ -118,7 +118,7 @@ module ProjectChecker =
                             }
                             Ok {
                                 Options = options
-                                CheckResult = { Graph = emptyGraph; Diagnostics = [] }
+                                CheckResult = { Graph = emptyGraph; Diagnostics = []; PlatformContext = None }
                                 SourceFiles = sourceFiles
                                 ParseErrors = parseErrors
                             }

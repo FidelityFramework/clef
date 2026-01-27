@@ -501,6 +501,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     {
         Graph = finalGraph
         Diagnostics = filteredDiagnostics
+        PlatformContext = platformContext
     }
 
 //-------------------------------------------------------------------------
@@ -1808,6 +1809,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
                 Range = dummyRange
                 RelatedNodes = []
             }]
+            PlatformContext = None
         }
 
 /// Result of parsing and checking combined

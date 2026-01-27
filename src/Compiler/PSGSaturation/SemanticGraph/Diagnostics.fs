@@ -29,6 +29,8 @@ type Diagnostic = {
 type CheckResult = {
     Graph: SemanticGraph
     Diagnostics: Diagnostic list
+    /// Platform context (handed off to Firefly for Alex code generation)
+    PlatformContext: PlatformContext option
 }
 
 module CheckResult =
