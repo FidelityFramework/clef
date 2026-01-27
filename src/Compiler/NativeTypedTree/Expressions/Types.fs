@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 /// Type checking environment and helpers for F# Native expression checking.
-/// Extracted from CheckExpressions.fs for maintainability.
 module FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
 
 open FSharp.Native.Compiler.Syntax
@@ -642,6 +641,25 @@ let addBclError (name: string) (r: range) (env: TypeEnv) : unit =
 // After conversion here, only NativeType propagates through type checking.
 //-------------------------------------------------------------------------
 
+/// Resolve a built-in type constructor to its NativeType factory.
+/// These are NTU types with dedicated NativeType constructors (not TApp).
+/// Returns None if not a built-in type constructor.
+let private tryResolveBuiltinTypeConstructor (name: string) (args: NativeType list) : NativeType option =
+    match name, args with
+    // Pointer types
+    | "nativeptr", [elem] -> Some (NativeType.TNativePtr elem)
+    | "byref", [elem] -> Some (NativeType.TByref(elem, ByrefKind.InOut))
+    | "inref", [elem] -> Some (NativeType.TByref(elem, ByrefKind.In))
+    | "outref", [elem] -> Some (NativeType.TByref(elem, ByrefKind.Out))
+    // Collection types with dedicated constructors
+    | "Lazy", [elem] -> Some (NativeType.TLazy elem)
+    | "seq", [elem] -> Some (NativeType.TSeq elem)
+    | "list", [elem] -> Some (NativeType.TList elem)
+    | "Map", [k; v] -> Some (NativeType.TMap(k, v))
+    | "Set", [elem] -> Some (NativeType.TSet elem)
+    // Not a built-in type constructor
+    | _ -> None
+
 /// Resolve a type name to NativeType via NTU lookup.
 /// Checks: TypeAbbrevs, TypeDefs, then NTU primitives.
 let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
@@ -691,20 +709,41 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
             NativeType.TError $"Unknown type: {name}"
 
     | SynType.App(typeName, _, typeArgs, _, _, _, _) ->
-        // Generic type application: List<int>, Option<string>
-        let baseTy = resolveSynType env typeName
+        // Generic type application: nativeptr<byte>, List<int>, Option<string>
         let argTys = typeArgs |> List.map (resolveSynType env)
-        match baseTy with
-        | NativeType.TApp(tyCon, []) -> NativeType.TApp(tyCon, argTys)
-        | _ -> baseTy  // If base isn't a type constructor, return as-is
+        // Extract base type name for built-in type constructor check
+        match typeName with
+        | SynType.LongIdent(SynLongIdent(idents, _, _)) ->
+            let name = idents |> List.map (fun id -> id.idText) |> String.concat "."
+            // Try built-in type constructor first (nativeptr, byref, list, etc.)
+            match tryResolveBuiltinTypeConstructor name argTys with
+            | Some ty -> ty
+            | None ->
+                // Fall back to regular type resolution (user-defined generics)
+                match resolveTypeName name env with
+                | Some (NativeType.TApp(tyCon, [])) -> NativeType.TApp(tyCon, argTys)
+                | Some ty -> ty
+                | None -> NativeType.TError $"Unknown type constructor: {name}"
+        | _ ->
+            // Complex type expression - recurse
+            let baseTy = resolveSynType env typeName
+            match baseTy with
+            | NativeType.TApp(tyCon, []) -> NativeType.TApp(tyCon, argTys)
+            | _ -> baseTy
 
-    | SynType.LongIdentApp(typeName, SynLongIdent(_idents, _, _), _, typeArgs, _, _, _) ->
+    | SynType.LongIdentApp(typeName, SynLongIdent(idents, _, _), _, typeArgs, _, _, _) ->
         // Qualified generic: Module.List<int>
-        let baseTy = resolveSynType env typeName
         let argTys = typeArgs |> List.map (resolveSynType env)
-        match baseTy with
-        | NativeType.TApp(tyCon, []) -> NativeType.TApp(tyCon, argTys)
-        | _ -> baseTy
+        let name = idents |> List.map (fun id -> id.idText) |> String.concat "."
+        // Try built-in type constructor first
+        match tryResolveBuiltinTypeConstructor name argTys with
+        | Some ty -> ty
+        | None ->
+            // Fall back to regular type resolution
+            let baseTy = resolveSynType env typeName
+            match baseTy with
+            | NativeType.TApp(tyCon, []) -> NativeType.TApp(tyCon, argTys)
+            | _ -> baseTy
 
     | SynType.Tuple(isStruct, segments, _) ->
         // Tuple type: int * string * bool

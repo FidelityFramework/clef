@@ -23,27 +23,66 @@ open FSharp.Native.Compiler.Nanopass.Recipe
 // Pass 1: Intrinsic Fan-Out (Parallel Recipe Creation)
 //-------------------------------------------------------------------------
 
+/// Check if two types have the same memory layout (same-size conversion)
+let private hasSameLayout (sourceType: NativeType) (targetType: NativeType) : bool =
+    let sourceLayout = layoutOf sourceType
+    let targetLayout = layoutOf targetType
+    match sourceLayout, targetLayout with
+    | TypeLayout.PlatformWord, TypeLayout.PlatformWord -> true
+    | TypeLayout.Inline (s1, _), TypeLayout.Inline (s2, _) when s1 = s2 -> true
+    | _ -> false
+
+/// Check if a node is a same-size conversion Application that can be eliminated
+let private isSameSizeConversion (node: SemanticNode) (graph: SemanticGraph) : (NodeId * IntrinsicInfo) option =
+    match node.Kind with
+    | SemanticKind.Application (funcId, [argId]) ->
+        // Look up the function node
+        match Map.tryFind funcId graph.Nodes with
+        | Some funcNode ->
+            match funcNode.Kind with
+            | SemanticKind.Intrinsic info when info.Category = IntrinsicCategory.Conversion ->
+                // Get arg type from the arg node
+                match Map.tryFind argId graph.Nodes with
+                | Some argNode ->
+                    // Check if source (arg) and target (result) have same layout
+                    if hasSameLayout argNode.Type node.Type then
+                        Some (argId, info)
+                    else
+                        None
+                | None -> None
+            | _ -> None
+        | None -> None
+    | _ -> None
+
 /// Determine if a node needs intrinsic elaboration.
-/// Currently returns false for all nodes - no intrinsics need PSG elaboration yet.
-let private needsIntrinsicElaboration (_node: SemanticNode) : bool =
-    // Future: check for intrinsics that need PSG expansion
-    // match node.Kind with
-    // | SemanticKind.Intrinsic info when requiresElaboration info -> true
-    // | _ -> false
-    false
+/// Returns true for same-size conversion Applications that can be eliminated.
+let private needsIntrinsicElaboration (node: SemanticNode) (graph: SemanticGraph) : bool =
+    isSameSizeConversion node graph |> Option.isSome
 
 /// Create a recipe for intrinsic elaboration.
-/// This is called only for nodes where needsIntrinsicElaboration returns true.
-/// RecipeCreator signature: SemanticNode -> SemanticGraph -> Recipe option
-let private createIntrinsicRecipe (node: SemanticNode) (_graph: SemanticGraph) : Recipe option =
-    // Future: implement intrinsic-specific recipe creation
-    // For now, this is never called since needsIntrinsicElaboration always returns false
-    failwithf "createIntrinsicRecipe: Node %d does not require elaboration" (let (NodeId nid) = node.Id in nid)
+/// For same-size conversions, the recipe replaces the Application with its argument.
+let private createIntrinsicRecipe (node: SemanticNode) (graph: SemanticGraph) : Recipe option =
+    match isSameSizeConversion node graph with
+    | Some (argId, info) ->
+        // Same-size conversion: replace Application with its argument
+        // No new nodes needed - we just redirect to the existing argument
+        Some {
+            OriginalNodeId = node.Id
+            NewNodes = []  // No new nodes!
+            ReplacementRootId = argId  // Replace with the argument
+            ElaborationKind = "Intrinsic"
+            ElaborationSource = sprintf "Convert.%s (same-size elimination)" info.Operation
+        }
+    | None ->
+        None
 
 /// Run Pass 1: Intrinsic Fan-Out
 /// Identifies intrinsics needing elaboration and creates recipes in parallel.
 let fanOut (graph: SemanticGraph) : RecipeSet =
-    FanOut.fanOut "Intrinsic" needsIntrinsicElaboration createIntrinsicRecipe graph
+    // Use closures to capture the graph for predicate and recipe creation
+    let shouldElaborate node = needsIntrinsicElaboration node graph
+    let createRecipe node _graph = createIntrinsicRecipe node graph
+    FanOut.fanOut "Intrinsic" shouldElaborate createRecipe graph
 
 //-------------------------------------------------------------------------
 // Pass 2: Intrinsic Fold-In
