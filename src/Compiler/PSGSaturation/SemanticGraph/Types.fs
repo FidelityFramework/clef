@@ -8,15 +8,6 @@ open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.SeqSaturation
 
 //-------------------------------------------------------------------------
-// PSG IDENTITY (Re-exported from NativeTypes)
-//-------------------------------------------------------------------------
-
-/// NodeId identifies PSG nodes uniquely.
-/// Re-exported here to establish SemanticGraph.Types as the interface boundary.
-/// Consumers should import from SemanticGraph.Types, not NativeTypes.
-type NodeId = NativeTypes.NodeId
-
-//-------------------------------------------------------------------------
 // SRTP Resolution
 //-------------------------------------------------------------------------
 
