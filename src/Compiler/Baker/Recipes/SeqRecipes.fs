@@ -32,11 +32,11 @@
 /// See: Serena memory "baker_saturation_architecture"
 module FSharp.Native.Compiler.Baker.Recipes.SeqRecipes
 
+open XParsec.Parsers
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
-open FSharp.Native.Compiler.Baker.ShadowAST
 open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
 open FSharp.Native.Compiler.Baker.Ingredients.Primitives
 
@@ -57,10 +57,11 @@ let private toSaturationState (ctx: Context) : SaturationState =
 /// Run a saturation parser and convert to Decomposition.Result
 let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Result =
     let initialState = toSaturationState ctx
-    match parser initialState with
-    | Matched resultNodeId, finalState ->
-        mkResultNoShadow (List.rev finalState.EmittedNodes) resultNodeId []
-    | NoMatch reason, _ ->
+    let result, nodes = run initialState parser
+    match result with
+    | Matched resultNodeId ->
+        mkResultNoShadow nodes resultNodeId []
+    | NoMatch reason ->
         failwithf "Saturation failed: %s" reason
 
 //=============================================================================
@@ -68,19 +69,28 @@ let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Re
 //=============================================================================
 
 let private intrinsicNode (info: IntrinsicInfo) (ty: NativeType) : SaturationParser<NodeId> =
-    fun state ->
+    saturation {
+        let! state = getUserState
         let node = mkNode state (SemanticKind.Intrinsic info) ty []
-        Matched node.Id, SaturationState.addNode node state
+        do! emit node
+        return node.Id
+    }
 
 let private unitLit : SaturationParser<NodeId> =
-    fun state ->
+    saturation {
+        let! state = getUserState
         let node = mkNode state (SemanticKind.Literal NativeLiteral.Unit) Types.unitType []
-        Matched node.Id, SaturationState.addNode node state
+        do! emit node
+        return node.Id
+    }
 
 let private whileLoop (conditionId: NodeId) (bodyId: NodeId) : SaturationParser<NodeId> =
-    fun state ->
+    saturation {
+        let! state = getUserState
         let node = mkNode state (SemanticKind.WhileLoop (conditionId, bodyId)) Types.unitType [conditionId; bodyId]
-        Matched node.Id, SaturationState.addNode node state
+        do! emit node
+        return node.Id
+    }
 
 //=============================================================================
 // CONSUMER PATTERN: Iterate seq with enumerator
@@ -152,7 +162,7 @@ let private seqFoldLeft
         let! ifNodeId = ifThenElse hasNextId recurseCallId accRefId accType
 
         // Lambda: fun acc -> if...
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("acc", accType, accParamId)],
             ifNodeId,
@@ -244,7 +254,7 @@ let private seqBoolFold
 
         // Lambda (takes unit, returns bool)
         let! unitParamId = patternBinding "_" Types.unitType
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("_", Types.unitType, unitParamId)],
             outerIfId,
@@ -480,7 +490,7 @@ let private seqAppendRecipe
         let! yieldBang2Id = yieldBang seq2Id elemType
 
         // Sequential: yield! xs; yield! ys
-        let! state = getState
+        let! state = getUserState
         let seqKind = SemanticKind.Sequential [yieldBang1Id; yieldBang2Id]
         let seqBodyNode = mkNode state seqKind Types.unitType [yieldBang1Id; yieldBang2Id]
         do! emit seqBodyNode
@@ -591,7 +601,7 @@ let private seqFoldRecipe
             return! app2 folderNodeId accId elemId stateType
         }
 
-    seqFoldLeft (ret stateNodeId) applyFolder inputSeqId elemType stateType
+    seqFoldLeft (preturn stateNodeId) applyFolder inputSeqId elemType stateType
 
 //=============================================================================
 // CONSUMER: SEQ.EXISTS
@@ -865,7 +875,7 @@ let private seqTryPickRecipe
 
         // Lambda
         let! unitParamId = patternBinding "_" Types.unitType
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("_", Types.unitType, unitParamId)],
             outerIfId,
@@ -957,7 +967,7 @@ let private seqMaxRecipe
         let! ifNodeId = ifThenElse hasNextId recurseCallId currentMaxReturnId elemType
 
         // Lambda
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("currentMax", elemType, maxParamId)],
             ifNodeId,
@@ -1037,7 +1047,7 @@ let private seqMinRecipe
         let! currentMinReturnId = varRef "currentMin" (Some minParamId) elemType
         let! ifNodeId = ifThenElse hasNextId recurseCallId currentMinReturnId elemType
 
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("currentMin", elemType, minParamId)],
             ifNodeId,
@@ -1120,7 +1130,7 @@ let private seqMinByRecipe
         let! currentMinReturnId = varRef "currentMin" (Some minParamId) elemType
         let! ifNodeId = ifThenElse hasNextId recurseCallId currentMinReturnId elemType
 
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("currentMin", elemType, minParamId)],
             ifNodeId,
@@ -1203,7 +1213,7 @@ let private seqMaxByRecipe
         let! currentMaxReturnId = varRef "currentMax" (Some maxParamId) elemType
         let! ifNodeId = ifThenElse hasNextId recurseCallId currentMaxReturnId elemType
 
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("currentMax", elemType, maxParamId)],
             ifNodeId,

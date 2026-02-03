@@ -23,6 +23,7 @@
 /// See: Serena memory "baker_saturation_architecture"
 module FSharp.Native.Compiler.Baker.Ingredients.Patterns
 
+open XParsec.Parsers
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
@@ -81,7 +82,7 @@ let foldRight
         let! ifNodeId = ifThenElse isEmptyId baseCaseId combineResultId resultType
         
         // Create the lambda: fun xs -> if...
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda ([("xs", listType, xsParamId)], ifNodeId, [], Some "loop", LambdaContext.RegularClosure)
         let lambdaNode = mkNode state lambdaKind loopFuncType [ifNodeId]
         do! emit lambdaNode
@@ -156,7 +157,7 @@ let foldLeft
         let! ifNodeId = ifThenElse isEmptyId accRefId recurseCallId accType
 
         // Lambda: fun acc xs -> if...
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("acc", accType, accParamId); ("xs", listType, xsParamId)],
             ifNodeId,
@@ -252,7 +253,7 @@ let foldLeft2
         let! outerIfId = ifThenElse isEmptyXsId isEmptyYsForBase middleIfId Types.boolType
 
         // Lambda
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("xs", listType1, xsParamId); ("ys", listType2, ysParamId)],
             outerIfId,
@@ -329,7 +330,7 @@ let boolFold
         let! outerIfId = ifThenElse isEmptyId baseId innerIfId Types.boolType
 
         // Lambda
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("xs", listType, xsParamId)],
             outerIfId,
@@ -395,7 +396,7 @@ let inOrderTraversalMap
         let! rightId = mapRight treeParamId keyType valueType
 
         // Create (key, value) tuple
-        let! state = getState
+        let! state = getUserState
         let tupleKind = SemanticKind.TupleExpr [keyId; valueId]
         let tupleNode = mkNode state tupleKind pairType []
         do! emit tupleNode
@@ -421,7 +422,7 @@ let inOrderTraversalMap
         let appendFuncType = NativeType.TFun (listType, NativeType.TFun (listType, listType))
 
         // First append intrinsic node
-        let! state1 = getState
+        let! state1 = getUserState
         let appendNode1 = mkNode state1 (SemanticKind.Intrinsic appendInfo) appendFuncType []
         do! emit appendNode1
         let appendFunc1 = appendNode1.Id
@@ -430,7 +431,7 @@ let inOrderTraversalMap
         let! midResultId = app2 appendFunc1 leftResultId singletonId listType
 
         // Second append intrinsic node
-        let! state2 = getState
+        let! state2 = getUserState
         let appendNode2 = mkNode state2 (SemanticKind.Intrinsic appendInfo) appendFuncType []
         do! emit appendNode2
         let appendFunc2 = appendNode2.Id
@@ -442,7 +443,7 @@ let inOrderTraversalMap
         let! ifNodeId = ifThenElse isEmptyId emptyListId fullResultId listType
 
         // Lambda
-        let! state3 = getState
+        let! state3 = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             ifNodeId,
@@ -530,7 +531,7 @@ let binarySearchMap
         let! outerIfId = ifThenElse isEmptyId noneId middleIfId optionType
 
         // Lambda
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             outerIfId,
@@ -628,7 +629,7 @@ let avlInsertMap
         let! outerIfId = ifThenElse isEmptyId leafNodeId middleIfId mapType
 
         // Lambda
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             outerIfId,
@@ -702,7 +703,7 @@ let treeForallMap
         let! ifNodeId = ifThenElse isEmptyId trueId andAllId Types.boolType
 
         // Lambda
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             ifNodeId,
@@ -791,7 +792,7 @@ let binarySearchSet
         let! outerIfId = ifThenElse isEmptyId falseId middleIfId Types.boolType
 
         // Lambda
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", setType, treeParamId)],
             outerIfId,
@@ -873,7 +874,7 @@ let avlInsertSet
         let! outerIfId = ifThenElse isEmptyId leafNodeId middleIfId setType
 
         // Lambda
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", setType, treeParamId)],
             outerIfId,
@@ -949,7 +950,7 @@ let inOrderKeysSeq
         let! yieldRightId = yieldBang rightSeqId keyType
 
         // Sequential body: yieldLeft; yieldKey; yieldRight
-        let! state1 = getState
+        let! state1 = getUserState
         let seqKind = SemanticKind.Sequential [yieldLeftId; yieldKeyId; yieldRightId]
         let seqChildren = [yieldLeftId; yieldKeyId; yieldRightId]
         let seqBodyNode = mkNode state1 seqKind Types.unitType seqChildren
@@ -965,7 +966,7 @@ let inOrderKeysSeq
         let! seqExprId = seqExpr condBodyId [capture] keyType
 
         // Lambda: fun tree -> seq { ... }
-        let! state2 = getState
+        let! state2 = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             seqExprId,
@@ -1024,7 +1025,7 @@ let inOrderValuesSeq
         let! yieldRightId = yieldBang rightSeqId valueType
 
         // Sequential body: yieldLeft; yieldValue; yieldRight
-        let! state1 = getState
+        let! state1 = getUserState
         let seqKind = SemanticKind.Sequential [yieldLeftId; yieldValueId; yieldRightId]
         let seqChildren = [yieldLeftId; yieldValueId; yieldRightId]
         let seqBodyNode = mkNode state1 seqKind Types.unitType seqChildren
@@ -1040,7 +1041,7 @@ let inOrderValuesSeq
         let! seqExprId = seqExpr condBodyId [capture] valueType
 
         // Lambda: fun tree -> seq { ... }
-        let! state2 = getState
+        let! state2 = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             seqExprId,
@@ -1103,7 +1104,7 @@ let inOrderPairsSeq
         let! rightId = mapRight treeParamId keyType valueType
 
         // Create (key, value) tuple
-        let! state0 = getState
+        let! state0 = getUserState
         let tupleKind = SemanticKind.TupleExpr [nodeKeyId; nodeValueId]
         let tupleNode = mkNode state0 tupleKind pairType []
         do! emit tupleNode
@@ -1122,7 +1123,7 @@ let inOrderPairsSeq
         let! yieldRightId = yieldBang rightSeqId pairType
 
         // Sequential body: yieldLeft; yieldPair; yieldRight
-        let! state1 = getState
+        let! state1 = getUserState
         let seqKind = SemanticKind.Sequential [yieldLeftId; yieldPairId; yieldRightId]
         let seqChildren = [yieldLeftId; yieldPairId; yieldRightId]
         let seqBodyNode = mkNode state1 seqKind Types.unitType seqChildren
@@ -1138,7 +1139,7 @@ let inOrderPairsSeq
         let! seqExprId = seqExpr condBodyId [capture] pairType
 
         // Lambda: fun tree -> seq { ... }
-        let! state2 = getState
+        let! state2 = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", mapType, treeParamId)],
             seqExprId,

@@ -15,11 +15,12 @@
 /// See: fsnative-spec/spec/patterns.md
 module FSharp.Native.Compiler.Baker.Recipes.MatchRecipes
 
+open XParsec.Parsers
+open XParsec.Combinators
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
-open FSharp.Native.Compiler.Baker.ShadowAST
 open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
 open FSharp.Native.Compiler.Baker.Ingredients.Primitives
 
@@ -40,10 +41,11 @@ let private toSaturationState (ctx: Context) : SaturationState =
 /// Run a saturation parser and convert to Decomposition.Result
 let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Result =
     let initialState = toSaturationState ctx
-    match parser initialState with
-    | Matched resultNodeId, finalState ->
-        mkResultNoShadow (List.rev finalState.EmittedNodes) resultNodeId []
-    | NoMatch reason, _ ->
+    let result, nodes = run initialState parser
+    match result with
+    | Matched resultNodeId ->
+        mkResultNoShadow nodes resultNodeId []
+    | NoMatch reason ->
         failwithf "Saturation failed: %s" reason
 
 //=============================================================================

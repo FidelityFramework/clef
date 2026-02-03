@@ -52,8 +52,8 @@
     <PackageDescription>F# Native Compiler Services - F# parsing and type checking for native compilation via Firefly.</PackageDescription>
     <PackageTags>F#;fsharp;compiler;native;fidelity</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/speakez-llc/fsnative</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/speakez-llc/fsnative</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/FidelityFramework/fsnative</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/FidelityFramework/fsnative</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <!-- Version is set in Directory.Build.props -->
   </PropertyGroup>
@@ -420,6 +420,9 @@
   <ItemGroup>
     <!-- Core F# runtime -->
     <PackageReference Include="FSharp.Core" Version="10.0.101" />
+
+    <!-- XParsec - Parser combinators for Baker saturation (Phase 4.0: XParsec migration) -->
+    <PackageReference Include="XParsec" Version="0.3.0" />
 
   </ItemGroup>
 

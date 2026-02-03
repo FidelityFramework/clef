@@ -24,11 +24,11 @@
 /// See: Serena memory "baker_saturation_architecture"
 module FSharp.Native.Compiler.Baker.Recipes.ListRecipes
 
+open XParsec.Parsers
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
-open FSharp.Native.Compiler.Baker.ShadowAST
 open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
 open FSharp.Native.Compiler.Baker.Ingredients.Primitives
 open FSharp.Native.Compiler.Baker.Ingredients.Patterns
@@ -51,10 +51,11 @@ let private toSaturationState (ctx: Context) : SaturationState =
 /// Run a saturation parser and convert to Decomposition.Result
 let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Result =
     let initialState = toSaturationState ctx
-    match parser initialState with
-    | Matched resultNodeId, finalState ->
-        mkResultNoShadow (List.rev finalState.EmittedNodes) resultNodeId []
-    | NoMatch reason, _ ->
+    let result, nodes = run initialState parser
+    match result with
+    | Matched resultNodeId ->
+        mkResultNoShadow nodes resultNodeId []
+    | NoMatch reason ->
         failwithf "Saturation failed: %s" reason
 
 //=============================================================================
@@ -117,7 +118,7 @@ let private listFoldRecipe
     : SaturationParser<NodeId> =
 
     foldLeft
-        (ret stateNodeId)  // Initial accumulator is the provided state
+        (preturn stateNodeId)  // Initial accumulator is the provided state
         (fun accId headId ->
             saturation {
                 // f acc head
@@ -235,7 +236,7 @@ let private listAppendRecipe
     // append xs ys = fold_right cons ys xs
     // Going right-to-left through xs, cons each element onto ys
     foldRight
-        (ret list2Id)  // Base case: return ys
+        (preturn list2Id)  // Base case: return ys
         (fun headId recurseId ->
             saturation {
                 return! cons headId recurseId elemType
@@ -270,7 +271,7 @@ let private listCollectRecipe
                 // a recursive append available. Actually, we can use foldRight
                 // to implement append inline:
                 return! foldRight
-                    (ret recurseId)  // Base: return accumulated result
+                    (preturn recurseId)  // Base: return accumulated result
                     (fun h acc ->
                         saturation {
                             return! cons h acc outputElemType
@@ -357,7 +358,7 @@ let private listTryPickRecipe
         let! outerIfId = ifThenElse isEmptyId noneId innerIfId optionType
 
         // Create the recursive lambda
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda ([("xs", listType, xsParamId)], outerIfId, [], Some "loop", LambdaContext.RegularClosure)
         let lambdaNode = mkNode state lambdaKind loopFuncType [outerIfId]
         do! emit lambdaNode
@@ -410,7 +411,7 @@ let private listMinByRecipe
                 let! isLess = lt headKey currentMinKey keyType
                 return! ifThenElse isLess headId currentMinId elemType
             }
-        return! foldLeft (ret firstElem) combiner restList elemType elemType
+        return! foldLeft (preturn firstElem) combiner restList elemType elemType
     }
 
 //=============================================================================
@@ -434,7 +435,7 @@ let private listMaxRecipe
                 let! isGreater = gt headId currentMaxId elemType
                 return! ifThenElse isGreater headId currentMaxId elemType
             }
-        return! foldLeft (ret firstElem) combiner restList elemType elemType
+        return! foldLeft (preturn firstElem) combiner restList elemType elemType
     }
 
 //=============================================================================

@@ -1,6 +1,7 @@
 # Fidelity Native F# Tooling Ecosystem
 
-> **Created**: January 1, 2026
+> **Created**: January 1, 2026  
+> **Updated**: February 1, 2026 (Lattice rebrand complete)  
 > **Organization**: FidelityFramework (GitHub)
 
 ## Complete Repository Map
@@ -8,24 +9,26 @@
 ### Core Compiler & Language Server
 
 | Repository | Path | Purpose |
-|------------|------|---------|
+|------------|------|------------|
 | **fsnative** | `~/repos/fsnative` | FNCS: parsing, type checking with native types, **PSG construction** |
 | **fsnative-spec** | `~/repos/fsnative-spec` | F# Native language specification |
 | **FsNativeAutoComplete** | `~/repos/FsNativeAutoComplete` | Unified LSP server for native + managed F# |
 
-### Editor Extensions (Forked from Ionide)
+### Editor Extensions (Rebranded from Ionide → Lattice, Feb 2026)
 
 | Repository | Path | Upstream |
 |------------|------|----------|
-| **ionide-vscode-fsnative** | `~/repos/ionide-vscode-fsnative` | ionide/ionide-vscode-fsharp |
-| **Ionide-vim-fsnative** | `~/repos/Ionide-vim-fsnative` | ionide/Ionide-vim |
-| **ionide-vscode-native-helpers** | `~/repos/ionide-vscode-native-helpers` | ionide/ionide-vscode-helpers |
-| **ionide-native-analyzers** | `~/repos/ionide-native-analyzers` | ionide/ionide-analyzers |
+| **lattice-vscode** | `~/repos/lattice-vscode` | ionide/ionide-vscode-fsharp |
+| **lattice-vim** | `~/repos/lattice-vim` | ionide/Ionide-vim |
+| **lattice-vscode-helpers** | `~/repos/lattice-vscode-helpers` | ionide/ionide-vscode-helpers |
+| **lattice-analyzers** | `~/repos/lattice-analyzers` | ionide/ionide-analyzers |
+
+**Rebrand History**: These repos were renamed Feb 1, 2026 from `ionide-*-fsnative` → `lattice-*` to reflect the "ion → lattice" chemical progression metaphor (individual ions bonding into organized crystal structures).
 
 ### Libraries
 
 | Repository | Path | Purpose |
-|------------|------|---------|
+|------------|------|------------|
 | **Fidelity.Platform** | `~/repos/Fidelity.Platform` | Platform-specific bindings and type layouts |
 | **BAREWire** | `~/repos/BAREWire` | Binary serialization (future) |
 | **Farscape** | `~/repos/Farscape` | Distributed compute (future) |
@@ -33,7 +36,7 @@
 ### Compiler Infrastructure
 
 | Repository | Path | Purpose |
-|------------|------|---------|
+|------------|------|------------|
 | **Firefly** | `~/repos/Firefly` | AOT compiler: **consumes PSG from FNCS** → MLIR → LLVM → Native |
 
 ## Dependency Graph
@@ -42,8 +45,8 @@
                     ┌─────────────────────────────────────┐
                     │         Editor Extensions           │
                     │  ┌─────────────┐ ┌───────────────┐  │
-                    │  │ VSCode      │ │ Vim/Neovim    │  │
-                    │  │ fsnative    │ │ fsnative      │  │
+                    │  │ lattice-    │ │ lattice-vim   │  │
+                    │  │ vscode      │ │               │  │
                     │  └──────┬──────┘ └───────┬───────┘  │
                     │         │                │          │
                     │         └───────┬────────┘          │
@@ -51,7 +54,7 @@
                     └─────────────────┼───────────────────┘
                                       │
                     ┌─────────────────▼───────────────────┐
-                    │      FsNativeAutoComplete           │
+                    │      FsNativeAutoComplete (FSNAC)   │
                     │  ┌─────────────┐ ┌───────────────┐  │
                     │  │ Native Path │ │ Managed Path  │  │
                     │  │ (FNCS)      │ │ (FSAC embed)  │  │
@@ -66,8 +69,8 @@
               └───────────────────┘    │ Services      │
                                        └───────────────┘
 
-ionide-native-analyzers ──────► FSharp.Analyzers.SDK (NuGet, no fork)
-ionide-vscode-native-helpers ─► VSCode API bindings
+lattice-analyzers ──────► FSharp.Analyzers.SDK (NuGet, no fork)
+lattice-vscode-helpers ─► VSCode API bindings
 ```
 
 ## Use As-Is (NuGet Dependencies)
@@ -77,27 +80,46 @@ ionide-vscode-native-helpers ─► VSCode API bindings
 | `Ionide.LanguageServerProtocol` | LSP protocol types |
 | `FSharp.Analyzers.SDK` | Analyzer infrastructure |
 
+## Package/Extension IDs (After Rebrand)
+
+| Old Name | New Name | Published |
+|----------|----------|-----------|
+| `Ionide.FsNative.Analyzers` | `Lattice.Analyzers` | NuGet (pending) |
+| `ionide-fsnative` (extension) | `lattice-fsharp` | VSCode Marketplace (pending) |
+| `Ionide.FsNative.VSCode.Helpers` | `Lattice.VSCode.Helpers` | NuGet (not published) |
+
 ## Key Changes Per Forked Repo
 
-### ionide-vscode-fsnative
-- Change NuGet reference from `fsautocomplete` to `fsnativeautocomplete`
-- Add `.fidproj` and `.fsnx` file associations
-- Add UI for `fsnative/*` custom endpoints
-- Add memory layout viewer, SRTP resolution display
+### lattice-vscode
+- NuGet reference: `fsautocomplete` → `fsnativeautocomplete`
+- Extension ID: `ionide-fsnative` → `lattice-fsharp`
+- Config namespace: `ionide.fsnative.*` → `lattice.fsharp.*`
+- File associations: `.fidproj`, `.fsnx`
+- UI: Memory layout viewer, SRTP resolution display, `fsnative/*` LSP endpoints
 
-### Ionide-vim-fsnative
-- Change `vim.g['fsharp#fsautocomplete_command']` default
-- Add `.fidproj` and `.fsnx` filetype detection
-- Add handlers for `fsnative/*` endpoints
+### lattice-vim
+- Command: `vim.g['fsharp#fsautocomplete_command']` → FSNAC path
+- Lua module: `require('ionide')` → `require('lattice')`
+- Filetype detection: `.fidproj`, `.fsnx`
+- LSP handlers: `fsnative/*` custom endpoints
 
-### ionide-native-analyzers
-- Keep: `EqualsNullAnalyzer`, struct-related analyzers
-- Add: `BclTypeAnalyzer`, `ObjTypeAnalyzer`, `ExceptionPatternAnalyzer`
-- Add: `BoxingAnalyzer`, `PlatformBindingAnalyzer`
+### lattice-analyzers
+- Package: `Ionide.FsNative.Analyzers` → `Lattice.Analyzers`
+- Namespace: `Ionide.FsNative.Analyzers` → `Lattice.Analyzers`
+- Target: net10.0 (upgraded from net8.0)
+- Inherited: `EqualsNullAnalyzer`, struct-related analyzers
+- **Planned** (not yet implemented):
+  - `BclTypeAnalyzer` - Warn on `System.*` BCL types
+  - `ObjTypeAnalyzer` - Warn on `obj` usage (not in NTU)
+  - `BoxingAnalyzer` - Detect value→reference conversions
+  - `ExceptionPatternAnalyzer` - Warn on .NET exceptions
+  - `PlatformBindingAnalyzer` - Validate Fidelity.Platform usage
 
-### ionide-vscode-native-helpers
-- Likely minimal changes (generic VSCode bindings)
-- Update imports if namespace changes needed
+### lattice-vscode-helpers
+- Package: `Ionide.FsNative.VSCode.Helpers` → `Lattice.VSCode.Helpers`
+- Namespace: `Ionide.FsNative.VSCode.Helpers` → `Lattice.VSCode.Helpers`
+- Target: netstandard2.0 (Fable requirement, unchanged)
+- Purpose: Generic VSCode API bindings for Fable
 
 ## File Extension Mapping
 
@@ -107,3 +129,14 @@ ionide-vscode-native-helpers ─► VSCode API bindings
 | `.fsnx` | FSNAC Native | F# Native script |
 | `.fsproj` | FSNAC → FSAC | Standard F# project |
 | `.fsx` | FSNAC → FSAC | Standard F# script |
+
+## Analyzer Architecture (Important!)
+
+**FNCS has NO analyzers built-in.** Analyzers are:
+1. Written in `lattice-analyzers` using `FSharp.Analyzers.SDK`
+2. Published to NuGet as `Lattice.Analyzers`
+3. Loaded by FSNAC at runtime
+4. Fed `FSharpCheckResults` from FNCS
+5. Return diagnostics to editor via FSNAC's LSP
+
+See related memory: `fncs_architecture` for FNCS purity (no file I/O, no analyzers).

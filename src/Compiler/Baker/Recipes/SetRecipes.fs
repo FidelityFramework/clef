@@ -19,11 +19,11 @@
 /// See: Serena memory "collection_machinery_architecture"
 module FSharp.Native.Compiler.Baker.Recipes.SetRecipes
 
+open XParsec.Parsers
 open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Baker.Recipes.Decomposition
-open FSharp.Native.Compiler.Baker.ShadowAST
 open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
 open FSharp.Native.Compiler.Baker.Ingredients.Primitives
 open FSharp.Native.Compiler.Baker.Ingredients.Patterns
@@ -45,10 +45,11 @@ let private toSaturationState (ctx: Context) : SaturationState =
 /// Run a saturation parser and convert to Decomposition.Result
 let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Result =
     let initialState = toSaturationState ctx
-    match parser initialState with
-    | Matched resultNodeId, finalState ->
-        mkResultNoShadow (List.rev finalState.EmittedNodes) resultNodeId []
-    | NoMatch reason, _ ->
+    let result, nodes = run initialState parser
+    match result with
+    | Matched resultNodeId ->
+        mkResultNoShadow nodes resultNodeId []
+    | NoMatch reason ->
         failwithf "Saturation failed: %s" reason
 
 //=============================================================================
@@ -150,7 +151,7 @@ let private setRemoveParser
         let! outerIfId = ifThenElse isEmptyId emptySetId middleIfId setType
         
         // Lambda
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", setType, treeParamId)],
             outerIfId,
@@ -218,7 +219,7 @@ let private setUnionParser
         let! ifNodeId = ifThenElse isEmptyId accRefId fullResultId setType
         
         // Lambda
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("tree1", setType, tree1ParamId); ("acc", setType, accParamId)],
             ifNodeId,
@@ -292,7 +293,7 @@ let private setIntersectParser
         let! ifNodeId = ifThenElse isEmptyId emptySetId conditionalId setType
         
         // Lambda
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", setType, treeParamId)],
             ifNodeId,
@@ -365,7 +366,7 @@ let private setDifferenceParser
         let! ifNodeId = ifThenElse isEmptyId emptySetId conditionalId setType
         
         // Lambda
-        let! state = getState
+        let! state = getUserState
         let lambdaKind = SemanticKind.Lambda (
             [("tree", setType, treeParamId)],
             ifNodeId,
