@@ -265,7 +265,23 @@ let checkApp
                 //
                 // Note: Partial application is still preserved by the type system.
                 // A function expecting 3 args called with 2 creates a closure-typed result.
-                | SemanticKind.Intrinsic _
+                //
+                // INTRINSIC NODE FRESHNESS: Create a fresh Intrinsic node for saturated
+                // applications to prevent node sharing. When an intrinsic like String.concat2
+                // is partially applied then saturated, we need separate Intrinsic nodes:
+                //   App(Intrinsic_A, [arg1]) - partial (unreachable)
+                //   App(Intrinsic_B, [arg1, arg2]) - saturated (reachable)
+                // Without fresh nodes, both Applications share Intrinsic_A, causing
+                // orphaned parent links after intrinsic elaboration.
+                | SemanticKind.Intrinsic info ->
+                    // Create fresh Intrinsic node for this saturated application
+                    let innerNode = Option.get (builder.Nodes.TryFind innerFuncId)
+                    let freshIntrinsic = builder.Create(
+                        SemanticKind.Intrinsic info,
+                        innerNode.Type,
+                        innerNode.Range,
+                        arena = env.CurrentArena)
+                    (freshIntrinsic.Id, existingArgs @ [argNode.Id])
                 | SemanticKind.PlatformBinding _
                 | SemanticKind.VarRef _
                 | SemanticKind.Lambda _
