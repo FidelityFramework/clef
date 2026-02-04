@@ -131,16 +131,16 @@ let private resolveSysOp (op: string) (range: SourceRange) : IntrinsicResolution
     let fullName = "Sys." + op
     match op with
     | "write" ->
-        // fd:int -> buffer:nativeptr<byte> -> count:int -> int
+        // fd:int -> buffer:nativeptr<byte> -> int
+        // Count extracted via memref.dim in MLIR backend
         let ty = NativeType.TFun(Types.intType,
-            NativeType.TFun(NativeType.TNativePtr Types.uint8Type,
-                NativeType.TFun(Types.intType, Types.intType)))
+            NativeType.TFun(NativeType.TNativePtr Types.uint8Type, Types.intType))
         Resolved (mkIntrinsic IntrinsicModule.Sys op IntrinsicCategory.Platform fullName, ty)
     | "read" ->
-        // fd:int -> buffer:nativeptr<byte> -> maxCount:int -> int
+        // fd:int -> buffer:nativeptr<byte> -> int
+        // maxCount = buffer capacity via memref.dim in MLIR backend
         let ty = NativeType.TFun(Types.intType,
-            NativeType.TFun(NativeType.TNativePtr Types.uint8Type,
-                NativeType.TFun(Types.intType, Types.intType)))
+            NativeType.TFun(NativeType.TNativePtr Types.uint8Type, Types.intType))
         Resolved (mkIntrinsic IntrinsicModule.Sys op IntrinsicCategory.Platform fullName, ty)
     | "exit" ->
         // code:int -> 'a (never returns, polymorphic return type)
@@ -335,6 +335,7 @@ let private resolveNativeStrOp (op: string) (_range: SourceRange) : IntrinsicRes
     match op with
     | "fromPointer" ->
         // ptr:nativeptr<byte> -> len:int -> string
+        // In MLIR: creates a new memref<?xi8> with specified length (NOT fat pointer struct)
         let ty = NativeType.TFun(NativeType.TNativePtr Types.uint8Type, NativeType.TFun(Types.intType, Types.stringType))
         Resolved (mkIntrinsic IntrinsicModule.NativeStr op IntrinsicCategory.StringOp fullName, ty)
     | unknown ->
