@@ -3,16 +3,18 @@
 
 /// Baker String Recipes - Decomposition of String operations to primitives.
 ///
-/// String operations decompose to memory operations since strings are fat pointers
-/// with {ptr: nativeptr<byte>, len: int} representation.
+/// MEMREF SEMANTICS (January 2026):
+/// Strings ARE memrefs (memref<?xi8>), not fat pointer structs.
+/// Simple operations (length, isEmpty) remain ATOMIC - witnessed directly by Alex.
+/// Complex operations (concat2) decompose to memory primitives.
 ///
 /// COMBINATOR MODEL:
-/// Each recipe composes patterns from Ingredients/ primitives.
-/// String.concat2 expands to: field extraction, stackalloc, memcpy, pointer arithmetic,
-/// and record construction.
+/// String.concat2 expands to: String.length calls, stackalloc, memcpy, pointer arithmetic,
+/// and NativeStr.fromPointer (identity in MLIR - buffer IS the string).
 ///
 /// See: docs/fidelity/Baker_Saturation_Architecture.md
 /// See: Serena memory "baker_saturation_architecture"
+/// See: Serena memory "mlir_memref_strings_no_llvm_cruft"
 module FSharp.Native.Compiler.Baker.Recipes.StringRecipes
 
 open XParsec.Parsers
@@ -58,64 +60,74 @@ let private stringConcat2Recipe
     : SaturationParser<NodeId> =
 
     saturation {
-        // Extract pointers and lengths from fat pointer strings
-        let! lhsPtr = fieldGet lhsId "ptr" Types.nintType   // nativeptr<byte>
-        let! lhsLen = fieldGet lhsId "len" Types.intType
-        let! rhsPtr = fieldGet rhsId "ptr" Types.nintType
-        let! rhsLen = fieldGet rhsId "len" Types.intType
+        // MEMREF SEMANTICS (January 2026):
+        // Input strings ARE memrefs (memref<?xi8>), not fat pointer structs.
+        // No field extraction needed - use memrefs directly as source buffers.
+        // Result is also a memref - no struct wrapping.
+
+        // Get lengths via String.length intrinsic (generates memref.dim in MLIR)
+        // Create String.length Application for lhs
+        let! lhsState = getUserState
+        let lengthFuncType = NativeType.TFun(Types.stringType, Types.intType)
+        let lengthInfo = { Module = IntrinsicModule.String; Operation = "length"; Category = IntrinsicCategory.Pure; FullName = "String.length" }
+        let lhsLengthFunc = mkNode lhsState (SemanticKind.Intrinsic lengthInfo) lengthFuncType []
+        do! emit lhsLengthFunc
+        let! lhsState' = getUserState
+        let lhsLengthApp = mkNode lhsState' (SemanticKind.Application (lhsLengthFunc.Id, [lhsId])) Types.intType [lhsLengthFunc.Id; lhsId]
+        do! emit lhsLengthApp
+        let lhsLen = lhsLengthApp.Id
+
+        // Create String.length Application for rhs
+        let! rhsState = getUserState
+        let rhsLengthFunc = mkNode rhsState (SemanticKind.Intrinsic lengthInfo) lengthFuncType []
+        do! emit rhsLengthFunc
+        let! rhsState' = getUserState
+        let rhsLengthApp = mkNode rhsState' (SemanticKind.Application (rhsLengthFunc.Id, [rhsId])) Types.intType [rhsLengthFunc.Id; rhsId]
+        do! emit rhsLengthApp
+        let rhsLen = rhsLengthApp.Id
 
         // Compute combined length
         let! combinedLen = add lhsLen rhsLen Types.intType
 
-        // Allocate result buffer on stack (returns nativeptr<byte>)
+        // Allocate result buffer (stackalloc creates memref<?xi8> with combinedLen)
         let! resultPtr = stackAlloc combinedLen Types.uint8Type
 
-        // Copy lhs string to beginning of buffer (CAPTURE node ID)
-        let! memcpy1 = memcpy resultPtr lhsPtr lhsLen Types.uint8Type
+        // Copy lhs memref to beginning of result buffer (CAPTURE node ID for control flow)
+        let! memcpy1 = memcpy resultPtr lhsId lhsLen Types.uint8Type
 
         // Compute offset pointer (resultPtr + lhsLen)
         let! offsetPtr = ptrAdd resultPtr lhsLen Types.uint8Type
 
-        // Copy rhs string after lhs (CAPTURE node ID)
-        let! memcpy2 = memcpy offsetPtr rhsPtr rhsLen Types.uint8Type
+        // Copy rhs memref after lhs (CAPTURE node ID for control flow)
+        let! memcpy2 = memcpy offsetPtr rhsId rhsLen Types.uint8Type
 
-        // Build result string fat pointer with side-effect prerequisites
-        // The memcpy operations must be witnessed before the RecordExpr
-        return! buildRecordWithPrereqs
-            [("ptr", resultPtr); ("len", combinedLen)]
-            [memcpy1; memcpy2]  // Control-flow prerequisites
-            stringType
+        // MEMREF RESULT: Use NativeStr.fromPointer to create string from buffer.
+        // This establishes control-flow dependency: memcpy ops execute before result.
+        // NativeStr.fromPointer is witnessed in Alex as identity (buffer IS the string).
+        // Include memcpy1 and memcpy2 as children to ensure they execute first.
+        let! finalState = getUserState
+        let fromPtrFuncType = NativeType.TFun(Types.nintType, NativeType.TFun(Types.intType, stringType))
+        let fromPtrInfo = { Module = IntrinsicModule.NativeStr; Operation = "fromPointer"; Category = IntrinsicCategory.Pure; FullName = "NativeStr.fromPointer" }
+        let fromPtrFunc = mkNode finalState (SemanticKind.Intrinsic fromPtrInfo) fromPtrFuncType []
+        do! emit fromPtrFunc
+        let! finalState' = getUserState
+        // Children: prerequisites first (memcpy1, memcpy2), then function and args
+        let fromPtrApp = mkNode finalState' (SemanticKind.Application (fromPtrFunc.Id, [resultPtr; combinedLen])) stringType [memcpy1; memcpy2; fromPtrFunc.Id; resultPtr; combinedLen]
+        do! emit fromPtrApp
+        return fromPtrApp.Id
     }
 
 //=============================================================================
-// STRING.LENGTH: Extract .len field from fat pointer
+// STRING.LENGTH & STRING.ISEMPTY: Atomic intrinsics (not decomposed)
 //=============================================================================
-
-let private stringLengthRecipe (strId: NodeId) : SaturationParser<NodeId> =
-    saturation {
-        // Extract len field from fat pointer string
-        let! len = fieldGet strId "len" Types.intType
-        return len
-    }
-
-//=============================================================================
-// STRING.ISEMPTY: Check if len == 0
-//=============================================================================
-
-let private stringIsEmptyRecipe (strId: NodeId) : SaturationParser<NodeId> =
-    saturation {
-        // Extract len field
-        let! len = fieldGet strId "len" Types.intType
-
-        // Create literal 0
-        let! state = getUserState
-        let zeroNode = mkNode state (SemanticKind.Literal (NativeLiteral.Int (0L, NTUKind.NTUint32))) Types.intType []
-        do! emit zeroNode
-
-        // Compare len == 0
-        let! isZero = eq len zeroNode.Id Types.boolType
-        return isZero
-    }
+//
+// In memref semantics, String.length and String.isEmpty are ATOMIC operations
+// witnessed directly by Alex (generate memref.dim + optional comparison).
+//
+// These operations do NOT decompose - they remain as Application nodes in PSG
+// and are handled by ApplicationWitness in Alex/Witnesses/ApplicationWitness.fs.
+//
+// This is architecturally correct: memref operations are primitives, not compositions.
 
 //=============================================================================
 // PUBLIC API: tryDecompose
@@ -138,19 +150,17 @@ let tryDecompose
     | "concat2", _ ->
         None  // Wrong arg count
 
-    // String.length: extract .len field
-    | "length", [str] ->
-        Some (runSaturation ctx (stringLengthRecipe str))
-
+    // String.length: ATOMIC INTRINSIC (not decomposed)
+    // In memref semantics, String.length generates memref.dim directly in Alex.
+    // No decomposition needed - strings ARE memrefs, length is intrinsic to descriptor.
     | "length", _ ->
-        None  // Wrong arg count
+        None  // Not decomposed - witnessed as atomic intrinsic by Alex
 
-    // String.isEmpty: check len == 0
-    | "isEmpty", [str] ->
-        Some (runSaturation ctx (stringIsEmptyRecipe str))
-
+    // String.isEmpty: ATOMIC INTRINSIC (not decomposed)
+    // In memref semantics, String.isEmpty uses memref.dim + comparison in Alex.
+    // No decomposition needed - composite atomic operation.
     | "isEmpty", _ ->
-        None  // Wrong arg count
+        None  // Not decomposed - witnessed as atomic intrinsic by Alex
 
     // Other string operations - not handled by intrinsic elaboration (handled by Alex)
     | "contains", _
