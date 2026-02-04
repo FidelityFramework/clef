@@ -50,84 +50,21 @@ let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Re
         failwithf "Saturation failed: %s" reason
 
 //=============================================================================
-// STRING.CONCAT2: lhs + rhs → allocate buffer, copy both strings
-//=============================================================================
-
-let private stringConcat2Recipe
-    (lhsId: NodeId)
-    (rhsId: NodeId)
-    (stringType: NativeType)
-    : SaturationParser<NodeId> =
-
-    saturation {
-        // MEMREF SEMANTICS (January 2026):
-        // Input strings ARE memrefs (memref<?xi8>), not fat pointer structs.
-        // No field extraction needed - use memrefs directly as source buffers.
-        // Result is also a memref - no struct wrapping.
-
-        // Get lengths via String.length intrinsic (generates memref.dim in MLIR)
-        // Create String.length Application for lhs
-        let! lhsState = getUserState
-        let lengthFuncType = NativeType.TFun(Types.stringType, Types.intType)
-        let lengthInfo = { Module = IntrinsicModule.String; Operation = "length"; Category = IntrinsicCategory.Pure; FullName = "String.length" }
-        let lhsLengthFunc = mkNode lhsState (SemanticKind.Intrinsic lengthInfo) lengthFuncType []
-        do! emit lhsLengthFunc
-        let! lhsState' = getUserState
-        let lhsLengthApp = mkNode lhsState' (SemanticKind.Application (lhsLengthFunc.Id, [lhsId])) Types.intType [lhsLengthFunc.Id; lhsId]
-        do! emit lhsLengthApp
-        let lhsLen = lhsLengthApp.Id
-
-        // Create String.length Application for rhs
-        let! rhsState = getUserState
-        let rhsLengthFunc = mkNode rhsState (SemanticKind.Intrinsic lengthInfo) lengthFuncType []
-        do! emit rhsLengthFunc
-        let! rhsState' = getUserState
-        let rhsLengthApp = mkNode rhsState' (SemanticKind.Application (rhsLengthFunc.Id, [rhsId])) Types.intType [rhsLengthFunc.Id; rhsId]
-        do! emit rhsLengthApp
-        let rhsLen = rhsLengthApp.Id
-
-        // Compute combined length
-        let! combinedLen = add lhsLen rhsLen Types.intType
-
-        // Allocate result buffer (stackalloc creates memref<?xi8> with combinedLen)
-        let! resultPtr = stackAlloc combinedLen Types.uint8Type
-
-        // Copy lhs memref to beginning of result buffer (CAPTURE node ID for control flow)
-        let! memcpy1 = memcpy resultPtr lhsId lhsLen Types.uint8Type
-
-        // Compute offset pointer (resultPtr + lhsLen)
-        let! offsetPtr = ptrAdd resultPtr lhsLen Types.uint8Type
-
-        // Copy rhs memref after lhs (CAPTURE node ID for control flow)
-        let! memcpy2 = memcpy offsetPtr rhsId rhsLen Types.uint8Type
-
-        // MEMREF RESULT: Use NativeStr.fromPointer to create string from buffer.
-        // This establishes control-flow dependency: memcpy ops execute before result.
-        // NativeStr.fromPointer is witnessed in Alex as identity (buffer IS the string).
-        // Include memcpy1 and memcpy2 as children to ensure they execute first.
-        let! finalState = getUserState
-        let fromPtrFuncType = NativeType.TFun(Types.nintType, NativeType.TFun(Types.intType, stringType))
-        let fromPtrInfo = { Module = IntrinsicModule.NativeStr; Operation = "fromPointer"; Category = IntrinsicCategory.Pure; FullName = "NativeStr.fromPointer" }
-        let fromPtrFunc = mkNode finalState (SemanticKind.Intrinsic fromPtrInfo) fromPtrFuncType []
-        do! emit fromPtrFunc
-        let! finalState' = getUserState
-        // Children: prerequisites first (memcpy1, memcpy2), then function and args
-        let fromPtrApp = mkNode finalState' (SemanticKind.Application (fromPtrFunc.Id, [resultPtr; combinedLen])) stringType [memcpy1; memcpy2; fromPtrFunc.Id; resultPtr; combinedLen]
-        do! emit fromPtrApp
-        return fromPtrApp.Id
-    }
-
-//=============================================================================
-// STRING.LENGTH & STRING.ISEMPTY: Atomic intrinsics (not decomposed)
+// STRING OPERATIONS: Atomic intrinsics (not decomposed)
 //=============================================================================
 //
-// In memref semantics, String.length and String.isEmpty are ATOMIC operations
-// witnessed directly by Alex (generate memref.dim + optional comparison).
+// In memref semantics, String operations (length, isEmpty, concat2) are ATOMIC
+// operations witnessed directly by Alex using pure memref operations.
+//
+// - String.length: memref.dim (returns index, cast to i64 at F# boundary)
+// - String.isEmpty: memref.dim + comparison
+// - String.concat2: memref.dim + arith.addi (index) + memref.alloc + memcpy
 //
 // These operations do NOT decompose - they remain as Application nodes in PSG
 // and are handled by ApplicationWitness in Alex/Witnesses/ApplicationWitness.fs.
 //
 // This is architecturally correct: memref operations are primitives, not compositions.
+// NO i64 arithmetic for internal operations - pure index throughout.
 
 //=============================================================================
 // PUBLIC API: tryDecompose
@@ -135,7 +72,7 @@ let private stringConcat2Recipe
 
 /// Try to decompose a String operation
 let tryDecompose
-    (ctx: Context)
+    (_ctx: Context)
     (operation: string)
     (args: NodeId list)
     (_inputType: NativeType)
@@ -143,12 +80,12 @@ let tryDecompose
     : Result option =
 
     match operation, args with
-    // String.concat2: lhs + rhs
-    | "concat2", [lhs; rhs] ->
-        Some (runSaturation ctx (stringConcat2Recipe lhs rhs Types.stringType))
-
+    // String.concat2: ATOMIC INTRINSIC (not decomposed)
+    // In memref semantics, String.concat2 is witnessed directly by Alex.
+    // Generates: memref.dim + arith.addi (index) + memref.alloc + memcpy
+    // NO i64 arithmetic - pure index operations throughout
     | "concat2", _ ->
-        None  // Wrong arg count
+        None  // Alex handles this with pure memref operations
 
     // String.length: ATOMIC INTRINSIC (not decomposed)
     // In memref semantics, String.length generates memref.dim directly in Alex.

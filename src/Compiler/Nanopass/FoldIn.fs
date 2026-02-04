@@ -206,7 +206,7 @@ let private validateRecipeNodes (passName: string) (recipeSet: RecipeSet) (graph
 /// Fold a RecipeSet into a PSG, producing a fresh PSG.
 ///
 /// This is Pass 2 (Intrinsic Fold-In) or Pass 4 (Saturation Fold-In).
-let foldIn (passName: string) (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
+let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
     let replacementMap = recipeSet.ReplacementMap
 
     // Collect all new nodes from recipes AND update their cross-recipe references.
@@ -293,7 +293,14 @@ let foldIn (passName: string) (recipeSet: RecipeSet) (graph: SemanticGraph) : Se
         SeqSaturation = SemanticGraph.mkSeqSaturation nodesWithParents
     }
 
-    // Validate recipe nodes are reachable - catch orphaned nodes immediately
-    validateRecipeNodes passName recipeSet resultGraph
+    // NOTE: Reachability validation removed (Feb 2026)
+    // Rationale: Two-pass reachability architecture
+    //   - First pass marks what to transform (efficiency)
+    //   - FoldIn applies transformations (trusts recipe creation)
+    //   - Final pass re-establishes truth after transformations (source of truth)
+    // Mid-flight validation created paradox: two definitions of "reachable"
+    //   - PSG marks module bodies as reachable (151 nodes)
+    //   - Children traversal from entry only reaches 30 nodes
+    // Solution: Trust recipe creation, validate once at end
 
     resultGraph

@@ -46,6 +46,7 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         let opPart = name.Substring(idx + 1)
         match modulePart with
         | "NativePtr" -> Some (IntrinsicModule.NativePtr, opPart)
+        | "MemRef" -> Some (IntrinsicModule.MemRef, opPart)
         | "Sys" -> Some (IntrinsicModule.Sys, opPart)
         | "String" -> Some (IntrinsicModule.String, opPart)
         | "Array" -> Some (IntrinsicModule.Array, opPart)
@@ -125,6 +126,39 @@ let private resolveNativePtrOp (op: string) (range: SourceRange) : IntrinsicReso
         Resolved (mkIntrinsic IntrinsicModule.NativePtr op IntrinsicCategory.Memory fullName, ty)
     | unknown ->
         UnknownOperation $"Unknown NativePtr intrinsic: NativePtr.{unknown}"
+
+/// Resolve MemRef.* operations (MLIR memref semantics)
+/// These are TARGET OPERATIONS created by Baker during NativePtr transformation.
+/// Alex witnesses these directly as memref dialect operations.
+let private resolveMemRefOp (op: string) (range: SourceRange) : IntrinsicResolution =
+    let tyParamSpec = freshTypeParam "'T" TypeParamKind.Type range
+    let tyParam = NativeType.TVar tyParamSpec
+    let fullName = "MemRef." + op
+    match op with
+    | "alloca" ->
+        // nativeint -> memref<?x'T> (dynamic alloca, size at runtime)
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(Types.nintType, NativeType.TNativePtr tyParam))
+        Resolved (mkIntrinsic IntrinsicModule.MemRef op IntrinsicCategory.Memory fullName, ty)
+    | "load" ->
+        // memref<?x'T> -> nativeint -> 'T (indexed load)
+        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TFun(Types.nintType, tyParam)))
+        Resolved (mkIntrinsic IntrinsicModule.MemRef op IntrinsicCategory.Memory fullName, ty)
+    | "store" ->
+        // 'T -> memref<?x'T> -> nativeint -> unit (indexed store)
+        let ty = NativeType.TForall([tyParamSpec],
+            NativeType.TFun(tyParam,
+                NativeType.TFun(NativeType.TNativePtr tyParam,
+                    NativeType.TFun(Types.nintType, Types.unitType))))
+        Resolved (mkIntrinsic IntrinsicModule.MemRef op IntrinsicCategory.Memory fullName, ty)
+    | "copy" ->
+        // dest:memref -> src:memref -> count:nativeint -> unit
+        let ty = NativeType.TForall([tyParamSpec],
+            NativeType.TFun(NativeType.TNativePtr tyParam,
+                NativeType.TFun(NativeType.TNativePtr tyParam,
+                    NativeType.TFun(Types.nintType, Types.unitType))))
+        Resolved (mkIntrinsic IntrinsicModule.MemRef op IntrinsicCategory.Memory fullName, ty)
+    | unknown ->
+        UnknownOperation $"Unknown MemRef intrinsic: MemRef.{unknown}"
 
 /// Resolve Sys.* operations (system calls)
 let private resolveSysOp (op: string) (range: SourceRange) : IntrinsicResolution =
@@ -334,9 +368,10 @@ let private resolveNativeStrOp (op: string) (_range: SourceRange) : IntrinsicRes
     let fullName = "NativeStr." + op
     match op with
     | "fromPointer" ->
-        // ptr:nativeptr<byte> -> len:int -> string
+        // ptr:nativeptr<byte> -> len:nativeint -> string
         // In MLIR: creates a new memref<?xi8> with specified length (NOT fat pointer struct)
-        let ty = NativeType.TFun(NativeType.TNativePtr Types.uint8Type, NativeType.TFun(Types.intType, Types.stringType))
+        // len is nativeint (maps to index) since it represents a buffer size/offset
+        let ty = NativeType.TFun(NativeType.TNativePtr Types.uint8Type, NativeType.TFun(Types.nintType, Types.stringType))
         Resolved (mkIntrinsic IntrinsicModule.NativeStr op IntrinsicCategory.StringOp fullName, ty)
     | unknown ->
         UnknownOperation $"Unknown NativeStr intrinsic: NativeStr.{unknown}"
@@ -789,6 +824,7 @@ let resolveModuleIntrinsic
 
     match modl with
     | IntrinsicModule.NativePtr -> resolveNativePtrOp op range
+    | IntrinsicModule.MemRef -> resolveMemRefOp op range
     | IntrinsicModule.Sys -> resolveSysOp op range
     | IntrinsicModule.String -> resolveStringOp op range
     | IntrinsicModule.Array -> resolveArrayOp op range

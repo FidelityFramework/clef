@@ -467,7 +467,18 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     RecipeSerialization.emitSaturationDiagnostics saturationRecipes.Diagnostics  // Artifact 04a
 
     // Pass 4: Saturation Fold-In - Build PSG₂ with decomposed structures
-    let finalGraph = BakerSaturation.foldIn saturationRecipes psg1WithEntryPoints
+    let foldedGraph = BakerSaturation.foldIn saturationRecipes psg1WithEntryPoints
+
+    // Pass 4.5: Recompute Reachability After Fold-In
+    // Baker fold-in replaces Application nodes with decomposed sub-trees.
+    // Original intrinsic function nodes (e.g., String.concat2 intrinsic) may become
+    // orphaned - they have parent pointers but are not in any children lists.
+    // Recompute reachability to mark these orphans as unreachable.
+    let finalGraph =
+        if PhaseConfig.useSoftDeleteReachability() then
+            markUnreachable foldedGraph
+        else
+            pruneUnreachable foldedGraph
 
     // Phase 5: Emit final result
     emitPhaseIfEnabled PhaseTypes.PhaseId.Final finalGraph diagnostics

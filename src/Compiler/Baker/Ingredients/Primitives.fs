@@ -940,6 +940,65 @@ let stackAlloc (sizeId: NodeId) (elemType: NativeType) : SaturationParser<NodeId
         return appNode.Id
     }
 
+//=============================================================================
+// ARENA ALLOCATION COMBINATORS (F-02: Arena Allocation)
+//=============================================================================
+
+/// Create arena: Arena.create<'lifetime>(sizeBytes)
+/// Allocates stack-based arena buffer.
+/// Returns Arena<'lifetime> (memref<N x i8> in MLIR).
+let arenaCreate (sizeBytesId: NodeId) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+
+        // Arena.create<'lifetime>: int -> Arena<'lifetime>
+        // Arena is nativeint (memref pointer) in our memref-based implementation
+        let arenaType = Types.nintType
+
+        let funcType = NativeType.TFun(Types.intType, arenaType)
+        let info = { Module = IntrinsicModule.Arena; Operation = "create"; Category = IntrinsicCategory.Memory; FullName = "Arena.create" }
+
+        // Create intrinsic node
+        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
+        do! emit funcNode
+
+        // Apply to size argument
+        let! state' = getUserState
+        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [sizeBytesId])) arenaType [funcNode.Id; sizeBytesId]
+        do! emit appNode
+
+        return appNode.Id
+    }
+
+/// Allocate from arena: Arena.alloc(arena byref, sizeBytes)
+/// Bump-pointer allocation from arena.
+/// Returns nativeint pointer to allocated memory.
+let arenaAlloc (arenaRefId: NodeId) (sizeBytesId: NodeId) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+
+        // Arena.alloc: Arena<'lifetime> byref -> int -> nativeint
+        // Arena is nativeint (memref pointer) in our memref-based implementation
+        let arenaType = Types.nintType
+
+        let funcType =
+            NativeType.TFun(
+                NativeType.TByref(arenaType, ByrefKind.InOut),
+                NativeType.TFun(Types.intType, Types.nintType))
+        let info = { Module = IntrinsicModule.Arena; Operation = "alloc"; Category = IntrinsicCategory.Memory; FullName = "Arena.alloc" }
+
+        // Create intrinsic node
+        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
+        do! emit funcNode
+
+        // Apply to arena byref and size arguments
+        let! state' = getUserState
+        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [arenaRefId; sizeBytesId])) Types.nintType [funcNode.Id; arenaRefId; sizeBytesId]
+        do! emit appNode
+
+        return appNode.Id
+    }
+
 /// Copy memory: NativePtr.copy<'T>(dest, src, count)
 /// General-purpose combinator for bulk memory operations.
 /// Copies count elements of type 'T from src to dest.

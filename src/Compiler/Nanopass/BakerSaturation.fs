@@ -30,7 +30,9 @@ module MapRecipes = FSharp.Native.Compiler.Baker.Recipes.MapRecipes
 module SetRecipes = FSharp.Native.Compiler.Baker.Recipes.SetRecipes
 module OptionRecipes = FSharp.Native.Compiler.Baker.Recipes.OptionRecipes
 module SeqRecipes = FSharp.Native.Compiler.Baker.Recipes.SeqRecipes
+module StringRecipes = FSharp.Native.Compiler.Baker.Recipes.StringRecipes
 module MatchRecipes = FSharp.Native.Compiler.Baker.Recipes.MatchRecipes
+module NativePtrRecipes = FSharp.Native.Compiler.Baker.Recipes.NativePtrRecipes
 
 //-------------------------------------------------------------------------
 // Type Extraction Helpers (from HOFDecomposition)
@@ -131,6 +133,14 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Option, ("isSome" | "isNone" | "get" | "defaultValue" | "some" | "none") -> false
     | IntrinsicModule.Seq, "empty" -> false
     | IntrinsicModule.Seq, "getEnumerator" -> false
+    // String operations
+    | IntrinsicModule.String, "concat2" -> true
+    // NativePtr operations - transform to MemRef (F# semantics → MLIR semantics)
+    | IntrinsicModule.NativePtr, "stackalloc" -> true
+    | IntrinsicModule.NativePtr, "read" -> true
+    | IntrinsicModule.NativePtr, "write" -> true
+    | IntrinsicModule.NativePtr, "add" -> true
+    | IntrinsicModule.NativePtr, "copy" -> true
     // Everything else
     | _ -> false
 
@@ -233,6 +243,15 @@ let private applyIntrinsicRecipe
             let stateType = None  // Seq doesn't use stateType currently
             SeqRecipes.tryDecompose ctx info.Operation args elemType outputElemType stateType
         | None -> None
+
+    | IntrinsicModule.String ->
+        // String operations decompose to memory primitives
+        StringRecipes.tryDecompose ctx info.Operation args returnType (Some returnType)
+
+    | IntrinsicModule.NativePtr ->
+        // NativePtr operations transform to MemRef intrinsics (F# semantics → MLIR semantics)
+        // This is the CRITICAL transformation that eliminates NativePtr from MiddleEnd
+        NativePtrRecipes.tryTransform info.Operation args returnType ctx.SourceRange ctx graph
 
     | _ -> None
 
@@ -396,4 +415,4 @@ let fanOut (graph: SemanticGraph) : RecipeSet =
 /// Builds fresh PSG with saturation structures applied.
 /// Uses generic FoldIn - the recipes from Pass 3 drive the transformation.
 let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
-    FoldIn.foldIn "Saturation Fold-In" recipeSet graph
+    FoldIn.foldIn recipeSet graph
