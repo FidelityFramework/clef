@@ -330,8 +330,8 @@
     <Compile Include="Baker\Recipes\MapRecipes.fs" />
     <Compile Include="Baker\Recipes\SetRecipes.fs" />
     <Compile Include="Baker\Recipes\OptionRecipes.fs" />
+    <Compile Include="Baker\Recipes\StringRecipes.fs" />
     <Compile Include="Baker\Recipes\MatchRecipes.fs" />
-    <Compile Include="Baker\HOFDecomposition.fs" />
     <!-- Nanopass passes - must come after Baker -->
     <Compile Include="Nanopass\IntrinsicElaboration.fs" />
     <Compile Include="Nanopass\BakerSaturation.fs" />
@@ -423,6 +423,9 @@
 
     <!-- XParsec - Parser combinators for Baker saturation (Phase 4.0: XParsec migration) -->
     <PackageReference Include="XParsec" Version="0.3.0" />
+
+    <!-- FSharp.Json - Pure F# JSON serializer with no BCL dependencies (diagnostic output) -->
+    <PackageReference Include="FSharp.Json" Version="0.4.1" />
 
   </ItemGroup>
 

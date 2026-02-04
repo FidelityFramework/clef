@@ -19,17 +19,46 @@ open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 type Recipe = {
     /// The original node being replaced
     OriginalNodeId: NodeId
-    
+
     /// New nodes that comprise the replacement structure
     NewNodes: SemanticNode list
-    
+
     /// The root of the replacement (what parent references should point to)
     ReplacementRootId: NodeId
-    
+
     /// Metadata for debugging/tooling
     ElaborationKind: string   // "Intrinsic" | "Baker"
     ElaborationSource: string // e.g., "Console.writeln" | "Match" | "List.map"
 }
+
+//=============================================================================
+// RECIPE CREATION RESULT: Diagnostic-aware recipe creation
+//=============================================================================
+
+/// Result of recipe creation with diagnostic context.
+/// Replaces silent `option` returns with explicit failure reasons.
+type RecipeCreationResult =
+    | RecipeCreated of Recipe
+    | NotApplicable of reason: string
+    | CreationFailed of reason: string * context: Map<string, string>
+
+/// Diagnostic artifact for a single recipe creation attempt.
+type RecipeDiagnostic = {
+    /// Node that was considered for elaboration
+    NodeId: NodeId
+
+    /// Type of elaboration attempted ("Intrinsic" | "Baker")
+    ElaborationKind: string
+
+    /// Result of the creation attempt
+    Result: RecipeCreationResult
+}
+
+/// Extract Recipe from successful result
+let tryGetRecipe (result: RecipeCreationResult) : Recipe option =
+    match result with
+    | RecipeCreated recipe -> Some recipe
+    | _ -> None
 
 //=============================================================================
 // RECIPE SET: Collection from fan-out pass (artifacts 2 and 4)
@@ -40,13 +69,17 @@ type Recipe = {
 type RecipeSet = {
     /// What kind of elaboration this is
     Kind: string  // "Intrinsic" | "Saturation"
-    
+
     /// All recipes, keyed by original node ID
     Recipes: Map<NodeId, Recipe>
-    
+
     /// Replacement map for quick lookup during fold-in
     /// Maps original NodeId → replacement root NodeId
     ReplacementMap: Map<NodeId, NodeId>
+
+    /// Diagnostics for all recipe creation attempts (NEW)
+    /// Includes successful, failed, and not-applicable cases
+    Diagnostics: RecipeDiagnostic list
 }
 
 module RecipeSet =
@@ -55,13 +88,14 @@ module RecipeSet =
         Kind = kind
         Recipes = Map.empty
         ReplacementMap = Map.empty
+        Diagnostics = []
     }
-    
+
     /// Create a recipe set from a list of recipes
     let fromList kind (recipes: Recipe list) : RecipeSet =
-        let recipeMap = 
-            recipes 
-            |> List.map (fun r -> r.OriginalNodeId, r) 
+        let recipeMap =
+            recipes
+            |> List.map (fun r -> r.OriginalNodeId, r)
             |> Map.ofList
         let replacementMap =
             recipes
@@ -71,6 +105,7 @@ module RecipeSet =
             Kind = kind
             Recipes = recipeMap
             ReplacementMap = replacementMap
+            Diagnostics = []  // No diagnostics when using fromList (legacy path)
         }
     
     /// Get total count of new nodes being added

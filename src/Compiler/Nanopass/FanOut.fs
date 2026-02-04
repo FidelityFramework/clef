@@ -20,52 +20,80 @@ open FSharp.Native.Compiler.Nanopass.Recipe
 //=============================================================================
 
 /// Function that creates a recipe for a single node.
-/// Returns Some recipe if the node needs elaboration, None otherwise.
-type RecipeCreator = SemanticNode -> SemanticGraph -> Recipe option
+/// Returns RecipeCreationResult with diagnostic context.
+type RecipeCreator = SemanticNode -> SemanticGraph -> RecipeCreationResult
 
 //=============================================================================
 // PARALLEL FAN-OUT
 //=============================================================================
 
 /// Fan-out pass: identify nodes needing elaboration and create recipes in parallel.
-/// 
+///
 /// Parameters:
 /// - kind: "Intrinsic" or "Saturation" - labels the resulting RecipeSet
 /// - shouldElaborate: predicate to identify nodes needing elaboration
-/// - createRecipe: function to create a recipe for a node
+/// - createRecipe: function to create a recipe for a node (returns RecipeCreationResult)
 /// - graph: the input PSG
-/// 
-/// Returns: RecipeSet containing all recipes (artifact 2 or 4)
-let fanOut 
+///
+/// Returns: RecipeSet containing all recipes AND diagnostics (artifact 2 or 4)
+let fanOut
     (kind: string)
     (shouldElaborate: SemanticNode -> bool)
     (createRecipe: RecipeCreator)
-    (graph: SemanticGraph) 
+    (graph: SemanticGraph)
     : RecipeSet =
-    
+
     // Find all reachable nodes that need elaboration
     let nodesToElaborate =
         graph.Nodes
         |> Map.toSeq |> Seq.map snd
         |> Seq.filter (fun node -> node.IsReachable && shouldElaborate node)
         |> List.ofSeq
-    
+
     if List.isEmpty nodesToElaborate then
         RecipeSet.empty kind
     else
         // Create recipes in parallel using Async.Parallel
-        let recipes =
+        let results =
             nodesToElaborate
             |> List.map (fun node ->
                 async {
-                    return createRecipe node graph
+                    let result = createRecipe node graph
+                    return (node.Id, result)
                 })
             |> Async.Parallel
             |> Async.RunSynchronously
-            |> Array.choose id
-            |> List.ofArray
-        
-        RecipeSet.fromList kind recipes
+            |> Array.toList
+
+        // Extract successful recipes
+        let recipes =
+            results
+            |> List.choose (fun (_, result) -> tryGetRecipe result)
+
+        // Build diagnostics for all attempts
+        let diagnostics =
+            results
+            |> List.map (fun (nodeId, result) ->
+                { NodeId = nodeId
+                  ElaborationKind = kind
+                  Result = result })
+
+        // Build recipe maps
+        let recipeMap =
+            recipes
+            |> List.map (fun r -> r.OriginalNodeId, r)
+            |> Map.ofList
+        let replacementMap =
+            recipes
+            |> List.map (fun r -> r.OriginalNodeId, r.ReplacementRootId)
+            |> Map.ofList
+
+        {
+            Kind = kind
+            Recipes = recipeMap
+            ReplacementMap = replacementMap
+            Diagnostics = diagnostics
+        }
 
 /// Fan-out with diagnostic output
 let fanOutWithDiagnostics
@@ -106,11 +134,18 @@ let fanOutWithDiagnostics
             recipes
             |> List.choose (fun (node, result) ->
                 match result with
-                | Some recipe ->
-                    diagnostics <- sprintf "[%s] Created recipe for node %d (%s)" 
+                | RecipeCreated recipe ->
+                    diagnostics <- sprintf "[%s] Created recipe for node %d (%s)"
                         kind (NodeId.value node.Id) recipe.ElaborationSource :: diagnostics
                     Some recipe
-                | None -> None)
+                | NotApplicable reason ->
+                    diagnostics <- sprintf "[%s] Node %d not applicable: %s"
+                        kind (NodeId.value node.Id) reason :: diagnostics
+                    None
+                | CreationFailed (reason, _context) ->
+                    diagnostics <- sprintf "[%s] Node %d failed: %s"
+                        kind (NodeId.value node.Id) reason :: diagnostics
+                    None)
         
         let recipeSet = RecipeSet.fromList kind successfulRecipes
         diagnostics <- sprintf "[%s] Total recipes: %d, total new nodes: %d" 

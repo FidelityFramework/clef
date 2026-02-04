@@ -911,3 +911,109 @@ let unionCase (caseName: string) (caseIndex: int) (payload: NodeId option) (unio
         do! emit node
         return node.Id
     }
+
+//=============================================================================
+// GENERAL-PURPOSE MEMORY AND POINTER PRIMITIVES
+//=============================================================================
+
+/// Allocate memory on stack: NativePtr.stackalloc<'T>(size)
+/// General-purpose combinator for stack-based allocation.
+/// Returns nativeptr<'T> to allocated buffer.
+let stackAlloc (sizeId: NodeId) (elemType: NativeType) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+
+        // NativePtr.stackalloc<'T>: int -> nativeptr<'T>
+        let ptrType = NativeType.TNativePtr elemType
+        let funcType = NativeType.TFun(Types.intType, ptrType)
+        let info = { Module = IntrinsicModule.NativePtr; Operation = "stackalloc"; Category = IntrinsicCategory.Memory; FullName = "NativePtr.stackalloc" }
+
+        // Create intrinsic node
+        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
+        do! emit funcNode
+
+        // Apply to size argument
+        let! state' = getUserState
+        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [sizeId])) ptrType [funcNode.Id; sizeId]
+        do! emit appNode
+
+        return appNode.Id
+    }
+
+/// Copy memory: NativePtr.copy<'T>(dest, src, count)
+/// General-purpose combinator for bulk memory operations.
+/// Copies count elements of type 'T from src to dest.
+let memcpy (destId: NodeId) (srcId: NodeId) (countId: NodeId) (elemType: NativeType) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+
+        // NativePtr.copy<'T>: nativeptr<'T> -> nativeptr<'T> -> int -> unit
+        let ptrType = NativeType.TNativePtr elemType
+        let funcType = NativeType.TFun(ptrType, NativeType.TFun(ptrType, NativeType.TFun(Types.intType, Types.unitType)))
+        let info = { Module = IntrinsicModule.NativePtr; Operation = "copy"; Category = IntrinsicCategory.Memory; FullName = "NativePtr.copy" }
+
+        // Create intrinsic node
+        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
+        do! emit funcNode
+
+        // Apply to all three arguments
+        let! state' = getUserState
+        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [destId; srcId; countId])) Types.unitType [funcNode.Id; destId; srcId; countId]
+        do! emit appNode
+
+        return appNode.Id
+    }
+
+/// Add offset to pointer: NativePtr.add<'T>(ptr, offset)
+/// General-purpose combinator for pointer indexing/offsetting.
+/// Returns new pointer advanced by offset elements.
+let ptrAdd (ptrId: NodeId) (offsetId: NodeId) (elemType: NativeType) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+
+        // NativePtr.add<'T>: nativeptr<'T> -> int -> nativeptr<'T>
+        let ptrType = NativeType.TNativePtr elemType
+        let funcType = NativeType.TFun(ptrType, NativeType.TFun(Types.intType, ptrType))
+        let info = { Module = IntrinsicModule.NativePtr; Operation = "add"; Category = IntrinsicCategory.Memory; FullName = "NativePtr.add" }
+
+        // Create intrinsic node
+        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
+        do! emit funcNode
+
+        // Apply to pointer and offset arguments
+        let! state' = getUserState
+        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [ptrId; offsetId])) ptrType [funcNode.Id; ptrId; offsetId]
+        do! emit appNode
+
+        return appNode.Id
+    }
+
+/// Build record/struct with fields: { field1 = value1; field2 = value2 }
+/// General-purpose combinator for struct/record creation.
+/// Creates a RecordExpr node with specified field bindings.
+let buildRecord (fields: (string * NodeId) list) (recordType: NativeType) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+        let childIds = fields |> List.map snd
+        let node = mkNode state (SemanticKind.RecordExpr (fields, None)) recordType childIds
+        do! emit node
+        return node.Id
+    }
+
+/// Build record/struct with prerequisite nodes that must be witnessed first.
+/// Used when side-effecting operations (e.g., memcpy) must execute before record creation.
+/// Prerequisites establish control-flow dependencies via Children edges.
+let buildRecordWithPrereqs
+    (fields: (string * NodeId) list)
+    (prereqs: NodeId list)
+    (recordType: NativeType)
+    : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+        let fieldIds = fields |> List.map snd
+        // Prerequisites first (control flow), then field values (data flow)
+        let childIds = prereqs @ fieldIds
+        let node = mkNode state (SemanticKind.RecordExpr (fields, None)) recordType childIds
+        do! emit node
+        return node.Id
+    }

@@ -11,6 +11,7 @@ open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 open FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Nanopass.Recipe
+open FSharp.Json
 
 //=============================================================================
 // JSON SERIALIZATION HELPERS
@@ -126,3 +127,50 @@ let emitRecipeSet (filename: string) (recipeSet: RecipeSet) : unit =
         elif filename.Contains("saturation") then ArtifactId.SaturationRecipes
         else 0  // Unknown
     emitRecipeSetArtifact artifactId recipeSet
+
+//=============================================================================
+// DIAGNOSTIC SERIALIZATION (using FSharp.Json)
+//=============================================================================
+
+/// Emit diagnostics as JSON using FSharp.Json
+let emitDiagnostics (artifactId: int) (diagnostics: RecipeDiagnostic list) : unit =
+    match getArtifactFilePath artifactId with
+    | None -> ()  // Emission disabled
+    | Some path ->
+        let json = Json.serialize diagnostics
+        // Ensure directory exists
+        let dir = System.IO.Path.GetDirectoryName(path)
+        if not (System.IO.Directory.Exists(dir)) then
+            System.IO.Directory.CreateDirectory(dir) |> ignore
+        System.IO.File.WriteAllText(path, json)
+        printfn "[FNCS] Wrote diagnostic artifact: %s" path
+
+/// Emit intrinsic diagnostics (artifact 02a)
+let emitIntrinsicDiagnostics (diagnostics: RecipeDiagnostic list) : unit =
+    // Use artifact ID 2 with "a" suffix convention: "02a_intrinsic_diagnostics.json"
+    // For now, we'll construct the path manually since artifact IDs are integers
+    match getArtifactFilePath ArtifactId.IntrinsicRecipes with
+    | None -> ()
+    | Some recipePath ->
+        // Replace "02_intrinsic_recipes.json" with "02a_intrinsic_diagnostics.json"
+        let diagPath = recipePath.Replace("02_intrinsic_recipes.json", "02a_intrinsic_diagnostics.json")
+        let json = Json.serialize diagnostics
+        let dir = System.IO.Path.GetDirectoryName(diagPath)
+        if not (System.IO.Directory.Exists(dir)) then
+            System.IO.Directory.CreateDirectory(dir) |> ignore
+        System.IO.File.WriteAllText(diagPath, json)
+        printfn "[FNCS] Wrote intrinsic diagnostics: %s" diagPath
+
+/// Emit saturation diagnostics (artifact 04a)
+let emitSaturationDiagnostics (diagnostics: RecipeDiagnostic list) : unit =
+    match getArtifactFilePath ArtifactId.SaturationRecipes with
+    | None -> ()
+    | Some recipePath ->
+        // Replace "04_saturation_recipes.json" with "04a_saturation_diagnostics.json"
+        let diagPath = recipePath.Replace("04_saturation_recipes.json", "04a_saturation_diagnostics.json")
+        let json = Json.serialize diagnostics
+        let dir = System.IO.Path.GetDirectoryName(diagPath)
+        if not (System.IO.Directory.Exists(dir)) then
+            System.IO.Directory.CreateDirectory(dir) |> ignore
+        System.IO.File.WriteAllText(diagPath, json)
+        printfn "[FNCS] Wrote saturation diagnostics: %s" diagPath

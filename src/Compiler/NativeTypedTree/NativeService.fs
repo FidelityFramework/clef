@@ -37,9 +37,6 @@ module PhaseConfig = FSharp.Native.Compiler.NativeTypedTree.Infrastructure.Phase
 module PhaseTypes = FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
 module PhaseEmitter = FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseEmitter
 
-// Baker modules - HOF decomposition (PRD-13a)
-module HOFDecomposition = FSharp.Native.Compiler.Baker.HOFDecomposition
-
 // Nanopass modules - Four-pass elaboration pipeline (January 2026)
 module IntrinsicElaboration = FSharp.Native.Compiler.Nanopass.IntrinsicElaboration
 module BakerSaturation = FSharp.Native.Compiler.Nanopass.BakerSaturation
@@ -453,6 +450,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // Pass 1: Intrinsic Fan-Out - Create intrinsic elaboration recipes
     let intrinsicRecipes = IntrinsicElaboration.fanOut reachableGraph
     RecipeSerialization.emitIntrinsicRecipes intrinsicRecipes  // Artifact 02
+    RecipeSerialization.emitIntrinsicDiagnostics intrinsicRecipes.Diagnostics  // Artifact 02a
 
     // Pass 2: Intrinsic Fold-In - Build PSG₁ with intrinsic elaborations
     let psg1 = IntrinsicElaboration.foldIn intrinsicRecipes reachableGraph
@@ -466,6 +464,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // Pass 3: Saturation Fan-Out - Create Baker decomposition recipes
     let saturationRecipes = BakerSaturation.fanOut psg1WithEntryPoints
     RecipeSerialization.emitSaturationRecipes saturationRecipes  // Artifact 04
+    RecipeSerialization.emitSaturationDiagnostics saturationRecipes.Diagnostics  // Artifact 04a
 
     // Pass 4: Saturation Fold-In - Build PSG₂ with decomposed structures
     let finalGraph = BakerSaturation.foldIn saturationRecipes psg1WithEntryPoints

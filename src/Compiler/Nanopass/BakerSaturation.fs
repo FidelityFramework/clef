@@ -247,8 +247,8 @@ let private toRecipe (originalNodeId: NodeId) (source: string) (result: Result) 
     }
 
 /// Create a saturation recipe for a node.
-/// RecipeCreator signature: SemanticNode -> SemanticGraph -> Recipe option
-let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) : Recipe option =
+/// RecipeCreator signature: SemanticNode -> SemanticGraph -> RecipeCreationResult
+let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) : RecipeCreationResult =
     match node.Kind with
     | SemanticKind.Application (funcNodeId, argNodeIds) ->
         match SemanticGraph.tryGetNode funcNodeId graph with
@@ -259,15 +259,31 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                 let ctx = mkContext node.Range Types.unitType graph.Platform hofName node.Id
 
                 match applyIntrinsicRecipe graph ctx info argNodeIds node.Type with
-                | Some result -> Some (toRecipe node.Id hofName result)
-                | None -> None  // Recipe creation failed, skip this node
-            | _ -> None  // Not an intrinsic that needs decomposition
-        | None -> None  // Function node not found
+                | Some result ->
+                    RecipeCreated (toRecipe node.Id hofName result)
+                | None ->
+                    CreationFailed (
+                        sprintf "applyIntrinsicRecipe returned None for %s" hofName,
+                        Map.ofList [
+                            ("operation", hofName)
+                            ("nodeId", string (NodeId.value node.Id))
+                            ("argCount", string (List.length argNodeIds))
+                        ]
+                    )
+            | SemanticKind.Intrinsic info ->
+                NotApplicable (sprintf "Intrinsic %A.%s does not need decomposition" info.Module info.Operation)
+            | _ ->
+                NotApplicable "Function node is not an Intrinsic"
+        | None ->
+            CreationFailed (
+                sprintf "Function node %d not found in graph" (NodeId.value funcNodeId),
+                Map.ofList [("funcId", string (NodeId.value funcNodeId))]
+            )
 
     | SemanticKind.Match (scrutineeId, cases) ->
         let ctx = mkContext node.Range node.Type graph.Platform "Match" node.Id
         let result = MatchRecipes.decomposeMatch ctx scrutineeId cases node.Type
-        Some (toRecipe node.Id "Match" result)
+        RecipeCreated (toRecipe node.Id "Match" result)
 
     | SemanticKind.UnionCase (caseName, caseIndex, payload) ->
         // Transform UnionCase to DUConstruct (lowered form for Alex)
@@ -362,9 +378,10 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
               EmissionStrategy = node.EmissionStrategy }
             |> markBaker "UnionCase" ctx.ExpansionId
         let result = mkResultNoShadow (coercionNodes @ [newNode]) newNode.Id []
-        Some (toRecipe node.Id "UnionCase" result)
+        RecipeCreated (toRecipe node.Id "UnionCase" result)
 
-    | _ -> None  // Other node types don't need saturation
+    | _ ->
+        NotApplicable "Node kind does not need saturation"
 
 /// Run Pass 3: Saturation Fan-Out
 /// Identifies nodes needing saturation and creates recipes in parallel.

@@ -18,6 +18,10 @@ open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
 
 open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
 open FSharp.Native.Compiler.Nanopass.Recipe
+open FSharp.Native.Compiler.Baker.Recipes.Decomposition
+
+// Import StringRecipes for String operation elaboration
+module StringRecipes = FSharp.Native.Compiler.Baker.Recipes.StringRecipes
 
 //-------------------------------------------------------------------------
 // Pass 1: Intrinsic Fan-Out (Parallel Recipe Creation)
@@ -54,19 +58,74 @@ let private isSameSizeConversion (node: SemanticNode) (graph: SemanticGraph) : (
         | None -> None
     | _ -> None
 
+/// Check if a node is a String operation Application that needs elaboration
+let private isStringOperation (node: SemanticNode) (graph: SemanticGraph) : bool =
+    match node.Kind with
+    | SemanticKind.Application (funcId, _) ->
+        match Map.tryFind funcId graph.Nodes with
+        | Some funcNode ->
+            match funcNode.Kind with
+            | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.String ->
+                match info.Operation with
+                | "concat2" | "length" | "isEmpty" -> true
+                | _ -> false
+            | _ -> false
+        | None -> false
+    | _ -> false
+
 /// Determine if a node needs intrinsic elaboration.
-/// Returns true for same-size conversion Applications that can be eliminated.
+/// Returns true for same-size conversions or String operations.
 let private needsIntrinsicElaboration (node: SemanticNode) (graph: SemanticGraph) : bool =
-    isSameSizeConversion node graph |> Option.isSome
+    match isSameSizeConversion node graph with
+    | Some _ -> true
+    | None -> isStringOperation node graph
+
+/// Create a recipe for String operation elaboration.
+/// Delegates to StringRecipes for decomposition.
+let private createStringRecipe (node: SemanticNode) (graph: SemanticGraph) : RecipeCreationResult =
+    match node.Kind with
+    | SemanticKind.Application (funcId, args) ->
+        match Map.tryFind funcId graph.Nodes with
+        | Some funcNode ->
+            match funcNode.Kind with
+            | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.String ->
+                let ctx = mkContext node.Range node.Type graph.Platform info.FullName node.Id
+                match StringRecipes.tryDecompose ctx info.Operation args Types.stringType (Some node.Type) with
+                | Some result ->
+                    RecipeCreated {
+                        OriginalNodeId = node.Id
+                        NewNodes = result.NewNodes @ result.AuxFunctions
+                        ReplacementRootId = result.ResultNodeId
+                        ElaborationKind = "Intrinsic"
+                        ElaborationSource = sprintf "String.%s" info.Operation
+                    }
+                | None ->
+                    CreationFailed (
+                        sprintf "StringRecipes.tryDecompose returned None for operation: %s" info.Operation,
+                        Map.ofList [
+                            ("operation", info.Operation)
+                            ("argCount", string (List.length args))
+                            ("nodeId", string (NodeId.value node.Id))
+                        ]
+                    )
+            | _ ->
+                NotApplicable "Function node is not a String intrinsic"
+        | None ->
+            CreationFailed (
+                sprintf "Function node %d not found in graph" (NodeId.value funcId),
+                Map.ofList [("funcId", string (NodeId.value funcId))]
+            )
+    | _ ->
+        NotApplicable "Not an Application node"
 
 /// Create a recipe for intrinsic elaboration.
-/// For same-size conversions, the recipe replaces the Application with its argument.
-let private createIntrinsicRecipe (node: SemanticNode) (graph: SemanticGraph) : Recipe option =
+/// Handles same-size conversions and String operations.
+let private createIntrinsicRecipe (node: SemanticNode) (graph: SemanticGraph) : RecipeCreationResult =
     match isSameSizeConversion node graph with
     | Some (argId, info) ->
         // Same-size conversion: replace Application with its argument
         // No new nodes needed - we just redirect to the existing argument
-        Some {
+        RecipeCreated {
             OriginalNodeId = node.Id
             NewNodes = []  // No new nodes!
             ReplacementRootId = argId  // Replace with the argument
@@ -74,7 +133,8 @@ let private createIntrinsicRecipe (node: SemanticNode) (graph: SemanticGraph) : 
             ElaborationSource = sprintf "Convert.%s (same-size elimination)" info.Operation
         }
     | None ->
-        None
+        // Try string operation
+        createStringRecipe node graph
 
 /// Run Pass 1: Intrinsic Fan-Out
 /// Identifies intrinsics needing elaboration and creates recipes in parallel.
