@@ -140,64 +140,6 @@ let private updateKindRefs (replacementMap: Map<NodeId, NodeId>) (kind: Semantic
 let private updateChildRefs (replacementMap: Map<NodeId, NodeId>) (children: NodeId list) : NodeId list =
     children |> List.map (updateRef replacementMap)
 
-//=============================================================================
-// GRAPH INTEGRITY VALIDATION
-//=============================================================================
-
-/// Collect all reachable nodes from entry points by traversing children
-let private collectReachableNodes (nodes: Map<NodeId, SemanticNode>) (entryPoints: NodeId list) : Set<NodeId> =
-    let rec traverse (visited: Set<NodeId>) (nodeId: NodeId) : Set<NodeId> =
-        if Set.contains nodeId visited then
-            visited
-        else
-            match Map.tryFind nodeId nodes with
-            | None -> visited
-            | Some node ->
-                let visited' = Set.add nodeId visited
-                node.Children |> List.fold traverse visited'
-
-    entryPoints |> List.fold traverse Set.empty
-
-/// Validate that NEW nodes from recipes are properly connected to the graph.
-/// This catches the specific bug where saturation nodes become orphaned due to
-/// broken parent/child edges after fold-in.
-///
-/// We only validate new nodes from recipes, not the entire graph, because:
-/// - TypeDef nodes (Platform types, user types) may not be children of entry points
-/// - Those are metadata nodes, not executable code
-/// - The critical invariant is: newly created nodes MUST be reachable
-let private validateRecipeNodes (passName: string) (recipeSet: RecipeSet) (graph: SemanticGraph) : unit =
-    // Collect all new node IDs from recipes
-    let newNodeIds =
-        recipeSet.Recipes
-        |> Map.toSeq |> Seq.map snd
-        |> Seq.collect (fun r -> r.NewNodes |> Seq.map (fun n -> n.Id))
-        |> Set.ofSeq
-
-    if Set.isEmpty newNodeIds then
-        // No new nodes to validate
-        ()
-    else
-        // Check which new nodes are reachable from entry points
-        let reachableNodes = collectReachableNodes graph.Nodes graph.EntryPoints
-        let unreachableNewNodes = Set.difference newNodeIds reachableNodes
-
-        if not (Set.isEmpty unreachableNewNodes) then
-            // Build diagnostic showing orphaned new nodes
-            let orphanedSample =
-                unreachableNewNodes
-                |> Set.toList
-                |> List.truncate 10
-                |> List.map (fun id ->
-                    match Map.tryFind id graph.Nodes with
-                    | Some node -> sprintf "%d (%A)" (NodeId.value id) node.Kind
-                    | None -> sprintf "%d (NOT IN GRAPH!)" (NodeId.value id))
-
-            failwithf "[%s] Recipe nodes not reachable from entry points! Created %d new nodes but %d are orphaned. Orphaned nodes: %s. This indicates broken parent/child edges after fold-in."
-                passName
-                (Set.count newNodeIds)
-                (Set.count unreachableNewNodes)
-                (String.concat ", " orphanedSample)
 
 //=============================================================================
 // FOLD-IN PASS

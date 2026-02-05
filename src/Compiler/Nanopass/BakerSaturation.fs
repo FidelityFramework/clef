@@ -272,7 +272,16 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
     | SemanticKind.Application (funcNodeId, argNodeIds) ->
         match SemanticGraph.tryGetNode funcNodeId graph with
         | Some funcNode ->
-            match funcNode.Kind with
+            // Unwrap TypeAnnotation for generic intrinsics (e.g., NativePtr.stackalloc<'T>)
+            let unwrappedKind =
+                match funcNode.Kind with
+                | SemanticKind.TypeAnnotation (innerNodeId, _) ->
+                    match SemanticGraph.tryGetNode innerNodeId graph with
+                    | Some innerNode -> innerNode.Kind
+                    | None -> funcNode.Kind
+                | _ -> funcNode.Kind
+
+            match unwrappedKind with
             | SemanticKind.Intrinsic info when shouldDecomposeIntrinsic info ->
                 let hofName = sprintf "%A.%s" info.Module info.Operation
                 let ctx = mkContext node.Range Types.unitType graph.Platform hofName node.Id
