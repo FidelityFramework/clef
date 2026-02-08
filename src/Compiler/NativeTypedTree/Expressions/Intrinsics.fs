@@ -51,7 +51,8 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         | "String" -> Some (IntrinsicModule.String, opPart)
         | "Array" -> Some (IntrinsicModule.Array, opPart)
         | "Parse" -> Some (IntrinsicModule.Parse, opPart)
-        | "Format" -> Some (IntrinsicModule.Format, opPart)
+        // NOTE: Format removed from intrinsic dispatch — Format.int/float are platform library functions
+        // (like Console.write), resolved as VarRef by FCS, not as FNCS intrinsics.
         | "Crypto" -> Some (IntrinsicModule.Crypto, opPart)
         | "Bits" -> Some (IntrinsicModule.Bits, opPart)
         | "FnPtr" -> Some (IntrinsicModule.FnPtr, opPart)
