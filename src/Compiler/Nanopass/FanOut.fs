@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: MIT
 
-/// Fan-Out pass: parallel recipe creation using MailboxProcessor.
-/// 
+/// Fan-Out pass: sequential recipe creation.
+///
 /// This is Pass 1 (Intrinsic Fan-Out) or Pass 3 (Saturation Fan-Out).
-/// 
+///
 /// Takes a PSG and a recipe-creation function, identifies nodes needing
-/// elaboration, spawns parallel workers to create recipes, and collects
-/// them into a RecipeSet.
-/// 
+/// elaboration, creates recipes sequentially, and collects them into a RecipeSet.
+///
+/// ARCHITECTURAL NOTE: Recipes MUST be created sequentially because NodeId.fresh()
+/// is a global mutable counter. Async.Parallel causes non-deterministic NodeId
+/// allocation — a correctness violation for a deterministic compiler.
+///
 /// See: psg_elaboration_fold_architecture.md (Serena memory)
 module FSharp.Native.Compiler.Nanopass.FanOut
 
@@ -53,17 +56,12 @@ let fanOut
     if List.isEmpty nodesToElaborate then
         RecipeSet.empty kind
     else
-        // Create recipes in parallel using Async.Parallel
+        // Create recipes sequentially (deterministic NodeId allocation)
         let results =
             nodesToElaborate
             |> List.map (fun node ->
-                async {
-                    let result = createRecipe node graph
-                    return (node.Id, result)
-                })
-            |> Async.Parallel
-            |> Async.RunSynchronously
-            |> Array.toList
+                let result = createRecipe node graph
+                (node.Id, result))
 
         // Extract successful recipes
         let recipes =
@@ -117,17 +115,12 @@ let fanOutWithDiagnostics
     if List.isEmpty nodesToElaborate then
         RecipeSet.empty kind, List.rev diagnostics
     else
-        // Create recipes in parallel
+        // Create recipes sequentially (deterministic NodeId allocation)
         let recipes =
             nodesToElaborate
             |> List.map (fun node ->
-                async {
-                    let result = createRecipe node graph
-                    return (node, result)
-                })
-            |> Async.Parallel
-            |> Async.RunSynchronously
-            |> Array.toList
+                let result = createRecipe node graph
+                (node, result))
         
         // Collect successful recipes and diagnostics
         let successfulRecipes =
