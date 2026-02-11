@@ -146,21 +146,13 @@ uint                  platformuint             NTUuint
    - `TypeConRef` extended with `NTUKind: NTUKind option` field
    - Helper functions: `mkNTUTypeConRef`, `mkNTUTypeConRefWithArity`
 
-2. *(DELETED: NativeGlobals.fs - greenfield pending)*
-   - All primitive types use `mkNTUTypeConRef` with appropriate NTU kinds
-   - Pointer types (nativeptr, voidptr, byref, inref, outref) use NTUptr
-   - Type checking helpers updated to use NTUKind
-   - New helpers: `isPlatformDependentType`, `getNTUKind`
-
-### Completed (cont.)
-
-3. **SemanticGraph.fs** - Platform context added:
+2. **SemanticGraph.fs** - Platform context added:
    - `PlatformContext` type with size/alignment resolution helpers
    - `SemanticGraph.Platform` field (optional)
    - `PlatformContext.fromPlatformPath` helper to create from .fidproj path
    - `PlatformContext.resolveSize` and `resolveAlign` for NTU type resolution
 
-4. **ProjectChecker.fs** - Platform context wiring:
+3. **ProjectChecker.fs** - Platform context wiring:
    - Extracts PlatformPath from FidprojOptions
    - Creates PlatformContext and attaches to SemanticGraph
 
@@ -169,7 +161,6 @@ uint                  platformuint             NTUuint
 Primary implementation locations in FNCS:
 
 - `src/Compiler/Checking.Native/NativeTypes.fs` - NTUKind definition ✓
-- *(DELETED: NativeGlobals.fs)*
 - `src/Compiler/TypedTree/TcGlobals.fs` - TypeConRef usage updated ✓
 - `src/Compiler/Checking.Native/SemanticGraph.fs` - Add platform context field (pending)
 

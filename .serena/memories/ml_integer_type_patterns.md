@@ -68,7 +68,7 @@ let z = x +^ y  // TYPE ERROR! Cannot mix Int32 and Int64
 ### Current (Wrong) - BCL-Style Polymorphic
 
 ```fsharp
-// *(DELETED: NativeGlobals.fs)* - WRONG pattern:
+// WRONG pattern (legacy BCL-style polymorphic):
 let mkPolymorphicBinaryOp () =
     let tyParam = freshTypeParam "'a"
     let tyVar = NativeType.TVar tyParam

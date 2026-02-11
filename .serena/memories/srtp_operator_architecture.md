@@ -4,7 +4,7 @@
 
 FNCS has two mechanisms for operator resolution that can conflict:
 
-### Mechanism 1: Built-in Bindings *(NativeGlobals.fs DELETED - greenfield pending)*
+### Mechanism 1: Built-in Bindings
 ```fsharp
 ("op_Addition", type_signature)
 ```
@@ -71,7 +71,6 @@ The codebase is in a broken hybrid state:
 
 ## Key Files
 
-- *(DELETED: NativeGlobals.fs)*
 - `SRTPResolution.fs` - SRTP witness infrastructure
 - `CheckExpressions.fs` - Where operator lookup happens
 - `Unify.fs` - Constraint solving
