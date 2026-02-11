@@ -374,7 +374,7 @@ let boolLit (value: bool) : SaturationParser<NodeId> =
 let intLit (value: int) : SaturationParser<NodeId> =
     saturation {
         let! state = getUserState
-        let node = mkNode state (SemanticKind.Literal (NativeLiteral.Int (int64 value, NTUKind.NTUint32))) Types.intType []
+        let node = mkNode state (SemanticKind.Literal (NativeLiteral.Int (int64 value, NTUKind.NTUint (NTUWidth.Fixed 32)))) Types.intType []
         do! emit node
         return node.Id
     }
@@ -383,7 +383,7 @@ let intLit (value: int) : SaturationParser<NodeId> =
 let int64Lit (value: int64) : SaturationParser<NodeId> =
     saturation {
         let! state = getUserState
-        let node = mkNode state (SemanticKind.Literal (NativeLiteral.Int (value, NTUKind.NTUint64))) Types.int64Type []
+        let node = mkNode state (SemanticKind.Literal (NativeLiteral.Int (value, NTUKind.NTUint (NTUWidth.Fixed 64)))) Types.int64Type []
         do! emit node
         return node.Id
     }
@@ -872,7 +872,7 @@ let extractPayloadField (unionId: NodeId) (index: int) (fieldType: NativeType) :
 let int8Lit (value: int) : SaturationParser<NodeId> =
     saturation {
         let! state = getUserState
-        let node = mkNode state (SemanticKind.Literal (NativeLiteral.Int (int64 value, NTUKind.NTUint8))) Types.int8Type []
+        let node = mkNode state (SemanticKind.Literal (NativeLiteral.Int (int64 value, NTUKind.NTUint (NTUWidth.Fixed 8)))) Types.int8Type []
         do! emit node
         return node.Id
     }

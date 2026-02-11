@@ -354,11 +354,11 @@ let mkBoolLiteralNode (ctx: Context) (value: bool) : SemanticNode =
 
 /// Create a Literal node for an integer (int32)
 let mkIntLiteralNode (ctx: Context) (value: int) : SemanticNode =
-    mkExpandedNode ctx (SemanticKind.Literal (NativeLiteral.Int (int64 value, NTUKind.NTUint32))) Types.intType
+    mkExpandedNode ctx (SemanticKind.Literal (NativeLiteral.Int (int64 value, NTUKind.NTUint (NTUWidth.Fixed 32)))) Types.intType
 
 /// Create a Literal node for an int64
 let mkInt64LiteralNode (ctx: Context) (value: int64) : SemanticNode =
-    mkExpandedNode ctx (SemanticKind.Literal (NativeLiteral.Int (value, NTUKind.NTUint64))) Types.int64Type
+    mkExpandedNode ctx (SemanticKind.Literal (NativeLiteral.Int (value, NTUKind.NTUint (NTUWidth.Fixed 64)))) Types.int64Type
 
 /// Create a Sequential node
 let mkSequentialNode

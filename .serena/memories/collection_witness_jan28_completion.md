@@ -215,7 +215,7 @@ The collection witnesses are complete, but Phase 0 (NULL ERADICATION) has additi
 ## References
 
 - **Plan:** `/home/hhh/.claude/plans/elegant-marinating-summit.md` (updated with completion status)
-- **Progress Memory:** `collection_witness_clean_room_progress` (full implementation details)
+- **Progress Memory:** ~~`collection_witness_clean_room_progress`~~ (deleted — redundant with this completion memory)
 - **Architecture:** `collection_witness_compositional_design` (architectural understanding)
 - **PRD:** `docs/PRDs/C-04-CoreCollections.md` (Baker primitives specification)
 - **Memories:** `baker_collection_primitives_architecture`, `flat_closure_universal_pattern`

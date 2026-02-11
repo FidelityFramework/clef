@@ -1,7 +1,8 @@
 # Format Intrinsics Architecture — Number-to-String Conversion
 
 ## Status
-Researched Feb 2026. Implementation pending — discuss "lift" in next session.
+✅ IMPLEMENTED (Feb 2026). Format.int and Format.float are F# code in Fidelity.Platform,
+compiled through the full pipeline. Sample 06 (AddNumbersInteractive) uses them successfully.
 
 ## Problem Statement
 Sample 05 (AddNumbers) needs `Format.int` and `Format.float` to produce console output.
@@ -71,9 +72,9 @@ See Firefly memory `format_int_implementation_plan_feb2026` for full implementat
 - Use idiomatic F# (explicit conversions, pattern matching on DU)
 - Format.int/Format.float are the mechanism for final output
 
-## Open Questions for Next Session
-1. What is the "lift" (effort) to implement the helper functions in MLIR?
-2. Should helper functions live in a "runtime preamble" or be emitted per-module?
-3. Float formatting precision: how many decimal places? (6 digits like printf %f?)
-4. String allocation: stack (memref.alloca) or heap? Max buffer size assumptions?
-5. Should Format.bool just emit "true"/"false" string constants?
+## Open Questions (RESOLVED)
+1. ✅ "Lift" = zero — F# code in Fidelity.Platform, compiled naturally through pipeline
+2. ✅ Functions live in platform library, emitted as normal func.func by LambdaWitness
+3. ✅ Float formatting: native F# implementation produces clean output (3.14, not 3.140000)
+4. ✅ String allocation: stack memref.alloca for local buffers, escape analysis promotes if needed
+5. ✅ Format.bool: not yet needed but would follow same platform library pattern

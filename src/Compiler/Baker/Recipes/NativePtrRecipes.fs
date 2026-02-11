@@ -87,7 +87,7 @@ let private mkMemRefApplication
 /// Create a literal nativeint node (for zero index in scalar load/store)
 let private mkNativeIntLiteral (value: int64) (range: SourceRange) (ctx: Context) : SemanticNode =
     { Id = NodeId.fresh()
-      Kind = SemanticKind.Literal (NativeLiteral.Int (value, NTUKind.NTUnint))
+      Kind = SemanticKind.Literal (NativeLiteral.Int (value, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer)))
       Range = range
       Type = Types.nintType
       SRTPResolution = None

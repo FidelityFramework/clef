@@ -159,11 +159,12 @@ match getPayloadType case with
 
 When this is implemented correctly:
 
-1. Sample 08 (Option) passes ✅ (already working - simple case)
-2. Sample 09 (Result) passes - heterogeneous payloads handled
+1. Sample 08 (Option) passes ✅ (working — simple case)
+2. Sample 09 (Result) passes — heterogeneous payloads handled
 3. User-defined DUs with any payload combination work
 4. Alex contains NO type-based decision logic for DUs
 5. All DU representation decisions are visible in PSG before Alex
+6. ✅ **ACHIEVED (Feb 2026):** Escape-aware allocation — DU values returned from functions get `memref.alloc` (heap), local-only DUs get `memref.alloca` (stack). Implemented via `pAllocValue` combinator pulling from `EscapeAnalysis` coeffect.
 
 ---
 

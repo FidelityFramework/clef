@@ -42,6 +42,7 @@ PSGElaboration runs multiple passes over the PSG. Each pass produces outputs tha
 | **Pattern Binding Analysis** | Binding scopes | Pattern binding SSAs | Match expression decomposition SSAs |
 | **String Collection** | String table | Literal index mappings | String literals for data section |
 | **Yield State Analysis** | Seq state indices | State machine layout | Seq MoveNext state machine structure |
+| **Escape Analysis** | Node escape kinds | `Map<int, EscapeKind>` | Stack vs heap allocation for DU constructions and string-returning calls (commit 02519cc) |
 
 **CRITICAL:** These are PASSES that run in PSGElaboration. Alex does NOT run these passes. Alex READS their outputs.
 
@@ -106,6 +107,7 @@ type TransferCoeffects = {
     ClosureLayouts: Map<NodeId, ClosureLayout>  // ← From PSGElaboration Capture Analysis pass
     PatternBindings: Map<NodeId, SSA list>      // ← From PSGElaboration Pattern Binding pass
     StringTable: Map<string, int>               // ← From PSGElaboration String Collection pass
+    EscapeAnalysis: EscapeAnalysisResult        // ← From PSGElaboration Escape Analysis pass
     Platform: Platform                          // ← Target platform context
 }
 ```

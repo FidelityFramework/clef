@@ -66,33 +66,53 @@ module NodeId =
 //-------------------------------------------------------------------------
 // NTU (Native Type Universe) Kind System
 // Following F* pattern: type identity is separate from type width.
+// Width is a first-class dimension, not baked into discrete variants.
 // Width is erased metadata resolved by Alex via platform quotations.
 //-------------------------------------------------------------------------
 
+/// Platform-resolved width dimensions — NTU-native vocabulary.
+/// These are NOT named after C types. Farscape maps C types to these dimensions;
+/// the NTU doesn't know or care about C.
+[<RequireQualifiedAccess>]
+type WidthDimension =
+    /// Address width — pointer-sized (64-bit on x86_64, 32-bit on ARM32)
+    | Pointer
+    /// Machine register / natural computational word width
+    | Register
+
+/// How the width of a numeric type is determined.
+[<RequireQualifiedAccess>]
+type NTUWidth =
+    /// Known at all times: 8, 16, 32, 64, 128 bits
+    | Fixed of bits: int
+    /// Platform-dependent, resolved by Alex via PlatformContext
+    | Resolved of WidthDimension
+
 /// NTU (Native Type Universe) type kinds.
-/// These categorize native types semantically, independent of platform width.
-/// Type identity: NTUint ≠ NTUint64 (different types even if same width on some platforms)
+/// Numeric types are parameterized by width — 3 kinds replace 16 discrete variants.
+/// Type identity: NTUint(Fixed 32) ≠ NTUint(Resolved Register) even if same width on LP64.
 [<RequireQualifiedAccess>]
 type NTUKind =
     //-----------------------------------------------------------------------
-    // Platform-dependent types (resolved via quotations at codegen)
+    // Parameterized numeric types (width as dimension)
     //-----------------------------------------------------------------------
-    
-    /// Platform word, signed (F# `int` in Fidelity semantics)
-    /// 64-bit on x86_64, 32-bit on ARM32, etc.
-    | NTUint
-    
-    /// Platform word, unsigned (F# `uint` in Fidelity semantics)
-    | NTUuint
-    
-    /// Native int, pointer-sized signed (explicit `nativeint`)
-    /// Semantically equivalent to NTUint but kept separate for source fidelity
-    | NTUnint
-    
-    /// Native uint, pointer-sized unsigned (explicit `unativeint`)
-    /// Semantically equivalent to NTUuint but kept separate for source fidelity
-    | NTUunint
-    
+
+    /// Signed integer of any width
+    /// Fixed 8/16/32/64 or Resolved Register/Pointer
+    | NTUint of NTUWidth
+
+    /// Unsigned integer of any width
+    /// Fixed 8/16/32/64 or Resolved Register/Pointer
+    | NTUuint of NTUWidth
+
+    /// IEEE floating point of any width
+    /// Fixed 32 or Fixed 64 (extensible to Fixed 128 for long double)
+    | NTUfloat of NTUWidth
+
+    //-----------------------------------------------------------------------
+    // Pointer types (width = Pointer, implicit)
+    //-----------------------------------------------------------------------
+
     /// Native pointer type (pointer-sized)
     | NTUptr
 
@@ -100,62 +120,35 @@ type NTUKind =
     /// Used for callbacks to top-level functions (no closures)
     | NTUfnptr
 
-    /// Size type (like C `size_t`) - used for array lengths, memory sizes
+    /// Size type (unsigned, pointer-width) — array lengths, memory sizes
     | NTUsize
-    
-    /// Pointer difference type (like C `ptrdiff_t`)
+
+    /// Pointer difference type (signed, pointer-width)
     | NTUdiff
-    
-    //-----------------------------------------------------------------------
-    // Fixed width types (platform-independent)
-    //-----------------------------------------------------------------------
-    
-    /// 8-bit signed integer
-    | NTUint8
-    /// 16-bit signed integer
-    | NTUint16
-    /// 32-bit signed integer
-    | NTUint32
-    /// 64-bit signed integer
-    | NTUint64
-    
-    /// 8-bit unsigned integer
-    | NTUuint8
-    /// 16-bit unsigned integer
-    | NTUuint16
-    /// 32-bit unsigned integer
-    | NTUuint32
-    /// 64-bit unsigned integer
-    | NTUuint64
-    
-    /// 32-bit IEEE 754 floating point
-    | NTUfloat32
-    /// 64-bit IEEE 754 floating point
-    | NTUfloat64
-    
+
     //-----------------------------------------------------------------------
     // Special types
     //-----------------------------------------------------------------------
-    
+
     /// UTF-8 encoded string (fat pointer: ptr + length)
     | NTUstring
-    
+
     /// Boolean (1 byte)
     | NTUbool
-    
+
     /// Unicode code point (UTF-32, 4 bytes)
     | NTUchar
-    
+
     /// Unit type (zero-sized)
     | NTUunit
-    
+
     /// Decimal (128-bit)
     | NTUdecimal
-    
+
     /// Lazy computation (thunk with memoization)
     /// PRD-14: Foundation of the Lazy Stack
     | NTUlazy
-    
+
     /// Sequence/generator (resumable computation producing values on demand)
     /// PRD-15: Simple Sequence Expressions
     | NTUseq
@@ -183,20 +176,17 @@ type NTUKind =
     //-----------------------------------------------------------------------
     // Compound value types (platform-independent fixed size)
     //-----------------------------------------------------------------------
-    
+
     /// UUID (128-bit, RFC 4122)
     /// Platform entropy source for generation (getrandom/BCryptGenRandom)
     | NTUuuid
-    
+
     /// DateTime - ticks since epoch (64-bit)
     /// Platform clock resolution via quotations
     | NTUdatetime
-    
+
     /// TimeSpan - duration in ticks (64-bit)
     | NTUtimespan
-    
-    /// Not a primitive NTU kind (user-defined types, parameterized types, etc.)
-    | NTUother
 
 /// Platform predicate types (abstract, erased at runtime).
 /// F*-inspired propositions for conditional compilation without runtime checks.
@@ -298,11 +288,10 @@ type PlatformContext = {
     /// Platform identifier (e.g., "Linux_x86_64", "Windows_ARM64")
     PlatformId: string
 
-    /// Word size in bits (32 or 64)
-    WordSize: int
-
-    /// Pointer size in bytes (4 or 8)
-    PointerSize: int
+    /// Width dimension resolutions (bits).
+    /// Maps WidthDimension → concrete bit width.
+    /// e.g., Pointer → 64, Register → 64 on x86_64
+    Dimensions: Map<WidthDimension, int>
 
     /// Pointer alignment in bytes
     PointerAlign: int
@@ -319,11 +308,27 @@ type PlatformContext = {
 
 /// Platform context operations for NTU type resolution
 module PlatformContext =
+    /// Resolve an NTUWidth to concrete bits using the platform dimensions.
+    let resolveWidth (ctx: PlatformContext) (width: NTUWidth) : int =
+        match width with
+        | NTUWidth.Fixed bits -> bits
+        | NTUWidth.Resolved dim -> ctx.Dimensions.[dim]
+
+    /// Convenience: pointer size in bytes for this platform
+    let pointerSize (ctx: PlatformContext) : int =
+        ctx.Dimensions.[WidthDimension.Pointer] / 8
+
+    /// Convenience: word size in bits for this platform
+    let wordSize (ctx: PlatformContext) : int =
+        ctx.Dimensions.[WidthDimension.Register]
+
     /// Default platform context for x86_64 Linux (most common development target)
     let defaultLinux_x86_64 = {
         PlatformId = "Linux_x86_64"
-        WordSize = 64
-        PointerSize = 8
+        Dimensions = Map.ofList [
+            (WidthDimension.Pointer, 64)
+            (WidthDimension.Register, 64)
+        ]
         PointerAlign = 8
         PlatformLibraryPath = None
         Predicates = Map.ofList [
@@ -351,19 +356,12 @@ module PlatformContext =
     /// Resolve the byte size for an NTU kind on this platform
     let resolveSize (ctx: PlatformContext) (kind: NTUKind) : int =
         match kind with
-        // Platform-dependent
-        | NTUKind.NTUint | NTUKind.NTUuint -> ctx.WordSize / 8
-        | NTUKind.NTUnint | NTUKind.NTUunint -> ctx.PointerSize
-        | NTUKind.NTUptr -> ctx.PointerSize
-        | NTUKind.NTUfnptr -> ctx.PointerSize  // Function pointers are pointer-sized
-        | NTUKind.NTUsize | NTUKind.NTUdiff -> ctx.PointerSize
-        // Fixed width
-        | NTUKind.NTUint8 | NTUKind.NTUuint8 -> 1
-        | NTUKind.NTUint16 | NTUKind.NTUuint16 -> 2
-        | NTUKind.NTUint32 | NTUKind.NTUuint32 -> 4
-        | NTUKind.NTUint64 | NTUKind.NTUuint64 -> 8
-        | NTUKind.NTUfloat32 -> 4
-        | NTUKind.NTUfloat64 -> 8
+        // Parameterized numeric types — resolve width dimension
+        | NTUKind.NTUint w | NTUKind.NTUuint w | NTUKind.NTUfloat w ->
+            resolveWidth ctx w / 8
+        // Pointer types — pointer-sized
+        | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff ->
+            pointerSize ctx
         // Special types
         | NTUKind.NTUstring -> 16  // Fat pointer: ptr + length
         | NTUKind.NTUbool -> 1
@@ -377,27 +375,19 @@ module PlatformContext =
         | NTUKind.NTUlazy -> -1  // Size depends on element type (PRD-14)
         | NTUKind.NTUseq -> -1  // Size depends on element type (PRD-15)
         | NTUKind.NTUarray -> 16  // Fat pointer: ptr + length (C-04)
-        | NTUKind.NTUlist -> ctx.PointerSize  // Pointer to cons cell (PRD-13a)
-        | NTUKind.NTUmap -> ctx.PointerSize  // Pointer to tree root (PRD-13a)
-        | NTUKind.NTUset -> ctx.PointerSize  // Pointer to tree root (PRD-13a)
-        | NTUKind.NTUother -> -1  // Unknown
+        | NTUKind.NTUlist -> pointerSize ctx  // Pointer to cons cell (PRD-13a)
+        | NTUKind.NTUmap -> pointerSize ctx  // Pointer to tree root (PRD-13a)
+        | NTUKind.NTUset -> pointerSize ctx  // Pointer to tree root (PRD-13a)
 
     /// Resolve the alignment for an NTU kind on this platform
     let resolveAlign (ctx: PlatformContext) (kind: NTUKind) : int =
         match kind with
-        // Platform-dependent - align to word size
-        | NTUKind.NTUint | NTUKind.NTUuint -> ctx.WordSize / 8
-        | NTUKind.NTUnint | NTUKind.NTUunint -> ctx.PointerAlign
-        | NTUKind.NTUptr -> ctx.PointerAlign
-        | NTUKind.NTUfnptr -> ctx.PointerAlign  // Function pointers align like pointers
-        | NTUKind.NTUsize | NTUKind.NTUdiff -> ctx.PointerAlign
-        // Fixed width - natural alignment
-        | NTUKind.NTUint8 | NTUKind.NTUuint8 -> 1
-        | NTUKind.NTUint16 | NTUKind.NTUuint16 -> 2
-        | NTUKind.NTUint32 | NTUKind.NTUuint32 -> 4
-        | NTUKind.NTUint64 | NTUKind.NTUuint64 -> 8
-        | NTUKind.NTUfloat32 -> 4
-        | NTUKind.NTUfloat64 -> 8
+        // Parameterized numeric types — align to width
+        | NTUKind.NTUint w | NTUKind.NTUuint w | NTUKind.NTUfloat w ->
+            resolveWidth ctx w / 8
+        // Pointer types — pointer alignment
+        | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff ->
+            ctx.PointerAlign
         // Special types
         | NTUKind.NTUstring -> 8  // Pointer alignment for fat pointer
         | NTUKind.NTUbool -> 1
@@ -414,66 +404,66 @@ module PlatformContext =
         | NTUKind.NTUlist -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
         | NTUKind.NTUmap -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
         | NTUKind.NTUset -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
-        | NTUKind.NTUother -> -1
 
 /// Helpers for NTUKind
 module NTUKind =
     /// Check if an NTUKind is platform-dependent (requires quotation resolution)
     let isPlatformDependent = function
-        | NTUKind.NTUint | NTUKind.NTUuint
-        | NTUKind.NTUnint | NTUKind.NTUunint
+        | NTUKind.NTUint (NTUWidth.Resolved _)
+        | NTUKind.NTUuint (NTUWidth.Resolved _)
+        | NTUKind.NTUfloat (NTUWidth.Resolved _) -> true
         | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff -> true
         | _ -> false
-    
+
     /// Check if an NTUKind is a fixed-width integer
     let isFixedWidthInteger = function
-        | NTUKind.NTUint8 | NTUKind.NTUint16 | NTUKind.NTUint32 | NTUKind.NTUint64
-        | NTUKind.NTUuint8 | NTUKind.NTUuint16 | NTUKind.NTUuint32 | NTUKind.NTUuint64 -> true
+        | NTUKind.NTUint (NTUWidth.Fixed _) -> true
+        | NTUKind.NTUuint (NTUWidth.Fixed _) -> true
         | _ -> false
-    
-    /// Check if an NTUKind is any integer type
+
+    /// Check if an NTUKind is any integer type (signed or unsigned, any width)
     let isInteger = function
-        | NTUKind.NTUint | NTUKind.NTUuint | NTUKind.NTUnint | NTUKind.NTUunint
-        | NTUKind.NTUint8 | NTUKind.NTUint16 | NTUKind.NTUint32 | NTUKind.NTUint64
-        | NTUKind.NTUuint8 | NTUKind.NTUuint16 | NTUKind.NTUuint32 | NTUKind.NTUuint64
+        | NTUKind.NTUint _ | NTUKind.NTUuint _ -> true
         | NTUKind.NTUsize | NTUKind.NTUdiff -> true
         | _ -> false
-    
+
     /// Check if an NTUKind is a signed integer
     let isSigned = function
-        | NTUKind.NTUint | NTUKind.NTUnint
-        | NTUKind.NTUint8 | NTUKind.NTUint16 | NTUKind.NTUint32 | NTUKind.NTUint64
+        | NTUKind.NTUint _ -> true
         | NTUKind.NTUdiff -> true
         | _ -> false
-    
+
     /// Check if an NTUKind is floating point
     let isFloatingPoint = function
-        | NTUKind.NTUfloat32 | NTUKind.NTUfloat64 -> true
+        | NTUKind.NTUfloat _ -> true
         | _ -> false
-    
+
     /// Check if an NTUKind is numeric (integer or floating point)
     let isNumeric kind = isInteger kind || isFloatingPoint kind
-    
+
     /// Get the human-readable name for an NTUKind
     let name = function
-        | NTUKind.NTUint -> "int"
-        | NTUKind.NTUuint -> "uint"
-        | NTUKind.NTUnint -> "nativeint"
-        | NTUKind.NTUunint -> "unativeint"
+        | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register) -> "int"
+        | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register) -> "uint"
+        | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer) -> "nativeint"
+        | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer) -> "unativeint"
+        | NTUKind.NTUint (NTUWidth.Fixed 8) -> "int8"
+        | NTUKind.NTUint (NTUWidth.Fixed 16) -> "int16"
+        | NTUKind.NTUint (NTUWidth.Fixed 32) -> "int32"
+        | NTUKind.NTUint (NTUWidth.Fixed 64) -> "int64"
+        | NTUKind.NTUuint (NTUWidth.Fixed 8) -> "uint8"
+        | NTUKind.NTUuint (NTUWidth.Fixed 16) -> "uint16"
+        | NTUKind.NTUuint (NTUWidth.Fixed 32) -> "uint32"
+        | NTUKind.NTUuint (NTUWidth.Fixed 64) -> "uint64"
+        | NTUKind.NTUfloat (NTUWidth.Fixed 32) -> "float32"
+        | NTUKind.NTUfloat (NTUWidth.Fixed 64) -> "float"
+        | NTUKind.NTUint w -> $"int({w})"
+        | NTUKind.NTUuint w -> $"uint({w})"
+        | NTUKind.NTUfloat w -> $"float({w})"
         | NTUKind.NTUptr -> "nativeptr"
         | NTUKind.NTUfnptr -> "fnptr"
         | NTUKind.NTUsize -> "size"
         | NTUKind.NTUdiff -> "diff"
-        | NTUKind.NTUint8 -> "int8"
-        | NTUKind.NTUint16 -> "int16"
-        | NTUKind.NTUint32 -> "int32"
-        | NTUKind.NTUint64 -> "int64"
-        | NTUKind.NTUuint8 -> "uint8"
-        | NTUKind.NTUuint16 -> "uint16"
-        | NTUKind.NTUuint32 -> "uint32"
-        | NTUKind.NTUuint64 -> "uint64"
-        | NTUKind.NTUfloat32 -> "float32"
-        | NTUKind.NTUfloat64 -> "float"
         | NTUKind.NTUstring -> "string"
         | NTUKind.NTUbool -> "bool"
         | NTUKind.NTUchar -> "char"
@@ -488,7 +478,6 @@ module NTUKind =
         | NTUKind.NTUuuid -> "Uuid"
         | NTUKind.NTUdatetime -> "DateTime"
         | NTUKind.NTUtimespan -> "TimeSpan"
-        | NTUKind.NTUother -> "<other>"
 
 /// Type layout determines memory representation
 [<RequireQualifiedAccess>]
@@ -850,19 +839,27 @@ type NativeLiteral =
     | BigInt of string
 
 module NativeLiteral =
-    /// Get the NTUKind for a literal
-    let kind = function
-        | NativeLiteral.Int (_, k) -> k
-        | NativeLiteral.UInt (_, k) -> k
-        | NativeLiteral.Float (_, k) -> k
-        | NativeLiteral.String _ -> NTUKind.NTUstring
-        | NativeLiteral.Bool _ -> NTUKind.NTUbool
-        | NativeLiteral.Char _ -> NTUKind.NTUchar
-        | NativeLiteral.Unit -> NTUKind.NTUunit
-        | NativeLiteral.Decimal _ -> NTUKind.NTUdecimal
-        | NativeLiteral.ByteArray _ -> NTUKind.NTUother  // Array of uint8
-        | NativeLiteral.UInt16Array _ -> NTUKind.NTUother  // Array of uint16
-        | NativeLiteral.BigInt _ -> NTUKind.NTUother  // BigInt is not a primitive NTU kind
+    /// Get the NTUKind for a literal.
+    /// Returns None for compound literals (ByteArray, UInt16Array, BigInt)
+    /// that decompose to NTUarray or user-defined composite types.
+    let tryKind = function
+        | NativeLiteral.Int (_, k) -> Some k
+        | NativeLiteral.UInt (_, k) -> Some k
+        | NativeLiteral.Float (_, k) -> Some k
+        | NativeLiteral.String _ -> Some NTUKind.NTUstring
+        | NativeLiteral.Bool _ -> Some NTUKind.NTUbool
+        | NativeLiteral.Char _ -> Some NTUKind.NTUchar
+        | NativeLiteral.Unit -> Some NTUKind.NTUunit
+        | NativeLiteral.Decimal _ -> Some NTUKind.NTUdecimal
+        | NativeLiteral.ByteArray _ -> Some NTUKind.NTUarray   // array<uint8>
+        | NativeLiteral.UInt16Array _ -> Some NTUKind.NTUarray  // array<uint16>
+        | NativeLiteral.BigInt _ -> Some (NTUKind.NTUint (NTUWidth.Fixed 64))  // Maps to int64
+
+    /// Get the NTUKind for a literal (backward-compat; use tryKind for new code)
+    let kind lit =
+        match tryKind lit with
+        | Some k -> k
+        | None -> failwith "NativeLiteral.kind: no NTUKind for this literal"
 
 //-------------------------------------------------------------------------
 // Closure Capture Information
@@ -1169,24 +1166,24 @@ and formatMeasure (m: Measure) : string =
 module Types =
     // Type constructors for primitive types (NTU kinds)
     // Platform-dependent types use PlatformWord layout (size resolved by Alex)
-    let intTyCon = mkNTUTypeConRef "int" NTUKind.NTUint TypeLayout.PlatformWord
+    let intTyCon = mkNTUTypeConRef "int" (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)) TypeLayout.PlatformWord
     // Fixed-width types use Inline layout with known sizes
-    let int8TyCon = mkNTUTypeConRef "int8" NTUKind.NTUint8 (TypeLayout.Inline(1, 1))
-    let int16TyCon = mkNTUTypeConRef "int16" NTUKind.NTUint16 (TypeLayout.Inline(2, 2))
-    let int32TyCon = mkNTUTypeConRef "int32" NTUKind.NTUint32 (TypeLayout.Inline(4, 4))
-    let int64TyCon = mkNTUTypeConRef "int64" NTUKind.NTUint64 (TypeLayout.Inline(8, 8))
+    let int8TyCon = mkNTUTypeConRef "int8" (NTUKind.NTUint (NTUWidth.Fixed 8)) (TypeLayout.Inline(1, 1))
+    let int16TyCon = mkNTUTypeConRef "int16" (NTUKind.NTUint (NTUWidth.Fixed 16)) (TypeLayout.Inline(2, 2))
+    let int32TyCon = mkNTUTypeConRef "int32" (NTUKind.NTUint (NTUWidth.Fixed 32)) (TypeLayout.Inline(4, 4))
+    let int64TyCon = mkNTUTypeConRef "int64" (NTUKind.NTUint (NTUWidth.Fixed 64)) (TypeLayout.Inline(8, 8))
     // Platform-dependent unsigned
-    let uintTyCon = mkNTUTypeConRef "uint" NTUKind.NTUuint TypeLayout.PlatformWord
+    let uintTyCon = mkNTUTypeConRef "uint" (NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register)) TypeLayout.PlatformWord
     // Fixed-width unsigned
-    let uint8TyCon = mkNTUTypeConRef "uint8" NTUKind.NTUuint8 (TypeLayout.Inline(1, 1))
-    let uint16TyCon = mkNTUTypeConRef "uint16" NTUKind.NTUuint16 (TypeLayout.Inline(2, 2))
-    let uint32TyCon = mkNTUTypeConRef "uint32" NTUKind.NTUuint32 (TypeLayout.Inline(4, 4))
-    let uint64TyCon = mkNTUTypeConRef "uint64" NTUKind.NTUuint64 (TypeLayout.Inline(8, 8))
+    let uint8TyCon = mkNTUTypeConRef "uint8" (NTUKind.NTUuint (NTUWidth.Fixed 8)) (TypeLayout.Inline(1, 1))
+    let uint16TyCon = mkNTUTypeConRef "uint16" (NTUKind.NTUuint (NTUWidth.Fixed 16)) (TypeLayout.Inline(2, 2))
+    let uint32TyCon = mkNTUTypeConRef "uint32" (NTUKind.NTUuint (NTUWidth.Fixed 32)) (TypeLayout.Inline(4, 4))
+    let uint64TyCon = mkNTUTypeConRef "uint64" (NTUKind.NTUuint (NTUWidth.Fixed 64)) (TypeLayout.Inline(8, 8))
     // Native pointer-sized integers (always platform-dependent)
-    let nintTyCon = mkNTUTypeConRef "nativeint" NTUKind.NTUnint TypeLayout.PlatformWord
-    let unintTyCon = mkNTUTypeConRef "unativeint" NTUKind.NTUunint TypeLayout.PlatformWord
-    let float32TyCon = mkNTUTypeConRef "float32" NTUKind.NTUfloat32 (TypeLayout.Inline(4, 4))
-    let floatTyCon = mkNTUTypeConRef "float" NTUKind.NTUfloat64 (TypeLayout.Inline(8, 8))
+    let nintTyCon = mkNTUTypeConRef "nativeint" (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer)) TypeLayout.PlatformWord
+    let unintTyCon = mkNTUTypeConRef "unativeint" (NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer)) TypeLayout.PlatformWord
+    let float32TyCon = mkNTUTypeConRef "float32" (NTUKind.NTUfloat (NTUWidth.Fixed 32)) (TypeLayout.Inline(4, 4))
+    let floatTyCon = mkNTUTypeConRef "float" (NTUKind.NTUfloat (NTUWidth.Fixed 64)) (TypeLayout.Inline(8, 8))
     let boolTyCon = mkNTUTypeConRef "bool" NTUKind.NTUbool (TypeLayout.Inline(1, 1))
     let charTyCon = mkNTUTypeConRef "char" NTUKind.NTUchar (TypeLayout.Inline(4, 4))
     let unitTyCon = mkNTUTypeConRef "unit" NTUKind.NTUunit (TypeLayout.Inline(0, 1))

@@ -60,18 +60,18 @@ let rec constToLiteral (c: SynConst) : NativeLiteral =
     match c with
     | SynConst.Unit -> NativeLiteral.Unit
     | SynConst.Bool b -> NativeLiteral.Bool b
-    | SynConst.SByte v -> NativeLiteral.Int(int64 v, NTUKind.NTUint8)
-    | SynConst.Byte v -> NativeLiteral.Int(int64 v, NTUKind.NTUuint8)
-    | SynConst.Int16 v -> NativeLiteral.Int(int64 v, NTUKind.NTUint16)
-    | SynConst.UInt16 v -> NativeLiteral.Int(int64 v, NTUKind.NTUuint16)
-    | SynConst.Int32 v -> NativeLiteral.Int(int64 v, NTUKind.NTUint)
-    | SynConst.UInt32 v -> NativeLiteral.Int(int64 v, NTUKind.NTUuint)
-    | SynConst.Int64 v -> NativeLiteral.Int(v, NTUKind.NTUint64)
-    | SynConst.UInt64 v -> NativeLiteral.UInt(v, NTUKind.NTUuint64)
-    | SynConst.IntPtr v -> NativeLiteral.Int(int64 v, NTUKind.NTUnint)
-    | SynConst.UIntPtr v -> NativeLiteral.UInt(uint64 v, NTUKind.NTUunint)
-    | SynConst.Single v -> NativeLiteral.Float(float v, NTUKind.NTUfloat32)
-    | SynConst.Double v -> NativeLiteral.Float(v, NTUKind.NTUfloat64)
+    | SynConst.SByte v -> NativeLiteral.Int(int64 v, NTUKind.NTUint (NTUWidth.Fixed 8))
+    | SynConst.Byte v -> NativeLiteral.Int(int64 v, NTUKind.NTUuint (NTUWidth.Fixed 8))
+    | SynConst.Int16 v -> NativeLiteral.Int(int64 v, NTUKind.NTUint (NTUWidth.Fixed 16))
+    | SynConst.UInt16 v -> NativeLiteral.Int(int64 v, NTUKind.NTUuint (NTUWidth.Fixed 16))
+    | SynConst.Int32 v -> NativeLiteral.Int(int64 v, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register))
+    | SynConst.UInt32 v -> NativeLiteral.Int(int64 v, NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register))
+    | SynConst.Int64 v -> NativeLiteral.Int(v, NTUKind.NTUint (NTUWidth.Fixed 64))
+    | SynConst.UInt64 v -> NativeLiteral.UInt(v, NTUKind.NTUuint (NTUWidth.Fixed 64))
+    | SynConst.IntPtr v -> NativeLiteral.Int(int64 v, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer))
+    | SynConst.UIntPtr v -> NativeLiteral.UInt(uint64 v, NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer))
+    | SynConst.Single v -> NativeLiteral.Float(float v, NTUKind.NTUfloat (NTUWidth.Fixed 32))
+    | SynConst.Double v -> NativeLiteral.Float(v, NTUKind.NTUfloat (NTUWidth.Fixed 64))
     | SynConst.Char v -> NativeLiteral.Char v
     | SynConst.Decimal v -> NativeLiteral.Decimal v
     | SynConst.String(s, _, _) -> NativeLiteral.String s

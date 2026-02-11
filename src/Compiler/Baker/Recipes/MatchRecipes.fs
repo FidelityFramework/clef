@@ -475,20 +475,23 @@ and private compilePattern
 /// Map NTUKind to NativeType
 and private ntuKindToType (kind: NTUKind) : NativeType =
     match kind with
-    | NTUKind.NTUint8 -> Types.int8Type
-    | NTUKind.NTUuint8 -> Types.uint8Type
-    | NTUKind.NTUint16 -> Types.int16Type
-    | NTUKind.NTUuint16 -> Types.uint16Type
-    | NTUKind.NTUint32 -> Types.int32Type
-    | NTUKind.NTUuint32 -> Types.uint32Type
-    | NTUKind.NTUint64 -> Types.int64Type
-    | NTUKind.NTUuint64 -> Types.uint64Type
-    | NTUKind.NTUint -> Types.intType
-    | NTUKind.NTUuint -> Types.uintType
-    | NTUKind.NTUnint -> Types.nintType
-    | NTUKind.NTUunint -> Types.unintType
-    | NTUKind.NTUfloat32 -> Types.float32Type
-    | NTUKind.NTUfloat64 -> Types.floatType
+    // Signed integers
+    | NTUKind.NTUint (NTUWidth.Fixed 8) -> Types.int8Type
+    | NTUKind.NTUint (NTUWidth.Fixed 16) -> Types.int16Type
+    | NTUKind.NTUint (NTUWidth.Fixed 32) -> Types.int32Type
+    | NTUKind.NTUint (NTUWidth.Fixed 64) -> Types.int64Type
+    | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register) -> Types.intType
+    | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer) -> Types.nintType
+    // Unsigned integers
+    | NTUKind.NTUuint (NTUWidth.Fixed 8) -> Types.uint8Type
+    | NTUKind.NTUuint (NTUWidth.Fixed 16) -> Types.uint16Type
+    | NTUKind.NTUuint (NTUWidth.Fixed 32) -> Types.uint32Type
+    | NTUKind.NTUuint (NTUWidth.Fixed 64) -> Types.uint64Type
+    | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register) -> Types.uintType
+    | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer) -> Types.unintType
+    // Floats
+    | NTUKind.NTUfloat (NTUWidth.Fixed 32) -> Types.float32Type
+    | NTUKind.NTUfloat (NTUWidth.Fixed 64) -> Types.floatType
     | _ -> failwithf "ntuKindToType: unexpected kind %A" kind
 
 /// Helper to get type from literal

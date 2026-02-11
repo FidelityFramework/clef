@@ -255,35 +255,10 @@ Fixed HelloWorld example from low-level syscalls (`Sys.write`, `NativeStr.ptr`) 
 
 ## Next Steps
 
-**Immediate:**
-1. Continue Phase 3 (Witness Refactoring)
-2. Start with highest-priority witnesses (after FormatOps investigation)
-3. Follow the per-witness process rigorously
-4. Run regression tests after each witness
+**Immediate (as of Feb 2026):**
+1. ✅ DU stack escape fix implemented (commit 02519cc) — samples 01-06 working
+2. Continue Phase 3 (Witness Refactoring) if/when focus returns to remediation
+3. Run full regression after any further witness changes
 
-**Blockers:**
-- None currently
-
-**Dependencies:**
-- Elements already exist (Phase 1 may be skipped)
-- Patterns largely exist (Phase 2 may be light audit)
-- Focus on Phase 3 (Witness Refactoring)
-
----
-
-## Metrics Tracking
-
-**Current State (as of January 28, 2026):**
-- Witnesses cleaned: 4 (LazyWitness, ArithWitness, LiteralWitness, SeqWitness)
-- Witnesses remaining: ~10+
-- Memories cleaned: 3
-- Code files fixed: 2
-- Architecture violations: 0 (all cleaned)
-
-**Target State (from plan):**
-- Total Alex: ~3,500 lines (56% reduction)
-- Witnesses: ~600 lines (~43 lines per witness, 90% reduction)
-- Direct MLIR ops: 0 (100% elimination)
-- XParsec-based: 14 witnesses (1300% increase)
-
-**Progress:** ~30% through witness refactoring, 100% of documentation cleanup
+**Note (Feb 2026):** Active work shifted to escape analysis generalization (PRD-06 DU fix).
+See `escape_analysis_generalized_design_feb2026` memory for that work.

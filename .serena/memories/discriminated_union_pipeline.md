@@ -63,19 +63,19 @@ let computeDUConstructSSACost arch graph duType payloadOpt =
 
 ### Phase 3: MLIR Witnessing (Alex)
 
-`witnessDUConstruct` checks slot vs payload type:
+`pDUCase` (MemoryPatterns.fs) emits DU construction:
 
-```fsharp
-if slotType = payload.Type then
-    // Direct insert (4 SSAs)
-    insertvalue result, withTag, payload.SSA, [1]
-else
-    // Bitcast first (5 SSAs)
-    bitcast = llvm.bitcast payload.SSA : f64 -> i64
-    insertvalue result, withTag, bitcast, [1]
-```
+1. **Allocation**: `pAllocValue` queries escape analysis coeffect:
+   - `StackScoped` → `memref.alloca` (stack, cheap, dies on return)
+   - `EscapesViaReturn` → `memref.alloc` (heap, survives return)
+2. **Tag insert**: reinterpret_cast + store at byte offset 0
+3. **Payload insert**: memref.view + store at byte offset 1
 
-`witnessDUEliminate` is symmetric - extract then bitcast if needed.
+`pDUEliminate` is symmetric — extract tag via reinterpret_cast, extract payload via view.
+
+**Key change (Feb 2026):** `pDUCase` now calls `pAllocValue` instead of `pUndef`.
+`pAllocValue` pulls the allocation decision from `EscapeAnalysis` coeffect (PULL model).
+DU values returned from functions get `memref.alloc` (heap); local-only DUs get `memref.alloca` (stack).
 
 ## The Invariant
 
