@@ -47,6 +47,9 @@ let cmpOp = ArithOp.CmpI (cmpSSA, pred, leftSSA, rightSSA, MLIRTypes.i32)
 let constOp = ArithOp.ConstI (ssa, value, MLIRTypes.i64)
 ```
 
+Note: With width-as-dimension, `NTUint(Resolved Register)` may be i32 OR i64 depending on platform.
+Only `NTUint(Fixed 32)` is truly always i32. This makes hardcoding even more dangerous.
+
 ## Correct Pattern: Flow Types Through
 
 ```fsharp

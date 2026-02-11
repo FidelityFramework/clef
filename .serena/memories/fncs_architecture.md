@@ -44,12 +44,12 @@ FNCS internally uses NTU nomenclature for all platform-generic types:
 
 **NTUKind Types:**
 - `NTUint/NTUuint` - Platform word (resolved via quotations)
-- `NTUint32/NTUint64` - Fixed width (always same size)
+- `NTUint(Fixed 32)` / `NTUint(Fixed 64)` — Fixed width (always same size)
 - `NTUptr<'T>` - Pointer (width from platform)
 - `NTUsize/NTUdiff` - size_t/ptrdiff_t equivalents
 
 **Key Principle:** Type identity and type width are SEPARATE.
-- FNCS enforces: `NTUint ≠ NTUint64` (different types)
+- FNCS enforces: `NTUint(Resolved Register) ≠ NTUint(Fixed 64)` (different types)
 - Alex resolves: Width via platform quotations
 
 **Option B Architecture:**

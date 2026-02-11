@@ -74,7 +74,17 @@ let checkParsedInputs (inputs: ParsedInput list) : CheckResult =
 
 ## Required Changes
 
-### 1. Platform Config Type
+### 1. Platform Config Type (Updated Feb 2026 — width-as-dimension)
+```fsharp
+// PlatformContext uses Dimensions map instead of discrete WordSize/PointerSize
+type PlatformContext = {
+    PlatformId: string
+    Dimensions: Map<WidthDimension, int>  // Pointer → 64, Register → 64, etc.
+    PointerAlign: int
+    PlatformLibraryPath: string option
+    Predicates: Map<PlatformPredicate, bool>
+    FreestandingStartup: FreestandingStartup option
+}
 ```fsharp
 type PlatformConfig = {
     Architecture: Architecture  // X86_64 | ARM32 | ARM64 | WASM32
@@ -128,6 +138,21 @@ let checkParsedInputs (inputs: ParsedInput list) (platform: PlatformConfig) : Ch
 
 **Recommended: Late Resolution** (nanopass-correct)
 
+## Multi-Dimensional Evolution (Feb 2026 Design Session)
+
+PlatformContext evolves from width-only to multi-dimensional as the NTU gains dimensional
+axes. The `Dimensions` map mechanism already supports this — each new axis adds entries.
+See fsnative-spec `ntu-dimensional-architecture.md` for the full vision.
+
+**Multi-stack targeting**: For heterogeneous applications (CPU+GPU+FPGA+NPU), each section
+of the program graph gets its own PlatformContext. Fidelity.Platform constructs these from
+fidproj TOML. BAREWire contracts define the boundaries between sections.
+
+**Fidelity.Platform is the canonical source** of platform dimensions — not Farscape, not
+BAREWire. When a new target class needs new dimensions (FPGA datapath width, GPU warp size),
+Fidelity.Platform declares them and PlatformContext carries the resolutions.
+
 ## Related Memories
 - `fncs_platform_aware_type_resolution` - Detailed architecture
 - `srtp_operator_architecture` - SRTP mechanism
+- `ntu_type_system` - NTU dimensional architecture overview

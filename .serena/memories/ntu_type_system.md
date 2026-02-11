@@ -4,27 +4,50 @@
 
 FNCS implements the NTU (Native Type Universe) type system for platform-generic types. This follows the F* pattern where type WIDTH is an erased assumption, not part of type identity.
 
-## NTUKind Discriminated Union
+## NTUKind Discriminated Union (Width-as-Dimension, Feb 2026)
 
-The core type representation in FNCS:
+The core type representation uses **parameterized width** — 3 numeric kinds replace 16 discrete variants:
 
 ```fsharp
-/// NTU (Native Type Universe) type kinds
+/// Platform-resolved width dimensions — NTU-native vocabulary
+[<RequireQualifiedAccess>]
+type WidthDimension =
+    | Pointer    // Address width (64-bit on x86_64, 32-bit on ARM32)
+    | Register   // Machine register / natural word width
+
+/// How the width of a numeric type is determined
+[<RequireQualifiedAccess>]
+type NTUWidth =
+    | Fixed of bits: int              // Known at all times: 8, 16, 32, 64
+    | Resolved of WidthDimension      // Platform-dependent, resolved by Alex
+
+/// NTU type kinds — numeric types parameterized by width
+[<RequireQualifiedAccess>]
 type NTUKind =
-    // Platform-dependent (resolved via quotations)
-    | NTUint      // Platform word, signed
-    | NTUuint     // Platform word, unsigned
-    | NTUnint     // Native int (pointer-sized signed)
-    | NTUunint    // Native uint (pointer-sized unsigned)
-    | NTUptr of NativeType  // Pointer to type
-    | NTUsize     // size_t equivalent
-    | NTUdiff     // ptrdiff_t equivalent
-    
-    // Fixed width (platform-independent)
-    | NTUint8 | NTUint16 | NTUint32 | NTUint64
-    | NTUuint8 | NTUuint16 | NTUuint32 | NTUuint64
-    | NTUfloat32 | NTUfloat64
+    | NTUint of NTUWidth      // Signed integer of any width
+    | NTUuint of NTUWidth     // Unsigned integer of any width
+    | NTUfloat of NTUWidth    // IEEE float of any width
+    | NTUptr | NTUfnptr       // Pointer types (width = Pointer, implicit)
+    | NTUsize | NTUdiff       // Semantic pointer-width aliases
+    | NTUstring | NTUbool | NTUchar | NTUunit | NTUdecimal
+    | NTUlazy | NTUseq
+    | NTUarray | NTUlist | NTUmap | NTUset
+    | NTUuuid | NTUdatetime | NTUtimespan
 ```
+
+**NTUother is ELIMINATED.** No escape hatch — every type is parameterized or user-defined composite.
+
+Old → New mapping:
+```
+NTUint      → NTUint (Resolved Register)
+NTUuint     → NTUuint (Resolved Register)
+NTUnint     → NTUint (Resolved Pointer)
+NTUunint    → NTUuint (Resolved Pointer)
+NTUint32    → NTUint (Fixed 32)
+NTUint64    → NTUint (Fixed 64)
+NTUfloat32  → NTUfloat (Fixed 32)
+NTUfloat64  → NTUfloat (Fixed 64)
+**(Old DU listing removed — see NTUKind Discriminated Union section above for current parameterized form)**
 
 ## Erased Layout Assumptions
 
@@ -42,30 +65,46 @@ type NTULayout = {
 
 ## Type Identity vs Type Width
 
-**Key Principle**: Type identity and type width are SEPARATE concerns.
+**Key Principle**: Type identity and type width are SEPARATE concerns. Width is a first-class dimension.
 
-- **Type Identity**: `NTUint ≠ NTUint64` - these are different types
-- **Type Width**: Erased assumption, resolved by platform quotations
+- **Type Identity**: `NTUint(Resolved Register) ≠ NTUint(Fixed 64)` — different types
+- **Type Width**: Erased assumption, resolved by Alex via `PlatformContext.Dimensions`
 
 FNCS enforces type identity. It does NOT assume width. Alex witnesses quotations to resolve width.
 
+## PlatformContext (Width Resolution)
+
+```fsharp
+type PlatformContext = {
+    PlatformId: string
+    Dimensions: Map<WidthDimension, int>  // Pointer → 64, Register → 64, etc.
+    PointerAlign: int
+    PlatformLibraryPath: string option
+    Predicates: Map<PlatformPredicate, bool>
+    FreestandingStartup: FreestandingStartup option
+}
+
+module PlatformContext =
+    let resolveWidth (ctx: PlatformContext) (width: NTUWidth) : int =
+        match width with
+        | NTUWidth.Fixed bits -> bits
+        | NTUWidth.Resolved dim -> ctx.Dimensions.[dim]
+```
+
 ## Integration with F# Type Names
 
-Standard F# types map to NTU types:
+Standard F# types map to parameterized NTU types:
 
-| F# Type | NTU Internal | Notes |
+| F# Type | NTU Internal | Width |
 |---------|--------------|-------|
-| `int` | NTUint | Platform word, signed |
-| `uint` | NTUuint | Platform word, unsigned |
-| `int32` | NTUint32 | Fixed 32-bit |
-| `int64` | NTUint64 | Fixed 64-bit |
-| `nativeint` | NTUnint | Pointer-sized |
-| `nativeptr<'T>` | NTUptr | Pointer |
-
-## Platform Predicates
-
-F*-inspired abstract propositions for conditional compilation:
-
+| `int` | `NTUint (Resolved Register)` | Platform word |
+| `uint` | `NTUuint (Resolved Register)` | Platform word |
+| `int32` | `NTUint (Fixed 32)` | 32-bit |
+| `int64` | `NTUint (Fixed 64)` | 64-bit |
+| `nativeint` | `NTUint (Resolved Pointer)` | Pointer-sized |
+| `float32` | `NTUfloat (Fixed 32)` | 32-bit |
+| `float` | `NTUfloat (Fixed 64)` | 64-bit |
+| `nativeptr<'T>` | `NTUptr` | Pointer-sized |
 ```fsharp
 /// Platform predicate types (abstract, erased)
 type PlatformPredicate =
@@ -134,8 +173,34 @@ Primary implementation locations in FNCS:
 - `src/Compiler/TypedTree/TcGlobals.fs` - TypeConRef usage updated ✓
 - `src/Compiler/Checking.Native/SemanticGraph.fs` - Add platform context field (pending)
 
+## Multi-Dimensional Architecture (Feb 2026 Design Session)
+
+Width is the **first implemented dimensional axis** of a broader multi-dimensional type substrate.
+The full vision (documented in fsnative-spec `ntu-dimensional-architecture.md`) includes:
+
+- **Width** (implemented): `NTUWidth = Fixed of int | Resolved of WidthDimension`
+- **Memory Space** (design): global/shared/private/peripheral/stack — critical for GPU, MCU
+- **Access Pattern** (design): read-only/write-only/read-write/volatile — formalizes BAREWire qualifiers
+- **Alignment** (design): cache-line/natural/packed/page — platform-resolved like width
+- **Tensor Shape** (future): batch/channel/height/width indices for ML/NPU targets
+
+**Key insight**: Dimensions don't erase after type checking — they flow through the PSG and
+inform code generation for any target. When a section of the program graph takes a platform
+definition, it becomes concretely typed for that target, but the NTU machinery provides the
+abstract dimensional underpinnings to accept and map from target to target.
+
+**Multi-stack compilation**: Different sections of the program graph may target different
+compute architectures (CPU, GPU, FPGA, NPU). Each section resolves dimensions against its
+own PlatformContext. BAREWire contracts between sections ensure type-safe data handoff.
+
+**Farscape's role**: Second-order consumer — it revealed that WidthDimension needed
+extensibility for C ABI diversity, catalyzing this broader rethinking. Farscape resolves
+C ABI widths at generation time using PlatformABI, emitting Fixed-width NTU types.
+New dimensions come from Fidelity.Platform, not from binding generators.
+
 ## Related Memories
 
 - `native_type_universe_foundations` - Prior NTU design work
 - `fncs_platform_aware_type_resolution` - Platform context passing
 - `platform_word_implementation_status` - Superseded by NTU
+- `fidproj_platform_context_principle` - PlatformContext as dimension resolution source

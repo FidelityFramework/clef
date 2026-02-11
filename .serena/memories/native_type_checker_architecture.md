@@ -12,7 +12,7 @@ FNCS uses native types exclusively:
 |------|----------------|
 | `string` | UTF-8 fat pointer (ptr + length, 16 bytes) |
 | `int` | Platform word (NTUint) |
-| `int32` | Fixed 32-bit (NTUint32) |
+| `int32` | Fixed 32-bit (`NTUint(Fixed 32)`) |
 | `option<'T>` | Value type (tag + payload), no null |
 | `obj` | **Does not exist** |
 

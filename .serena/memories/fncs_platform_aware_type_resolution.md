@@ -3,10 +3,11 @@
 > **Related**: This memory describes the platform-aware staging design. The implementation
 > now uses the **NTU (Native Type Universe)** nomenclature. See `ntu_type_system` memory.
 >
-> Key NTU changes:
-> - `TypeLayout.PlatformWord` evolves into `NTUKind` discriminated union
-> - Types like `NTUint`, `NTUuint`, `NTUptr` provide proper type identity
-> - Platform predicates (`fits_u32`, `fits_u64`) enable conditional compilation
+> Key NTU changes (Feb 2026):
+> - Width is now a first-class dimension: `NTUWidth = Fixed of bits | Resolved of WidthDimension`
+> - 3 parameterized kinds (`NTUint of NTUWidth`, `NTUuint of NTUWidth`, `NTUfloat of NTUWidth`) replace 16 discrete variants
+> - `PlatformContext.Dimensions: Map<WidthDimension, int>` replaces `WordSize`/`PointerSize`
+> - `NTUother` eliminated entirely
 
 ## Critical Insight: Nanopass Staging for Platform Types
 
@@ -35,31 +36,22 @@ Alex: Type RESOLUTION (platform word → i64 on x86_64, i32 on ARM32)
 - `int` → `i64` on x86_64, `i32` on ARM32/thumbv8m
 - `nativeptr<T>` → pointer size based on target
 
-## TypeLayout.PlatformWord Concept
+## TypeLayout.PlatformWord and Width-as-Dimension
 
-**Current (WRONG - hardcodes sizes in FNCS):**
+TypeLayout.PlatformWord is now backed by parameterized NTUWidth:
+
 ```fsharp
-let intTyCon = mkTypeConRef "int" 0 (TypeLayout.Inline(8, 8))  // HARDCODED 8 bytes
+// TypeConRef constructors use parameterized NTUKind
+let intTyCon = mkNTUTypeConRef "int" (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)) TypeLayout.PlatformWord
+let int32TyCon = mkNTUTypeConRef "int32" (NTUKind.NTUint (NTUWidth.Fixed 32)) (TypeLayout.Inline(4, 4))
+let nintTyCon = mkNTUTypeConRef "nativeint" (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer)) TypeLayout.PlatformWord
+let float64TyCon = mkNTUTypeConRef "float" (NTUKind.NTUfloat (NTUWidth.Fixed 64)) (TypeLayout.Inline(8, 8))
 ```
 
-**Correct (abstract size, resolved by Alex):**
-```fsharp
-type TypeLayout =
-    | Inline of size: int * align: int  // Fixed size types (int32, int64, etc.)
-    | Reference of ArenaAffinity
-    | Opaque                             // Unknown at this stage
-    | PlatformWord                       // NEW: Size depends on target architecture
-
-let intTyCon = mkTypeConRef "int" 0 TypeLayout.PlatformWord
-let uintTyCon = mkTypeConRef "uint" 0 TypeLayout.PlatformWord
-let nintTyCon = mkTypeConRef "nativeint" 0 TypeLayout.PlatformWord
-let nativeptrTyCon = mkTypeConRef "nativeptr" 1 TypeLayout.PlatformWord
-```
-
-Alex then resolves based on target:
-- `TypeLayout.PlatformWord` on x86_64 → 8 bytes (i64)
-- `TypeLayout.PlatformWord` on ARM32 → 4 bytes (i32)
-- `TypeLayout.PlatformWord` on WASM32 → 4 bytes (i32)
+Alex resolves `Resolved` widths via `PlatformContext.Dimensions`:
+- `Resolved Register` on x86_64 → 64 bits (8 bytes)
+- `Resolved Register` on ARM32 → 32 bits (4 bytes)
+- `Fixed 32` → always 32 bits (4 bytes), platform-independent
 
 ## Platform Context Flow: Quotation-Based Architecture (Updated Jan 2026)
 

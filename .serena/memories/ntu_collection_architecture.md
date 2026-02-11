@@ -4,19 +4,21 @@
 
 Collections in Fidelity are **FNCS-level primitives** using the NTU (Native Type Universe) machinery. This follows ML/F* patterns where collection types are language-level constructs with platform-resolved metadata.
 
-### Key Principle: Erased Width Generics
+### Key Principle: Width-as-Dimension
 
-NTUKind provides "erased generics" for platform-dependent values:
+NTUKind uses parameterized width for platform-dependent values:
 
 ```
-Source Level        FNCS Level (Abstract)     Alex Level (Resolved)
-─────────────────────────────────────────────────────────────────────
-int                 NTUint                    i64 (x86_64) / i32 (ARM32)
-array.Length        NTUsize                   i64 (x86_64) / i32 (ARM32)
-array[i]            Index by NTUint           Same as above
+Source Level        FNCS Level (Abstract)              Alex Level (Resolved)
+───────────────────────────────────────────────────────────────────────────
+int                 NTUint(Resolved Register)          i64 (x86_64) / i32 (ARM32)
+array.Length        NTUsize (Pointer dimension)        i64 (x86_64) / i32 (ARM32)
+array[i]            Index by NTUint(Resolved Register) Same as above
+int32               NTUint(Fixed 32)                   i32 (all platforms)
 ```
 
-Type identity (`NTUint ≠ NTUint64`) is preserved during type checking. Width metadata is erased when Alex witnesses platform quotations.
+Type identity (`NTUint(Resolved Register) ≠ NTUint(Fixed 64)`) is preserved during type checking.
+Width resolved via `PlatformContext.Dimensions` when Alex witnesses platform quotations.
 
 ## F*/ML Inspiration
 
