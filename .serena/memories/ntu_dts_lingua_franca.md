@@ -301,6 +301,7 @@ When `TIncremental of element: NativeType * targetMeasure: MeasureType option` i
 - `coeffect_analysis` — Coeffect infrastructure
 - `memory_layout_and_raii` — Memory regions, access patterns, RAII model
 - `resource_management_architecture` — Actor-based resource management
+- `firefly_multi_substrate_fanout_architecture` — **CRITICAL**: Downstream Firefly design for multi-substrate fan-out
 
 ## Source Material
 

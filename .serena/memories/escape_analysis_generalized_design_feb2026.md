@@ -69,3 +69,6 @@ Three blog posts:
 - Closure escape integration: flat closure detection + allocation decisions
 - Lifetime inference (Phase 3): minimum lifetime bounds, auto-scope arenas
 - Freestanding bump allocator: needed when freestanding samples use DUs
+- **Substrate-aware allocation**: EscapeKind interpretation varies by SubstrateKind
+  (StackScoped → GPU private mem, NPU tile SRAM, FPGA registers)
+  See `firefly_multi_substrate_fanout_architecture`

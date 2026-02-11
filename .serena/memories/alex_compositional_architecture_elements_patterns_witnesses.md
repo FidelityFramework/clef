@@ -391,3 +391,12 @@ This keeps witnesses maintainable, enables Pattern reuse, and creates clear arch
 ---
 
 **This is the architectural footprint for all Alex witnesses going forward.**
+
+## Multi-Substrate Extension
+
+The three-layer model extends to multi-substrate compilation:
+- **Elements** fork per substrate (LLVM/, GPU/, AIE/, CIRCT/ modules)
+- **Patterns** dispatch based on SubstrateKind from coeffects
+- **Witnesses** remain substrate-agnostic (observe PSG structure, delegate to Patterns)
+
+See `firefly_multi_substrate_fanout_architecture` for complete design.
