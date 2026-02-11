@@ -29,8 +29,8 @@ open FSharp.Native.Compiler.Baker.Recipes.Decomposition
 
 /// Check if two types have the same memory layout (same-size conversion)
 let private hasSameLayout (sourceType: NativeType) (targetType: NativeType) : bool =
-    let sourceLayout = layoutOf sourceType
-    let targetLayout = layoutOf targetType
+    let sourceLayout = TypeLayout.baseLayout (layoutOf sourceType)
+    let targetLayout = TypeLayout.baseLayout (layoutOf targetType)
     match sourceLayout, targetLayout with
     | TypeLayout.PlatformWord, TypeLayout.PlatformWord -> true
     | TypeLayout.Inline (s1, _), TypeLayout.Inline (s2, _) when s1 = s2 -> true

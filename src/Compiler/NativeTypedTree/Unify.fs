@@ -83,6 +83,8 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
             unify boundTy ty range
     
     // Type applications
+    // NOTE: TypeConRef.Qualifiers are NOT part of type identity.
+    // Types with different placement qualifiers unify as the same type.
     | NativeType.TApp(tc1, args1), NativeType.TApp(tc2, args2) ->
         if tc1.Name <> tc2.Name || tc1.Module <> tc2.Module then
             raise (UnificationException(TypeMismatch(t1, t2, range)))

@@ -180,3 +180,9 @@ Alex binding mechanism can target these hardware paths as they mature, emitting 
 - Posit Standard 2022
 - PACoGen: https://github.com/manish-kj/PACoGen
 - PERCIVAL: CVA6-based posit RISC-V core
+
+## Related Memories
+
+- `ntu_dts_lingua_franca` - **CRITICAL**: Multi-substrate NTU design where posits are a driving use case
+- `ntu_type_system` - NTU type system (Width axis implemented)
+- `memory_layout_and_raii` - Cache alignment for Quire types

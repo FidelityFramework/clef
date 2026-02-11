@@ -492,6 +492,11 @@ and private ntuKindToType (kind: NTUKind) : NativeType =
     // Floats
     | NTUKind.NTUfloat (NTUWidth.Fixed 32) -> Types.float32Type
     | NTUKind.NTUfloat (NTUWidth.Fixed 64) -> Types.floatType
+    // Posits
+    | NTUKind.NTUposit (NTUWidth.Fixed 8, _) -> Types.posit8Type
+    | NTUKind.NTUposit (NTUWidth.Fixed 16, _) -> Types.posit16Type
+    | NTUKind.NTUposit (NTUWidth.Fixed 32, _) -> Types.posit32Type
+    | NTUKind.NTUposit (NTUWidth.Fixed 64, _) -> Types.posit64Type
     | _ -> failwithf "ntuKindToType: unexpected kind %A" kind
 
 /// Helper to get type from literal

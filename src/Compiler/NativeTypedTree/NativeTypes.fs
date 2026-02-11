@@ -188,6 +188,79 @@ type NTUKind =
     /// TimeSpan - duration in ticks (64-bit)
     | NTUtimespan
 
+    //-----------------------------------------------------------------------
+    // Posit numeric types (Gustafson Type III Unum)
+    //-----------------------------------------------------------------------
+
+    /// Posit number: tapered-precision floating point.
+    /// Width determines storage size (8/16/32/64 bits).
+    /// es = exponent field size (0-3), determines dynamic range vs precision tradeoff.
+    /// Type identity: NTUposit(Fixed 32, 2) ≠ NTUfloat(Fixed 32) — different numeric semantics.
+    /// CPU: software decode/encode or AVX-512 vectorized.
+    /// FPGA: dedicated hardware pipeline via CIRCT (PACoGen-style).
+    | NTUposit of NTUWidth * es: int
+
+//-------------------------------------------------------------------------
+// NTU Dimensional Qualifiers (Multi-Substrate Compilation)
+//-------------------------------------------------------------------------
+
+/// Memory space qualifier for substrate-aware type placement.
+/// These do NOT affect type identity — `int @Global` and `int @Shared`
+/// are the same NTU type with different placement. Qualifiers inform
+/// code generation and BAREWire inter-substrate transfer strategy.
+[<RequireQualifiedAccess>]
+type NTUMemorySpace =
+    /// Substrate chooses (escape analysis on CPU, compiler on GPU)
+    | Default
+    /// Function-local (universal concept across substrates)
+    | Stack
+    /// Main memory / VRAM / HBM
+    | Global
+    /// Explicitly managed cache (GPU shared mem, NPU tile mem)
+    | Shared
+    /// Per-thread/per-PE (GPU registers, NPU private mem)
+    | Private
+    /// HSA unified (CPU↔GPU↔NPU on Strix Halo — zero-copy)
+    | Coherent
+    /// Cross-device (FPGA BRAM from CPU perspective)
+    | External
+    /// MMIO (volatile access from BAREWire patterns)
+    | Peripheral
+
+/// Access pattern qualifier for cache-aware compilation.
+/// Informs cache bypass strategy on CPU, coalescing on GPU,
+/// and AXI stream vs memory-mapped on FPGA.
+[<RequireQualifiedAccess>]
+type NTUAccessPattern =
+    /// Regular read/write
+    | Normal
+    /// Sequential, don't cache (non-temporal on CPU, coalesced on GPU)
+    | Streaming
+    /// MMIO / peripheral
+    | Volatile
+    /// Immutable view (enables sharing without coherency cost)
+    | ReadOnly
+    /// Producer-only (enables GPU write-combine)
+    | WriteOnly
+
+/// Bundle of placement qualifiers for substrate-aware compilation.
+/// Attached to TypeLayout, not type identity.
+type NTUQualifiers = {
+    MemorySpace: NTUMemorySpace option
+    AccessPattern: NTUAccessPattern option
+}
+
+/// NTUQualifiers helpers
+module NTUQualifiers =
+    /// Empty qualifiers (no explicit placement)
+    let empty = { MemorySpace = None; AccessPattern = None }
+
+    /// Create qualifiers with only a memory space
+    let withMemorySpace space = { MemorySpace = Some space; AccessPattern = None }
+
+    /// Create qualifiers with only an access pattern
+    let withAccessPattern pattern = { MemorySpace = None; AccessPattern = Some pattern }
+
 /// Platform predicate types (abstract, erased at runtime).
 /// F*-inspired propositions for conditional compilation without runtime checks.
 /// These flow through FNCS unchanged and are resolved by Alex using platform quotations.
@@ -277,12 +350,26 @@ module FreestandingStartup =
         | _ -> None
 
 //-------------------------------------------------------------------------
-// Platform Context (NTU Resolution)
+// Substrate and Platform Context (NTU Resolution)
 //-------------------------------------------------------------------------
+
+/// Compute substrate kind for multi-substrate compilation.
+/// Each fidproj targets a single substrate; the fidsln orchestrates across them.
+[<RequireQualifiedAccess>]
+type SubstrateKind =
+    /// CPU target (Zen 5, ARM, RISC-V) → MLIR → LLVM → native
+    | CPU
+    /// GPU target (RDNA 3.5, etc.) → MLIR → GPU/AMDGPU → ROCm
+    | GPU
+    /// NPU target (XDNA 2, etc.) → MLIR → MLIR-AIE → AI Engine runtime
+    | NPU
+    /// FPGA target (Xilinx, etc.) → MLIR → CIRCT → handshake → hw/comb/seq → SV
+    | FPGA
 
 /// Platform context for NTU type resolution.
 /// Carries quotation-resolved platform information used to
 /// resolve platform-dependent types (NTUint, NTUptr, etc.) to concrete widths.
+/// Extended with substrate-awareness for multi-target compilation.
 [<NoComparison; NoEquality>]
 type PlatformContext = {
     /// Platform identifier (e.g., "Linux_x86_64", "Windows_ARM64")
@@ -304,7 +391,22 @@ type PlatformContext = {
 
     /// Freestanding startup configuration (populated for freestanding builds)
     FreestandingStartup: FreestandingStartup option
+
+    /// Substrate kind (None = CPU for backward compat with single-substrate builds)
+    SubstrateKind: SubstrateKind option
+
+    /// Memory spaces available on this substrate.
+    /// Empty = all spaces available (for backward compat).
+    AvailableMemorySpaces: NTUMemorySpace list
+
+    /// Default memory space for allocation on this substrate.
+    /// None = substrate default (Stack/heap via escape analysis on CPU, Global on GPU, etc.)
+    DefaultMemorySpace: NTUMemorySpace option
 }
+
+/// SubstrateContext is PlatformContext with substrate-aware fields populated.
+/// Type alias for documentation and gradual migration — not a separate type.
+type SubstrateContext = PlatformContext
 
 /// Platform context operations for NTU type resolution
 module PlatformContext =
@@ -339,6 +441,9 @@ module PlatformContext =
             (PlatformPredicate.HasHardwareFloat, true)
         ]
         FreestandingStartup = None  // Set when building freestanding binaries
+        SubstrateKind = None  // None = CPU (backward compat)
+        AvailableMemorySpaces = []  // Empty = all (backward compat)
+        DefaultMemorySpace = None  // None = substrate default
     }
 
     /// Create a platform context from a platform library path
@@ -357,7 +462,8 @@ module PlatformContext =
     let resolveSize (ctx: PlatformContext) (kind: NTUKind) : int =
         match kind with
         // Parameterized numeric types — resolve width dimension
-        | NTUKind.NTUint w | NTUKind.NTUuint w | NTUKind.NTUfloat w ->
+        | NTUKind.NTUint w | NTUKind.NTUuint w | NTUKind.NTUfloat w
+        | NTUKind.NTUposit (w, _) ->
             resolveWidth ctx w / 8
         // Pointer types — pointer-sized
         | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff ->
@@ -383,7 +489,8 @@ module PlatformContext =
     let resolveAlign (ctx: PlatformContext) (kind: NTUKind) : int =
         match kind with
         // Parameterized numeric types — align to width
-        | NTUKind.NTUint w | NTUKind.NTUuint w | NTUKind.NTUfloat w ->
+        | NTUKind.NTUint w | NTUKind.NTUuint w | NTUKind.NTUfloat w
+        | NTUKind.NTUposit (w, _) ->
             resolveWidth ctx w / 8
         // Pointer types — pointer alignment
         | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff ->
@@ -405,13 +512,28 @@ module PlatformContext =
         | NTUKind.NTUmap -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
         | NTUKind.NTUset -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
 
+    /// Get the substrate kind (defaults to CPU for backward compatibility)
+    let substrateKind (ctx: PlatformContext) : SubstrateKind =
+        ctx.SubstrateKind |> Option.defaultValue SubstrateKind.CPU
+
+    /// Check if a memory space is available on this substrate
+    let isMemorySpaceAvailable (ctx: PlatformContext) (space: NTUMemorySpace) : bool =
+        match ctx.AvailableMemorySpaces with
+        | [] -> true  // Empty = all available (backward compat)
+        | spaces -> List.contains space spaces
+
+    /// Get the default memory space for this substrate
+    let defaultMemorySpace (ctx: PlatformContext) : NTUMemorySpace =
+        ctx.DefaultMemorySpace |> Option.defaultValue NTUMemorySpace.Default
+
 /// Helpers for NTUKind
 module NTUKind =
     /// Check if an NTUKind is platform-dependent (requires quotation resolution)
     let isPlatformDependent = function
         | NTUKind.NTUint (NTUWidth.Resolved _)
         | NTUKind.NTUuint (NTUWidth.Resolved _)
-        | NTUKind.NTUfloat (NTUWidth.Resolved _) -> true
+        | NTUKind.NTUfloat (NTUWidth.Resolved _)
+        | NTUKind.NTUposit (NTUWidth.Resolved _, _) -> true
         | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff -> true
         | _ -> false
 
@@ -438,8 +560,13 @@ module NTUKind =
         | NTUKind.NTUfloat _ -> true
         | _ -> false
 
-    /// Check if an NTUKind is numeric (integer or floating point)
-    let isNumeric kind = isInteger kind || isFloatingPoint kind
+    /// Check if an NTUKind is a posit (Gustafson Type III Unum)
+    let isPosit = function
+        | NTUKind.NTUposit _ -> true
+        | _ -> false
+
+    /// Check if an NTUKind is numeric (integer, floating point, or posit)
+    let isNumeric kind = isInteger kind || isFloatingPoint kind || isPosit kind
 
     /// Get the human-readable name for an NTUKind
     let name = function
@@ -460,6 +587,11 @@ module NTUKind =
         | NTUKind.NTUint w -> $"int({w})"
         | NTUKind.NTUuint w -> $"uint({w})"
         | NTUKind.NTUfloat w -> $"float({w})"
+        | NTUKind.NTUposit (NTUWidth.Fixed 8, _) -> "posit8"
+        | NTUKind.NTUposit (NTUWidth.Fixed 16, _) -> "posit16"
+        | NTUKind.NTUposit (NTUWidth.Fixed 32, _) -> "posit32"
+        | NTUKind.NTUposit (NTUWidth.Fixed 64, _) -> "posit64"
+        | NTUKind.NTUposit (w, es) -> $"posit({w},es={es})"
         | NTUKind.NTUptr -> "nativeptr"
         | NTUKind.NTUfnptr -> "fnptr"
         | NTUKind.NTUsize -> "size"
@@ -500,6 +632,10 @@ type TypeLayout =
     /// Size = sum of component sizes (all platform-dependent)
     /// Used for types like NativeSlice (ptr + length + flags)
     | NTUCompound of componentCount: int
+    /// Substrate-qualified layout: same type, different placement.
+    /// Qualifiers do NOT affect type identity — only inform codegen
+    /// and BAREWire inter-substrate transfer strategy.
+    | Qualified of inner: TypeLayout * qualifiers: NTUQualifiers
 
 /// Arena affinity for memory management
 and [<RequireQualifiedAccess>] ArenaAffinity =
@@ -509,6 +645,19 @@ and [<RequireQualifiedAccess>] ArenaAffinity =
     | Explicit of name: string
     /// Stack allocation (no arena, scope-bound)
     | Stack
+
+/// TypeLayout helpers
+module TypeLayout =
+    /// Strip qualifiers to get the underlying layout (for size/align calculations).
+    /// Most code should use this when computing layout properties.
+    let rec baseLayout = function
+        | TypeLayout.Qualified (inner, _) -> baseLayout inner
+        | layout -> layout
+
+    /// Get qualifiers from a layout, if present
+    let qualifiers = function
+        | TypeLayout.Qualified (_, q) -> Some q
+        | _ -> None
 
 //-------------------------------------------------------------------------
 // Type Parameter Kind
@@ -553,6 +702,11 @@ type TypeConRef = {
     /// 0 for non-record types. >0 for record types.
     /// Actual field types are looked up via SemanticGraph.Types.
     FieldCount: int
+    /// Placement qualifiers for substrate-aware compilation.
+    /// None = no explicit placement (substrate default).
+    /// These do NOT affect type identity — types with different
+    /// qualifiers unify as the same type.
+    Qualifiers: NTUQualifiers option
 }
 
 /// Total arity (type + measure parameters)
@@ -560,24 +714,28 @@ let arity (tc: TypeConRef) = List.length tc.ParamKinds
 
 /// Create a simple type constructor with only type parameters (non-NTU kind)
 let mkTypeConRef name typeArity layout =
-    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = None; FieldCount = 0 }
+    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = None; FieldCount = 0; Qualifiers = None }
 
 /// Create a type constructor with explicit parameter kinds (non-NTU kind)
 let mkTypeConRefWithMeasures name paramKinds layout =
-    { Name = name; Module = []; ParamKinds = paramKinds; Layout = layout; NTUKind = None; FieldCount = 0 }
+    { Name = name; Module = []; ParamKinds = paramKinds; Layout = layout; NTUKind = None; FieldCount = 0; Qualifiers = None }
 
 /// Create a type constructor with an NTU kind (for native primitives)
 let mkNTUTypeConRef name ntuKind layout =
-    { Name = name; Module = []; ParamKinds = []; Layout = layout; NTUKind = Some ntuKind; FieldCount = 0 }
+    { Name = name; Module = []; ParamKinds = []; Layout = layout; NTUKind = Some ntuKind; FieldCount = 0; Qualifiers = None }
 
 /// Create a parameterized type constructor with an NTU kind
 let mkNTUTypeConRefWithArity name ntuKind typeArity layout =
-    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = Some ntuKind; FieldCount = 0 }
+    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = Some ntuKind; FieldCount = 0; Qualifiers = None }
 
 /// Create a type constructor for a record type
 /// Field info is accessed via SemanticGraph.Types lookup (not embedded in TypeConRef)
 let mkRecordTypeConRef name modulePath layout fieldCount =
-    { Name = name; Module = modulePath; ParamKinds = []; Layout = layout; NTUKind = None; FieldCount = fieldCount }
+    { Name = name; Module = modulePath; ParamKinds = []; Layout = layout; NTUKind = None; FieldCount = fieldCount; Qualifiers = None }
+
+/// Create a qualified type constructor (same type, different placement)
+let withQualifiers (qualifiers: NTUQualifiers) (tycon: TypeConRef) : TypeConRef =
+    { tycon with Qualifiers = Some qualifiers }
 
 //-------------------------------------------------------------------------
 // Code Labels (for state machine compilation)
@@ -993,7 +1151,7 @@ let computeRecordLayout (fields: (string * NativeType) list) : TypeLayout =
     let wordAlign = 8
 
     let folder (offset, maxAlign) (_, fieldType) =
-        let fieldLayout = layoutOf fieldType
+        let fieldLayout = TypeLayout.baseLayout (layoutOf fieldType)
         match fieldLayout with
         | TypeLayout.Inline(size, align) when size >= 0 && align > 0 ->
             // Known inline size - add padding for alignment
@@ -1038,6 +1196,9 @@ let computeRecordLayout (fields: (string * NativeType) list) : TypeLayout =
                 if remainder = 0 then 0 else wordAlign - remainder
             let paddedOffset = offset + pad
             (paddedOffset + wordSize, max maxAlign wordAlign)
+        | TypeLayout.Qualified _ ->
+            // Defensive: baseLayout should have stripped this, but handle for exhaustiveness
+            failwith "computeRecordLayout: Qualified layout should have been unwrapped by baseLayout"
 
     let (totalSize, maxAlign) = List.fold folder (0, 1) fields
 
@@ -1184,6 +1345,14 @@ module Types =
     let unintTyCon = mkNTUTypeConRef "unativeint" (NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer)) TypeLayout.PlatformWord
     let float32TyCon = mkNTUTypeConRef "float32" (NTUKind.NTUfloat (NTUWidth.Fixed 32)) (TypeLayout.Inline(4, 4))
     let floatTyCon = mkNTUTypeConRef "float" (NTUKind.NTUfloat (NTUWidth.Fixed 64)) (TypeLayout.Inline(8, 8))
+
+    // Posit numeric types (Gustafson Type III Unum)
+    // es = exponent field size: determines dynamic range vs precision tradeoff
+    let posit8TyCon = mkNTUTypeConRef "posit8" (NTUKind.NTUposit (NTUWidth.Fixed 8, 0)) (TypeLayout.Inline(1, 1))
+    let posit16TyCon = mkNTUTypeConRef "posit16" (NTUKind.NTUposit (NTUWidth.Fixed 16, 1)) (TypeLayout.Inline(2, 2))
+    let posit32TyCon = mkNTUTypeConRef "posit32" (NTUKind.NTUposit (NTUWidth.Fixed 32, 2)) (TypeLayout.Inline(4, 4))
+    let posit64TyCon = mkNTUTypeConRef "posit64" (NTUKind.NTUposit (NTUWidth.Fixed 64, 3)) (TypeLayout.Inline(8, 8))
+
     let boolTyCon = mkNTUTypeConRef "bool" NTUKind.NTUbool (TypeLayout.Inline(1, 1))
     let charTyCon = mkNTUTypeConRef "char" NTUKind.NTUchar (TypeLayout.Inline(4, 4))
     let unitTyCon = mkNTUTypeConRef "unit" NTUKind.NTUunit (TypeLayout.Inline(0, 1))
@@ -1214,6 +1383,10 @@ module Types =
     let unintType = mkSimpleType unintTyCon
     let float32Type = mkSimpleType float32TyCon
     let floatType = mkSimpleType floatTyCon
+    let posit8Type = mkSimpleType posit8TyCon
+    let posit16Type = mkSimpleType posit16TyCon
+    let posit32Type = mkSimpleType posit32TyCon
+    let posit64Type = mkSimpleType posit64TyCon
     let boolType = mkSimpleType boolTyCon
     let charType = mkSimpleType charTyCon
     let unitType = mkSimpleType unitTyCon

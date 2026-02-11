@@ -191,7 +191,9 @@ New dimensions come from Fidelity.Platform, not from binding generators.
 
 ## Related Memories
 
+- `ntu_dts_lingua_franca` - **CRITICAL**: Multi-substrate dimensional extension design (Feb 2026)
 - `native_type_universe_foundations` - Prior NTU design work
 - `fncs_platform_aware_type_resolution` - Platform context passing
 - `platform_word_implementation_status` - Superseded by NTU
 - `fidproj_platform_context_principle` - PlatformContext as dimension resolution source
+- `posit_universal_numbers_design` - Posit types and FPGA acceleration path
