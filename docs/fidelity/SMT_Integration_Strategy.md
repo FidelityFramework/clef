@@ -14,7 +14,7 @@ The metaphor is deliberate. In accounting, every transaction has two entries tha
 
 The first mode is an interactive, LSP-driven proof checker that operates during development. This takes its inspiration directly from F\*'s interactive verification experience, which itself draws from the F# Interactive (FSI) model. The developer writes `[<SMT Requires("...")>]` and `[<SMT Ensures("...")>]` annotations on functions. The LSP dispatches these as SMT queries to a solver (Z3, cvc5) in real time. The developer receives immediate feedback: proven, unproven, or counterexample.
 
-What made F\*'s interactive mode compelling was not the power of the underlying solver but the tightness of the feedback loop. The developer did not need to invoke a separate tool, switch to a different language, or wait for a batch process. Proof checking was part of editing. This is the experience Keystone preserves, while eliminating the language boundary that F\* imposed.
+What made F\*'s interactive mode compelling was not the power of the underlying solver but the tightness of the feedback loop. The developer did not need to invoke a separate tool, switch to a different language, or wait for a batch process. Proof checking was part of editing. This is the experience Keystone preserves.
 
 Over time, parameterized lemma libraries provide reusable proof templates that can be applied with a single annotation. The developer's experience is: write code, annotate key properties, see green checks or red diagnostics. No separate verification language. No context-switching to a proof assistant.
 
