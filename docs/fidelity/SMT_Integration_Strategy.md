@@ -290,6 +290,26 @@ The dimensional type system will face explanation resistance proportional to its
 
 The shadow-api capability is a concrete, demonstrable result that does not require explaining type theory to communicate. Take an existing C library like OpenSSL and generate a provably safe drop-in replacement with automatically derived SMT proof obligations. "We can take OpenSSL and prove the replacement is memory-safe" resonates with practitioners in a way that the theoretical foundations cannot.
 
+### 5.8 The Posit Proof Story
+
+Where Farscape demonstrates verification at language boundaries (F# calling C), the posit proof-of-concept demonstrates verification across hardware boundaries. It is the concrete artifact that answers the question section 4 raises: does multi-substrate verification actually work?
+
+The demonstration targets an AMD Strix Halo system — Zen 5 CPU, RDNA 3.5 GPU, and XDNA 2 NPU on-die with HSA coherent shared memory — paired with a Xilinx FPGA development board connected over USB. This configuration spans all four substrate kinds that the NTU dimensional type system addresses: CPU for orchestration, GPU for data-parallel computation, NPU for inference workloads, and FPGA for posit arithmetic that no other substrate can execute natively.
+
+Posit numbers (Gustafson's Type III Unum) are the ideal verification use case because the type safety requirement is not optional — it is existential. A posit32 and an IEEE float32 are both 32-bit values, but interpreting one as the other produces silently wrong results. There is no runtime signal, no exception, no NaN. The bits are valid in both formats; the semantics are incompatible. The NTU's type identity distinction (`NTUposit ≠ NTUfloat`) is the only thing standing between correct computation and undetectable corruption.
+
+The verification story operates on three levels:
+
+1. **Type identity across substrates.** The NTU carries `NTUposit(width=32, es=2)` as a distinct type through the entire pipeline. On CPU, Alex lowers this to `i32` storage with software encode/decode. On FPGA, Alex lowers it through CIRCT to a dedicated posit hardware pipeline. The type identity survives the fork — both substrates agree on what the bits mean, even though they execute the arithmetic differently. An `[<SMT Requires("format_posit32(x)")>]` annotation at the source level generates proof obligations on both substrate paths.
+
+2. **BAREWire contracts at substrate boundaries.** When the CPU marshals posit bits for DMA transfer to the FPGA, a BAREWire layout contract defines the memory representation. Both substrates compile against the same shared type definition. The double-entry system verifies this: design-time proofs confirm that the contract is consistent (the debit), and compilation-path assertions in the MLIR smt dialect confirm that both substrate code generators honor it (the credit). A mismatch — one side interpreting posit32 as IEEE float32 — is a type error caught at compile time, not a silent data corruption discovered in production.
+
+3. **Cross-substrate proof obligations on the PSG.** The hypergraph representation connects computation nodes across substrates. A posit dot-product that accumulates in a 512-bit quire on the FPGA and returns a posit32 result to the CPU is a hyperedge spanning two substrates. The proof obligation — that the quire accumulation preserves precision guarantees — attaches to this hyperedge and must be satisfied on both sides of the substrate boundary. This is the verification capability that section 4.1 claims and that F\* structurally cannot provide: a proof that spans hardware boundaries.
+
+The demonstration is built incrementally. The first milestone is CPU-only posit arithmetic — software encode/decode compiled through the standard MLIR/LLVM path, proving the type identity and BAREWire contract infrastructure end-to-end. The second milestone adds the FPGA substrate — CIRCT code generation for posit hardware pipelines, DMA transfer contracts, and cross-substrate proof obligations. Subsequent milestones bring in GPU (data-parallel posit batch operations via ROCm) and NPU (quantized inference with posit accumulation).
+
+For the audiences identified in section 4.3, the posit demo provides different entry points. For formal methods researchers, it is a concrete instance of cross-substrate refinement type preservation — the dimensional type system in action, not in theory. For systems engineers, it is an HPC application running on real hardware with verified data integrity across four compute substrates. For defense program managers, it is a demonstration of the patent's claims (US 63/786,264) on independently owned infrastructure targeting heterogeneous hardware. For certification auditors, it is a complete double-entry evidence package: design-time proofs of posit precision properties balanced against compilation-path proof certificates from every substrate in the system.
+
 ## 6. Migration Path
 
 ### 6.1 Blog Posts
