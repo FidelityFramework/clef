@@ -71,9 +71,13 @@ This is a capability that F\* structurally cannot provide.
 
 ### 2.3 NTU Dimensional Types as Structured Refinements
 
-F\*'s refinement types allow arbitrary predicates: `x:int{phi(x)}` where `phi` can be any F\* term. This generality is the source of both F\*'s power and its complexity. It forces a universal `Term` sort with boxing and unboxing, fuel-based termination heuristics, and an encoding layer that the solver may not terminate on. The generality is necessary for F\*'s mission of full dependent types, but it is not necessary for Keystone's design goals.
+The term "dimensional types" requires definition, as it is not established terminology in formal methods. The concept originates in F#'s Units of Measure system (and its community extension, FSharp.UMX), which attaches phantom type parameters representing physical units — meters, seconds, kilograms — to numeric types. The compiler enforces dimensional algebra (`meters/seconds * seconds = meters`) and rejects inconsistent operations, all at zero runtime cost because the annotations erase before code generation.
 
-NTU's dimensional type system generates predicates from structured, decidable sources:
+Keystone's NTU (Novel Type Universe) takes this mechanism and generalizes it in two directions. First, the vocabulary of "dimensions" extends beyond physical units to encompass memory access modes (`ReadOnly`, `WriteOnly`), platform predicates, wire layout constraints, tensor axis identities, and other structured properties relevant to systems programming. Second, and critically for this strategy, dimensions do not erase. They survive through the Program Semantic Graph and inform code generation, substrate targeting, and proof obligation generation throughout the compilation pipeline.
+
+In formal methods terms, dimensional types are **refinement types restricted to decidable SMT theories**. Where F\*'s refinement types allow arbitrary predicates — `x:int{phi(x)}` where `phi` can be any F\* term — dimensional types draw their predicates from a fixed, structured vocabulary. This restriction is the key design choice. F\*'s generality forces a universal `Term` sort with boxing and unboxing, fuel-based termination heuristics, and an encoding layer that the solver may not terminate on. That generality is necessary for F\*'s mission of full dependent types, but it is not necessary for Keystone's design goals.
+
+Each dimensional constraint maps directly to a specific SMT theory:
 
 - Width constraints → bitvector theory
 - Memory space compatibility → enum sorts
@@ -82,7 +86,9 @@ NTU's dimensional type system generates predicates from structured, decidable so
 - Access pattern compatibility → enum sorts
 - Value-level refinements (via `[<SMT>]` annotations) → decidable arithmetic
 
-Each of these maps directly to an SMT theory without encoding gymnastics. The solver always terminates with a definitive answer. This is not a limitation of the system; it is a design choice. The NTU does not need arbitrary dependent types because it captures the constraints that matter for systems programming through structured dimensions rather than open-ended predicates.
+Because each theory is decidable, the solver always terminates with a definitive answer: satisfied, unsatisfied, or counterexample. There is no fuel, no encoding heuristic, no "unknown" result. This is not a limitation of the system; it is a deliberate restriction to the decidable fragment of refinement typing. The NTU does not need arbitrary dependent types because it captures the constraints that matter for systems programming — physical consistency, memory safety, cross-substrate data integrity — through structured dimensions rather than open-ended predicates.
+
+The closest precedents in deployed systems are Ada's derived numeric types (which enforce dimensional consistency but do not survive to guide code generation) and VHDL's physical types (which carry units through synthesis to inform hardware resource allocation). Keystone's dimensional types occupy a similar design point: structured, domain-specific constraints that serve both verification and compilation, rather than a general-purpose predicate logic.
 
 ### 2.4 Farscape as Proof-Obligation Generator
 
