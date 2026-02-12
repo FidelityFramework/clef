@@ -277,7 +277,16 @@ Publish on multi-substrate verification, the capability F\* cannot match. Target
 
 The publication angle is novel contribution, not reinvented wheel.
 
-### 5.6 The Farscape Story
+### 5.6 Establishing the DTS Vocabulary
+
+The dimensional type system will face explanation resistance proportional to its novelty. The mitigation is to establish the terminology through multiple channels before it encounters skepticism in high-stakes settings.
+
+1. **Lead with the bridge in every context.** "Refinement types restricted to decidable SMT theories" is the entry point for formal methods audiences. "Dimensional types" is introduced as the name for that restriction, not as a standalone concept. The explanation sequence, familiar category first, novel name second, must be consistent across papers, talks, and documentation.
+2. **Publish the type-theoretic foundations separately.** A paper establishing the formal relationship between dimensional types, F#'s Units of Measure, and decidable refinement types gives the FM community a citable reference. Without it, reviewers at CAV or POPL will treat the terminology as ad hoc. This initiative should target ICFP or POPL for this foundational work.
+3. **Use the Ada/VHDL precedent actively.** The embedded and safety-critical communities already understand that types can guide code generation. Framing dimensional types as "Ada's derived types generalized to multi-substrate compilation" is an entry point for that audience that requires no new vocabulary.
+4. **The "Doubling Down" blog post traces the lineage.** The public record of the evolution from F#'s Units of Measure through FSharp.UMX to the NTU provides a traceable design narrative. This is not academic publication, but it demonstrates that the concept was developed through principled iteration rather than invented whole-cloth.
+
+### 5.7 The Farscape Story
 
 The shadow-api capability is a concrete, demonstrable result that does not require explaining type theory to communicate. Take an existing C library like OpenSSL and generate a provably safe drop-in replacement with automatically derived SMT proof obligations. "We can take OpenSSL and prove the replacement is memory-safe" resonates with practitioners in a way that the theoretical foundations cannot.
 
@@ -322,6 +331,7 @@ The shadow-api capability is a concrete, demonstrable result that does not requi
 ## References
 
 - Fehr, Fan, Pompougnac, Regehr, Grosser. "First-Class Verification Dialects for MLIR." PLDI 2025. https://doi.org/10.1145/3729309
+- SpeakEZ Blog: "Doubling Down on DMM and DTS" (January 2026)
 - SpeakEZ Blog: "Proof-Aware Compilation Through Hypergraphs" (August 2025)
 - SpeakEZ Blog: "Verifying F#" (May 2025)
 - SpeakEZ Blog: "Farscape's Modular Entry Points" (June 2025)
