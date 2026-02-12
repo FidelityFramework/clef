@@ -73,7 +73,7 @@ This is a capability that F\* structurally cannot provide.
 
 The term "dimensional types" requires definition, as it is not established terminology in formal methods. The concept originates in F#'s Units of Measure system (and its community extension, FSharp.UMX), which attaches phantom type parameters representing physical units — meters, seconds, kilograms — to numeric types. The compiler enforces dimensional algebra (`meters/seconds * seconds = meters`) and rejects inconsistent operations, all at zero runtime cost because the annotations erase before code generation.
 
-Keystone's NTU (Novel Type Universe) takes this mechanism and generalizes it in two directions. First, the vocabulary of "dimensions" extends beyond physical units to encompass memory access modes (`ReadOnly`, `WriteOnly`), platform predicates, wire layout constraints, tensor axis identities, and other structured properties relevant to systems programming. Second, and critically for this strategy, dimensions do not erase. They survive through the Program Semantic Graph and inform code generation, substrate targeting, and proof obligation generation throughout the compilation pipeline.
+Keystone's NTU (Native Type Universe) takes this mechanism and generalizes it in two directions. First, the vocabulary of "dimensions" extends beyond physical units to encompass memory access modes (`ReadOnly`, `WriteOnly`), platform predicates, wire layout constraints, tensor axis identities, and other structured properties relevant to systems programming. Second, and critically for this strategy, dimensions do not erase. They survive through the Program Semantic Graph and inform code generation, substrate targeting, and proof obligation generation throughout the compilation pipeline.
 
 In formal methods terms, dimensional types are **refinement types restricted to decidable SMT theories**. Where F\*'s refinement types allow arbitrary predicates — `x:int{phi(x)}` where `phi` can be any F\* term — dimensional types draw their predicates from a fixed, structured vocabulary. This restriction is the key design choice. F\*'s generality forces a universal `Term` sort with boxing and unboxing, fuel-based termination heuristics, and an encoding layer that the solver may not terminate on. That generality is necessary for F\*'s mission of full dependent types, but it is not necessary for Keystone's design goals.
 
@@ -168,7 +168,17 @@ This concern is tempered by a deliberate design decision: Keystone preserves F# 
 
 The formal methods community is wary of reinvented wheels. A new proof system must demonstrate clear advantages over existing ones, or it will be dismissed as NIH syndrome. The multi-substrate capability is the answer to this objection, but it must be demonstrated convincingly, not merely asserted.
 
-### 3.6 Platform Risk: What Building on F\*/F# Actually Means
+### 3.6 The Explanation Cost of a Novel Type System
+
+The dimensional type system introduces terminology that does not exist in the formal methods vocabulary. A researcher with decades of experience in refinement types, dependent types, and abstract interpretation will hear "dimensional types" and not know what category of type-theoretic object is being described. This is a barrier that operates before any technical evaluation begins.
+
+Section 2.3 provides the formal methods bridge: dimensional types are refinement types restricted to decidable SMT theories, with predicates drawn from a structured vocabulary rather than arbitrary terms. The lineage from F#'s Units of Measure through FSharp.UMX to the NTU is traceable and principled. The Ada and VHDL precedents anchor the concept in deployed systems the audience already respects. But none of this matters if the audience disengages at the terminology before reaching the explanation.
+
+This is distinct from the NIH risk (section 3.5). NIH resistance assumes the audience understands the concept and doubts the need for a new implementation. The vocabulary barrier is upstream: the audience does not yet have a mental model for what is being proposed. The explanation must land before the evaluation can begin. For a community that has spent decades refining a shared vocabulary around refinement types, dependent types, liquid types, and indexed families, a new term is a signal that demands immediate justification.
+
+The mitigation is not to avoid the term but to always lead with the bridge: "refinement types restricted to decidable theories" is the formal methods entry point; "dimensional types" is the name for that specific restriction applied to systems programming constraints. The explanation sequence matters.
+
+### 3.7 Platform Risk: What Building on F\*/F# Actually Means
 
 The credibility of F\* and F# comes at a price: platform dependency on Microsoft.
 
