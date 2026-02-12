@@ -75,7 +75,17 @@ The term "dimensional types" requires definition, as it is not established termi
 
 Keystone's NTU (Native Type Universe) takes this mechanism and generalizes it in two directions. First, the vocabulary of "dimensions" extends beyond physical units to encompass memory access modes (`ReadOnly`, `WriteOnly`), platform predicates, wire layout constraints, tensor axis identities, and other structured properties relevant to systems programming. Second, and critically for this strategy, dimensions do not erase. They survive through the Program Semantic Graph and inform code generation, substrate targeting, and proof obligation generation throughout the compilation pipeline.
 
-In formal methods terms, dimensional types are **refinement types restricted to decidable SMT theories**. Where F\*'s refinement types allow arbitrary predicates, `x:int{phi(x)}` where `phi` can be any F\* term, dimensional types draw their predicates from a fixed, structured vocabulary. This restriction is the key design choice. F\*'s generality forces a universal `Term` sort with boxing and unboxing, fuel-based termination heuristics, and an encoding layer that the solver may not terminate on. That generality is necessary for F\*'s mission of full dependent types, but it is not necessary for Keystone's design goals.
+The type-theoretic spectrum runs from simple types (Hindley-Milner) at one end to Martin-Löf's intuitionistic type theory (MLTT) at the other. MLTT provides full dependent types with propositions-as-types — the foundation for Agda, Coq, Lean, and the theoretical ancestor of F\*. In that lineage, any proposition can be expressed as a type and any proof is a program. The power is immense; the cost is that type checking can require arbitrary computation and solver interaction may not terminate. Dimensional types occupy a specific position on this spectrum:
+
+| System | Expressiveness | Decidability | Survives Compilation |
+|--------|---------------|-------------|---------------------|
+| Simple types (Hindley-Milner) | Type structure only | Always decidable | Erased |
+| Phantom types / F# UoM | Type-level tags, abelian group algebra | Always decidable | Erased |
+| Refinement types (Liquid Haskell) | Predicates from decidable SMT theories | Always decidable | Erased |
+| **Dimensional types (Keystone)** | **Predicates from decidable SMT theories** | **Always decidable** | **Preserved** |
+| Dependent types (F\*, Agda, Coq) | Arbitrary propositions-as-types | May not terminate | N/A (extraction) |
+
+In formal methods terms, dimensional types are **refinement types restricted to decidable SMT theories**. Where F\*'s refinement types allow arbitrary predicates — `x:int{phi(x)}` where `phi` can be any F\* term — dimensional types draw their predicates from a fixed, structured vocabulary. This restriction is the key design choice. F\*'s generality forces a universal `Term` sort with boxing and unboxing, fuel-based termination heuristics, and an encoding layer that the solver may not terminate on. That generality is necessary for F\*'s mission of full dependent types, but it is not necessary for Keystone's design goals. The deliberate tradeoff: Keystone gives up MLTT's full propositions-as-types in exchange for guaranteed decidability and the ability to preserve type information through compilation to multiple hardware targets.
 
 Each dimensional constraint maps directly to a specific SMT theory:
 
