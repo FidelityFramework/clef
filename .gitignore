@@ -167,3 +167,9 @@ tests/projects/CompilerCompat/**/obj/
 .vscode/
 .config/
 .devcontainer/
+# Fidelity/Clef local compiler assets
+# Multi-target projects should use `targets/` (plural) at the project level.
+# Current tooling may still emit `target/` for leaf package builds.
+targets/
+target/
+deps/
