@@ -41,7 +41,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="$(MSBuildThisFileDirectory)..\Compiler\FSharp.Native.Compiler.Service.fsproj" />
+    <ProjectReference Include="$(MSBuildThisFileDirectory)..\Compiler\Clef.Compiler.Service.fsproj" />
     <ProjectReference Include="$(MSBuildThisFileDirectory)..\FSharp.Compiler.Interactive.Settings\FSharp.Compiler.Interactive.Settings.fsproj" />
   </ItemGroup>
 

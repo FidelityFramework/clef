@@ -45,7 +45,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<ProjectReference Include="..\Compiler\FSharp.Native.Compiler.Service.fsproj" />
+		<ProjectReference Include="..\Compiler\Clef.Compiler.Service.fsproj" />
 		<ProjectReference Include="..\Microsoft.CommonLanguageServerProtocol.Framework.Proxy\Microsoft.CommonLanguageServerProtocol.Framework.Proxy.csproj" />
 	</ItemGroup>
 

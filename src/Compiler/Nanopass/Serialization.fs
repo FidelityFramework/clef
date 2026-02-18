@@ -17,11 +17,12 @@ open FSharp.Json
 // JSON SERIALIZATION HELPERS
 //=============================================================================
 
-let private escapeJson (s: string) : string =
-    if isNull s then "null"
-    else
+let private escapeJson (s: string | null) : string =
+    match Option.ofObj s with
+    | None -> "null"
+    | Some value ->
         let sb = StringBuilder()
-        for c in s do
+        for c in value do
             match c with
             | '"' -> sb.Append("\\\"") |> ignore
             | '\\' -> sb.Append("\\\\") |> ignore
@@ -31,6 +32,12 @@ let private escapeJson (s: string) : string =
             | c when int c < 32 -> sb.Append(sprintf "\\u%04x" (int c)) |> ignore
             | c -> sb.Append(c) |> ignore
         sb.ToString()
+
+let private ensureDirectoryForFilePath (filePath: string) : unit =
+    match System.IO.Path.GetDirectoryName(filePath) |> Option.ofObj with
+    | Some dir when not (System.IO.Directory.Exists(dir)) ->
+        System.IO.Directory.CreateDirectory(dir) |> ignore
+    | _ -> ()
 
 //=============================================================================
 // RECIPE SERIALIZATION
@@ -104,10 +111,7 @@ let emitRecipeSetArtifact (artifactId: int) (recipeSet: RecipeSet) : unit =
     | None -> ()  // Emission disabled for this artifact
     | Some path ->
         let json = serializeRecipeSet recipeSet
-        // Ensure directory exists
-        let dir = System.IO.Path.GetDirectoryName(path)
-        if not (System.IO.Directory.Exists(dir)) then
-            System.IO.Directory.CreateDirectory(dir) |> ignore
+        ensureDirectoryForFilePath path
         System.IO.File.WriteAllText(path, json)
         printfn "[FNCS] Wrote artifact: %s" path
 
@@ -138,10 +142,7 @@ let emitDiagnostics (artifactId: int) (diagnostics: RecipeDiagnostic list) : uni
     | None -> ()  // Emission disabled
     | Some path ->
         let json = Json.serialize diagnostics
-        // Ensure directory exists
-        let dir = System.IO.Path.GetDirectoryName(path)
-        if not (System.IO.Directory.Exists(dir)) then
-            System.IO.Directory.CreateDirectory(dir) |> ignore
+        ensureDirectoryForFilePath path
         System.IO.File.WriteAllText(path, json)
         printfn "[FNCS] Wrote diagnostic artifact: %s" path
 
@@ -155,9 +156,7 @@ let emitIntrinsicDiagnostics (diagnostics: RecipeDiagnostic list) : unit =
         // Replace "02_intrinsic_recipes.json" with "02a_intrinsic_diagnostics.json"
         let diagPath = recipePath.Replace("02_intrinsic_recipes.json", "02a_intrinsic_diagnostics.json")
         let json = Json.serialize diagnostics
-        let dir = System.IO.Path.GetDirectoryName(diagPath)
-        if not (System.IO.Directory.Exists(dir)) then
-            System.IO.Directory.CreateDirectory(dir) |> ignore
+        ensureDirectoryForFilePath diagPath
         System.IO.File.WriteAllText(diagPath, json)
         printfn "[FNCS] Wrote intrinsic diagnostics: %s" diagPath
 
@@ -169,8 +168,6 @@ let emitSaturationDiagnostics (diagnostics: RecipeDiagnostic list) : unit =
         // Replace "04_saturation_recipes.json" with "04a_saturation_diagnostics.json"
         let diagPath = recipePath.Replace("04_saturation_recipes.json", "04a_saturation_diagnostics.json")
         let json = Json.serialize diagnostics
-        let dir = System.IO.Path.GetDirectoryName(diagPath)
-        if not (System.IO.Directory.Exists(dir)) then
-            System.IO.Directory.CreateDirectory(dir) |> ignore
+        ensureDirectoryForFilePath diagPath
         System.IO.File.WriteAllText(diagPath, json)
         printfn "[FNCS] Wrote saturation diagnostics: %s" diagPath

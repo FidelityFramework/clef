@@ -208,8 +208,8 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
             parentNode.Children
             |> List.fold (fun acc' childId ->
                 match Map.tryFind childId acc' with
-                | Some childNode ->
-                    let updatedChild = { childNode with Parent = Some parentId }
+                | Some (childNode: SemanticNode) ->
+                    let updatedChild: SemanticNode = { childNode with Parent = Some parentId }
                     Map.add childId updatedChild acc'
                 | None -> acc'
             ) acc

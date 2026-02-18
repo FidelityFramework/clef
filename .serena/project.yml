@@ -1,4 +1,4 @@
-name: FSharpNative Compiler Services
+name: Clef Compiler Service
 
 
 # list of languages for which language servers are started; choose from:
@@ -91,7 +91,7 @@ initial_prompt: ''
 # For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
 encoding: utf-8
 # the name by which the project can be referenced within Serena
-project_name: FNCS
+project_name: CCS
 
 # list of mode names to that are always to be included in the set of active modes
 # The full set of modes to be activated is base_modes + default_modes.
