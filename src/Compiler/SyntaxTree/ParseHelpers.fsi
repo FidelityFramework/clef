@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal FSharp.Native.Compiler.ParseHelpers
+module internal Clef.Compiler.ParseHelpers
 
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.SyntaxTrivia
-open FSharp.Native.Compiler.Features
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.Xml
+open Clef.Compiler.Syntax
+open Clef.Compiler.SyntaxTrivia
+open Clef.Compiler.Features
+open Clef.Compiler.Text
+open Clef.Compiler.Xml
 open Internal.Utilities.Text.Lexing
 open Internal.Utilities.Text.Parsing
 

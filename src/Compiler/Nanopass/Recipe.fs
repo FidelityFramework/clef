@@ -6,10 +6,10 @@
 /// A RecipeSet is the collection of all recipes from a fan-out pass.
 /// 
 /// See: psg_elaboration_fold_architecture.md (Serena memory)
-module FSharp.Native.Compiler.Nanopass.Recipe
+module Clef.Compiler.Nanopass.Recipe
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
 //=============================================================================
 // RECIPE: Single node elaboration

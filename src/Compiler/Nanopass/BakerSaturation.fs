@@ -13,26 +13,26 @@
 ///
 /// See: docs/PSG_Elaboration_Fold_Architecture.md
 /// See: docs/Baker_Saturation_Architecture.md
-module FSharp.Native.Compiler.Nanopass.BakerSaturation
+module Clef.Compiler.Nanopass.BakerSaturation
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.NativeTypes
 
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Elaboration
-open FSharp.Native.Compiler.Nanopass.Recipe
-open FSharp.Native.Compiler.Baker.Recipes.Decomposition
-open FSharp.Native.Compiler.Baker.ShadowAST
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration
+open Clef.Compiler.Nanopass.Recipe
+open Clef.Compiler.Baker.Recipes.Decomposition
+open Clef.Compiler.Baker.ShadowAST
 
 // Import existing recipe modules from Baker
-module ListRecipes = FSharp.Native.Compiler.Baker.Recipes.ListRecipes
-module MapRecipes = FSharp.Native.Compiler.Baker.Recipes.MapRecipes
-module SetRecipes = FSharp.Native.Compiler.Baker.Recipes.SetRecipes
-module OptionRecipes = FSharp.Native.Compiler.Baker.Recipes.OptionRecipes
-module SeqRecipes = FSharp.Native.Compiler.Baker.Recipes.SeqRecipes
-module StringRecipes = FSharp.Native.Compiler.Baker.Recipes.StringRecipes
-module MatchRecipes = FSharp.Native.Compiler.Baker.Recipes.MatchRecipes
-module NativePtrRecipes = FSharp.Native.Compiler.Baker.Recipes.NativePtrRecipes
+module ListRecipes = Clef.Compiler.Baker.Recipes.ListRecipes
+module MapRecipes = Clef.Compiler.Baker.Recipes.MapRecipes
+module SetRecipes = Clef.Compiler.Baker.Recipes.SetRecipes
+module OptionRecipes = Clef.Compiler.Baker.Recipes.OptionRecipes
+module SeqRecipes = Clef.Compiler.Baker.Recipes.SeqRecipes
+module StringRecipes = Clef.Compiler.Baker.Recipes.StringRecipes
+module MatchRecipes = Clef.Compiler.Baker.Recipes.MatchRecipes
+module NativePtrRecipes = Clef.Compiler.Baker.Recipes.NativePtrRecipes
 
 //-------------------------------------------------------------------------
 // Type Extraction Helpers (from HOFDecomposition)

@@ -8,50 +8,50 @@
 /// - Module structure is preserved
 /// - Source locations are properly tracked
 /// - Hard prune is applied before returning
-module FSharp.Native.Compiler.NativeService
+module Clef.Compiler.NativeService
 
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.Syntax
+open Clef.Compiler.Text
+open Clef.Compiler.NativeTypedTree.NativeTypes
 
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Reachability
-open FSharp.Native.Compiler.NativeTypedTree.NameResolution
-open FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
+open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+open Clef.Compiler.PSGSaturation.SemanticGraph.Reachability
+open Clef.Compiler.NativeTypedTree.NameResolution
+open Clef.Compiler.NativeTypedTree.Expressions.Types
 
 // Handler module aliases for qualified dispatch
-module Literals = FSharp.Native.Compiler.NativeTypedTree.Expressions.Literals
-module Identity = FSharp.Native.Compiler.NativeTypedTree.Expressions.Identity
-module Applications = FSharp.Native.Compiler.NativeTypedTree.Expressions.Applications
-module Bindings = FSharp.Native.Compiler.NativeTypedTree.Expressions.Bindings
-module Collections = FSharp.Native.Compiler.NativeTypedTree.Expressions.Collections
-module ControlFlow = FSharp.Native.Compiler.NativeTypedTree.Expressions.ControlFlow
-module TypeOperations = FSharp.Native.Compiler.NativeTypedTree.Expressions.TypeOperations
-module Patterns = FSharp.Native.Compiler.NativeTypedTree.Expressions.Patterns
+module Literals = Clef.Compiler.NativeTypedTree.Expressions.Literals
+module Identity = Clef.Compiler.NativeTypedTree.Expressions.Identity
+module Applications = Clef.Compiler.NativeTypedTree.Expressions.Applications
+module Bindings = Clef.Compiler.NativeTypedTree.Expressions.Bindings
+module Collections = Clef.Compiler.NativeTypedTree.Expressions.Collections
+module ControlFlow = Clef.Compiler.NativeTypedTree.Expressions.ControlFlow
+module TypeOperations = Clef.Compiler.NativeTypedTree.Expressions.TypeOperations
+module Patterns = Clef.Compiler.NativeTypedTree.Expressions.Patterns
 
 // Infrastructure modules - use qualified names to avoid conflicts
-module PhaseConfig = FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
-module PhaseTypes = FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
-module PhaseEmitter = FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseEmitter
+module PhaseConfig = Clef.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
+module PhaseTypes = Clef.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
+module PhaseEmitter = Clef.Compiler.NativeTypedTree.Infrastructure.PhaseEmitter
 
 // Nanopass modules - Four-pass elaboration pipeline (January 2026)
-module IntrinsicElaboration = FSharp.Native.Compiler.Nanopass.IntrinsicElaboration
-module BakerSaturation = FSharp.Native.Compiler.Nanopass.BakerSaturation
-module RecipeSerialization = FSharp.Native.Compiler.Nanopass.Serialization
+module IntrinsicElaboration = Clef.Compiler.Nanopass.IntrinsicElaboration
+module BakerSaturation = Clef.Compiler.Nanopass.BakerSaturation
+module RecipeSerialization = Clef.Compiler.Nanopass.Serialization
 
-open FSharp.Native.Compiler.NativeTypedTree.UnionFind
-open FSharp.Native.Compiler.NativeTypedTree.Unify
-open FSharp.Native.Compiler.DiagnosticsLogger
-open FSharp.Native.Compiler.Features
-open FSharp.Native.Compiler.Lexhelp
-open FSharp.Native.Compiler.UnicodeLexing
-open FSharp.Native.Compiler.LexFilter
-open FSharp.Native.Compiler.IO
-open FSharp.Native.Compiler.Xml
-open FSharp.Native.Compiler.SyntaxTrivia
+open Clef.Compiler.NativeTypedTree.UnionFind
+open Clef.Compiler.NativeTypedTree.Unify
+open Clef.Compiler.DiagnosticsLogger
+open Clef.Compiler.Features
+open Clef.Compiler.Lexhelp
+open Clef.Compiler.UnicodeLexing
+open Clef.Compiler.LexFilter
+open Clef.Compiler.IO
+open Clef.Compiler.Xml
+open Clef.Compiler.SyntaxTrivia
 open Internal.Utilities.Text.Lexing
 open Internal.Utilities
 
@@ -173,7 +173,7 @@ let parseString (source: string) (fileName: string) (options: ParseOptions) : Pa
         // skipWhitespaceTokens = true (as in FCS) - critical for proper parsing
         let skipWhitespaceTokens = true
         let rawLexer (lexbuf: LexBuffer<char>) =
-            FSharp.Native.Compiler.Lexer.token lexargs skipWhitespaceTokens lexbuf
+            Clef.Compiler.Lexer.token lexargs skipWhitespaceTokens lexbuf
 
         // Create the LexFilter for indentation-aware parsing
         let lexFilter = LexFilter(
@@ -189,7 +189,7 @@ let parseString (source: string) (fileName: string) (options: ParseOptions) : Pa
             lexFilter.GetToken()
 
         // Parse the implementation file
-        let parsedImplFile = FSharp.Native.Compiler.Parser.implementationFile tokenFunc lexbuf
+        let parsedImplFile = Clef.Compiler.Parser.implementationFile tokenFunc lexbuf
 
         // Convert to ParsedImplFileInput and wrap in ParsedInput
         let implFileInput = implFileToInput fileName parsedImplFile
@@ -1424,7 +1424,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                     let tupleType = NativeType.TTuple(multipleFields, false)
                                     NativeType.TFun(tupleType, unionType)
                             // Add constructor binding with case info for proper UnionCase node creation
-                            let caseInfo: FSharp.Native.Compiler.NativeTypedTree.NameResolution.UnionCaseInfo = {
+                            let caseInfo: Clef.Compiler.NativeTypedTree.NameResolution.UnionCaseInfo = {
                                 CaseName = caseName
                                 UnionType = unionType
                                 CaseIndex = caseIndex

@@ -2,11 +2,11 @@
 
 /// Core operations on SemanticGraph - creation, querying, saturation computation.
 /// This module computes lazy coeffects like ModuleClassifications and SeqSaturation.
-module FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
+module Clef.Compiler.PSGSaturation.SemanticGraph.Core
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.SeqSaturation
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.SeqSaturation
 
 //-------------------------------------------------------------------------
 // SemanticGraph Module - Core Operations

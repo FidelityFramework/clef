@@ -1,5 +1,5 @@
 /// Parallel processing of graph of work items with dependencies
-module internal FSharp.Native.Compiler.GraphChecking.GraphProcessing
+module internal Clef.Compiler.GraphChecking.GraphProcessing
 
 open System.Threading
 

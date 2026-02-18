@@ -61,7 +61,7 @@
 
   <!-- Internals visible for Firefly and testing -->
   <ItemGroup>
-    <InternalsVisibleTo Include="FSharp.Native.Compiler.Service.Tests" />
+    <InternalsVisibleTo Include="Clef.Compiler.Service.Tests" />
     <InternalsVisibleTo Include="Firefly" />
     <InternalsVisibleTo Include="Composer" />
   </ItemGroup>
@@ -157,19 +157,19 @@
     <Compile Include="SyntaxTree\PrettyNaming.fsi" />
     <Compile Include="SyntaxTree\PrettyNaming.fs" />
     <FsLex Include="pplex.fsl">
-      <OtherFlags>--module FSharp.Native.Compiler.PPLexer --internal --open FSharp.Native.Compiler.Lexhelp --open Internal.Utilities.Text.Lexing --open FSharp.Native.Compiler.PPParser --unicode --lexlib Internal.Utilities.Text.Lexing</OtherFlags>
+      <OtherFlags>--module Clef.Compiler.PPLexer --internal --open Clef.Compiler.Lexhelp --open Internal.Utilities.Text.Lexing --open Clef.Compiler.PPParser --unicode --lexlib Internal.Utilities.Text.Lexing</OtherFlags>
       <Link>SyntaxTree\pplex.fsl</Link>
     </FsLex>
     <FsYacc Include="pppars.fsy">
-      <OtherFlags>--module FSharp.Native.Compiler.PPParser --open FSharp.Native.Compiler.ParseHelpers --open FSharp.Native.Compiler.LexerStore --internal --lexlib Internal.Utilities.Text.Lexing --parslib Internal.Utilities.Text.Parsing --buffer-type-argument char</OtherFlags>
+      <OtherFlags>--module Clef.Compiler.PPParser --open Clef.Compiler.ParseHelpers --open Clef.Compiler.LexerStore --internal --lexlib Internal.Utilities.Text.Lexing --parslib Internal.Utilities.Text.Parsing --buffer-type-argument char</OtherFlags>
       <Link>SyntaxTree\pppars.fsy</Link>
     </FsYacc>
     <FsLex Include="lex.fsl">
-      <OtherFlags>--module FSharp.Native.Compiler.Lexer --open FSharp.Native.Compiler.Lexhelp --open Internal.Utilities.Text.Lexing --open FSharp.Native.Compiler.Parser --open FSharp.Native.Compiler.Text --open FSharp.Native.Compiler.ParseHelpers --open FSharp.Native.Compiler.LexerStore --internal --unicode --lexlib Internal.Utilities.Text.Lexing</OtherFlags>
+      <OtherFlags>--module Clef.Compiler.Lexer --open Clef.Compiler.Lexhelp --open Internal.Utilities.Text.Lexing --open Clef.Compiler.Parser --open Clef.Compiler.Text --open Clef.Compiler.ParseHelpers --open Clef.Compiler.LexerStore --internal --unicode --lexlib Internal.Utilities.Text.Lexing</OtherFlags>
       <Link>SyntaxTree\lex.fsl</Link>
     </FsLex>
     <FsYacc Include="pars.fsy">
-      <OtherFlags>--module FSharp.Native.Compiler.Parser --open FSharp.Native.Compiler --open FSharp.Native.Compiler.Syntax --open FSharp.Native.Compiler.Text --internal --lexlib Internal.Utilities.Text.Lexing --parslib Internal.Utilities.Text.Parsing --buffer-type-argument char</OtherFlags>
+      <OtherFlags>--module Clef.Compiler.Parser --open Clef.Compiler --open Clef.Compiler.Syntax --open Clef.Compiler.Text --internal --lexlib Internal.Utilities.Text.Lexing --parslib Internal.Utilities.Text.Parsing --buffer-type-argument char</OtherFlags>
       <Link>SyntaxTree\pars.fsy</Link>
     </FsYacc>
     <None Include="pplex.fsl">

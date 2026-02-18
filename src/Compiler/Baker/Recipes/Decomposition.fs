@@ -20,13 +20,13 @@
 ///
 /// See: docs/fidelity/fncs-specification.md Part 14
 /// See: Serena memory "baker_shadow_ast_architecture"
-module FSharp.Native.Compiler.Baker.Recipes.Decomposition
+module Clef.Compiler.Baker.Recipes.Decomposition
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.NativeTypes
 
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Elaboration
-open FSharp.Native.Compiler.Baker.ShadowAST
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration
+open Clef.Compiler.Baker.ShadowAST
 
 //-------------------------------------------------------------------------
 // Legacy Metadata Keys (deprecated - use ElaborationMetadata instead)

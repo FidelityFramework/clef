@@ -2,10 +2,10 @@
 
 /// Type unification algorithm for the native type checker.
 /// Uses Union-Find for efficient substitution with path compression.
-module FSharp.Native.Compiler.NativeTypedTree.Unify
+module Clef.Compiler.NativeTypedTree.Unify
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.UnionFind
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.UnionFind
 
 //-------------------------------------------------------------------------
 // Type Errors

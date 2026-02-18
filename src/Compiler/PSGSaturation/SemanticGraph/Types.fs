@@ -2,10 +2,10 @@
 
 /// Core type definitions for the Program Semantic Graph (PSG).
 /// These types form the unified representation for Firefly.
-module FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
+module Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.SeqSaturation
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.SeqSaturation
 
 //-------------------------------------------------------------------------
 // SRTP Resolution

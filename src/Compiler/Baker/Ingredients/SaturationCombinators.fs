@@ -11,13 +11,13 @@
 ///
 /// See: Serena memory "compose_from_standing_art_principle"
 /// See: Serena memory "baker_saturation_architecture"
-module FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
+module Clef.Compiler.Baker.Ingredients.SaturationCombinators
 
 open XParsec
 open XParsec.Parsers
 open XParsec.Combinators
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
 //=============================================================================
 // STATE TYPE - Domain-specific state threaded through saturation

@@ -15,7 +15,7 @@
 ///   06_coeffects.json         - Coeffect analysis (SSA, mutability, etc.)
 ///   07_output.mlir            - MLIR output
 ///   08_output.ll              - LLVM IR (future)
-module FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
+module Clef.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
 
 open System
 

@@ -12,13 +12,13 @@
 ///
 /// See: docs/PSG_Elaboration_Fold_Architecture.md
 /// See: Serena memory "freestanding_entry_point_knock_list"
-module FSharp.Native.Compiler.Nanopass.IntrinsicElaboration
+module Clef.Compiler.Nanopass.IntrinsicElaboration
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.NativeTypes
 
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.Nanopass.Recipe
-open FSharp.Native.Compiler.Baker.Recipes.Decomposition
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.Nanopass.Recipe
+open Clef.Compiler.Baker.Recipes.Decomposition
 
 // String operations handled by Baker Saturation (Pass 3), not Intrinsic Elaboration.
 // Clean layer separation: no mixing of Pass 1 (intrinsics) and Pass 3 (Baker).

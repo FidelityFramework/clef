@@ -2,11 +2,11 @@
 
 /// Reachability analysis for the semantic graph.
 /// Implements soft-delete (mark unreachable) and hard prune for dead code elimination.
-module FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Reachability
+module Clef.Compiler.PSGSaturation.SemanticGraph.Reachability
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 
 //-------------------------------------------------------------------------
 // Reachability Analysis

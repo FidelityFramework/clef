@@ -4,18 +4,18 @@
 /// Each phase checkpoint calls into this module to write its state.
 ///
 /// Output files: fncs_phase_{N}_{suffix}.json
-module FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseEmitter
+module Clef.Compiler.NativeTypedTree.Infrastructure.PhaseEmitter
 
 open System
 open System.IO
 open System.Text
-open FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
-open FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+open Clef.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
+open Clef.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
+open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 // ═══════════════════════════════════════════════════════════════════════════
 // JSON Serialization (minimal, no external dependencies)
@@ -315,7 +315,7 @@ let emitDiff (diff: PhaseDiff) : unit =
 // FSharpNativeExpr Emission (expression-centric view)
 // ═══════════════════════════════════════════════════════════════════════════
 
-open FSharp.Native.Compiler.NativeTypedTree
+open Clef.Compiler.NativeTypedTree
 
 /// Serialize FSharpNativeExpr to JSON
 let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeExpr) : string =

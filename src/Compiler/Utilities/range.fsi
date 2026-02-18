@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-// The Range and Pos types form part of the public API of FSharp.Native.Compiler.Service
-namespace FSharp.Native.Compiler.Text
+// The Range and Pos types form part of the public API of Clef.Compiler.Service
+namespace Clef.Compiler.Text
 
 open System
 open System.Collections.Generic

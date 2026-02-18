@@ -6,14 +6,14 @@
 ///
 /// ARCHITECTURAL PRINCIPLE: No `name.StartsWith("X.")` dispatch.
 /// Intrinsic modules are matched via proper pattern matching on IntrinsicModule.
-module FSharp.Native.Compiler.NativeTypedTree.Expressions.Intrinsics
+module Clef.Compiler.NativeTypedTree.Expressions.Intrinsics
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.UnionFind
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.UnionFind
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
+open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 //-------------------------------------------------------------------------
 // Result Type for Intrinsic Resolution

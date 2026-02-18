@@ -16,14 +16,14 @@
 ///
 /// See: docs/fidelity/Baker_Saturation_Architecture.md
 /// See: Serena memory "baker_saturation_architecture"
-module FSharp.Native.Compiler.Baker.Ingredients.Primitives
+module Clef.Compiler.Baker.Ingredients.Primitives
 
 open XParsec.Parsers
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.NativeTypes
 
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Elaboration
-open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration
+open Clef.Compiler.Baker.Ingredients.SaturationCombinators
 
 // Re-export saturation CE for convenient use in this module and dependents
 let saturation = SaturationCombinators.saturation

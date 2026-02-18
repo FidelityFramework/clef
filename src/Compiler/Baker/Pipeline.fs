@@ -5,13 +5,13 @@
 ///
 /// ModuleClassifications is now computed lazily on the PSG itself.
 /// Baker's role is to provide intermediate JSON output for the -k flag.
-module FSharp.Native.Compiler.Baker.Pipeline
+module Clef.Compiler.Baker.Pipeline
 
 open System.IO
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
-open FSharp.Native.Compiler.Baker.ModuleInit
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
+open Clef.Compiler.Baker.ModuleInit
 
 //-------------------------------------------------------------------------
 // JSON Serialization for Intermediates

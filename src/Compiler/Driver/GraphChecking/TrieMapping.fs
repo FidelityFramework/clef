@@ -1,11 +1,11 @@
-﻿module internal FSharp.Native.Compiler.GraphChecking.TrieMapping
+﻿module internal Clef.Compiler.GraphChecking.TrieMapping
 
 open System.Collections.Generic
 open System.Collections.Immutable
 open System.Text
-open FSharp.Native.Compiler.IO
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.SyntaxTreeOps
+open Clef.Compiler.IO
+open Clef.Compiler.Syntax
+open Clef.Compiler.SyntaxTreeOps
 
 [<RequireQualifiedAccess>]
 module private ImmutableHashSet =

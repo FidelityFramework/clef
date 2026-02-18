@@ -4,21 +4,21 @@
 /// Application expression handlers for F# Native.
 /// Handles: App (function application), Lambda, TypeApp, New, ObjExpr, TraitCall
 /// Includes: Pipe operator reduction, intrinsic saturation, DU constructor detection
-module FSharp.Native.Compiler.NativeTypedTree.Expressions.Applications
+module Clef.Compiler.NativeTypedTree.Expressions.Applications
 
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.Syntax
+open Clef.Compiler.Text
+open Clef.Compiler.NativeTypedTree.NativeTypes
 
-open FSharp.Native.Compiler.NativeTypedTree.UnionFind
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
-open FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
+open Clef.Compiler.NativeTypedTree.UnionFind
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
+open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+open Clef.Compiler.NativeTypedTree.Expressions.Types
 
 // Module alias for qualified access
-module NativeTypes = FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+module NativeTypes = Clef.Compiler.NativeTypedTree.NativeTypes
 
 //-------------------------------------------------------------------------
 // Callback Types

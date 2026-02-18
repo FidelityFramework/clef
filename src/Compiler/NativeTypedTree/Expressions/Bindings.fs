@@ -3,23 +3,23 @@
 
 /// Binding handling for F# Native.
 /// Handles: Let, LetRec, Lambda, pattern bindings, Set operations
-module FSharp.Native.Compiler.NativeTypedTree.Expressions.Bindings
+module Clef.Compiler.NativeTypedTree.Expressions.Bindings
 
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.Syntax
+open Clef.Compiler.NativeTypedTree.NativeTypes
 
-open FSharp.Native.Compiler.NativeTypedTree.UnionFind
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
-open FSharp.Native.Compiler.NativeTypedTree.NameResolution
-open FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
-open FSharp.Native.Compiler.NativeTypedTree.Expressions.Literals
-open FSharp.Native.Compiler.NativeTypedTree.Expressions.Applications
+open Clef.Compiler.NativeTypedTree.UnionFind
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
+open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+open Clef.Compiler.NativeTypedTree.NameResolution
+open Clef.Compiler.NativeTypedTree.Expressions.Types
+open Clef.Compiler.NativeTypedTree.Expressions.Literals
+open Clef.Compiler.NativeTypedTree.Expressions.Applications
 
 // Module alias for qualified access to shared utilities
-module Types = FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
+module Types = Clef.Compiler.NativeTypedTree.Expressions.Types
 
 //-------------------------------------------------------------------------
 // Callback Types

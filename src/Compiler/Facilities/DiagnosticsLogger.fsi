@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal FSharp.Native.Compiler.DiagnosticsLogger
+module internal Clef.Compiler.DiagnosticsLogger
 
 open System
-open FSharp.Native.Compiler.Diagnostics
-open FSharp.Native.Compiler.Features
-open FSharp.Native.Compiler.Text
+open Clef.Compiler.Diagnostics
+open Clef.Compiler.Features
+open Clef.Compiler.Text
 open System.Runtime.CompilerServices
 open System.Runtime.InteropServices
 

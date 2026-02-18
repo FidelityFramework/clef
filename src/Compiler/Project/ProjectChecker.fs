@@ -1,15 +1,15 @@
 /// Unified project checking entry point.
 /// Loads, parses, and checks a complete project from .fidproj.
-namespace FSharp.Native.Compiler.Project
+namespace Clef.Compiler.Project
 
 open System.IO
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeService
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.Syntax
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeService
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 // Import Diagnostics types qualified to avoid shadowing Result.Error/Ok
-module SGDiag = FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+module SGDiag = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 /// Result of checking a complete project.
 type ProjectCheckResult = {

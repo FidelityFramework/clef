@@ -2,9 +2,9 @@
 
 /// Union-Find data structure for efficient type substitution.
 /// Uses path compression for near-constant-time operations.
-module FSharp.Native.Compiler.NativeTypedTree.UnionFind
+module Clef.Compiler.NativeTypedTree.UnionFind
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.NativeTypes
 
 //-------------------------------------------------------------------------
 // Core Union-Find Operations

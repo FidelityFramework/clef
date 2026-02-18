@@ -5,14 +5,14 @@
 ///
 /// Classification logic is now in PSG/SemanticGraph.fs (computed lazily).
 /// This module provides intermediate output formatting for the -k flag.
-module FSharp.Native.Compiler.Baker.ModuleInit
+module Clef.Compiler.Baker.ModuleInit
 
 open System
 open System.Diagnostics
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
 
 /// Create the Baker ModuleInit phase output for intermediate emission.
 let createOutput (graph: SemanticGraph) (elapsedMs: int64) : BakerModuleInitOutput =

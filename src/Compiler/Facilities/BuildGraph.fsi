@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal FSharp.Native.Compiler.BuildGraph
+module internal Clef.Compiler.BuildGraph
 
 /// Contains helpers related to the build graph
 [<RequireQualifiedAccess>]

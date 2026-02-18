@@ -17,10 +17,10 @@
 ///
 /// See: docs/fidelity/fncs-specification.md Part 14
 /// See: Serena memory "baker_shadow_ast_architecture"
-module FSharp.Native.Compiler.Baker.ShadowAST
+module Clef.Compiler.Baker.ShadowAST
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
 // ═══════════════════════════════════════════════════════════════════════════
 // IDENTIFIERS

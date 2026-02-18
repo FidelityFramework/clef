@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Native.Compiler
+namespace Clef.Compiler
 
-open FSharp.Native.Compiler.Diagnostics
-open FSharp.Native.Compiler.SyntaxTrivia
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.UnicodeLexing
+open Clef.Compiler.Diagnostics
+open Clef.Compiler.SyntaxTrivia
+open Clef.Compiler.Text
+open Clef.Compiler.UnicodeLexing
 
 module internal WarnScopes =
 

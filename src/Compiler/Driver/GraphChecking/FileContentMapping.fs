@@ -1,7 +1,7 @@
-﻿module internal rec FSharp.Native.Compiler.GraphChecking.FileContentMapping
+﻿module internal rec Clef.Compiler.GraphChecking.FileContentMapping
 
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.SyntaxTreeOps
+open Clef.Compiler.Syntax
+open Clef.Compiler.SyntaxTreeOps
 
 type Continuations = ((FileContentEntry list -> FileContentEntry list) -> FileContentEntry list) list
 

@@ -6,7 +6,7 @@
 /// points to stderr.  All functions call flush() automatically.
 ///
 /// REVIEW: review if we should just switch to System.Diagnostics
-module internal FSharp.Native.Compiler.AbstractIL.Diagnostics
+module internal Clef.Compiler.AbstractIL.Diagnostics
 
 open System.IO
 open Microsoft.FSharp.Core.Printf
