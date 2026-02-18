@@ -1,4 +1,4 @@
-namespace FSharp.Native.Compiler
+namespace Clef.Compiler
 
 open System
 open System.Threading
@@ -55,7 +55,7 @@ namespace Internal.Utilities.Library
 
 open System
 open System.Threading
-open FSharp.Native.Compiler
+open Clef.Compiler
 
 open FSharp.Core.CompilerServices.StateMachineHelpers
 

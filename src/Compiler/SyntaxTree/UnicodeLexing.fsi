@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal FSharp.Native.Compiler.UnicodeLexing
+module internal Clef.Compiler.UnicodeLexing
 
 open System.IO
-open FSharp.Native.Compiler.Features
-open FSharp.Native.Compiler.Text
+open Clef.Compiler.Features
+open Clef.Compiler.Text
 open Internal.Utilities.Text.Lexing
 
 type Lexbuf = LexBuffer<char>

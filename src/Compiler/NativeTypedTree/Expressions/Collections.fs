@@ -3,22 +3,22 @@
 
 /// Collection expression handlers for F# Native.
 /// Handles: Tuple, Array, List, Record, AnonRecd, Indexing, Field access, Lazy, Seq
-module FSharp.Native.Compiler.NativeTypedTree.Expressions.Collections
+module Clef.Compiler.NativeTypedTree.Expressions.Collections
 
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.Syntax
+open Clef.Compiler.Text
+open Clef.Compiler.NativeTypedTree.NativeTypes
 
-open FSharp.Native.Compiler.NativeTypedTree.UnionFind
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
-open FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
+open Clef.Compiler.NativeTypedTree.UnionFind
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
+open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+open Clef.Compiler.NativeTypedTree.Expressions.Types
 
 // Module aliases for qualified access
-module Types = FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
-module NativeTypes = FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+module Types = Clef.Compiler.NativeTypedTree.Expressions.Types
+module NativeTypes = Clef.Compiler.NativeTypedTree.NativeTypes
 
 //-------------------------------------------------------------------------
 // Callback Types

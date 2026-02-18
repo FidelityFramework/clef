@@ -15,15 +15,15 @@
 /// See: docs/fidelity/Baker_Saturation_Architecture.md
 /// See: Serena memory "baker_saturation_architecture"
 /// See: Serena memory "mlir_memref_strings_no_llvm_cruft"
-module FSharp.Native.Compiler.Baker.Recipes.StringRecipes
+module Clef.Compiler.Baker.Recipes.StringRecipes
 
 open XParsec.Parsers
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.NativeTypes
 
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.Baker.Recipes.Decomposition
-open FSharp.Native.Compiler.Baker.Ingredients.SaturationCombinators
-open FSharp.Native.Compiler.Baker.Ingredients.Primitives
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.Baker.Recipes.Decomposition
+open Clef.Compiler.Baker.Ingredients.SaturationCombinators
+open Clef.Compiler.Baker.Ingredients.Primitives
 
 //=============================================================================
 // BRIDGE: Convert SaturationParser results to Decomposition.Result

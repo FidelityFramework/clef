@@ -22,13 +22,13 @@
 ///
 /// See: /home/hhh/.claude/plans/zippy-kindling-nova.md
 /// See: Serena memory "architecture_principles"
-module FSharp.Native.Compiler.Baker.Recipes.NativePtrRecipes
+module Clef.Compiler.Baker.Recipes.NativePtrRecipes
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Elaboration
-open FSharp.Native.Compiler.Baker.Recipes.Decomposition
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration
+open Clef.Compiler.Baker.Recipes.Decomposition
 
 //-------------------------------------------------------------------------
 // Node Construction Helpers

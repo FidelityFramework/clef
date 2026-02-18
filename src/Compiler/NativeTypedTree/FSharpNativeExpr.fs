@@ -16,13 +16,13 @@
 // - Serialize to JSON for intermediate inspection
 // - Navigate for IDE features (hover, go-to-definition)
 
-namespace FSharp.Native.Compiler.NativeTypedTree
+namespace Clef.Compiler.NativeTypedTree
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
+open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 /// Native match case for pattern matching
 [<NoComparison; NoEquality>]

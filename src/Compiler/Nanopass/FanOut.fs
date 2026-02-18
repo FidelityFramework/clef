@@ -12,11 +12,11 @@
 /// allocation — a correctness violation for a deterministic compiler.
 ///
 /// See: psg_elaboration_fold_architecture.md (Serena memory)
-module FSharp.Native.Compiler.Nanopass.FanOut
+module Clef.Compiler.Nanopass.FanOut
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.Nanopass.Recipe
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.Nanopass.Recipe
 
 //=============================================================================
 // RECIPE CREATION FUNCTION TYPE

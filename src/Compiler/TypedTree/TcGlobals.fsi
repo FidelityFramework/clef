@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal FSharp.Native.Compiler.TcGlobals
+module internal Clef.Compiler.TcGlobals
 
 /// Signals how checker/compiler was invoked - from FSC task/process (a one-off compilation), from tooling or from interactive session.
 /// This is used to determine if we want to use certain features in the pipeline, for example, type subsumption cache is only used in one-off compilation now.
@@ -86,7 +86,7 @@ module internal FSharpLib =
 
 [<NoEquality; NoComparison; StructuredFormatDisplay("{DebugText}")>]
 type internal BuiltinAttribInfo =
-    | AttribInfo of FSharp.Native.Compiler.NativeTypedTree.NativeTypes.TypeConRef * TypedTree.TyconRef
+    | AttribInfo of Clef.Compiler.NativeTypedTree.NativeTypes.TypeConRef * TypedTree.TyconRef
 
     /// For debugging
     override ToString: unit -> string
@@ -97,7 +97,7 @@ type internal BuiltinAttribInfo =
 
     member TyconRef: TypedTree.TyconRef
 
-    member TypeRef: FSharp.Native.Compiler.NativeTypedTree.NativeTypes.TypeConRef
+    member TypeRef: Clef.Compiler.NativeTypedTree.NativeTypes.TypeConRef
 
 [<Literal>]
 val internal tname_InternalsVisibleToAttribute: string = "System.Runtime.CompilerServices.InternalsVisibleToAttribute"
@@ -166,7 +166,7 @@ type internal TcGlobals =
 
     member FindSysAttrib: nm: string -> BuiltinAttribInfo
 
-    member FindSysTypeRef: nm: string -> FSharp.Native.Compiler.NativeTypedTree.NativeTypes.TypeConRef
+    member FindSysTypeRef: nm: string -> Clef.Compiler.NativeTypedTree.NativeTypes.TypeConRef
 
     member isSpliceOperator: TypedTree.ValRef -> bool
 
@@ -182,7 +182,7 @@ type internal TcGlobals =
 
     member TryFindSysAttrib: nm: string -> BuiltinAttribInfo option
 
-    member TryFindSysTypeRef: nm: string -> FSharp.Native.Compiler.NativeTypedTree.NativeTypes.TypeConRef option
+    member TryFindSysTypeRef: nm: string -> Clef.Compiler.NativeTypedTree.NativeTypes.TypeConRef option
 
     member TryFindSysTyconRef: path: string list -> nm: string -> TypedTree.EntityRef option
 

@@ -1,18 +1,18 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module FSharp.Native.Compiler.SyntaxTreeOps
+module Clef.Compiler.SyntaxTreeOps
 
 open Internal.Utilities
 open Internal.Utilities.Library
-open FSharp.Native.Compiler.DiagnosticsLogger
-open FSharp.Native.Compiler.Features
-open FSharp.Native.Compiler.IO
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.SyntaxTrivia
-open FSharp.Native.Compiler.Syntax.PrettyNaming
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.Text.Range
-open FSharp.Native.Compiler.Xml
+open Clef.Compiler.DiagnosticsLogger
+open Clef.Compiler.Features
+open Clef.Compiler.IO
+open Clef.Compiler.Syntax
+open Clef.Compiler.SyntaxTrivia
+open Clef.Compiler.Syntax.PrettyNaming
+open Clef.Compiler.Text
+open Clef.Compiler.Text.Range
+open Clef.Compiler.Xml
 open System
 
 /// Generate implicit argument names in parsing

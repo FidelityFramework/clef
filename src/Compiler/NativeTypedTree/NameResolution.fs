@@ -8,14 +8,14 @@
 /// Key insight: Instead of accumulating bindings in a mutable map,
 /// we compose resolver functions. Each `open` declaration adds a new
 /// "lens" that tries prefixed lookups before falling back.
-module FSharp.Native.Compiler.NativeTypedTree.NameResolution
+module Clef.Compiler.NativeTypedTree.NameResolution
 
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+open Clef.Compiler.Syntax
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
+open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 // =============================================================================
 // Core Types

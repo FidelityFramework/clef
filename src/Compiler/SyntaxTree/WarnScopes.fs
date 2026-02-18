@@ -1,15 +1,15 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Native.Compiler
+namespace Clef.Compiler
 
-open FSharp.Native.Compiler.Diagnostics
-open FSharp.Native.Compiler.DiagnosticsLogger
-open FSharp.Native.Compiler.Features
-open FSharp.Native.Compiler.SyntaxTrivia
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.Text.Position
-open FSharp.Native.Compiler.Text.Range
-open FSharp.Native.Compiler.UnicodeLexing
+open Clef.Compiler.Diagnostics
+open Clef.Compiler.DiagnosticsLogger
+open Clef.Compiler.Features
+open Clef.Compiler.SyntaxTrivia
+open Clef.Compiler.Text
+open Clef.Compiler.Text.Position
+open Clef.Compiler.Text.Range
+open Clef.Compiler.UnicodeLexing
 open Internal.Utilities.Library
 open System.Text.RegularExpressions
 

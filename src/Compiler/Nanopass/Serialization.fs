@@ -4,13 +4,13 @@
 ///
 /// Emits artifacts 02 (Intrinsic Recipes) and 04 (Saturation Recipes)
 /// using the global ordinal artifact naming scheme.
-module FSharp.Native.Compiler.Nanopass.Serialization
+module Clef.Compiler.Nanopass.Serialization
 
 open System.Text
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.Nanopass.Recipe
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.Nanopass.Recipe
 open FSharp.Json
 
 //=============================================================================

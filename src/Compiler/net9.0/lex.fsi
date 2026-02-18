@@ -1,11 +1,11 @@
-module internal FSharp.Native.Compiler.Lexer
+module internal Clef.Compiler.Lexer
 
-open FSharp.Native.Compiler.Lexhelp
+open Clef.Compiler.Lexhelp
 open Internal.Utilities.Text.Lexing
-open FSharp.Native.Compiler.Parser
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.ParseHelpers
-open FSharp.Native.Compiler.LexerStore
+open Clef.Compiler.Parser
+open Clef.Compiler.Text
+open Clef.Compiler.ParseHelpers
+open Clef.Compiler.LexerStore
 
 /// Rule token
 val token: args: LexArgs -> skip: bool -> lexbuf: LexBuffer<char> -> token

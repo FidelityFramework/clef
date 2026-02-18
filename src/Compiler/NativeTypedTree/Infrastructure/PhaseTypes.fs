@@ -10,7 +10,7 @@
 ///   Phase 3: SRTP         - SemanticGraph with TraitCall → WitnessResolution attached
 ///   Phase 4: REACHABILITY - SemanticGraph + EntryPoints → IsReachable marks (soft-delete)
 ///   Phase 5: FINAL        - Complete CheckResult with diagnostics
-module FSharp.Native.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
+module Clef.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
 
 open System
 

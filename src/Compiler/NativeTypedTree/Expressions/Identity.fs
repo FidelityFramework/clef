@@ -13,17 +13,17 @@
 /// (e.g., "s.Pointer" parsed as LongIdent instead of DotGet). This is a parser ambiguity
 /// that should eventually be resolved via a proper nanopass architecture.
 /// TODO: Factor member access normalization into a dedicated nanopass.
-module FSharp.Native.Compiler.NativeTypedTree.Expressions.Identity
+module Clef.Compiler.NativeTypedTree.Expressions.Identity
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Builder
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
-open FSharp.Native.Compiler.NativeTypedTree.Expressions.Types
-open FSharp.Native.Compiler.NativeTypedTree.Expressions.Intrinsics
-open FSharp.Native.Compiler.NativeTypedTree.UnionFind
-module NR = FSharp.Native.Compiler.NativeTypedTree.NameResolution
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
+open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+open Clef.Compiler.NativeTypedTree.Expressions.Types
+open Clef.Compiler.NativeTypedTree.Expressions.Intrinsics
+open Clef.Compiler.NativeTypedTree.UnionFind
+module NR = Clef.Compiler.NativeTypedTree.NameResolution
 
 //-------------------------------------------------------------------------
 // Identifier Resolution Result
@@ -184,7 +184,7 @@ let resolveIdentifier
     (env: TypeEnv)
     (builder: NodeBuilder)
     (range: SourceRange)
-    (synRange: FSharp.Native.Compiler.Text.range)
+    (synRange: Clef.Compiler.Text.range)
     : SemanticNode =
 
     match resolveIdentifierCore parts env range with

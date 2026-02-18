@@ -18,9 +18,9 @@
 ///
 /// A for-loop is structurally identical whether from source or enrichment.
 /// The ONLY distinction is the presence of enrichment metadata.
-module FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Elaboration
+module Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration
 
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
 //-------------------------------------------------------------------------
 // Enrichment Kinds

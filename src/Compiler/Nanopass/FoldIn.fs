@@ -9,12 +9,12 @@
 /// The original PSG is not mutated; a fresh PSG is built.
 /// 
 /// See: psg_elaboration_fold_architecture.md (Serena memory)
-module FSharp.Native.Compiler.Nanopass.FoldIn
+module Clef.Compiler.Nanopass.FoldIn
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.Nanopass.Recipe
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.Nanopass.Recipe
 
 //=============================================================================
 // REFERENCE UPDATE HELPERS

@@ -1,14 +1,14 @@
 ﻿// Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal FSharp.Native.Compiler.XmlDocFileWriter
+module internal Clef.Compiler.XmlDocFileWriter
 
 open System.IO
-open FSharp.Native.Compiler.DiagnosticsLogger
-open FSharp.Native.Compiler.IO
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.Xml
-open FSharp.Native.Compiler.TypedTree
-open FSharp.Native.Compiler.TypedTreeOps
+open Clef.Compiler.DiagnosticsLogger
+open Clef.Compiler.IO
+open Clef.Compiler.Text
+open Clef.Compiler.Xml
+open Clef.Compiler.TypedTree
+open Clef.Compiler.TypedTreeOps
 
 module XmlDocWriter =
 

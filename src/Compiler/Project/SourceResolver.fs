@@ -1,7 +1,7 @@
 /// Source file resolution and ordering.
 /// Handles dependency library ordering and project source resolution.
 /// GENERIC DEPENDENCY RESOLUTION - no hardcoded library names.
-namespace FSharp.Native.Compiler.Project
+namespace Clef.Compiler.Project
 
 open System.IO
 

@@ -2,12 +2,12 @@
 
 /// Graph traversal utilities for SemanticGraph.
 /// Provides pre-order, post-order, and SCF region-aware traversals.
-module FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Traversal
+module Clef.Compiler.PSGSaturation.SemanticGraph.Traversal
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Reachability
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.PSGSaturation.SemanticGraph.Reachability
 
 //-------------------------------------------------------------------------
 // SCF Region Types (for structured control flow witnessing)

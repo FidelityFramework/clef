@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 /// Coordinating compiler operations - configuration, loading initial context, reporting errors etc.
-module internal FSharp.Native.Compiler.Features
+module internal Clef.Compiler.Features
 
 /// LanguageFeature enumeration
 [<RequireQualifiedAccess>]

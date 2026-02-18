@@ -1,5 +1,5 @@
 /// Defines the typed abstract syntax intermediate representation used throughout the F# compiler.
-module internal rec FSharp.Native.Compiler.TypedTree
+module internal rec Clef.Compiler.TypedTree
 
 open System
 open System.Diagnostics
@@ -9,12 +9,12 @@ open Internal.Utilities.Collections
 open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
 open Internal.Utilities.Rational
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.DiagnosticsLogger
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.TypeProviders
-open FSharp.Native.Compiler.Xml
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.DiagnosticsLogger
+open Clef.Compiler.Syntax
+open Clef.Compiler.Text
+open Clef.Compiler.TypeProviders
+open Clef.Compiler.Xml
 open FSharp.Core.CompilerServices
 
 [<RequireQualifiedAccess>]

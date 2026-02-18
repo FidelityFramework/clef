@@ -1,15 +1,15 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Native.Compiler
+namespace Clef.Compiler
 
 #if !NO_TYPEPROVIDERS
 
 open System
 open Internal.Utilities.Library 
 open FSharp.Core.CompilerServices
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.Text.Range
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.Text
+open Clef.Compiler.Text.Range
 
 [<Sealed>]
 type internal TypeProviderToken() = interface LockToken

@@ -1,14 +1,14 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-module internal FSharp.Native.Compiler.LexerStore
+module internal Clef.Compiler.LexerStore
 
-open FSharp.Native.Compiler.SyntaxTreeOps
-open FSharp.Native.Compiler.SyntaxTrivia
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.Text.Position
-open FSharp.Native.Compiler.Text.Range
-open FSharp.Native.Compiler.UnicodeLexing
-open FSharp.Native.Compiler.Xml
+open Clef.Compiler.SyntaxTreeOps
+open Clef.Compiler.SyntaxTrivia
+open Clef.Compiler.Text
+open Clef.Compiler.Text.Position
+open Clef.Compiler.Text.Range
+open Clef.Compiler.UnicodeLexing
+open Clef.Compiler.Xml
 
 //------------------------------------------------------------------------
 // A SynArgNameGenerator for the current file, used by the parser

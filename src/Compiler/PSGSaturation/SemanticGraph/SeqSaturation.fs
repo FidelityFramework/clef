@@ -6,9 +6,9 @@
 ///
 /// NANOPASS: This module contains coeffect types computed during saturation.
 /// The extraction functions that compute these values are in SemanticGraph.fs.
-module FSharp.Native.Compiler.PSGSaturation.SemanticGraph.SeqSaturation
+module Clef.Compiler.PSGSaturation.SemanticGraph.SeqSaturation
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.NativeTypes
 
 /// Information about an internal mutable binding in a seq body.
 /// These become fields in the seq struct (after captures).

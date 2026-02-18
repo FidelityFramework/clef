@@ -1,4 +1,4 @@
-namespace FSharp.Native.Compiler.Caches
+namespace Clef.Compiler.Caches
 
 open System
 open System.Collections.Generic

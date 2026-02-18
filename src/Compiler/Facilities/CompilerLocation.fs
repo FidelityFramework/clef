@@ -62,7 +62,7 @@ module internal FSharpEnvironment =
 
     // The default location of FSharp.Core.dll and fsc.exe based on the version of fsc.exe that is running
     // Used for
-    //     - location of design-time copies of FSharp.Core.dll and FSharp.Native.Compiler.Interactive.Settings.dll for the default assumed environment for scripts
+    //     - location of design-time copies of FSharp.Core.dll and Clef.Compiler.Interactive.Settings.dll for the default assumed environment for scripts
     //     - default ToolPath in tasks in FSharp.Build.dll (for Fsc tasks, but note a probe location is given)
     //     - default F# binaries directory in service.fs (REVIEW: check this)
     //     - default location of fsi.exe in FSharp.VS.FSI.dll (REVIEW: check this)
@@ -236,7 +236,7 @@ module internal FSharpEnvironment =
     let getCompilerToolsDesignTimeAssemblyPaths compilerToolPaths = searchToolPaths None compilerToolPaths
 
     let getFSharpCoreLibraryName = "FSharp.Core"
-    let fsiLibraryName = "FSharp.Native.Compiler.Interactive.Settings"
+    let fsiLibraryName = "Clef.Compiler.Interactive.Settings"
 
     let getFSharpCompilerLocationWithDefaultFromType (defaultLocation: Type) =
         let location =
@@ -261,7 +261,7 @@ module internal FSharpEnvironment =
             // Use the location of this dll
             path
 
-    // Fallback to ambient FSharp.Native.CompilerService.dll
+    // Fallback to ambient Clef.CompilerService.dll
     let getFSharpCompilerLocation () =
         Path.Combine(getFSharpCompilerLocationWithDefaultFromType (typeof<TypeInThisAssembly>))
 
@@ -269,7 +269,7 @@ module internal FSharpEnvironment =
     let getDefaultFSharpCoreLocation () =
         Path.Combine(getFSharpCompilerLocationWithDefaultFromType (typeof<Unit>), getFSharpCoreLibraryName + ".dll")
 
-    // Must be alongside the location of FSharp.Native.CompilerService.dll
+    // Must be alongside the location of Clef.CompilerService.dll
     let getDefaultFsiLibraryLocation () =
         Path.Combine(!!Path.GetDirectoryName(getFSharpCompilerLocation ()), fsiLibraryName + ".dll")
 

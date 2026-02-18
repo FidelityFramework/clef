@@ -2,11 +2,11 @@
 
 /// LexFilter - process the token stream prior to parsing.
 /// Implements the offside rule and a couple of other lexical transformations.
-module internal FSharp.Native.Compiler.LexFilter
+module internal Clef.Compiler.LexFilter
 
 open Internal.Utilities.Text.Lexing
-open FSharp.Native.Compiler.Lexhelp
-open FSharp.Native.Compiler.Parser
+open Clef.Compiler.Lexhelp
+open Clef.Compiler.Parser
 
 /// Match the close of '>' of a set of type parameters.
 /// This is done for tokens such as '>>' by smashing the token

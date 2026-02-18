@@ -2,9 +2,9 @@
 
 /// Some general F# utilities for mangling / unmangling / manipulating names.
 /// Anything to do with special names of identifiers and other lexical rules
-module public FSharp.Native.Compiler.Syntax.PrettyNaming
+module public Clef.Compiler.Syntax.PrettyNaming
 
-open FSharp.Native.Compiler.Text
+open Clef.Compiler.Text
 
 [<Literal>]
 val internal parenGet: string = ".()"

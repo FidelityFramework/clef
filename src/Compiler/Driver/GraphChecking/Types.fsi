@@ -1,7 +1,7 @@
-namespace FSharp.Native.Compiler.GraphChecking
+namespace Clef.Compiler.GraphChecking
 
 open System.Collections.Immutable
-open FSharp.Native.Compiler.Syntax
+open Clef.Compiler.Syntax
 
 /// The index of a file inside a project.
 type internal FileIndex = int

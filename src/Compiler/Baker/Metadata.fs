@@ -5,10 +5,10 @@
 ///
 /// ModuleClassification is now defined in PSG/SemanticGraph.fs and computed
 /// lazily from EmissionStrategy. This module re-exports for API stability.
-module FSharp.Native.Compiler.Baker.Metadata
+module Clef.Compiler.Baker.Metadata
 
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 
 // Re-export ModuleClassification from PSG for API stability
-type ModuleClassification = FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types.ModuleClassification
+type ModuleClassification = Clef.Compiler.PSGSaturation.SemanticGraph.Types.ModuleClassification

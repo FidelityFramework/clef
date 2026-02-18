@@ -2,7 +2,7 @@
 
 /// Core type representation for the native type checker.
 /// These types are used throughout the type checking process and in the output semantic graph.
-module FSharp.Native.Compiler.NativeTypedTree.NativeTypes
+module Clef.Compiler.NativeTypedTree.NativeTypes
 
 open System.Collections.Generic
 

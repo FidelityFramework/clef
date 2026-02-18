@@ -1,8 +1,8 @@
-module internal FSharp.Native.Compiler.PPLexer
+module internal Clef.Compiler.PPLexer
 
-open FSharp.Native.Compiler.Lexhelp
+open Clef.Compiler.Lexhelp
 open Internal.Utilities.Text.Lexing
-open FSharp.Native.Compiler.PPParser
+open Clef.Compiler.PPParser
 
 /// Rule tokenstream
 val tokenstream: args: LexArgs -> lexbuf: LexBuffer<char> -> token

@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Native.Compiler.Xml
+namespace Clef.Compiler.Xml
 
-open FSharp.Native.Compiler.Text
+open Clef.Compiler.Text
 
 /// Represents collected XmlDoc lines
 [<Class>]

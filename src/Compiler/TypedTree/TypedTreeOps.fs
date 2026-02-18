@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All Rights Reserved. See License.txt in the project root for license information.
 
 /// Defines derived expression manipulation and construction functions.
-module internal FSharp.Native.Compiler.TypedTreeOps
+module internal Clef.Compiler.TypedTreeOps
 
 open System
 open System.CodeDom.Compiler
@@ -13,25 +13,25 @@ open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
 open Internal.Utilities.Rational
 
-open FSharp.Native.Compiler.IO
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.CompilerGlobalState
-open FSharp.Native.Compiler.DiagnosticsLogger
-open FSharp.Native.Compiler.Features
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.Syntax.PrettyNaming
-open FSharp.Native.Compiler.SyntaxTreeOps
-open FSharp.Native.Compiler.TcGlobals
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.Text.Range
-open FSharp.Native.Compiler.Text.Layout
-open FSharp.Native.Compiler.Text.LayoutRender
-open FSharp.Native.Compiler.Text.TaggedText
-open FSharp.Native.Compiler.Xml
-open FSharp.Native.Compiler.TypedTree
-open FSharp.Native.Compiler.TypedTreeBasics
+open Clef.Compiler.IO
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.CompilerGlobalState
+open Clef.Compiler.DiagnosticsLogger
+open Clef.Compiler.Features
+open Clef.Compiler.Syntax
+open Clef.Compiler.Syntax.PrettyNaming
+open Clef.Compiler.SyntaxTreeOps
+open Clef.Compiler.TcGlobals
+open Clef.Compiler.Text
+open Clef.Compiler.Text.Range
+open Clef.Compiler.Text.Layout
+open Clef.Compiler.Text.LayoutRender
+open Clef.Compiler.Text.TaggedText
+open Clef.Compiler.Xml
+open Clef.Compiler.TypedTree
+open Clef.Compiler.TypedTreeBasics
 #if !NO_TYPEPROVIDERS
-open FSharp.Native.Compiler.TypeProviders
+open Clef.Compiler.TypeProviders
 #endif
 
 let inline compareBy (x: 'T MaybeNull) (y: 'T MaybeNull) ([<InlineIfLambda>]func: 'T -> 'K)  = 

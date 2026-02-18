@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 /// Diagnostic types for reporting compiler errors, warnings, and info.
-module FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+module Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
 //-------------------------------------------------------------------------
 // Diagnostics

@@ -6,7 +6,7 @@
 /// into the compiler.  This lets the compiler perform particular optimizations
 /// for these types and values, for example emitting optimized calls for
 /// comparison and hashing functions.
-module internal FSharp.Native.Compiler.TcGlobals
+module internal Clef.Compiler.TcGlobals
 
 open System.Collections.Concurrent
 open System.Linq
@@ -14,15 +14,15 @@ open System.Diagnostics
 
 open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.CompilerGlobalState
-open FSharp.Native.Compiler.Features
-open FSharp.Native.Compiler.IO
-open FSharp.Native.Compiler.Syntax.PrettyNaming
-open FSharp.Native.Compiler.Text.FileIndex
-open FSharp.Native.Compiler.Text.Range
-open FSharp.Native.Compiler.TypedTree
-open FSharp.Native.Compiler.TypedTreeBasics
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.CompilerGlobalState
+open Clef.Compiler.Features
+open Clef.Compiler.IO
+open Clef.Compiler.Syntax.PrettyNaming
+open Clef.Compiler.Text.FileIndex
+open Clef.Compiler.Text.Range
+open Clef.Compiler.TypedTree
+open Clef.Compiler.TypedTreeBasics
 open Internal.Utilities
 
 /// Split a fully-qualified type name into (namespace path, type name)

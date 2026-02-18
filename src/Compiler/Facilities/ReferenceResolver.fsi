@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Native.Compiler.CodeAnalysis
+namespace Clef.Compiler.CodeAnalysis
 
 open System
 
@@ -56,7 +56,7 @@ type ILegacyReferenceResolver =
     abstract DotNetFrameworkReferenceAssembliesRootDirectory: string
 
 // Note, two implementations of this are provided, and no further implementations can be added from
-// outside FSharp.Native.Compiler.Service
+// outside Clef.Compiler.Service
 [<Class; AllowNullLiteral; Obsolete("This API is obsolete and not for external use")>]
 type LegacyReferenceResolver =
     new: impl: ILegacyReferenceResolver -> LegacyReferenceResolver

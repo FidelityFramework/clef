@@ -1,21 +1,21 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 /// Defines derived expression manipulation and construction functions.
-module internal FSharp.Native.Compiler.TypedTreeOps
+module internal Clef.Compiler.TypedTreeOps
 
 open System.Collections.Generic
 open System.Collections.Immutable
 open Internal.Utilities.Collections
 open Internal.Utilities.Library
 open Internal.Utilities.Rational
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes
-open FSharp.Native.Compiler.DiagnosticsLogger
-open FSharp.Native.Compiler.CompilerGlobalState
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.Xml
-open FSharp.Native.Compiler.TypedTree
-open FSharp.Native.Compiler.TcGlobals
+open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.DiagnosticsLogger
+open Clef.Compiler.CompilerGlobalState
+open Clef.Compiler.Syntax
+open Clef.Compiler.Text
+open Clef.Compiler.Xml
+open Clef.Compiler.TypedTree
+open Clef.Compiler.TcGlobals
 
 type Erasure =
     | EraseAll

@@ -1,10 +1,10 @@
 ﻿/// The Typars of a Val in the signature data should also be pretty named.
 /// This will happen for the implementation file contents, but not for the signature data.
 /// In this module some helpers will traverse the ModuleOrNamespaceType and update all the typars of each found Val.
-module internal FSharp.Native.Compiler.UpdatePrettyTyparNames
+module internal Clef.Compiler.UpdatePrettyTyparNames
 
-open FSharp.Native.Compiler.TypedTree
-open FSharp.Native.Compiler.TypedTreeOps
+open Clef.Compiler.TypedTree
+open Clef.Compiler.TypedTreeOps
 
 let updateVal (v: Val) =
     if not (List.isEmpty v.Typars) then

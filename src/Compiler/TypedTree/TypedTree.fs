@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All Rights Reserved. See License.txt in the project root for license information.
   
 /// Defines the typed abstract syntax intermediate representation used throughout the F# compiler.
-module internal rec FSharp.Native.Compiler.TypedTree 
+module internal rec Clef.Compiler.TypedTree 
 
 open System
 open System.Collections.Generic
@@ -12,21 +12,21 @@ open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
 open Internal.Utilities.Rational
 
-open FSharp.Native.Compiler 
-open FSharp.Native.Compiler.NativeTypedTree.NativeTypes 
+open Clef.Compiler 
+open Clef.Compiler.NativeTypedTree.NativeTypes 
 // ILX.Types removed - FNCS doesn't emit IL for discriminated unions
-open FSharp.Native.Compiler.CompilerGlobalState
-open FSharp.Native.Compiler.DiagnosticsLogger
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.Syntax.PrettyNaming
-open FSharp.Native.Compiler.QuotationPickler
-open FSharp.Native.Compiler.SyntaxTreeOps
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.Text.Range
-open FSharp.Native.Compiler.Xml
+open Clef.Compiler.CompilerGlobalState
+open Clef.Compiler.DiagnosticsLogger
+open Clef.Compiler.Syntax
+open Clef.Compiler.Syntax.PrettyNaming
+open Clef.Compiler.QuotationPickler
+open Clef.Compiler.SyntaxTreeOps
+open Clef.Compiler.Text
+open Clef.Compiler.Text.Range
+open Clef.Compiler.Xml
 
 #if !NO_TYPEPROVIDERS
-open FSharp.Native.Compiler.TypeProviders
+open Clef.Compiler.TypeProviders
 open FSharp.Core.CompilerServices
 #endif
 

@@ -1,11 +1,11 @@
-module internal FSharp.Native.Compiler.Lexer
+module internal Clef.Compiler.Lexer
 
-open FSharp.Native.Compiler.Lexhelp
+open Clef.Compiler.Lexhelp
 open Internal.Utilities.Text.Lexing
-open FSharp.Native.Compiler.Parser
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.ParseHelpers
-open FSharp.Native.Compiler.LexerStore
+open Clef.Compiler.Parser
+open Clef.Compiler.Text
+open Clef.Compiler.ParseHelpers
+open Clef.Compiler.LexerStore
 
 # 3 "lex.fsl"
  
@@ -22,12 +22,12 @@ open System.Text
 open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
 
-open FSharp.Native.Compiler
-open FSharp.Native.Compiler.DiagnosticsLogger
-open FSharp.Native.Compiler.Features
-open FSharp.Native.Compiler.IO
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.Text.Range
+open Clef.Compiler
+open Clef.Compiler.DiagnosticsLogger
+open Clef.Compiler.Features
+open Clef.Compiler.IO
+open Clef.Compiler.Syntax
+open Clef.Compiler.Text.Range
 
 module Ranges =
     /// Whether valid as signed int8 when a minus sign is prepended, compares true to 0x80
@@ -213,8 +213,8 @@ let evalIfDefExpression startPos reportLibraryOnlyFeatures langVersion strictInd
     let lexbuf          = LexBuffer<char>.FromChars (reportLibraryOnlyFeatures, langVersion, strictIndentation, lexed.ToCharArray ())
     lexbuf.StartPos     <- startPos
     lexbuf.EndPos       <- startPos
-    let tokenStream     = FSharp.Native.Compiler.PPLexer.tokenstream args
-    let expr            = FSharp.Native.Compiler.PPParser.start tokenStream lexbuf
+    let tokenStream     = Clef.Compiler.PPLexer.tokenstream args
+    let expr            = Clef.Compiler.PPParser.start tokenStream lexbuf
     (LexerIfdefEval lookup expr), expr
 
 let evalFloat args lexbuf =

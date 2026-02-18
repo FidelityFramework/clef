@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-namespace FSharp.Native.Compiler.CodeAnalysis
+namespace Clef.Compiler.CodeAnalysis
 
 exception LegacyResolutionFailure
 

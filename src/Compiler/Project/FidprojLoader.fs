@@ -1,6 +1,6 @@
 /// .fidproj file loading and parsing.
 /// Single source of truth for project configuration.
-namespace FSharp.Native.Compiler.Project
+namespace Clef.Compiler.Project
 
 open System.IO
 open Fidelity.Toml

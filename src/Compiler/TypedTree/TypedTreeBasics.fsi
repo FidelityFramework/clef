@@ -4,12 +4,12 @@
 // Defines the typed abstract syntax trees used throughout the F# compiler.
 //-------------------------------------------------------------------------
 
-module internal FSharp.Native.Compiler.TypedTreeBasics
+module internal Clef.Compiler.TypedTreeBasics
 
 open Internal.Utilities.Library.Extras
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.Text
-open FSharp.Native.Compiler.TypedTree
+open Clef.Compiler.Syntax
+open Clef.Compiler.Text
+open Clef.Compiler.TypedTree
 
 /// Metadata on values (names of arguments etc.
 module ValReprInfo =
