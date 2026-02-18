@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    FsLex - F# Lexer Generator
+
+    Build tool for generating lexers from .fsl files.
+    Must be built before FSharp.Native.Compiler.Service.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
+    <RollForward>LatestMajor</RollForward>
+    <NoWarn>$(NoWarn);64;1204;3261</NoWarn>
+    <TolerateUnusedBindings>true</TolerateUnusedBindings>
+    <!-- Disable nullable for legacy/generated code -->
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Lexing.fsi" />
+    <Compile Include="Lexing.fs" />
+    <Compile Include="Parsing.fsi" />
+    <Compile Include="Parsing.fs" />
+    <Compile Include="Arg.fsi" />
+    <Compile Include="Arg.fs" />
+    <Compile Include="fslexast.fs" />
+    <Compile Include="fslexpars.fs" />
+    <Compile Include="fslexlex.fs" />
+    <Compile Include="fslexdriver.fs" />
+    <Compile Include="fslex.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FSharp.Core" Version="10.0.101" />
+  </ItemGroup>
+
+</Project>

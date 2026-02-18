@@ -1,0 +1,40 @@
+<Project>
+  <!--
+    FNCS Build Properties - Arcade-free
+
+    Minimal build configuration for F# Native Compiler Services.
+    No Arcade SDK, no complex multi-targeting, no signing infrastructure.
+  -->
+
+  <PropertyGroup>
+    <BUILD_IN_FSHARP_REPOSITORY>true</BUILD_IN_FSHARP_REPOSITORY>
+  </PropertyGroup>
+
+  <!-- Directory locations -->
+  <PropertyGroup>
+    <FSharpSourcesRoot>$(RepoRoot)src</FSharpSourcesRoot>
+    <FSharpTestsRoot>$(RepoRoot)tests</FSharpTestsRoot>
+  </PropertyGroup>
+
+  <!-- NuGet configuration -->
+  <PropertyGroup>
+    <NuGetPackageRoot Condition="'$(NuGetPackageRoot)' == ''">$(NUGET_PACKAGES)</NuGetPackageRoot>
+    <NuGetPackageRoot Condition="'$(NuGetPackageRoot)' == '' AND '$(OS)' != 'Windows_NT'">$(HOME)/.nuget/packages/</NuGetPackageRoot>
+    <NuGetPackageRoot Condition="'$(NuGetPackageRoot)' == '' AND '$(OS)' == 'Windows_NT'">$(UserProfile)\.nuget\packages\</NuGetPackageRoot>
+    <NuGetPackageRoot Condition="!HasTrailingSlash('$(NuGetPackageRoot)') AND '$(OS)' != 'Windows_NT'">$(NuGetPackageRoot)/</NuGetPackageRoot>
+    <NuGetPackageRoot Condition="!HasTrailingSlash('$(NuGetPackageRoot)') AND '$(OS)' == 'Windows_NT'">$(NuGetPackageRoot)\</NuGetPackageRoot>
+  </PropertyGroup>
+
+  <!-- Compiler settings -->
+  <PropertyGroup>
+    <NoWarn Condition="'$(Language)' == 'F#'">$(NoWarn);FS2003</NoWarn>
+    <WarningsAsErrors>0025;$(WarningsAsErrors)</WarningsAsErrors>
+    <UseStandardResourceNames>false</UseStandardResourceNames>
+  </PropertyGroup>
+
+  <!-- Linux/Unix detection -->
+  <PropertyGroup Condition="'$(OS)' == 'Unix'">
+    <DefineConstants>$(DefineConstants);TESTING_ON_LINUX</DefineConstants>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,85 @@
+<Project>
+  <!--
+    FNCS (F# Native Compiler Services) - Arcade-Free Build Infrastructure
+
+    This is a principled simplification from upstream dotnet/fsharp:
+    - Removed: Arcade SDK, complex multi-targeting, .NET Framework support, CI/CD integration
+    - Preserved: NuGet packaging, FsLex/FsYacc integration, functional compiler flags
+
+    FNCS is a library that Firefly references during the "bridge period" where
+    Firefly itself runs on .NET while producing native binaries.
+  -->
+
+  <!-- Core Configuration -->
+  <PropertyGroup>
+    <RepoRoot Condition="'$(RepoRoot)' == ''">$(MSBuildThisFileDirectory)</RepoRoot>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!-- Artifacts Layout -->
+  <PropertyGroup>
+    <ArtifactsDir>$(RepoRoot)artifacts/</ArtifactsDir>
+    <BaseOutputPath>$(ArtifactsDir)bin/$(MSBuildProjectName)/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(ArtifactsDir)obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
+    <PackageOutputPath>$(ArtifactsDir)packages/$(Configuration)/</PackageOutputPath>
+  </PropertyGroup>
+
+  <!-- FsLex/FsYacc Tool Paths -->
+  <PropertyGroup>
+    <FsLexPath>$(ArtifactsDir)bin/fslex/$(Configuration)/net10.0/fslex.dll</FsLexPath>
+    <FsYaccPath>$(ArtifactsDir)bin/fsyacc/$(Configuration)/net10.0/fsyacc.dll</FsYaccPath>
+  </PropertyGroup>
+
+  <!--
+    Version Information
+
+    FNCS version tracks upstream F# version for compatibility reference,
+    plus its own version for native-specific changes.
+  -->
+  <PropertyGroup>
+    <!-- Upstream F# version we're based on -->
+    <FSMajorVersion>9</FSMajorVersion>
+    <FSMinorVersion>0</FSMinorVersion>
+    <FSBuildVersion>300</FSBuildVersion>
+    <FSLanguageVersion>$(FSMajorVersion).$(FSMinorVersion)</FSLanguageVersion>
+
+    <!-- FNCS package version - synchronized with Fidelity ecosystem -->
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionSuffix></VersionSuffix>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+
+    <!-- For NuGet packaging -->
+    <Authors>SpeakEZ</Authors>
+    <Company>SpeakEZ, Inc.</Company>
+    <Copyright>Copyright (c) SpeakEZ, Inc. and Microsoft Corporation</Copyright>
+  </PropertyGroup>
+
+  <!--
+    Compiler Flags
+
+    These are functional requirements, not infrastructure:
+    - nowarn:3384 - XML doc warnings in generated code
+    - nowarn:75 - InternalCommandLineOption usage
+    - generate-filter-blocks - prevents stack overflow in type checking
+  -->
+  <PropertyGroup>
+    <OtherFlags>$(OtherFlags) --nowarn:3384</OtherFlags>
+    <OtherFlags>$(OtherFlags) --nowarn:75</OtherFlags>
+    <NoCompilerStandardLib>true</NoCompilerStandardLib>
+    <DebugType>embedded</DebugType>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- Centralized Package Versions -->
+  <PropertyGroup>
+    <FSharpCorePackageVersion>9.0.100</FSharpCorePackageVersion>
+    <SystemCollectionsImmutableVersion>8.0.0</SystemCollectionsImmutableVersion>
+    <SystemReflectionMetadataVersion>8.0.0</SystemReflectionMetadataVersion>
+  </PropertyGroup>
+
+  <!-- Import additional build props -->
+  <Import Project="FSharpBuild.Directory.Build.props" />
+
+</Project>
