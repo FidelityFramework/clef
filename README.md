@@ -1,4 +1,4 @@
-# F# Native Compiler Services (FNCS)
+# Clef Compiler Services (CCS)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -7,169 +7,163 @@
 <em>This project is in early development and not intended for production use.</em>
 </p>
 
-**Native-first type resolution for F# ahead-of-time compilation.**
+**The parsing and type-checking frontend for the Clef programming language.**
 
 ## Overview
 
-fsnative is F# Native Compiler Services (FNCS), a specialized fork of [Microsoft's F# compiler](https://github.com/dotnet/fsharp) designed for native compilation. Where the standard F# compiler assumes a managed runtime with garbage collection and BCL types, fsnative understands native types, deterministic memory, and statically resolved operations from the ground up.
+CCS (Clef Compiler Services) is the compiler frontend for [Clef](https://clef-lang.com), a concurrent programming language in the ML tradition. It parses Clef source, resolves types against the Native Type Universe (NTU), and produces a typed abstract syntax tree that flows into the Composer compiler's middle- and back-end pipeline. No .NET runtime required anywhere in the output.
 
-fsnative is the frontend for the [Fidelity](https://speakez.tech/blog/fidelity-framework-a-primer/) native compilation framework. It parses F# code, performs type checking, and produces a typed abstract syntax tree that flows directly into native code generation. No .NET runtime required.
+Clef targets CPU, MCU, GPU, NPU, FPGA, and CGRA from a single source language. CCS is stage one of that compilation.
 
 ## The Fidelity Framework
 
-FNCS is part of the **Fidelity** native F# compilation ecosystem:
+CCS is part of the **Fidelity** compilation framework:
 
 | Project | Role |
 |---------|------|
-| **[Firefly](https://github.com/FidelityFramework/firefly)** | AOT compiler: F# → PSG → MLIR → Native binary |
+| **[Composer](https://github.com/FidelityFramework/composer)** | Compiler and CLI: Clef → PSG → MLIR → Native binary |
 | **[BAREWire](https://github.com/FidelityFramework/barewire)** | Binary encoding, memory mapping, zero-copy IPC |
 | **[Farscape](https://github.com/FidelityFramework/farscape)** | C/C++ header parsing for native library bindings |
 | **[XParsec](https://github.com/FidelityFramework/xparsec)** | Parser combinators powering PSG traversal and header parsing |
-| **fsnative** | F# Native Compiler Services (this repository) |
-| **[fsnative-spec](https://github.com/FidelityFramework/clef-lang-spec)** | Clef language specification |
-
-The name "Fidelity" reflects the framework's core mission: **preserving type and memory safety** from source code through compilation to native execution.
+| **CCS** | Clef Compiler Services — this repository |
+| **[clef-lang-spec](https://github.com/FidelityFramework/clef-lang-spec)** | Normative Clef language specification |
 
 ## Why Clef Exists
 
-The standard F# Compiler Services does an excellent job for .NET development. Microsoft is making progress with ahead-of-time (AOT) compilation, but there are fundamental limitations. When you're compiling to true native binaries without a runtime or garbage collector, many .NET assumptions become obstacles:
+Heterogeneous compute is fragmented. Writing software that runs across CPUs, microcontrollers, GPUs, NPUs, and FPGAs today means maintaining separate codebases in separate languages — C for bare-metal, CUDA for GPUs, HLS for FPGAs, Python for ML inference pipelines. Each target brings its own toolchain, its own memory model, and its own failure modes. Integrating them requires hand-written glue at every boundary.
 
-**Strings are garbage-collected UTF-16 objects.** Native compilation needs UTF-8 strings with deterministic lifetimes. When a string goes out of scope, its memory should be freed immediately.
+Clef is a single language that targets all of them.
 
-**Option types are heap-allocated reference types.** Native compilation needs value options that live on the stack and cost nothing when they're `None`.
+**Concurrency is the programming model, not a library.** The actor model is built into the language. Every stateful interaction is a message. Actors are the unit of ownership, isolation, and scheduling — whether running on CPU threads, GPU streaming multiprocessors, or synthesized into FPGA logic.
 
-**Memory has no notion of ownership or regions.** Native compilation needs to distinguish stack memory from heap memory, peripheral registers from RAM, read-only flash from writable SRAM. The type system should enforce these distinctions at compile time.
+**The type system carries hardware information.** Dimensional type inference propagates numeric format, memory region, access kind, and tensor shape through the type system invisibly, the way Hindley-Milner propagates polymorphism. The compiler knows whether a value lives in global DRAM, shared SRAM, a peripheral register, or read-only flash — and enforces those distinctions at compile time.
 
-**The runtime manages all memory.** Native compilation needs explicit control. Pointers should carry lifetime information. The compiler should track whether memory is borrowed or owned, mutable or immutable.
+**Memory is deterministic and ownership-tracked.** There is no garbage collector, no managed heap, no runtime. Lifetimes are inferred from program structure. Arena allocation per actor means thousands of allocations freed together at actor scope exit. Pointers carry lifetime information through the type system.
 
-These aren't bugs to work around. They're fundamental assumptions baked into the type system. fsnative replaces those assumptions with native-first semantics while preserving the F# developer experience.
+**SRTP-based polymorphism costs nothing at runtime.** Statically resolved type parameters monomorphize at compile time against the Alloy witness hierarchy. Zero-cost abstractions are not aspirational — they are structural.
 
-## The Vision
+## The Language
 
-fsnative makes native types *intrinsic* to the compiler:
+Clef is ML-family syntax — records, discriminated unions, pattern matching, computation expressions, first-class functions — with native-first semantics throughout.
 
-```fsharp
-// What you write
-let greeting = "Hello, World!"
+```clef
+// Records are value types with struct layout
+type Point = { x: float32; y: float32 }
 
-// Standard F#: System.String (UTF-16, GC-managed)
-// fsnative:    NativeStr (UTF-8, deterministic lifetime)
+// Discriminated unions are tag + payload — no heap allocation
+type Shape =
+    | Circle of center: Point * radius: float32
+    | Rect   of origin: Point * width: float32 * height: float32
+
+// Pattern matching is exhaustive and statically verified
+let area = function
+    | Circle (_, r) -> Float.pi * r * r
+    | Rect (_, w, h) -> w * h
+
+// SRTP-based polymorphism resolves at compile time — no vtables
+let inline dot (a: ^Vec) (b: ^Vec) : float32
+    when ^Vec : (member X : float32) and ^Vec : (member Y : float32) =
+    a.X * b.X + a.Y * b.Y
+
+// Actors are the concurrency primitive — no shared mutable state
+actor Sensor (mailbox: Mailbox<Reading>) =
+    let rec loop () = actor {
+        let! reading = mailbox.receive ()
+        do! publish (process reading)
+        return! loop ()
+    }
+    loop ()
 ```
 
-```fsharp
-// What you write
-let maybeValue = Some 42
-
-// Standard F#: int option (reference type, heap allocated)
-// fsnative:    int voption (value type, stack allocated)
-```
-
-```fsharp
-// What you write
-let inline add a b = a + b
-
-// Standard F#: resolves against System.Int32.op_Addition
-// fsnative:    resolves against Alloy.BasicOps witness hierarchy
-```
-
-The compiler *knows* these types. It doesn't discover them by reading assembly metadata. It understands their layout, their semantics, their operations. When fsnative produces a typed tree, the types are already native, ready for direct translation to MLIR and LLVM.
-
-## The Fidelity Pipeline
-
-fsnative is one piece of a larger native compilation story:
+## The Compilation Pipeline
 
 ```
-F# Source
+Clef Source (.clef)
     ↓
-fsnative (FNCS)     ← You are here
+CCS (this repository)       ← Parsing, type checking, NTU resolution
     ↓
 Program Semantic Graph (PSG)
     ↓
-Alex → MLIR → LLVM
+Alex (MiddleEnd)            ← Nanopasses, optimization, target selection
     ↓
-Native Binary
+MLIR → LLVM
+    ↓
+Native Binary / FPGA Bitstream / NPU Microcode
 ```
 
-Together with Firefly, Alloy, BAREWire, and Farscape, fsnative compiles F# to efficient, standalone native binaries that run without any runtime.
+CCS hands a fully-typed tree to Composer. Every type is already native — NTU strings, value options, region-annotated pointers. Composer's nanopasses operate on resolved types, not BCL references.
 
-## What fsnative Provides
+## What CCS Provides
 
-- **Parsing**: Full F# syntax support via the battle-tested FCS lexer and parser
-- **Native Type Resolution**: String literals, options, and arrays resolve to native types
-- **Memory Region Tracking**: Pointers carry region and access-kind information through the type system
-- **Native SRTP**: Statically resolved type parameters resolve against the Alloy witness hierarchy
-- **Typed Tree**: Complete `FSharpExpr` output for downstream code generation
-- **IDE Services**: Symbol resolution, type information, and semantic classification for tooling
+- **Parsing** — Full Clef syntax via the battle-tested FCS lexer and parser, extended for Clef constructs
+- **Native Type Resolution** — String literals, options, and arrays resolve to NTU types at the type-checking stage
+- **Memory Region Tracking** — Pointers carry region and access-kind annotations through the typed tree
+- **SRTP Resolution** — Statically resolved type parameters resolve against the Alloy witness hierarchy, not .NET method tables
+- **Typed Tree Output** — Complete `ClefExpr` output for downstream PSG construction in Composer
+- **LSP Services** — Symbol resolution, type information, and semantic classification consumed by Lattice
 
-## What fsnative Does Not Provide
+## What CCS Does Not Provide
 
-fsnative is a focused frontend, not a complete compiler:
+CCS is a focused frontend, not a complete compiler:
 
-- **No IL generation**: That's what the standard F# compiler does
-- **No MSBuild integration**: Project files are handled by Firefly
-- **No NuGet resolution**: Package management is external
-- **No REPL**: Interactive scripting requires a managed runtime
+- **No IL generation** — Clef does not target .NET IL
+- **No MSBuild integration** — Project files are `.fidproj`, handled by Composer
+- **No NuGet resolution** — Package management is ClefPak (`cpk`)
+- **No REPL** — Interactive scripting requires a managed runtime; Clef has none
 
-fsnative stops at the typed tree. Code generation happens in Firefly via MLIR.
+CCS stops at the typed tree. Code generation happens in Composer via Alex and MLIR.
 
 ## Getting Started
 
-fsnative is consumed as a library by the Firefly compiler:
+CCS is consumed as a library by Composer:
 
-```fsharp
-// Firefly uses fsnative for type checking
-let checker = FNCSChecker.Create()
-let results = checker.ParseAndCheck(sourceFiles, config)
+```clef
+// Composer uses CCS for parsing and type checking
+let checker = CCSChecker.create ()
+let results = checker.parseAndCheck sourceFiles config
 
-// Results contain the typed tree with native type resolution
-let typedTree = results.TypedTree
-let srtpResolutions = results.SRTPResolutions
+// Results contain the typed tree with NTU type resolution
+let typedTree = results.typedTree
+let srtpResolutions = results.srtpResolutions
 ```
 
-For most use cases, you'll interact with fsnative through Firefly rather than directly.
+For most use cases, you will interact with CCS through Composer rather than directly.
 
 ## Implementation Status
 
 | Phase | Description | Status |
 |-------|-------------|--------|
 | Phase 1 | Structural pruning and namespace transformation | In Progress |
-| Phase 2 | Native type integration | Pending |
+| Phase 2 | Native Type Universe (NTU) integration | Pending |
 | Phase 3 | SRTP resolution against Alloy witnesses | Pending |
-| Phase 4 | Memory region and access kind measures | Future |
+| Phase 4 | Memory region and access-kind annotations | Future |
 
-See [docs/fidelity/FNCS_Phase1_Transformation_Plan.md](docs/fidelity/FNCS_Phase1_Transformation_Plan.md) for detailed status.
+See [docs/fidelity/FNCS_Phase1_Transformation_Plan.md](docs/fidelity/FNCS_Phase1_Transformation_Plan.md) for detailed phase status.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [docs/fidelity/README.md](docs/fidelity/README.md) | FNCS overview and architecture |
-| [docs/fidelity/FNCS_Phase1_Transformation_Plan.md](docs/fidelity/FNCS_Phase1_Transformation_Plan.md) | Detailed transformation roadmap |
-| [docs/fidelity/FNCS_Pruning_Plan.md](docs/fidelity/FNCS_Pruning_Plan.md) | Component pruning strategy |
-| [fsnative-spec](https://github.com/speakeztech/fsnative-spec) | Normative language specification |
+| [docs/fidelity/README.md](docs/fidelity/README.md) | CCS architecture overview |
+| [clef-lang-spec](https://github.com/FidelityFramework/clef-lang-spec) | Normative Clef language specification |
+| [clef-lang.com](https://clef-lang.com) | Language documentation and design guides |
 
 ## Relationship to dotnet/fsharp
 
-fsnative is a fork of Microsoft's [dotnet/fsharp](https://github.com/dotnet/fsharp) repository. We're grateful to the F# team and community for creating and maintaining an excellent compiler.
+CCS descends from a surgical fork of Microsoft's [dotnet/fsharp](https://github.com/dotnet/fsharp). The FCS parsing and name-resolution machinery is the foundation; the type universe, memory model, and output interface are being replaced wholesale. We are grateful to the F# team and community for the compiler infrastructure on which this work builds.
 
-Our modifications focus on type resolution, not syntax. We maintain the fork as a focused, surgical modification rather than a wholesale rewrite. The parsing, name resolution, and constraint solving machinery remains largely intact. What changes is the underlying type machinery those mechanisms operate against.
+Clef is a distinct language. It is not F# targeting native backends. The syntax is ML-family and will be familiar to F# developers, but the semantics — memory ownership, the actor model, dimensional types, hardware targeting — are Clef's own.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
 
 Original work is copyright Microsoft Corporation. Modifications are copyright SpeakEZ Technologies.
 
 ## Contact
 
-fsnative is developed by [SpeakEZ Technologies](https://speakez.tech) as part of the Fidelity native compilation framework.
-
-## Acknowledgments
-
-- **[Microsoft F# Team](https://github.com/dotnet/fsharp)**: For the F# compiler and FCS that FNCS is based on
-- **Don Syme and F# Contributors**: For creating an elegant functional language
-- **Firefly Team**: For the native compilation infrastructure
+CCS is developed by [SpeakEZ Technologies](https://speakez.tech) as part of the Fidelity native compilation framework.
 
 ---
 
-*F# syntax you know. Native semantics you need.*
+*ML semantics. Hardware scale. No runtime.*
