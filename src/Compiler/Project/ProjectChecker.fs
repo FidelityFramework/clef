@@ -131,7 +131,7 @@ module ProjectChecker =
                                 | Some platformPath ->
                                     let basePlatformCtx = PlatformContext.fromPlatformPath platformPath
                                     // Set FreestandingStartup if this is a freestanding build
-                                    if options.OutputKind = OutputKind.Freestanding then
+                                    if options.DeploymentMode = DeploymentMode.Freestanding then
                                         Some { basePlatformCtx with
                                                  FreestandingStartup = FreestandingStartup.forPlatform basePlatformCtx.PlatformId }
                                     else
@@ -219,7 +219,7 @@ module ProjectChecker =
                             | Some platformPath ->
                                 let basePlatformCtx = PlatformContext.fromPlatformPath platformPath
                                 // Set FreestandingStartup if this is a freestanding build
-                                if options.OutputKind = OutputKind.Freestanding then
+                                if options.DeploymentMode = DeploymentMode.Freestanding then
                                     Some { basePlatformCtx with
                                              FreestandingStartup = FreestandingStartup.forPlatform basePlatformCtx.PlatformId }
                                 else

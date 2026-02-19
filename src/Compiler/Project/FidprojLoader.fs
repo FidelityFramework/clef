@@ -17,9 +17,25 @@ type MemoryModel =
     /// Standard allocation (malloc/free or GC).
     | Standard
 
-/// Output kind for the compiled binary.
+/// Target platform — determines which compilation pipeline (backend) to use.
 [<RequireQualifiedAccess>]
-type OutputKind =
+type TargetPlatform =
+    /// General-purpose processor → LLVM backend.
+    | CPU
+    /// Field-programmable gate array → CIRCT backend.
+    | FPGA
+    /// Graphics/compute processor → future.
+    | GPU
+    /// Microcontroller → LLVM backend (different config).
+    | MCU
+    /// Neural processing unit → future.
+    | NPU
+
+/// Deployment mode — backend-internal concern.
+/// Determines linker flags, runtime dependencies, entry point handling.
+/// Does NOT affect pipeline selection.
+[<RequireQualifiedAccess>]
+type DeploymentMode =
     /// Freestanding binary, no libc dependency.
     | Freestanding
     /// Console application with libc.
@@ -58,16 +74,16 @@ type FidprojOptions = {
 
     /// Compilation memory model.
     MemoryModel: MemoryModel
-    /// Target platform.
-    Target: string
+    /// Target platform — determines which backend pipeline to use.
+    TargetPlatform: TargetPlatform
 
     /// Source files (relative paths as declared in fidproj).
     SourceFiles: string list
 
     /// Output binary name (without extension).
     OutputName: string option
-    /// Output kind.
-    OutputKind: OutputKind
+    /// Deployment mode — backend-internal (linker flags, runtime deps).
+    DeploymentMode: DeploymentMode
 
     /// Project dependencies.
     Dependencies: FidprojDependency list
@@ -91,14 +107,24 @@ module FidprojLoader =
         | "arena" -> MemoryModel.Arena
         | "standard" | _ -> MemoryModel.Standard
 
-    /// Parses an output kind string.
-    let private parseOutputKind (s: string) =
+    /// Parses a target platform string from [compilation] target.
+    let private parseTargetPlatform (s: string) =
         match s.ToLowerInvariant() with
-        | "freestanding" -> OutputKind.Freestanding
-        | "console" -> OutputKind.Console
-        | "library" | "lib" -> OutputKind.Library
-        | "embedded" -> OutputKind.Embedded
-        | _ -> OutputKind.Console
+        | "cpu" | "native" -> TargetPlatform.CPU
+        | "fpga" -> TargetPlatform.FPGA
+        | "gpu" -> TargetPlatform.GPU
+        | "mcu" -> TargetPlatform.MCU
+        | "npu" -> TargetPlatform.NPU
+        | _ -> TargetPlatform.CPU
+
+    /// Parses a deployment mode string from [build] output_kind.
+    let private parseDeploymentMode (s: string) =
+        match s.ToLowerInvariant() with
+        | "freestanding" -> DeploymentMode.Freestanding
+        | "console" -> DeploymentMode.Console
+        | "library" | "lib" -> DeploymentMode.Library
+        | "embedded" -> DeploymentMode.Embedded
+        | _ -> DeploymentMode.Console
 
     /// Parses a dependency from a TOML value.
     let private parseDependency (name: string) (value: TomlValue) (projectDir: string): FidprojDependency =
@@ -169,19 +195,20 @@ module FidprojLoader =
                     Toml.getString "compilation.memory_model" doc
                     |> Option.map parseMemoryModel
                     |> Option.defaultValue MemoryModel.StackOnly
-                let target =
+                let targetPlatform =
                     Toml.getString "compilation.target" doc
                     |> Option.defaultValue "native"
+                    |> parseTargetPlatform
 
                 // Build section
                 let sources =
                     Toml.getStringArray "build.sources" doc
                     |> Option.defaultValue []
                 let outputName = Toml.getString "build.output" doc
-                let outputKind =
+                let deploymentMode =
                     Toml.getString "build.output_kind" doc
-                    |> Option.map parseOutputKind
-                    |> Option.defaultValue OutputKind.Console
+                    |> Option.map parseDeploymentMode
+                    |> Option.defaultValue DeploymentMode.Console
 
                 // Dependencies section
                 let dependencies =
@@ -211,10 +238,10 @@ module FidprojLoader =
                     Name = name
                     Version = version
                     MemoryModel = memoryModel
-                    Target = target
+                    TargetPlatform = targetPlatform
                     SourceFiles = sources
                     OutputName = outputName
-                    OutputKind = outputKind
+                    DeploymentMode = deploymentMode
                     Dependencies = dependencies
                     AlloyPath = alloyPath
                     PlatformPath = platformPath
