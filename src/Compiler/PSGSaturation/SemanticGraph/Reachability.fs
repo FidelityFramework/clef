@@ -49,6 +49,12 @@ let getSemanticReferences (node: SemanticNode) : NodeId list =
         scrutinee :: (cases |> List.collect (fun c ->
             let guardAndBody = match c.Guard with Some g -> [g; c.Body] | None -> [c.Body]
             c.PatternBindings @ guardAndBody))
+    // CaseElimination: follow scrutinee and arm bindings/guards/bodies
+    | SemanticKind.CaseElimination (scrutinee, arms) ->
+        scrutinee :: (arms |> List.collect (fun arm ->
+            arm.Bindings
+            @ (match arm.Guard with Some g -> [g] | None -> [])
+            @ [arm.Body]))
     // Sequential: follow all nodes
     | SemanticKind.Sequential nodes ->
         nodes

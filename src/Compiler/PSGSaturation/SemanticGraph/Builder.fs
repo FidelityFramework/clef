@@ -31,6 +31,11 @@ let private extractImpliedChildren (kind: SemanticKind) : NodeId list =
             let guardAndBody = match c.Guard with Some g -> [g; c.Body] | None -> [c.Body]
             c.PatternBindings @ guardAndBody)
         scrutinee :: caseNodeIds
+    | SemanticKind.CaseElimination (scrutinee, arms) ->
+        scrutinee :: (arms |> List.collect (fun arm ->
+            arm.Bindings
+            @ (match arm.Guard with Some g -> [g] | None -> [])
+            @ [arm.Body]))
     | SemanticKind.Sequential nodes -> nodes
     | SemanticKind.WhileLoop (guard, body) -> [guard; body]
     | SemanticKind.ForLoop (_, start, finish, _, body) -> [start; finish; body]

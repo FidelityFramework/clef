@@ -237,6 +237,24 @@ let foldWithSCFRegions
                         ) (state, 0)
                         |> fst
 
+                    // CaseElimination: scrutinee first, then each arm is a region
+                    | SemanticKind.CaseElimination (scrutineeId, arms), Some hook ->
+                        let parentId = node.Id
+                        let state = walk state scrutineeId
+                        arms
+                        |> List.fold (fun (state, idx) arm ->
+                            let state = hook.BeforeRegion state parentId (MatchCaseRegion idx)
+                            let state = arm.Bindings |> List.fold walk state
+                            let state =
+                                match arm.Guard with
+                                | Some guardId -> walk state guardId
+                                | None -> state
+                            let state = walk state arm.Body
+                            let state = hook.AfterRegion state parentId (MatchCaseRegion idx)
+                            (state, idx + 1)
+                        ) (state, 0)
+                        |> fst
+
                     // Lambda: body is a region, but parameters are walked first
                     | SemanticKind.Lambda (params', bodyId, _captures, _enclosingFunction, _context), Some hook ->
                         let parentId = node.Id

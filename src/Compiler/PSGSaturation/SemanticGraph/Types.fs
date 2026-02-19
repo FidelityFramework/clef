@@ -162,6 +162,20 @@ type MatchCase = {
     Body: NodeId
 }
 
+/// An arm in a case elimination — enriched by Baker with concrete bindings.
+/// Pattern carries the structural info (Union tag index, payload type).
+/// Bindings are fully resolved (DUEliminate + Binding via letBindAt).
+and CaseArm = {
+    /// The pattern (carries Union tag index and payload type info)
+    Pattern: Pattern
+    /// NodeIds of binding nodes created by extractPatternBindings
+    Bindings: NodeId list
+    /// Optional guard expression
+    Guard: NodeId option
+    /// The body expression
+    Body: NodeId
+}
+
 /// Patterns in match expressions
 and [<RequireQualifiedAccess>] Pattern =
     | Const of NativeLiteral
@@ -191,6 +205,10 @@ type SemanticKind =
     | Literal of value: NativeLiteral
     | VarRef of name: string * definition: NodeId option
     | Match of scrutinee: NodeId * cases: MatchCase list
+    /// Structural elimination (catamorphism) — Baker-enriched form of Match.
+    /// Preserves the fold structure: constructor index → (bindings, body).
+    /// No DUGetTag, comparison, or IfThenElse nodes — those are elision concerns.
+    | CaseElimination of scrutinee: NodeId * arms: CaseArm list
     | Sequential of nodes: NodeId list
     | WhileLoop of guard: NodeId * body: NodeId
     | ForLoop of var: string * start: NodeId * finish: NodeId * isUp: bool * body: NodeId

@@ -310,7 +310,21 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
 
     | SemanticKind.Match (scrutineeId, cases) ->
         let ctx = mkContext node.Range node.Type graph.Platform "Match" node.Id
-        let result = MatchRecipes.decomposeMatch ctx scrutineeId cases node.Type
+        // Tuple matches require nested tag extraction (multiple DU scrutinees).
+        // Use enrichMatch (CaseElimination) for single-DU matches;
+        // fall back to decomposeMatch (IfThenElse chain) for tuple matches.
+        let isTupleMatch =
+            match SemanticGraph.tryGetNode scrutineeId graph with
+            | Some scrutineeNode ->
+                match scrutineeNode.Kind with
+                | SemanticKind.TupleExpr _ -> true
+                | _ -> false
+            | None -> false
+        let result =
+            if isTupleMatch then
+                MatchRecipes.decomposeMatch ctx scrutineeId cases node.Type
+            else
+                MatchRecipes.enrichMatch ctx scrutineeId cases node.Type
         RecipeCreated (toRecipe node.Id "Match" result)
 
     | SemanticKind.UnionCase (caseName, caseIndex, payload) ->

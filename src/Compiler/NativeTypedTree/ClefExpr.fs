@@ -431,6 +431,15 @@ module ClefExpr =
                 let nativeCases = cases |> List.map (convertMatchCase graph)
                 ClefExpr.Match(scrutineeExpr, nativeCases, node.Type)
 
+            // CaseElimination — display as Match for source-level representation
+            | SemanticKind.CaseElimination(scrutineeId, arms) ->
+                let scrutineeExpr = fromNode graph scrutineeId
+                let nativeCases = arms |> List.map (fun arm ->
+                    { Pattern = convertPattern arm.Pattern
+                      Guard = arm.Guard |> Option.map (fromNode graph)
+                      Body = fromNode graph arm.Body } : NativeMatchCase)
+                ClefExpr.Match(scrutineeExpr, nativeCases, node.Type)
+
             // While loop
             | SemanticKind.WhileLoop(guardId, bodyId) ->
                 let guardExpr = fromNode graph guardId

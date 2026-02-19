@@ -674,3 +674,38 @@ let decomposeMatch
     
     let parser = matchDecomposeParser scrutineeId cases resultType
     runSaturation ctx parser
+
+/// Enrich a Match into a CaseElimination — preserving the fold structure.
+/// Each arm's bindings are resolved (DUEliminate + Binding via letBindAt)
+/// but no DUGetTag, comparison, or IfThenElse nodes are created.
+/// Tag comparison and control flow are elision concerns (handled by Alex).
+let enrichMatch
+    (ctx: Context)
+    (scrutineeId: NodeId)
+    (cases: MatchCase list)
+    (resultType: NativeType)
+    : Result =
+
+    let parser =
+        saturation {
+            let! arms =
+                cases |> List.map (fun case ->
+                    saturation {
+                        let! bindings = extractPatternBindings scrutineeId case.Pattern case.PatternBindings
+                        return { Pattern = case.Pattern
+                                 Bindings = bindings
+                                 Guard = case.Guard
+                                 Body = case.Body } : CaseArm
+                    }) |> sequence
+
+            let children =
+                scrutineeId :: (arms |> List.collect (fun arm ->
+                    arm.Bindings
+                    @ (match arm.Guard with Some g -> [g] | None -> [])
+                    @ [arm.Body]))
+
+            return! createWithChildren
+                (SemanticKind.CaseElimination (scrutineeId, arms))
+                resultType children
+        }
+    runSaturation ctx parser
