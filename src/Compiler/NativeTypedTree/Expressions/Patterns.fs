@@ -83,9 +83,11 @@ let rec checkPattern
                         | Some caseInfo -> caseInfo.CaseIndex
                         | None -> 0  // Fallback for non-DU constructors
                     | None ->
-                        tryGetUnionCaseInfo caseName expectedTy
-                        |> Option.map (fun ci -> ci.CaseIndex)
-                        |> Option.defaultValue 0
+                        addDiagnostic { Severity = NativeDiagnosticSeverity.Error
+                                        Code = DiagnosticCodes.FS0001_GenericError
+                                        Message = $"The constructor '{caseName}' is not defined."
+                                        Range = range; RelatedNodes = [] } env
+                        0
                 (Pattern.Union(caseName, tagIndex, None, expectedTy), [])
         | SynArgPats.Pats pats ->
             // Constructor with arguments (e.g., Some x, Error e)
@@ -110,12 +112,11 @@ let rec checkPattern
                         | None -> 0  // Fallback for non-DU constructors
                     (types, idx)
                 | None ->
-                    // Fallback: use fresh type variables; case index from well-known DU constructors
-                    let idx =
-                        tryGetUnionCaseInfo caseName expectedTy
-                        |> Option.map (fun ci -> ci.CaseIndex)
-                        |> Option.defaultValue 0
-                    (pats |> List.map (fun _ -> freshTypeVar range), idx)
+                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error
+                                    Code = DiagnosticCodes.FS0001_GenericError
+                                    Message = $"The constructor '{caseName}' is not defined."
+                                    Range = range; RelatedNodes = [] } env
+                    (pats |> List.map (fun _ -> freshTypeVar range), 0)
 
             let (argPatterns, argBindings) =
                 List.zip pats payloadTypes
@@ -134,9 +135,11 @@ let rec checkPattern
                     | Some caseInfo -> caseInfo.CaseIndex
                     | None -> 0
                 | None ->
-                    tryGetUnionCaseInfo caseName expectedTy
-                    |> Option.map (fun ci -> ci.CaseIndex)
-                    |> Option.defaultValue 0
+                        addDiagnostic { Severity = NativeDiagnosticSeverity.Error
+                                        Code = DiagnosticCodes.FS0001_GenericError
+                                        Message = $"The constructor '{caseName}' is not defined."
+                                        Range = range; RelatedNodes = [] } env
+                        0
             (Pattern.Union(caseName, tagIndex, None, expectedTy), [])
 
     | SynPat.As(lhsPat, rhsPat, _) ->

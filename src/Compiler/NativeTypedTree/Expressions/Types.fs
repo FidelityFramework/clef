@@ -160,36 +160,31 @@ type CheckerCallbacks = {
 }
 
 //-------------------------------------------------------------------------
+// Built-in DU TypeConRefs
+// Module-level so both createTypeEnv (constructor registration) and
+// tryResolveBuiltinTypeConstructor (type annotation resolution) share the
+// same canonical TypeConRef instances.
+//-------------------------------------------------------------------------
+
+/// Canonical TypeConRef for option<'T>.
+let internal optionTycon  : TypeConRef = mkTypeConRef "option"  1 TypeLayout.Opaque
+/// Canonical TypeConRef for voption<'T>.
+let internal voptionTycon : TypeConRef = mkTypeConRef "voption" 1 TypeLayout.Opaque
+/// Canonical TypeConRef for Result<'T,'E>. Capital R — matches F# annotation syntax.
+let internal resultTycon  : TypeConRef = mkTypeConRef "Result"  2 TypeLayout.Opaque
+
+//-------------------------------------------------------------------------
 // Environment Creation
 //-------------------------------------------------------------------------
 
-/// Get UnionCaseInfo for known union case constructors
-/// This follows the FCS TyconRef.Deref pattern - union case info is looked up, not embedded
-let tryGetUnionCaseInfo (name: string) (ty: NativeType) : NR.UnionCaseInfo option =
-    // Unwrap TForall to get to the actual type
-    let resultType =
-        match ty with
-        | NativeType.TForall(_, NativeType.TFun(_, ret)) -> ret  // Constructor with payload
-        | NativeType.TForall(_, ret) -> ret  // Nullary constructor
-        | NativeType.TFun(_, ret) -> ret  // Non-polymorphic constructor with payload
-        | _ -> ty
-
-    match name with
-    // Option constructors (case 0 = None, case 1 = Some)
-    | "None" -> Some { CaseName = "None"; UnionType = resultType; CaseIndex = 0 }
-    | "Some" -> Some { CaseName = "Some"; UnionType = resultType; CaseIndex = 1 }
-    // ValueOption constructors (case 0 = ValueNone, case 1 = ValueSome)
-    | "ValueNone" -> Some { CaseName = "ValueNone"; UnionType = resultType; CaseIndex = 0 }
-    | "ValueSome" -> Some { CaseName = "ValueSome"; UnionType = resultType; CaseIndex = 1 }
-    // Result constructors (case 0 = Ok, case 1 = Error)
-    | "Ok" -> Some { CaseName = "Ok"; UnionType = resultType; CaseIndex = 0 }
-    | "Error" -> Some { CaseName = "Error"; UnionType = resultType; CaseIndex = 1 }
-    | _ -> None
-
-/// Create a type environment
-/// Intrinsics are resolved via Intrinsics.fs, not built-in bindings
+/// Create a type environment, pre-populated with built-in DU constructors.
+/// option<'T>, voption<'T>, and Result<'T,'E> constructors are registered here
+/// so that unqualified `Some`, `None`, `Ok`, `Error`, `ValueSome`, `ValueNone`
+/// resolve to properly-typed UnionCase nodes. Each use site gets fresh type
+/// variables via instantiateTForall, so the PSG carries concrete TApp types
+/// (e.g. TApp(option_tycon, [TVar ?fresh])) rather than bare unbound TVars.
 let createTypeEnv () : TypeEnv =
-    {
+    let baseEnv = {
         Resolution = NR.createContext ()
         TypeDefs = Map.empty
         TypeAbbrevs = Map.empty
@@ -202,6 +197,34 @@ let createTypeEnv () : TypeEnv =
         EnclosingFunction = None
         EnclosingSeqExpr = None
     }
+    // Inline registration: mirrors addUnionCaseBinding without forward-reference.
+    let mkDU name ty caseIndex env =
+        let caseInfo: NR.UnionCaseInfo = { CaseName = name; UnionType = ty; CaseIndex = caseIndex }
+        let binding: NR.ResolvedBinding = {
+            QualifiedName = name; Type = ty; IsMutable = false; NodeId = None
+            InlineBody = None; UnionCaseInfo = Some caseInfo; NativeLiteral = None; IsModuleLevel = true }
+        { env with Resolution = NR.registerBinding name binding env.Resolution }
+    // option: None : option<'T>   Some : 'T -> option<'T>
+    let optA   = freshTypeParamAuto TypeParamKind.Type dummyRange
+    let optATy = NativeType.TVar optA
+    let optionTy = NativeType.TApp(optionTycon, [optATy])
+    // voption: ValueNone : voption<'T>   ValueSome : 'T -> voption<'T>
+    let voptA   = freshTypeParamAuto TypeParamKind.Type dummyRange
+    let voptATy = NativeType.TVar voptA
+    let voptionTy = NativeType.TApp(voptionTycon, [voptATy])
+    // result: Ok : 'T -> result<'T,'E>   Error : 'E -> result<'T,'E>
+    let resOkA  = freshTypeParamAuto TypeParamKind.Type dummyRange
+    let resErrA = freshTypeParamAuto TypeParamKind.Type dummyRange
+    let resOkTy  = NativeType.TVar resOkA
+    let resErrTy = NativeType.TVar resErrA
+    let resultTy = NativeType.TApp(resultTycon, [resOkTy; resErrTy])
+    baseEnv
+    |> mkDU "None"      (NativeType.TForall([optA],              optionTy))                                                   0
+    |> mkDU "Some"      (NativeType.TForall([optA],              NativeType.TFun(optATy,  optionTy)))                         1
+    |> mkDU "ValueNone" (NativeType.TForall([voptA],             voptionTy))                                                  0
+    |> mkDU "ValueSome" (NativeType.TForall([voptA],             NativeType.TFun(voptATy, voptionTy)))                        1
+    |> mkDU "Ok"        (NativeType.TForall([resOkA; resErrA],   NativeType.TFun(resOkTy,  resultTy)))                        0
+    |> mkDU "Error"     (NativeType.TForall([resOkA; resErrA],   NativeType.TFun(resErrTy, resultTy)))                        1
 
 //-------------------------------------------------------------------------
 // Diagnostics
@@ -657,6 +680,10 @@ let private tryResolveBuiltinTypeConstructor (name: string) (args: NativeType li
     | "list", [elem] -> Some (NativeType.TList elem)
     | "Map", [k; v] -> Some (NativeType.TMap(k, v))
     | "Set", [elem] -> Some (NativeType.TSet elem)
+    // Built-in discriminated union type constructors
+    | "option",  [elem]      -> Some (NativeType.TApp(optionTycon,  [elem]))
+    | "voption", [elem]      -> Some (NativeType.TApp(voptionTycon, [elem]))
+    | "Result",  [ok; err]   -> Some (NativeType.TApp(resultTycon,  [ok; err]))
     // Not a built-in type constructor
     | _ -> None
 
