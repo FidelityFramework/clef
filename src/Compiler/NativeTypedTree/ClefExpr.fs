@@ -1,4 +1,4 @@
-// FSharpNativeExpr.fs - FNCS's native typed expression representation
+// ClefExpr.fs - FNCS's native typed expression representation
 //
 // This is FNCS's own typed expression type that REPLACES FSharpExpr from FCS.
 // It is a PROJECTION/VIEW over SemanticGraph - materialized from SemanticNode + SemanticKind on demand.
@@ -11,7 +11,7 @@
 // - Expression-centric view for tooling, debugging, IDE integration
 //
 // The SemanticGraph already has all information (types attached during construction).
-// FSharpNativeExpr provides an expression-centric view that's easier to:
+// ClefExpr provides an expression-centric view that's easier to:
 // - Pretty-print for debugging
 // - Serialize to JSON for intermediate inspection
 // - Navigate for IDE features (hover, go-to-definition)
@@ -30,9 +30,9 @@ type NativeMatchCase = {
     /// The pattern (simplified representation)
     Pattern: NativePattern
     /// Optional guard: when expr
-    Guard: FSharpNativeExpr option
+    Guard: ClefExpr option
     /// The case body
-    Body: FSharpNativeExpr
+    Body: ClefExpr
 }
 
 /// Pattern for match cases
@@ -60,9 +60,9 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] NativePattern =
     /// Null pattern: null
     | Null
 
-/// FSharpNativeExpr - Expression-centric view over SemanticGraph
+/// ClefExpr - Expression-centric view over SemanticGraph
 /// Materialized from SemanticNode + SemanticKind on demand
-and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
+and [<RequireQualifiedAccess; NoComparison; NoEquality>] ClefExpr =
     // ═══════════════════════════════════════════════════════════════════════════
     // Bindings
     // ═══════════════════════════════════════════════════════════════════════════
@@ -71,14 +71,14 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
     | LetBinding of
         name: string *
         isMutable: bool *
-        value: FSharpNativeExpr *
-        body: FSharpNativeExpr option *
+        value: ClefExpr *
+        body: ClefExpr option *
         ty: NativeType
 
     /// Recursive let bindings: let rec f = ... and g = ... in body
     | LetRecBindings of
-        bindings: (string * FSharpNativeExpr) list *
-        body: FSharpNativeExpr option
+        bindings: (string * ClefExpr) list *
+        body: ClefExpr option
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Functions
@@ -88,15 +88,15 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
     /// enclosingFunction: None at module level, Some "parentName" for nested functions (PRD-13)
     | Lambda of
         parameters: (string * NativeType) list *
-        body: FSharpNativeExpr *
+        body: ClefExpr *
         returnType: NativeType *
         srtp: WitnessResolution option *
         enclosingFunction: string option
 
     /// Function application: f arg1 arg2
     | Application of
-        func: FSharpNativeExpr *
-        args: FSharpNativeExpr list *
+        func: ClefExpr *
+        args: ClefExpr list *
         returnType: NativeType *
         srtp: WitnessResolution option
 
@@ -120,38 +120,38 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
 
     /// If-then-else: if guard then thenBranch else elseBranch
     | IfThenElse of
-        guard: FSharpNativeExpr *
-        thenBranch: FSharpNativeExpr *
-        elseBranch: FSharpNativeExpr option *
+        guard: ClefExpr *
+        thenBranch: ClefExpr *
+        elseBranch: ClefExpr option *
         ty: NativeType
 
     /// Match expression: match scrutinee with | case1 -> ... | case2 -> ...
     | Match of
-        scrutinee: FSharpNativeExpr *
+        scrutinee: ClefExpr *
         cases: NativeMatchCase list *
         ty: NativeType
 
     /// Sequential expression: expr1; expr2; ...
-    | Sequential of exprs: FSharpNativeExpr list * ty: NativeType
+    | Sequential of exprs: ClefExpr list * ty: NativeType
 
     /// While loop: while guard do body
     | WhileLoop of
-        guard: FSharpNativeExpr *
-        body: FSharpNativeExpr
+        guard: ClefExpr *
+        body: ClefExpr
 
     /// For loop: for var = start to/downto finish do body
     | ForLoop of
         var: string *
-        start: FSharpNativeExpr *
-        finish: FSharpNativeExpr *
+        start: ClefExpr *
+        finish: ClefExpr *
         isUp: bool *
-        body: FSharpNativeExpr
+        body: ClefExpr
 
     /// For-each loop: for x in collection do body
     | ForEach of
         var: string *
-        collection: FSharpNativeExpr *
-        body: FSharpNativeExpr
+        collection: ClefExpr *
+        body: ClefExpr
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Exception Handling
@@ -159,13 +159,13 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
 
     /// Try-with: try body with handler
     | TryWith of
-        body: FSharpNativeExpr *
-        handler: FSharpNativeExpr
+        body: ClefExpr *
+        handler: ClefExpr
 
     /// Try-finally: try body finally cleanup
     | TryFinally of
-        body: FSharpNativeExpr *
-        cleanup: FSharpNativeExpr
+        body: ClefExpr *
+        cleanup: ClefExpr
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Data Structures
@@ -173,35 +173,35 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
 
     /// Record expression: { field1 = v1; field2 = v2 }
     | RecordExpr of
-        fields: (string * FSharpNativeExpr) list *
-        copyFrom: FSharpNativeExpr option *
+        fields: (string * ClefExpr) list *
+        copyFrom: ClefExpr option *
         ty: NativeType
 
     /// Union case: Some x, None, etc.
     | UnionCase of
         caseName: string *
-        payload: FSharpNativeExpr option *
+        payload: ClefExpr option *
         ty: NativeType
 
     /// Tuple expression: (e1, e2, ...)
     | TupleExpr of
-        elements: FSharpNativeExpr list *
+        elements: ClefExpr list *
         ty: NativeType
 
     /// Tuple element access: fst tuple, snd tuple, or tuple destructuring
     | TupleGet of
-        tuple: FSharpNativeExpr *
+        tuple: ClefExpr *
         index: int *
         ty: NativeType
 
     /// Array expression: [| e1; e2; ... |]
     | ArrayExpr of
-        elements: FSharpNativeExpr list *
+        elements: ClefExpr list *
         ty: NativeType
 
     /// List expression: [ e1; e2; ... ]
     | ListExpr of
-        elements: FSharpNativeExpr list *
+        elements: ClefExpr list *
         ty: NativeType
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -210,27 +210,27 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
 
     /// Field get: expr.field
     | FieldGet of
-        expr: FSharpNativeExpr *
+        expr: ClefExpr *
         fieldName: string *
         ty: NativeType
 
     /// Field set: expr.field <- value
     | FieldSet of
-        expr: FSharpNativeExpr *
+        expr: ClefExpr *
         fieldName: string *
-        value: FSharpNativeExpr
+        value: ClefExpr
 
     /// Index get: expr.[index]
     | IndexGet of
-        expr: FSharpNativeExpr *
-        index: FSharpNativeExpr *
+        expr: ClefExpr *
+        index: ClefExpr *
         ty: NativeType
 
     /// Index set: expr.[index] <- value
     | IndexSet of
-        expr: FSharpNativeExpr *
-        index: FSharpNativeExpr *
-        value: FSharpNativeExpr
+        expr: ClefExpr *
+        index: ClefExpr *
+        value: ClefExpr
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Type Operations
@@ -238,22 +238,22 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
 
     /// Type annotation: (expr : T)
     | TypeAnnotation of
-        expr: FSharpNativeExpr *
+        expr: ClefExpr *
         annotatedType: NativeType
 
     /// Upcast: expr :> T
     | Upcast of
-        expr: FSharpNativeExpr *
+        expr: ClefExpr *
         targetType: NativeType
 
     /// Downcast: expr :?> T
     | Downcast of
-        expr: FSharpNativeExpr *
+        expr: ClefExpr *
         targetType: NativeType
 
     /// Type test: expr :? T
     | TypeTest of
-        expr: FSharpNativeExpr *
+        expr: ClefExpr *
         testType: NativeType
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -262,17 +262,17 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
 
     /// Address-of: &expr or &&expr
     | AddressOf of
-        expr: FSharpNativeExpr *
+        expr: ClefExpr *
         isByref: bool *
         ty: NativeType
 
     /// Dereference: !expr (for ref cells)
-    | Deref of expr: FSharpNativeExpr * ty: NativeType
+    | Deref of expr: ClefExpr * ty: NativeType
 
     /// Assignment: expr <- value
     | Set of
-        target: FSharpNativeExpr *
-        value: FSharpNativeExpr
+        target: ClefExpr *
+        value: ClefExpr
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Platform Integration (CRITICAL for debugging writeStrOut)
@@ -282,13 +282,13 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
     /// Alex provides platform-specific implementations for these
     | PlatformBinding of
         entryPoint: string *
-        args: FSharpNativeExpr list *
+        args: ClefExpr list *
         ty: NativeType
 
     /// Compiler intrinsic function (e.g., NativePtr.toNativeInt)
     | Intrinsic of
         info: IntrinsicInfo *
-        args: FSharpNativeExpr list *
+        args: ClefExpr list *
         ty: NativeType
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -300,7 +300,7 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
     | TraitCall of
         memberName: string *
         constrainedTypes: NativeType list *
-        arg: FSharpNativeExpr *
+        arg: ClefExpr *
         resolution: WitnessResolution option *
         ty: NativeType
 
@@ -320,19 +320,19 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
     /// Module definition (for top-level structure)
     | ModuleDef of
         name: string *
-        members: FSharpNativeExpr list
+        members: ClefExpr list
 
     /// Type definition
     | TypeDef of
         name: string *
         kind: TypeDefKind *
-        members: FSharpNativeExpr list
+        members: ClefExpr list
 
     /// Member definition
     | MemberDef of
         name: string *
         kind: MemberKind *
-        body: FSharpNativeExpr option
+        body: ClefExpr option
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Error Recovery
@@ -344,14 +344,14 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] FSharpNativeExpr =
 /// Part of an interpolated string
 and [<RequireQualifiedAccess>] InterpolatedStringPart =
     | Text of string
-    | Expr of FSharpNativeExpr * format: string option
+    | Expr of ClefExpr * format: string option
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Conversion Module: SemanticGraph → FSharpNativeExpr
+// Conversion Module: SemanticGraph → ClefExpr
 // ═══════════════════════════════════════════════════════════════════════════
 
-module FSharpNativeExpr =
+module ClefExpr =
 
     /// Create an empty source range for error cases
     let private emptyRange : SourceRange = {
@@ -361,14 +361,14 @@ module FSharpNativeExpr =
     }
 
     /// Materialize an expression tree from SemanticGraph starting at a node
-    let rec fromNode (graph: SemanticGraph) (nodeId: NodeId) : FSharpNativeExpr =
+    let rec fromNode (graph: SemanticGraph) (nodeId: NodeId) : ClefExpr =
         match graph.Nodes.TryFind nodeId with
-        | None -> FSharpNativeExpr.Error($"Node {NodeId.value nodeId} not found in graph", emptyRange)
+        | None -> ClefExpr.Error($"Node {NodeId.value nodeId} not found in graph", emptyRange)
         | Some node ->
             match node.Kind with
             // Literals
             | SemanticKind.Literal value ->
-                FSharpNativeExpr.Literal(value, node.Type)
+                ClefExpr.Literal(value, node.Type)
 
             // Variable references
             | SemanticKind.VarRef(name, defId) ->
@@ -380,24 +380,24 @@ module FSharpNativeExpr =
                         | SemanticKind.Binding(_, isMut, _, _) -> isMut
                         | _ -> false)
                     |> Option.defaultValue false
-                FSharpNativeExpr.Variable(name, node.Type, isMutable, defId)
+                ClefExpr.Variable(name, node.Type, isMutable, defId)
 
             // Function application
             | SemanticKind.Application(funcId, argIds) ->
                 let funcExpr = fromNode graph funcId
                 let argExprs = argIds |> List.map (fromNode graph)
-                FSharpNativeExpr.Application(funcExpr, argExprs, node.Type, node.SRTPResolution)
+                ClefExpr.Application(funcExpr, argExprs, node.Type, node.SRTPResolution)
 
             // Lambda expressions
             | SemanticKind.Lambda(parameters, bodyId, _captures, enclosingFunction, _context) ->
                 let bodyExpr = fromNode graph bodyId
                 let returnType = extractReturnType node.Type
-                // Convert 3-tuple (name, type, nodeId) to 2-tuple (name, type) for FSharpNativeExpr
+                // Convert 3-tuple (name, type, nodeId) to 2-tuple (name, type) for ClefExpr
                 let params2 = parameters |> List.map (fun (name, ty, _nodeId) -> (name, ty))
-                // Note: captures are available via the SemanticKind but FSharpNativeExpr.Lambda
+                // Note: captures are available via the SemanticKind but ClefExpr.Lambda
                 // doesn't include them - they're accessed via the PSG node during code generation
                 // PRD-13: Include enclosingFunction for debugging nested function identity
-                FSharpNativeExpr.Lambda(params2, bodyExpr, returnType, node.SRTPResolution, enclosingFunction)
+                ClefExpr.Lambda(params2, bodyExpr, returnType, node.SRTPResolution, enclosingFunction)
 
             // Bindings
             | SemanticKind.Binding(name, isMutable, _isRecursive, _isEntryPoint) ->
@@ -409,130 +409,130 @@ module FSharpNativeExpr =
                         match rest with
                         | bodyId :: _ -> Some(fromNode graph bodyId)
                         | [] -> None
-                    FSharpNativeExpr.LetBinding(name, isMutable, valueExpr, bodyExpr, node.Type)
+                    ClefExpr.LetBinding(name, isMutable, valueExpr, bodyExpr, node.Type)
                 | [] ->
-                    FSharpNativeExpr.Error($"Binding {name} has no value", node.Range)
+                    ClefExpr.Error($"Binding {name} has no value", node.Range)
 
             // Sequential expressions
             | SemanticKind.Sequential nodeIds ->
                 let exprs = nodeIds |> List.map (fromNode graph)
-                FSharpNativeExpr.Sequential(exprs, node.Type)
+                ClefExpr.Sequential(exprs, node.Type)
 
             // If-then-else
             | SemanticKind.IfThenElse(guardId, thenId, elseIdOpt) ->
                 let guardExpr = fromNode graph guardId
                 let thenExpr = fromNode graph thenId
                 let elseExpr = elseIdOpt |> Option.map (fromNode graph)
-                FSharpNativeExpr.IfThenElse(guardExpr, thenExpr, elseExpr, node.Type)
+                ClefExpr.IfThenElse(guardExpr, thenExpr, elseExpr, node.Type)
 
             // Match expression
             | SemanticKind.Match(scrutineeId, cases) ->
                 let scrutineeExpr = fromNode graph scrutineeId
                 let nativeCases = cases |> List.map (convertMatchCase graph)
-                FSharpNativeExpr.Match(scrutineeExpr, nativeCases, node.Type)
+                ClefExpr.Match(scrutineeExpr, nativeCases, node.Type)
 
             // While loop
             | SemanticKind.WhileLoop(guardId, bodyId) ->
                 let guardExpr = fromNode graph guardId
                 let bodyExpr = fromNode graph bodyId
-                FSharpNativeExpr.WhileLoop(guardExpr, bodyExpr)
+                ClefExpr.WhileLoop(guardExpr, bodyExpr)
 
             // For loop
             | SemanticKind.ForLoop(var, startId, finishId, isUp, bodyId) ->
                 let startExpr = fromNode graph startId
                 let finishExpr = fromNode graph finishId
                 let bodyExpr = fromNode graph bodyId
-                FSharpNativeExpr.ForLoop(var, startExpr, finishExpr, isUp, bodyExpr)
+                ClefExpr.ForLoop(var, startExpr, finishExpr, isUp, bodyExpr)
 
             // For-each loop
             | SemanticKind.ForEach(var, collectionId, bodyId) ->
                 let collectionExpr = fromNode graph collectionId
                 let bodyExpr = fromNode graph bodyId
-                FSharpNativeExpr.ForEach(var, collectionExpr, bodyExpr)
+                ClefExpr.ForEach(var, collectionExpr, bodyExpr)
 
             // Try-with
             | SemanticKind.TryWith(bodyId, handlerId) ->
                 let bodyExpr = fromNode graph bodyId
                 let handlerExpr = fromNode graph handlerId
-                FSharpNativeExpr.TryWith(bodyExpr, handlerExpr)
+                ClefExpr.TryWith(bodyExpr, handlerExpr)
 
             // Try-finally
             | SemanticKind.TryFinally(bodyId, cleanupId) ->
                 let bodyExpr = fromNode graph bodyId
                 let cleanupExpr = fromNode graph cleanupId
-                FSharpNativeExpr.TryFinally(bodyExpr, cleanupExpr)
+                ClefExpr.TryFinally(bodyExpr, cleanupExpr)
 
             // Record expression
             | SemanticKind.RecordExpr(fields, copyFromIdOpt) ->
                 let fieldExprs = fields |> List.map (fun (name, id) -> (name, fromNode graph id))
                 let copyFromExpr = copyFromIdOpt |> Option.map (fromNode graph)
-                FSharpNativeExpr.RecordExpr(fieldExprs, copyFromExpr, node.Type)
+                ClefExpr.RecordExpr(fieldExprs, copyFromExpr, node.Type)
 
             // Union case
             | SemanticKind.UnionCase(caseName, _caseIndex, payloadIdOpt) ->
                 let payloadExpr = payloadIdOpt |> Option.map (fromNode graph)
-                FSharpNativeExpr.UnionCase(caseName, payloadExpr, node.Type)
+                ClefExpr.UnionCase(caseName, payloadExpr, node.Type)
 
             // DU Operations (January 2026) - internal compiler operations
             // These are lowered during code generation, not user-visible expressions
             | SemanticKind.DUGetTag (duValueId, _) ->
                 // Represents tag extraction - use FieldGet representation for now
                 let duExpr = fromNode graph duValueId
-                FSharpNativeExpr.FieldGet(duExpr, "Tag", node.Type)
+                ClefExpr.FieldGet(duExpr, "Tag", node.Type)
 
             | SemanticKind.DUEliminate (duValueId, _caseIndex, caseName, _payloadType) ->
                 // Represents type-safe payload extraction - use FieldGet representation
                 let duExpr = fromNode graph duValueId
-                FSharpNativeExpr.FieldGet(duExpr, caseName, node.Type)
+                ClefExpr.FieldGet(duExpr, caseName, node.Type)
 
             | SemanticKind.DUConstruct (caseName, _caseIndex, payloadIdOpt, _arenaHint) ->
                 // Represents DU construction - use UnionCase representation
                 let payloadExpr = payloadIdOpt |> Option.map (fromNode graph)
-                FSharpNativeExpr.UnionCase(caseName, payloadExpr, node.Type)
+                ClefExpr.UnionCase(caseName, payloadExpr, node.Type)
 
             // Tuple expression
             | SemanticKind.TupleExpr elementIds ->
                 let elements = elementIds |> List.map (fromNode graph)
-                FSharpNativeExpr.TupleExpr(elements, node.Type)
+                ClefExpr.TupleExpr(elements, node.Type)
 
             // Tuple element access (tuple destructuring)
             | SemanticKind.TupleGet(tupleId, index) ->
                 let tuple = fromNode graph tupleId
-                FSharpNativeExpr.TupleGet(tuple, index, node.Type)
+                ClefExpr.TupleGet(tuple, index, node.Type)
 
             // Array expression
             | SemanticKind.ArrayExpr elementIds ->
                 let elements = elementIds |> List.map (fromNode graph)
-                FSharpNativeExpr.ArrayExpr(elements, node.Type)
+                ClefExpr.ArrayExpr(elements, node.Type)
 
             // List expression
             | SemanticKind.ListExpr elementIds ->
                 let elements = elementIds |> List.map (fromNode graph)
-                FSharpNativeExpr.ListExpr(elements, node.Type)
+                ClefExpr.ListExpr(elements, node.Type)
 
             // Field get
             | SemanticKind.FieldGet(exprId, fieldName) ->
                 let expr = fromNode graph exprId
-                FSharpNativeExpr.FieldGet(expr, fieldName, node.Type)
+                ClefExpr.FieldGet(expr, fieldName, node.Type)
 
             // Field set
             | SemanticKind.FieldSet(exprId, fieldName, valueId) ->
                 let expr = fromNode graph exprId
                 let value = fromNode graph valueId
-                FSharpNativeExpr.FieldSet(expr, fieldName, value)
+                ClefExpr.FieldSet(expr, fieldName, value)
 
             // Index get
             | SemanticKind.IndexGet(exprId, indexId) ->
                 let expr = fromNode graph exprId
                 let index = fromNode graph indexId
-                FSharpNativeExpr.IndexGet(expr, index, node.Type)
+                ClefExpr.IndexGet(expr, index, node.Type)
 
             // Index set
             | SemanticKind.IndexSet(exprId, indexId, valueId) ->
                 let expr = fromNode graph exprId
                 let index = fromNode graph indexId
                 let value = fromNode graph valueId
-                FSharpNativeExpr.IndexSet(expr, index, value)
+                ClefExpr.IndexSet(expr, index, value)
 
             // Named indexed property set
             | SemanticKind.NamedIndexedPropertySet(exprId, _propName, indexId, valueId) ->
@@ -540,59 +540,59 @@ module FSharpNativeExpr =
                 let expr = fromNode graph exprId
                 let index = fromNode graph indexId
                 let value = fromNode graph valueId
-                FSharpNativeExpr.IndexSet(expr, index, value)
+                ClefExpr.IndexSet(expr, index, value)
 
             // Type annotation
             | SemanticKind.TypeAnnotation(exprId, annotatedType) ->
                 let expr = fromNode graph exprId
-                FSharpNativeExpr.TypeAnnotation(expr, annotatedType)
+                ClefExpr.TypeAnnotation(expr, annotatedType)
 
             // Upcast
             | SemanticKind.Upcast(exprId, targetType) ->
                 let expr = fromNode graph exprId
-                FSharpNativeExpr.Upcast(expr, targetType)
+                ClefExpr.Upcast(expr, targetType)
 
             // Downcast
             | SemanticKind.Downcast(exprId, targetType) ->
                 let expr = fromNode graph exprId
-                FSharpNativeExpr.Downcast(expr, targetType)
+                ClefExpr.Downcast(expr, targetType)
 
             // Type test
             | SemanticKind.TypeTest(exprId, testType) ->
                 let expr = fromNode graph exprId
-                FSharpNativeExpr.TypeTest(expr, testType)
+                ClefExpr.TypeTest(expr, testType)
 
             // Address-of
             | SemanticKind.AddressOf(exprId, isByref) ->
                 let expr = fromNode graph exprId
-                FSharpNativeExpr.AddressOf(expr, isByref, node.Type)
+                ClefExpr.AddressOf(expr, isByref, node.Type)
 
             // Dereference
             | SemanticKind.Deref exprId ->
                 let expr = fromNode graph exprId
-                FSharpNativeExpr.Deref(expr, node.Type)
+                ClefExpr.Deref(expr, node.Type)
 
             // Set (assignment)
             | SemanticKind.Set(targetId, valueId) ->
                 let target = fromNode graph targetId
                 let value = fromNode graph valueId
-                FSharpNativeExpr.Set(target, value)
+                ClefExpr.Set(target, value)
 
             // Platform binding
             | SemanticKind.PlatformBinding name ->
                 // Find args from children
                 let args = node.Children |> List.map (fromNode graph)
-                FSharpNativeExpr.PlatformBinding(name, args, node.Type)
+                ClefExpr.PlatformBinding(name, args, node.Type)
 
             // Intrinsic
             | SemanticKind.Intrinsic info ->
                 let args = node.Children |> List.map (fromNode graph)
-                FSharpNativeExpr.Intrinsic(info, args, node.Type)
+                ClefExpr.Intrinsic(info, args, node.Type)
 
             // SRTP trait call
             | SemanticKind.TraitCall(memberName, constrainedTypes, argId) ->
                 let argExpr = fromNode graph argId
-                FSharpNativeExpr.TraitCall(memberName, constrainedTypes, argExpr, node.SRTPResolution, node.Type)
+                ClefExpr.TraitCall(memberName, constrainedTypes, argExpr, node.SRTPResolution, node.Type)
 
             // Quote expression
             | SemanticKind.Quote(exprId, _isTyped) ->
@@ -603,39 +603,39 @@ module FSharpNativeExpr =
             | SemanticKind.ObjectExpr(_interfaceType, memberIds) ->
                 // Convert to a pseudo-record for now
                 let members = memberIds |> List.map (fromNode graph)
-                FSharpNativeExpr.TupleExpr(members, node.Type)
+                ClefExpr.TupleExpr(members, node.Type)
 
             // Module definition
             | SemanticKind.ModuleDef(name, memberIds) ->
                 let members = memberIds |> List.map (fromNode graph)
-                FSharpNativeExpr.ModuleDef(name, members)
+                ClefExpr.ModuleDef(name, members)
 
             // Type definition
             | SemanticKind.TypeDef(name, kind, memberIds) ->
                 let members = memberIds |> List.map (fromNode graph)
-                FSharpNativeExpr.TypeDef(name, kind, members)
+                ClefExpr.TypeDef(name, kind, members)
 
             // Member definition
             | SemanticKind.MemberDef(name, kind, bodyIdOpt) ->
                 let bodyExpr = bodyIdOpt |> Option.map (fromNode graph)
-                FSharpNativeExpr.MemberDef(name, kind, bodyExpr)
+                ClefExpr.MemberDef(name, kind, bodyExpr)
 
             // Interpolated string
             | SemanticKind.InterpolatedString parts ->
                 let nativeParts = parts |> List.map (convertInterpolatedPart graph)
-                FSharpNativeExpr.InterpolatedString(nativeParts, node.Type)
+                ClefExpr.InterpolatedString(nativeParts, node.Type)
 
             // Pattern binding - a variable introduced by a match pattern
             // This is a definition node; direct traversal returns the variable
             | SemanticKind.PatternBinding name ->
-                FSharpNativeExpr.Variable(name, node.Type, false, Some nodeId)
+                ClefExpr.Variable(name, node.Type, false, Some nodeId)
 
             // Lazy expressions (PRD-14)
             | SemanticKind.LazyExpr(bodyId, _captures) ->
                 // Convert lazy body to an expression
                 let bodyExpr = fromNode graph bodyId
                 // For now, wrap as a special intrinsic call - Alex will handle
-                FSharpNativeExpr.Intrinsic(
+                ClefExpr.Intrinsic(
                     { Module = IntrinsicModule.Lazy
                       Operation = "create"
                       Category = IntrinsicCategory.Pure
@@ -645,7 +645,7 @@ module FSharpNativeExpr =
 
             | SemanticKind.LazyForce lazyValueId ->
                 let lazyExpr = fromNode graph lazyValueId
-                FSharpNativeExpr.Intrinsic(
+                ClefExpr.Intrinsic(
                     { Module = IntrinsicModule.Lazy
                       Operation = "force"
                       Category = IntrinsicCategory.Pure
@@ -658,7 +658,7 @@ module FSharpNativeExpr =
                 // Convert seq body (MoveNext thunk) to an expression
                 let bodyExpr = fromNode graph bodyId
                 // For now, wrap as a special intrinsic call - Alex will handle
-                FSharpNativeExpr.Intrinsic(
+                ClefExpr.Intrinsic(
                     { Module = IntrinsicModule.Seq
                       Operation = "create"
                       Category = IntrinsicCategory.Pure
@@ -668,7 +668,7 @@ module FSharpNativeExpr =
 
             | SemanticKind.Yield valueId ->
                 let valueExpr = fromNode graph valueId
-                FSharpNativeExpr.Intrinsic(
+                ClefExpr.Intrinsic(
                     { Module = IntrinsicModule.Seq
                       Operation = "yield"
                       Category = IntrinsicCategory.Pure
@@ -678,7 +678,7 @@ module FSharpNativeExpr =
 
             | SemanticKind.YieldBang seqId ->
                 let seqExpr = fromNode graph seqId
-                FSharpNativeExpr.Intrinsic(
+                ClefExpr.Intrinsic(
                     { Module = IntrinsicModule.Seq
                       Operation = "yieldFrom"
                       Category = IntrinsicCategory.Pure
@@ -688,7 +688,7 @@ module FSharpNativeExpr =
 
             // Error
             | SemanticKind.Error message ->
-                FSharpNativeExpr.Error(message, node.Range)
+                ClefExpr.Error(message, node.Range)
 
     /// Convert a match case from SemanticGraph to native representation
     and private convertMatchCase (graph: SemanticGraph) (case: MatchCase) : NativeMatchCase =
@@ -744,12 +744,12 @@ module FSharpNativeExpr =
     // Entry Point Helpers
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// Get FSharpNativeExpr trees for all entry points in the graph
-    let fromEntryPoints (graph: SemanticGraph) : FSharpNativeExpr list =
+    /// Get ClefExpr trees for all entry points in the graph
+    let fromEntryPoints (graph: SemanticGraph) : ClefExpr list =
         graph.EntryPoints |> List.map (fromNode graph)
 
-    /// Get a single FSharpNativeExpr for a named binding
-    let fromBinding (graph: SemanticGraph) (name: string) : FSharpNativeExpr option =
+    /// Get a single ClefExpr for a named binding
+    let fromBinding (graph: SemanticGraph) (name: string) : ClefExpr option =
         graph.Nodes
         |> Map.tryPick (fun id node ->
             match node.Kind with
@@ -762,106 +762,106 @@ module FSharpNativeExpr =
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// Pretty-print an expression for debugging
-    let rec prettyPrint (indent: int) (expr: FSharpNativeExpr) : string =
+    let rec prettyPrint (indent: int) (expr: ClefExpr) : string =
         let pad = String.replicate indent "  "
 
         match expr with
-        | FSharpNativeExpr.Literal(value, _ty) ->
+        | ClefExpr.Literal(value, _ty) ->
             sprintf "%sLiteral(%A)" pad value
 
-        | FSharpNativeExpr.Variable(name, _ty, isMut, defId) ->
+        | ClefExpr.Variable(name, _ty, isMut, defId) ->
             let mutStr = if isMut then "mutable " else ""
             let defStr = defId |> Option.map (fun id -> sprintf " -> %d" (NodeId.value id)) |> Option.defaultValue ""
             sprintf "%sVar(%s%s%s)" pad mutStr name defStr
 
-        | FSharpNativeExpr.Application(func, args, _ty, srtp) ->
+        | ClefExpr.Application(func, args, _ty, srtp) ->
             let funcStr = prettyPrint 0 func
             let argsStr = args |> List.map (prettyPrint 0) |> String.concat ", "
             let srtpStr = srtp |> Option.map (fun r -> sprintf " [SRTP: %s -> %s]" r.Operator r.ResolvedMember) |> Option.defaultValue ""
             sprintf "%sApp(%s, [%s])%s" pad funcStr argsStr srtpStr
 
-        | FSharpNativeExpr.Lambda(params', body, _retTy, _srtp, enclosingFunc) ->
+        | ClefExpr.Lambda(params', body, _retTy, _srtp, enclosingFunc) ->
             let paramsStr = params' |> List.map fst |> String.concat ", "
             let bodyStr = prettyPrint (indent + 1) body
             let enclosingStr = enclosingFunc |> Option.map (sprintf " [enclosing: %s]") |> Option.defaultValue ""
             sprintf "%sLambda(%s)%s ->\n%s" pad paramsStr enclosingStr bodyStr
 
-        | FSharpNativeExpr.LetBinding(name, isMut, value, body, _ty) ->
+        | ClefExpr.LetBinding(name, isMut, value, body, _ty) ->
             let mutStr = if isMut then "mutable " else ""
             let valueStr = prettyPrint (indent + 1) value
             let bodyStr = body |> Option.map (prettyPrint (indent + 1)) |> Option.defaultValue ""
             sprintf "%sLet %s%s =\n%s%s" pad mutStr name valueStr (if bodyStr = "" then "" else "\n" + bodyStr)
 
-        | FSharpNativeExpr.Sequential(exprs, _ty) ->
+        | ClefExpr.Sequential(exprs, _ty) ->
             let exprsStr = exprs |> List.map (prettyPrint (indent + 1)) |> String.concat "\n"
             sprintf "%sSeq:\n%s" pad exprsStr
 
-        | FSharpNativeExpr.IfThenElse(guard, thenBr, elseBr, _ty) ->
+        | ClefExpr.IfThenElse(guard, thenBr, elseBr, _ty) ->
             let guardStr = prettyPrint 0 guard
             let thenStr = prettyPrint (indent + 1) thenBr
             let elseStr = elseBr |> Option.map (prettyPrint (indent + 1)) |> Option.defaultValue ""
             sprintf "%sIf %s then\n%s%s" pad guardStr thenStr (if elseStr = "" then "" else sprintf "\n%selse\n%s" pad elseStr)
 
-        | FSharpNativeExpr.PlatformBinding(name, args, _ty) ->
+        | ClefExpr.PlatformBinding(name, args, _ty) ->
             let argsStr = args |> List.map (prettyPrint 0) |> String.concat ", "
             sprintf "%sPlatformBinding(%s, [%s])" pad name argsStr
 
-        | FSharpNativeExpr.TraitCall(memberName, _types, arg, resolution, _ty) ->
+        | ClefExpr.TraitCall(memberName, _types, arg, resolution, _ty) ->
             let argStr = prettyPrint 0 arg
             let resStr = resolution |> Option.map (fun r -> sprintf " -> %s" r.ResolvedMember) |> Option.defaultValue " (UNRESOLVED)"
             sprintf "%sTraitCall(%s, %s)%s" pad memberName argStr resStr
 
-        | FSharpNativeExpr.ModuleDef(name, members) ->
+        | ClefExpr.ModuleDef(name, members) ->
             let membersStr = members |> List.map (prettyPrint (indent + 1)) |> String.concat "\n"
             sprintf "%sModule %s:\n%s" pad name membersStr
 
-        | FSharpNativeExpr.Error(message, range) ->
+        | ClefExpr.Error(message, range) ->
             sprintf "%sERROR: %s at %s" pad message (range.ToString())
 
         | _ ->
             sprintf "%s%A" pad expr
 
     /// Get a compact string representation for logging
-    let toCompactString (expr: FSharpNativeExpr) : string =
+    let toCompactString (expr: ClefExpr) : string =
         match expr with
-        | FSharpNativeExpr.Literal(value, _) -> sprintf "Literal(%A)" value
-        | FSharpNativeExpr.Variable(name, _, _, _) -> sprintf "Var(%s)" name
-        | FSharpNativeExpr.Application(_, args, _, _) -> sprintf "App(..., %d args)" (List.length args)
-        | FSharpNativeExpr.Lambda(params', _, _, _, _) -> sprintf "Lambda(%d params)" (List.length params')
-        | FSharpNativeExpr.LetBinding(name, _, _, _, _) -> sprintf "Let(%s)" name
-        | FSharpNativeExpr.LetRecBindings(bindings, _) -> sprintf "LetRec(%d bindings)" (List.length bindings)
-        | FSharpNativeExpr.Sequential(exprs, _) -> sprintf "Seq(%d)" (List.length exprs)
-        | FSharpNativeExpr.IfThenElse(_, _, _, _) -> "IfThenElse"
-        | FSharpNativeExpr.Match(_, cases, _) -> sprintf "Match(%d cases)" (List.length cases)
-        | FSharpNativeExpr.WhileLoop(_, _) -> "While"
-        | FSharpNativeExpr.ForLoop(var, _, _, _, _) -> sprintf "For(%s)" var
-        | FSharpNativeExpr.ForEach(var, _, _) -> sprintf "ForEach(%s)" var
-        | FSharpNativeExpr.TryWith(_, _) -> "TryWith"
-        | FSharpNativeExpr.TryFinally(_, _) -> "TryFinally"
-        | FSharpNativeExpr.RecordExpr(fields, _, _) -> sprintf "Record(%d fields)" (List.length fields)
-        | FSharpNativeExpr.UnionCase(name, _, _) -> sprintf "Case(%s)" name
-        | FSharpNativeExpr.TupleExpr(elements, _) -> sprintf "Tuple(%d)" (List.length elements)
-        | FSharpNativeExpr.TupleGet(_, index, _) -> sprintf "TupleGet[%d]" index
-        | FSharpNativeExpr.ArrayExpr(elements, _) -> sprintf "Array(%d)" (List.length elements)
-        | FSharpNativeExpr.ListExpr(elements, _) -> sprintf "List(%d)" (List.length elements)
-        | FSharpNativeExpr.FieldGet(_, name, _) -> sprintf "FieldGet(.%s)" name
-        | FSharpNativeExpr.FieldSet(_, name, _) -> sprintf "FieldSet(.%s)" name
-        | FSharpNativeExpr.IndexGet(_, _, _) -> "IndexGet"
-        | FSharpNativeExpr.IndexSet(_, _, _) -> "IndexSet"
-        | FSharpNativeExpr.TypeAnnotation(_, _) -> "TypeAnnotation"
-        | FSharpNativeExpr.Upcast(_, _) -> "Upcast"
-        | FSharpNativeExpr.Downcast(_, _) -> "Downcast"
-        | FSharpNativeExpr.TypeTest(_, _) -> "TypeTest"
-        | FSharpNativeExpr.AddressOf(_, isByref, _) -> if isByref then "AddressOfByref" else "AddressOf"
-        | FSharpNativeExpr.Deref(_, _) -> "Deref"
-        | FSharpNativeExpr.Set(_, _) -> "Set"
-        | FSharpNativeExpr.PlatformBinding(name, _, _) -> sprintf "Platform(%s)" name
-        | FSharpNativeExpr.Intrinsic(info, _, _) -> sprintf "Intrinsic(%s)" info.FullName
-        | FSharpNativeExpr.TraitCall(name, _, _, res, _) ->
+        | ClefExpr.Literal(value, _) -> sprintf "Literal(%A)" value
+        | ClefExpr.Variable(name, _, _, _) -> sprintf "Var(%s)" name
+        | ClefExpr.Application(_, args, _, _) -> sprintf "App(..., %d args)" (List.length args)
+        | ClefExpr.Lambda(params', _, _, _, _) -> sprintf "Lambda(%d params)" (List.length params')
+        | ClefExpr.LetBinding(name, _, _, _, _) -> sprintf "Let(%s)" name
+        | ClefExpr.LetRecBindings(bindings, _) -> sprintf "LetRec(%d bindings)" (List.length bindings)
+        | ClefExpr.Sequential(exprs, _) -> sprintf "Seq(%d)" (List.length exprs)
+        | ClefExpr.IfThenElse(_, _, _, _) -> "IfThenElse"
+        | ClefExpr.Match(_, cases, _) -> sprintf "Match(%d cases)" (List.length cases)
+        | ClefExpr.WhileLoop(_, _) -> "While"
+        | ClefExpr.ForLoop(var, _, _, _, _) -> sprintf "For(%s)" var
+        | ClefExpr.ForEach(var, _, _) -> sprintf "ForEach(%s)" var
+        | ClefExpr.TryWith(_, _) -> "TryWith"
+        | ClefExpr.TryFinally(_, _) -> "TryFinally"
+        | ClefExpr.RecordExpr(fields, _, _) -> sprintf "Record(%d fields)" (List.length fields)
+        | ClefExpr.UnionCase(name, _, _) -> sprintf "Case(%s)" name
+        | ClefExpr.TupleExpr(elements, _) -> sprintf "Tuple(%d)" (List.length elements)
+        | ClefExpr.TupleGet(_, index, _) -> sprintf "TupleGet[%d]" index
+        | ClefExpr.ArrayExpr(elements, _) -> sprintf "Array(%d)" (List.length elements)
+        | ClefExpr.ListExpr(elements, _) -> sprintf "List(%d)" (List.length elements)
+        | ClefExpr.FieldGet(_, name, _) -> sprintf "FieldGet(.%s)" name
+        | ClefExpr.FieldSet(_, name, _) -> sprintf "FieldSet(.%s)" name
+        | ClefExpr.IndexGet(_, _, _) -> "IndexGet"
+        | ClefExpr.IndexSet(_, _, _) -> "IndexSet"
+        | ClefExpr.TypeAnnotation(_, _) -> "TypeAnnotation"
+        | ClefExpr.Upcast(_, _) -> "Upcast"
+        | ClefExpr.Downcast(_, _) -> "Downcast"
+        | ClefExpr.TypeTest(_, _) -> "TypeTest"
+        | ClefExpr.AddressOf(_, isByref, _) -> if isByref then "AddressOfByref" else "AddressOf"
+        | ClefExpr.Deref(_, _) -> "Deref"
+        | ClefExpr.Set(_, _) -> "Set"
+        | ClefExpr.PlatformBinding(name, _, _) -> sprintf "Platform(%s)" name
+        | ClefExpr.Intrinsic(info, _, _) -> sprintf "Intrinsic(%s)" info.FullName
+        | ClefExpr.TraitCall(name, _, _, res, _) ->
             let resolved = res |> Option.map (fun r -> sprintf "->%s" r.ResolvedMember) |> Option.defaultValue ""
             sprintf "TraitCall(%s%s)" name resolved
-        | FSharpNativeExpr.InterpolatedString(parts, _) -> sprintf "Interpolated(%d parts)" (List.length parts)
-        | FSharpNativeExpr.ModuleDef(name, _) -> sprintf "Module(%s)" name
-        | FSharpNativeExpr.TypeDef(name, _, _) -> sprintf "Type(%s)" name
-        | FSharpNativeExpr.MemberDef(name, _, _) -> sprintf "Member(%s)" name
-        | FSharpNativeExpr.Error(msg, _) -> sprintf "Error(%s)" msg
+        | ClefExpr.InterpolatedString(parts, _) -> sprintf "Interpolated(%d parts)" (List.length parts)
+        | ClefExpr.ModuleDef(name, _) -> sprintf "Module(%s)" name
+        | ClefExpr.TypeDef(name, _, _) -> sprintf "Type(%s)" name
+        | ClefExpr.MemberDef(name, _, _) -> sprintf "Member(%s)" name
+        | ClefExpr.Error(msg, _) -> sprintf "Error(%s)" msg

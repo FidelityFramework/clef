@@ -312,20 +312,20 @@ let emitDiff (diff: PhaseDiff) : unit =
             printfn "[FNCS] Warning: Failed to write phase diff: %s" ex.Message
 
 // ═══════════════════════════════════════════════════════════════════════════
-// FSharpNativeExpr Emission (expression-centric view)
+// ClefExpr Emission (expression-centric view)
 // ═══════════════════════════════════════════════════════════════════════════
 
 open Clef.Compiler.NativeTypedTree
 
-/// Serialize FSharpNativeExpr to JSON
-let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeExpr) : string =
+/// Serialize ClefExpr to JSON
+let rec private serializeExpr (pretty: bool) (indent: int) (expr: ClefExpr) : string =
     // Note: these indent helpers reserved for future complex nesting
     let _indentStr = if pretty then String.replicate indent "  " else ""
     let _innerIndent = if pretty then String.replicate (indent + 1) "  " else ""
     let _newline = if pretty then "\n" else ""
 
     match expr with
-    | FSharpNativeExpr.Literal(value, ty) ->
+    | ClefExpr.Literal(value, ty) ->
         let valueStr = sprintf "%A" value |> escapeJsonString
         let typeStr = sprintf "%A" ty |> escapeJsonString
         buildJsonObject pretty indent [
@@ -334,7 +334,7 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
             ("type", typeStr)
         ]
 
-    | FSharpNativeExpr.Variable(name, ty, isMutable, defId) ->
+    | ClefExpr.Variable(name, ty, isMutable, defId) ->
         let defIdStr =
             match defId with
             | Some (NodeId id) -> string id
@@ -347,7 +347,7 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
             ("definitionId", defIdStr)
         ]
 
-    | FSharpNativeExpr.Application(func, args, returnType, srtp) ->
+    | ClefExpr.Application(func, args, returnType, srtp) ->
         let funcJson = serializeExpr pretty (indent + 1) func
         let argsJson = args |> List.map (serializeExpr pretty (indent + 2)) |> buildJsonArray pretty (indent + 1)
         let srtpStr =
@@ -365,7 +365,7 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
             ("srtpResolution", srtpStr)
         ]
 
-    | FSharpNativeExpr.Lambda(parameters, body, returnType, srtp, enclosingFunction) ->
+    | ClefExpr.Lambda(parameters, body, returnType, srtp, enclosingFunction) ->
         let paramsJson =
             parameters
             |> List.map (fun (name, ty) ->
@@ -395,7 +395,7 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
             ("enclosingFunction", enclosingStr)
         ]
 
-    | FSharpNativeExpr.LetBinding(name, isMutable, value, body, ty) ->
+    | ClefExpr.LetBinding(name, isMutable, value, body, ty) ->
         let valueJson = serializeExpr pretty (indent + 1) value
         let bodyJson =
             match body with
@@ -410,7 +410,7 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
             ("type", sprintf "%A" ty |> escapeJsonString)
         ]
 
-    | FSharpNativeExpr.Sequential(exprs, ty) ->
+    | ClefExpr.Sequential(exprs, ty) ->
         let exprsJson = exprs |> List.map (serializeExpr pretty (indent + 1)) |> buildJsonArray pretty (indent + 1)
         buildJsonObject pretty indent [
             ("kind", escapeJsonString "Sequential")
@@ -418,7 +418,7 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
             ("type", sprintf "%A" ty |> escapeJsonString)
         ]
 
-    | FSharpNativeExpr.IfThenElse(guard, thenBranch, elseBranch, ty) ->
+    | ClefExpr.IfThenElse(guard, thenBranch, elseBranch, ty) ->
         let guardJson = serializeExpr pretty (indent + 1) guard
         let thenJson = serializeExpr pretty (indent + 1) thenBranch
         let elseJson =
@@ -433,7 +433,7 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
             ("type", sprintf "%A" ty |> escapeJsonString)
         ]
 
-    | FSharpNativeExpr.PlatformBinding(entryPoint, args, ty) ->
+    | ClefExpr.PlatformBinding(entryPoint, args, ty) ->
         let argsJson = args |> List.map (serializeExpr pretty (indent + 1)) |> buildJsonArray pretty (indent + 1)
         buildJsonObject pretty indent [
             ("kind", escapeJsonString "PlatformBinding")
@@ -442,7 +442,7 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
             ("type", sprintf "%A" ty |> escapeJsonString)
         ]
 
-    | FSharpNativeExpr.TraitCall(memberName, constrainedTypes, arg, resolution, ty) ->
+    | ClefExpr.TraitCall(memberName, constrainedTypes, arg, resolution, ty) ->
         let argJson = serializeExpr pretty (indent + 1) arg
         let typesJson =
             constrainedTypes
@@ -464,7 +464,7 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
             ("type", sprintf "%A" ty |> escapeJsonString)
         ]
 
-    | FSharpNativeExpr.ModuleDef(name, members) ->
+    | ClefExpr.ModuleDef(name, members) ->
         let membersJson = members |> List.map (serializeExpr pretty (indent + 1)) |> buildJsonArray pretty (indent + 1)
         buildJsonObject pretty indent [
             ("kind", escapeJsonString "ModuleDef")
@@ -472,7 +472,7 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
             ("members", membersJson)
         ]
 
-    | FSharpNativeExpr.Error(message, _range) ->
+    | ClefExpr.Error(message, _range) ->
         buildJsonObject pretty indent [
             ("kind", escapeJsonString "Error")
             ("message", escapeJsonString message)
@@ -480,19 +480,19 @@ let rec private serializeExpr (pretty: bool) (indent: int) (expr: FSharpNativeEx
 
     | _ ->
         // Fallback for other expression types - use compact string
-        let compactStr = FSharpNativeExpr.toCompactString expr
+        let compactStr = ClefExpr.toCompactString expr
         buildJsonObject pretty indent [
             ("kind", escapeJsonString compactStr)
             ("note", escapeJsonString "Full serialization not yet implemented for this expression type")
         ]
 
-/// Emit FSharpNativeExpr views for all entry points
+/// Emit ClefExpr views for all entry points
 let emitExpressionView (graph: SemanticGraph) : unit =
     let config = getConfig()
     if not config.EmitIntermediates then ()
     else
         try
-            let exprs = FSharpNativeExpr.fromEntryPoints graph
+            let exprs = ClefExpr.fromEntryPoints graph
             let exprsJson =
                 exprs
                 |> List.map (serializeExpr config.PrettyPrint 1)
@@ -500,7 +500,7 @@ let emitExpressionView (graph: SemanticGraph) : unit =
 
             let output = buildJsonObject config.PrettyPrint 0 [
                 ("version", escapeJsonString "1.0")
-                ("description", escapeJsonString "FSharpNativeExpr - Expression-centric view of SemanticGraph")
+                ("description", escapeJsonString "ClefExpr - Expression-centric view of SemanticGraph")
                 ("entryPointCount", string (List.length exprs))
                 ("expressions", exprsJson)
             ]
@@ -517,11 +517,11 @@ let emitExpressionText (graph: SemanticGraph) : unit =
     if not config.EmitIntermediates then ()
     else
         try
-            let exprs = FSharpNativeExpr.fromEntryPoints graph
+            let exprs = ClefExpr.fromEntryPoints graph
             let text =
                 exprs
                 |> List.mapi (fun i expr ->
-                    sprintf "=== Entry Point %d ===\n%s\n" i (FSharpNativeExpr.prettyPrint 0 expr))
+                    sprintf "=== Entry Point %d ===\n%s\n" i (ClefExpr.prettyPrint 0 expr))
                 |> String.concat "\n"
 
             let path = Path.Combine(config.OutputDir, "fncs_expr.txt")

@@ -483,7 +483,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // Phase 5: Emit final result
     emitPhaseIfEnabled PhaseTypes.PhaseId.Final finalGraph diagnostics
 
-    // Emit FSharpNativeExpr view (expression-centric representation)
+    // Emit ClefExpr view (expression-centric representation)
     PhaseEmitter.emitExpressionView finalGraph
     PhaseEmitter.emitExpressionText finalGraph
 

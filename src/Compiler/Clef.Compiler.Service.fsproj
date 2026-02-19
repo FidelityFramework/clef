@@ -306,7 +306,7 @@
     <Compile Include="NativeTypedTree\Expressions\Bindings.fs" />
     <!-- Coordinator - Thin dispatcher that ties modules together -->
     <Compile Include="NativeTypedTree\SRTPResolution.fs" />
-    <Compile Include="NativeTypedTree\FSharpNativeExpr.fs" />
+    <Compile Include="NativeTypedTree\ClefExpr.fs" />
     <!-- Infrastructure - Nanopass phase configuration and intermediate emission -->
     <Compile Include="NativeTypedTree\Infrastructure\PhaseConfig.fs" />
     <Compile Include="NativeTypedTree\Infrastructure\PhaseTypes.fs" />
