@@ -21,17 +21,16 @@ FNCS is part of the **Fidelity** native F# compilation ecosystem:
 
 | Project | Role |
 |---------|------|
-| **[Firefly](https://github.com/speakeztech/firefly)** | AOT compiler: F# → PSG → MLIR → Native binary |
-| **[Alloy](https://github.com/speakeztech/alloy)** | Native standard library with platform bindings |
-| **[BAREWire](https://github.com/speakeztech/barewire)** | Binary encoding, memory mapping, zero-copy IPC |
-| **[Farscape](https://github.com/speakeztech/farscape)** | C/C++ header parsing for native library bindings |
-| **[XParsec](https://github.com/speakeztech/xparsec)** | Parser combinators powering PSG traversal and header parsing |
+| **[Firefly](https://github.com/FidelityFramework/firefly)** | AOT compiler: F# → PSG → MLIR → Native binary |
+| **[BAREWire](https://github.com/FidelityFramework/barewire)** | Binary encoding, memory mapping, zero-copy IPC |
+| **[Farscape](https://github.com/FidelityFramework/farscape)** | C/C++ header parsing for native library bindings |
+| **[XParsec](https://github.com/FidelityFramework/xparsec)** | Parser combinators powering PSG traversal and header parsing |
 | **fsnative** | F# Native Compiler Services (this repository) |
-| **[fsnative-spec](https://github.com/speakeztech/fsnative-spec)** | F# Native language specification |
+| **[fsnative-spec](https://github.com/FidelityFramework/clef-lang-spec)** | Clef language specification |
 
 The name "Fidelity" reflects the framework's core mission: **preserving type and memory safety** from source code through compilation to native execution.
 
-## Why fsnative Exists
+## Why Clef Exists
 
 The standard F# Compiler Services does an excellent job for .NET development. Microsoft is making progress with ahead-of-time (AOT) compilation, but there are fundamental limitations. When you're compiling to true native binaries without a runtime or garbage collector, many .NET assumptions become obstacles:
 
