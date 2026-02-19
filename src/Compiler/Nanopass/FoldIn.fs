@@ -60,6 +60,13 @@ let private updateKindRefs (replacementMap: Map<NodeId, NodeId>) (kind: Semantic
                 Body = update case.Body
                 PatternBindings = List.map update case.PatternBindings })
         SemanticKind.Match (update scrutinee, updatedCases)
+    | SemanticKind.CaseElimination (scrutinee, arms) ->
+        let updatedArms = arms |> List.map (fun arm ->
+            { arm with
+                Bindings = List.map update arm.Bindings
+                Guard = Option.map update arm.Guard
+                Body = update arm.Body })
+        SemanticKind.CaseElimination (update scrutinee, updatedArms)
     | SemanticKind.RecordExpr (fields, copyFrom) ->
         let updatedFields = fields |> List.map (fun (name, nodeId) -> (name, update nodeId))
         SemanticKind.RecordExpr (updatedFields, Option.map update copyFrom)
