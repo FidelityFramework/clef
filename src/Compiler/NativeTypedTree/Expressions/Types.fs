@@ -165,7 +165,7 @@ type CheckerCallbacks = {
 
 /// Get UnionCaseInfo for known union case constructors
 /// This follows the FCS TyconRef.Deref pattern - union case info is looked up, not embedded
-let private tryGetUnionCaseInfo (name: string) (ty: NativeType) : NR.UnionCaseInfo option =
+let tryGetUnionCaseInfo (name: string) (ty: NativeType) : NR.UnionCaseInfo option =
     // Unwrap TForall to get to the actual type
     let resultType =
         match ty with

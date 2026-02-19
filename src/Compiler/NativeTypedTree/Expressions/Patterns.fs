@@ -82,7 +82,10 @@ let rec checkPattern
                         match binding.UnionCaseInfo with
                         | Some caseInfo -> caseInfo.CaseIndex
                         | None -> 0  // Fallback for non-DU constructors
-                    | None -> 0  // Fallback
+                    | None ->
+                        tryGetUnionCaseInfo caseName expectedTy
+                        |> Option.map (fun ci -> ci.CaseIndex)
+                        |> Option.defaultValue 0
                 (Pattern.Union(caseName, tagIndex, None, expectedTy), [])
         | SynArgPats.Pats pats ->
             // Constructor with arguments (e.g., Some x, Error e)
@@ -107,8 +110,12 @@ let rec checkPattern
                         | None -> 0  // Fallback for non-DU constructors
                     (types, idx)
                 | None ->
-                    // Fallback: use fresh type variables (will be constrained later)
-                    (pats |> List.map (fun _ -> freshTypeVar range), 0)
+                    // Fallback: use fresh type variables; case index from well-known DU constructors
+                    let idx =
+                        tryGetUnionCaseInfo caseName expectedTy
+                        |> Option.map (fun ci -> ci.CaseIndex)
+                        |> Option.defaultValue 0
+                    (pats |> List.map (fun _ -> freshTypeVar range), idx)
 
             let (argPatterns, argBindings) =
                 List.zip pats payloadTypes
@@ -126,7 +133,10 @@ let rec checkPattern
                     match binding.UnionCaseInfo with
                     | Some caseInfo -> caseInfo.CaseIndex
                     | None -> 0
-                | None -> 0
+                | None ->
+                    tryGetUnionCaseInfo caseName expectedTy
+                    |> Option.map (fun ci -> ci.CaseIndex)
+                    |> Option.defaultValue 0
             (Pattern.Union(caseName, tagIndex, None, expectedTy), [])
 
     | SynPat.As(lhsPat, rhsPat, _) ->
