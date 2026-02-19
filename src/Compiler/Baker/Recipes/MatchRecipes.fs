@@ -413,16 +413,17 @@ and private compilePattern
     | Pattern.Record (fields, recordType) ->
         // Record patterns always match structurally (no runtime tag check).
         // Extract each field and create bindings inline, like Union.
+        // NOTE: Field count validation is OUTSIDE the saturation {} block.
+        // An 'if ... then failwithf' without 'else' inside a CE calls Zero() = pzero,
+        // causing a silent Message "" failure even when the condition is false.
+        let expectedFieldCount =
+            match recordType with
+            | NativeType.TApp(tycon, _) -> tycon.FieldCount
+            | _ -> 0
+        if expectedFieldCount > 0 && List.length fields > expectedFieldCount then
+            failwithf "Record pattern has %d fields but record type %A only has %d fields"
+                (List.length fields) recordType expectedFieldCount
         saturation {
-            // Validate field count
-            let expectedFieldCount =
-                match recordType with
-                | NativeType.TApp(tycon, _) -> tycon.FieldCount
-                | _ -> 0
-            if expectedFieldCount > 0 && List.length fields > expectedFieldCount then
-                failwithf "Record pattern has %d fields but record type %A only has %d fields"
-                    (List.length fields) recordType expectedFieldCount
-
             // Extract and bind each field
             let! newBindings =
                 fields
