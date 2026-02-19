@@ -90,19 +90,7 @@ let rec private resolveIdentifierCore
                         let actualType = instantiateTForall binding.Type range
                         BindingNode (name, actualType, binding.NodeId)
             | None ->
-                // Well-known DU constructors (Some/None/Ok/Error/ValueSome/ValueNone) are
-                // implicitly available without an explicit type definition in the source.
-                // Payload constructors get TFun(fresh, fresh) so Applications.fs case 2 can
-                // extract the union return type when the constructor is applied to an argument.
-                let unionTy = freshTypeVar range
-                let constructorTy =
-                    match name with
-                    | "Some" | "Ok" | "Error" | "ValueSome" -> NativeType.TFun (freshTypeVar range, unionTy)
-                    | _ -> unionTy
-                match tryGetUnionCaseInfo name constructorTy with
-                | Some caseInfo -> UnionCaseNode (name, constructorTy, caseInfo)
-                | None ->
-                    ErrorNode ($"The value or constructor '{name}' is not defined.", NativeType.TError $"Undefined: {name}")
+                ErrorNode ($"The value or constructor '{name}' is not defined.", NativeType.TError $"Undefined: {name}")
 
     // 3. Two-part identifier (Module.operation) - check for module intrinsics
     elif parts.Length = 2 then
