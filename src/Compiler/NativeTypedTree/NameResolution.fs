@@ -164,26 +164,35 @@ let createContextFrom (baseResolver: Resolver) : ResolutionContext = {
 }
 
 /// Add an open namespace to the context
-/// 
-/// IMPORTANT: This composes the open at the FRONT, so more recent
-/// opens take precedence (shadow earlier ones)
+///
+/// Direct bindings (base resolver) always take priority over opens.
+/// Among opens, more recent opens take precedence over earlier ones.
 let addOpen (ns: string) (ctx: ResolutionContext) : ResolutionContext =
-    let openResolver = openNamespace ns ctx.BaseResolver
-    { ctx with 
-        OpenNamespaces = ns :: ctx.OpenNamespaces
-        ComposedResolver = compose openResolver ctx.ComposedResolver }
+    let newOpenNamespaces = ns :: ctx.OpenNamespaces
+    // Recompose: base > opens (most recent first)
+    let opensResolver =
+        newOpenNamespaces
+        |> List.rev  // Apply in original order (earliest first)
+        |> List.fold (fun r openNs -> compose (openNamespace openNs ctx.BaseResolver) r) empty
+    { ctx with
+        OpenNamespaces = newOpenNamespaces
+        ComposedResolver = compose ctx.BaseResolver opensResolver }
 
 /// Register a binding in the base resolver
+///
+/// Direct bindings always take priority over opens. When a Lambda parameter
+/// shadows a module-level name (e.g., `sw0` parameter vs `Pins.sw0` from open),
+/// the parameter wins because base resolver is checked before open resolvers.
 let registerBinding (name: string) (binding: ResolvedBinding) (ctx: ResolutionContext) : ResolutionContext =
     let newBase = addBinding name binding ctx.BaseResolver
-    // Recompose with all opens applied
-    let recomposed = 
-        ctx.OpenNamespaces 
+    // Recompose: base > opens (opens see the updated base for qualified lookups)
+    let opensResolver =
+        ctx.OpenNamespaces
         |> List.rev  // Apply in original order
-        |> List.fold (fun r ns -> compose (openNamespace ns newBase) r) newBase
-    { ctx with 
+        |> List.fold (fun r ns -> compose (openNamespace ns newBase) r) empty
+    { ctx with
         BaseResolver = newBase
-        ComposedResolver = recomposed }
+        ComposedResolver = compose newBase opensResolver }
 
 /// Resolve a name using the full composed resolver
 let resolve (name: string) (ctx: ResolutionContext) : ResolvedBinding option =
