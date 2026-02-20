@@ -26,7 +26,7 @@ let createOutput (graph: SemanticGraph) (elapsedMs: int64) : BakerModuleInitOutp
                 Name = classification.Name
                 ModuleInit = classification.ModuleInit |> List.map NodeId.value
                 Definitions = classification.Definitions |> List.map NodeId.value
-                EntryPoint = classification.EntryPoint |> Option.map NodeId.value
+                EntryPoint = classification.DeclarationRoot |> Option.map (fun (id, _) -> NodeId.value id)
             })
 
     let totalModuleInit = modules |> List.sumBy (fun m -> List.length m.ModuleInit)
@@ -41,7 +41,7 @@ let createOutput (graph: SemanticGraph) (elapsedMs: int64) : BakerModuleInitOutp
         Timestamp = DateTime.UtcNow
         NodeCount = Map.count graph.Nodes
         ReachableCount = Some (graph.Nodes |> Map.filter (fun _ n -> n.IsReachable) |> Map.count)
-        EntryPointCount = List.length graph.EntryPoints
+        EntryPointCount = List.length graph.DeclarationRoots
         DiagnosticCount = 0
         ErrorCount = 0
         ElapsedMs = elapsedMs

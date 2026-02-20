@@ -286,7 +286,7 @@ let markUnreachable (graph: SemanticGraph) : SemanticGraph =
             (missingImplementations |> List.head |> fun (_, impl, _) -> impl)
         failwithf "Missing %d intrinsic implementation function(s). Cannot continue compilation." missingImplementations.Length
 
-    let reachable = computeReachable graph graph.EntryPoints
+    let reachable = computeReachable graph (graph.DeclarationRoots |> List.map fst)
     let updatedNodes =
         graph.Nodes
         |> Map.map (fun id node ->
@@ -315,6 +315,6 @@ let getReachabilityStats (graph: SemanticGraph) : int * int =
 /// Hard prune unreachable nodes (not soft-delete!)
 /// Use for production - removes unreachable nodes entirely
 let pruneUnreachable (graph: SemanticGraph) : SemanticGraph =
-    let reachable = computeReachable graph graph.EntryPoints
+    let reachable = computeReachable graph (graph.DeclarationRoots |> List.map fst)
     { graph with
         Nodes = graph.Nodes |> Map.filter (fun id _ -> Set.contains id reachable) }

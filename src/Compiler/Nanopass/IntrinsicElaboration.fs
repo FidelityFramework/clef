@@ -300,7 +300,7 @@ let private buildStartWrapper
     // 9. Binding: let _start = ... (marked as entry point)
     let startBindingNode = {
         Id = startBindingId
-        Kind = SemanticKind.Binding (startup.EntrySymbol, false, false, true)  // name, isMutable, isRecursive, isEntryPoint
+        Kind = SemanticKind.Binding (startup.EntrySymbol, false, false, Some DeclRoot.EntryPoint)
         Range = sourceRange
         Type = NativeType.TFun (unitType, unitType)
         SRTPResolution = None
@@ -348,9 +348,15 @@ let private findMainNode (graph: SemanticGraph) : (NodeId * NativeType) option =
 ///
 /// This runs AFTER intrinsic fold-in but BEFORE saturation fan-out.
 /// The resulting graph has _start as the true entry point.
+/// Only applies to DeclRoot.EntryPoint roots — HardwareModule roots skip this.
 let elaborateEntryPoints (graph: SemanticGraph) : SemanticGraph =
+    // Only elaborate for EntryPoint roots (CPU freestanding).
+    // HardwareModule roots don't need _start wrappers — hardware has no OS.
+    let hasEntryPointRoot =
+        graph.DeclarationRoots |> List.exists (fun (_, root) -> root = DeclRoot.EntryPoint)
+
     match graph.Platform with
-    | Some platform when platform.FreestandingStartup.IsSome ->
+    | Some platform when platform.FreestandingStartup.IsSome && hasEntryPointRoot ->
         let startup = platform.FreestandingStartup.Value
 
         // Find main function
@@ -371,13 +377,13 @@ let elaborateEntryPoints (graph: SemanticGraph) : SemanticGraph =
                 startNodes
                 |> List.fold (fun acc node -> Map.add node.Id node acc) graph.Nodes
 
-            // Update entry points: _start is now the primary entry point
-            // Keep main in entry points for debugging/symbol resolution
-            let newEntryPoints = startBindingId :: graph.EntryPoints
+            // Update declaration roots: _start is now the primary entry point
+            // Keep main in roots for debugging/symbol resolution
+            let newRoots = (startBindingId, DeclRoot.EntryPoint) :: graph.DeclarationRoots
 
             { graph with
                 Nodes = newNodes
-                EntryPoints = newEntryPoints }
+                DeclarationRoots = newRoots }
 
         | None ->
             // No main function found - can't create _start wrapper
@@ -385,5 +391,5 @@ let elaborateEntryPoints (graph: SemanticGraph) : SemanticGraph =
             graph
 
     | _ ->
-        // Not freestanding mode - no entry point elaboration needed
+        // Not freestanding mode or no EntryPoint root - no entry point elaboration needed
         graph

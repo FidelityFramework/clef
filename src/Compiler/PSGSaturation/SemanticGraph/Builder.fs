@@ -170,9 +170,9 @@ type NodeBuilder() =
         | None -> failwith ("Node not found: " + string (let (NodeId n) = nodeId in n))
 
     /// Build the semantic graph
-    member _.Build(entryPoints: NodeId list) : SemanticGraph =
+    member _.Build(declRoots: (NodeId * DeclRoot) list) : SemanticGraph =
         { Nodes = nodes
-          EntryPoints = entryPoints
+          DeclarationRoots = declRoots
           Modules = Map.empty
           Types = SemanticGraph.mkTypesIndex nodes
           Platform = None
@@ -180,9 +180,9 @@ type NodeBuilder() =
           SeqSaturation = SemanticGraph.mkSeqSaturation nodes }
 
     /// Build the semantic graph with platform context
-    member _.BuildWithPlatform(entryPoints: NodeId list, platform: PlatformContext) : SemanticGraph =
+    member _.BuildWithPlatform(declRoots: (NodeId * DeclRoot) list, platform: PlatformContext) : SemanticGraph =
         { Nodes = nodes
-          EntryPoints = entryPoints
+          DeclarationRoots = declRoots
           Modules = Map.empty
           Types = SemanticGraph.mkTypesIndex nodes
           Platform = Some platform

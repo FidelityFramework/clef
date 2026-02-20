@@ -222,9 +222,9 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
             ) acc
         ) newNodes
     
-    // Update entry points if any were replaced
-    let updatedEntryPoints =
-        graph.EntryPoints |> List.map (updateRef replacementMap)
+    // Update declaration roots if any were replaced
+    let updatedDeclRoots =
+        graph.DeclarationRoots |> List.map (fun (id, root) -> (updateRef replacementMap id, root))
 
     // Update module mappings
     let updatedModules =
@@ -234,7 +234,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
     // Build fresh graph
     let resultGraph = {
         Nodes = nodesWithParents
-        EntryPoints = updatedEntryPoints
+        DeclarationRoots = updatedDeclRoots
         Modules = updatedModules
         Types = SemanticGraph.mkTypesIndex nodesWithParents
         Platform = graph.Platform

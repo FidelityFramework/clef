@@ -41,12 +41,12 @@ let assertError (errorCode: string) (source: string) =
 /// Get the type of the first entry point binding
 let getMainType (source: string) =
     let (_, graph) = checkSource source
-    match graph.EntryPoints with
-    | [] -> failwith "No entry points in graph"
-    | nodeId :: _ ->
+    match graph.DeclarationRoots with
+    | [] -> failwith "No declaration roots in graph"
+    | (nodeId, _) :: _ ->
         match Map.tryFind nodeId graph.Nodes with
         | Some node -> node.Type
-        | None -> failwith $"Entry point node {nodeId} not found"
+        | None -> failwith $"Declaration root node {nodeId} not found"
 
 //=============================================================================
 // SPEC: Native Type Mappings - Primitive Types

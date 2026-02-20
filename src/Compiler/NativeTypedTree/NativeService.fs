@@ -269,42 +269,57 @@ let private solveAndGetDiagnostics (constraints: Constraint list) : Diagnostic l
 // Entry Point Detection
 //-------------------------------------------------------------------------
 
-/// Determine entry points from checked nodes
-/// Entry points are bindings that are either:
-/// - Named "main", or
-/// - Have the [<EntryPoint>] attribute
-let private findEntryPoints (allNodes: Map<NodeId, SemanticNode>) (topLevelNodes: SemanticNode list) : NodeId list =
-    // Helper to check if a node is an entry point
-    let isEntryPointBinding node =
+/// Determine declaration roots from checked nodes.
+/// Declaration roots are bindings that are either:
+/// - Named "main" (implies DeclRoot.EntryPoint), or
+/// - Have [<EntryPoint>] attribute (DeclRoot.EntryPoint), or
+/// - Have [<HardwareModule>] attribute (DeclRoot.HardwareModule)
+let private findDeclarationRoots (allNodes: Map<NodeId, SemanticNode>) (topLevelNodes: SemanticNode list) : (NodeId * DeclRoot) list =
+    // Helper to get DeclRoot for a binding node
+    let getBindingDeclRoot node =
         match node with
         | Some memberNode ->
             match memberNode.Kind with
-            | SemanticKind.Binding(name, _, _, isEntryPoint) ->
-                name = "main" || isEntryPoint
-            | _ -> false
-        | None -> false
+            | SemanticKind.Binding(name, _, _, declRoot) ->
+                match declRoot with
+                | Some root -> Some (memberNode.Id, root)
+                | None when name = "main" -> Some (memberNode.Id, DeclRoot.EntryPoint)
+                | None -> None
+            | _ -> None
+        | None -> None
 
     // Helper to look up a node by ID
     let tryGetNode (nodeId: NodeId) =
         Map.tryFind nodeId allNodes
 
-    // Find modules that contain an entry point binding
-    let entryModules =
+    // Find declaration roots: modules containing root bindings, or top-level root bindings
+    let roots =
         topLevelNodes
-        |> List.filter (fun node ->
+        |> List.collect (fun node ->
             match node.Kind with
             | SemanticKind.ModuleDef (_, memberIds) ->
-                // Check if this module contains an entry point binding
-                memberIds |> List.exists (fun memberId ->
-                    isEntryPointBinding (tryGetNode memberId))
-            | SemanticKind.Binding(name, _, _, isEntryPoint) ->
-                name = "main" || isEntryPoint
-            | _ -> false
+                // Check if this module contains a declaration root binding
+                let hasRoot =
+                    memberIds |> List.exists (fun memberId ->
+                        (getBindingDeclRoot (tryGetNode memberId)).IsSome)
+                if hasRoot then
+                    // Return the module's NodeId paired with the first root's DeclRoot flavor
+                    let firstRoot =
+                        memberIds
+                        |> List.tryPick (fun memberId -> getBindingDeclRoot (tryGetNode memberId))
+                    match firstRoot with
+                    | Some (_, root) -> [(node.Id, root)]
+                    | None -> []
+                else []
+            | SemanticKind.Binding(name, _, _, declRoot) ->
+                match declRoot with
+                | Some root -> [(node.Id, root)]
+                | None when name = "main" -> [(node.Id, DeclRoot.EntryPoint)]
+                | None -> []
+            | _ -> []
         )
-        |> List.map (fun n -> n.Id)
 
-    // If no entry point found, this is a library - return empty
-    entryModules
+    roots
 
 //-------------------------------------------------------------------------
 // Graph Building Helpers
@@ -378,9 +393,9 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
         
         let summary =
             if phase.Number >= 4 then
-                PhaseTypes.createSummaryWithReachability phase (Map.count graph.Nodes) reachable (List.length graph.EntryPoints) 0L
+                PhaseTypes.createSummaryWithReachability phase (Map.count graph.Nodes) reachable (List.length graph.DeclarationRoots) 0L
             else
-                PhaseTypes.createSummary phase (Map.count graph.Nodes) (List.length graph.EntryPoints) 0L
+                PhaseTypes.createSummary phase (Map.count graph.Nodes) (List.length graph.DeclarationRoots) 0L
         
         let diagStrings = diagnostics |> List.map (fun d -> d.Message)
         let errorCount = diagnostics |> List.filter (fun d -> d.Severity = NativeDiagnosticSeverity.Error) |> List.length
@@ -389,7 +404,7 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
         let output : PhaseTypes.PhaseOutput = {
             Summary = summaryWithDiags
             Nodes = nodeOutputs
-            EntryPoints = graph.EntryPoints |> List.map NodeId.value
+            EntryPoints = graph.DeclarationRoots |> List.map (fun (id, _) -> NodeId.value id)
             Diagnostics = diagStrings
         }
         
@@ -398,7 +413,7 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
 /// Build a CheckResult from builder state and diagnostics
 /// platformContext: Optional platform context for freestanding builds (enables entry point elaboration)
 let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) (platformContext: PlatformContext option) : CheckResult =
-    let entryPoints = findEntryPoints builder.Nodes topLevelNodes
+    let declRoots = findDeclarationRoots builder.Nodes topLevelNodes
 
     // CRITICAL: Apply type substitutions to resolve type variables after constraint solving.
     // During type checking, nodes are created with fresh type variables that get unified
@@ -411,7 +426,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     let graph = {
         Nodes = resolvedNodes
-        EntryPoints = entryPoints
+        DeclarationRoots = declRoots
         Modules = modulePaths
         // Types extracted lazily from witnessed TypeDef nodes (codata pattern)
         Types = SemanticGraph.mkTypesIndex resolvedNodes
@@ -459,15 +474,15 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     // Pass 2.5: Entry Point Elaboration (Freestanding mode only)
     // Adds _start wrapper that calls main with argc/argv from stack
-    let psg1WithEntryPoints = IntrinsicElaboration.elaborateEntryPoints psg1
+    let psg1WithDeclRoots = IntrinsicElaboration.elaborateEntryPoints psg1
 
     // Pass 3: Saturation Fan-Out - Create Baker decomposition recipes
-    let saturationRecipes = BakerSaturation.fanOut psg1WithEntryPoints
+    let saturationRecipes = BakerSaturation.fanOut psg1WithDeclRoots
     RecipeSerialization.emitSaturationRecipes saturationRecipes  // Artifact 04
     RecipeSerialization.emitSaturationDiagnostics saturationRecipes.Diagnostics  // Artifact 04a
 
     // Pass 4: Saturation Fold-In - Build PSG₂ with decomposed structures
-    let foldedGraph = BakerSaturation.foldIn saturationRecipes psg1WithEntryPoints
+    let foldedGraph = BakerSaturation.foldIn saturationRecipes psg1WithDeclRoots
 
     // Pass 4.5: Recompute Reachability After Fold-In
     // Baker fold-in replaces Application nodes with decomposed sub-trees.
@@ -1203,9 +1218,12 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         let simpleName = Bindings.getBindingName binding
                         let placeholderTy = freshTypeVar range
                         let (SynBinding(_, _, _, isMutable, attrs, _, _, _, _, _, _, _, _)) = binding
-                        let isEntryPoint = hasEntryPointAttribute attrs
+                        let declRoot =
+                            if hasEntryPointAttribute attrs then Some DeclRoot.EntryPoint
+                            elif hasHardwareModuleAttribute attrs then Some DeclRoot.HardwareModule
+                            else None
                         let node = builder.Create(
-                            SemanticKind.Binding(simpleName, isMutable, true, isEntryPoint),
+                            SemanticKind.Binding(simpleName, isMutable, true, declRoot),
                             placeholderTy,
                             range,
                             children = [])
@@ -1393,7 +1411,8 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     let layout = TypeLayout.Inline(unionSize, unionAlign)
 
                     // Create TypeConRef for the union type
-                    let tyCon = mkTypeConRef typeName arity layout
+                    let caseCount = List.length caseInfos
+                    let tyCon = mkUnionTypeConRef typeName arity layout caseCount
                     let unionType = mkSimpleType tyCon
 
                     // Register type definition under all name suffixes
@@ -1811,7 +1830,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
     | ParsedInput.SigFile _ ->
         // Signature files not yet supported
         {
-            Graph = { Nodes = Map.empty; EntryPoints = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty }
+            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty }
             Diagnostics = [{
                 Severity = NativeDiagnosticSeverity.Warning
                 Code = "FS0000"

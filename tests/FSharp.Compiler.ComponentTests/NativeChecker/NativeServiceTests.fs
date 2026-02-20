@@ -56,7 +56,7 @@ let x = 42
         // Should have nodes in the graph
         Assert.True(result.Graph.Nodes.Count > 0, "Graph should have nodes")
         // Should have entry points
-        Assert.True(result.Graph.EntryPoints.Length > 0, "Should have entry points")
+        Assert.True(result.Graph.DeclarationRoots.Length > 0, "Should have declaration roots")
     | ParseFailure errors -> failwithf "Parse failed: %A" errors
     | CheckFailure result -> failwithf "Check failed with diagnostics: %A" result.Diagnostics
 

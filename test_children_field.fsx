@@ -37,6 +37,6 @@ match parseAndCheck testSource "test.fs" with
         | _ -> ()
         printfn ""
 
-    printfn "Entry points: %A" result.Graph.EntryPoints
+    printfn "Declaration roots: %A" result.Graph.DeclarationRoots
 
 | _ -> printfn "Failed"

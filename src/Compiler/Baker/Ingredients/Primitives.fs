@@ -285,7 +285,7 @@ let patternBinding (name: string) (ty: NativeType) : SaturationParser<NodeId> =
 let letBind (name: string) (valueNodeId: NodeId) (ty: NativeType) : SaturationParser<NodeId> =
     saturation {
         let! state = getUserState
-        let kind = SemanticKind.Binding (name, false, false, false)
+        let kind = SemanticKind.Binding (name, false, false, None)
         let node = mkNode state kind ty [valueNodeId]
         do! emit node
         do! withBinding name node.Id ty
@@ -298,7 +298,7 @@ let letBind (name: string) (valueNodeId: NodeId) (ty: NativeType) : SaturationPa
 let letBindAt (targetNodeId: NodeId) (name: string) (valueNodeId: NodeId) (ty: NativeType) : SaturationParser<NodeId> =
     saturation {
         let! state = getUserState
-        let kind = SemanticKind.Binding (name, false, false, false)
+        let kind = SemanticKind.Binding (name, false, false, None)
         let node = mkNodeAt state targetNodeId kind ty [valueNodeId]
         do! emit node
         do! withBinding name targetNodeId ty
@@ -309,7 +309,7 @@ let letBindAt (targetNodeId: NodeId) (name: string) (valueNodeId: NodeId) (ty: N
 let letRecBind (name: string) (valueNodeId: NodeId) (ty: NativeType) : SaturationParser<NodeId> =
     saturation {
         let! state = getUserState
-        let kind = SemanticKind.Binding (name, false, true, false)
+        let kind = SemanticKind.Binding (name, false, true, None)
         let node = mkNode state kind ty [valueNodeId]
         do! emit node
         do! withBinding name node.Id ty

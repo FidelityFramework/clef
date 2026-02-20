@@ -109,7 +109,7 @@ module ProjectChecker =
                             // Return partial result with parse errors
                             let emptyGraph: SemanticGraph = {
                                 Nodes = Map.empty
-                                EntryPoints = []
+                                DeclarationRoots = []
                                 Modules = Map.empty
                                 Types = lazy Map.empty
                                 Platform = None

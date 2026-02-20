@@ -295,7 +295,7 @@ let mkBindingNode
     (valueNodeId: NodeId)
     (ty: NativeType) : SemanticNode =
 
-    let node = mkExpandedNode ctx (SemanticKind.Binding (name, isMutable, isRecursive, false)) ty
+    let node = mkExpandedNode ctx (SemanticKind.Binding (name, isMutable, isRecursive, None)) ty
     // Note: Children will be set by the caller (valueNodeId and body if let-in)
     { node with Children = [valueNodeId] }
 
