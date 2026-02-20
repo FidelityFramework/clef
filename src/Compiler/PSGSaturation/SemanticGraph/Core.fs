@@ -36,14 +36,14 @@ module SemanticGraph =
             | SemanticKind.ModuleDef(name, memberIds) ->
                 let mutable moduleInit = []
                 let mutable definitions = []
-                let mutable entryPoint = None
+                let mutable declRoot = None
                 for memberId in memberIds do
                     match Map.tryFind memberId nodes with
                     | Some memberNode ->
                         match memberNode.Kind with
-                        | SemanticKind.Binding(_, _, _, isEntryPoint) ->
-                            if isEntryPoint then
-                                entryPoint <- Some memberId
+                        | SemanticKind.Binding(_, _, _, dr) ->
+                            if dr.IsSome then
+                                declRoot <- Some (memberId, dr.Value)
                                 definitions <- memberId :: definitions
                             elif memberNode.EmissionStrategy = EmissionStrategy.MainPrologue then
                                 moduleInit <- memberId :: moduleInit
@@ -55,7 +55,7 @@ module SemanticGraph =
                     Name = name
                     ModuleInit = List.rev moduleInit
                     Definitions = List.rev definitions
-                    EntryPoint = entryPoint
+                    DeclarationRoot = declRoot
                 })
             | _ -> None)
         |> Map.ofSeq
@@ -327,7 +327,7 @@ module SemanticGraph =
     /// Create an empty semantic graph
     let empty : SemanticGraph = {
         Nodes = Map.empty
-        EntryPoints = []
+        DeclarationRoots = []
         Modules = Map.empty
         Types = lazy Map.empty
         Platform = None
@@ -338,7 +338,7 @@ module SemanticGraph =
     /// Create an empty semantic graph with platform context
     let emptyWithPlatform (platform: PlatformContext) : SemanticGraph = {
         Nodes = Map.empty
-        EntryPoints = []
+        DeclarationRoots = []
         Modules = Map.empty
         Types = lazy Map.empty
         Platform = Some platform
@@ -377,9 +377,9 @@ module SemanticGraph =
         | Some node -> node
         | None -> failwith $"Node not found: {NodeId.value id}"
 
-    /// Add an entry point
-    let addEntryPoint (id: NodeId) (graph: SemanticGraph) : SemanticGraph =
-        { graph with EntryPoints = id :: graph.EntryPoints }
+    /// Add a declaration root
+    let addDeclarationRoot (id: NodeId) (root: DeclRoot) (graph: SemanticGraph) : SemanticGraph =
+        { graph with DeclarationRoots = (id, root) :: graph.DeclarationRoots }
 
     /// Get all nodes of a given kind
     let nodesOfKind (predicate: SemanticKind -> bool) (graph: SemanticGraph) : SemanticNode list =

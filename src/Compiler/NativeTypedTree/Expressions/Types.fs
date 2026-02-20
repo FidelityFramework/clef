@@ -611,6 +611,17 @@ let hasEntryPointAttribute (attrs: SynAttributes) : bool =
         )
     )
 
+/// Check if a binding has the [<HardwareModule>] attribute
+/// Marks a binding as the top-level hardware module for FPGA targets.
+let hasHardwareModuleAttribute (attrs: SynAttributes) : bool =
+    attrs |> List.exists (fun attrList ->
+        attrList.Attributes |> List.exists (fun attr ->
+            match attr.TypeName.LongIdent with
+            | [id] -> id.idText = "HardwareModule" || id.idText = "HardwareModuleAttribute"
+            | _ -> false
+        )
+    )
+
 /// Check if a binding has the [<Literal>] attribute
 /// Per F# spec: Literal bindings must be initialized with constant expressions.
 /// Values are substituted at use sites during name resolution.

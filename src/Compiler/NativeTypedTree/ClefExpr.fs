@@ -400,7 +400,7 @@ module ClefExpr =
                 ClefExpr.Lambda(params2, bodyExpr, returnType, node.SRTPResolution, enclosingFunction)
 
             // Bindings
-            | SemanticKind.Binding(name, isMutable, _isRecursive, _isEntryPoint) ->
+            | SemanticKind.Binding(name, isMutable, _isRecursive, _declRoot) ->
                 // Find the value and body from children
                 match node.Children with
                 | valueId :: rest ->
@@ -753,9 +753,9 @@ module ClefExpr =
     // Entry Point Helpers
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// Get ClefExpr trees for all entry points in the graph
-    let fromEntryPoints (graph: SemanticGraph) : ClefExpr list =
-        graph.EntryPoints |> List.map (fromNode graph)
+    /// Get ClefExpr trees for all declaration roots in the graph
+    let fromDeclarationRoots (graph: SemanticGraph) : ClefExpr list =
+        graph.DeclarationRoots |> List.map (fun (id, _) -> fromNode graph id)
 
     /// Get a single ClefExpr for a named binding
     let fromBinding (graph: SemanticGraph) (name: string) : ClefExpr option =

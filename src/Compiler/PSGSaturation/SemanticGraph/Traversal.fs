@@ -56,7 +56,7 @@ let foldPreOrder (folder: 'State -> SemanticNode -> 'State)
             let state = folder state node
             node.Children |> List.fold walk state
 
-    graph.EntryPoints |> List.fold walk state
+    graph.DeclarationRoots |> List.map fst |> List.fold walk state
 
 /// Fold over all nodes in depth-first post-order
 let foldPostOrder (folder: 'State -> SemanticNode -> 'State)
@@ -69,7 +69,7 @@ let foldPostOrder (folder: 'State -> SemanticNode -> 'State)
             let state = node.Children |> List.fold walk state
             folder state node
 
-    graph.EntryPoints |> List.fold walk state
+    graph.DeclarationRoots |> List.map fst |> List.fold walk state
 
 /// Fold with pre-order action for Lambda parameters
 /// The preBind function is called BEFORE children, specifically for binding Lambda params
@@ -123,7 +123,7 @@ let foldWithLambdaPreBind
                 // Apply main folder (post-order)
                 folder state node
 
-    graph.EntryPoints |> List.fold walk state
+    graph.DeclarationRoots |> List.map fst |> List.fold walk state
 
 /// Fold with pre-order action for Lambda parameters AND SCF region hooks
 /// Extends foldWithLambdaPreBind with region boundary hooks for control flow nodes.
@@ -276,7 +276,7 @@ let foldWithSCFRegions
                 // Apply main folder (post-order)
                 folder state node
 
-    graph.EntryPoints |> List.fold walk state
+    graph.DeclarationRoots |> List.map fst |> List.fold walk state
 
 /// Map over all nodes
 let map (f: SemanticNode -> SemanticNode) (graph: SemanticGraph) : SemanticGraph =

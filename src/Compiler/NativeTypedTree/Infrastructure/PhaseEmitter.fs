@@ -492,7 +492,7 @@ let emitExpressionView (graph: SemanticGraph) : unit =
     if not config.EmitIntermediates then ()
     else
         try
-            let exprs = ClefExpr.fromEntryPoints graph
+            let exprs = ClefExpr.fromDeclarationRoots graph
             let exprsJson =
                 exprs
                 |> List.map (serializeExpr config.PrettyPrint 1)
@@ -517,7 +517,7 @@ let emitExpressionText (graph: SemanticGraph) : unit =
     if not config.EmitIntermediates then ()
     else
         try
-            let exprs = ClefExpr.fromEntryPoints graph
+            let exprs = ClefExpr.fromDeclarationRoots graph
             let text =
                 exprs
                 |> List.mapi (fun i expr ->

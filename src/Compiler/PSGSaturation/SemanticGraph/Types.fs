@@ -135,6 +135,17 @@ type EmissionStrategy =
     | MainPrologue
 
 //-------------------------------------------------------------------------
+// Declaration Roots
+//-------------------------------------------------------------------------
+
+/// Declaration root flavor — what makes a binding the "top" of a design.
+/// Platform-agnostic: the pipeline routes based on DeclRoot kind.
+[<RequireQualifiedAccess>]
+type DeclRoot =
+    | EntryPoint        // CPU: [<EntryPoint>] or name="main" — OS calls this
+    | HardwareModule    // FPGA: [<HardwareModule>] — this IS the circuit
+
+//-------------------------------------------------------------------------
 // Module Classification
 //-------------------------------------------------------------------------
 
@@ -143,7 +154,7 @@ type ModuleClassification = {
     Name: string
     ModuleInit: NodeId list
     Definitions: NodeId list
-    EntryPoint: NodeId option
+    DeclarationRoot: (NodeId * DeclRoot) option
 }
 
 //-------------------------------------------------------------------------
@@ -199,7 +210,7 @@ and [<RequireQualifiedAccess>] Pattern =
 /// The kind of semantic node - what syntactic/semantic construct it represents
 [<RequireQualifiedAccess>]
 type SemanticKind =
-    | Binding of name: string * isMutable: bool * isRecursive: bool * isEntryPoint: bool
+    | Binding of name: string * isMutable: bool * isRecursive: bool * declRoot: DeclRoot option
     | Application of func: NodeId * args: NodeId list
     | Lambda of parameters: (string * NativeType * NodeId) list * body: NodeId * captures: CaptureInfo list * enclosingFunction: string option * context: LambdaContext
     | Literal of value: NativeLiteral
@@ -354,7 +365,7 @@ type SemanticNode = {
 [<NoComparison; NoEquality>]
 type SemanticGraph = {
     Nodes: Map<NodeId, SemanticNode>
-    EntryPoints: NodeId list
+    DeclarationRoots: (NodeId * DeclRoot) list
     Modules: Map<ModulePath, NodeId list>
     Types: Lazy<Map<string, NodeId>>
     Platform: PlatformContext option

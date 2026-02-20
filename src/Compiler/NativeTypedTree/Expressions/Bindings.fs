@@ -217,7 +217,10 @@ let checkBinding
     let (SynBinding(_, _, isInline, isMutable, attrs, _, _, headPat, _, expr, bindingRange, _, _)) = binding
     let range = rangeToSourceRange bindingRange
     let name = getBindingName binding
-    let isEntryPoint = hasEntryPointAttribute attrs
+    let declRoot =
+        if hasEntryPointAttribute attrs then Some DeclRoot.EntryPoint
+        elif hasHardwareModuleAttribute attrs then Some DeclRoot.HardwareModule
+        else None
     let isLiteral = hasLiteralAttribute attrs
 
     // Extract literal value if this is a [<Literal>] binding with a constant expression
@@ -254,7 +257,7 @@ let checkBinding
         // Use NodeId.fresh() to get a unique identifier for the hidden name
         let hiddenName = sprintf "__tuple_%d" (NodeId.value (NodeId.fresh()))
         let hiddenBinding = builder.Create(
-            SemanticKind.Binding(hiddenName, isMutable, false, false),
+            SemanticKind.Binding(hiddenName, isMutable, false, None),
             tupleExprNode.Type,
             range,
             children = [tupleExprNode.Id])
@@ -283,7 +286,7 @@ let checkBinding
                 // Create binding for the element (unless wildcard)
                 let bindingName = if isWildcard then sprintf "_discard_%d" i else elemName
                 let elemBinding = builder.Create(
-                    SemanticKind.Binding(bindingName, isMutable, false, false),
+                    SemanticKind.Binding(bindingName, isMutable, false, None),
                     elemType,
                     range,
                     children = [tupleGetNode.Id])
@@ -354,7 +357,7 @@ let checkBinding
 
         // Entry point constraint: string[] -> int
         // Per F# spec, [<EntryPoint>] functions must have signature: string[] -> int
-        if isEntryPoint then
+        if declRoot = Some DeclRoot.EntryPoint then
             // Constrain parameter to string[] (argv)
             match lambdaParams with
             | [(_, paramTy, _)] ->
@@ -421,7 +424,7 @@ let checkBinding
                 preCreated
             | None ->
                 builder.Create(
-                    SemanticKind.Binding(name, isMutable, false, isEntryPoint),
+                    SemanticKind.Binding(name, isMutable, false, declRoot),
                     funcType,
                     range,
                     children = [lambdaNode.Id])
@@ -558,7 +561,7 @@ let checkBinding
                 preCreated
             | None ->
                 builder.Create(
-                    SemanticKind.Binding(name, isMutable, false, isEntryPoint),
+                    SemanticKind.Binding(name, isMutable, false, declRoot),
                     finalExprNode.Type,
                     range,
                     children = [finalExprNode.Id])
@@ -567,7 +570,7 @@ let checkBinding
         
         // Module-level value bindings need MainPrologue strategy for SSA scoping.
         // These are emitted at the start of main - SSAs flow into main's body.
-        if env.EnclosingFunction.IsNone && not isEntryPoint then
+        if env.EnclosingFunction.IsNone && declRoot.IsNone then
             builder.SetEmissionStrategy(node.Id, EmissionStrategy.MainPrologue)
         
         (node, None, isMutable, literalValue)
@@ -653,9 +656,12 @@ let checkLetOrUse
                 let name = getBindingName binding
                 let ty = freshTypeVar range
                 let (SynBinding(_, _, _, isMutable, attrs, _, _, _, _, _, _, _, _)) = binding
-                let isEntryPoint = hasEntryPointAttribute attrs
+                let declRoot =
+                    if hasEntryPointAttribute attrs then Some DeclRoot.EntryPoint
+                    elif hasHardwareModuleAttribute attrs then Some DeclRoot.HardwareModule
+                    else None
                 let node = builder.Create(
-                    SemanticKind.Binding(name, isMutable, true, isEntryPoint),
+                    SemanticKind.Binding(name, isMutable, true, declRoot),
                     ty,
                     range,
                     children = [])
