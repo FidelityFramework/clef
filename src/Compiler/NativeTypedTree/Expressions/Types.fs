@@ -522,10 +522,22 @@ let resolveRecordTypeFromFields
                     Result.Error((DiagnosticCodes.FS0001_GenericError,
                            sprintf "Internal error: field labels reference record type '%s' but it is not in RecordDefs" typeName))
             | _ ->
-                // FS8704: Ambiguous fields - multiple record types could match
-                let typeNames = intersection |> Set.toList |> String.concat ", "
-                Result.Error((DiagnosticCodes.FS8704_AmbiguousFields,
-                       sprintf "Field labels are ambiguous; could be any of: %s. Use type annotation or qualified field access." typeNames))
+                // Multiple record types have all fields — use "last definition wins" rule
+                // (standard F# behavior: most recently defined/opened type takes precedence)
+                // candidateSets preserves insertion order; take the LAST matching type
+                let lastTypeName =
+                    candidateSets
+                    |> List.head |> snd
+                    |> List.filter (fun fr -> Set.contains fr.RecordType.Name intersection)
+                    |> List.last
+                    |> fun fr -> fr.RecordType.Name
+                match Map.tryFind lastTypeName env.RecordDefs with
+                | Some recordInfo ->
+                    Result.Ok (NativeType.TApp(recordInfo.TypeCon, []))
+                | None ->
+                    let typeNames = intersection |> Set.toList |> String.concat ", "
+                    Result.Error((DiagnosticCodes.FS8704_AmbiguousFields,
+                           sprintf "Field labels are ambiguous; could be any of: %s. Use type annotation or qualified field access." typeNames))
 
 //-------------------------------------------------------------------------
 // Constraint Management
