@@ -1489,7 +1489,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // Per fsnative-spec: Field order determines memory layout
                     // "Fidelity makes ALL memory layout decisions - MLIR/LLVM never determine layout"
                     let (SynComponentInfo(attrs, typars, _, _, _, _, _, _)) = typeInfo
-                    let _arity = match typars with Some tp -> tp.TyparDecls.Length | None -> 0
+                    let typeArity = match typars with Some tp -> tp.TyparDecls.Length | None -> 0
                     let requireQualifiedAccess = hasRequireQualifiedAccessAttribute attrs
                     
                     // Extract field names, types, and pin attributes from SynField list
@@ -1529,9 +1529,9 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // Field info is accessed via SemanticGraph.Types lookup (TypeDef node)
                     let tyCon =
                         if Map.isEmpty pinAttrs then
-                            mkRecordTypeConRef typeName ctx.Path layout (List.length fieldInfos)
+                            mkRecordTypeConRef typeName ctx.Path typeArity layout (List.length fieldInfos)
                         else
-                            mkRecordTypeConRefWithPins typeName ctx.Path layout (List.length fieldInfos) pinAttrs
+                            mkRecordTypeConRefWithPins typeName ctx.Path typeArity layout (List.length fieldInfos) pinAttrs
                     
                     // Register under all name suffixes (handles AutoOpen modules)
                     let updatedEnv = 

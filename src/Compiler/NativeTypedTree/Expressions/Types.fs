@@ -516,8 +516,9 @@ let resolveRecordTypeFromFields
                 match Map.tryFind typeName env.RecordDefs with
                 | Some recordInfo ->
                     // Spec Section 4.2: Use TApp for records (single representation invariant)
-                    // Fields accessed via tryGetRecordFields lookup per Section 7.2
-                    Result.Ok (NativeType.TApp(recordInfo.TypeCon, []))
+                    // ParamKinds is the single source of truth — fresh vars for generic records
+                    let freshArgs = recordInfo.TypeCon.ParamKinds |> List.map (fun _kind -> freshTypeVar _range)
+                    Result.Ok (NativeType.TApp(recordInfo.TypeCon, freshArgs))
                 | None ->
                     // INTERNAL ERROR: Field label resolution found this type name,
                     // so it MUST exist in RecordDefs.
@@ -535,7 +536,8 @@ let resolveRecordTypeFromFields
                     |> fun fr -> fr.RecordType.Name
                 match Map.tryFind lastTypeName env.RecordDefs with
                 | Some recordInfo ->
-                    Result.Ok (NativeType.TApp(recordInfo.TypeCon, []))
+                    let freshArgs = recordInfo.TypeCon.ParamKinds |> List.map (fun _kind -> freshTypeVar _range)
+                    Result.Ok (NativeType.TApp(recordInfo.TypeCon, freshArgs))
                 | None ->
                     let typeNames = intersection |> Set.toList |> String.concat ", "
                     Result.Error((DiagnosticCodes.FS8704_AmbiguousFields,
@@ -761,9 +763,11 @@ let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
     match tryLookupTypeAbbrev name env with
     | Some ty -> Some ty
     | None ->
-        // 2. Check type definitions
+        // 2. Check type definitions — ParamKinds is the single source of truth for arity
         match tryLookupTypeDef name env with
-        | Some tyCon -> Some (NativeType.TApp(tyCon, []))
+        | Some tyCon ->
+            let args = tyCon.ParamKinds |> List.map (fun _kind -> freshTypeVar dummyRange)
+            Some (NativeType.TApp(tyCon, args))
         | None ->
             // 3. Check NTU primitives
             match name with
@@ -815,14 +819,14 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
             | None ->
                 // Fall back to regular type resolution (user-defined generics)
                 match resolveTypeName name env with
-                | Some (NativeType.TApp(tyCon, [])) -> NativeType.TApp(tyCon, argTys)
+                | Some (NativeType.TApp(tyCon, _)) -> NativeType.TApp(tyCon, argTys)
                 | Some ty -> ty
                 | None -> NativeType.TError $"Unknown type constructor: {name}"
         | _ ->
             // Complex type expression - recurse
             let baseTy = resolveSynType env typeName
             match baseTy with
-            | NativeType.TApp(tyCon, []) -> NativeType.TApp(tyCon, argTys)
+            | NativeType.TApp(tyCon, _) -> NativeType.TApp(tyCon, argTys)
             | _ -> baseTy
 
     | SynType.LongIdentApp(typeName, SynLongIdent(idents, _, _), _, typeArgs, _, _, _) ->
@@ -836,7 +840,7 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
             // Fall back to regular type resolution
             let baseTy = resolveSynType env typeName
             match baseTy with
-            | NativeType.TApp(tyCon, []) -> NativeType.TApp(tyCon, argTys)
+            | NativeType.TApp(tyCon, _) -> NativeType.TApp(tyCon, argTys)
             | _ -> baseTy
 
     | SynType.Tuple(isStruct, segments, _) ->
