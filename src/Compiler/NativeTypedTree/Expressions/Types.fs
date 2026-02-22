@@ -249,6 +249,7 @@ let addNativeError (code: string) (r: range) (message: string) (env: TypeEnv) : 
         Message = message
         Range = rangeToSourceRange r
         RelatedNodes = []
+        Reachability = ReachabilityContext.Unknown
     } env
 
 /// Create and add an error diagnostic (generic fallback - prefer addNativeError with specific code)
@@ -263,6 +264,7 @@ let addNativeWarning (code: string) (r: range) (message: string) (env: TypeEnv) 
         Message = message
         Range = rangeToSourceRange r
         RelatedNodes = []
+        Reachability = ReachabilityContext.Unknown
     } env
 
 /// Create and add a warning diagnostic (generic fallback)
@@ -645,6 +647,48 @@ let hasLiteralAttribute (attrs: SynAttributes) : bool =
             | _ -> false
         )
     )
+
+/// Extract pin logical name from [<Pin("name")>] attribute on a record field.
+/// Returns a single-element list for consistency with extractPinsAttribute.
+let extractPinAttribute (attrs: SynAttributes) : string list =
+    attrs |> List.collect (fun attrList ->
+        attrList.Attributes |> List.choose (fun attr ->
+            match attr.TypeName.LongIdent with
+            | [id] when id.idText = "Pin" || id.idText = "PinAttribute" ->
+                match attr.ArgExpr with
+                | SynExpr.Paren(SynExpr.Const(SynConst.String(pinName, _, _), _), _, _, _) -> Some pinName
+                | SynExpr.Const(SynConst.String(pinName, _, _), _) -> Some pinName
+                | _ -> None
+            | _ -> None
+        )
+    )
+
+/// Extract pin logical names from [<Pins("a","b","c")>] attribute on a record field.
+/// Returns multiple names for multi-pin groups (e.g., RGB LED channels).
+let extractPinsAttribute (attrs: SynAttributes) : string list =
+    attrs |> List.collect (fun attrList ->
+        attrList.Attributes |> List.collect (fun attr ->
+            match attr.TypeName.LongIdent with
+            | [id] when id.idText = "Pins" || id.idText = "PinsAttribute" ->
+                match attr.ArgExpr with
+                | SynExpr.Paren(SynExpr.Tuple(_, exprs, _, _), _, _, _) ->
+                    exprs |> List.choose (fun expr ->
+                        match expr with
+                        | SynExpr.Const(SynConst.String(pinName, _, _), _) -> Some pinName
+                        | _ -> None
+                    )
+                | SynExpr.Paren(SynExpr.Const(SynConst.String(pinName, _, _), _), _, _, _) ->
+                    [pinName]
+                | _ -> []
+            | _ -> []
+        )
+    )
+
+/// Extract all pin names from [<Pin>] or [<Pins>] attributes on a record field.
+let extractFieldPinNames (attrs: SynAttributes) : string list =
+    match extractPinAttribute attrs with
+    | pins when not (List.isEmpty pins) -> pins
+    | _ -> extractPinsAttribute attrs
 
 //-------------------------------------------------------------------------
 // BCL Rejection - CRITICAL

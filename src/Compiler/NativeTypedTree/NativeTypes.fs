@@ -711,6 +711,10 @@ type TypeConRef = {
     /// These do NOT affect type identity — types with different
     /// qualifiers unify as the same type.
     Qualifiers: NTUQualifiers option
+    /// Pin attributes on record fields: Map<fieldName, pinLogicalNames>
+    /// Populated from [<Pin("name")>] and [<Pins("a","b","c")>] attributes on SynField.
+    /// Empty for non-record types and records without pin attributes.
+    FieldPinAttributes: Map<string, string list>
 }
 
 /// Total arity (type + measure parameters)
@@ -718,28 +722,32 @@ let arity (tc: TypeConRef) = List.length tc.ParamKinds
 
 /// Create a simple type constructor with only type parameters (non-NTU kind)
 let mkTypeConRef name typeArity layout =
-    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = None; FieldCount = 0; CaseCount = 0; Qualifiers = None }
+    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = None; FieldCount = 0; CaseCount = 0; Qualifiers = None; FieldPinAttributes = Map.empty }
 
 /// Create a type constructor with explicit parameter kinds (non-NTU kind)
 let mkTypeConRefWithMeasures name paramKinds layout =
-    { Name = name; Module = []; ParamKinds = paramKinds; Layout = layout; NTUKind = None; FieldCount = 0; CaseCount = 0; Qualifiers = None }
+    { Name = name; Module = []; ParamKinds = paramKinds; Layout = layout; NTUKind = None; FieldCount = 0; CaseCount = 0; Qualifiers = None; FieldPinAttributes = Map.empty }
 
 /// Create a type constructor with an NTU kind (for native primitives)
 let mkNTUTypeConRef name ntuKind layout =
-    { Name = name; Module = []; ParamKinds = []; Layout = layout; NTUKind = Some ntuKind; FieldCount = 0; CaseCount = 0; Qualifiers = None }
+    { Name = name; Module = []; ParamKinds = []; Layout = layout; NTUKind = Some ntuKind; FieldCount = 0; CaseCount = 0; Qualifiers = None; FieldPinAttributes = Map.empty }
 
 /// Create a parameterized type constructor with an NTU kind
 let mkNTUTypeConRefWithArity name ntuKind typeArity layout =
-    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = Some ntuKind; FieldCount = 0; CaseCount = 0; Qualifiers = None }
+    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = Some ntuKind; FieldCount = 0; CaseCount = 0; Qualifiers = None; FieldPinAttributes = Map.empty }
 
 /// Create a type constructor for a record type
 /// Field info is accessed via SemanticGraph.Types lookup (not embedded in TypeConRef)
 let mkRecordTypeConRef name modulePath layout fieldCount =
-    { Name = name; Module = modulePath; ParamKinds = []; Layout = layout; NTUKind = None; FieldCount = fieldCount; CaseCount = 0; Qualifiers = None }
+    { Name = name; Module = modulePath; ParamKinds = []; Layout = layout; NTUKind = None; FieldCount = fieldCount; CaseCount = 0; Qualifiers = None; FieldPinAttributes = Map.empty }
+
+/// Create a type constructor for a record type with pin attributes
+let mkRecordTypeConRefWithPins name modulePath layout fieldCount (pinAttrs: Map<string, string list>) =
+    { Name = name; Module = modulePath; ParamKinds = []; Layout = layout; NTUKind = None; FieldCount = fieldCount; CaseCount = 0; Qualifiers = None; FieldPinAttributes = pinAttrs }
 
 /// Create a type constructor for a discriminated union type
 let mkUnionTypeConRef name typeArity layout caseCount =
-    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = None; FieldCount = 0; CaseCount = caseCount; Qualifiers = None }
+    { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = None; FieldCount = 0; CaseCount = caseCount; Qualifiers = None; FieldPinAttributes = Map.empty }
 
 /// Create a qualified type constructor (same type, different placement)
 let withQualifiers (qualifiers: NTUQualifiers) (tycon: TypeConRef) : TypeConRef =

@@ -86,7 +86,7 @@ let rec checkPattern
                         addDiagnostic { Severity = NativeDiagnosticSeverity.Error
                                         Code = DiagnosticCodes.FS0001_GenericError
                                         Message = $"The constructor '{caseName}' is not defined."
-                                        Range = range; RelatedNodes = [] } env
+                                        Range = range; RelatedNodes = []; Reachability = ReachabilityContext.Unknown } env
                         0
                 (Pattern.Union(caseName, tagIndex, None, expectedTy), [])
         | SynArgPats.Pats pats ->
@@ -115,7 +115,7 @@ let rec checkPattern
                     addDiagnostic { Severity = NativeDiagnosticSeverity.Error
                                     Code = DiagnosticCodes.FS0001_GenericError
                                     Message = $"The constructor '{caseName}' is not defined."
-                                    Range = range; RelatedNodes = [] } env
+                                    Range = range; RelatedNodes = []; Reachability = ReachabilityContext.Unknown } env
                     (pats |> List.map (fun _ -> freshTypeVar range), 0)
 
             let (argPatterns, argBindings) =
@@ -138,7 +138,7 @@ let rec checkPattern
                         addDiagnostic { Severity = NativeDiagnosticSeverity.Error
                                         Code = DiagnosticCodes.FS0001_GenericError
                                         Message = $"The constructor '{caseName}' is not defined."
-                                        Range = range; RelatedNodes = [] } env
+                                        Range = range; RelatedNodes = []; Reachability = ReachabilityContext.Unknown } env
                         0
             (Pattern.Union(caseName, tagIndex, None, expectedTy), [])
 
@@ -194,6 +194,7 @@ let rec checkPattern
                             Message = sprintf "Record pattern field '%s' not found in type '%s'. Record type may not be registered in RecordDefs, or expectedTy is not resolved." fieldName tyName
                             Range = range
                             RelatedNodes = []
+                            Reachability = ReachabilityContext.Unknown
                         } env
                         // Return a placeholder type for error recovery, but the error is logged
                         Types.unitType
@@ -248,6 +249,7 @@ let rec checkPattern
             Message = "Quote expression patterns are not supported in native F# compilation."
             Range = range
             RelatedNodes = []
+            Reachability = ReachabilityContext.Unknown
         } env
         (Pattern.Wildcard, [])  // Wildcard for error recovery
 
@@ -263,5 +265,6 @@ let rec checkPattern
             Message = "Instance member patterns (object expressions) are not supported in native F# compilation."
             Range = range
             RelatedNodes = []
+            Reachability = ReachabilityContext.Unknown
         } env
         (Pattern.Wildcard, [])  // Wildcard for error recovery

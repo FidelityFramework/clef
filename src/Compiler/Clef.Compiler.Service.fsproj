@@ -338,6 +338,7 @@
     <!-- Nanopass passes - must come after Baker -->
     <Compile Include="Nanopass\IntrinsicElaboration.fs" />
     <Compile Include="Nanopass\BakerSaturation.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
 
     <Compile Include="NativeTypedTree\NativeService.fs" />
 
