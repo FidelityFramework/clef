@@ -24,6 +24,26 @@ type ProjectCheckResult = {
 }
 
 module ProjectChecker =
+    /// Build PlatformContext from project options.
+    /// Single canonical path — SubstrateKind flows from fidproj target.
+    let private buildPlatformContext (options: FidprojOptions) : PlatformContext option =
+        match options.PlatformPath with
+        | Some platformPath ->
+            let basePlatformCtx = PlatformContext.fromPlatformPath platformPath
+            let substrateKind =
+                match options.TargetPlatform with
+                | TargetPlatform.CPU  -> SubstrateKind.CPU
+                | TargetPlatform.FPGA -> SubstrateKind.FPGA
+                | TargetPlatform.GPU  -> SubstrateKind.GPU
+                | TargetPlatform.NPU  -> SubstrateKind.NPU
+                | TargetPlatform.MCU  -> SubstrateKind.CPU
+            let ctx = { basePlatformCtx with SubstrateKind = Some substrateKind }
+            if options.DeploymentMode = DeploymentMode.Freestanding then
+                Some { ctx with FreestandingStartup = FreestandingStartup.forPlatform ctx.PlatformId }
+            else
+                Some ctx
+        | None -> None
+
     /// Normalizes a path to use forward slashes and be absolute.
     let private normalizePath (path: string) =
         Path.GetFullPath(path).Replace('\\', '/')
@@ -123,20 +143,7 @@ module ProjectChecker =
                                 ParseErrors = parseErrors
                             }
                         else
-                            // Build platform context BEFORE checking
-                            // This is critical: the platform context must be set on the graph
-                            // BEFORE the nanopass pipeline runs (which includes entry point elaboration)
-                            let platformContext =
-                                match options.PlatformPath with
-                                | Some platformPath ->
-                                    let basePlatformCtx = PlatformContext.fromPlatformPath platformPath
-                                    // Set FreestandingStartup if this is a freestanding build
-                                    if options.DeploymentMode = DeploymentMode.Freestanding then
-                                        Some { basePlatformCtx with
-                                                 FreestandingStartup = FreestandingStartup.forPlatform basePlatformCtx.PlatformId }
-                                    else
-                                        Some basePlatformCtx
-                                | None -> None
+                            let platformContext = buildPlatformContext options
 
                             // Check all parsed inputs together with platform context
                             // The platform context is set on the graph BEFORE entry point elaboration
@@ -212,19 +219,7 @@ module ProjectChecker =
                                 | Result.Error _ -> None)
 
                         // Build platform context BEFORE checking
-                        // This is critical: the platform context must be set on the graph
-                        // BEFORE the nanopass pipeline runs (which includes entry point elaboration)
-                        let platformContext =
-                            match options.PlatformPath with
-                            | Some platformPath ->
-                                let basePlatformCtx = PlatformContext.fromPlatformPath platformPath
-                                // Set FreestandingStartup if this is a freestanding build
-                                if options.DeploymentMode = DeploymentMode.Freestanding then
-                                    Some { basePlatformCtx with
-                                             FreestandingStartup = FreestandingStartup.forPlatform basePlatformCtx.PlatformId }
-                                else
-                                    Some basePlatformCtx
-                            | None -> None
+                        let platformContext = buildPlatformContext options
 
                         // Check all parsed inputs together with platform context
                         let checkResult = checkParsedInputsWithPlatform parsedInputs platformContext

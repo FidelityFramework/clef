@@ -738,12 +738,12 @@ let mkNTUTypeConRefWithArity name ntuKind typeArity layout =
 
 /// Create a type constructor for a record type
 /// Field info is accessed via SemanticGraph.Types lookup (not embedded in TypeConRef)
-let mkRecordTypeConRef name modulePath layout fieldCount =
-    { Name = name; Module = modulePath; ParamKinds = []; Layout = layout; NTUKind = None; FieldCount = fieldCount; CaseCount = 0; Qualifiers = None; FieldPinAttributes = Map.empty }
+let mkRecordTypeConRef name modulePath typeArity layout fieldCount =
+    { Name = name; Module = modulePath; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = None; FieldCount = fieldCount; CaseCount = 0; Qualifiers = None; FieldPinAttributes = Map.empty }
 
 /// Create a type constructor for a record type with pin attributes
-let mkRecordTypeConRefWithPins name modulePath layout fieldCount (pinAttrs: Map<string, string list>) =
-    { Name = name; Module = modulePath; ParamKinds = []; Layout = layout; NTUKind = None; FieldCount = fieldCount; CaseCount = 0; Qualifiers = None; FieldPinAttributes = pinAttrs }
+let mkRecordTypeConRefWithPins name modulePath typeArity layout fieldCount (pinAttrs: Map<string, string list>) =
+    { Name = name; Module = modulePath; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = None; FieldCount = fieldCount; CaseCount = 0; Qualifiers = None; FieldPinAttributes = pinAttrs }
 
 /// Create a type constructor for a discriminated union type
 let mkUnionTypeConRef name typeArity layout caseCount =
