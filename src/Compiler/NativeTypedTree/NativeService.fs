@@ -19,6 +19,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 open Clef.Compiler.PSGSaturation.SemanticGraph.Reachability
+module DepthAnalysis = Clef.Compiler.PSGSaturation.SemanticGraph.DepthAnalysis
 open Clef.Compiler.NativeTypedTree.NameResolution
 open Clef.Compiler.NativeTypedTree.Expressions.Types
 
@@ -255,6 +256,7 @@ let private errorsToDiagnostics (errors: UnificationError list) : Diagnostic lis
             Message = formatError e
             Range = range
             RelatedNodes = []
+            Reachability = ReachabilityContext.Unknown
         }
     )
 
@@ -502,30 +504,39 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     PhaseEmitter.emitExpressionView finalGraph
     PhaseEmitter.emitExpressionText finalGraph
 
-    // Filter diagnostics to only those from source files with reachable code
-    // This prevents reporting errors from unreachable dependency code (e.g., unused
-    // parts of transitive dependencies like BAREWire)
-    // 
-    // Strategy: Get all source files that have reachable nodes, then filter
-    // diagnostics to only those from files with reachable code.
-    let reachableSourceFiles =
+    // Tag diagnostics with reachability context.
+    // Strategy: Build a (file, line) → IsReachable index from the graph.
+    // If ANY node at a diagnostic's source line is reachable, the diagnostic is Reachable.
+    // If ALL nodes at that line are unreachable, the diagnostic is Unreachable.
+    // If no nodes found (e.g., empty range), conservative Unknown.
+    let reachableLines =
         finalGraph.Nodes
         |> Map.values
-        |> Seq.map (fun node -> node.Range.File)
-        |> Seq.filter (fun f -> f <> "")  // Filter out empty/dummy ranges
+        |> Seq.filter (fun node -> node.Range.File <> "" && node.IsReachable)
+        |> Seq.collect (fun node ->
+            seq { for line in node.Range.Start.Line .. node.Range.End.Line do
+                    yield (node.Range.File, line) })
         |> Set.ofSeq
-    
-    let filteredDiagnostics =
-        diagnostics
-        |> List.filter (fun d ->
-            // Keep diagnostic if its source file has reachable code
-            // If no file info (empty string), keep the diagnostic (conservative)
-            let file = d.Range.File
-            file = "" || Set.contains file reachableSourceFiles)
+
+    let tagReachability (d: Diagnostic) =
+        if d.Range.File = "" then { d with Reachability = ReachabilityContext.Unknown }
+        else
+            let lineRange = d.Range.Start.Line
+            if Set.contains (d.Range.File, lineRange) reachableLines then
+                { d with Reachability = ReachabilityContext.Reachable }
+            else
+                { d with Reachability = ReachabilityContext.Unreachable }
+
+    let taggedDiagnostics = diagnostics |> List.map tagReachability
+
+    // Layer 1: Combinational depth analysis (FPGA-only structural heuristic)
+    // Walks the final PSG bottom-up, counting weighted operation depth.
+    // Reports paths exceeding threshold as Info diagnostics.
+    let depthDiagnostics = DepthAnalysis.analyze platformContext finalGraph
 
     {
         Graph = finalGraph
-        Diagnostics = filteredDiagnostics
+        Diagnostics = taggedDiagnostics @ depthDiagnostics
         PlatformContext = platformContext
     }
 
@@ -1481,31 +1492,46 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     let _arity = match typars with Some tp -> tp.TyparDecls.Length | None -> 0
                     let requireQualifiedAccess = hasRequireQualifiedAccessAttribute attrs
                     
-                    // Extract field names and types from SynField list
+                    // Extract field names, types, and pin attributes from SynField list
                     // Per spec: fields are processed in declaration order (= memory order)
-                    let fieldInfos =
+                    let fieldInfosWithPins =
                         fields
                         |> List.choose (fun synField ->
                             match synField with
-                            | SynField(_, _, idOpt, fieldType, _, _, _, _, _) ->
+                            | SynField(fieldAttrs, _, idOpt, fieldType, _, _, _, _, _) ->
                                 match idOpt with
                                 | Some ident ->
                                     let fieldName = ident.idText
                                     let nativeType = resolveSynType accEnv fieldType
-                                    Some (fieldName, nativeType)
+                                    let pinNames = extractFieldPinNames fieldAttrs
+                                    Some (fieldName, nativeType, pinNames)
                                 | None ->
                                     // Anonymous field (tuple-style) - skip for now
                                     // Full implementation would handle this case
                                     None
                         )
-                    
+
+                    let fieldInfos = fieldInfosWithPins |> List.map (fun (name, ty, _) -> (name, ty))
+
+                    // Build pin attribute map (only non-empty entries)
+                    let pinAttrs =
+                        fieldInfosWithPins
+                        |> List.choose (fun (name, _, pins) ->
+                            if List.isEmpty pins then None
+                            else Some (name, pins))
+                        |> Map.ofList
+
                     // Compute memory layout from fields
                     // Per spec Step 4: "Initialize offset = 0, max_align = 1..."
                     let layout = computeRecordLayout fieldInfos
 
-                    // Create TypeConRef with computed layout
+                    // Create TypeConRef with computed layout and pin attributes
                     // Field info is accessed via SemanticGraph.Types lookup (TypeDef node)
-                    let tyCon = mkRecordTypeConRef typeName ctx.Path layout (List.length fieldInfos)
+                    let tyCon =
+                        if Map.isEmpty pinAttrs then
+                            mkRecordTypeConRef typeName ctx.Path layout (List.length fieldInfos)
+                        else
+                            mkRecordTypeConRefWithPins typeName ctx.Path layout (List.length fieldInfos) pinAttrs
                     
                     // Register under all name suffixes (handles AutoOpen modules)
                     let updatedEnv = 
@@ -1837,6 +1863,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
                 Message = "Signature files not yet supported in native checker"
                 Range = dummyRange
                 RelatedNodes = []
+                Reachability = ReachabilityContext.Unknown
             }]
             PlatformContext = None
         }

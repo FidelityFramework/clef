@@ -248,6 +248,7 @@ module ProjectChecker =
         SGDiag.CheckResult.hasErrors result.CheckResult
 
     /// Get all error messages from a project check result.
+    /// Uses effective severity (unreachable errors demoted to info).
     let getErrorMessages (result: ProjectCheckResult): string list =
         let parseErrorMsgs =
             result.ParseErrors
@@ -257,7 +258,32 @@ module ProjectChecker =
 
         let checkErrorMsgs =
             result.CheckResult.Diagnostics
-            |> List.filter (fun d -> d.Severity = SGDiag.NativeDiagnosticSeverity.Error)
+            |> List.filter (fun d -> SGDiag.Diagnostic.effectiveSeverity d = SGDiag.NativeDiagnosticSeverity.Error)
             |> List.map (fun d -> $"{d.Range.File}:{d.Range.Start.Line}: {d.Message}")
 
         parseErrorMsgs @ checkErrorMsgs
+
+    /// Check if a project check result has any warnings.
+    /// Uses effective severity (unreachable warnings demoted to info).
+    let hasWarnings (result: ProjectCheckResult): bool =
+        result.CheckResult.Diagnostics
+        |> List.exists (fun d -> SGDiag.Diagnostic.effectiveSeverity d = SGDiag.NativeDiagnosticSeverity.Warning)
+
+    /// Get all warning messages from a project check result.
+    /// Uses effective severity (unreachable warnings demoted to info).
+    let getWarningMessages (result: ProjectCheckResult): string list =
+        result.CheckResult.Diagnostics
+        |> List.filter (fun d -> SGDiag.Diagnostic.effectiveSeverity d = SGDiag.NativeDiagnosticSeverity.Warning)
+        |> List.map (fun d -> $"{d.Range.File}:{d.Range.Start.Line}: warning {d.Code}: {d.Message}")
+
+    /// Get all info messages from a project check result.
+    /// Includes intrinsic info AND demoted unreachable diagnostics.
+    let getInfoMessages (result: ProjectCheckResult): string list =
+        result.CheckResult.Diagnostics
+        |> List.filter (fun d -> SGDiag.Diagnostic.effectiveSeverity d = SGDiag.NativeDiagnosticSeverity.Info)
+        |> List.map (fun d ->
+            let reachTag =
+                match d.Reachability with
+                | SGDiag.Unreachable -> " [unreachable]"
+                | _ -> ""
+            $"{d.Range.File}:{d.Range.Start.Line}: info {d.Code}: {d.Message}{reachTag}")
