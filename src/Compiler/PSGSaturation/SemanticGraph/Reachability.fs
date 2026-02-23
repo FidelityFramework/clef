@@ -292,12 +292,6 @@ let markUnreachable (graph: SemanticGraph) : SemanticGraph =
         |> Map.map (fun id node ->
             { node with IsReachable = Set.contains id reachable })
 
-    // Print reachability stats
-    let reachableCount = updatedNodes |> Map.filter (fun _ n -> n.IsReachable) |> Map.count
-    let unreachableCount = updatedNodes |> Map.filter (fun _ n -> not n.IsReachable) |> Map.count
-    printfn "[REACHABILITY] Stats: %d reachable, %d unreachable (total: %d nodes)"
-        reachableCount unreachableCount (reachableCount + unreachableCount)
-
     { graph with Nodes = updatedNodes }
 
 /// Get counts of reachable and unreachable nodes

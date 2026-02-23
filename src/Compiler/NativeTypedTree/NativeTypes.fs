@@ -423,6 +423,14 @@ type PlatformContext = {
     /// Default memory space for allocation on this substrate.
     /// None = substrate default (Stack/heap via escape analysis on CPU, Global on GPU, etc.)
     DefaultMemorySpace: NTUMemorySpace option
+
+    /// Clock frequency in MHz from platform binding (FPGA/MCU).
+    /// Used to compute combinational depth threshold.
+    ClockFrequencyMhz: int option
+
+    /// Fabric-specific ns per weighted depth unit (from binding, calibrated against Vivado).
+    /// threshold = floor(clock_period_ns / ns_per_weight_unit)
+    NsPerWeightUnit: float option
 }
 
 /// SubstrateContext is PlatformContext with substrate-aware fields populated.
@@ -466,6 +474,8 @@ module PlatformContext =
         RuntimeModel = None  // None = inferred from DeploymentMode (backward compat)
         AvailableMemorySpaces = []  // Empty = all (backward compat)
         DefaultMemorySpace = None  // None = substrate default
+        ClockFrequencyMhz = None  // None = no timing analysis
+        NsPerWeightUnit = None  // None = use default threshold
     }
 
     /// Create a platform context from a platform library path

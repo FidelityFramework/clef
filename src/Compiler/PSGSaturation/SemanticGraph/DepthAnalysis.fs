@@ -111,6 +111,16 @@ let private nodeLabel (graph: SemanticGraph) (node: SemanticNode) =
 
 let [<Literal>] DefaultThreshold = 6
 
+/// Compute combinational depth threshold from clock frequency and fabric delay.
+/// threshold = floor(clock_period_ns / ns_per_weight_unit)
+/// Falls back to DefaultThreshold when timing data is unavailable.
+let computeThreshold (clockMhz: int option) (nsPerUnit: float option) : int =
+    match clockMhz, nsPerUnit with
+    | Some mhz, Some npu when mhz > 0 && npu > 0.0 ->
+        let periodNs = 1000.0 / float mhz
+        int (floor (periodNs / npu))
+    | _ -> DefaultThreshold
+
 let private analyzeNode (state: DepthAnalysisState) (node: SemanticNode) : DepthAnalysisState =
     let graph = state.Graph
     let weight = operationWeight graph node.Kind
@@ -154,21 +164,39 @@ let private isMuxOp = function
     | "mux" | "match" | "case" -> true
     | _ -> false
 
-let private remediationHint (chain: string list) =
-    let dspCount = chain |> List.filter isDspOp |> List.length
-    let muxCount = chain |> List.filter isMuxOp |> List.length
-    if dspCount > muxCount then
-        "consider a register stage to break the arithmetic/DSP chain"
-    elif muxCount > dspCount then
-        "consider restructuring branches to reduce mux cascade depth"
-    else
-        "consider a register stage to pipeline this combinational path"
+/// Two-sided remediation: tells the developer both knobs they can turn.
+/// When timing data is available, computes the max clock for the current depth
+/// and the required depth for the current clock.
+let private remediationHint (chain: string list) (depth: int) (threshold: int)
+                            (clockMhz: int option) (nsPerUnit: float option) =
+    let structuralAdvice =
+        let dspCount = chain |> List.filter isDspOp |> List.length
+        let muxCount = chain |> List.filter isMuxOp |> List.length
+        if dspCount > muxCount then
+            "break the arithmetic/DSP chain with register stages"
+        elif muxCount > dspCount then
+            "restructure branches to reduce mux cascade depth"
+        else
+            "pipeline this combinational path with register stages"
+    match clockMhz, nsPerUnit with
+    | Some mhz, Some npu when npu > 0.0 ->
+        // What clock would accommodate this depth?
+        let maxFreqMhz = int (floor (1000.0 / (float depth * npu)))
+        sprintf "either reduce depth to ≤ %d, or relax clock to ≤ %d MHz (currently %d MHz). To reduce: %s"
+            threshold maxFreqMhz mhz structuralAdvice
+    | _ ->
+        sprintf "%s (reduce depth to ≤ %d)" structuralAdvice threshold
 
 //=============================================================================
 // RESIDUAL — Group identical chains, format diagnostics with hints
 //=============================================================================
 
-let private formatDiagnostics (threshold: int) (peaks: PeakInfo list) : Diagnostic list =
+let private formatDiagnostics (threshold: int) (clockMhz: int option) (nsPerUnit: float option)
+                              (peaks: PeakInfo list) : Diagnostic list =
+    let clockNote =
+        match clockMhz with
+        | Some mhz -> sprintf " (%d MHz)" mhz
+        | None -> ""
     peaks
     |> List.groupBy (fun p -> p.Chain)
     |> List.map (fun (chain, instances) ->
@@ -176,27 +204,32 @@ let private formatDiagnostics (threshold: int) (peaks: PeakInfo list) : Diagnost
         let lines = instances |> List.map (fun p -> p.Range.Start.Line) |> List.sort
         let firstRange = instances |> List.minBy (fun p -> p.Range.Start.Line) |> fun p -> p.Range
         let chainStr = chain |> String.concat " → "
-        let hint = remediationHint chain
+        let hint = remediationHint chain maxDepth threshold clockMhz nsPerUnit
         let instanceNote =
             if instances.Length > 1 then
                 sprintf " (%d instances: lines %s)" instances.Length (lines |> List.map string |> String.concat ", ")
             else ""
         { Severity = NativeDiagnosticSeverity.Warning
           Code = "CCS0100"
-          Message = sprintf "Combinational depth %d exceeds threshold %d%s\n  Chain: %s\n  Hint: %s"
-                      maxDepth threshold instanceNote chainStr hint
+          Message = sprintf "Combinational depth %d exceeds threshold %d%s%s\n  Chain: %s\n  Hint: %s"
+                      maxDepth threshold clockNote instanceNote chainStr hint
           Range = firstRange
           RelatedNodes = []
           Reachability = ReachabilityContext.Reachable })
 
 /// Run combinational depth analysis on the semantic graph.
 /// FPGA-only — returns empty list for non-FPGA substrates.
+/// Threshold is calibrated from platform binding timing data when available:
+///   threshold = floor(clock_period_ns / ns_per_weight_unit)
 let analyze (platformContext: PlatformContext option) (graph: SemanticGraph) : Diagnostic list =
     match platformContext with
     | Some ctx when PlatformContext.substrateKind ctx = SubstrateKind.FPGA ->
-        let initialState = DepthAnalysisState.create graph DefaultThreshold
+        let clockMhz = ctx.ClockFrequencyMhz
+        let nsPerUnit = ctx.NsPerWeightUnit
+        let threshold = computeThreshold clockMhz nsPerUnit
+        let initialState = DepthAnalysisState.create graph threshold
         let finalState = Traversal.foldWithLambdaPreBind (fun s _ -> s) analyzeNode initialState graph
         let peaks = finalState.Peaks |> Map.toList |> List.map snd
-        formatDiagnostics finalState.Threshold peaks
+        formatDiagnostics threshold clockMhz nsPerUnit peaks
     | _ ->
         []
