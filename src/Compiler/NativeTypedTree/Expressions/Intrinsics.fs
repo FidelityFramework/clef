@@ -50,10 +50,8 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         | "Sys" -> Some (IntrinsicModule.Sys, opPart)
         | "String" -> Some (IntrinsicModule.String, opPart)
         | "Array" -> Some (IntrinsicModule.Array, opPart)
-        // NOTE: Parse removed from intrinsic dispatch — Parse.int/float are platform library functions
-        // (like Format.int), resolved as VarRef by FCS, not as FNCS intrinsics.
-        // NOTE: Format removed from intrinsic dispatch — Format.int/float are platform library functions
-        // (like Console.write), resolved as VarRef by FCS, not as FNCS intrinsics.
+        // Parse.int/float and Format.int/float are platform library functions,
+        // resolved as VarRef by FCS, not as FNCS intrinsics.
         | "Crypto" -> Some (IntrinsicModule.Crypto, opPart)
         | "Bits" -> Some (IntrinsicModule.Bits, opPart)
         | "FnPtr" -> Some (IntrinsicModule.FnPtr, opPart)
@@ -167,16 +165,18 @@ let private resolveSysOp (op: string) (range: SourceRange) : IntrinsicResolution
     let fullName = "Sys." + op
     match op with
     | "write" ->
-        // fd:int -> buffer:nativeptr<byte> -> int
-        // Count extracted via memref.dim in MLIR backend
+        // fd:int -> buffer:string -> int (bytes written)
         let ty = NativeType.TFun(Types.intType,
-            NativeType.TFun(NativeType.TNativePtr Types.uint8Type, Types.intType))
+            NativeType.TFun(Types.stringType, Types.intType))
         Resolved (mkIntrinsic IntrinsicModule.Sys op IntrinsicCategory.Platform fullName, ty)
     | "read" ->
-        // fd:int -> buffer:nativeptr<byte> -> int
-        // maxCount = buffer capacity via memref.dim in MLIR backend
+        // fd:int -> buffer:string -> int (bytes read)
         let ty = NativeType.TFun(Types.intType,
-            NativeType.TFun(NativeType.TNativePtr Types.uint8Type, Types.intType))
+            NativeType.TFun(Types.stringType, Types.intType))
+        Resolved (mkIntrinsic IntrinsicModule.Sys op IntrinsicCategory.Platform fullName, ty)
+    | "readline" ->
+        // fd:int -> string (reads until newline/EOF)
+        let ty = NativeType.TFun(Types.intType, Types.stringType)
         Resolved (mkIntrinsic IntrinsicModule.Sys op IntrinsicCategory.Platform fullName, ty)
     | "exit" ->
         // code:int -> 'a (never returns, polymorphic return type)
@@ -318,6 +318,13 @@ let private resolveArrayOp (op: string) (range: SourceRange) : IntrinsicResoluti
                         NativeType.TFun(Types.intType,
                             NativeType.TFun(Types.intType, Types.unitType))))))
         Resolved (mkIntrinsic IntrinsicModule.Array op IntrinsicCategory.Memory fullName, ty)
+    | "sub" ->
+        // 'T[] -> int -> int -> 'T[] (source, startIndex, count)
+        let ty = NativeType.TForall([tyParamSpec],
+            NativeType.TFun(arrayType,
+                NativeType.TFun(Types.intType,
+                    NativeType.TFun(Types.intType, arrayType))))
+        Resolved (mkIntrinsic IntrinsicModule.Array op IntrinsicCategory.Memory fullName, ty)
     | "collect" ->
         // ('T -> 'U[]) -> 'T[] -> 'U[]
         let tyParamSpecU = freshTypeParam "'U" TypeParamKind.Type range
@@ -328,7 +335,7 @@ let private resolveArrayOp (op: string) (range: SourceRange) : IntrinsicResoluti
             NativeType.TFun(mapperFn, NativeType.TFun(arrayType, arrayTypeU)))
         Resolved (mkIntrinsic IntrinsicModule.Array op IntrinsicCategory.Memory fullName, ty)
     | unknown ->
-        UnknownOperation $"Unknown Array intrinsic: Array.{unknown}. Available: zeroCreate, create, init, copy, length, get, set, tryItem, isEmpty, blit, collect"
+        UnknownOperation $"Unknown Array intrinsic: Array.{unknown}. Available: zeroCreate, create, init, copy, length, get, set, sub, tryItem, isEmpty, blit, collect"
 
 /// Resolve Parse.* operations (string → numeric)
 let private resolveParseOp (op: string) (_range: SourceRange) : IntrinsicResolution =

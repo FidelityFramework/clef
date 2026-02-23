@@ -25,24 +25,52 @@ type ProjectCheckResult = {
 
 module ProjectChecker =
     /// Build PlatformContext from project options.
-    /// Single canonical path — SubstrateKind flows from fidproj target.
+    /// When binding metadata is available (PlatformMetadata from [platform] section),
+    /// it is the authoritative source. Falls back to path-string inference for
+    /// legacy bindings without [platform].
     let private buildPlatformContext (options: FidprojOptions) : PlatformContext option =
-        match options.PlatformPath with
-        | Some platformPath ->
+        let substrateKind =
+            match options.TargetPlatform with
+            | TargetPlatform.CPU  -> SubstrateKind.CPU
+            | TargetPlatform.FPGA -> SubstrateKind.FPGA
+            | TargetPlatform.GPU  -> SubstrateKind.GPU
+            | TargetPlatform.NPU  -> SubstrateKind.NPU
+            | TargetPlatform.MCU  -> SubstrateKind.CPU
+
+        match options.PlatformPath, options.PlatformMetadata with
+        | Some platformPath, Some metadata ->
+            // Authoritative: build from binding metadata
+            let dimensions =
+                match metadata.WordSize with
+                | Some 64 -> Map.ofList [(WidthDimension.Pointer, 64); (WidthDimension.Register, 64)]
+                | Some 32 -> Map.ofList [(WidthDimension.Pointer, 32); (WidthDimension.Register, 32)]
+                | _ -> PlatformContext.defaultLinux_x86_64.Dimensions
+            let platformId = metadata.Arch |> Option.defaultValue "unknown"
+            let ctx = {
+                PlatformId = platformId
+                Dimensions = dimensions
+                PointerAlign = (metadata.WordSize |> Option.defaultValue 64) / 8
+                PlatformLibraryPath = Some platformPath
+                Predicates = Map.empty
+                FreestandingStartup =
+                    match metadata.RuntimeModel with
+                    | RuntimeModel.Freestanding -> FreestandingStartup.forPlatform platformId
+                    | _ -> None
+                SubstrateKind = Some substrateKind
+                RuntimeModel = Some metadata.RuntimeModel
+                AvailableMemorySpaces = []
+                DefaultMemorySpace = None
+            }
+            Some ctx
+        | Some platformPath, None ->
+            // Legacy fallback: path-string inference for bindings without [platform]
             let basePlatformCtx = PlatformContext.fromPlatformPath platformPath
-            let substrateKind =
-                match options.TargetPlatform with
-                | TargetPlatform.CPU  -> SubstrateKind.CPU
-                | TargetPlatform.FPGA -> SubstrateKind.FPGA
-                | TargetPlatform.GPU  -> SubstrateKind.GPU
-                | TargetPlatform.NPU  -> SubstrateKind.NPU
-                | TargetPlatform.MCU  -> SubstrateKind.CPU
             let ctx = { basePlatformCtx with SubstrateKind = Some substrateKind }
             if options.DeploymentMode = DeploymentMode.Freestanding then
                 Some { ctx with FreestandingStartup = FreestandingStartup.forPlatform ctx.PlatformId }
             else
                 Some ctx
-        | None -> None
+        | None, _ -> None
 
     /// Normalizes a path to use forward slashes and be absolute.
     let private normalizePath (path: string) =

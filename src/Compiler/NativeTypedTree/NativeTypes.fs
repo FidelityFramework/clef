@@ -353,6 +353,23 @@ module FreestandingStartup =
 // Substrate and Platform Context (NTU Resolution)
 //-------------------------------------------------------------------------
 
+/// Runtime model — what execution environment services are available.
+/// This is a capability coeffect: what the computation requires from
+/// its environment. Comes from the platform binding's [platform] section.
+/// See DTS+DMM paper Section 3.1.
+[<RequireQualifiedAccess>]
+type RuntimeModel =
+    /// C library available (CPU console apps)
+    | Libc
+    /// Direct syscalls only, no libc (CPU standalone)
+    | Freestanding
+    /// No OS, hardware target (FPGA, MCU)
+    | Bare
+    /// AMD GPU runtime
+    | ROCm
+    /// AMD NPU runtime
+    | XDNA
+
 /// Compute substrate kind for multi-substrate compilation.
 /// Each fidproj targets a single substrate; the fidsln orchestrates across them.
 [<RequireQualifiedAccess>]
@@ -394,6 +411,10 @@ type PlatformContext = {
 
     /// Substrate kind (None = CPU for backward compat with single-substrate builds)
     SubstrateKind: SubstrateKind option
+
+    /// Runtime model from platform binding — capability coeffect.
+    /// What execution environment services are available.
+    RuntimeModel: RuntimeModel option
 
     /// Memory spaces available on this substrate.
     /// Empty = all spaces available (for backward compat).
@@ -442,6 +463,7 @@ module PlatformContext =
         ]
         FreestandingStartup = None  // Set when building freestanding binaries
         SubstrateKind = None  // None = CPU (backward compat)
+        RuntimeModel = None  // None = inferred from DeploymentMode (backward compat)
         AvailableMemorySpaces = []  // Empty = all (backward compat)
         DefaultMemorySpace = None  // None = substrate default
     }
