@@ -60,6 +60,9 @@ module ProjectChecker =
                 RuntimeModel = Some metadata.RuntimeModel
                 AvailableMemorySpaces = []
                 DefaultMemorySpace = None
+                // Project clock_mhz overrides binding clock_mhz (design may use PLL/divider)
+                ClockFrequencyMhz = options.ClockMhzOverride |> Option.orElse metadata.ClockMhz
+                NsPerWeightUnit = metadata.NsPerWeightUnit
             }
             Some ctx
         | Some platformPath, None ->

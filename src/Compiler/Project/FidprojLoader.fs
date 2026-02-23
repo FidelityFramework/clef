@@ -66,6 +66,13 @@ type PlatformSection = {
     Family: string option
     /// Specific device (e.g., "xc7a100t").
     Device: string option
+    /// Clock frequency in MHz (FPGA/MCU). Used with NsPerWeightUnit for
+    /// combinational depth threshold: threshold = floor(period_ns / ns_per_weight_unit).
+    ClockMhz: int option
+    /// Fabric-specific delay per weighted combinational depth unit (ns).
+    /// Calibrated from Vivado post-route timing (includes routing overhead).
+    /// e.g., 1.6 for Artix-7 (from HelloArty WNS=-2.635ns at depth 8, 100 MHz).
+    NsPerWeightUnit: float option
 }
 
 /// Represents a project dependency.
@@ -119,6 +126,10 @@ type FidprojOptions = {
     /// The binding IS the specification — this is the authoritative source
     /// for runtime model, architecture, and capabilities.
     PlatformMetadata: PlatformSection option
+    /// Project-level clock frequency override (MHz).
+    /// When set, overrides the platform binding's clock_mhz for depth analysis.
+    /// Use when the design runs at a different frequency than the board oscillator.
+    ClockMhzOverride: int option
 }
 
 module FidprojLoader =
@@ -152,8 +163,8 @@ module FidprojLoader =
         | "freestanding" -> Ok DeploymentMode.Freestanding
         | "console" | "executable" -> Ok DeploymentMode.Console
         | "library" | "lib" -> Ok DeploymentMode.Library
-        | "embedded" -> Ok DeploymentMode.Embedded
-        | unknown -> Error $"Unrecognized output_kind '%s{unknown}'. Expected: console, freestanding, library, embedded"
+        | "embedded" | "fpga" -> Ok DeploymentMode.Embedded
+        | unknown -> Error $"Unrecognized output_kind '%s{unknown}'. Expected: console, freestanding, library, embedded, fpga"
 
     /// Parses a runtime model string from a binding's [platform] section.
     /// No silent fallbacks — unknown values are hard errors.
@@ -183,6 +194,8 @@ module FidprojLoader =
                     Vendor = Toml.getString "platform.vendor" doc
                     Family = Toml.getString "platform.family" doc
                     Device = Toml.getString "platform.device" doc
+                    ClockMhz = Toml.getInt "platform.clock_mhz" doc |> Option.map int
+                    NsPerWeightUnit = Toml.getFloat "platform.ns_per_weight_unit" doc
                 }
 
     /// Tries to find a .fidproj file in the given directory.
@@ -329,6 +342,10 @@ module FidprojLoader =
                         | Error _ -> None
                     | None -> None
 
+                // Project-level clock override from [compilation] section
+                let clockMhzOverride =
+                    Toml.getInt "compilation.clock_mhz" doc |> Option.map int
+
                 Ok {
                     ProjectPath = absPath
                     ProjectDirectory = projectDir
@@ -343,6 +360,7 @@ module FidprojLoader =
                     AlloyPath = alloyPath
                     PlatformPath = platformPath
                     PlatformMetadata = platformMetadata
+                    ClockMhzOverride = clockMhzOverride
                 }
 
     /// Finds the .fidproj file containing a source file.

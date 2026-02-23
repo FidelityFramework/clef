@@ -61,6 +61,8 @@ type ArtifactConfig = {
     IncludeRanges: bool
     /// Pretty-print JSON output
     PrettyPrint: bool
+    /// Log file writes to stdout
+    Verbose: bool
 }
 
 /// Default configuration - all emission disabled
@@ -71,6 +73,7 @@ let defaultConfig : ArtifactConfig = {
     IncludeNodeBodies = false
     IncludeRanges = true
     PrettyPrint = true
+    Verbose = false
 }
 
 /// Global mutable configuration
@@ -81,6 +84,13 @@ let getConfig () = currentConfig
 
 /// Check if intermediates should be emitted
 let shouldEmit () = currentConfig.EmitIntermediates
+
+/// Check if verbose logging is enabled
+let isVerbose () = currentConfig.Verbose
+
+/// Enable verbose logging for intermediate file writes
+let enableVerbose () =
+    currentConfig <- { currentConfig with Verbose = true }
 
 /// Check if a specific artifact should be emitted
 let shouldEmitArtifact (id: int) =
@@ -129,6 +139,7 @@ let enableAllFncsArtifacts (outputDir: string) =
         IncludeNodeBodies = true
         IncludeRanges = true
         PrettyPrint = true
+        Verbose = currentConfig.Verbose
     }
 
 /// Enable all artifacts including Alex (1-8)
@@ -140,6 +151,7 @@ let enableAllArtifacts (outputDir: string) =
         IncludeNodeBodies = true
         IncludeRanges = true
         PrettyPrint = true
+        Verbose = currentConfig.Verbose
     }
 
 // Legacy compatibility
@@ -154,6 +166,7 @@ let enableArtifacts (outputDir: string) (ids: int list) =
         IncludeNodeBodies = true
         IncludeRanges = true
         PrettyPrint = true
+        Verbose = currentConfig.Verbose
     }
 
 // Legacy compatibility

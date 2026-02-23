@@ -31,3 +31,6 @@ targets.make text eol=lf
 *.xlf linguist-generated=true
 
 *.png binary
+
+
+*.clef linguist-language=FSharp
