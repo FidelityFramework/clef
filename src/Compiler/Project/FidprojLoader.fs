@@ -4,6 +4,7 @@ namespace Clef.Compiler.Project
 
 open System.IO
 open Fidelity.Toml
+open Clef.Compiler.NativeTypedTree.NativeTypes
 
 /// Memory model for native compilation.
 [<RequireQualifiedAccess>]
@@ -31,9 +32,9 @@ type TargetPlatform =
     /// Neural processing unit → future.
     | NPU
 
-/// Deployment mode — backend-internal concern.
-/// Determines linker flags, runtime dependencies, entry point handling.
-/// Does NOT affect pipeline selection.
+/// Deployment mode — artifact shape only.
+/// Determines output format (executable vs library).
+/// Does NOT determine runtime model — that comes from the platform binding.
 [<RequireQualifiedAccess>]
 type DeploymentMode =
     /// Freestanding binary, no libc dependency.
@@ -44,6 +45,28 @@ type DeploymentMode =
     | Library
     /// Embedded firmware/bare metal.
     | Embedded
+
+/// Parsed [platform] section from a binding's fidproj.
+/// The platform binding IS the specification — this is the machine-readable
+/// encoding of the platform quotation. See DTS+DMM paper Section 2.6.
+type PlatformSection = {
+    /// What execution environment services are available.
+    RuntimeModel: RuntimeModel
+    /// Operating system (e.g., "linux", "none").
+    OS: string option
+    /// Architecture (e.g., "x86_64", "arm_cortex_m7").
+    Arch: string option
+    /// Word size in bits (e.g., 32, 64).
+    WordSize: int option
+    /// Substrate type for FPGA (e.g., "fpga").
+    Substrate: string option
+    /// Hardware vendor (e.g., "xilinx", "amd").
+    Vendor: string option
+    /// Hardware family (e.g., "artix7", "rdna3_5").
+    Family: string option
+    /// Specific device (e.g., "xc7a100t").
+    Device: string option
+}
 
 /// Represents a project dependency.
 type FidprojDependency = {
@@ -92,6 +115,10 @@ type FidprojOptions = {
     /// Resolved absolute path to platform binding library (if specified).
     /// E.g., ~/repos/Fidelity.Platform/Linux_x86_64
     PlatformPath: string option
+    /// Platform metadata from the binding's [platform] section (if loaded).
+    /// The binding IS the specification — this is the authoritative source
+    /// for runtime model, architecture, and capabilities.
+    PlatformMetadata: PlatformSection option
 }
 
 module FidprojLoader =
@@ -108,23 +135,77 @@ module FidprojLoader =
         | "standard" | _ -> MemoryModel.Standard
 
     /// Parses a target platform string from [compilation] target.
-    let private parseTargetPlatform (s: string) =
+    let private parseTargetPlatform (s: string) : Result<TargetPlatform, string> =
         match s.ToLowerInvariant() with
-        | "cpu" | "native" -> TargetPlatform.CPU
-        | "fpga" -> TargetPlatform.FPGA
-        | "gpu" -> TargetPlatform.GPU
-        | "mcu" -> TargetPlatform.MCU
-        | "npu" -> TargetPlatform.NPU
-        | _ -> TargetPlatform.CPU
+        | "cpu" | "native" -> Ok TargetPlatform.CPU
+        | "fpga" -> Ok TargetPlatform.FPGA
+        | "gpu" -> Ok TargetPlatform.GPU
+        | "mcu" -> Ok TargetPlatform.MCU
+        | "npu" -> Ok TargetPlatform.NPU
+        | unknown -> Error $"Unrecognized target platform '%s{unknown}'. Expected: cpu, fpga, gpu, mcu, npu"
 
     /// Parses a deployment mode string from [build] output_kind.
-    let private parseDeploymentMode (s: string) =
+    /// Parses a deployment mode string from [build] output_kind.
+    /// No silent fallbacks — unknown values are hard errors.
+    let private parseDeploymentMode (s: string) : Result<DeploymentMode, string> =
         match s.ToLowerInvariant() with
-        | "freestanding" -> DeploymentMode.Freestanding
-        | "console" -> DeploymentMode.Console
-        | "library" | "lib" -> DeploymentMode.Library
-        | "embedded" -> DeploymentMode.Embedded
-        | _ -> DeploymentMode.Console
+        | "freestanding" -> Ok DeploymentMode.Freestanding
+        | "console" | "executable" -> Ok DeploymentMode.Console
+        | "library" | "lib" -> Ok DeploymentMode.Library
+        | "embedded" -> Ok DeploymentMode.Embedded
+        | unknown -> Error $"Unrecognized output_kind '%s{unknown}'. Expected: console, freestanding, library, embedded"
+
+    /// Parses a runtime model string from a binding's [platform] section.
+    /// No silent fallbacks — unknown values are hard errors.
+    let private parseRuntimeModel (s: string) : Result<RuntimeModel, string> =
+        match s.ToLowerInvariant() with
+        | "libc" -> Ok RuntimeModel.Libc
+        | "freestanding" -> Ok RuntimeModel.Freestanding
+        | "bare" -> Ok RuntimeModel.Bare
+        | "rocm" -> Ok RuntimeModel.ROCm
+        | "xdna" -> Ok RuntimeModel.XDNA
+        | unknown -> Error $"Unrecognized runtime_model '%s{unknown}'. Expected: libc, freestanding, bare, rocm, xdna"
+
+    /// Parses a [platform] section from a TOML document.
+    let private parsePlatformSection (doc: TomlDocument) : Result<PlatformSection, string> =
+        match Toml.getString "platform.runtime_model" doc with
+        | None -> Error "Missing required field [platform] runtime_model"
+        | Some rmStr ->
+            match parseRuntimeModel rmStr with
+            | Error msg -> Error msg
+            | Ok runtimeModel ->
+                Ok {
+                    RuntimeModel = runtimeModel
+                    OS = Toml.getString "platform.os" doc
+                    Arch = Toml.getString "platform.arch" doc
+                    WordSize = Toml.getInt "platform.word_size" doc |> Option.map int
+                    Substrate = Toml.getString "platform.substrate" doc
+                    Vendor = Toml.getString "platform.vendor" doc
+                    Family = Toml.getString "platform.family" doc
+                    Device = Toml.getString "platform.device" doc
+                }
+
+    /// Tries to find a .fidproj file in the given directory.
+    let tryFindInDirectory (directory: string): string option =
+        let dir = normalizePath directory
+        if Directory.Exists dir then
+            Directory.GetFiles(dir, "*.fidproj")
+            |> Array.tryHead
+            |> Option.map normalizePath
+        else
+            None
+
+    /// Loads the [platform] section from a binding's .fidproj file.
+    /// The binding IS the specification — this reads what the platform provides.
+    let loadBindingPlatformSection (platformDir: string) : Result<PlatformSection, string> =
+        let dir = normalizePath platformDir
+        match tryFindInDirectory dir with
+        | None -> Error $"No .fidproj found in platform binding directory: {dir}"
+        | Some fidprojPath ->
+            let content = File.ReadAllText(fidprojPath)
+            match Toml.parse content with
+            | Error msg -> Error $"Failed to parse binding fidproj {fidprojPath}: {msg}"
+            | Ok doc -> parsePlatformSection doc
 
     /// Parses a dependency from a TOML value.
     let private parseDependency (name: string) (value: TomlValue) (projectDir: string): FidprojDependency =
@@ -195,20 +276,26 @@ module FidprojLoader =
                     Toml.getString "compilation.memory_model" doc
                     |> Option.map parseMemoryModel
                     |> Option.defaultValue MemoryModel.StackOnly
-                let targetPlatform =
-                    Toml.getString "compilation.target" doc
-                    |> Option.defaultValue "native"
-                    |> parseTargetPlatform
+                let targetPlatformResult =
+                    match Toml.getString "compilation.target" doc with
+                    | None -> Error "Missing required field [compilation] target. Expected: cpu, fpga, gpu, mcu, npu"
+                    | Some s -> parseTargetPlatform s
+                match targetPlatformResult with
+                | Error msg -> Error msg
+                | Ok targetPlatform ->
 
                 // Build section
                 let sources =
                     Toml.getStringArray "build.sources" doc
                     |> Option.defaultValue []
                 let outputName = Toml.getString "build.output" doc
-                let deploymentMode =
-                    Toml.getString "build.output_kind" doc
-                    |> Option.map parseDeploymentMode
-                    |> Option.defaultValue DeploymentMode.Console
+                let deploymentModeResult =
+                    match Toml.getString "build.output_kind" doc with
+                    | None -> Ok DeploymentMode.Console
+                    | Some s -> parseDeploymentMode s
+                match deploymentModeResult with
+                | Error msg -> Error msg
+                | Ok deploymentMode ->
 
                 // Dependencies section
                 let dependencies =
@@ -232,6 +319,16 @@ module FidprojLoader =
                     |> List.tryFind (fun d -> d.Name = "platform" || d.Name = "Platform")
                     |> Option.bind (fun d -> d.Path)
 
+                // Load platform metadata from binding's [platform] section if available.
+                // The binding IS the specification — this is the authoritative source.
+                let platformMetadata =
+                    match platformPath with
+                    | Some dir ->
+                        match loadBindingPlatformSection dir with
+                        | Ok section -> Some section
+                        | Error _ -> None
+                    | None -> None
+
                 Ok {
                     ProjectPath = absPath
                     ProjectDirectory = projectDir
@@ -245,17 +342,8 @@ module FidprojLoader =
                     Dependencies = dependencies
                     AlloyPath = alloyPath
                     PlatformPath = platformPath
+                    PlatformMetadata = platformMetadata
                 }
-
-    /// Tries to find a .fidproj file in the given directory.
-    let tryFindInDirectory (directory: string): string option =
-        let dir = normalizePath directory
-        if Directory.Exists dir then
-            Directory.GetFiles(dir, "*.fidproj")
-            |> Array.tryHead
-            |> Option.map normalizePath
-        else
-            None
 
     /// Finds the .fidproj file containing a source file.
     let findProjectForSourceFile (sourceFile: string) (projects: FidprojOptions list): FidprojOptions option =

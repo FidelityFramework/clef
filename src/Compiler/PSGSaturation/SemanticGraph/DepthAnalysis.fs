@@ -21,17 +21,23 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 open Clef.Compiler.PSGSaturation.SemanticGraph.Traversal
 
+type PeakInfo = {
+    Depth: int
+    Chain: string list
+    Range: SourceRange
+}
+
 type DepthAnalysisState = {
     Depths: Map<NodeId, int>
     Chains: Map<NodeId, string list>
-    Diagnostics: Diagnostic list
+    Peaks: Map<int, PeakInfo>
     Graph: SemanticGraph
     Threshold: int
 }
 
 module DepthAnalysisState =
     let create (graph: SemanticGraph) (threshold: int) =
-        { Depths = Map.empty; Chains = Map.empty; Diagnostics = []
+        { Depths = Map.empty; Chains = Map.empty; Peaks = Map.empty
           Graph = graph; Threshold = threshold }
 
     let setDepth (nodeId: NodeId) (depth: int) (chain: string list) (state: DepthAnalysisState) =
@@ -45,8 +51,10 @@ module DepthAnalysisState =
     let getChain (nodeId: NodeId) (state: DepthAnalysisState) =
         Map.tryFind nodeId state.Chains |> Option.defaultValue []
 
-    let addDiagnostic (diag: Diagnostic) (state: DepthAnalysisState) =
-        { state with Diagnostics = diag :: state.Diagnostics }
+    let recordPeak (line: int) (peak: PeakInfo) (state: DepthAnalysisState) =
+        match Map.tryFind line state.Peaks with
+        | Some existing when existing.Depth >= peak.Depth -> state
+        | _ -> { state with Peaks = Map.add line peak state.Peaks }
 
 //=============================================================================
 // WEIGHT TABLE — Structural complexity weights (unitless, NOT nanoseconds)
@@ -129,18 +137,57 @@ let private analyzeNode (state: DepthAnalysisState) (node: SemanticNode) : Depth
     let state = DepthAnalysisState.setDepth node.Id nodeDepth chain state
 
     if nodeDepth > state.Threshold && weight > 0 then
-        let chainStr = chain |> String.concat " → "
-        DepthAnalysisState.addDiagnostic {
-            Severity = NativeDiagnosticSeverity.Warning
-            Code = "CCS0100"
-            Message = sprintf "Combinational depth %d exceeds threshold %d. Chain: %s"
-                        nodeDepth state.Threshold chainStr
-            Range = node.Range
-            RelatedNodes = []
-            Reachability = ReachabilityContext.Reachable
-        } state
+        let peak = { Depth = nodeDepth; Chain = chain; Range = node.Range }
+        DepthAnalysisState.recordPeak node.Range.Start.Line peak state
     else
         state
+
+//=============================================================================
+// REMEDIATION — Derived from chain content, not a lookup dictionary
+//=============================================================================
+
+let private isDspOp = function
+    | "op_Multiply" | "op_Division" | "op_Modulus" -> true
+    | _ -> false
+
+let private isMuxOp = function
+    | "mux" | "match" | "case" -> true
+    | _ -> false
+
+let private remediationHint (chain: string list) =
+    let dspCount = chain |> List.filter isDspOp |> List.length
+    let muxCount = chain |> List.filter isMuxOp |> List.length
+    if dspCount > muxCount then
+        "consider a register stage to break the arithmetic/DSP chain"
+    elif muxCount > dspCount then
+        "consider restructuring branches to reduce mux cascade depth"
+    else
+        "consider a register stage to pipeline this combinational path"
+
+//=============================================================================
+// RESIDUAL — Group identical chains, format diagnostics with hints
+//=============================================================================
+
+let private formatDiagnostics (threshold: int) (peaks: PeakInfo list) : Diagnostic list =
+    peaks
+    |> List.groupBy (fun p -> p.Chain)
+    |> List.map (fun (chain, instances) ->
+        let maxDepth = instances |> List.map (fun p -> p.Depth) |> List.max
+        let lines = instances |> List.map (fun p -> p.Range.Start.Line) |> List.sort
+        let firstRange = instances |> List.minBy (fun p -> p.Range.Start.Line) |> fun p -> p.Range
+        let chainStr = chain |> String.concat " → "
+        let hint = remediationHint chain
+        let instanceNote =
+            if instances.Length > 1 then
+                sprintf " (%d instances: lines %s)" instances.Length (lines |> List.map string |> String.concat ", ")
+            else ""
+        { Severity = NativeDiagnosticSeverity.Warning
+          Code = "CCS0100"
+          Message = sprintf "Combinational depth %d exceeds threshold %d%s\n  Chain: %s\n  Hint: %s"
+                      maxDepth threshold instanceNote chainStr hint
+          Range = firstRange
+          RelatedNodes = []
+          Reachability = ReachabilityContext.Reachable })
 
 /// Run combinational depth analysis on the semantic graph.
 /// FPGA-only — returns empty list for non-FPGA substrates.
@@ -149,6 +196,7 @@ let analyze (platformContext: PlatformContext option) (graph: SemanticGraph) : D
     | Some ctx when PlatformContext.substrateKind ctx = SubstrateKind.FPGA ->
         let initialState = DepthAnalysisState.create graph DefaultThreshold
         let finalState = Traversal.foldWithLambdaPreBind (fun s _ -> s) analyzeNode initialState graph
-        List.rev finalState.Diagnostics
+        let peaks = finalState.Peaks |> Map.toList |> List.map snd
+        formatDiagnostics finalState.Threshold peaks
     | _ ->
         []

@@ -284,6 +284,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\Reachability.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Traversal.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Diagnostics.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
 
     <!-- NativeTypedTree - Native Type Checker (BCL-free, unified representation) -->
     <!-- NativeTypes.fs moved earlier - foundational types needed by TypedTree -->
