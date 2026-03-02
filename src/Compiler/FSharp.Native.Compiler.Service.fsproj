@@ -439,9 +439,9 @@
     <ProjectReference Include="$(RepoRoot)src/FSharp.DependencyManager.Nuget/FSharp.DependencyManager.Nuget.fsproj" />
   </ItemGroup>
 
-  <!-- Fidelity.Toml - TOML parser for .fidproj loading -->
+  <!-- Fidelity.Data - TOML/XML/YAML/JSON/CSV parser for .fidproj loading -->
   <ItemGroup>
-    <ProjectReference Include="../../../Fidelity.Toml/src/Fidelity.Toml.fsproj" />
+    <ProjectReference Include="../../../Fidelity.Data/src/Fidelity.Data/Fidelity.Data.fsproj" />
   </ItemGroup>
 
 </Project>

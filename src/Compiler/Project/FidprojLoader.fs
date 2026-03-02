@@ -3,7 +3,7 @@
 namespace Clef.Compiler.Project
 
 open System.IO
-open Fidelity.Toml
+open Fidelity.Data.TOML
 open Clef.Compiler.NativeTypedTree.NativeTypes
 
 /// Memory model for native compilation.
