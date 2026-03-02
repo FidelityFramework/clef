@@ -692,6 +692,22 @@ let extractFieldPinNames (attrs: SynAttributes) : string list =
     | pins when not (List.isEmpty pins) -> pins
     | _ -> extractPinsAttribute attrs
 
+/// Extract library and symbol from [<FidelityExtern("library", "symbol")>] attribute.
+/// Returns (library, symbol) option. Used for Farscape-generated native bindings.
+let extractFidelityExternAttribute (attrs: SynAttributes) : (string * string) option =
+    attrs |> List.tryPick (fun attrList ->
+        attrList.Attributes |> List.tryPick (fun attr ->
+            match attr.TypeName.LongIdent with
+            | [id] when id.idText = "FidelityExtern" || id.idText = "FidelityExternAttribute" ->
+                match attr.ArgExpr with
+                | SynExpr.Paren(SynExpr.Tuple(_, [SynExpr.Const(SynConst.String(library, _, _), _);
+                                                   SynExpr.Const(SynConst.String(symbol, _, _), _)], _, _), _, _, _) ->
+                    Some (library, symbol)
+                | _ -> None
+            | _ -> None
+        )
+    )
+
 //-------------------------------------------------------------------------
 // BCL Rejection - CRITICAL
 // BCL types/namespaces are NEVER allowed in F# Native

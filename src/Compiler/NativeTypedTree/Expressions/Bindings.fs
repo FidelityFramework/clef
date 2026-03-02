@@ -222,6 +222,7 @@ let checkBinding
         elif hasHardwareModuleAttribute attrs then Some DeclRoot.HardwareModule
         else None
     let isLiteral = hasLiteralAttribute attrs
+    let fidelityExtern = extractFidelityExternAttribute attrs
 
     // Extract literal value if this is a [<Literal>] binding with a constant expression
     let literalValue =
@@ -433,6 +434,13 @@ let checkBinding
         // Lambda's Parent field must point back to Binding for SSA name assignment
         builder.SetParent(lambdaNode.Id, bindingNode.Id)
 
+        // Propagate [<FidelityExtern>] metadata for Farscape-generated native bindings
+        match fidelityExtern with
+        | Some (library, symbol) ->
+            builder.SetMetadata(bindingNode.Id, "FidelityExtern.Library", MetadataValue.String library) |> ignore
+            builder.SetMetadata(bindingNode.Id, "FidelityExtern.Symbol", MetadataValue.String symbol) |> ignore
+        | None -> ()
+
         // Capture inline body only for functions explicitly marked `inline`
         // This enables escape analysis - inline functions have their allocations
         // moved to the caller's frame, ensuring pointers remain valid.
@@ -567,12 +575,19 @@ let checkBinding
                     children = [finalExprNode.Id])
         // Establish bidirectional parent-child link
         builder.SetParent(finalExprNode.Id, node.Id)
-        
+
+        // Propagate [<FidelityExtern>] metadata for Farscape-generated native bindings
+        match fidelityExtern with
+        | Some (library, symbol) ->
+            builder.SetMetadata(node.Id, "FidelityExtern.Library", MetadataValue.String library) |> ignore
+            builder.SetMetadata(node.Id, "FidelityExtern.Symbol", MetadataValue.String symbol) |> ignore
+        | None -> ()
+
         // Module-level value bindings need MainPrologue strategy for SSA scoping.
         // These are emitted at the start of main - SSAs flow into main's body.
         if env.EnclosingFunction.IsNone && declRoot.IsNone then
             builder.SetEmissionStrategy(node.Id, EmissionStrategy.MainPrologue)
-        
+
         (node, None, isMutable, literalValue)
 
 //-------------------------------------------------------------------------
