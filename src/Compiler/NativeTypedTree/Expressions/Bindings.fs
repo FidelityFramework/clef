@@ -214,7 +214,7 @@ let checkBinding
     (preCreatedBinding: SemanticNode option)
     : SemanticNode * InlineBody option * bool * NativeLiteral option =
 
-    let (SynBinding(_, _, isInline, isMutable, attrs, _, _, headPat, _, expr, bindingRange, _, _)) = binding
+    let (SynBinding(_, _, isInline, isMutable, attrs, _, _, headPat, returnInfo, expr, bindingRange, _, _)) = binding
     let range = rangeToSourceRange bindingRange
     let name = getBindingName binding
     let declRoot =
@@ -354,7 +354,22 @@ let checkBinding
         let bodyEnv = { bodyEnvWithParams with EnclosingFunction = Some name }
 
         // Check body with extended environment
-        let bodyNode = checkExpr bodyEnv builder expr
+        // For [<FidelityExtern>] bindings, the body is a placeholder (Unchecked.defaultof<T>)
+        // that would be rejected by BCL filtering. Skip body checking and create a
+        // placeholder node using the return type annotation. Alex resolves these via ExternCall.
+        let bodyNode =
+            match fidelityExtern with
+            | Some _ ->
+                let retType =
+                    match returnInfo with
+                    | Some (SynBindingReturnInfo(typeName = synType)) -> resolveSynType env synType
+                    | None -> freshTypeVar range
+                builder.Create(
+                    SemanticKind.Literal(NativeLiteral.Unit),
+                    retType,
+                    range)
+            | None ->
+                checkExpr bodyEnv builder expr
 
         // Entry point constraint: string[] -> int
         // Per F# spec, [<EntryPoint>] functions must have signature: string[] -> int
