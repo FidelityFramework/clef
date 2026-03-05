@@ -29,13 +29,18 @@ module ProjectChecker =
     /// it is the authoritative source. Falls back to path-string inference for
     /// legacy bindings without [platform].
     let private buildPlatformContext (options: FidprojOptions) : PlatformContext option =
+        // Libraries are substrate-neutral — no platform context needed
+        match options.TargetPlatform with
+        | TargetPlatform.Library -> None
+        | target ->
         let substrateKind =
-            match options.TargetPlatform with
+            match target with
             | TargetPlatform.CPU  -> SubstrateKind.CPU
             | TargetPlatform.FPGA -> SubstrateKind.FPGA
             | TargetPlatform.GPU  -> SubstrateKind.GPU
             | TargetPlatform.NPU  -> SubstrateKind.NPU
             | TargetPlatform.MCU  -> SubstrateKind.CPU
+            | TargetPlatform.Library -> SubstrateKind.CPU // unreachable
 
         match options.PlatformPath, options.PlatformMetadata with
         | Some platformPath, Some metadata ->

@@ -31,6 +31,8 @@ type TargetPlatform =
     | MCU
     /// Neural processing unit → future.
     | NPU
+    /// Pure library — substrate-neutral, no hardware affinity.
+    | Library
 
 /// Deployment mode — artifact shape only.
 /// Determines output format (executable vs library).
@@ -105,6 +107,7 @@ type FidprojOptions = {
     /// Compilation memory model.
     MemoryModel: MemoryModel
     /// Target platform — determines which backend pipeline to use.
+    /// Substrate-neutral libraries use TargetPlatform.Library.
     TargetPlatform: TargetPlatform
 
     /// Source files (relative paths as declared in fidproj).
@@ -153,7 +156,8 @@ module FidprojLoader =
         | "gpu" -> Ok TargetPlatform.GPU
         | "mcu" -> Ok TargetPlatform.MCU
         | "npu" -> Ok TargetPlatform.NPU
-        | unknown -> Error $"Unrecognized target platform '%s{unknown}'. Expected: cpu, fpga, gpu, mcu, npu"
+        | "library" | "lib" -> Ok TargetPlatform.Library
+        | unknown -> Error $"Unrecognized target platform '%s{unknown}'. Expected: cpu, fpga, gpu, library, mcu, npu"
 
     /// Parses a deployment mode string from [build] output_kind.
     /// Parses a deployment mode string from [build] output_kind.
@@ -198,26 +202,16 @@ module FidprojLoader =
                     NsPerWeightUnit = Toml.getFloat "platform.ns_per_weight_unit" doc
                 }
 
-    /// Tries to find a .fidproj file in the given directory.
-    let tryFindInDirectory (directory: string): string option =
-        let dir = normalizePath directory
-        if Directory.Exists dir then
-            Directory.GetFiles(dir, "*.fidproj")
-            |> Array.tryHead
-            |> Option.map normalizePath
-        else
-            None
-
     /// Loads the [platform] section from a binding's .fidproj file.
     /// The binding IS the specification — this reads what the platform provides.
-    let loadBindingPlatformSection (platformDir: string) : Result<PlatformSection, string> =
-        let dir = normalizePath platformDir
-        match tryFindInDirectory dir with
-        | None -> Error $"No .fidproj found in platform binding directory: {dir}"
-        | Some fidprojPath ->
-            let content = File.ReadAllText(fidprojPath)
+    let loadBindingPlatformSection (fidprojPath: string) : Result<PlatformSection, string> =
+        let path = normalizePath fidprojPath
+        if not (File.Exists path) then
+            Error $"Platform .fidproj not found: {path}"
+        else
+            let content = File.ReadAllText(path)
             match Toml.parse content with
-            | Error msg -> Error $"Failed to parse binding fidproj {fidprojPath}: {msg}"
+            | Error msg -> Error $"Failed to parse binding fidproj {path}: {msg}"
             | Ok doc -> parsePlatformSection doc
 
     /// Parses a dependency from a TOML value.
@@ -289,15 +283,8 @@ module FidprojLoader =
                     Toml.getString "compilation.memory_model" doc
                     |> Option.map parseMemoryModel
                     |> Option.defaultValue MemoryModel.StackOnly
-                let targetPlatformResult =
-                    match Toml.getString "compilation.target" doc with
-                    | None -> Error "Missing required field [compilation] target. Expected: cpu, fpga, gpu, mcu, npu"
-                    | Some s -> parseTargetPlatform s
-                match targetPlatformResult with
-                | Error msg -> Error msg
-                | Ok targetPlatform ->
 
-                // Build section
+                // Build section — parse output_kind first: libraries are substrate-neutral
                 let sources =
                     Toml.getStringArray "build.sources" doc
                     |> Option.defaultValue []
@@ -309,6 +296,16 @@ module FidprojLoader =
                 match deploymentModeResult with
                 | Error msg -> Error msg
                 | Ok deploymentMode ->
+
+                // Target platform — required for all packages.
+                // Substrate-neutral packages use target = "library".
+                let targetPlatformResult =
+                    match Toml.getString "compilation.target" doc with
+                    | Some s -> parseTargetPlatform s
+                    | None -> Error "Missing required field [compilation] target. Expected: cpu, fpga, gpu, library, mcu, npu"
+                match targetPlatformResult with
+                | Error msg -> Error msg
+                | Ok targetPlatform ->
 
                 // Dependencies section
                 let dependencies =
@@ -336,8 +333,8 @@ module FidprojLoader =
                 // The binding IS the specification — this is the authoritative source.
                 let platformMetadata =
                     match platformPath with
-                    | Some dir ->
-                        match loadBindingPlatformSection dir with
+                    | Some path ->
+                        match loadBindingPlatformSection path with
                         | Ok section -> Some section
                         | Error _ -> None
                     | None -> None

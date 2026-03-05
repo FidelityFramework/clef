@@ -463,6 +463,7 @@ let lookupFieldLabels (fieldName: string) (env: TypeEnv) : FieldRef list =
 /// Returns Ok(recordType) or Error(diagnosticCode, message)
 let resolveRecordTypeFromFields
     (fieldNames: string list)
+    (typeQualifier: string option)
     (_range: SourceRange)
     (env: TypeEnv)
     : Result<NativeType, string * string> =
@@ -503,7 +504,16 @@ let resolveRecordTypeFromFields
                 | [] -> Set.empty
                 | first :: rest -> List.fold Set.intersect first rest
 
-            // Step 3: Disambiguate
+            // Step 3: Apply type qualifier if present (e.g., { TypeName.field = value })
+            let intersection =
+                match typeQualifier with
+                | Some qualifier ->
+                    // Filter to types whose name ends with or equals the qualifier
+                    intersection |> Set.filter (fun typeName ->
+                        typeName = qualifier || typeName.EndsWith("." + qualifier))
+                | None -> intersection
+
+            // Step 4: Disambiguate
             match Set.count intersection with
             | 0 ->
                 // FS8703: Conflicting fields - no record type has all fields
@@ -527,12 +537,12 @@ let resolveRecordTypeFromFields
             | _ ->
                 // Multiple record types have all fields — use "last definition wins" rule
                 // (standard F# behavior: most recently defined/opened type takes precedence)
-                // candidateSets preserves insertion order; take the LAST matching type
+                // addRecordDef prepends new FieldRefs, so List.head = most recently defined
                 let lastTypeName =
                     candidateSets
                     |> List.head |> snd
                     |> List.filter (fun fr -> Set.contains fr.RecordType.Name intersection)
-                    |> List.last
+                    |> List.head
                     |> fun fr -> fr.RecordType.Name
                 match Map.tryFind lastTypeName env.RecordDefs with
                 | Some recordInfo ->

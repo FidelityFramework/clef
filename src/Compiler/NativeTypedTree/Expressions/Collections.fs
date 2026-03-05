@@ -125,16 +125,23 @@ let checkRecord
     let copyNode = copyInfo |> Option.map (fun (expr, _) -> checkExpr env builder expr)
 
     // Extract field names and check expressions
+    // For type-qualified fields like { TypeName.field = value }, LongIdent has multiple parts.
+    // We extract the simple field name (last part) for lookup and the qualifier (prefix) for disambiguation.
     let fieldNodes = fields |> List.choose (fun field ->
         match field with
         | SynExprRecordField((fieldId, _), _, Some expr, _, _) ->
-            let fieldName = fieldId.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
+            let parts = fieldId.LongIdent |> List.map (fun id -> id.idText)
+            let fieldName = List.last parts
+            let qualifier = if parts.Length > 1 then Some (parts |> List.take (parts.Length - 1) |> String.concat ".") else None
             let exprNode = checkExpr env builder expr
-            Some (fieldName, exprNode)
+            Some (fieldName, qualifier, exprNode)
         | _ -> None)
 
     // Extract just the field names for type resolution
-    let fieldNames = fieldNodes |> List.map fst
+    let fieldNames = fieldNodes |> List.map (fun (name, _, _) -> name)
+
+    // Extract type qualifier from first qualified field (if any) for disambiguation
+    let typeQualifier = fieldNodes |> List.tryPick (fun (_, q, _) -> q)
 
     // Resolve record type using Field Label Resolution Algorithm
     // Per fsnative-spec: intersection of candidate sets for each field label
@@ -147,7 +154,7 @@ let checkRecord
         | None ->
             // Fresh record expression: { Field1 = v1; Field2 = v2 }
             // Resolve type from field labels
-            match resolveRecordTypeFromFields fieldNames range env with
+            match resolveRecordTypeFromFields fieldNames typeQualifier range env with
             | Result.Ok resolvedTy ->
                 // Verify field types match (add constraints)
                 // Each NativeType case must be handled explicitly - no catch-all patterns
@@ -157,7 +164,7 @@ let checkRecord
                     match Map.tryFind tyCon.Name env.RecordDefs with
                     | Some recordInfo ->
                         // Add constraints: each field expression must match field type
-                        for (fieldName, exprNode) in fieldNodes do
+                        for (fieldName, _, exprNode) in fieldNodes do
                             match recordInfo.Fields |> List.tryFind (fun (n, _) -> n = fieldName) with
                             | Some (_, expectedTy) ->
                                 addConstraint (Constraint.Equals(exprNode.Type, expectedTy, range)) env
@@ -226,13 +233,13 @@ let checkRecord
                 addNativeError code recordRange message env
                 NativeType.TError message
 
-    let fieldNodePairs = fieldNodes |> List.map (fun (name, node) -> (name, node.Id))
+    let fieldNodePairs = fieldNodes |> List.map (fun (name, _, node) -> (name, node.Id))
 
     builder.Create(
         SemanticKind.RecordExpr(fieldNodePairs, copyNode |> Option.map (fun n -> n.Id)),
         recordTy,
         range,
-        children = (copyNode |> Option.map (fun n -> [n.Id]) |> Option.defaultValue []) @ (fieldNodes |> List.map (fun (_, n) -> n.Id)))
+        children = (copyNode |> Option.map (fun n -> [n.Id]) |> Option.defaultValue []) @ (fieldNodes |> List.map (fun (_, _, n) -> n.Id)))
 
 //-------------------------------------------------------------------------
 // Anonymous Record Expressions

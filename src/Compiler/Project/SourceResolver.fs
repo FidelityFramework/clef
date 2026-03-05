@@ -8,9 +8,7 @@ open System.IO
 /// Errors that can occur during source resolution.
 /// A production compiler MUST surface these - no silent fallbacks.
 type SourceResolutionError =
-    /// A dependency directory specified in dependencies does not exist.
-    | DependencyDirectoryNotFound of name: string * path: string
-    /// A dependency's .fidproj file is missing from its directory.
+    /// A dependency's .fidproj file does not exist.
     | DependencyFidprojNotFound of name: string * path: string
     /// A dependency's .fidproj file exists but failed to parse/load.
     | DependencyFidprojLoadError of name: string * path: string * message: string
@@ -25,10 +23,8 @@ module SourceResolutionError =
     /// Format error for display.
     let format (error: SourceResolutionError): string =
         match error with
-        | DependencyDirectoryNotFound (name, path) ->
-            $"Dependency '{name}' directory not found: {path}. Check the path in your .fidproj dependencies."
         | DependencyFidprojNotFound (name, path) ->
-            $"Dependency '{name}' .fidproj not found at: {path}. The library must have a .fidproj file."
+            $"Dependency '{name}' .fidproj not found: {path}. Check the path in your .fidproj dependencies."
         | DependencyFidprojLoadError (name, path, msg) ->
             $"Failed to load dependency '{name}' .fidproj at {path}: {msg}"
         | DependencySourceFileNotFound (name, path) ->
@@ -49,6 +45,9 @@ module SourceResolver =
     /// The dependency's .fidproj is the single source of truth for file ordering.
     /// Returns Error if dependency cannot be loaded - this is NEVER silently ignored.
     /// Uses visited set to detect circular dependencies.
+    ///
+    /// depPath is always a fidproj file path — resolution from directory paths happens
+    /// in FidprojLoader.parseDependency, not here.
     let rec private getDependencySourcesRec
         (depName: string)
         (depPath: string)
@@ -62,56 +61,52 @@ module SourceResolver =
         if Set.contains normalizedPath visitedPaths then
             Error (CircularDependency (List.rev (depName :: visitChain)))
         else
-            if not (Directory.Exists normalizedPath) then
-                Error (DependencyDirectoryNotFound (depName, normalizedPath))
+            if not (File.Exists normalizedPath) then
+                Error (DependencyFidprojNotFound (depName, normalizedPath))
             else
-                // Look for *.fidproj in the dependency directory
-                let fidprojFiles = Directory.GetFiles(normalizedPath, "*.fidproj")
-                if Array.isEmpty fidprojFiles then
-                    Error (DependencyFidprojNotFound (depName, normalizedPath))
-                else
-                    let fidprojPath = fidprojFiles.[0]  // Use first .fidproj found
-                    // Load the dependency project file to get authoritative source ordering
-                    match FidprojLoader.load fidprojPath with
-                    | Error msg ->
-                        Error (DependencyFidprojLoadError (depName, fidprojPath, msg))
-                    | Ok depOptions ->
-                        // Mark this path as visited BEFORE recursing
-                        let newVisited = Set.add normalizedPath visitedPaths
-                        let newChain = depName :: visitChain
+                // Load the dependency project file to get authoritative source ordering
+                match FidprojLoader.load normalizedPath with
+                | Error msg ->
+                    Error (DependencyFidprojLoadError (depName, normalizedPath, msg))
+                | Ok depOptions ->
+                    // Mark this path as visited BEFORE recursing
+                    let newVisited = Set.add normalizedPath visitedPaths
+                    let newChain = depName :: visitChain
 
-                        // FIRST: Recursively get sources from THIS dependency's dependencies
-                        // This ensures transitive dependencies are compiled first
-                        let transitiveDepsResult =
-                            depOptions.Dependencies
-                            |> List.filter (fun dep -> dep.Path.IsSome)
-                            |> List.fold (fun acc dep ->
-                                match acc with
+                    // FIRST: Recursively get sources from THIS dependency's dependencies
+                    // This ensures transitive dependencies are compiled first
+                    let transitiveDepsResult =
+                        depOptions.Dependencies
+                        |> List.filter (fun dep -> dep.Path.IsSome)
+                        |> List.fold (fun acc dep ->
+                            match acc with
+                            | Error e -> Error e
+                            | Ok (accSources, accVisited) ->
+                                match getDependencySourcesRec dep.Name dep.Path.Value accVisited newChain with
                                 | Error e -> Error e
-                                | Ok (accSources, accVisited) ->
-                                    match getDependencySourcesRec dep.Name dep.Path.Value accVisited newChain with
-                                    | Error e -> Error e
-                                    | Ok (depSources, depVisited) ->
-                                        Ok (accSources @ depSources, depVisited)
-                            ) (Ok ([], newVisited))
+                                | Ok (depSources, depVisited) ->
+                                    Ok (accSources @ depSources, depVisited)
+                        ) (Ok ([], newVisited))
 
-                        match transitiveDepsResult with
-                        | Error e -> Error e
-                        | Ok (transitiveSources, finalVisited) ->
-                            // THEN: Add this dependency's own sources
-                            let resolvedPaths =
-                                depOptions.SourceFiles
-                                |> List.map (fun sf -> normalizePath (Path.Combine(normalizedPath, sf)))
+                    match transitiveDepsResult with
+                    | Error e -> Error e
+                    | Ok (transitiveSources, finalVisited) ->
+                        // THEN: Add this dependency's own sources
+                        // depOptions.ProjectDirectory is the fidproj's parent directory,
+                        // set by FidprojLoader.load — the authoritative source base.
+                        let resolvedPaths =
+                            depOptions.SourceFiles
+                            |> List.map (fun sf -> normalizePath (Path.Combine(depOptions.ProjectDirectory, sf)))
 
-                            // Check that ALL source files exist - missing files are errors
-                            let missingFiles =
-                                resolvedPaths
-                                |> List.filter (fun p -> not (File.Exists p))
+                        // Check that ALL source files exist - missing files are errors
+                        let missingFiles =
+                            resolvedPaths
+                            |> List.filter (fun p -> not (File.Exists p))
 
-                            match missingFiles with
-                            | [] -> Ok (transitiveSources @ resolvedPaths, finalVisited)
-                            | missing :: _ ->
-                                Error (DependencySourceFileNotFound (depName, missing))
+                        match missingFiles with
+                        | [] -> Ok (transitiveSources @ resolvedPaths, finalVisited)
+                        | missing :: _ ->
+                            Error (DependencySourceFileNotFound (depName, missing))
 
     /// Gets ordered source files from a dependency by reading its .fidproj.
     /// Handles transitive dependencies automatically (deepest first).
@@ -193,12 +188,17 @@ module SourceResolver =
         if normalizedSource.StartsWith(normalizedDir + "/") then
             Some (normalizedSource.Substring(normalizedDir.Length + 1))
         else
-            // Check if it's in any dependency
+            // Check if it's in any dependency.
+            // dep.Path is a fidproj file path (resolved by FidprojLoader);
+            // its parent directory is the dependency's source base.
             options.Dependencies
             |> List.tryPick (fun dep ->
                 match dep.Path with
                 | Some depPath ->
-                    let normalizedDep = normalizePath depPath
+                    let normalizedDep =
+                        match Path.GetDirectoryName(normalizePath depPath) with
+                        | null -> normalizePath depPath
+                        | dir -> normalizePath dir
                     if normalizedSource.StartsWith(normalizedDep + "/") then
                         Some (normalizedSource.Substring(normalizedDep.Length + 1))
                     else
@@ -213,6 +213,9 @@ module SourceResolver =
         |> List.tryFind (fun dep ->
             match dep.Path with
             | Some depPath ->
-                let normalizedDep = normalizePath depPath
+                let normalizedDep =
+                    match Path.GetDirectoryName(normalizePath depPath) with
+                    | null -> normalizePath depPath
+                    | dir -> normalizePath dir
                 normalizedSource.StartsWith(normalizedDep + "/")
             | None -> false)
