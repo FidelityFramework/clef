@@ -129,21 +129,28 @@ let rec private extractPatternBindings
             failwithf "extractPatternBindings: Unsupported union payload pattern: %A" other
 
     | Pattern.Tuple elements ->
-        // Top-level tuple pattern: extract each element and recursively extract bindings
-        let extractElement index elemPattern =
-            saturation {
-                // Extract this element from the scrutinee tuple
-                let elemType = getPatternType elemPattern
-                let! elemId = createWithChildren (SemanticKind.TupleGet (scrutineeId, index)) elemType [scrutineeId]
-                // Get pattern bindings for this element
-                let elemBindings = getElementPatternBindings index patternBindings elements
-                // Recursively extract bindings
-                return! extractPatternBindings elemId elemPattern elemBindings
-            }
+        // Top-level tuple pattern: extract each element via TupleGet + letBindAt.
+        // Mirrors union payload tuple handling (lines 99-125): create TupleGet,
+        // then replace PatternBinding with Binding that has TupleGet as child.
         saturation {
             let! allBindings =
                 elements
-                |> List.mapi extractElement
+                |> List.mapi (fun index elem ->
+                    match elem with
+                    | Pattern.Var (name, ty) ->
+                        saturation {
+                            let! elementId = createWithChildren (SemanticKind.TupleGet (scrutineeId, index)) ty [scrutineeId]
+                            let originalBindingId = patternBindings.[index]
+                            let! bindingId = letBindAt originalBindingId name elementId ty
+                            return [bindingId]
+                        }
+                    | nested ->
+                        saturation {
+                            let elemType = getPatternType nested
+                            let! elemId = createWithChildren (SemanticKind.TupleGet (scrutineeId, index)) elemType [scrutineeId]
+                            let elemBindings = getElementPatternBindings index patternBindings elements
+                            return! extractPatternBindings elemId nested elemBindings
+                        })
                 |> sequence
             return List.concat allBindings
         }
