@@ -1753,7 +1753,7 @@ let private checkModuleOrNamespace (env: TypeEnv) (builder: NodeBuilder) (module
         (updatedEnv, modulePath, contentNodes)
     else
         // Modules get a ModuleDef wrapper node
-        let moduleName = modulePath |> List.tryLast |> Option.defaultValue ""
+        let moduleName = modulePath |> String.concat "."
         let childIds = contentNodes |> List.map (fun n -> n.Id)
 
         let moduleNode = builder.Create(

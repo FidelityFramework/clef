@@ -156,6 +156,8 @@ let private needsSaturationBasic (node: SemanticNode) : bool =
     | SemanticKind.Match _ -> true
     | SemanticKind.UnionCase _ -> true  // DU construction needs lowering to DUConstruct
     | SemanticKind.Application _ -> true  // May or may not need decomposition, checked in recipe creation
+    | SemanticKind.Lambda(_, _, captures, _, LambdaContext.RegularClosure)
+        when List.isEmpty captures -> true  // Zero-capture lambda may need closure pair (checked in recipe)
     | _ -> false
 
 /// Apply the appropriate recipe for an HOF intrinsic
@@ -355,6 +357,52 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
             |> markBaker "UnionCase" ctx.ExpansionId
         let result = mkResultNoShadow [newNode] newNode.Id []
         RecipeCreated (toRecipe node.Id "UnionCase" result)
+
+    | SemanticKind.Lambda(params', body, captures, enclosing, context) when List.isEmpty captures ->
+        // Zero-capture lambda — check if it's in value position (argument to a function).
+        // When a lambda is passed as an argument, it needs closure pair construction
+        // ({code_ptr, null_env}) even with zero captures, for uniform calling convention.
+        //
+        // This is a DMM decision: the compiler constructs the closure pair on behalf of
+        // the developer. The developer writes `(fun x -> x * 2)` and the compiler
+        // handles the value representation.
+        let isInValuePosition =
+            match node.Parent with
+            | Some parentId ->
+                match SemanticGraph.tryGetNode parentId graph with
+                | Some parentNode ->
+                    match parentNode.Kind with
+                    | SemanticKind.Application(_, args) ->
+                        // Lambda is an argument to a function application
+                        List.contains node.Id args
+                    | _ -> false
+                | None -> false
+            | None -> false
+
+        if isInValuePosition then
+            let ctx = mkContext node.Range node.Type graph.Platform "Lambda" node.Id
+            // Enrichment: create a new Lambda node identical to the original
+            // but with ClosureMetadata marking it for closure pair construction.
+            let enrichedNode =
+                { Id = NodeId.fresh()
+                  Kind = SemanticKind.Lambda(params', body, captures, enclosing, context)
+                  Range = node.Range
+                  Type = node.Type
+                  SRTPResolution = node.SRTPResolution
+                  ArenaAffinity = node.ArenaAffinity
+                  LayoutHint = node.LayoutHint
+                  Children = node.Children
+                  Parent = None
+                  Metadata =
+                      node.Metadata
+                      |> Map.add ClosureMetadata.RequiresClosurePair (MetadataValue.Bool true)
+                  IsReachable = true
+                  EmissionStrategy = node.EmissionStrategy }
+                |> markBaker "Lambda" ctx.ExpansionId
+            let result = mkResultNoShadow [enrichedNode] enrichedNode.Id []
+            RecipeCreated (toRecipe node.Id "Lambda" result)
+        else
+            NotApplicable "Zero-capture lambda not in value position"
 
     | _ ->
         NotApplicable "Node kind does not need saturation"

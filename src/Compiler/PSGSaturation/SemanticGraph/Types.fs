@@ -336,6 +336,19 @@ module ElaborationMetadata =
     [<Literal>]
     let Id = "Elaboration.Id"
 
+/// Metadata keys for closure pair construction decisions.
+/// Baker marks zero-capture lambdas in value position with these keys,
+/// signaling to SSAAssignment that a closure pair must be constructed
+/// even when the captures list is empty.
+[<RequireQualifiedAccess>]
+module ClosureMetadata =
+    /// When true, indicates this Lambda requires closure pair construction
+    /// ({code_ptr, env_ptr}) even with zero captures. The env_ptr will be null.
+    /// Set by Baker when a Lambda is discovered in value position (e.g., as
+    /// an argument to an Application).
+    [<Literal>]
+    let RequiresClosurePair = "Closure.RequiresClosurePair"
+
 //-------------------------------------------------------------------------
 // Semantic Node
 //-------------------------------------------------------------------------
