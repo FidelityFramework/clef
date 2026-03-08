@@ -57,9 +57,10 @@ module SourceResolver =
 
         let normalizedPath = normalizePath depPath
 
-        // Check for circular dependency
+        // Already processed (diamond dependency) — skip without error.
+        // True circular deps (mutual module imports) will surface as type-check errors.
         if Set.contains normalizedPath visitedPaths then
-            Error (CircularDependency (List.rev (depName :: visitChain)))
+            Ok ([], visitedPaths)
         else
             if not (File.Exists normalizedPath) then
                 Error (DependencyFidprojNotFound (depName, normalizedPath))

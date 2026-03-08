@@ -214,6 +214,36 @@ let findBindingByName (name: string) (graph: SemanticGraph) : NodeId option =
             Some id
         | _ -> None)
 
+/// Build an index of qualified binding names → NodeIds.
+/// Qualified name = ModuleDef.name + "." + Binding.name.
+/// Used by reachability analysis to resolve string literals that name
+/// compiled functions (e.g., dlsym(RTLD_DEFAULT, "Module.function")).
+let buildQualifiedBindingIndex (graph: SemanticGraph) : Map<string, NodeId> =
+    graph.Nodes
+    |> Map.fold (fun acc id node ->
+        match node.Kind with
+        | SemanticKind.Binding (bindingName, _, _, _) ->
+            match node.Parent with
+            | Some parentId ->
+                match SemanticGraph.tryGetNode parentId graph with
+                | Some parentNode ->
+                    match parentNode.Kind with
+                    | SemanticKind.ModuleDef (moduleName, _) ->
+                        Map.add (moduleName + "." + bindingName) id acc
+                    | _ -> acc
+                | None -> acc
+            | None -> acc
+        | _ -> acc) Map.empty
+
+/// Resolve a string literal to a binding NodeId if it names a compiled function.
+/// This is the reachability edge for dlsym(RTLD_DEFAULT, "symbol_name") patterns:
+/// a string literal naming a function in the compilation unit makes that function reachable.
+let getStringLiteralBindingRef (node: SemanticNode) (qualifiedIndex: Map<string, NodeId>) : NodeId option =
+    match node.Kind with
+    | SemanticKind.Literal (NativeLiteral.String name) ->
+        Map.tryFind name qualifiedIndex
+    | _ -> None
+
 /// Get implementation function references for intrinsic nodes
 /// Returns the NodeId of the implementation function if found
 let getIntrinsicImplementationRef (node: SemanticNode) (graph: SemanticGraph) : NodeId option =
@@ -224,8 +254,15 @@ let getIntrinsicImplementationRef (node: SemanticNode) (graph: SemanticGraph) : 
     | _ -> None
 
 /// Compute the set of reachable nodes from given entry points
-/// Follows structural children, semantic references, type references, AND intrinsic implementation functions
+/// Follows structural children, semantic references, type references,
+/// intrinsic implementation functions, AND string-literal symbol references.
 let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId> =
+    // Build qualified binding index once for string-literal → binding resolution.
+    // This enables reachability through dlsym(RTLD_DEFAULT, "Module.function"):
+    // if a string literal naming a compiled function is itself reachable,
+    // the function it names is reachable.
+    let qualifiedIndex = buildQualifiedBindingIndex graph
+
     let rec walk (visited: Set<NodeId>) (nodeId: NodeId) =
         if Set.contains nodeId visited then
             visited
@@ -240,7 +277,9 @@ let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId>
                 let typeRefs = getTypeDefRefs node graph
                 // Follow intrinsic implementation function references
                 let intrinsicRef = getIntrinsicImplementationRef node graph |> Option.toList
-                let allRefs = (node.Children @ refs @ typeRefs @ intrinsicRef) |> List.distinct
+                // Follow string-literal symbol references (dlsym reachability)
+                let symbolRef = getStringLiteralBindingRef node qualifiedIndex |> Option.toList
+                let allRefs = (node.Children @ refs @ typeRefs @ intrinsicRef @ symbolRef) |> List.distinct
                 allRefs |> List.fold walk visited
 
     entries |> List.fold walk Set.empty

@@ -27,12 +27,30 @@ open Clef.Compiler.Baker.Recipes.Decomposition
 // Pass 1: Intrinsic Fan-Out (Parallel Recipe Creation)
 //-------------------------------------------------------------------------
 
-/// Check if two types have the same memory layout (same-size conversion)
+/// Check if a type is pointer-like (produces a different MLIR representation
+/// than scalar PlatformWord types, even though they share the same memory layout).
+/// TNativePtr and TByref map to memref/index in MLIR, while nativeint maps to index
+/// via a different code path that introduces platform word casts.
+/// Conversions between these categories must be preserved for correct MLIR emission.
+let private isPointerLike (ty: NativeType) : bool =
+    match ty with
+    | NativeType.TNativePtr _ | NativeType.TByref _ -> true
+    | _ -> false
+
+/// Check if two types have the same memory layout AND the same MLIR representation
+/// category. Same-size elimination is only safe when the lowering target treats both
+/// types identically. Pointer-like ↔ scalar conversions are same-size but produce
+/// different MLIR types (memref vs index vs i64), so they must be preserved.
 let private hasSameLayout (sourceType: NativeType) (targetType: NativeType) : bool =
     let sourceLayout = TypeLayout.baseLayout (layoutOf sourceType)
     let targetLayout = TypeLayout.baseLayout (layoutOf targetType)
     match sourceLayout, targetLayout with
-    | TypeLayout.PlatformWord, TypeLayout.PlatformWord -> true
+    | TypeLayout.PlatformWord, TypeLayout.PlatformWord ->
+        // Same memory size, but check MLIR representation compatibility.
+        // Pointer-like types (TNativePtr, TByref) have different lowering paths
+        // than scalar platform-word types (nativeint, int). Don't eliminate
+        // conversions that cross this boundary.
+        isPointerLike sourceType = isPointerLike targetType
     | TypeLayout.Inline (s1, _), TypeLayout.Inline (s2, _) when s1 = s2 -> true
     | _ -> false
 

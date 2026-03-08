@@ -46,11 +46,11 @@ let fanOut
     (graph: SemanticGraph)
     : RecipeSet =
 
-    // Find all reachable nodes that need elaboration
+    // Find all nodes that need elaboration (reachability-agnostic)
     let nodesToElaborate =
         graph.Nodes
         |> Map.toSeq |> Seq.map snd
-        |> Seq.filter (fun node -> node.IsReachable && shouldElaborate node)
+        |> Seq.filter (fun node -> shouldElaborate node)
         |> List.ofSeq
 
     if List.isEmpty nodesToElaborate then
@@ -103,11 +103,11 @@ let fanOutWithDiagnostics
     
     let mutable diagnostics = []
     
-    // Find all reachable nodes that need elaboration
+    // Find all nodes that need elaboration (reachability-agnostic)
     let nodesToElaborate =
         graph.Nodes
         |> Map.toSeq |> Seq.map snd
-        |> Seq.filter (fun node -> node.IsReachable && shouldElaborate node)
+        |> Seq.filter (fun node -> shouldElaborate node)
         |> List.ofSeq
     
     diagnostics <- sprintf "[%s] Found %d node(s) to elaborate" kind (List.length nodesToElaborate) :: diagnostics

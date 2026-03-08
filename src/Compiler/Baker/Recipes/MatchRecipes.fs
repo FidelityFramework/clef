@@ -88,6 +88,9 @@ let rec private extractPatternBindings
                 let! bindingId = letBindAt originalBindingId name payloadId ty
                 return [bindingId]
             }
+        | Some (Pattern.Wildcard) ->
+            // Wildcard payload (e.g., | Error _ ->) — no bindings needed
+            saturation { return [] }
         | Some (Pattern.Tuple [Pattern.Var (name, ty)]) ->
             // Single-element tuple - treat as direct value
             saturation {
@@ -96,6 +99,9 @@ let rec private extractPatternBindings
                 let! bindingId = letBindAt originalBindingId name payloadId ty
                 return [bindingId]
             }
+        | Some (Pattern.Tuple elements) when elements |> List.forall (fun e -> match e with Pattern.Wildcard -> true | _ -> false) ->
+            // All-wildcard tuple (e.g., | Case (_, _) ->) — no bindings needed
+            saturation { return [] }
         | Some (Pattern.Tuple elements) ->
             saturation {
                 let elementTypes =
@@ -103,10 +109,13 @@ let rec private extractPatternBindings
                     |> List.map (fun elem ->
                         match elem with
                         | Pattern.Var (_, ty) -> ty
+                        | Pattern.Wildcard -> Types.unitType
                         | _ -> failwithf "Unsupported tuple element pattern in DU payload")
                 let tuplePayloadType = NativeType.TTuple (elementTypes, false)
                 let! tuplePayloadId = duEliminate scrutineeId caseName tagIndex tuplePayloadType
 
+                // Only bind Var elements, skip Wildcards; track binding index separately
+                let mutable bindingIdx = 0
                 let! bindings =
                     elements
                     |> List.mapi (fun index elem ->
@@ -114,14 +123,17 @@ let rec private extractPatternBindings
                         | Pattern.Var (name, ty) ->
                             saturation {
                                 let! elementId = createWithChildren (SemanticKind.TupleGet (tuplePayloadId, index)) ty [tuplePayloadId]
-                                let originalBindingId = patternBindings.[index]
+                                let originalBindingId = patternBindings.[bindingIdx]
+                                bindingIdx <- bindingIdx + 1
                                 let! bindingId = letBindAt originalBindingId name elementId ty
-                                return bindingId
+                                return Some bindingId
                             }
+                        | Pattern.Wildcard ->
+                            saturation { return None }
                         | other ->
                             failwithf "Unsupported tuple element pattern: %A" other)
                     |> sequence
-                return bindings
+                return bindings |> List.choose id
             }
         | None ->
             saturation { return [] }
@@ -286,6 +298,9 @@ and private compilePattern
                         let! bindingId = letBindAt originalBindingId name payloadId ty
                         return [bindingId]
                     }
+                | Some (Pattern.Wildcard) ->
+                    // Wildcard payload (e.g., | Error _ ->) — no bindings needed
+                    saturation { return [] }
                 | Some (Pattern.Tuple [Pattern.Var (name, ty)]) ->
                     // Single-element tuple - F# represents `Case of T` as a 1-tuple
                     // Treat this as a direct value, not a tuple
@@ -295,6 +310,9 @@ and private compilePattern
                         let! bindingId = letBindAt originalBindingId name payloadId ty
                         return [bindingId]
                     }
+                | Some (Pattern.Tuple elements) when elements |> List.forall (fun e -> match e with Pattern.Wildcard -> true | _ -> false) ->
+                    // All-wildcard tuple (e.g., | Case (_, _) ->) — no bindings needed
+                    saturation { return [] }
                 | Some (Pattern.Tuple elements) ->
                     // Multi-field tuple payload like `SomeCase of int * float`:
                     // Each element reuses its corresponding PatternBinding NodeId
@@ -305,6 +323,7 @@ and private compilePattern
                             |> List.map (fun elem ->
                                 match elem with
                                 | Pattern.Var (_, ty) -> ty
+                                | Pattern.Wildcard -> Types.unitType
                                 | _ -> failwithf "Unsupported tuple element pattern in DU payload")
                         let tuplePayloadType = NativeType.TTuple (elementTypes, false)
 
@@ -312,6 +331,8 @@ and private compilePattern
                         let! tuplePayloadId = duEliminate scrutineeId caseName tagIndex tuplePayloadType
 
                         // Extract and bind each element, reusing original PatternBinding NodeIds
+                        // Only bind Var elements, skip Wildcards; track binding index separately
+                        let mutable bindingIdx = 0
                         let! bindings =
                             elements
                             |> List.mapi (fun index elem ->
@@ -321,14 +342,17 @@ and private compilePattern
                                         // TupleGet extracts element at index from the tuple
                                         let! elementId = createWithChildren (SemanticKind.TupleGet (tuplePayloadId, index)) ty [tuplePayloadId]
                                         // Reuse the original PatternBinding's NodeId
-                                        let originalBindingId = patternBindings.[index]
+                                        let originalBindingId = patternBindings.[bindingIdx]
+                                        bindingIdx <- bindingIdx + 1
                                         let! bindingId = letBindAt originalBindingId name elementId ty
-                                        return bindingId
+                                        return Some bindingId
                                     }
+                                | Pattern.Wildcard ->
+                                    saturation { return None }
                                 | other ->
                                     failwithf "Unsupported tuple element pattern: %A" other)
                             |> sequence
-                        return bindings
+                        return bindings |> List.choose id
                     }
                 | None ->
                     // No payload - no bindings needed (nullary case like None)
