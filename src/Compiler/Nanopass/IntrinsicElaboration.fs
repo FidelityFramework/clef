@@ -27,30 +27,41 @@ open Clef.Compiler.Baker.Recipes.Decomposition
 // Pass 1: Intrinsic Fan-Out (Parallel Recipe Creation)
 //-------------------------------------------------------------------------
 
-/// Check if a type is pointer-like (produces a different MLIR representation
-/// than scalar PlatformWord types, even though they share the same memory layout).
-/// TNativePtr and TByref map to memref/index in MLIR, while nativeint maps to index
-/// via a different code path that introduces platform word casts.
+/// Check if a type maps to MLIR index type (pointer-dimension PlatformWord).
+/// PlatformWord types split into two MLIR categories:
+///   - Pointer-dimension (nativeint, unativeint, size_t, ptrdiff_t, ptr, fnptr,
+///     nativeptr<T>, byref<T>) → MLIR TIndex
+///   - Register-dimension (int, uint) → MLIR TInt(wordWidth)
 /// Conversions between these categories must be preserved for correct MLIR emission.
-let private isPointerLike (ty: NativeType) : bool =
+let private mapsToIndex (ty: NativeType) : bool =
     match ty with
     | NativeType.TNativePtr _ | NativeType.TByref _ -> true
+    | NativeType.TApp(tycon, _) ->
+        match tycon.NTUKind with
+        | Some (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer))
+        | Some (NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer))
+        | Some NTUKind.NTUsize
+        | Some NTUKind.NTUdiff
+        | Some NTUKind.NTUptr
+        | Some NTUKind.NTUfnptr -> true
+        | _ -> false
     | _ -> false
 
 /// Check if two types have the same memory layout AND the same MLIR representation
 /// category. Same-size elimination is only safe when the lowering target treats both
-/// types identically. Pointer-like ↔ scalar conversions are same-size but produce
-/// different MLIR types (memref vs index vs i64), so they must be preserved.
+/// types identically. Conversions between index-mapped types (nativeint, nativeptr,
+/// size_t) and integer-mapped types (int, uint) must be preserved because they
+/// produce different MLIR types (index vs i64/i32).
 let private hasSameLayout (sourceType: NativeType) (targetType: NativeType) : bool =
     let sourceLayout = TypeLayout.baseLayout (layoutOf sourceType)
     let targetLayout = TypeLayout.baseLayout (layoutOf targetType)
     match sourceLayout, targetLayout with
     | TypeLayout.PlatformWord, TypeLayout.PlatformWord ->
         // Same memory size, but check MLIR representation compatibility.
-        // Pointer-like types (TNativePtr, TByref) have different lowering paths
-        // than scalar platform-word types (nativeint, int). Don't eliminate
-        // conversions that cross this boundary.
-        isPointerLike sourceType = isPointerLike targetType
+        // Index-mapped types (nativeint, nativeptr, size_t, etc.) lower to
+        // MLIR index, while register-dimension types (int, uint) lower to
+        // TInt(wordWidth). Don't eliminate conversions that cross this boundary.
+        mapsToIndex sourceType = mapsToIndex targetType
     | TypeLayout.Inline (s1, _), TypeLayout.Inline (s2, _) when s1 = s2 -> true
     | _ -> false
 
