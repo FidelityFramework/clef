@@ -96,7 +96,7 @@ The PSG with source ranges through every nanopass phase, combined with proof obl
 
 DO-178C (via DO-330), IEC 61508, and ISO 26262 all require tool qualification. Qualifying a monolithic compiler is expensive and must be repeated per-platform. Keystone's nanopass architecture allows:
 
-- Shared pipeline (FNCS, Baker, nanopasses, PSG elaboration) qualifies once
+- Shared pipeline (CCS, Baker, nanopasses, PSG elaboration) qualifies once
 - Each Alex substrate backend qualifies independently
 - Adding a new target means qualifying only that backend against the already-qualified shared pipeline
 - Cost of target enablement is a fraction of monolithic compiler qualification

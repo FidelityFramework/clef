@@ -138,7 +138,7 @@ For most use cases, you will interact with CCS through Composer rather than dire
 | Phase 3 | SRTP resolution against Alloy witnesses | Pending |
 | Phase 4 | Memory region and access-kind annotations | Future |
 
-See [docs/fidelity/FNCS_Phase1_Transformation_Plan.md](docs/fidelity/FNCS_Phase1_Transformation_Plan.md) for detailed phase status.
+See [docs/fidelity/CCS_Phase1_Transformation_Plan.md](docs/fidelity/CCS_Phase1_Transformation_Plan.md) for detailed phase status.
 
 ## Documentation
 

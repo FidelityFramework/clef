@@ -1,8 +1,8 @@
 <Project>
   <!--
-    FNCS Directory Build Targets - Arcade-free
+    CCS Directory Build Targets - Arcade-free
 
-    Minimal targets for F# Native Compiler Services.
+    Minimal targets for Clef Compiler Service.
   -->
 
   <Import Project="FSharpBuild.Directory.Build.targets" />

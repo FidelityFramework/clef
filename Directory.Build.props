@@ -1,12 +1,12 @@
 <Project>
   <!--
-    FNCS (F# Native Compiler Services) - Arcade-Free Build Infrastructure
+    CCS (Clef Compiler Service) - Arcade-Free Build Infrastructure
 
     This is a principled simplification from upstream dotnet/fsharp:
     - Removed: Arcade SDK, complex multi-targeting, .NET Framework support, CI/CD integration
     - Preserved: NuGet packaging, FsLex/FsYacc integration, functional compiler flags
 
-    FNCS is a library that Firefly references during the "bridge period" where
+    CCS is a library that Firefly references during the "bridge period" where
     Firefly itself runs on .NET while producing native binaries.
   -->
 
@@ -35,7 +35,7 @@
   <!--
     Version Information
 
-    FNCS version tracks upstream F# version for compatibility reference,
+    CCS version tracks upstream F# version for compatibility reference,
     plus its own version for native-specific changes.
   -->
   <PropertyGroup>
@@ -45,7 +45,7 @@
     <FSBuildVersion>300</FSBuildVersion>
     <FSLanguageVersion>$(FSMajorVersion).$(FSMinorVersion)</FSLanguageVersion>
 
-    <!-- FNCS package version - synchronized with Fidelity ecosystem -->
+    <!-- CCS package version - synchronized with Fidelity ecosystem -->
     <VersionPrefix>0.1.0</VersionPrefix>
     <VersionSuffix></VersionSuffix>
     <AssemblyVersion>0.1.0.0</AssemblyVersion>

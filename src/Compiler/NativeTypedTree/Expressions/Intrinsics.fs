@@ -51,7 +51,7 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         | "String" -> Some (IntrinsicModule.String, opPart)
         | "Array" -> Some (IntrinsicModule.Array, opPart)
         // Parse.int/float and Format.int/float are platform library functions,
-        // resolved as VarRef by FCS, not as FNCS intrinsics.
+        // resolved as VarRef by FCS, not as CCS intrinsics.
         | "Crypto" -> Some (IntrinsicModule.Crypto, opPart)
         | "Bits" -> Some (IntrinsicModule.Bits, opPart)
         | "FnPtr" -> Some (IntrinsicModule.FnPtr, opPart)

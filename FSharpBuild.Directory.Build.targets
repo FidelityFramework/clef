@@ -1,8 +1,8 @@
 <Project>
   <!--
-    FNCS Build Targets - Arcade-free
+    CCS Build Targets - Arcade-free
 
-    Minimal build targets for F# Native Compiler Services.
+    Minimal build targets for Clef Compiler Service.
     Preserves essential functionality, removes Arcade dependencies.
   -->
 

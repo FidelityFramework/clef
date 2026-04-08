@@ -194,7 +194,7 @@ type LexerContinuation =
 
 and LexCont = LexerContinuation
 
-// FNCS: Inline IL parsing removed - native compilation doesn't support (# ... #) syntax
+// CCS: Inline IL parsing removed - native compilation doesn't support (# ... #) syntax
 // ParseAssemblyCodeInstructions and ParseAssemblyCodeType have been removed
 
 let grabXmlDocAtRangeStart (parseState: IParseState, optAttributes: SynAttributeList list, range: range) =

@@ -128,7 +128,7 @@ The relationship is analogous to F* and F#: shared ML heritage and syntax famili
                     Keystone Source (.ks)
                          |
                     +----------+
-                    |   FNCS   |  NTU types, dimensional inference
+                    |   CCS   |  NTU types, dimensional inference
                     |  (pure)  |  Type checking, SRTP resolution
                     +----+-----+
                          |
@@ -156,7 +156,7 @@ The relationship is analogous to F* and F#: shared ML heritage and syntax famili
       binary  kernel  runtime  Verilog  config
 ```
 
-The fork between substrates happens at Alex (code generation). FNCS, Baker, nanopasses, and PSG elaboration are all substrate-agnostic. They operate on NTU types with dimensional qualifiers - the substrate kind is carried through the pipeline and resolved at code generation time.
+The fork between substrates happens at Alex (code generation). CCS, Baker, nanopasses, and PSG elaboration are all substrate-agnostic. They operate on NTU types with dimensional qualifiers - the substrate kind is carried through the pipeline and resolved at code generation time.
 
 ## Ecosystem
 
@@ -168,7 +168,7 @@ The fork between substrates happens at Alex (code generation). FNCS, Baker, nano
 | **Search / SEO** | kslang |
 | **Actor model** | Olivier (actors) / Prospero (supervisors) |
 | **Type system** | Native Type Universe (NTU) |
-| **Compiler frontend** | FNCS (Keystone Compiler Services) |
+| **Compiler frontend** | CCS (Keystone Compiler Services) |
 | **Code generation** | Alex (Elements / Patterns / Witnesses) |
 | **Backend orchestration** | Firefly |
 | **Memory layout contracts** | BAREWire |

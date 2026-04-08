@@ -1,6 +1,6 @@
-// ClefExpr.fs - FNCS's native typed expression representation
+// ClefExpr.fs - CCS's native typed expression representation
 //
-// This is FNCS's own typed expression type that REPLACES FSharpExpr from FCS.
+// This is CCS's own typed expression type that REPLACES FSharpExpr from FCS.
 // It is a PROJECTION/VIEW over SemanticGraph - materialized from SemanticNode + SemanticKind on demand.
 //
 // Design principles:

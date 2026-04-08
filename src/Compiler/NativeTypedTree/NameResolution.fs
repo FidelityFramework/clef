@@ -1,4 +1,4 @@
-/// Compositional Name Resolution for FNCS
+/// Compositional Name Resolution for CCS
 /// 
 /// This module implements name resolution as a codata/coeffect pattern:
 /// - Resolvers are functions from names to bindings (demand-driven)

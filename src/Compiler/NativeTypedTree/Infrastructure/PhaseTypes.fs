@@ -1,6 +1,6 @@
-/// PhaseTypes - Phase definitions for FNCS nanopass pipeline
+/// PhaseTypes - Phase definitions for CCS nanopass pipeline
 ///
-/// Defines the formal phases of the FNCS type checking pipeline.
+/// Defines the formal phases of the CCS type checking pipeline.
 /// Each phase transforms the program representation and can emit intermediates.
 ///
 /// Phase Pipeline:

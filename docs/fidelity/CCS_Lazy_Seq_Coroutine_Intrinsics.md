@@ -1,8 +1,8 @@
-# FNCS Computation Expression Intrinsics
+# CCS Computation Expression Intrinsics
 
 ## Overview
 
-This document specifies the **semantic contracts** for computation expression types in FNCS. These are the stable "what" - behavioral guarantees that any implementation must satisfy.
+This document specifies the **semantic contracts** for computation expression types in CCS. These are the stable "what" - behavioral guarantees that any implementation must satisfy.
 
 **Implementation strategies** (the "how") live in Alex and are documented separately. See `/home/hhh/repos/Firefly/.serena/memories/computation_strategy_architecture.md`.
 
@@ -41,7 +41,7 @@ This document specifies the **semantic contracts** for computation expression ty
 ## Architectural Principle
 
 ```
-FNCS (This Document)              Alex (Implementation)
+CCS (This Document)              Alex (Implementation)
 ─────────────────────             ────────────────────────
 Semantic contracts                Strategy: StateMachine
 Type signatures                   Strategy: DCont (future)
@@ -49,7 +49,7 @@ Behavioral laws                   Strategy: ... (extensible)
 Coeffect interactions
 ```
 
-FNCS defines **what** these types mean. Alex provides **how** to compile them. This separation allows implementation strategies to evolve without changing the language semantics.
+CCS defines **what** these types mean. Alex provides **how** to compile them. This separation allows implementation strategies to evolve without changing the language semantics.
 
 ---
 
@@ -573,7 +573,7 @@ let worker = MailboxProcessor.Start(fun inbox ->
 
 ## 8. Coeffect System Integration
 
-These types interact with FNCS coeffect tracking:
+These types interact with CCS coeffect tracking:
 
 | Type | Primary Coeffects |
 |------|-------------------|
@@ -628,7 +628,7 @@ These belong in Alex implementation strategy documentation.
 
 ## 10. Implementation Strategy Overview
 
-While FNCS defines semantics, Alex provides multiple implementation strategies:
+While CCS defines semantics, Alex provides multiple implementation strategies:
 
 | Feature | Foundational Strategy | Future Strategy |
 |---------|----------------------|-----------------|
@@ -650,8 +650,8 @@ See `/home/hhh/repos/Firefly/.serena/memories/computation_strategy_architecture.
 
 ## Related Documentation
 
-**Semantic (FNCS)**:
-- `/home/hhh/repos/fsnative/docs/fidelity/fncs-specification.md`
+**Semantic (CCS)**:
+- `/home/hhh/repos/fsnative/docs/fidelity/ccs-specification.md`
 - `/home/hhh/repos/fsnative/.serena/memories/coeffect_compilation_strategy.md`
 
 **Implementation (Alex)**:

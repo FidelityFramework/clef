@@ -220,6 +220,7 @@ let checkBinding
     let declRoot =
         if hasEntryPointAttribute attrs then Some DeclRoot.EntryPoint
         elif hasHardwareModuleAttribute attrs then Some DeclRoot.HardwareModule
+        elif hasKernelModuleAttribute attrs then Some DeclRoot.KernelModule
         else None
     let isLiteral = hasLiteralAttribute attrs
     let fidelityExtern = extractFidelityExternAttribute attrs
@@ -689,6 +690,7 @@ let checkLetOrUse
                 let declRoot =
                     if hasEntryPointAttribute attrs then Some DeclRoot.EntryPoint
                     elif hasHardwareModuleAttribute attrs then Some DeclRoot.HardwareModule
+                    elif hasKernelModuleAttribute attrs then Some DeclRoot.KernelModule
                     else None
                 let node = builder.Create(
                     SemanticKind.Binding(name, isMutable, true, declRoot),
