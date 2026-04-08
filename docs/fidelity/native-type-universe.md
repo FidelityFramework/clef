@@ -18,7 +18,7 @@ This document specifies the native type universe for fsnative, the F# native com
 
 ### Relationship to Other Documents
 
-- **[fncs-specification.md](fncs-specification.md)**: Defines F# Native Compiler Services, including:
+- **[ccs-specification.md](ccs-specification.md)**: Defines Clef Compiler Service, including:
   - SRTP resolution against Alloy witness hierarchy (Part 3)
   - Platform bindings convention (Part 6)
   - Memory region enforcement rules (Parts 9-10)
@@ -58,7 +58,7 @@ Everything else is derived from these primitives.
 
 ## Part 2: Primitive Types
 
-> **FNCS Resolution**: See [`fncs-specification.md` Part 1.1](fncs-specification.md#11-primitive-type-mapping) for how FNCS resolves these types at compile-time.
+> **CCS Resolution**: See [`ccs-specification.md` Part 1.1](ccs-specification.md#11-primitive-type-mapping) for how CCS resolves these types at compile-time.
 >
 > **OCaml Provenance**: Primitives follow OCaml's value-oriented representation (unboxed by default) while eliminating GC-oriented overhead. See [Appendix E](#appendix-e-ocaml-provenance-and-fidelity-extensions) for detailed provenance analysis.
 
@@ -524,7 +524,7 @@ switch (shape.tag) {
 
 > **Principle**: Reference types use fat pointers (pointer + length). No null pointers - empty is represented by length 0.
 >
-> **FNCS Resolution**: See [`fncs-specification.md` Parts 1.2-1.4](fncs-specification.md#12-string-literals) for compiler-level type resolution.
+> **CCS Resolution**: See [`ccs-specification.md` Parts 1.2-1.4](ccs-specification.md#12-string-literals) for compiler-level type resolution.
 
 ### 4.1 String
 
@@ -646,9 +646,9 @@ Span<'T>
 
 ## Part 5: Parameterized Types
 
-> **Principle**: Parameterized types follow familiar F# syntax. FNCS resolves native semantics at compile-time.
+> **Principle**: Parameterized types follow familiar F# syntax. CCS resolves native semantics at compile-time.
 >
-> **FNCS Resolution**: See [`fncs-specification.md` Part 1.3](fncs-specification.md#13-option-types) for option type resolution and null-free guarantees.
+> **CCS Resolution**: See [`ccs-specification.md` Part 1.3](ccs-specification.md#13-option-types) for option type resolution and null-free guarantees.
 
 ### 5.1 Option
 
@@ -677,13 +677,13 @@ option<'T>  (voption semantics)
 
 > **See**: Appendix E for detailed OCaml/Rust comparison.
 
-**FNCS Resolution**:
+**CCS Resolution**:
 ```fsharp
 // User writes familiar F# syntax:
 let x : int option = Some 42
 let y : int option = None
 
-// FNCS compiles with voption<int> semantics:
+// CCS compiles with voption<int> semantics:
 // - Stack allocated
 // - Tag-based discrimination
 // - No null anywhere
@@ -697,7 +697,7 @@ let y : int option = None
 | `opt.IsSome` | `Option.isSome opt` |
 | `Option.defaultValue v opt` | Same (works identically) |
 
-> **Migration Note**: Alloy shadow type (`type option<'T> = voption<'T>`) will be removed once FNCS provides native resolution.
+> **Migration Note**: Alloy shadow type (`type option<'T> = voption<'T>`) will be removed once CCS provides native resolution.
 
 ### 5.2 Result
 
@@ -923,7 +923,7 @@ c.Value <- c.Value + 1
 >
 > **Erasure at Last Lowering**: These types ARE erased - but at the **last possible lowering stage**, after Fidelity has made all memory layout decisions. By the time code reaches LLVM, "the type information that guided every transformation has done its job and compiled away to nothing." This is the entire point of "Fidelity" - preserving type fidelity through compilation so the F# compiler controls memory layout.
 >
-> **FNCS Enforcement**: See [`fncs-specification.md` Parts 9-10](fncs-specification.md#part-9-memory-region-types-and-semantics) for region constraint enforcement and diagnostic codes.
+> **CCS Enforcement**: See [`ccs-specification.md` Parts 9-10](ccs-specification.md#part-9-memory-region-types-and-semantics) for region constraint enforcement and diagnostic codes.
 
 ### 8.1 Memory Regions
 
@@ -1056,7 +1056,7 @@ val origin : Point
 **Type Resolution in Interactive Mode**:
 - Types defined in the session are immediately available
 - Types from `#require` directives are loaded into the type environment
-- FNCS resolves types against both session-local and loaded definitions
+- CCS resolves types against both session-local and loaded definitions
 
 ### 10.2 Arena Semantics in Interactive Mode
 
@@ -1081,9 +1081,9 @@ val data : int list  // Allocated in session arena
 
 | Mode | Type Checking | Execution |
 |------|---------------|-----------|
-| Interpret | Full FNCS | Interpreted |
-| Compile | Full FNCS | Native code |
-| Hybrid | Full FNCS | Mode-dependent |
+| Interpret | Full CCS | Interpreted |
+| Compile | Full CCS | Native code |
+| Hybrid | Full CCS | Mode-dependent |
 
 All modes use identical type semantics. The difference is only in execution:
 
@@ -1222,7 +1222,7 @@ This tagging allows integers to remain "unboxed" (stored directly without heap a
 ### Migration Sequence
 
 1. **Phase 1: fsnative Type Definitions**
-   - Define proper base types in FNCS (fsnative compiler)
+   - Define proper base types in CCS (fsnative compiler)
    - Types resolve at compile-time, not via library shadowing
    - `option<'T>` → compiler knows this is `voption` semantics
    - `string` → compiler knows this is UTF-8 fat pointer
@@ -1254,7 +1254,7 @@ Shadow types in Alloy were reactive workarounds created because:
 2. FCS hardcodes `option<'T>` → heap-allocated reference type
 3. No clean way to intercept type resolution at the compiler level
 
-The **principled solution** is FNCS (F# Native Compiler Services) - a minimal FCS fork that resolves types to native representations at the source, eliminating the need for library-level workarounds.
+The **principled solution** is CCS (Clef Compiler Service) - a minimal FCS fork that resolves types to native representations at the source, eliminating the need for library-level workarounds.
 
 ---
 

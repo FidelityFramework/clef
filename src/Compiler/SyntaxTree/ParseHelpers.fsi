@@ -102,7 +102,7 @@ type LexerContinuation =
 
 and LexCont = LexerContinuation
 
-// FNCS: Inline IL parsing removed - native compilation doesn't support (# ... #) syntax
+// CCS: Inline IL parsing removed - native compilation doesn't support (# ... #) syntax
 
 val grabXmlDocAtRangeStart: parseState: IParseState * optAttributes: SynAttributeList list * range: range -> PreXmlDoc
 

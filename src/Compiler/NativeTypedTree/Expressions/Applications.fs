@@ -173,8 +173,8 @@ let checkApp
             freshResult
 
     // PIPE OPERATOR REDUCTION:
-    // F# pipe operators (|>, <|) are syntactic sugar that FNCS reduces during
-    // type checking. This is a SEMANTIC TRANSFORM that belongs in FNCS, not
+    // F# pipe operators (|>, <|) are syntactic sugar that CCS reduces during
+    // type checking. This is a SEMANTIC TRANSFORM that belongs in CCS, not
     // downstream in Firefly.
     //
     // Forward pipe: App(App(|>, x), f) -> App(f, [x])
@@ -257,7 +257,7 @@ let checkApp
                         // Unexpected structure - keep as-is
                         (funcNode.Id, [argNode.Id])
                 // APPLICATION SATURATION: Flatten ALL curried applications
-                // This is a SEMANTIC TRANSFORM that belongs in FNCS, enabling direct
+                // This is a SEMANTIC TRANSFORM that belongs in CCS, enabling direct
                 // emission as multi-arg calls. Without flattening:
                 //   App(App(f, a), b) - nested, requires closure handling
                 // With flattening:

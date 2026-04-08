@@ -1,4 +1,4 @@
-/// Tests for the native type checker (FNCS)
+/// Tests for the native type checker (CCS)
 module FSharp.Native.Compiler.Service.Tests.TypeChecker.NativeTypeCheckerTests
 
 open FSharp.Native.Compiler.Checking.Native.NativeTypes

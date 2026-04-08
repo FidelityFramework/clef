@@ -168,7 +168,8 @@ module FidprojLoader =
         | "console" | "executable" -> Ok DeploymentMode.Console
         | "library" | "lib" -> Ok DeploymentMode.Library
         | "embedded" | "fpga" -> Ok DeploymentMode.Embedded
-        | unknown -> Error $"Unrecognized output_kind '%s{unknown}'. Expected: console, freestanding, library, embedded, fpga"
+        | "kernel" | "npu" -> Ok DeploymentMode.Freestanding
+        | unknown -> Error $"Unrecognized output_kind '%s{unknown}'. Expected: console, freestanding, library, embedded, fpga, kernel"
 
     /// Parses a runtime model string from a binding's [platform] section.
     /// No silent fallbacks — unknown values are hard errors.
@@ -331,13 +332,19 @@ module FidprojLoader =
 
                 // Load platform metadata from binding's [platform] section if available.
                 // The binding IS the specification — this is the authoritative source.
+                // When no platform dependency exists (e.g., standalone kernel fidproj),
+                // fall back to the project's own [platform] section as metadata source.
                 let platformMetadata =
                     match platformPath with
                     | Some path ->
                         match loadBindingPlatformSection path with
                         | Ok section -> Some section
                         | Error _ -> None
-                    | None -> None
+                    | None ->
+                        // No platform dependency; try the project's own [platform] section
+                        match parsePlatformSection doc with
+                        | Ok section -> Some section
+                        | Error _ -> None
 
                 // Project-level clock override from [compilation] section
                 let clockMhzOverride =

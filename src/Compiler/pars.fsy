@@ -2479,10 +2479,10 @@ tyconDefnOrSpfnSimpleRepr:
      { if not (isNil $1) then errorR(Error(FSComp.SR.parsAttributesIllegalHere(), rhs parseState 1))
        SynTypeDefnSimpleRepr.Record($2, $3, lhs parseState) }
 
-  /* An inline-assembly type definition - NOT SUPPORTED in FNCS (native compilation) */
+  /* An inline-assembly type definition - NOT SUPPORTED in CCS (native compilation) */
   | opt_attributes opt_access LPAREN HASH string HASH rparen
      { let mLhs = lhs parseState
-       // FNCS: Inline IL type definitions are not supported in native compilation
+       // CCS: Inline IL type definitions are not supported in native compilation
        errorR(Error((193, "Inline IL type definitions (# ... #) are not supported in native F# compilation"), mLhs))
        SynTypeDefnSimpleRepr.None(mLhs) }
 
@@ -5630,9 +5630,9 @@ forLoopDirection:
   | DOWNTO { false }
 
 inlineAssemblyExpr:
-  /* Inline assembly expressions - NOT SUPPORTED in FNCS (native compilation) */
+  /* Inline assembly expressions - NOT SUPPORTED in CCS (native compilation) */
   | HASH string opt_inlineAssemblyTypeArg optCurriedArgExprs optInlineAssemblyReturnTypes HASH
-      { // FNCS: Inline IL expressions are not supported in native compilation
+      { // CCS: Inline IL expressions are not supported in native compilation
         (fun m ->
             errorR(Error((193, "Inline IL expressions (# ... #) are not supported in native F# compilation"), m))
             SynExpr.FromParseError(SynExpr.Const(SynConst.Unit, m), m)) }

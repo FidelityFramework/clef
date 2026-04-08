@@ -114,9 +114,9 @@ mv src/fsi/ src/fnsi/
 **Options**:
 1. **ARCHIVE**: Move to `reference/FSharp.Core/` - Keep as pattern reference
 2. **DELETE**: Remove entirely - NTU defines what exists
-3. **EXTRACT**: Pull specific patterns into FNCS documentation
+3. **EXTRACT**: Pull specific patterns into CCS documentation
 
-**Recommendation**: ARCHIVE. The code documents F# semantics that inform FNCS intrinsic design, but should not be in the active `src/` tree.
+**Recommendation**: ARCHIVE. The code documents F# semantics that inform CCS intrinsic design, but should not be in the active `src/` tree.
 
 ```bash
 mkdir -p reference/

@@ -113,7 +113,7 @@ let emitRecipeSetArtifact (artifactId: int) (recipeSet: RecipeSet) : unit =
         let json = serializeRecipeSet recipeSet
         ensureDirectoryForFilePath path
         System.IO.File.WriteAllText(path, json)
-        if isVerbose() then printfn "[FNCS] Wrote artifact: %s" path
+        if isVerbose() then printfn "[CCS] Wrote artifact: %s" path
 
 /// Emit intrinsic recipes (artifact 02)
 let emitIntrinsicRecipes (recipeSet: RecipeSet) : unit =
@@ -144,7 +144,7 @@ let emitDiagnostics (artifactId: int) (diagnostics: RecipeDiagnostic list) : uni
         let json = Json.serialize diagnostics
         ensureDirectoryForFilePath path
         System.IO.File.WriteAllText(path, json)
-        if isVerbose() then printfn "[FNCS] Wrote diagnostic artifact: %s" path
+        if isVerbose() then printfn "[CCS] Wrote diagnostic artifact: %s" path
 
 /// Emit intrinsic diagnostics (artifact 02a)
 let emitIntrinsicDiagnostics (diagnostics: RecipeDiagnostic list) : unit =
@@ -158,7 +158,7 @@ let emitIntrinsicDiagnostics (diagnostics: RecipeDiagnostic list) : unit =
         let json = Json.serialize diagnostics
         ensureDirectoryForFilePath diagPath
         System.IO.File.WriteAllText(diagPath, json)
-        if isVerbose() then printfn "[FNCS] Wrote intrinsic diagnostics: %s" diagPath
+        if isVerbose() then printfn "[CCS] Wrote intrinsic diagnostics: %s" diagPath
 
 /// Emit saturation diagnostics (artifact 04a)
 let emitSaturationDiagnostics (diagnostics: RecipeDiagnostic list) : unit =
@@ -170,4 +170,4 @@ let emitSaturationDiagnostics (diagnostics: RecipeDiagnostic list) : unit =
         let json = Json.serialize diagnostics
         ensureDirectoryForFilePath diagPath
         System.IO.File.WriteAllText(diagPath, json)
-        if isVerbose() then printfn "[FNCS] Wrote saturation diagnostics: %s" diagPath
+        if isVerbose() then printfn "[CCS] Wrote saturation diagnostics: %s" diagPath

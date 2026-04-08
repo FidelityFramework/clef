@@ -7455,7 +7455,7 @@ let _fsyacc_reductions = lazy [|
                    (
 # 2484 "pars.fsy"
                             let mLhs = lhs parseState
-                            // FNCS: Inline IL type definitions are not supported in native compilation
+                            // CCS: Inline IL type definitions are not supported in native compilation
                             errorR(Error((193, "Inline IL type definitions (# ... #) are not supported in native F# compilation"), mLhs))
                             SynTypeDefnSimpleRepr.None(mLhs) 
                    )
@@ -15427,7 +15427,7 @@ let _fsyacc_reductions = lazy [|
                 (
                    (
 # 5635 "pars.fsy"
-                             // FNCS: Inline IL expressions are not supported in native compilation
+                             // CCS: Inline IL expressions are not supported in native compilation
                              (fun m ->
                                  errorR(Error((193, "Inline IL expressions (# ... #) are not supported in native F# compilation"), m))
                                  SynExpr.FromParseError(SynExpr.Const(SynConst.Unit, m), m)) 

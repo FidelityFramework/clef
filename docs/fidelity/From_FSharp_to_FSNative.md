@@ -133,7 +133,7 @@ let greeting = "Hello"  // Type: string (native semantics)
 In F# Native, `string` has native semantics - internally a fat pointer struct containing a pointer to UTF-8 bytes and a length:
 
 ```fsharp
-// Internal representation of string in FNCS
+// Internal representation of string in CCS
 // (Users just write "string" - this is transparent)
 [<Struct>]
 type internal StringRepr = {
@@ -157,9 +157,9 @@ Similar transformations apply to other types:
 | `int[]` | `System.Int32[]` (heap, GC tracked) | `array<int>` with native semantics (fat pointer) |
 | Records without `[<Struct>]` | Heap allocated | Struct by default |
 
-### 2.4 The FNCS Transformation
+### 2.4 The CCS Transformation
 
-F# Native Compiler Services (FNCS) is a fork of the standard F# compiler that performs type resolution against the native type universe rather than the BCL. When FNCS encounters:
+Clef Compiler Service (CCS) is a fork of the standard F# compiler that performs type resolution against the native type universe rather than the BCL. When CCS encounters:
 
 ```fsharp
 let numbers = [| 1; 2; 3 |]
@@ -167,24 +167,24 @@ let numbers = [| 1; 2; 3 |]
 
 It resolves `array<int>` with native semantics (fat pointer) rather than `System.Int32[]` (heap, GC tracked). The syntax is identical; the semantics differ.
 
-This transformation is systematic. FNCS does not attempt to translate BCL code to native equivalents at runtime. Instead, it establishes a parallel type universe where native types are the primitive types, and BCL types do not exist.
+This transformation is systematic. CCS does not attempt to translate BCL code to native equivalents at runtime. Instead, it establishes a parallel type universe where native types are the primitive types, and BCL types do not exist.
 
-The path to FNCS itself illustrates the engineering-driven nature of this work. The original approach attempted to intercept type resolution at the Baker phase in Firefly, substituting native types for BCL types after the fact. This proved fragile; the type system assumptions of the standard compiler leaked through in unexpected ways. The realization that a cleaner approach required modifying type resolution at its source, in the compiler services themselves, came from debugging these failures rather than from architectural foresight. Sometimes the right abstraction reveals itself only after the wrong ones have been tried.
+The path to CCS itself illustrates the engineering-driven nature of this work. The original approach attempted to intercept type resolution at the Baker phase in Firefly, substituting native types for BCL types after the fact. This proved fragile; the type system assumptions of the standard compiler leaked through in unexpected ways. The realization that a cleaner approach required modifying type resolution at its source, in the compiler services themselves, came from debugging these failures rather than from architectural foresight. Sometimes the right abstraction reveals itself only after the wrong ones have been tried.
 
 Arriving at a generalized pattern for memory layout that adheres to the goals of the Fidelity framework while providing maximum degrees of freedom to target different processors is going to be a non-trivial challenge. We expect to start with some relatively straightforward hard-coded patterns and develop a proper abstraction pattern later. Our sense is that a plug-in system will need to be developed that will have some coupling to project-level declaration of the targeted hardware, but that story has yet to develop at this early stage. We are willing to live with some brittle implementations to help us target early wins and avoid over-engineering in the abstract.
 
 ### 2.5 Reducing the Compiler's Surface Area
 
-The transformation from FCS to FNCS involves systematic removal of .NET assembly import machinery. This work reveals an important insight about compiler architecture: what appears to be foundational infrastructure is often unnecessary indirection.
+The transformation from FCS to CCS involves systematic removal of .NET assembly import machinery. This work reveals an important insight about compiler architecture: what appears to be foundational infrastructure is often unnecessary indirection.
 
 Consider `ImportMap`, a type that permeated the standard F# compiler with 268 uses across the codebase. Its stated purpose was "converting AbstractIL .NET and provided types to F# internal compiler data structures." The type held two things:
 
 1. **`TcGlobals`**: The compiler's global type-checking context
 2. **`AssemblyLoader`**: Infrastructure for loading .NET assemblies
 
-For native compilation, the second capability is unnecessary - FNCS reads F# source directly, not .NET assemblies. But the pervasive use of `ImportMap` obscured this fact. Functions throughout the compiler accepted `amap: ImportMap` as a parameter, even when they only needed access to `TcGlobals` via `amap.g`.
+For native compilation, the second capability is unnecessary - CCS reads F# source directly, not .NET assemblies. But the pervasive use of `ImportMap` obscured this fact. Functions throughout the compiler accepted `amap: ImportMap` as a parameter, even when they only needed access to `TcGlobals` via `amap.g`.
 
-The principled approach is not to create a "native-friendly" `ImportMap` wrapper that preserves the interface while gutting the implementation. That would preserve unnecessary abstraction. Instead, FNCS removes `ImportMap` entirely and refactors all 268 call sites to use `TcGlobals` directly:
+The principled approach is not to create a "native-friendly" `ImportMap` wrapper that preserves the interface while gutting the implementation. That would preserve unnecessary abstraction. Instead, CCS removes `ImportMap` entirely and refactors all 268 call sites to use `TcGlobals` directly:
 
 - ~96 functions took only `amap` → now take `g: TcGlobals`
 - ~172 functions took both `g` and `amap` → redundant `amap` parameter removed
@@ -221,7 +221,7 @@ This reveals that the F# compiler was architecturally designed around the assump
 
 For native compilation, where types come only from F# source, this unification layer is pure indirection. But removing it doesn't leave a functioning compiler - it leaves a compiler with no type checker.
 
-**The implication is significant**: FNCS cannot be created by pruning the existing F# compiler. The type-checking layer must be rebuilt for the native type universe - a type checker that operates directly on F# types without the "types might come from IL" assumption baked into every function signature.
+**The implication is significant**: CCS cannot be created by pruning the existing F# compiler. The type-checking layer must be rebuilt for the native type universe - a type checker that operates directly on F# types without the "types might come from IL" assumption baked into every function signature.
 
 This is not a failure of the cascade deletion approach - it's the approach working correctly. By systematically removing indirection, we've identified exactly what needs to be rebuilt: a type checker for native F#.
 
@@ -355,7 +355,7 @@ let inline add (a: ^T) (b: ^T) : ^T
 let result = add 1 2
 ```
 
-In F# Native, there is no `System.Int32`. SRTP resolution must search elsewhere. FNCS resolves against the Alloy witness hierarchy:
+In F# Native, there is no `System.Int32`. SRTP resolution must search elsewhere. CCS resolves against the Alloy witness hierarchy:
 
 1. The concrete type's own members
 2. `BasicOps` for primitive operations
@@ -384,7 +384,7 @@ type WritableString =
 WritableString $ "Hello"
 ```
 
-FNCS resolves this through SRTP:
+CCS resolves this through SRTP:
 
 1. Identify the trait call for `op_Dollar`
 2. Search `WritableString` members
@@ -447,7 +447,7 @@ module Platform.Bindings =
         ()
 ```
 
-The function bodies are placeholders. FNCS recognizes `Unchecked.defaultof<T>` and `()` as binding markers, indicating that the actual implementation will be provided by the compilation backend (Alex).
+The function bodies are placeholders. CCS recognizes `Unchecked.defaultof<T>` and `()` as binding markers, indicating that the actual implementation will be provided by the compilation backend (Alex).
 
 ### 5.3 Platform-Specific Implementation
 
@@ -507,7 +507,7 @@ let greet (name: string) : unit -[IO.Console]-> unit =
 
 ### 6.2 Coeffect Inference
 
-When coeffect annotations are absent, FNCS infers them:
+When coeffect annotations are absent, CCS infers them:
 
 ```fsharp
 // Inferred: Pure
@@ -736,7 +736,7 @@ let items = System.Collections.Generic.List<int>()
 let content = System.IO.File.ReadAllText("config.json")
 ```
 
-These explicit BCL references will not compile under FNCS. They must be replaced with Alloy equivalents or removed.
+These explicit BCL references will not compile under CCS. They must be replaced with Alloy equivalents or removed.
 
 ### 10.2 Implicit BCL Usage
 
@@ -753,7 +753,7 @@ let numbers = [| 1; 2; 3 |]
 let items = [ 1; 2; 3 ]
 ```
 
-These will compile under FNCS with native semantics. The `string` greeting has UTF-8 fat pointer semantics, the `array<int>` has native array semantics, and the `list<int>` has native list semantics - but users write standard F# type names throughout.
+These will compile under CCS with native semantics. The `string` greeting has UTF-8 fat pointer semantics, the `array<int>` has native array semantics, and the `list<int>` has native list semantics - but users write standard F# type names throughout.
 
 ### 10.3 Semantic Differences to Consider
 
@@ -769,7 +769,7 @@ The migration requires awareness of semantic differences:
 For large codebases, migration can proceed incrementally:
 
 1. **Identify leaf modules**: Modules with no BCL dependencies in their public interface
-2. **Migrate leaf modules first**: These can be compiled with FNCS independently
+2. **Migrate leaf modules first**: These can be compiled with CCS independently
 3. **Abstract boundaries**: Define interfaces that work with both type systems
 4. **Migrate incrementally**: Move modules from standard F# to F# Native over time
 

@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-/// Public API for F# Native Compiler Services.
+/// Public API for Clef Compiler Service.
 /// Provides native type checking for Firefly consumption.
 ///
 /// This module builds a unified SemanticGraph where:
@@ -1232,6 +1232,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         let declRoot =
                             if hasEntryPointAttribute attrs then Some DeclRoot.EntryPoint
                             elif hasHardwareModuleAttribute attrs then Some DeclRoot.HardwareModule
+                            elif hasKernelModuleAttribute attrs then Some DeclRoot.KernelModule
                             else None
                         let node = builder.Create(
                             SemanticKind.Binding(simpleName, isMutable, true, declRoot),
@@ -1646,7 +1647,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
 
     | SynModuleDecl.Open(target, range) ->
         // Open statements affect name resolution - compose into resolver
-        // FNCS has NO BCL - only source-defined modules can be opened
+        // CCS has NO BCL - only source-defined modules can be opened
         let updatedEnv =
             match target with
             | SynOpenDeclTarget.ModuleOrNamespace(longId, _) ->

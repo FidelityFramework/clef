@@ -92,10 +92,10 @@ let capabilities = loadPlatformCapabilities platformPath
 // capabilities.fits_u64 = <@ true @>
 ```
 
-### 3. FNCS Attachment
+### 3. CCS Attachment
 
 ```fsharp
-// FNCS receives predicates as part of PlatformContext
+// CCS receives predicates as part of PlatformContext
 type PlatformContext = {
     Predicates: Map<string, Expr<bool>>
     // fits_u64 -> <@ true @>
@@ -167,7 +167,7 @@ has_avx512 ==> has_avx2
 has_avx2 ==> has_sse42
 ```
 
-FNCS can use these implications for type checking:
+CCS can use these implications for type checking:
 
 ```fsharp
 // If fits_u64 is true, we know fits_u32 is also true
@@ -186,7 +186,7 @@ FNCS can use these implications for type checking:
 | has_atomics_64 | true | true | false | false |
 | has_atomics_128 | true | true | false | false |
 
-## Implementation in FNCS
+## Implementation in CCS
 
 ### Predicate Type
 
@@ -254,4 +254,4 @@ This happens at compile time, resulting in smaller binaries with no runtime over
 
 - `NTU_Type_System.md` - NTU type implementation
 - `Fidelity.Platform/Capabilities.fs` - Predicate definitions
-- `fncs-specification.md` - FNCS specification
+- `ccs-specification.md` - CCS specification

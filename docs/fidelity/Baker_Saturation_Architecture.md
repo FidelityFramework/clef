@@ -2,7 +2,7 @@
 
 ## Document Purpose
 
-This document provides a comprehensive architectural specification for Baker, the HOF (Higher-Order Function) decomposition component of FNCS. It captures the design rationale, the three-layer combinator model, the parallel saturation vision, and implementation guidance.
+This document provides a comprehensive architectural specification for Baker, the HOF (Higher-Order Function) decomposition component of CCS. It captures the design rationale, the three-layer combinator model, the parallel saturation vision, and implementation guidance.
 
 **Companion Memory:** `baker_saturation_architecture` (terse reference)
 

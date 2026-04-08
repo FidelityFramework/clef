@@ -81,7 +81,7 @@ module internal HashUtilities =
         |> hashListOrderMatters (fst >> hashText)
         |> pipeToHash tyconHash
 
-// FNCS: HashIL module removed - native compilation doesn't use IL types
+// CCS: HashIL module removed - native compilation doesn't use IL types
 // These stubs exist for compatibility with any remaining references
 module HashIL =
     // Stub functions that return constant hashes
@@ -94,7 +94,7 @@ module HashAccessibility =
     let isHiddenToObserver (TAccess access) (observer: ObserverVisibility) =
         let isInternalCompPath x =
             match x with
-            // FNCS: ILScopeRef.Local replaced with ScopeRef.Local
+            // CCS: ILScopeRef.Local replaced with ScopeRef.Local
             | CompPath(ScopeRef.Local, _, []) -> true
             | _ -> false
 

@@ -14,7 +14,7 @@ open Internal.Utilities.Rational
 
 open Clef.Compiler 
 open Clef.Compiler.NativeTypedTree.NativeTypes 
-// ILX.Types removed - FNCS doesn't emit IL for discriminated unions
+// ILX.Types removed - CCS doesn't emit IL for discriminated unions
 open Clef.Compiler.CompilerGlobalState
 open Clef.Compiler.DiagnosticsLogger
 open Clef.Compiler.Syntax
@@ -675,7 +675,7 @@ type Entity =
       // MUTABILITY: only for unpickle linkage
       mutable entity_cpath: CompilationPath option 
 
-      // FNCS: entity_il_repr_cache removed - native compilation doesn't use IL representation
+      // CCS: entity_il_repr_cache removed - native compilation doesn't use IL representation
 
       mutable entity_opt_data: EntityOptionalData option
     }
@@ -916,7 +916,7 @@ type Entity =
         | Some optData -> optData.entity_tycon_repr_accessibility
         | _ -> TAccess []
 
-    // FNCS: CompiledReprCache removed - native compilation doesn't use IL representation
+    // CCS: CompiledReprCache removed - native compilation doesn't use IL representation
 
     /// Get a blob of data indicating how this type is nested in other namespaces, modules or types.
     member x.PublicPath = x.entity_pubpath
@@ -1108,7 +1108,7 @@ type Entity =
          | TFSharpTyconRepr x -> x 
          | _ -> failwith "not an F# object model type definition"
 
-    // FNCS: IsILTycon, ILTyconInfo, ILTyconRawMetadata removed - native compilation doesn't use IL type representation
+    // CCS: IsILTycon, ILTyconInfo, ILTyconRawMetadata removed - native compilation doesn't use IL type representation
 
     /// Indicates if this is an F# type definition whose r.h.s. is known to be a record type definition.
     member x.IsRecordTycon =
@@ -1157,7 +1157,7 @@ type Entity =
             | TFSharpEnum -> true
         | _ -> false
 
-    // FNCS: IsAsmReprTycon removed - native compilation doesn't use IL assembly representation
+    // CCS: IsAsmReprTycon removed - native compilation doesn't use IL assembly representation
 
     /// Indicates if this is an F# type definition which is one of the special types in FSharp.Core.dll like 'float<_>' which
     /// defines a measure type with a relation to an existing non-measure type as a representation.
@@ -1179,7 +1179,7 @@ type Entity =
     /// Indicates if this is an F#-defined class type definition 
     member x.IsFSharpClassTycon = x.IsFSharpObjectModelTycon && match x.FSharpTyconRepresentationData.fsobjmodel_kind with TFSharpClass -> true | _ -> false
 
-    // FNCS: IsILEnumTycon always false - native compilation doesn't import IL types
+    // CCS: IsILEnumTycon always false - native compilation doesn't import IL types
     member x.IsILEnumTycon = false
 
     /// Indicates if this is an enum type definition 
@@ -1202,7 +1202,7 @@ type Entity =
             | TFSharpStruct | TFSharpEnum -> true
         | _ -> false
 
-    // FNCS: IsILStructOrEnumTycon always false - native compilation doesn't import IL types
+    // CCS: IsILStructOrEnumTycon always false - native compilation doesn't import IL types
     member x.IsILStructOrEnumTycon = false
 
     /// Indicates if this is a struct or enum type definition, i.e. a value type definition, including struct records and unions
@@ -1264,7 +1264,7 @@ type Entity =
           | Some (vref1, vref2, vref3, _) -> yield vref1; yield vref2; yield vref3 ]
     
 
-    // FNCS: CompiledRepresentation and CompiledRepresentationForNamedType removed - native compilation doesn't use IL type representation
+    // CCS: CompiledRepresentation and CompiledRepresentationForNamedType removed - native compilation doesn't use IL type representation
 
 
     /// Indicates if we have pre-determined that a type definition has a default constructor.
@@ -1297,7 +1297,7 @@ type ParentRef =
 /// just an ILTypeRef. Computed and cached by later phases. Stored in 
 /// type and exception definitions. Not pickled. Store an optional ILType object for 
 /// non-generic types.
-// FNCS: CompiledTypeRepr removed - native compilation doesn't use IL type representations
+// CCS: CompiledTypeRepr removed - native compilation doesn't use IL type representations
 // Native types use NativeType from Checking.Native.NativeTypes instead
 
 [<NoEquality; NoComparison; RequireQualifiedAccess; StructuredFormatDisplay("{DebugText}")>]
@@ -1383,8 +1383,8 @@ type TyconRepresentation =
     /// Indicates the type is a class, struct, enum, delegate or interface 
     | TFSharpTyconRepr of FSharpTyconData
 
-    // FNCS: TILObjectRepr removed - native compilation doesn't use IL object representations
-    // FNCS: TAsmRepr removed - native compilation doesn't use IL assembly representations
+    // CCS: TILObjectRepr removed - native compilation doesn't use IL object representations
+    // CCS: TAsmRepr removed - native compilation doesn't use IL assembly representations
 
     /// Indicates the type is parameterized on a measure (e.g. float<_>) but erases to some other type (e.g. float)
     | TMeasureableRepr of TType
@@ -1416,7 +1416,7 @@ type TyconRepresentation =
 
     override x.ToString() = sprintf "%+A" x 
 
-// FNCS: TILObjectReprData removed - native compilation doesn't use IL object representations
+// CCS: TILObjectReprData removed - native compilation doesn't use IL object representations
 
 
 #if !NO_TYPEPROVIDERS
@@ -1594,7 +1594,7 @@ type TyconUnionData =
       /// The cases contained in the discriminated union. 
       CasesTable: TyconUnionCases
 
-      /// FNCS stub - IL representation not used in native compilation
+      /// CCS stub - IL representation not used in native compilation
       CompiledRepresentation: unit cache 
     }
 
@@ -1857,7 +1857,7 @@ type ExceptionInfo =
     /// Indicates that an exception is an abbreviation for the given exception 
     | TExnAbbrevRepr of TyconRef 
 
-    // FNCS: TExnAsmRepr removed - native compilation doesn't use IL exception types
+    // CCS: TExnAsmRepr removed - native compilation doesn't use IL exception types
 
     /// Indicates that an exception carries the given record of values 
     | TExnFresh of TyconRecdFields
@@ -3544,7 +3544,7 @@ type EntityRef =
     /// Is the destination assembly available?
     member tcr.CanDeref = tcr.TryDeref.IsSome
 
-    // FNCS: CompiledRepresentation and CompiledRepresentationForNamedType removed - native compilation doesn't use IL
+    // CCS: CompiledRepresentation and CompiledRepresentationForNamedType removed - native compilation doesn't use IL
 
     /// The implementation definition location of the namespace, module or type
     member x.DefinitionRange = x.Deref.DefinitionRange
@@ -3649,7 +3649,7 @@ type EntityRef =
     /// Get the value representing the accessibility of the r.h.s. of an F# type definition.
     member x.TypeReprAccessibility = x.Deref.TypeReprAccessibility
 
-    // FNCS: CompiledReprCache removed - native compilation doesn't use IL representation
+    // CCS: CompiledReprCache removed - native compilation doesn't use IL representation
 
     /// Get a blob of data indicating how this type is nested in other namespaces, modules or types.
     member x.PublicPath: PublicPath option = x.Deref.PublicPath
@@ -3754,7 +3754,7 @@ type EntityRef =
     /// Indicates if this is a struct or enum type definition, i.e. a value type definition, including struct records and unions
     member x.IsStructOrEnumTycon = x.Deref.IsStructOrEnumTycon
 
-    // FNCS: IsAsmReprTycon removed - native compilation doesn't use IL assembly representation
+    // CCS: IsAsmReprTycon removed - native compilation doesn't use IL assembly representation
 
     /// Indicates if this is an F# type definition which is one of the special types in FSharp.Core.dll like 'float<_>' which
     /// defines a measure type with a relation to an existing non-measure type as a representation.
@@ -3775,7 +3775,7 @@ type EntityRef =
     /// Gets any implicit hash/equals methods added to an F# record, union or struct type definition.
     member x.GeneratedHashAndEqualsValues = x.Deref.GeneratedHashAndEqualsValues
     
-    // FNCS: IsILTycon, ILTyconInfo, ILTyconRawMetadata removed - native compilation doesn't use IL
+    // CCS: IsILTycon, ILTyconInfo, ILTyconRawMetadata removed - native compilation doesn't use IL
 
     /// Indicate if this is a type whose r.h.s. is known to be a union type definition.
     member x.IsUnionTycon = x.Deref.IsUnionTycon
@@ -4336,7 +4336,7 @@ type TType =
         | TType_fun _ -> ""
         | TType_measure _ -> ""
         | TType_var (tp, _) -> tp.Solution |> function Some slnTy -> slnTy.GetAssemblyName() | None -> ""
-        // FNCS: Use CompilationPath.ScopeRef instead of ILTyconInfo for native compilation
+        // CCS: Use CompilationPath.ScopeRef instead of ILTyconInfo for native compilation
         | TType_ucase (_uc, _tinst) ->
             _uc.Tycon.CompilationPath.ScopeRef.QualifiedName
 
@@ -4388,14 +4388,14 @@ type AnonRecdTypeInfo =
       mutable SortedNames: string[]
     }
 
-    // FNCS: Simple incrementing stamp counter for anonymous record type identity
+    // CCS: Simple incrementing stamp counter for anonymous record type identity
     static let mutable anonRecdStampCounter = 0L
 
     /// Create an AnonRecdTypeInfo from the basic data
     static member Create(ccu: CcuThunk, tupInfo, ids: Ident[]) = 
         let sortedIds = ids |> Array.sortBy (fun id -> id.idText)
 
-        // FNCS: Use simple incrementing stamp instead of SHA1 hash
+        // CCS: Use simple incrementing stamp instead of SHA1 hash
         // This provides uniqueness for type identity without IL dependencies
         let stamp = System.Threading.Interlocked.Increment(&anonRecdStampCounter)
 
@@ -4969,7 +4969,7 @@ type Expr =
     /// Indicates the expression is a quoted expression tree. 
     ///
     // MUTABILITY: this use of mutability is awkward and perhaps should be removed
-    // FNCS: Quotation info uses TypeConRef instead of ILTypeRef for native compilation
+    // CCS: Quotation info uses TypeConRef instead of ILTypeRef for native compilation
     | Quote of
         quotedExpr: Expr *
         quotationInfo: ((TypeConRef list * TTypes * Exprs * ExprData) * (TypeConRef list * TTypes * Exprs * ExprData)) option ref *
@@ -5131,7 +5131,7 @@ type TOp =
     /// An operation representing a field-get from an F# tuple value.
     | TupleFieldGet of TupInfo * int 
 
-    // FNCS: ILAsm removed - native compilation uses MLIR, not IL assembly
+    // CCS: ILAsm removed - native compilation uses MLIR, not IL assembly
 
     /// Generate a ldflda on an 'a ref. 
     | RefAddrGet of bool
@@ -5157,7 +5157,7 @@ type TOp =
     /// Operation nodes representing C-style operations on byrefs and mutable vals (l-values) 
     | LValueOp of LValueOperation * ValRef 
 
-    // FNCS: ILCall removed - native compilation uses MLIR, not IL method calls
+    // CCS: ILCall removed - native compilation uses MLIR, not IL method calls
 
     [<DebuggerBrowsable(DebuggerBrowsableState.Never)>]
     member x.DebugText = x.ToString()
@@ -5188,7 +5188,7 @@ type TOp =
         | ExnFieldGet (tcref, _) -> "ExnFieldGet(" + tcref.LogicalName + ",..)"
         | ExnFieldSet (tcref, _) -> "ExnFieldSet(" + tcref.LogicalName + ",..)"
         | TupleFieldGet _ -> "TupleFieldGet(..)"
-        // FNCS: ILAsm removed
+        // CCS: ILAsm removed
         | RefAddrGet _ -> "RefAddrGet(..)"
         | Coerce -> "Coerce"
         | Reraise -> "Reraise"
@@ -5197,7 +5197,7 @@ type TOp =
         | Label n -> "Label(" + string n + ")"
         | TraitCall info -> "TraitCall(" + info.MemberLogicalName + ")"
         | LValueOp (op, vref) -> sprintf "%+A(%s)" op vref.LogicalName
-        // FNCS: ILCall removed
+        // CCS: ILCall removed
 
 /// Represents the kind of record construction operation.
 type RecordConstructionInfo = 
@@ -5548,7 +5548,7 @@ type CcuData =
       // NOTE: may contain transient state during typechecking 
       mutable Contents: ModuleOrNamespace
       
-      // FNCS: TryGetILModuleDef removed - native compilation doesn't use IL modules
+      // CCS: TryGetILModuleDef removed - native compilation doesn't use IL modules
       
       /// A helper function used to link method signatures using type equality. This is effectively a forward call to the type equality 
       /// logic in tastops.fs
@@ -5659,7 +5659,7 @@ type CcuThunk =
     /// Holds the file name for the assembly, if any 
     member ccu.FileName = ccu.Deref.FileName
 
-    // FNCS: TryGetILModuleDef removed - native compilation doesn't use IL modules
+    // CCS: TryGetILModuleDef removed - native compilation doesn't use IL modules
 
 #if !NO_TYPEPROVIDERS
     /// Is this a provider-injected assembly
@@ -6107,7 +6107,7 @@ type Construct() =
                 | TyparKind.Type, doc, TAccess [], TAccess [] when doc.IsEmpty -> None
                 | _ -> Some { Entity.NewEmptyEntityOptData() with entity_kind = kind; entity_xmldoc = doc; entity_tycon_repr_accessibility = reprAccess; entity_accessibility=access } } 
 
-    // FNCS: NewILTycon removed - native compilation doesn't import .NET type definitions
+    // CCS: NewILTycon removed - native compilation doesn't import .NET type definitions
 
     /// Create a new Val node
     static member NewVal(

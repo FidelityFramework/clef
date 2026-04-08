@@ -1495,7 +1495,7 @@ let mkLazyAnd (g: TcGlobals) m e1 e2 =
 let mkCoerceExpr(e, toTy, m, fromTy) =
     Expr.Op (TOp.Coerce, [toTy; fromTy], [e], m)
 
-// FNCS: IL instruction infrastructure removed
+// CCS: IL instruction infrastructure removed
 // - ILDataType type, AI_* instruction placeholders, ILInstr module removed
 // - mkAsmExpr removed - it returned wrong placeholder values (Coerce/Zero)
 // Native compilation uses MLIR operations, not IL assembly
@@ -1528,11 +1528,11 @@ let mkStaticRecdFieldGet (fref, tinst, m) =
 let mkStaticRecdFieldSet(fref, tinst, e, m) =
     Expr.Op (TOp.ValFieldSet fref, tinst, [e], m)
 
-// FNCS: mkArrayElemAddress - native arrays use fat pointer representation
+// CCS: mkArrayElemAddress - native arrays use fat pointer representation
 // Native array element address is computed as base pointer + (index * element size)
 // The first expr is the array, remaining exprs are indices
 let mkArrayElemAddress (g: TcGlobals) (readonly, elemTy, exprs, m) = 
-    // FNCS: For native compilation, array element addressing uses the refcell contents field
+    // CCS: For native compilation, array element addressing uses the refcell contents field
     // as a marker. Alex recognizes this pattern and generates native pointer arithmetic.
     let rfref = RecdFieldRef(g.refcell_tcr_canon, "contents")
     Expr.Op (TOp.ValFieldGetAddr (rfref, readonly), [elemTy], exprs, m)
@@ -1893,7 +1893,7 @@ let isValueTypeTy g ty = ty |> stripTyEqns g |> (function TType_app(tcref, _, _)
 
 let isVoidTy g ty = ty |> stripTyEqns g |> (function TType_app(tcref, _, _) -> tyconRefEq g g.system_Void_tcref tcref | _ -> false) 
 
-// FNCS: isILAppTy removed - native compilation doesn't have IL tycons
+// CCS: isILAppTy removed - native compilation doesn't have IL tycons
 let _isILAppTy _g _ty = false 
 
 let isNativePtrTy g ty = ty |> stripTyEqns g |> (function TType_app(tcref, _, _) -> tyconRefEq g g.nativeptr_tcr tcref | _ -> false) 
@@ -2159,7 +2159,7 @@ let isAbstractTycon (tycon: Tycon) =
         not tycon.IsFSharpDelegateTycon && 
         tycon.TypeContents.tcaug_abstract 
     else 
-        // FNCS: IsILTycon removed - native compilation uses F# abstractions only
+        // CCS: IsILTycon removed - native compilation uses F# abstractions only
         false
 
 //---------------------------------------------------------------------------
@@ -3502,7 +3502,7 @@ let supersOfTyconRef (tcref: TyconRef) =
 // Detect attributes
 //----------------------------------------------------------------------------
 
-// FNCS: IL attribute functions removed - native compilation uses F# attributes only
+// CCS: IL attribute functions removed - native compilation uses F# attributes only
 // Removed: isILAttribByName, isILAttrib, HasILAttribute, TryDecodeILAttribute
 
 // F# view of attributes (these get converted to AbsIL attributes in ilxgen) 
@@ -3518,7 +3518,7 @@ let IsMatchingFSharpAttributeOpt g attrOpt (Attrib(tcref2, _, _, _, _, _, _)) = 
 let (|ExtractAttribNamedArg|_|) nm args = 
     args |> List.tryPick (function AttribNamedArg(nm2, _, _, v) when nm = nm2 -> Some v | _ -> None) |> ValueOption.ofOption
 
-// FNCS: ExtractILAttributeNamedArg removed - vestigial IL pattern
+// CCS: ExtractILAttributeNamedArg removed - vestigial IL pattern
 
 [<return: Struct>]
 let (|StringExpr|_|) = function Expr.Const (Const.String n, _, _) -> ValueSome n | _ -> ValueNone
@@ -3535,7 +3535,7 @@ let (|AttribBoolArg|_|) = function AttribExpr(_, Expr.Const (Const.Bool n, _, _)
 [<return: Struct>]
 let (|AttribStringArg|_|) = function AttribExpr(_, Expr.Const (Const.String n, _, _)) -> ValueSome n | _ -> ValueNone
 
-// FNCS: AttribElemStringArg removed - vestigial IL pattern
+// CCS: AttribElemStringArg removed - vestigial IL pattern
 
 let TryFindFSharpBoolAttributeWithDefault dflt g nm attrs = 
     match TryFindFSharpAttribute g nm attrs with
@@ -3564,11 +3564,11 @@ let TryFindLocalizedFSharpStringAttribute g nm attrs =
         | _ -> Some b
     | _ -> None
     
-// FNCS: TryFindILAttribute, TryFindILAttributeOpt, IsILAttrib removed - vestigial IL attribute functions
+// CCS: TryFindILAttribute, TryFindILAttributeOpt, IsILAttrib removed - vestigial IL attribute functions
     
 
 /// Analyze attributes declared on type definitions: F#-declared attributes and provided attributes.
-/// FNCS: Simplified - removed IL-declared attributes case (native compilation uses F# attributes only)
+/// CCS: Simplified - removed IL-declared attributes case (native compilation uses F# attributes only)
 //
 // This is used for AttributeUsageAttribute, DefaultMemberAttribute and ConditionalAttribute (on attribute types)
 let TryBindTyconRefAttribute (g: TcGlobals) (m: range) (AttribInfo (atref, _) as args) (tcref: TyconRef) (f2: Attrib -> 'a option) (_f3: obj option list * (string * obj option) list -> 'a option) : 'a option =
@@ -3641,7 +3641,7 @@ let TyconRefHasAttributeByName (m: range) (attrFullName: string) (tcref: TyconRe
             a.GetAttributeConstructorArgs(provAttribs.TypeProvider.PUntaintNoFailure id, attrFullName)), m).IsSome
 #endif
     | FSharpOrArrayOrByrefOrTupleOrExnTypeMetadata ->
-        // FNCS: CompiledRepresentation removed - use attribute logical name matching
+        // CCS: CompiledRepresentation removed - use attribute logical name matching
         tcref.Attribs
         |> List.exists (fun attr ->
             let attrTcref = attr.TyconRef
@@ -3682,7 +3682,7 @@ let isSpanLikeTy g m ty =
     not (isByrefTy g ty)
 
 let isSpanTyconRef g m tcref =
-    // FNCS: CompiledRepresentationForNamedType removed - use logical name matching
+    // CCS: CompiledRepresentationForNamedType removed - use logical name matching
     isByrefLikeTyconRef g m tcref &&
     tcref.DisplayName = "Span"
 
@@ -3700,7 +3700,7 @@ let destSpanTy g m ty =
     | _ -> failwith "destSpanTy"
 
 let isReadOnlySpanTyconRef g m tcref =
-    // FNCS: CompiledRepresentationForNamedType removed - use logical name matching
+    // CCS: CompiledRepresentationForNamedType removed - use logical name matching
     isByrefLikeTyconRef g m tcref &&
     tcref.DisplayName = "ReadOnlySpan"
 
@@ -4442,7 +4442,7 @@ module DebugPrint =
 
                 if emptyMeasure then emptyL else (wordL (tagText start) @@-- aboveListL alldecls) @@ wordL(tagText "end")
 
-        // FNCS: TAsmRepr and TILObjectRepr removed - native compilation doesn't use IL representations
+        // CCS: TAsmRepr and TILObjectRepr removed - native compilation doesn't use IL representations
         | TMeasureableRepr ty -> typeL ty
         | TNoRepr -> emptyL
 
@@ -4584,12 +4584,12 @@ module DebugPrint =
             | Expr.Op (TOp.Reraise, [_], [], _) -> 
                 wordL(tagText "Reraise")
 
-            // FNCS: TOp.ILAsm removed - native compilation uses MLIR, not IL assembly
+            // CCS: TOp.ILAsm removed - native compilation uses MLIR, not IL assembly
 
             | Expr.Op (TOp.LValueOp (lvop, vr), _, args, _) -> 
                 (lvalopL lvop ^^ valRefL vr --- bracketL (commaListL (List.map atomL args))) |> wrap
 
-            // FNCS: TOp.ILCall removed - native compilation uses MLIR, not IL method calls
+            // CCS: TOp.ILCall removed - native compilation uses MLIR, not IL method calls
 
             | Expr.Op (TOp.Array, [_], xs, _) -> 
                 leftL(tagText "[|") ^^ commaListL (List.map exprL xs) ^^ rightL(tagText "|]")
@@ -5526,7 +5526,7 @@ and accFreeInOp opts op acc =
         let acc = accUsesFunctionLocalConstructs (kind = RecdExprIsObjInit) acc
         (accUsedRecdOrUnionTyconRepr opts tcref.Deref (accFreeTyvars opts accFreeTycon tcref acc)) 
 
-    // FNCS: TOp.ILAsm removed - native compilation uses MLIR, not IL assembly
+    // CCS: TOp.ILAsm removed - native compilation uses MLIR, not IL assembly
     
     | TOp.Reraise -> 
         accUsesRethrow true acc
@@ -5540,7 +5540,7 @@ and accFreeInOp opts op acc =
     | TOp.LValueOp (_, vref) -> 
         accFreeValRef opts vref acc
 
-    // FNCS: TOp.ILCall removed - native compilation uses MLIR, not IL method calls
+    // CCS: TOp.ILCall removed - native compilation uses MLIR, not IL method calls
 
 and accFreeInTargets opts targets acc = 
     Array.foldBack (accFreeInTarget opts) targets acc
@@ -6118,10 +6118,10 @@ and remapOp tmenv op =
     | TOp.UnionCaseFieldGet (ucref, n) -> TOp.UnionCaseFieldGet (remapUnionCaseRef tmenv.tyconRefRemap ucref, n)
     | TOp.UnionCaseFieldGetAddr (ucref, n, readonly) -> TOp.UnionCaseFieldGetAddr (remapUnionCaseRef tmenv.tyconRefRemap ucref, n, readonly)
     | TOp.UnionCaseFieldSet (ucref, n) -> TOp.UnionCaseFieldSet (remapUnionCaseRef tmenv.tyconRefRemap ucref, n)
-    // FNCS: TOp.ILAsm removed - native compilation uses MLIR, not IL assembly
+    // CCS: TOp.ILAsm removed - native compilation uses MLIR, not IL assembly
     | TOp.TraitCall traitInfo -> TOp.TraitCall (remapTraitInfo tmenv traitInfo)
     | TOp.LValueOp (kind, lvr) -> TOp.LValueOp (kind, remapValRef tmenv lvr)
-    // FNCS: TOp.ILCall removed - native compilation uses MLIR, not IL method calls
+    // CCS: TOp.ILCall removed - native compilation uses MLIR, not IL method calls
     | _ -> op
     
 and remapValFlags tmenv x =
@@ -6217,7 +6217,7 @@ and remapFsObjData ctxt tmenv x =
 and remapTyconRepr ctxt tmenv repr = 
     match repr with 
     | TFSharpTyconRepr x -> TFSharpTyconRepr (remapFsObjData ctxt tmenv x)
-    // FNCS: TILObjectRepr and TAsmRepr removed - native compilation doesn't use IL representations
+    // CCS: TILObjectRepr and TAsmRepr removed - native compilation doesn't use IL representations
 #if !NO_TYPEPROVIDERS
     | TProvidedNamespaceRepr _ -> repr
     | TProvidedTypeRepr info -> 
@@ -6696,7 +6696,7 @@ let rec tyOfExpr g expr =
     | Expr.Op (op, tinst, _, _) -> 
         match op with 
         | TOp.Coerce -> (match tinst with [toTy;_fromTy] -> toTy | _ -> failwith "bad TOp.Coerce node")
-        // FNCS: TOp.ILCall and TOp.ILAsm removed - native compilation uses MLIR
+        // CCS: TOp.ILCall and TOp.ILAsm removed - native compilation uses MLIR
         | TOp.UnionCase uc -> actualResultTyOfUnionCase tinst uc 
         | TOp.UnionCaseProof uc -> mkProvenUnionCaseTy uc tinst  
         | TOp.Recd (_, tcref) -> mkWoNullAppTy tcref tinst
@@ -7127,17 +7127,17 @@ let rec mkExprAddrOfExprAux g mustTakeAddress _useReadonlyForGenericArrayAddress
             let writeonly = writeonly || isOutByrefTy g objTy
             wrap, mkUnionCaseFieldGetAddrProvenViaExprAddr(readonly, expra, uref, tinst, cidx, m), readonly, writeonly
 
-        // FNCS: TOp.ILAsm patterns for .NET static/instance fields removed - native compilation uses MLIR
+        // CCS: TOp.ILAsm patterns for .NET static/instance fields removed - native compilation uses MLIR
 
         // LVALUE of "e.[n]" where e is an array of structs
-        // FNCS: Native arrays use fat pointer representation - simplified from IL shapes
+        // CCS: Native arrays use fat pointer representation - simplified from IL shapes
         | Expr.App (Expr.Val (vf, _, _), _, [elemTy], [aexpr;nexpr], _) when (valRefEq g vf g.array_get_vref) -> 
             let readonly = false // array address is never forced to be readonly
             let writeonly = false
             None, mkArrayElemAddress g (readonly, elemTy, [aexpr; nexpr], m), readonly, writeonly
 
         // LVALUE of "e.[n1, n2]", "e.[n1, n2, n3]", "e.[n1, n2, n3, n4]" where e is an array of structs
-        // FNCS: Native multi-dimensional arrays use nested fat pointers
+        // CCS: Native multi-dimensional arrays use nested fat pointers
         | Expr.App (Expr.Val (vref, _, _), _, [elemTy], aexpr :: args, _)
              when (valRefEq g vref g.array2D_get_vref || valRefEq g vref g.array3D_get_vref || valRefEq g vref g.array4D_get_vref) ->
             let readonly = false // array address is never forced to be readonly
@@ -7591,7 +7591,7 @@ let rec mkSequentials g m es =
     | e :: es -> mkSequential m e (mkSequentials g m es) 
     | [] -> mkUnit g m
 
-// FNCS: mkGetArg0 removed - vestigial IL, no callers, no export
+// CCS: mkGetArg0 removed - vestigial IL, no callers, no export
 // Native compilation handles argument access at MLIR level
 
 //-------------------------------------------------------------------------
@@ -7722,12 +7722,12 @@ let mkCompGenLocalAndInvisibleBind g nm m e =
 // Make some fragments of code
 //----------------------------------------------------------------------------
 
-// FNCS: IL instruction primitives removed - native compilation doesn't use IL assembly
+// CCS: IL instruction primitives removed - native compilation doesn't use IL assembly
 // Removed: box, isinst, unbox, mkUnbox, mkBox
 // Removed: mspec_String_Length, mspec_String_Concat2/3/4
-// These are IL code generation primitives. FNCS uses native compilation.
+// These are IL code generation primitives. CCS uses native compilation.
 
-// FNCS: mkIsInst stub - native type testing handled at MLIR level
+// CCS: mkIsInst stub - native type testing handled at MLIR level
 let mkIsInst tgtTy expr m =
     // For native compilation, isinst is handled through pattern matching at MLIR level
     // Return a coercion expression as placeholder - the source type will be inferred
@@ -8039,33 +8039,33 @@ let mkLazyDelayed g m ty f = mkApps g (typedExprForIntrinsic g m g.lazy_create_i
 
 let mkLazyForce g m ty e = mkApps g (typedExprForIntrinsic g m g.lazy_force_info, [[ty]], [ e; mkUnit g m ], m) 
 
-// FNCS: mkGetString, mkGetStringChar removed - not exported, no callers
+// CCS: mkGetString, mkGetStringChar removed - not exported, no callers
 // Native string operations handled at MLIR level removed - alias for mkGetString, not exported, no callers
 
-// FNCS: mkGetStringLength removed - uses IL method call to String.Length
-// FNCS: mkStaticCall_String_Concat2/3/4 removed - uses IL method calls to String.Concat
+// CCS: mkGetStringLength removed - uses IL method call to String.Length
+// CCS: mkStaticCall_String_Concat2/3/4 removed - uses IL method calls to String.Concat
 // Native strings use fat pointer representation with length embedded, no IL calls needed
 
-// FNCS: IL assembly expression functions removed - native compilation uses native operations
+// CCS: IL assembly expression functions removed - native compilation uses native operations
 // Removed: mkDecr, mkIncr (used IL arithmetic instructions)
 // Removed: mkLdlen, mkLdelem (used IL array instructions)
 // Removed: mkILAsmCeq, mkILAsmClt (used IL comparison instructions)
 
-// FNCS: Stub implementations for throw-related functions
+// CCS: Stub implementations for throw-related functions
 // Native exception handling goes through MLIR, not IL instructions
 let isThrow (_expr: Expr) = false
 let destThrow _expr : (range * TType * Expr) option = None
 let mkThrow m ty expr = 
-    // FNCS: Native throw is handled at MLIR level
+    // CCS: Native throw is handled at MLIR level
     // For now, wrap in a reraise-like pattern that Alex can recognize
     Expr.Op (TOp.Reraise, [ty], [expr], m)
 
-// FNCS: mkILAsmCeq, mkILAsmClt, mkDecr, mkGetStringLength removed
+// CCS: mkILAsmCeq, mkILAsmClt, mkDecr, mkGetStringLength removed
 // These IL-based stubs returned WRONG values (false, false, identity, 0)
 // They were only used by DetectAndOptimizeForEachExpression which has been removed
 // Native comparisons, arithmetic, and string operations are handled at MLIR level
 
-// FNCS: mkNull removed - fsnative-spec: "No null: Everything is voption, no sentinel values"
+// CCS: mkNull removed - fsnative-spec: "No null: Everything is voption, no sentinel values"
 // Const.Zero (null pointer) is not used in native compilation
 
 // reraise - parsed as library call - internally represented as op form.
@@ -8075,13 +8075,13 @@ let mkReraiseLibCall (g: TcGlobals) ty m =
 
 let mkReraise m returnTy = Expr.Op (TOp.Reraise, [returnTy], [], m) (* could suppress unitArg *)
 
-// FNCS: IL compilation attribute functions removed - native compilation doesn't generate IL attributes
+// CCS: IL compilation attribute functions removed - native compilation doesn't generate IL attributes
 // Removed: mkCompilationMappingAttr*, mkCompilationSourceNameAttr, tref_* functions
 // Native compilation uses native attributes represented in NativeTypes
 
-// FNCS: IL extensible typing attribute functions removed - native compilation doesn't use IL attributes
+// CCS: IL extensible typing attribute functions removed - native compilation doesn't use IL attributes
 // Removed: isTypeProviderAssemblyAttr, TryDecodeTypeProviderAssemblyAttr
-// FNCS: All IL signature/attribute matching functions removed
+// CCS: All IL signature/attribute matching functions removed
 // Removed: mkSignatureDataVersionAttr, IsSignatureDataVersionAttr
 // Removed: TryFindAutoOpenAttr, TryFindInternalsVisibleToAttr, IsMatchingSignatureDataVersionAttr
 
@@ -9215,7 +9215,7 @@ let mkUnionCaseTest (g: TcGlobals) (e1, cref: UnionCaseRef, tinst, m) =
 //    2. The compilation of string patterns in the pattern match compiler
 // Called for when creating compiled form of 'let fixed ...'.
 //
-// FNCS: mkNullTest, mkNonNullTest, mkNonNullCond removed
+// CCS: mkNullTest, mkNonNullTest, mkNonNullCond removed
 // fsnative-spec: "No null: Everything is voption, no sentinel values"
 // mkNonNullTest used broken mkAsmExpr stub with AI_ldnull/AI_cgt_un
 // These functions had no external callers
@@ -9753,7 +9753,7 @@ type EntityRef with
     member tcref.HasOverride g nm argTys = tcref.Deref.HasOverride g nm argTys
     member tcref.HasMember g nm argTys = tcref.Deref.HasMember g nm argTys
 
-// FNCS: mkFastForLoop removed - only used by vestigial loop optimization infrastructure
+// CCS: mkFastForLoop removed - only used by vestigial loop optimization infrastructure
 // mkIntegerForLoop is still available for direct use if needed
 
 /// Accessing a binding of the form "let x = 1" or "let x = e" for any "e" satisfying the predicate
@@ -10062,7 +10062,7 @@ and EvaledAttribExprEquality g e1 e2 =
     | TypeDefOfExpr g ty1, TypeDefOfExpr g ty2 -> typeEquiv g ty1 ty2
     | _ -> false
 
-// FNCS: ConstToILFieldInit removed - vestigial IL field initializer conversion
+// CCS: ConstToILFieldInit removed - vestigial IL field initializer conversion
 
 let EvalLiteralExprOrAttribArg g x = 
     match x with 
@@ -10130,18 +10130,18 @@ let rec mkCompiledTuple g isStruct (argTys, args, m) =
         let argTysAB = argTysA @ [ty8] 
         (mkCompiledTupleTyconRef g isStruct (List.length argTysAB), argTysAB, argsA @ [v8], m)
 
-// FNCS: IL method/field spec functions removed - native tuples use native field access
+// CCS: IL method/field spec functions removed - native tuples use native field access
 // Removed: mkILMethodSpecForTupleItem, mkILFieldSpecForTupleItem
 
-// FNCS: mkGetTupleItemN simplified - native tuples don't need IL type parameter
+// CCS: mkGetTupleItemN simplified - native tuples don't need IL type parameter
 // Native tuples use native field access instead of IL method calls
 let mkGetTupleItemN (_g: TcGlobals) m n isStruct expr retTy =
-    // FNCS TODO: Replace with native tuple field access
+    // CCS TODO: Replace with native tuple field access
     // For now, use the existing tuple field get expression
     let tupInfo = if isStruct then tupInfoStruct else tupInfoRef
     Expr.Op (TOp.TupleFieldGet (tupInfo, n), [retTy], [expr], m)
 
-// FNCS: Loop optimization patterns removed - only used by DetectAndOptimizeForEachExpression which had no callers
+// CCS: Loop optimization patterns removed - only used by DetectAndOptimizeForEachExpression which had no callers
 // Int32Expr, TryFinally (for loops), WhileLoopForCompiledForEachExpr, Let (for loops),
 // RangeInt32Step, GetEnumeratorCall, CompiledForEachExpr, CompiledInt32RangeForEachExpr patterns removed
 // Native loop optimization is handled at MLIR level, not typed tree level
@@ -10152,11 +10152,11 @@ let (|ValApp|_|) g vref expr =
     | Expr.App (Expr.Val (vref2, _, _), _f0ty, tyargs, args, m) when valRefEq g vref vref2 -> ValueSome (tyargs, args, m)
     | _ -> ValueNone
 
-// FNCS: IntegralConst module, IntegralRange, EmptyRange, ConstCount patterns removed
+// CCS: IntegralConst module, IntegralRange, EmptyRange, ConstCount patterns removed
 // These were only used by the loop optimization infrastructure (mkRangeCount, mkOptimizedRangeLoop)
 // Native loop optimization is handled at MLIR level
 
-// FNCS: Loop optimization infrastructure removed
+// CCS: Loop optimization infrastructure removed
 // Count, Idx, Elem, Body, Loop, WouldOvf types removed
 // RangeCount DU removed
 // mkRangeCount function removed (~307 lines)

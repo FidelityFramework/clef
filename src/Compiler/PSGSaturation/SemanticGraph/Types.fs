@@ -144,6 +144,7 @@ type EmissionStrategy =
 type DeclRoot =
     | EntryPoint        // CPU: [<EntryPoint>] or name="main" — OS calls this
     | HardwareModule    // FPGA: [<HardwareModule>] — this IS the circuit
+    | KernelModule      // NPU: [<KernelModule>] — compute kernel dispatched to AIE tiles
 
 //-------------------------------------------------------------------------
 // Module Classification

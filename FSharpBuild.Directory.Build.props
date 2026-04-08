@@ -1,8 +1,8 @@
 <Project>
   <!--
-    FNCS Build Properties - Arcade-free
+    CCS Build Properties - Arcade-free
 
-    Minimal build configuration for F# Native Compiler Services.
+    Minimal build configuration for Clef Compiler Service.
     No Arcade SDK, no complex multi-targeting, no signing infrastructure.
   -->
 

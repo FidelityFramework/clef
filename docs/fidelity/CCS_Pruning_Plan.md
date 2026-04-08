@@ -1,8 +1,8 @@
-# FNCS Pruning Plan: From FCS to F# Native Compiler Services
+# CCS Pruning Plan: From FCS to Clef Compiler Service
 
 ## Overview
 
-This document outlines the plan to transform the `fsnative` repository from a full F# compiler fork into a lean **F# Native Compiler Services (FNCS)** library optimized for the Fidelity framework's native compilation pipeline.
+This document outlines the plan to transform the `fsnative` repository from a full F# compiler fork into a lean **Clef Compiler Service (CCS)** library optimized for the Fidelity framework's native compilation pipeline.
 
 **Goal**: Create `FSharp.Native.Compiler.Service.dll` - a minimal, fast-compiling library that provides:
 - Lexing and parsing (preserved from FCS)
@@ -24,20 +24,20 @@ This document outlines the plan to transform the `fsnative` repository from a fu
 ### The Fidelity Compilation Pipeline
 
 ```
-F# Source → FNCS → PSG → Alex → MLIR → LLVM → Native Binary
+F# Source → CCS → PSG → Alex → MLIR → LLVM → Native Binary
               ↑
          This repository
 ```
 
-FNCS replaces FCS in the Fidelity pipeline. It provides:
+CCS replaces FCS in the Fidelity pipeline. It provides:
 1. **Parsing**: Lexer, parser, syntax tree (largely unchanged from FCS)
 2. **Type Checking**: Modified to use native types, not BCL types
 3. **Typed Tree**: FSharpExpr with native type resolution
 4. **Symbol Services**: For IDE integration via FidelityAC
 
-### What FNCS Does NOT Provide
+### What CCS Does NOT Provide
 
-FNCS stops at the typed tree. It does NOT:
+CCS stops at the typed tree. It does NOT:
 - Generate IL or any executable code
 - Resolve NuGet packages
 - Read MSBuild project files
@@ -84,7 +84,7 @@ src/Compiler/Driver/BinaryResourceFormats.fs # Win32 resources - REMOVE
 
 ### Category 2: KEEP AND MODIFY
 
-These are the core components that define FNCS:
+These are the core components that define CCS:
 
 #### Type System (CRITICAL MODIFICATIONS)
 ```
@@ -180,7 +180,7 @@ src/Compiler/Driver/ParseAndCheckInputs.fs # KEEP: Core pipeline
 Create `src/Compiler/Checking/NativeTypes.fs`:
 
 ```fsharp
-/// Native type definitions for FNCS
+/// Native type definitions for CCS
 module internal FSharp.Compiler.NativeTypes
 
 /// Native string type (replaces System.String for literals)
@@ -213,17 +213,17 @@ let expandWitnessHierarchy (ty: TType) = ...
 
 ### Configuration
 
-Create `src/Compiler/FNCSConfig.fs`:
+Create `src/Compiler/CCSConfig.fs`:
 
 ```fsharp
-/// FNCS configuration
+/// CCS configuration
 [<RequireQualifiedAccess>]
-type FNCSMode =
+type CCSMode =
     | Native      // Full native type universe (default)
     | Compatible  // BCL types for comparison/testing
 
-type FNCSConfig = {
-    Mode: FNCSMode
+type CCSConfig = {
+    Mode: CCSMode
     AlloyPath: string option  // Path to Alloy for witness resolution
 }
 ```
@@ -244,7 +244,7 @@ type FNCSConfig = {
 
 ### Estimated Build Time Impact
 
-| Metric | FCS | FNCS (Target) |
+| Metric | FCS | CCS (Target) |
 |--------|-----|---------------|
 | Source files | ~200 | ~80 |
 | Lines of code | ~400K | ~150K |
@@ -263,7 +263,7 @@ type FNCSConfig = {
 ### Phase 2: Service Streamlining (Week 2-3)
 
 1. Remove heavy Service components
-2. Create minimal `FNCSChecker` API
+2. Create minimal `CCSChecker` API
 3. Expose only: Parse, TypeCheck, GetTypedTree
 4. Remove workspace/project management
 
@@ -283,7 +283,7 @@ type FNCSConfig = {
 ### Phase 5: Integration Testing (Week 7-8)
 
 1. Create test harness in Firefly
-2. Verify HelloWorld compiles with FNCS
+2. Verify HelloWorld compiles with CCS
 3. Verify SRTP resolves correctly
 4. Benchmark build times
 
@@ -294,24 +294,24 @@ type FNCSConfig = {
 ```fsharp
 namespace FSharp.Native.Compiler
 
-/// Configuration for FNCS
-type FNCSConfig
+/// Configuration for CCS
+type CCSConfig
 
 /// Main entry point for type checking
-type FNCSChecker =
+type CCSChecker =
     /// Parse a source file
-    member ParseFile: source: string * path: string -> FNCSParseResults
+    member ParseFile: source: string * path: string -> CCSParseResults
 
     /// Type check parsed files
-    member CheckFiles: parsed: FNCSParseResults list * config: FNCSConfig -> FNCSCheckResults
+    member CheckFiles: parsed: CCSParseResults list * config: CCSConfig -> CCSCheckResults
 
 /// Parse results (syntax tree)
-type FNCSParseResults =
+type CCSParseResults =
     member SyntaxTree: SynModuleOrNamespace list
-    member Diagnostics: FNCSDiagnostic list
+    member Diagnostics: CCSDiagnostic list
 
 /// Type check results (typed tree)
-type FNCSCheckResults =
+type CCSCheckResults =
     /// Get the typed expression tree
     member TypedTree: FSharpExpr
 
@@ -335,7 +335,7 @@ type SRTPResolution = {
 
 ### Internal Dependencies
 
-FNCS depends only on:
+CCS depends only on:
 - `FSharp.Core` (F# runtime)
 - `System.Collections.Immutable` (data structures)
 - `System.Memory` (spans)
@@ -364,7 +364,7 @@ FSharp.Compiler.Symbols.*   → FSharp.Native.Compiler.Symbols.*
 
 ## API Exposure Strategy
 
-A key motivation for FNCS is exposing internal FCS APIs that Firefly needs for AST/typed tree correlation. These APIs are currently private in FCS.
+A key motivation for CCS is exposing internal FCS APIs that Firefly needs for AST/typed tree correlation. These APIs are currently private in FCS.
 
 ### APIs to Expose
 
@@ -376,7 +376,7 @@ A key motivation for FNCS is exposing internal FCS APIs that Firefly needs for A
 
 ### Implementation Approach
 
-Create `src/Compiler/Service/FNCSPublicAPI.fs` as a stability layer:
+Create `src/Compiler/Service/CCSPublicAPI.fs` as a stability layer:
 
 ```fsharp
 namespace FSharp.Native.Compiler.Service
@@ -450,7 +450,7 @@ The critical change is at ~line 7342 in `CheckExpressions.fs`:
     TcPropagatingExprLeafThenConvert cenv overallTy g.string_ty env m (fun () ->
         mkString g m s, tpenv)
 
-// FNCS (string with native UTF-8 fat pointer semantics)
+// CCS (string with native UTF-8 fat pointer semantics)
 | false, LiteralArgumentType.Inline ->
     TcPropagatingExprLeafThenConvert cenv overallTy g.string_ty env m (fun () ->
         mkString g m s, tpenv)  // Same API, string_ty now has native semantics
@@ -462,7 +462,7 @@ The critical change is at ~line 7342 in `CheckExpressions.fs`:
 
 ### Memory Region Types
 
-FNCS must understand BAREWire's memory region types as first-class:
+CCS must understand BAREWire's memory region types as first-class:
 
 ```fsharp
 type MemoryRegionKind =
@@ -499,7 +499,7 @@ Access kinds constrain operations on memory pointers:
 
 ### Farscape Peripheral Descriptors
 
-FNCS recognizes Farscape-generated peripheral types:
+CCS recognizes Farscape-generated peripheral types:
 
 ```fsharp
 type PeripheralTypeInfo = {
@@ -525,7 +525,7 @@ type RegisterInfo = {
 
 ### Native SRTP Witness Resolution
 
-FNCS resolves SRTP against native witnesses before BCL method tables:
+CCS resolves SRTP against native witnesses before BCL method tables:
 
 ```fsharp
 module NativeSRTP =
@@ -571,7 +571,7 @@ Phase 3 (Weeks 4-8): API Exposure [Parallel with Phase 2]
 ├── RangeCorrelationService
 ├── SymbolContextService
 ├── SRTPService
-└── FNCSPublicAPI.fs stability layer
+└── CCSPublicAPI.fs stability layer
 
 Phase 4 (Weeks 7-10): Native SRTP
 ├── NativeSRTP.fs witness registry
@@ -609,9 +609,9 @@ Phase 6 (Integration)                                  ████████
 
 ## Related Documents
 
-- `Firefly/docs/FNCS_Architecture.md` - Firefly's FNCS documentation
-- `Firefly/docs/FNCS_Ecosystem.md` - Cross-repository relationships
-- `fsnative-spec/docs/fidelity/FNCS_Specification.md` - Language specification for native types
+- `Firefly/docs/CCS_Architecture.md` - Firefly's CCS documentation
+- `Firefly/docs/CCS_Ecosystem.md` - Cross-repository relationships
+- `fsnative-spec/docs/fidelity/CCS_Specification.md` - Language specification for native types
 - `SpeakEZ/hugo/content/proposals/From Bridged To Self Hosted.md` - Long-term extraction strategy
 
 ## Appendix: Files to Remove

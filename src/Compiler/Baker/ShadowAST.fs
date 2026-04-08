@@ -15,7 +15,7 @@
 /// - Built alongside PSG in single pass (no separate construction)
 /// - Two levels: semantic shadow (developer-facing) + PSG nodes (compiler-facing)
 ///
-/// See: docs/fidelity/fncs-specification.md Part 14
+/// See: docs/fidelity/ccs-specification.md Part 14
 /// See: Serena memory "baker_shadow_ast_architecture"
 module Clef.Compiler.Baker.ShadowAST
 

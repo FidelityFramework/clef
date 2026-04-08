@@ -4,7 +4,7 @@
 /// This allows `ls` to show them in pipeline order regardless of which
 /// compiler stage produced them.
 ///
-/// FNCS artifacts (01-05):
+/// CCS artifacts (01-05):
 ///   01_psg0.json              - PSG₀: Initial typed tree with reachability
 ///   02_intrinsic_recipes.json - Intrinsic elaboration recipes
 ///   03_psg1.json              - PSG₁: After intrinsic fold-in
@@ -22,7 +22,7 @@ open System
 /// Artifact identifiers - ordinal across entire pipeline
 [<RequireQualifiedAccess>]
 module ArtifactId =
-    // FNCS artifacts
+    // CCS artifacts
     let [<Literal>] Psg0 = 1               // Initial PSG with reachability
     let [<Literal>] IntrinsicRecipes = 2   // Intrinsic elaboration recipes
     let [<Literal>] Psg1 = 3               // After intrinsic fold-in
@@ -130,7 +130,7 @@ let getPhaseFilePath (phase: int) =
         | _ -> phase
     getArtifactFilePath artifactId
 
-/// Enable all FNCS artifacts (1-5)
+/// Enable all CCS artifacts (1-5)
 let enableAllFncsArtifacts (outputDir: string) =
     currentConfig <- {
         EmitIntermediates = true

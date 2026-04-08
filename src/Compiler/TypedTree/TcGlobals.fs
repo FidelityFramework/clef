@@ -120,7 +120,7 @@ type
 
 [<Literal>]
 let tname_InternalsVisibleToAttribute = "System.Runtime.CompilerServices.InternalsVisibleToAttribute"
-// FNCS: Prefixed with underscore - vestigial BCL references not used in native compilation
+// CCS: Prefixed with underscore - vestigial BCL references not used in native compilation
 [<Literal>]
 let _tname_DebuggerNonUserCodeAttribute = "System.Diagnostics.DebuggerNonUserCodeAttribute"
 [<Literal>]
@@ -299,7 +299,7 @@ type TcGlobals(
   let v_refcell_tcr_nice  = mk_MFCore_tcref fslibCcu "ref`1"
   let v_mfe_tcr           = mk_MFCore_tcref fslibCcu "MatchFailureException"
 
-  // FNCS: embeddedILTypeDefs removed - IL type embedding not used in native compilation
+  // CCS: embeddedILTypeDefs removed - IL type embedding not used in native compilation
 
   let dummyAssemblyNameCarryingUsefulErrorInformation path typeName =
       FSComp.SR.tcGlobalsSystemTypeNotFound (String.concat "." path + "." + typeName)
@@ -320,7 +320,7 @@ type TcGlobals(
       let ccu = findSysTypeCcu path nm
       mkNonLocalTyconRef2 ccu (Array.ofList path) nm
 
-  // FNCS: Native type ref creation (replaces findSysILTypeRef)
+  // CCS: Native type ref creation (replaces findSysILTypeRef)
   let findSysTypeRef nm : TypeConRef =
       mkNativeTypeRef nm
 
@@ -365,7 +365,7 @@ type TcGlobals(
       | "System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes" -> true
       | _ -> false
 
-  // FNCS: findOrEmbedSysPublicType simplified - just returns the attrib info
+  // CCS: findOrEmbedSysPublicType simplified - just returns the attrib info
   // Native compilation doesn't embed IL types
   let findOrEmbedSysPublicType nm =
       assert (isInEmbeddableKnownSet nm)
@@ -669,7 +669,7 @@ type TcGlobals(
   let mk_MFCompilerServices_attrib nm : BuiltinAttribInfo =
       AttribInfo(mkNativeTypeRef (Core + "." + nm), mk_MFCompilerServices_tcref fslibCcu nm)
 
-  // FNCS: ILSourceDocument memoization removed - native compilation doesn't use IL source documents
+  // CCS: ILSourceDocument memoization removed - native compilation doesn't use IL source documents
 
   let v_and_info =                   makeIntrinsicValRef(fslib_MFIntrinsicOperators_nleref,                    CompileOpName "&"                      , None                 , None          , [],         mk_rel_sig v_bool_ty)
   let v_addrof_info =                makeIntrinsicValRef(fslib_MFIntrinsicOperators_nleref,                    CompileOpName "~&"                     , None                 , None          , [vara],     ([[varaTy]], mkByrefTy varaTy))
@@ -891,7 +891,7 @@ type TcGlobals(
   let v_check_this_info            = makeIntrinsicValRef(fslib_MFIntrinsicFunctions_nleref,                    "CheckThis"                            , None                 , None                          , [vara],      ([[varaTy]], varaTy))
   let v_quote_to_linq_lambda_info  = makeIntrinsicValRef(fslib_MFLinqRuntimeHelpersQuotationConverter_nleref,  "QuotationToLambdaExpression"          , None                 , None                          , [vara],      ([[mkQuotedExprTy varaTy]], mkLinqExpressionTy varaTy))
 
-  // FNCS: IL attribute generation infrastructure removed - native compilation uses MLIR
+  // CCS: IL attribute generation infrastructure removed - native compilation uses MLIR
   // Removed: tref_DebuggerNonUserCodeAttribute, tref_DebuggableAttribute, tref_CompilerGeneratedAttribute
   // Removed: tref_InternalsVisibleToAttribute, debuggerNonUserCodeAttribute, compilerGeneratedAttribute
   // Removed: generatedAttributes, addGeneratedAttrs, addValGeneratedAttrs
@@ -1044,13 +1044,13 @@ type TcGlobals(
 
   member _.directoryToResolveRelativePaths = directoryToResolveRelativePaths
 
-  // FNCS: ilg removed - IL globals not used in native compilation
+  // CCS: ilg removed - IL globals not used in native compilation
 
   member _.noDebugAttributes = noDebugAttributes
 
   member _.tryFindSysTypeCcuHelper: string list -> string -> bool -> CcuThunk option = tryFindSysTypeCcuHelper
 
-  // FNCS: tryRemoveEmbeddedILTypeDefs removed - IL type embedding not used in native compilation
+  // CCS: tryRemoveEmbeddedILTypeDefs removed - IL type embedding not used in native compilation
 
   // A table of all intrinsics that the compiler cares about
   member _.knownIntrinsics = v_knownIntrinsics
@@ -1214,7 +1214,7 @@ type TcGlobals(
 
   member val SupportsWhenTEnum_tcr = mk_MFCompilerServices_tcref fslibCcu "SupportsWhenTEnum"
 
-  // FNCS: TryEmbedILType removed - IL type embedding not used in native compilation
+  // CCS: TryEmbedILType removed - IL type embedding not used in native compilation
 
   member g.mk_GeneratedSequenceBase_ty seqElemTy = TType_app(g.seq_base_tcr,[seqElemTy], v_knownWithoutNull)
 
@@ -1297,7 +1297,7 @@ type TcGlobals(
   member val float_ty = v_float_ty
   member val float32_ty = v_float32_ty
 
-  // FNCS: memoize_file removed - IL source documents not used in native compilation
+  // CCS: memoize_file removed - IL source documents not used in native compilation
 
   member val system_Array_ty = mkSysNonGenericTy sys "Array"
   member val system_Object_ty = mkSysNonGenericTy sys "Object"
@@ -1380,7 +1380,7 @@ type TcGlobals(
   // Review: Does this need to be an option type?
   member val System_Runtime_CompilerServices_RuntimeFeature_ty = tryFindSysTyconRef sysCompilerServices "RuntimeFeature" |> Option.map mkNonGenericTy
 
-  // FNCS: iltyp_* members removed - IL types not used in native compilation
+  // CCS: iltyp_* members removed - IL types not used in native compilation
 
   member val attrib_AttributeUsageAttribute = findSysAttrib "System.AttributeUsageAttribute"
   member val attrib_ParamArrayAttribute = findSysAttrib "System.ParamArrayAttribute"
@@ -1792,7 +1792,7 @@ type TcGlobals(
 
   member _.TryFindSysAttrib nm = tryFindSysAttrib nm
 
-  // FNCS: IL attribute generation removed - native compilation uses MLIR
+  // CCS: IL attribute generation removed - native compilation uses MLIR
   // Removed: AddGeneratedAttributes, AddValGeneratedAttributes, AddMethodGeneratedAttributes
   // Removed: AddPropertyGeneratedAttributes, AddFieldGeneratedAttributes, AddPropertyNeverAttributes
   // Removed: AddFieldNeverAttributes, MkDebuggerTypeProxyAttribute, mkDebuggerDisplayAttribute

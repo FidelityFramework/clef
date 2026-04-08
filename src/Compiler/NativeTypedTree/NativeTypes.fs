@@ -263,7 +263,7 @@ module NTUQualifiers =
 
 /// Platform predicate types (abstract, erased at runtime).
 /// F*-inspired propositions for conditional compilation without runtime checks.
-/// These flow through FNCS unchanged and are resolved by Alex using platform quotations.
+/// These flow through CCS unchanged and are resolved by Alex using platform quotations.
 [<RequireQualifiedAccess>]
 type PlatformPredicate =
     /// Platform supports 32-bit word operations
@@ -653,7 +653,7 @@ type TypeLayout =
     /// Platform-specific, size determined at codegen
     | Opaque
     /// Platform word size - size/alignment depend on target architecture
-    /// FNCS preserves type identity; Alex resolves to concrete size
+    /// CCS preserves type identity; Alex resolves to concrete size
     | PlatformWord
     /// Fat pointer: pointer + length (both platform word sized)
     /// Used for arrays, strings, spans - compound of two NTU components.
@@ -1072,7 +1072,7 @@ module NativeLiteral =
 //-------------------------------------------------------------------------
 
 /// Information about a variable captured by a lambda (closure).
-/// Capture analysis is performed during FNCS type checking as part of scope resolution.
+/// Capture analysis is performed during CCS type checking as part of scope resolution.
 /// MLKit-style flat closures: immutable bindings captured by value, mutable by reference.
 type CaptureInfo = {
     /// Name of the captured variable

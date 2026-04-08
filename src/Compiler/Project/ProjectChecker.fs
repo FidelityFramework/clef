@@ -78,7 +78,31 @@ module ProjectChecker =
                 Some { ctx with FreestandingStartup = FreestandingStartup.forPlatform ctx.PlatformId }
             else
                 Some ctx
-        | None, _ -> None
+        | None, Some metadata ->
+            // Standalone project with [platform] section but no platform dependency.
+            // Synthesize a minimal PlatformContext from the project's own metadata.
+            // Common case: kernel fidproj (target=npu) with inline [platform] section.
+            let dimensions =
+                match metadata.WordSize with
+                | Some 64 -> Map.ofList [(WidthDimension.Pointer, 64); (WidthDimension.Register, 64)]
+                | Some 32 -> Map.ofList [(WidthDimension.Pointer, 32); (WidthDimension.Register, 32)]
+                | _ -> PlatformContext.defaultLinux_x86_64.Dimensions
+            let platformId = metadata.Arch |> Option.defaultValue "unknown"
+            Some {
+                PlatformId = platformId
+                Dimensions = dimensions
+                PointerAlign = (metadata.WordSize |> Option.defaultValue 64) / 8
+                PlatformLibraryPath = None
+                Predicates = Map.empty
+                FreestandingStartup = None
+                SubstrateKind = Some substrateKind
+                RuntimeModel = Some metadata.RuntimeModel
+                AvailableMemorySpaces = []
+                DefaultMemorySpace = None
+                ClockFrequencyMhz = options.ClockMhzOverride |> Option.orElse metadata.ClockMhz
+                NsPerWeightUnit = metadata.NsPerWeightUnit
+            }
+        | None, None -> None
 
     /// Normalizes a path to use forward slashes and be absolute.
     let private normalizePath (path: string) =

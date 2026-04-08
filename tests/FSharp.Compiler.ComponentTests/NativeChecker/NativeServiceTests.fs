@@ -1,4 +1,4 @@
-/// Tests for the F# Native Compiler Service (FNCS)
+/// Tests for the F# Native Compiler Service (CCS)
 /// Validates the full pipeline from F# source to SemanticGraph
 module NativeChecker.NativeServiceTests
 

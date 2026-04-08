@@ -103,7 +103,7 @@ val primMkCond: DebugPointAtBinding -> range -> TType -> Expr -> Expr -> Expr ->
 /// Build a conditional expression
 val mkCond: DebugPointAtBinding -> range -> TType -> Expr -> Expr -> Expr -> Expr
 
-// FNCS: mkNonNullCond removed - no callers, used broken mkNonNullTest
+// CCS: mkNonNullCond removed - no callers, used broken mkNonNullTest
 
 /// Build an if-then statement
 val mkIfThen: TcGlobals -> range -> Expr -> Expr -> Expr
@@ -274,7 +274,7 @@ val mkUnionCaseExpr: UnionCaseRef * TypeInst * Exprs * range -> Expr
 /// Make an expression that constructs an exception value
 val mkExnExpr: TyconRef * Exprs * range -> Expr
 
-// FNCS: mkAsmExpr removed - native compilation doesn't use IL assembly
+// CCS: mkAsmExpr removed - native compilation doesn't use IL assembly
 
 /// Make an expression that coerces one expression to another type
 val mkCoerceExpr: Expr * TType * range * TType -> Expr
@@ -351,7 +351,7 @@ val mkExnCaseFieldGet: Expr * TyconRef * int * range -> Expr
 val mkExnCaseFieldSet: Expr * TyconRef * int * Expr * range -> Expr
 
 /// Make an expression that gets the address of an element in an array
-/// FNCS: Simplified - native arrays use fat pointer representation, not IL array shapes
+/// CCS: Simplified - native arrays use fat pointer representation, not IL array shapes
 val mkArrayElemAddress:
     TcGlobals -> readonly: bool * TType * Expr list * range -> Expr
 
@@ -375,7 +375,7 @@ val mkCompiledTupleTy: TcGlobals -> bool -> TTypes -> TType
 val mkCompiledTuple: TcGlobals -> bool -> TTypes * Exprs * range -> TyconRef * TTypes * Exprs * range
 
 /// Make a TAST expression representing getting an item from a tuple
-/// FNCS: Simplified - native tuples don't need IL type parameter
+/// CCS: Simplified - native tuples don't need IL type parameter
 val mkGetTupleItemN: TcGlobals -> range -> int -> bool -> Expr -> TType -> Expr
 
 /// Evaluate the TupInfo to work out if it is a struct or a ref.  Currently this is very simple
@@ -1685,7 +1685,7 @@ val isStringTy: TcGlobals -> TType -> bool
 val isListTy: TcGlobals -> TType -> bool
 
 /// Determine if a type is a nominal .NET type
-// FNCS: isILAppTy removed - native compilation doesn't distinguish IL app types
+// CCS: isILAppTy removed - native compilation doesn't distinguish IL app types
 
 /// Determine if a type is any kind of array type
 val isArrayTy: TcGlobals -> TType -> bool
@@ -2014,17 +2014,17 @@ val mkSequentials: TcGlobals -> range -> Exprs -> Expr
 
 val mkRecordExpr: TcGlobals -> RecordConstructionInfo * TyconRef * TypeInst * RecdFieldRef list * Exprs * range -> Expr
 
-// FNCS: mkUnbox, mkBox removed - IL boxing operations not used in native compilation
+// CCS: mkUnbox, mkBox removed - IL boxing operations not used in native compilation
 
 val mkIsInst: TType -> Expr -> range -> Expr
 
-// FNCS: Null-related functions removed - fsnative-spec says "No null: Everything is voption"
+// CCS: Null-related functions removed - fsnative-spec says "No null: Everything is voption"
 // Removed: mkNull, mkNullTest, mkNonNullTest, mkThrow, isThrow
 // These had no callers and mkNonNullTest used broken mkAsmExpr stub
 
 val mkIsInstConditional: TcGlobals -> range -> TType -> Expr -> Val -> Expr -> Expr -> Expr
 
-// FNCS: mkGetArg0 removed - vestigial IL, no callers
+// CCS: mkGetArg0 removed - vestigial IL, no callers
 
 val mkDefault: range * TType -> Expr
 
@@ -2075,8 +2075,8 @@ val mkQuotedExprTy: TcGlobals -> TType -> TType
 val mkRawQuotedExprTy: TcGlobals -> TType
 
 //-------------------------------------------------------------------------
-// NOTE: IL code gen primitives removed from FNCS
-// FNCS is for type checking, not IL generation. IL code gen helpers
+// NOTE: IL code gen primitives removed from CCS
+// CCS is for type checking, not IL generation. IL code gen helpers
 // (mspec_Type_GetTypeFromHandle, mkInitializeArrayMethSpec, etc.)
 // have been removed as they depend on BCL types (System.Type, System.Array).
 //-------------------------------------------------------------------------
@@ -2288,7 +2288,7 @@ val mkCallSeqEmpty: TcGlobals -> range -> TType -> Expr
 /// Make a call to the 'isprintf' function for string interpolation
 val mkCall_sprintf: g: TcGlobals -> m: range -> funcTy: TType -> fmtExpr: Expr -> fillExprs: Expr list -> Expr
 
-// FNCS: mkILAsmCeq and mkILAsmClt removed - native compilation doesn't use IL assembly
+// CCS: mkILAsmCeq and mkILAsmClt removed - native compilation doesn't use IL assembly
 
 val mkCallFailInit: TcGlobals -> range -> Expr
 
@@ -2306,7 +2306,7 @@ val mkCallNewQuerySource: TcGlobals -> range -> TType -> TType -> Expr -> Expr
 
 val mkArray: TType * Exprs * range -> Expr
 
-// FNCS: mkStaticCall_String_Concat2/3/4 removed - IL string operations not used in native compilation
+// CCS: mkStaticCall_String_Concat2/3/4 removed - IL string operations not used in native compilation
 // Native string operations use Alloy's Text module
 
 /// Use a witness in BuiltInWitnesses
@@ -2321,14 +2321,14 @@ val tryMkCallCoreFunctionAsBuiltInWitness:
 // up loops to generate .NET code that does not include array bound checks
 //-------------------------------------------------------------------------
 
-// FNCS: mkDecr, mkIncr, mkLdlen, mkLdelem removed - IL array/arithmetic operations not used in native compilation
+// CCS: mkDecr, mkIncr, mkLdlen, mkLdelem removed - IL array/arithmetic operations not used in native compilation
 // Native operations use direct memory access and MLIR arithmetic
 
 //-------------------------------------------------------------------------
 // Analyze attribute sets
 //-------------------------------------------------------------------------
 
-// FNCS: IL attribute functions removed - native compilation uses F# attributes only
+// CCS: IL attribute functions removed - native compilation uses F# attributes only
 // Removed: TryDecodeILAttribute, IsILAttrib, TryFindILAttribute, TryFindILAttributeOpt
 
 val IsMatchingFSharpAttribute: TcGlobals -> BuiltinAttribInfo -> Attrib -> bool
@@ -2370,7 +2370,7 @@ val TyconRefHasAttributeByName: range -> string -> TyconRef -> bool
 /// Try to find the AttributeUsage attribute, looking for the value of the AllowMultiple named parameter
 val TryFindAttributeUsageAttribute: TcGlobals -> range -> TyconRef -> bool option
 
-// FNCS: IL attribute creation/reading functions removed - native compilation doesn't use IL attributes
+// CCS: IL attribute creation/reading functions removed - native compilation doesn't use IL attributes
 // Removed: TryDecodeTypeProviderAssemblyAttr, IsSignatureDataVersionAttr, TryFindAutoOpenAttr
 // Removed: TryFindInternalsVisibleToAttr, IsMatchingSignatureDataVersionAttr
 // Removed: mkCompilationMappingAttr*, mkCompilationSourceNameAttr, mkSignatureDataVersionAttr
@@ -2488,7 +2488,7 @@ val DecideStaticOptimizations:
 
 val mkStaticOptimizationExpr: TcGlobals -> StaticOptimization list * Expr * Expr * range -> Expr
 
-// FNCS: mkFastForLoop removed - only used by vestigial loop optimization
+// CCS: mkFastForLoop removed - only used by vestigial loop optimization
 
 //---------------------------------------------------------------------------
 // Active pattern helpers
@@ -2587,7 +2587,7 @@ val EvaledAttribExprEquality: TcGlobals -> Expr -> Expr -> bool
 
 val IsSimpleSyntacticConstantExpr: TcGlobals -> Expr -> bool
 
-// FNCS: ConstToILFieldInit, ExtractILAttributeNamedArg removed - vestigial IL patterns
+// CCS: ConstToILFieldInit, ExtractILAttributeNamedArg removed - vestigial IL patterns
 
 [<return: Struct>]
 val (|ExtractAttribNamedArg|_|): string -> AttribNamedArg list -> AttribExpr voption
@@ -2604,8 +2604,8 @@ val (|AttribBoolArg|_|): (AttribExpr -> bool voption)
 [<return: Struct>]
 val (|AttribStringArg|_|): (AttribExpr -> string voption)
 
-// FNCS: AttribElemStringArg removed - vestigial IL pattern
-// FNCS: Int32Expr pattern removed - only used by vestigial loop optimization
+// CCS: AttribElemStringArg removed - vestigial IL pattern
+// CCS: Int32Expr pattern removed - only used by vestigial loop optimization
 
 /// Determines types that are potentially known to satisfy the 'comparable' constraint and returns
 /// a set of residual types that must also satisfy the constraint
@@ -2621,12 +2621,12 @@ val (|SpecialNotEquatableHeadType|_|): TcGlobals -> TType -> unit voption
 val (|TyparTy|NullableTypar|StructTy|NullTrueValue|NullableRefType|WithoutNullRefType|UnresolvedRefType|):
     TType * TcGlobals -> Choice<unit, unit, unit, unit, unit, unit, unit>
 
-// FNCS: IntegralRange pattern, IntegralConst module removed - only used by vestigial loop optimization
+// CCS: IntegralRange pattern, IntegralConst module removed - only used by vestigial loop optimization
 
-// FNCS: Count, Idx, Elem, Body, Loop types removed
-// FNCS: mkOptimizedRangeLoop removed - IL-based loop optimization is vestigial
+// CCS: Count, Idx, Elem, Body, Loop types removed
+// CCS: mkOptimizedRangeLoop removed - IL-based loop optimization is vestigial
 
-// FNCS: OptimizeForExpressionOptions, DetectAndOptimizeForEachExpression removed
+// CCS: OptimizeForExpressionOptions, DetectAndOptimizeForEachExpression removed
 // IL-based loop optimization is vestigial - native loops optimized at MLIR level
 
 val TryEliminateDesugaredConstants: TcGlobals -> range -> Const -> Expr option
@@ -2747,7 +2747,7 @@ val isResumableCodeTy: TcGlobals -> TType -> bool
 val isReturnsResumableCodeTy: TcGlobals -> TType -> bool
 
 /// Shared helper for binding attributes
-/// FNCS: Simplified - removed IL attribute callback (f1), kept F# and provided type callbacks
+/// CCS: Simplified - removed IL attribute callback (f1), kept F# and provided type callbacks
 val TryBindTyconRefAttribute:
     g: TcGlobals ->
     m: range ->

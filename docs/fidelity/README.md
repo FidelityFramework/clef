@@ -1,12 +1,12 @@
-# F# Native Compiler Services (FNCS)
+# Clef Compiler Service (CCS)
 
 ## Overview
 
-FNCS (F# Native Compiler Services) is a pruned fork of the F# Compiler Services (FCS) optimized for native compilation. It provides the frontend for the Fidelity framework, producing typed abstract syntax trees and resolved SRTP constraints that flow to Firefly for native code generation.
+CCS (Clef Compiler Service) is a pruned and significantly modified fork of the F# Compiler Services (FCS) optimized for native compilation. It includes some contributions from F* (F-Star) as well as its own unique ['dimensional' type system](https://arxiv.org/abs/2603.16437). It provides the frontend for the Fidelity framework, producing typed abstract syntax trees and resolved SRTP constraints that flow to Firefly for native code generation.
 
 **Key Differences from FCS:**
 
-| Aspect | FCS | FNCS |
+| Aspect | FCS | CCS |
 |--------|-----|------|
 | Target | .NET runtime | Native binaries |
 | Type universe | BCL types (System.String, etc.) | Standard F# types with native semantics |
@@ -22,7 +22,7 @@ FNCS (F# Native Compiler Services) is a pruned fork of the F# Compiler Services 
 │                                                                 │
 │  fsnative-spec          fsnative           Firefly              │
 │  ┌─────────────┐       ┌─────────────┐    ┌─────────────┐      │
-│  │ F# Native   │       │ FNCS        │    │ PSG/Alex    │      │
+│  │ F# Native   │       │ CCS        │    │ PSG/Alex    │      │
 │  │ Language    │──────▶│ Compiler    │───▶│ Native      │      │
 │  │ Spec        │ impl  │ Services    │uses│ Pipeline    │      │
 │  └─────────────┘       └─────────────┘    └─────────────┘      │
@@ -33,11 +33,11 @@ FNCS (F# Native Compiler Services) is a pruned fork of the F# Compiler Services 
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-- **fsnative-spec** defines the normative rules FNCS must implement
-- **FNCS** (this repository) implements the F# Native type system
-- **Firefly** consumes FNCS output for native code generation
+- **fsnative-spec** defines the normative rules CCS must implement
+- **CCS** (this repository) implements the F# Native type system
+- **Firefly** consumes CCS output for native code generation
 
-## What FNCS Provides
+## What CCS Provides
 
 ### 1. Native Type Resolution
 
@@ -46,10 +46,10 @@ String literals, option types, and arrays resolve to native types:
 ```fsharp
 // F# syntax
 let greeting = "Hello"        // Standard F#: System.String
-                              // FNCS: string with native semantics (UTF-8 fat pointer)
+                              // CCS: string with native semantics (UTF-8 fat pointer)
 
 let maybeValue = Some 42      // Standard F#: int option (reference)
-                              // FNCS: int voption (value type)
+                              // CCS: int voption (value type)
 ```
 
 ### 2. SRTP Resolution Against Alloy
@@ -60,12 +60,12 @@ Statically resolved type parameters resolve against the Alloy witness hierarchy:
 let inline add a b = a + b
 
 // Standard F#: Searches System.Int32.op_Addition
-// FNCS: Searches Alloy.BasicOps, finds Add<int>
+// CCS: Searches Alloy.BasicOps, finds Add<int>
 ```
 
 ### 3. Exposed APIs for Firefly Integration
 
-FNCS exposes internal APIs that FCS keeps private:
+CCS exposes internal APIs that FCS keeps private:
 
 | API | Purpose |
 |-----|---------|
@@ -75,7 +75,7 @@ FNCS exposes internal APIs that FCS keeps private:
 
 ## Quick Start
 
-### Building FNCS
+### Building CCS
 
 ```bash
 cd ~/repos/fsnative
@@ -84,13 +84,13 @@ dotnet build src/FSharp.Compiler.Service/FSharp.Compiler.Service.fsproj
 
 ### Using with Firefly
 
-FNCS is referenced as a project dependency in Firefly's `.fsproj`:
+CCS is referenced as a project dependency in Firefly's `.fsproj`:
 
 ```xml
 <ProjectReference Include="$(FsnativePath)/src/FSharp.Compiler.Service/FSharp.Compiler.Service.fsproj" />
 ```
 
-Firefly calls FNCS for parsing and type checking:
+Firefly calls CCS for parsing and type checking:
 
 ```fsharp
 // In Firefly's FCS integration
@@ -99,7 +99,7 @@ let parseResults, checkResults = checker.ParseAndCheckFileInProject(...)
 
 // Extract typed tree and SRTP resolutions
 let typedTree = checkResults.ImplementationFile
-let srtpResolutions = FNCSPublicAPI.getSRTPResolutions checkResults
+let srtpResolutions = CCSPublicAPI.getSRTPResolutions checkResults
 ```
 
 ## Directory Structure
@@ -109,7 +109,7 @@ fsnative/
 ├── docs/
 │   └── fidelity/
 │       ├── README.md                 # This file
-│       └── FNCS_Pruning_Plan.md      # Implementation roadmap
+│       └── CCS_Pruning_Plan.md      # Implementation roadmap
 ├── src/
 │   └── Compiler/
 │       ├── Checking/                 # Type checking, SRTP
@@ -119,7 +119,7 @@ fsnative/
 │       │   └── NativeSRTP.fs         # (NEW) Alloy witness resolution
 │       ├── Service/
 │       │   ├── FSharpCheckerResults.fs
-│       │   └── FNCSPublicAPI.fs      # (NEW) Stability layer
+│       │   └── CCSPublicAPI.fs      # (NEW) Stability layer
 │       ├── Symbols/
 │       │   └── Exprs.fs              # FSharpExpr API
 │       └── TypedTree/
@@ -132,13 +132,13 @@ fsnative/
 
 | Document | Description |
 |----------|-------------|
-| [FNCS_Pruning_Plan.md](FNCS_Pruning_Plan.md) | Detailed implementation roadmap with phases |
+| [CCS_Pruning_Plan.md](CCS_Pruning_Plan.md) | Detailed implementation roadmap with phases |
 | [fsnative-spec](https://github.com/user/fsnative-spec) | Normative language specification |
-| [Firefly FNCS_Ecosystem.md](../../../Firefly/docs/FNCS_Ecosystem.md) | How all components integrate |
+| [Firefly CCS_Ecosystem.md](../../../Firefly/docs/CCS_Ecosystem.md) | How all components integrate |
 
 ## Implementation Status
 
-See [FNCS_Pruning_Plan.md](FNCS_Pruning_Plan.md) for the phased implementation timeline:
+See [CCS_Pruning_Plan.md](CCS_Pruning_Plan.md) for the phased implementation timeline:
 
 | Phase | Description | Status |
 |-------|-------------|--------|
@@ -152,11 +152,11 @@ See [FNCS_Pruning_Plan.md](FNCS_Pruning_Plan.md) for the phased implementation t
 
 ## Contributing
 
-FNCS follows the architectural principles documented in:
+CCS follows the architectural principles documented in:
 - Serena memory: `architecture_principles`
 - Serena memory: `fncs_architecture`
 
 Key constraints:
 1. No BCL type dependencies in the native type path
 2. All changes must preserve typed tree structure for Firefly correlation
-3. New APIs go through `FNCSPublicAPI.fs` stability layer
+3. New APIs go through `CCSPublicAPI.fs` stability layer

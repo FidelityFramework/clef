@@ -3,7 +3,7 @@
   FSharp.DependencyManager.Nuget - NuGet dependency resolution for FSI
 
   Provides #r directive resolution for F# Interactive.
-  Required by FNCS for script/interactive scenarios.
+  Required by CCS for script/interactive scenarios.
 -->
 <Project Sdk="Microsoft.NET.Sdk">
 

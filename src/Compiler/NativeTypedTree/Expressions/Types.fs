@@ -648,6 +648,17 @@ let hasHardwareModuleAttribute (attrs: SynAttributes) : bool =
         )
     )
 
+/// Check if a binding has the [<KernelModule>] attribute
+/// Marks a binding as the top-level compute kernel for NPU targets.
+let hasKernelModuleAttribute (attrs: SynAttributes) : bool =
+    attrs |> List.exists (fun attrList ->
+        attrList.Attributes |> List.exists (fun attr ->
+            match attr.TypeName.LongIdent with
+            | [id] -> id.idText = "KernelModule" || id.idText = "KernelModuleAttribute"
+            | _ -> false
+        )
+    )
+
 /// Check if a binding has the [<Literal>] attribute
 /// Per F# spec: Literal bindings must be initialized with constant expressions.
 /// Values are substituted at use sites during name resolution.
@@ -742,7 +753,7 @@ let isUncheckedReference (name: string) : bool =
 /// Emit FS8104: Unchecked.defaultof not allowed in F# Native
 let addUncheckedError (name: string) (r: range) (env: TypeEnv) : unit =
     addNativeError DiagnosticCodes.FS8104_UncheckedDefault r
-        $"'{name}' is not available in F# Native. Unchecked.defaultof requires runtime type information. Use explicit initialization, FNCS intrinsics, or NativeDefault.zeroed instead." env
+        $"'{name}' is not available in F# Native. Unchecked.defaultof requires runtime type information. Use explicit initialization, CCS intrinsics, or NativeDefault.zeroed instead." env
 
 /// Emit FS8500: BCL reference not allowed in F# Native
 let addBclError (name: string) (r: range) (env: TypeEnv) : unit =

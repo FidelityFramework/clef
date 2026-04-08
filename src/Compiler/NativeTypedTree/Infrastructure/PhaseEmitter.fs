@@ -1,4 +1,4 @@
-/// PhaseEmitter - JSON emission for FNCS nanopass intermediates
+/// PhaseEmitter - JSON emission for CCS nanopass intermediates
 ///
 /// Emits phase intermediate files as JSON for debugging and analysis.
 /// Each phase checkpoint calls into this module to write its state.
@@ -186,9 +186,9 @@ let emitPhase (output: PhaseOutput) : unit =
                 File.WriteAllText(path, json, Encoding.UTF8)
 
                 if PhaseConfig.isVerbose() then
-                    printfn "[FNCS] Wrote phase %d intermediate: %s" phase path
+                    printfn "[CCS] Wrote phase %d intermediate: %s" phase path
             with ex ->
-                eprintfn "[FNCS] Warning: Failed to write phase %d intermediate: %s" phase ex.Message
+                eprintfn "[CCS] Warning: Failed to write phase %d intermediate: %s" phase ex.Message
 
 /// Emit a phase with automatic timing
 let emitPhaseWithTiming (phase: PhaseId) (startTime: DateTime) (buildOutput: unit -> PhaseOutput) : unit =
@@ -307,9 +307,9 @@ let emitDiff (diff: PhaseDiff) : unit =
             let json = serializeDiff diff
             File.WriteAllText(path, json, Encoding.UTF8)
             if PhaseConfig.isVerbose() then
-                printfn "[FNCS] Wrote phase diff: %s" path
+                printfn "[CCS] Wrote phase diff: %s" path
         with ex ->
-            eprintfn "[FNCS] Warning: Failed to write phase diff: %s" ex.Message
+            eprintfn "[CCS] Warning: Failed to write phase diff: %s" ex.Message
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ClefExpr Emission (expression-centric view)
@@ -508,9 +508,9 @@ let emitExpressionView (graph: SemanticGraph) : unit =
             let path = Path.Combine(config.OutputDir, "fncs_expr.json")
             File.WriteAllText(path, output, Encoding.UTF8)
             if PhaseConfig.isVerbose() then
-                printfn "[FNCS] Wrote expression view: %s" path
+                printfn "[CCS] Wrote expression view: %s" path
         with ex ->
-            eprintfn "[FNCS] Warning: Failed to write expression view: %s" ex.Message
+            eprintfn "[CCS] Warning: Failed to write expression view: %s" ex.Message
 
 /// Emit pretty-printed text view for debugging
 let emitExpressionText (graph: SemanticGraph) : unit =
@@ -528,6 +528,6 @@ let emitExpressionText (graph: SemanticGraph) : unit =
             let path = Path.Combine(config.OutputDir, "fncs_expr.txt")
             File.WriteAllText(path, text, Encoding.UTF8)
             if PhaseConfig.isVerbose() then
-                printfn "[FNCS] Wrote expression text: %s" path
+                printfn "[CCS] Wrote expression text: %s" path
         with ex ->
-            eprintfn "[FNCS] Warning: Failed to write expression text: %s" ex.Message
+            eprintfn "[CCS] Warning: Failed to write expression text: %s" ex.Message

@@ -262,7 +262,7 @@ The pitch is not "we made F\* work better." The pitch is "we built a new capabil
 
 ### 5.1 Maintain F\* as Reference, Not Dependency
 
-F\* remains valuable as a reference implementation for SMT encoding patterns, type-theoretic design decisions, and proof strategies. The FNCS codebase already treats F\* this way. The F\* source is studied for its encoding of refinement types, its solver interaction protocol, and its approach to termination checking. None of this requires making F\* a runtime dependency.
+F\* remains valuable as a reference implementation for SMT encoding patterns, type-theoretic design decisions, and proof strategies. The CCS codebase already treats F\* this way. The F\* source is studied for its encoding of refinement types, its solver interaction protocol, and its approach to termination checking. None of this requires making F\* a runtime dependency.
 
 ### 5.2 MLIR Community Engagement
 

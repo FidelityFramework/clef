@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Clef.Compiler.Service - F# Native Compiler Services
+  Clef.Compiler.Service - Clef Compiler Service
 
-  FNCS provides F# parsing and type checking for native compilation.
+  CCS provides F# parsing and type checking for native compilation.
   This is a simplified, Arcade-free build for the Fidelity bridge period.
 -->
 <Project Sdk="Microsoft.NET.Sdk">
@@ -17,7 +17,7 @@
     <NoWarn>$(NoWarn);44;57;75;1204;NU5125;64</NoWarn>
 
     <!-- Compiler settings -->
-    <!-- FNCS Native Compilation Defines:
+    <!-- CCS Native Compilation Defines:
          - NO_INLINE_IL_PARSER: Inline IL parsing not supported in native compilation
          - NO_TYPEPROVIDERS: Type providers require BCL reflection (Assembly.UnsafeLoadFrom, Activator.CreateInstance)
            Type providers are fundamentally incompatible with native compilation because they:
@@ -49,7 +49,7 @@
   <PropertyGroup>
     <PackageId>Clef.Compiler.Service</PackageId>
     <IsPackable>true</IsPackable>
-    <PackageDescription>F# Native Compiler Services - F# parsing and type checking for native compilation via Firefly.</PackageDescription>
+    <PackageDescription>Clef Compiler Service - F# parsing and type checking for native compilation via Firefly.</PackageDescription>
     <PackageTags>F#;fsharp;compiler;native;fidelity</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/FidelityFramework/fsnative</PackageProjectUrl>
@@ -274,7 +274,7 @@
     -->
 
     <!-- PSGSaturation - Program Semantic Graph with saturation passes -->
-    <!-- FNCS's responsibility: make the PSG semantically complete -->
+    <!-- CCS's responsibility: make the PSG semantically complete -->
     <!-- SemanticGraph split into focused nanopass modules (January 2026) -->
     <Compile Include="PSGSaturation\SemanticGraph\SeqSaturation.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Types.fs" />
@@ -347,9 +347,9 @@
 
     <!-- Optimize.fs removed - IL optimization not applicable to native compilation.
          Semantic optimizations (inlining, SRTP resolution, monomorphization) are performed
-         by FNCS and Firefly in the semantic layer. MLIR/LLVM are deterministic carriers
+         by CCS and Firefly in the semantic layer. MLIR/LLVM are deterministic carriers
          that implement what Fidelity dictates. Fidelity controls memory layout - not MLIR. -->
-    <!-- CodeGen removed - FNCS uses Alex for code generation to MLIR -->
+    <!-- CodeGen removed - CCS uses Alex for code generation to MLIR -->
     <!-- FxResolver removed - .NET Framework resolution not needed -->
     <Compile Include="DependencyManager/AssemblyResolveHandler.fsi">
       <Link>Driver\AssemblyResolveHandler.fsi</Link>

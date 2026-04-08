@@ -2,14 +2,14 @@
 
 ## Overview
 
-This document specifies the **F# Native** dialect - extensions and modifications to standard F# semantics for native compilation via the Fidelity framework. F# Native is implemented by FNCS (F# Native Compiler Services) and compiled to native binaries by Firefly.
+This document specifies the **F# Native** dialect - extensions and modifications to standard F# semantics for native compilation via the Fidelity framework. F# Native is implemented by CCS (Clef Compiler Service) and compiled to native binaries by Firefly.
 
 **Relationship to Standard F#**: F# Native is a superset of F# syntax with modified type semantics. Valid F# Native code parses identically to standard F#, but type resolution follows native rules.
 
 ## Companion Documents
 
-- `fsnative/docs/FNCS_Pruning_Plan.md` - Implementation plan for FNCS
-- `Firefly/docs/FNCS_Architecture.md` - Integration with Firefly
+- `fsnative/docs/CCS_Pruning_Plan.md` - Implementation plan for CCS
+- `Firefly/docs/CCS_Architecture.md` - Integration with Firefly
 - `fslang-spec/spec/*` - Standard F# specification (reference)
 
 ---
@@ -28,9 +28,9 @@ This document specifies the **F# Native** dialect - extensions and modifications
 
 ### 1.1 Primitive Type Mapping
 
-FNCS resolves types to native representations at compile-time. **No Alloy shadow types required.**
+CCS resolves types to native representations at compile-time. **No Alloy shadow types required.**
 
-| F# Syntax | Standard F# (BCL) | FNCS Native | Memory |
+| F# Syntax | Standard F# (BCL) | CCS Native | Memory |
 |-----------|-------------------|-------------|--------|
 | `int` | `System.Int32` | Platform word | `index` (MLIR) |
 | `int32` | `System.Int32` | 32-bit signed | `i32` |
@@ -44,7 +44,7 @@ FNCS resolves types to native representations at compile-time. **No Alloy shadow
 | `byte` | `System.Byte` | 8-bit unsigned | `i8` |
 | `option<'T>` | `FSharp.Core.Option<'T>` | `voption<'T>` | Stack-allocated |
 
-**Key principle**: FNCS provides native type resolution at the compiler level. Alloy shadow types (e.g., `type option<'T> = voption<'T>`) are temporary workarounds that will be removed once FNCS is complete.
+**Key principle**: CCS provides native type resolution at the compiler level. Alloy shadow types (e.g., `type option<'T> = voption<'T>`) are temporary workarounds that will be removed once CCS is complete.
 
 ### 1.2 String Literals
 
@@ -52,14 +52,14 @@ FNCS resolves types to native representations at compile-time. **No Alloy shadow
 
 **Standard F#**: String literals have type `System.String`.
 
-**F# Native**: String literals have type `string` (UTF-8 fat pointer, resolved by FNCS).
+**F# Native**: String literals have type `string` (UTF-8 fat pointer, resolved by CCS).
 
 ```fsharp
 // F# Native semantics
 let greeting = "Hello"  // Type: string (UTF-8 fat pointer, not System.String)
 ```
 
-FNCS resolves `string` to a UTF-8 fat pointer:
+CCS resolves `string` to a UTF-8 fat pointer:
 
 ```
 Memory layout:
@@ -93,7 +93,7 @@ let nothing: int option = None        // Stack-allocated, NOT null
 - **Absolute null-freedom**: No null representation anywhere
 - Stack allocated (no heap, no GC)
 - Pattern matching works identically to standard F#
-- FNCS resolves at compile-time, no Alloy shadow required
+- CCS resolves at compile-time, no Alloy shadow required
 
 ### 1.4 Array Types
 
@@ -190,7 +190,7 @@ let inline add (a: ^T) (b: ^T) : ^T
 // 2. Found in BCL
 
 // F# Native resolution for `add 1 2`:
-// 1. FNCS recognizes `int` as native platform word
+// 1. CCS recognizes `int` as native platform word
 // 2. Look in native BasicOps - found: Add<int>
 // 3. Resolved witness: BasicOps, method: Add
 ```
@@ -393,7 +393,7 @@ Code targeting F# Native should:
 
 ### 8.1 Native-Specific Errors
 
-FNCS produces native-specific error messages:
+CCS produces native-specific error messages:
 
 ```
 FS0001: This expression was expected to have type 'string'
@@ -443,7 +443,7 @@ NORMATIVE: F# Native defines a closed set of memory region kinds:
 | `Stack` | Non-volatile | Core-local | Thread-local storage |
 
 ```fsharp
-// FNCS type definitions
+// CCS type definitions
 type MemoryRegionKind =
     | Peripheral      // Memory-mapped I/O (volatile, no cache)
     | SRAM            // General RAM
@@ -607,7 +607,7 @@ NORMATIVE: Alex SHALL recognize these binding markers and replace them with plat
 
 ### 11.2 Peripheral Attributes
 
-NORMATIVE: FNCS SHALL recognize these Farscape-generated attributes on peripheral descriptor types:
+NORMATIVE: CCS SHALL recognize these Farscape-generated attributes on peripheral descriptor types:
 
 ```fsharp
 [<AttributeUsage(AttributeTargets.Class ||| AttributeTargets.Struct)>]
@@ -915,7 +915,7 @@ A `PatternBinding` represents a variable introduced by a pattern:
 
 **Lifecycle phases:**
 
-1. **Creation** (FNCS pattern checking): When FNCS processes a pattern like `IntVal x`, it creates a PatternBinding node with the variable name and inferred type.
+1. **Creation** (CCS pattern checking): When CCS processes a pattern like `IntVal x`, it creates a PatternBinding node with the variable name and inferred type.
 
 2. **SSA Assignment** (traversal): The `foldWithSCFRegions` traversal visits PatternBinding nodes as children of Match, assigning them SSA values.
 
@@ -1004,7 +1004,7 @@ for binding in case.PatternBindings do
 
 | Phase | Responsibility | Output |
 |-------|----------------|--------|
-| **FNCS Checking** | Create PatternBinding nodes | PSG with pattern structure |
+| **CCS Checking** | Create PatternBinding nodes | PSG with pattern structure |
 | **SSA Assignment** | Assign SSAs to PatternBindings | Coeffect map |
 | **BeforeRegion Hook** | Extract payload, bind to VarBindings | State update |
 | **Case Body Traversal** | VarRefs resolve pattern variables | MLIR ops |
@@ -1086,7 +1086,7 @@ Each element's tag must be checked independently:
 
 **Pattern.Tuple Structure:**
 
-FNCS represents tuple patterns with `Pattern.Tuple`:
+CCS represents tuple patterns with `Pattern.Tuple`:
 
 ```fsharp
 type Pattern =
@@ -1142,7 +1142,7 @@ When processing `Pattern.Tuple elements`:
 
 ### Compound Types
 
-| F# Syntax | FNCS Native Semantics | Notes |
+| F# Syntax | CCS Native Semantics | Notes |
 |-----------|----------------------|-------|
 | `string` | UTF-8 fat pointer | `{ptr, len}` |
 | `option<'T>` | `voption<'T>` | Stack-allocated, non-null |
@@ -1185,16 +1185,16 @@ These parse as standard F# (attributes, operators) but have special semantics in
 
 | Section | Status | Implementation |
 |---------|--------|----------------|
-| Part 1: Native Type Universe | **Specified** | Pending in FNCS |
-| Part 2: Null-Free Semantics | **Specified** | Pending in FNCS |
-| Part 3: SRTP Resolution | **Specified** | Pending in FNCS |
+| Part 1: Native Type Universe | **Specified** | Pending in CCS |
+| Part 2: Null-Free Semantics | **Specified** | Pending in CCS |
+| Part 3: SRTP Resolution | **Specified** | Pending in CCS |
 | Part 4: Memory Semantics | Draft | Future |
 | Part 5: Coeffects | Draft | Future |
 | Part 6: Platform Bindings | **Specified** | Implemented in Firefly |
 | Part 7: Compatibility | **Specified** | Reference |
-| Part 8: Diagnostics | **Specified** | Partial in FNCS |
-| Part 9: Memory Region Types | **Specified** | Pending in FNCS |
-| Part 10: Access Kind Enforcement | **Specified** | Pending in FNCS |
+| Part 8: Diagnostics | **Specified** | Partial in CCS |
+| Part 9: Memory Region Types | **Specified** | Pending in CCS |
+| Part 10: Access Kind Enforcement | **Specified** | Pending in CCS |
 | Part 11: Peripheral Descriptors | **Specified** | Pending (Farscape integration) |
 | Part 12: Ownership/Coeffects | Reserved | Future |
 | Part 12: SCF Regions | **Specified** | Implemented in Firefly |
@@ -1360,12 +1360,12 @@ NORMATIVE: Hints SHALL provide actionable guidance. Generic "see documentation" 
 
 ### 14.1 Overview
 
-Collection higher-order functions (HOFs) like `List.map`, `List.fold`, `Seq.collect`, etc. must be decomposed into primitive operations that the code generator (Alex) can witness directly. This decomposition occurs in the **Baker** component of FNCS.
+Collection higher-order functions (HOFs) like `List.map`, `List.fold`, `Seq.collect`, etc. must be decomposed into primitive operations that the code generator (Alex) can witness directly. This decomposition occurs in the **Baker** component of CCS.
 
 **Architectural Principle**: PSGSaturation (Baker) decomposes; Alex witnesses. Alex never implements collection algorithms—it sees only primitives.
 
 ```
-FNCS Type Checking
+CCS Type Checking
         ↓
 PSGSaturation (Baker Decomposition)
         ↓

@@ -1,6 +1,6 @@
-# FNCS Phase 1 Transformation Plan
+# CCS Phase 1 Transformation Plan
 
-## From F# Compiler Services to F# Native Compiler Services
+## From F# Compiler Services to Clef Compiler Service
 
 **Version**: 1.0
 **Status**: Planning
@@ -59,7 +59,7 @@ For Fidelity/Firefly, this creates significant **semantic impedance mismatches**
 
 The strategic document ["Firefly: From Bridged to Self Hosted"](~/repos/SpeakEZ/hugo/content/proposals/Firefly%20Compiler%20From%20Bridged%20To%20Self%20Hosted.md) defines the **absorption strategy**:
 
-> "fsil and UMX patterns don't just inform FNCS; they *become* FNCS. The inline ceremony disappears. The measure annotation workarounds disappear. What remains is a type system where these capabilities are reflexive."
+> "fsil and UMX patterns don't just inform CCS; they *become* CCS. The inline ceremony disappears. The measure annotation workarounds disappear. What remains is a type system where these capabilities are reflexive."
 
 **Key insight**: The type semantics currently defined in Alloy **move INTO fsnative** as compiler intrinsics. Users continue to write `string`, `option`, `array` - the same F# types they always use. What changes is what those types *mean*. This is NOT:
 
@@ -109,14 +109,14 @@ When Firefly receives this:
   → Firefly re-resolves to native semantics
 ```
 
-#### Target State (FNCS/Absorbed)
+#### Target State (CCS/Absorbed)
 
 ```
 TcGlobals.fs:
   string_ty → Intrinsic definition (no CCU lookup)
              Native semantics: UTF-8, deterministic lifetime
 
-When FNCS sees "Hello":
+When CCS sees "Hello":
   → CheckExpressions.fs
   → TcPropagatingExprLeafThenConvert ... g.string_ty ...
   → Types as string with native semantics
@@ -128,7 +128,7 @@ When Firefly receives this:
 
 ### What Moves INTO fsnative
 
-From the strategic document section "What Moves Into FNCS":
+From the strategic document section "What Moves Into CCS":
 
 | F# Type | Current Semantics | After Absorption |
 |---------|------------------|------------------|
@@ -177,7 +177,7 @@ The following subsystems are removed entirely in Phase 1. Each has a clear ratio
 | `ilreflect.fs` + `ilreflect.fsi` | ~2,500 | Reflection emit |
 | `ilprint.fs`, `ilmorph.fs`, etc. | ~2,800 | Supporting utilities |
 
-**Rationale**: FNCS outputs to PSG/MLIR, not IL. All assembly I/O is irrelevant. The IL type definitions (`ILType`, `ILMethodDef`, etc.) are pervasive throughout FCS but are not needed for native compilation.
+**Rationale**: CCS outputs to PSG/MLIR, not IL. All assembly I/O is irrelevant. The IL type definitions (`ILType`, `ILMethodDef`, etc.) are pervasive throughout FCS but are not needed for native compilation.
 
 **Impact**: Removing AbstractIL requires stubbing or removing references in:
 - `TypedTree.fs` (uses `ILType` for some representations)
@@ -198,7 +198,7 @@ The following subsystems are removed entirely in Phase 1. Each has a clear ratio
 | `EraseUnions.fs` + `EraseUnions.fsi` | ~2,000 | Union lowering |
 | `IlxGenSupport.fs` + `IlxGenSupport.fsi` | ~1,500 | Generation utilities |
 
-**Rationale**: IL generation is the entire purpose of this directory. FNCS stops at the typed tree; Alex generates MLIR.
+**Rationale**: IL generation is the entire purpose of this directory. CCS stops at the typed tree; Alex generates MLIR.
 
 **Impact**: Clean removal - nothing in the type-checking pipeline depends on CodeGen.
 
@@ -233,7 +233,7 @@ The following subsystems are removed entirely in Phase 1. Each has a clear ratio
 | `FSharpInteractiveServer.fs` + `.fsi` | ~800 | Server mode |
 | `fsihelp.fs`, `ControlledExecution.fs` | ~900 | Supporting utilities |
 
-**Rationale**: FSI is a runtime REPL. FNCS is an AOT frontend. These are fundamentally incompatible.
+**Rationale**: FSI is a runtime REPL. CCS is an AOT frontend. These are fundamentally incompatible.
 
 **Impact**: Clean removal - FSI is self-contained.
 
@@ -267,7 +267,7 @@ The following subsystems are removed entirely in Phase 1. Each has a clear ratio
 | `FSharpCommandLineBuilder.fs` | ~400 | Command line construction |
 | `*.targets`, `*.props` | N/A | MSBuild integration files |
 
-**Rationale**: MSBuild integration has no role. FNCS is consumed as a library by Firefly.
+**Rationale**: MSBuild integration has no role. CCS is consumed as a library by Firefly.
 
 **Impact**: Clean removal - this is a separate project.
 
@@ -293,7 +293,7 @@ The following subsystems are removed entirely in Phase 1. Each has a clear ratio
 
 **Location**: `src/fsc/` and `src/fsi/`
 
-**Rationale**: These are entry points for standalone compiler execution. FNCS is a library consumed by Firefly.
+**Rationale**: These are entry points for standalone compiler execution. CCS is a library consumed by Firefly.
 
 ---
 
@@ -399,7 +399,7 @@ Lines 500+:    Intrinsic operators and functions
 |------|---------|----------|
 | `src/Compiler/TypedTree/IntrinsicTypes.fs` | Intrinsic type definitions (stub initially) | High |
 | `src/Compiler/Checking/NativeSemantics.fs` | Native semantic definitions (stub initially) | High |
-| `src/Compiler/Service/FNCSPublicAPI.fs` | Public API stability layer | High |
+| `src/Compiler/Service/CCSPublicAPI.fs` | Public API stability layer | High |
 | `Directory.Build.props` | Updated build configuration | High |
 
 #### Phase 2+ Creates (Not in Phase 1)
@@ -527,7 +527,7 @@ furnished to do so, subject to the following conditions:
 <Project>
   <PropertyGroup>
     <!-- Identity -->
-    <Product>F# Native Compiler Services</Product>
+    <Product>Clef Compiler Service</Product>
     <Company>SpeakEZ Technologies</Company>
     <Copyright>Original work (c) Microsoft Corporation. Modifications (c) 2025 SpeakEZ Technologies.</Copyright>
 
@@ -566,7 +566,7 @@ furnished to do so, subject to the following conditions:
 2. Remove FSharp.Build project reference
 3. Remove IL generation source files
 4. Remove MSBuild task references
-5. Add new FNCS source files
+5. Add new CCS source files
 6. Simplify dependencies
 
 ```xml
@@ -611,7 +611,7 @@ furnished to do so, subject to the following conditions:
     <Compile Include="Driver\ParseAndCheckInputs.fs" />
 
     <!-- Service (streamlined) -->
-    <Compile Include="Service\FNCSPublicAPI.fs" />
+    <Compile Include="Service\CCSPublicAPI.fs" />
     <Compile Include="Service\service.fs" />
     <Compile Include="Service\FSharpCheckerResults.fs" />
     <Compile Include="Service\FSharpParseFileResults.fs" />
@@ -629,7 +629,7 @@ furnished to do so, subject to the following conditions:
 |----------|-------|
 | Package ID | `FSharp.Native.Compiler.Service` |
 | Authors | SpeakEZ Technologies |
-| Description | F# Native Compiler Services - Frontend for native F# compilation |
+| Description | Clef Compiler Service - Frontend for native F# compilation |
 | Tags | fsharp, compiler, native, aot |
 | Repository URL | https://github.com/speakez-tech/fsnative |
 | License | MIT |
@@ -644,14 +644,14 @@ Create `FSharp.Native.Compiler.Service.nuspec`:
   <metadata>
     <id>FSharp.Native.Compiler.Service</id>
     <version>$version$</version>
-    <title>F# Native Compiler Services</title>
+    <title>Clef Compiler Service</title>
     <authors>SpeakEZ Technologies</authors>
     <owners>SpeakEZ Technologies</owners>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <license type="expression">MIT</license>
     <projectUrl>https://github.com/speakez-tech/fsnative</projectUrl>
     <description>
-      F# Native Compiler Services provides parsing, type checking, and
+      Clef Compiler Service provides parsing, type checking, and
       symbol resolution for native F# compilation. It is the frontend
       for the Fidelity framework's native compilation pipeline.
     </description>
@@ -772,7 +772,7 @@ This section documents what absorption means for the standard F# types. The key 
 **Current Semantics** (FCS/BCL):
 - `System.String` - UTF-16 encoded, garbage collected, immutable reference type
 
-**Target Semantics** (FNCS):
+**Target Semantics** (CCS):
 - UTF-8 encoded, null-terminated, deterministic lifetime
 - When binding goes out of scope, memory is freed
 - String literals have static lifetime (live in `.rodata`)
@@ -787,7 +787,7 @@ This section documents what absorption means for the standard F# types. The key 
 - Reference type, heap-allocated
 - `None` is typically null, `Some x` allocates a wrapper object
 
-**Target Semantics** (FNCS):
+**Target Semantics** (CCS):
 - Value type, stack-allocated by default
 - `None` has zero runtime cost (just a tag)
 - No heap allocation for simple option values
@@ -801,7 +801,7 @@ This section documents what absorption means for the standard F# types. The key 
 **Current Semantics** (FCS/BCL):
 - `System.Array` - GC-managed, bounds-checked at runtime, boxed header
 
-**Target Semantics** (FNCS):
+**Target Semantics** (CCS):
 - Contiguous memory, no boxed header
 - Compile-time size tracking when size is known
 - Region-aware (stack, heap, arena)
@@ -820,7 +820,7 @@ let inline iter ([<InlineIfLambda>] f) (x: _) : unit =
     Internal.Iterate.Invoke(x, f)
 ```
 
-**Target Semantics** (FNCS):
+**Target Semantics** (CCS):
 
 ```fsharp
 // Functions are transparent by default - no ceremony needed
@@ -845,7 +845,7 @@ let opaqueFunction x = ...
 let customerId: string<customerId> = %"cust-123"
 ```
 
-**Target Semantics** (FNCS):
+**Target Semantics** (CCS):
 
 ```fsharp
 // Measures work naturally on any type
@@ -916,14 +916,14 @@ let ptr: nativeptr<byte, sram, readWrite> = ...
 
 - [ ] Create `src/Compiler/TypedTree/IntrinsicTypes.fs` (stub)
 - [ ] Create `src/Compiler/Checking/NativeSemantics.fs` (stub)
-- [ ] Create `src/Compiler/Service/FNCSPublicAPI.fs`
+- [ ] Create `src/Compiler/Service/CCSPublicAPI.fs`
 
 ### Validation
 
 - [ ] Build succeeds
 - [ ] Build time < 90 seconds (target: < 60 seconds)
 - [ ] Binary size < 10 MB (target: < 5 MB)
-- [ ] Firefly can reference and use FNCS in bridged mode
+- [ ] Firefly can reference and use CCS in bridged mode
 - [ ] HelloWorld sample compiles through full pipeline
 
 ---
@@ -946,7 +946,7 @@ let ptr: nativeptr<byte, sram, readWrite> = ...
 3. **Diagnostics**: Errors and warnings are reported correctly
 4. **Symbol Resolution**: Symbols resolve for IDE features
 5. **Typed Tree**: FSharpExpr is available for Firefly consumption
-6. **Bridged Mode**: Firefly pipeline works with FNCS in bridged mode
+6. **Bridged Mode**: Firefly pipeline works with CCS in bridged mode
 
 ### Integration Test: HelloWorld
 
@@ -961,7 +961,7 @@ let main _ =
 ```
 
 After Phase 1:
-- FNCS parses and type-checks this
+- CCS parses and type-checks this
 - Firefly receives typed tree
 - Baker bridges types (still in bridged mode)
 - Native binary executes correctly
@@ -1074,4 +1074,4 @@ echo "Copyright headers updated."
 
 ---
 
-*This document is part of the F# Native Compiler Services (FNCS) project. For questions or clarifications, contact SpeakEZ Technologies.*
+*This document is part of the Clef Compiler Service (CCS) project. For questions or clarifications, contact SpeakEZ Technologies.*

@@ -162,7 +162,7 @@ type internal TcGlobals =
 
     member tryFindSysTypeCcuHelper: (string list -> string -> bool -> TypedTree.CcuThunk option) with get
 
-    // FNCS: IL attribute generation removed - native compilation uses MLIR
+    // CCS: IL attribute generation removed - native compilation uses MLIR
 
     member FindSysAttrib: nm: string -> BuiltinAttribInfo
 
@@ -178,7 +178,7 @@ type internal TcGlobals =
     /// AdditionDynamic for op_Addition.  Also work out the type instantiation of the dynamic function.
     member MakeBuiltInWitnessInfo: t: TypedTree.TraitConstraintInfo -> IntrinsicValRef * TypedTree.TType list
 
-    // FNCS: IL attribute generation removed - native compilation uses MLIR
+    // CCS: IL attribute generation removed - native compilation uses MLIR
 
     member TryFindSysAttrib: nm: string -> BuiltinAttribInfo option
 
@@ -200,8 +200,8 @@ type internal TcGlobals =
     member improveType:
         tcref: TypedTree.EntityRef -> tinst: TypedTree.TType list -> (TypedTree.Nullness -> TypedTree.TType)
 
-    // FNCS: memoize_file removed - IL source documents not used in native compilation
-    // FNCS: mkDebuggableAttributeV2, mkDebuggerDisplayAttribute removed - IL attribute generation not used
+    // CCS: memoize_file removed - IL source documents not used in native compilation
+    // CCS: mkDebuggableAttributeV2, mkDebuggerDisplayAttribute removed - IL attribute generation not used
 
     member mk_ArrayCollector_ty: seqElemTy: TypedTree.TType -> TypedTree.TType
 
@@ -213,8 +213,8 @@ type internal TcGlobals =
 
     member mk_ResumableStateMachine_ty: dataTy: TypedTree.TType -> TypedTree.TType
 
-    // FNCS: tryRemoveEmbeddedILTypeDefs removed - IL type embedding not used in native compilation
-    // FNCS: CompilerGeneratedAttribute, DebuggerBrowsableNeverAttribute, DebuggerNonUserCodeAttribute removed - IL attributes not used
+    // CCS: tryRemoveEmbeddedILTypeDefs removed - IL type embedding not used in native compilation
+    // CCS: CompilerGeneratedAttribute, DebuggerBrowsableNeverAttribute, DebuggerNonUserCodeAttribute removed - IL attributes not used
 
     member unionCaseRefEq: x: TypedTree.UnionCaseRef -> y: TypedTree.UnionCaseRef -> bool
 
@@ -708,7 +708,7 @@ type internal TcGlobals =
 
     member il_arr_tcr_map: TypedTree.EntityRef array
 
-    // FNCS: ilg and iltyp_* removed - IL type infrastructure not used in native compilation
+    // CCS: ilg and iltyp_* removed - IL type infrastructure not used in native compilation
 
     member ilsigptr_tcr: TypedTree.EntityRef
 

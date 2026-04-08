@@ -1,8 +1,8 @@
-# NTU Type System Implementation in FNCS
+# NTU Type System Implementation in CCS
 
 ## Overview
 
-This document describes how FNCS implements the NTU (Native Type Universe) type system for platform-generic types that resolve via quotation-based platform bindings.
+This document describes how CCS implements the NTU (Native Type Universe) type system for platform-generic types that resolve via quotation-based platform bindings.
 
 ## NTUKind Discriminated Union
 
@@ -70,7 +70,7 @@ type NTUKind =
 Type identity and type width are **separate concerns**:
 
 ```fsharp
-// Type identity - enforced by FNCS
+// Type identity - enforced by CCS
 NTUint ≠ NTUint64   // Different types!
 NTUint ≠ NTUint32   // Different types!
 
@@ -79,12 +79,12 @@ NTUint on x86_64 → i64
 NTUint on ARM32 → i32
 ```
 
-### What FNCS Enforces
+### What CCS Enforces
 
 1. **Type Identity**: `int + int` ✓, `int + int64` ✗
 2. **Unification**: NTU types unify with themselves only
 3. **SRTP Resolution**: Operator witnesses based on type identity
-4. **No Width Assumptions**: FNCS never assumes byte sizes
+4. **No Width Assumptions**: CCS never assumes byte sizes
 
 ### What Alex Resolves
 
@@ -172,7 +172,7 @@ type NTUint64Ops =
     static member inline (+) (a: int64, b: int64) : int64 = ...
 ```
 
-FNCS selects the correct witness based on operand types (NTUint vs NTUint64).
+CCS selects the correct witness based on operand types (NTUint vs NTUint64).
 
 ## Platform Predicates Integration
 
@@ -186,7 +186,7 @@ let x: int64 = ...  // Requires fits_u64
 let y: int32 = ...  // No platform requirements
 ```
 
-FNCS validates predicates; Alex eliminates dead code.
+CCS validates predicates; Alex eliminates dead code.
 
 ## Migration from PlatformWord
 
@@ -201,5 +201,5 @@ The previous `TypeLayout.PlatformWord` design is superseded:
 ## Related Documentation
 
 - `Platform_Predicates.md` - F*-style platform predicates
-- `fncs-specification.md` - FNCS specification
+- `ccs-specification.md` - CCS specification
 - `native-type-universe.md` - Original NTU design
