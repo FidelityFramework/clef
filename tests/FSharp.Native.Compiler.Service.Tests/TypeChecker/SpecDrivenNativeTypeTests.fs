@@ -1,11 +1,11 @@
 /// Spec-Driven TDD Tests for Native Type Universe
 ///
-/// These tests are derived from fsnative-spec NORMATIVE requirements, NOT from
+/// These tests are derived from clef-lang-spec NORMATIVE requirements, NOT from
 /// existing implementation. They serve as executable specification that guards
 /// against regression and ensures implementation honors the spec.
 ///
-/// Reference: fsnative-spec/spec/native-type-mappings.md
-/// Reference: fsnative-spec/spec/native-type-universe.md
+/// Reference: clef-lang-spec/spec/native-type-mappings.md
+/// Reference: clef-lang-spec/spec/native-type-universe.md
 module FSharp.Native.Compiler.Service.Tests.TypeChecker.SpecDrivenNativeTypeTests
 
 open FSharp.Native.Compiler.Checking.Native.NativeService
@@ -50,7 +50,7 @@ let getMainType (source: string) =
 
 //=============================================================================
 // SPEC: Native Type Mappings - Primitive Types
-// Reference: fsnative-spec/spec/native-type-mappings.md
+// Reference: clef-lang-spec/spec/native-type-mappings.md
 //=============================================================================
 
 module ``Primitive Types per Spec`` =
@@ -92,13 +92,13 @@ module ``Primitive Types per Spec`` =
 
 //=============================================================================
 // SPEC: BCL Rejection
-// Reference: fsnative-spec/spec/native-type-mappings.md
+// Reference: clef-lang-spec/spec/native-type-mappings.md
 //=============================================================================
 
 module ``BCL Rejection per Spec`` =
 
     /// SPEC: "The compiler SHALL reject any code that references obj or System.Object"
-    /// NORMATIVE: obj type SHALL NOT exist in F# Native
+    /// NORMATIVE: obj type SHALL NOT exist in Clef
     [<Fact>]
     let ``SPEC: obj type SHALL be rejected with FS8011`` () =
         let source = "module Test\nlet main : obj = box 42"
@@ -134,7 +134,7 @@ module ``BCL Rejection per Spec`` =
 
 //=============================================================================
 // SPEC: Option Type Mapping
-// Reference: fsnative-spec/spec/native-type-mappings.md
+// Reference: clef-lang-spec/spec/native-type-mappings.md
 //=============================================================================
 
 module ``Option Type per Spec`` =
@@ -180,13 +180,13 @@ module ``Name Resolution per Architecture`` =
 
 //=============================================================================
 // SPEC: Metaprogramming Features
-// Reference: fsnative-spec/spec/native-type-mappings.md "Compile-Time Metaprogramming"
+// Reference: clef-lang-spec/spec/native-type-mappings.md "Compile-Time Metaprogramming"
 //=============================================================================
 
 module ``Metaprogramming per Spec`` =
 
     /// SPEC: "Quotations, active patterns, and computation expressions SHALL be fully supported"
-    /// NORMATIVE: Quotations SHALL work in F# Native
+    /// NORMATIVE: Quotations SHALL work in Clef
     [<Fact>]
     let ``SPEC: Quotation literals SHALL compile`` () =
         let source = "module Test\nlet main = <@ 1 + 2 @>"
@@ -204,7 +204,7 @@ let main = match 4 with Even -> 0 | Odd -> 1
 
 //=============================================================================
 // SPEC: Quotations as Semantic Carriers for Memory Mapping
-// Reference: fsnative-spec/spec/native-type-mappings.md "Quotations as Semantic Carriers"
+// Reference: clef-lang-spec/spec/native-type-mappings.md "Quotations as Semantic Carriers"
 //=============================================================================
 
 module ``Quotations as Memory Mapping Carriers`` =
@@ -245,7 +245,7 @@ let main = 0
 
 //=============================================================================
 // SPEC: Active Patterns for Structural Recognition
-// Reference: fsnative-spec/spec/native-type-mappings.md "Active Patterns"
+// Reference: clef-lang-spec/spec/native-type-mappings.md "Active Patterns"
 //=============================================================================
 
 module ``Active Patterns for Structural Recognition`` =
@@ -283,7 +283,7 @@ let main = match 15 with DivisibleBy 3 -> 1 | DivisibleBy 5 -> 2 | _ -> 0
 
 //=============================================================================
 // SPEC: Memory Regions (Native-Specific)
-// Reference: fsnative-spec/spec/memory-regions.md
+// Reference: clef-lang-spec/spec/memory-regions.md
 //=============================================================================
 
 module ``Memory Regions per Spec`` =

@@ -1,4 +1,4 @@
-# fsnative Directory Restructuring Plan
+# clef Directory Restructuring Plan
 
 **Date**: January 2026
 **Status**: DRAFT - Awaiting Review
@@ -39,7 +39,7 @@ rm -rf src/Microsoft.FSharp.Compiler/
 
 ### 1.2 `FSharp.VisualStudio.Extension/` → DELETE (or ARCHIVE)
 
-**Reason**: VS extension not priority for native tooling. FsNativeAutoComplete will be the primary IDE integration path.
+**Reason**: VS extension not priority for native tooling. ClefAutoComplete will be the primary IDE integration path.
 
 ```bash
 rm -rf src/FSharp.VisualStudio.Extension/
@@ -88,7 +88,7 @@ mv src/FSharp.Compiler.Interactive.Settings/ src/FSharp.Native.Compiler.Interact
 - Evaluate if event loop model applies to native context
 - Update project file
 
-### 2.3 `fsi/` → `fnsi/` (F# Native Interactive)
+### 2.3 `fsi/` → `fnsi/` (Clef Interactive)
 
 **Current state**: F# Interactive targeting CLR
 **Target state**: Native REPL with JIT or interpreted execution
@@ -255,7 +255,7 @@ After restructuring:
 - [ ] `dotnet build` succeeds for all remaining projects
 - [ ] No broken project references in .sln
 - [ ] No dead namespace references in code
-- [ ] Firefly compiler still builds against fsnative
+- [ ] Firefly compiler still builds against clef
 - [ ] Regression tests pass
 - [ ] LSP server starts (even if limited functionality)
 

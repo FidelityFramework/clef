@@ -1,14 +1,14 @@
-# F# Native Language Specification
+# Clef Language Specification
 
 ## Overview
 
-This document specifies the **F# Native** dialect - extensions and modifications to standard F# semantics for native compilation via the Fidelity framework. F# Native is implemented by CCS (Clef Compiler Service) and compiled to native binaries by Firefly.
+This document specifies the **Clef** dialect - extensions and modifications to standard F# semantics for native compilation via the Fidelity framework. Clef is implemented by CCS (Clef Compiler Service) and compiled to native binaries by Firefly.
 
-**Relationship to Standard F#**: F# Native is a superset of F# syntax with modified type semantics. Valid F# Native code parses identically to standard F#, but type resolution follows native rules.
+**Relationship to Standard F#**: Clef is a superset of F# syntax with modified type semantics. Valid Clef code parses identically to standard F#, but type resolution follows native rules.
 
 ## Companion Documents
 
-- `fsnative/docs/CCS_Pruning_Plan.md` - Implementation plan for CCS
+- `docs/CCS_Pruning_Plan.md` - Implementation plan for CCS
 - `Firefly/docs/CCS_Architecture.md` - Integration with Firefly
 - `fslang-spec/spec/*` - Standard F# specification (reference)
 
@@ -52,10 +52,10 @@ CCS resolves types to native representations at compile-time. **No Alloy shadow 
 
 **Standard F#**: String literals have type `System.String`.
 
-**F# Native**: String literals have type `string` (UTF-8 fat pointer, resolved by CCS).
+**Clef**: String literals have type `string` (UTF-8 fat pointer, resolved by CCS).
 
 ```fsharp
-// F# Native semantics
+// Clef semantics
 let greeting = "Hello"  // Type: string (UTF-8 fat pointer, not System.String)
 ```
 
@@ -81,10 +81,10 @@ Memory layout:
 
 **Standard F#**: `option<'T>` is a reference type, `None` may be null.
 
-**F# Native**: `option<'T>` has `voption<'T>` semantics (stack-allocated value type).
+**Clef**: `option<'T>` has `voption<'T>` semantics (stack-allocated value type).
 
 ```fsharp
-// F# Native semantics - user writes familiar syntax
+// Clef semantics - user writes familiar syntax
 let maybeValue: int option = Some 42  // Compiled as voption<int>
 let nothing: int option = None        // Stack-allocated, NOT null
 ```
@@ -101,10 +101,10 @@ let nothing: int option = None        // Stack-allocated, NOT null
 
 **Standard F#**: `'T[]` is `System.Array` (heap allocated, GC managed).
 
-**F# Native**: `array<'T>` is a fat pointer (pointer + length).
+**Clef**: `array<'T>` is a fat pointer (pointer + length).
 
 ```fsharp
-// F# Native semantics - user writes familiar syntax
+// Clef semantics - user writes familiar syntax
 let numbers = [| 1; 2; 3 |]  // Type: array<int> (fat pointer)
 ```
 
@@ -126,10 +126,10 @@ Memory layout:
 
 ### 2.1 Null Prohibition
 
-F# Native enforces null-free semantics for ALL types:
+Clef enforces null-free semantics for ALL types:
 
 ```fsharp
-// COMPILE ERROR in F# Native
+// COMPILE ERROR in Clef
 let s: string = null         // Error FS8010: Cannot assign null
 let arr: int array = null    // Error FS8010: Cannot assign null
 let opt: int option = null   // Error FS8010: Use None, not null
@@ -168,7 +168,7 @@ Native types have sensible defaults, not null:
 
 ### 3.1 Witness Hierarchy
 
-Standard F# SRTP resolves against .NET method tables. F# Native SRTP resolves against the **Alloy witness hierarchy**.
+Standard F# SRTP resolves against .NET method tables. Clef SRTP resolves against the **Alloy witness hierarchy**.
 
 **Alloy Witness Chain** (searched in order):
 1. Concrete type's members
@@ -189,7 +189,7 @@ let inline add (a: ^T) (b: ^T) : ^T
 // 1. Look for System.Int32.op_Addition
 // 2. Found in BCL
 
-// F# Native resolution for `add 1 2`:
+// Clef resolution for `add 1 2`:
 // 1. CCS recognizes `int` as native platform word
 // 2. Look in native BasicOps - found: Add<int>
 // 3. Resolved witness: BasicOps, method: Add
@@ -207,7 +207,7 @@ type WritableString =
 // Usage
 WritableString $ "Hello"
 
-// F# Native resolution:
+// Clef resolution:
 // 1. TraitCall for op_Dollar
 // 2. Search WritableString members
 // 3. Found: WritableString.op_Dollar
@@ -216,7 +216,7 @@ WritableString $ "Hello"
 
 ### 3.4 Resolution Metadata
 
-F# Native SRTP resolution captures additional metadata:
+Clef SRTP resolution captures additional metadata:
 
 ```fsharp
 type SRTPResolution = {
@@ -236,7 +236,7 @@ This metadata flows to Firefly's PSG for code generation.
 
 ### 4.1 Stack Allocation
 
-F# Native defaults to stack allocation for value types:
+Clef defaults to stack allocation for value types:
 
 ```fsharp
 let point = { X = 1.0; Y = 2.0 }  // Stack allocated
@@ -257,7 +257,7 @@ arena {
 
 ### 4.3 Ownership Types (Future)
 
-F# Native will support ownership annotations:
+Clef will support ownership annotations:
 
 ```fsharp
 // Owned value - caller receives ownership
@@ -349,10 +349,10 @@ let writeData (data: array<byte>) : unit -[IO, Unsafe]-> unit =
 
 ### 7.1 Syntax Compatibility
 
-F# Native accepts all valid F# syntax. These are identical:
+Clef accepts all valid F# syntax. These are identical:
 
 ```fsharp
-// Valid in both F# and F# Native
+// Valid in both F# and Clef
 let rec factorial n =
     if n <= 1 then 1
     else n * factorial (n - 1)
@@ -372,16 +372,16 @@ The same syntax has different type semantics:
 ```fsharp
 let s = "hello"
 // F#: s : System.String
-// F# Native: s : string
+// Clef: s : string
 
 let opt = Some 42
 // F#: opt : int option (reference type, None = null)
-// F# Native: opt : int voption (value type, None = ValueNone)
+// Clef: opt : int voption (value type, None = ValueNone)
 ```
 
 ### 7.3 Migration Path
 
-Code targeting F# Native should:
+Code targeting Clef should:
 1. Avoid BCL type annotations (`System.String`, etc.)
 2. Use Alloy library instead of FSharp.Core for collections
 3. Handle option as value type
@@ -399,14 +399,14 @@ CCS produces native-specific error messages:
 FS0001: This expression was expected to have type 'string'
         but here has type 'System.String'.
 
-Hint: F# Native uses string for string literals.
+Hint: Clef uses string for string literals.
       If interoperating with .NET, use string.ofString.
 ```
 
 ```
 FS0002: Cannot assign null to native type 'array<int>'.
 
-Hint: F# Native types are non-nullable.
+Hint: Clef types are non-nullable.
       Use voption<T> for optional values.
 ```
 
@@ -431,7 +431,7 @@ Hint: Implement op_Addition on MyType or add to witness hierarchy.
 
 ### 9.1 Memory Region Kinds
 
-NORMATIVE: F# Native defines a closed set of memory region kinds:
+NORMATIVE: Clef defines a closed set of memory region kinds:
 
 | Kind | Volatility | Cache Behavior | Use Case |
 |------|------------|----------------|----------|
@@ -521,7 +521,7 @@ A pointer to a "higher" region can be used where a "lower" region is expected in
 
 ### 10.1 Access Kinds
 
-F# Native enforces access kinds at the type level:
+Clef enforces access kinds at the type level:
 
 | Kind | Read | Write | Description |
 |------|------|-------|-------------|
@@ -555,9 +555,9 @@ NORMATIVE: Access kinds are checked at compile time. No runtime overhead is incu
 
 ### 10.3 CMSIS Qualifier Mapping
 
-F# Native access kinds map directly to CMSIS-standard volatile qualifiers:
+Clef access kinds map directly to CMSIS-standard volatile qualifiers:
 
-| CMSIS Qualifier | C Definition | F# Native |
+| CMSIS Qualifier | C Definition | Clef |
 |-----------------|--------------|-----------|
 | `__I` | `volatile const` | `readOnly` |
 | `__O` | `volatile` | `writeOnly` |
@@ -685,7 +685,7 @@ let buffer: SizedPtr<byte, sram, readWrite, bytes> = ...
 
 ### 11.4 BAREWire Schema Integration
 
-NORMATIVE: BAREWire memory layouts integrate with F# Native types through struct layout attributes:
+NORMATIVE: BAREWire memory layouts integrate with Clef types through struct layout attributes:
 
 ```fsharp
 [<Struct; StructLayout(LayoutKind.Sequential, Pack = 1)>]
@@ -1120,7 +1120,7 @@ When processing `Pattern.Tuple elements`:
 
 ### Primitive Types
 
-| F# Keyword | F# Native Type | Size | Alignment |
+| F# Keyword | Clef Type | Size | Alignment |
 |------------|----------------|------|-----------|
 | `sbyte` | `Int8` | 1 | 1 |
 | `byte` | `UInt8` | 1 | 1 |
@@ -1155,7 +1155,7 @@ When processing `Pattern.Tuple elements`:
 
 ## Appendix B: Grammar Extensions (Future)
 
-Reserved syntax for future F# Native features:
+Reserved syntax for future Clef features:
 
 ```
 // Ownership expressions
@@ -1177,7 +1177,7 @@ arena { <expr> }
 @Align1, @Align2, @Align4, @Align8, @Packed
 ```
 
-These parse as standard F# (attributes, operators) but have special semantics in F# Native.
+These parse as standard F# (attributes, operators) but have special semantics in Clef.
 
 ---
 
@@ -1207,7 +1207,7 @@ These parse as standard F# (attributes, operators) but have special semantics in
 
 ### D.1 Error Code Ranges
 
-F# Native reserves the FS8xxx range for native-specific diagnostics:
+Clef reserves the FS8xxx range for native-specific diagnostics:
 
 | Range | Category |
 |-------|----------|
@@ -1274,7 +1274,7 @@ Hint: Peripheral and SystemControl regions require volatile semantics.
 
 ```
 error FS8005: Cannot assign null to native type 'array<int>'.
-  F# Native types are non-nullable by design.
+  Clef types are non-nullable by design.
 
   let arr: array<int> = null
                               ^~~~
@@ -1289,20 +1289,20 @@ Hint: Use 'voption<array<int>>' for optional values,
 
 ```
 error FS8010: BCL type 'System.String' is not available in native compilation.
-  F# Native uses 'string' for string values.
+  Clef uses 'string' for string values.
 
   let s: System.String = "hello"
          ^~~~~~~~~~~~~
 
 Hint: Remove explicit BCL type annotations. String literals automatically
-      have type 'string' in F# Native.
+      have type 'string' in Clef.
 ```
 
 **FS8011: BCL collection in native compilation**
 
 ```
 error FS8011: BCL collection 'System.Collections.Generic.List<T>' is not available.
-  F# Native uses native collection types.
+  Clef uses native collection types.
 
 Hint: Use 'list<T>', 'array<T>', or 'Map<K,V>' with native semantics.
 ```
@@ -1557,4 +1557,4 @@ The shadow AST enables design-time tooling:
 
 ---
 
-*This specification is maintained alongside the fsnative-spec repository and evolves with the Fidelity framework.*
+*This specification is maintained alongside the clef-lang-spec repository and evolves with the Fidelity framework.*

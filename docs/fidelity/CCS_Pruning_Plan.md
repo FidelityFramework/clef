@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the plan to transform the `fsnative` repository from a full F# compiler fork into a lean **Clef Compiler Service (CCS)** library optimized for the Fidelity framework's native compilation pipeline.
+This document outlines the plan to transform the `clef` repository from a full F# compiler fork into a lean **Clef Compiler Service (CCS)** library optimized for the Fidelity framework's native compilation pipeline.
 
 **Goal**: Create `FSharp.Native.Compiler.Service.dll` - a minimal, fast-compiling library that provides:
 - Lexing and parsing (preserved from FCS)
@@ -611,7 +611,7 @@ Phase 6 (Integration)                                  ████████
 
 - `Firefly/docs/CCS_Architecture.md` - Firefly's CCS documentation
 - `Firefly/docs/CCS_Ecosystem.md` - Cross-repository relationships
-- `fsnative-spec/docs/fidelity/CCS_Specification.md` - Language specification for native types
+- `clef-lang-spec/docs/fidelity/CCS_Specification.md` - Language specification for native types
 - `SpeakEZ/hugo/content/proposals/From Bridged To Self Hosted.md` - Long-term extraction strategy
 
 ## Appendix: Files to Remove

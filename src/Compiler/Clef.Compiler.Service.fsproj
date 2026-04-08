@@ -435,7 +435,7 @@
 
   <!--
     FSharp.DependencyManager.Nuget - Required for #r directive resolution in FSI.
-    This is a project reference since we maintain it in fsnative.
+    This is a project reference since we maintain it in clef.
   -->
   <ItemGroup>
     <ProjectReference Include="$(RepoRoot)src/FSharp.DependencyManager.Nuget/FSharp.DependencyManager.Nuget.fsproj" />

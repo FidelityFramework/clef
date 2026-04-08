@@ -11,7 +11,7 @@
 
 ## Executive Summary
 
-This document provides the complete, detailed transformation plan for **Phase 1** of the fsnative repository transition. Phase 1 establishes the foundation for "bridged" compilation by:
+This document provides the complete, detailed transformation plan for **Phase 1** of the clef repository transition. Phase 1 establishes the foundation for "bridged" compilation by:
 
 1. **Removing BCL-centric subsystems** (~92,000 lines) that have no role in native compilation
 2. **Restructuring the project** for publication as `FSharp.Native.Compiler.Services`
@@ -61,7 +61,7 @@ The strategic document ["Firefly: From Bridged to Self Hosted"](~/repos/SpeakEZ/
 
 > "fsil and UMX patterns don't just inform CCS; they *become* CCS. The inline ceremony disappears. The measure annotation workarounds disappear. What remains is a type system where these capabilities are reflexive."
 
-**Key insight**: The type semantics currently defined in Alloy **move INTO fsnative** as compiler intrinsics. Users continue to write `string`, `option`, `array` - the same F# types they always use. What changes is what those types *mean*. This is NOT:
+**Key insight**: The type semantics currently defined in Alloy **move INTO Clef** as compiler intrinsics. Users continue to write `string`, `option`, `array` - the same F# types they always use. What changes is what those types *mean*. This is NOT:
 
 - Adding new type names that users must learn
 - Pointing fslibCcu at Alloy as an external library
@@ -82,7 +82,7 @@ Phase 1 prepares the foundation by:
 3. **Preparing TcGlobals** - Understanding and documenting the type registry
 4. **Establishing patterns** - Housekeeping standards for ongoing work
 
-Phase 1 is deliberately **non-breaking for bridged mode**. After Phase 1, Firefly can still use fsnative through Baker, with the same semantics as before. If we see reason to keep those zipper mechanics for merging AST and typed trees we will likely move them in a later phase of transformation.
+Phase 1 is deliberately **non-breaking for bridged mode**. After Phase 1, Firefly can still use Clef through Baker, with the same semantics as before. If we see reason to keep those zipper mechanics for merging AST and typed trees we will likely move them in a later phase of transformation.
 
 ---
 
@@ -90,7 +90,7 @@ Phase 1 is deliberately **non-breaking for bridged mode**. After Phase 1, Firefl
 
 ### What "Absorption" Means
 
-Currently we define absorption as Alloy/fsil/UMX library patterns becoming fsnative language intrinsics. To understand this concretely, consider the current vs. target state:
+Currently we define absorption as Alloy/fsil/UMX library patterns becoming Clef language intrinsics. To understand this concretely, consider the current vs. target state:
 
 #### Current State (FCS/Bridged)
 
@@ -126,7 +126,7 @@ When Firefly receives this:
   → No re-resolution needed
 ```
 
-### What Moves INTO fsnative
+### What Moves INTO Clef
 
 From the strategic document section "What Moves Into CCS":
 
@@ -472,7 +472,7 @@ FCS files contain Microsoft copyright headers:
 
 1. **Preserve Original Copyright**: The fork retains Microsoft's copyright for derived work
 2. **Add SpeakEZ Notice**: Additions are copyright SpeakEZ Technologies
-3. **Update License Reference**: Point to fsnative LICENSE file
+3. **Update License Reference**: Point to clef LICENSE file
 
 #### New Header Format
 
@@ -631,7 +631,7 @@ furnished to do so, subject to the following conditions:
 | Authors | SpeakEZ Technologies |
 | Description | Clef Compiler Service - Frontend for native F# compilation |
 | Tags | fsharp, compiler, native, aot |
-| Repository URL | https://github.com/speakez-tech/fsnative |
+| Repository URL | https://github.com/speakez-tech/clef |
 | License | MIT |
 
 #### nuspec Configuration
@@ -649,7 +649,7 @@ Create `FSharp.Native.Compiler.Service.nuspec`:
     <owners>SpeakEZ Technologies</owners>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <license type="expression">MIT</license>
-    <projectUrl>https://github.com/speakez-tech/fsnative</projectUrl>
+    <projectUrl>https://github.com/speakez-tech/clef</projectUrl>
     <description>
       Clef Compiler Service provides parsing, type checking, and
       symbol resolution for native F# compilation. It is the frontend
@@ -1015,7 +1015,7 @@ vsintegration/
 ```bash
 #!/bin/bash
 # namespace-transform.sh
-# Run from fsnative repository root
+# Run from clef repository root
 
 # Backup first
 cp -r src src.backup
@@ -1047,7 +1047,7 @@ echo "Namespace transformation complete. Backup at src.backup/"
 ```bash
 #!/bin/bash
 # copyright-update.sh
-# Run from fsnative repository root
+# Run from clef repository root
 
 NEW_HEADER='// Original work Copyright (c) Microsoft Corporation.  All Rights Reserved.
 // Modifications Copyright (c) 2025 SpeakEZ Technologies.

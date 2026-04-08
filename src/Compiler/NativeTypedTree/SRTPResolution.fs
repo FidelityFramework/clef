@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 /// SRTP (Statically Resolved Type Parameters) resolution during type checking.
-/// Unlike FCS where SRTP is resolved post-hoc, fsnative resolves SRTP
+/// Unlike FCS where SRTP is resolved post-hoc, Clef resolves SRTP
 /// during construction, making it intrinsic to the type checker.
 module Clef.Compiler.NativeTypedTree.SRTPResolution
 
@@ -291,7 +291,7 @@ let private hasUnboundTypeVars (ty: NativeType) : bool =
 // Conversions follow the F# syntax: `float x`, `int y`, `string z`
 // SRTP resolution determines the operation based on source type.
 //
-// See: fsnative-spec/spec/drafts/NTU_Conversion_Model.md
+// See: clef-lang-spec/spec/drafts/NTU_Conversion_Model.md
 //-------------------------------------------------------------------------
 
 /// Conversion category determines semantics and MLIR operation

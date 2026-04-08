@@ -651,8 +651,8 @@ See `/home/hhh/repos/Firefly/.serena/memories/computation_strategy_architecture.
 ## Related Documentation
 
 **Semantic (CCS)**:
-- `/home/hhh/repos/fsnative/docs/fidelity/ccs-specification.md`
-- `/home/hhh/repos/fsnative/.serena/memories/coeffect_compilation_strategy.md`
+- `/home/hhh/repos/clef/docs/fidelity/ccs-specification.md`
+- `/home/hhh/repos/clef/.serena/memories/coeffect_compilation_strategy.md`
 
 **Implementation (Alex)**:
 - `/home/hhh/repos/Firefly/.serena/memories/computation_strategy_architecture.md`

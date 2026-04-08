@@ -696,7 +696,7 @@ module TypeLayout =
 //-------------------------------------------------------------------------
 
 /// Distinguishes type parameters from measure parameters.
-/// In fsnative, measures work on ANY type (not just numerics like in .NET F#).
+/// In Clef, measures work on ANY type (not just numerics like in .NET F#).
 [<RequireQualifiedAccess>]
 type TypeParamKind =
     /// Regular type parameter: 'T
@@ -1087,7 +1087,7 @@ type CaptureInfo = {
 
 //-------------------------------------------------------------------------
 // Record Type Infrastructure (for Field Label Resolution)
-// Per fsnative-spec inference-procedures.md: "Field order determines memory layout"
+// Per clef-lang-spec inference-procedures.md: "Field order determines memory layout"
 //-------------------------------------------------------------------------
 
 /// A reference to a field in a specific record type.
@@ -1183,7 +1183,7 @@ let rec layoutOf (ty: NativeType) : TypeLayout =
     | NativeType.TError _ -> TypeLayout.Opaque
 
 /// Compute memory layout for a record from its fields.
-/// Per fsnative-spec: "Field order determines memory layout" and
+/// Per clef-lang-spec: "Field order determines memory layout" and
 /// "Fidelity makes ALL memory layout decisions - MLIR/LLVM never determine layout."
 ///
 /// Algorithm (from spec inference-procedures.md Step 4):

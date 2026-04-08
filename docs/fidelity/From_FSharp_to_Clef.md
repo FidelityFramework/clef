@@ -1,12 +1,12 @@
-# From F# to F# Native: A Developer's Journey
+# From F# to Clef: A Developer's Journey
 
 ## Introduction
 
-This document addresses the experienced .NET developer who has invested years in understanding F#, the Common Language Runtime, and the Base Class Library ecosystem. It presents F# Native not as a rejection of that knowledge, but as an evolution that reclaims capabilities the language has always possessed, capabilities that the managed runtime abstracted away for convenience but that native compilation now requires us to reconsider.
+This document addresses the experienced .NET developer who has invested years in understanding F#, the Common Language Runtime, and the Base Class Library ecosystem. It presents Clef not as a rejection of that knowledge, but as an evolution that reclaims capabilities the language has always possessed, capabilities that the managed runtime abstracted away for convenience but that native compilation now requires us to reconsider.
 
-The transition from F# on .NET to F# Native is not merely a technical migration; it is a conceptual shift in how we think about memory, types, and the relationship between our source code and the machine that executes it. This document walks through that shift systematically, beginning with familiar ground and progressing toward the new mental model that F# Native demands.
+The transition from F# on .NET to Clef is not merely a technical migration; it is a conceptual shift in how we think about memory, types, and the relationship between our source code and the machine that executes it. This document walks through that shift systematically, beginning with familiar ground and progressing toward the new mental model that Clef demands.
 
-A note on how we arrived here: the F# Native type system was not designed from some level of academic remove and then implemented. It emerged from engineering necessity. The initial goal was simply to compile F# to native code, and the approach involved creating "shadow types" in the Alloy library to mask BCL types during Baker type resolution. To give credit where it is due, FSharp.Core already contained some primitive types that proved invaluable in this early work: the `voption` type existed beyond the standard `option` type's null representation, and `NativeInterop.nativeptr` remained central to much of what we accomplished before making the "full break" to create fsnative.
+A note on how we arrived here: the Clef type system was not designed from some level of academic remove and then implemented. It emerged from engineering necessity. The initial goal was simply to compile F# to native code, and the approach involved creating "shadow types" in the Alloy library to mask BCL types during Baker type resolution. To give credit where it is due, FSharp.Core already contained some primitive types that proved invaluable in this early work: the `voption` type existed beyond the standard `option` type's null representation, and `NativeInterop.nativeptr` remained central to much of what we accomplished before making the "full break" to create Clef.
 
 What we discovered, through iteration and experimentation, was that the types we needed bore a striking resemblance to OCaml's native types. This accidental sympathy with OCaml revealed something fundamental about ML-family languages: when you strip away the managed runtime, the natural semantics that emerge are value-oriented, UTF-8 native, and explicitly memory-aware. The sympathies to principled design are certainly part of the full picture, and those elements serve to further inform how the framework will develop as requirements grow and opportunities to target new platforms emerge. The journey described in this document reflects that discovery.
 
@@ -98,19 +98,19 @@ Native compilation removes the CLR from the execution environment. The compiled 
 3. **No BCL**: The Base Class Library is unavailable; alternative implementations are required
 4. **Direct hardware access**: The program can interact with memory-mapped peripherals
 
-The question F# Native answers is this: can we retain F#'s expressive type system and functional programming model while targeting this runtime-free environment? In our case, for the purposes of fsnative, this is exactly our *opportunity*.
+The question Clef answers is this: can we retain F#'s expressive type system and functional programming model while targeting this runtime-free environment? In our case, for the purposes of Clef, this is exactly our *opportunity*.
 
-This is no small task. There are many considerations to account for, not simply for the presumed OS-based world of Windows, macOS, and Linux. There are memory mapping concerns around GPU, NPU, and other accelerators that are just as much a target for the Fidelity framework. Simply considering the constrained environment of microcontrollers, there are specific patterns that are allowed and others that would not work at all. These are all concerns that fsnative has to account for and allow in order for the full range of options to be available to realize the platform's vision.
+This is no small task. There are many considerations to account for, not simply for the presumed OS-based world of Windows, macOS, and Linux. There are memory mapping concerns around GPU, NPU, and other accelerators that are just as much a target for the Fidelity framework. Simply considering the constrained environment of microcontrollers, there are specific patterns that are allowed and others that would not work at all. These are all concerns that Clef has to account for and allow in order for the full range of options to be available to realize the platform's vision.
 
 ### 2.2 The OCaml Precedent
 
 F# descends from the ML family of languages, sharing ancestry with OCaml and Standard ML. OCaml compiles natively without requiring a managed runtime, yet it offers many of the same programming constructs: algebraic data types, pattern matching, type inference, and higher-order functions.
 
-The F* programming language, developed for verified systems programming, extracts to OCaml with high fidelity. Each F* type has a precise OCaml representation, and the extraction preserves type safety without requiring a runtime. This precedent demonstrates that ML-family languages can target native code while preserving their essential character. F* also provides the HyperStack memory model that again corresponds to what we arrived at for fsnative's region system; the correspondence was discovered, not copied.
+The F* programming language, developed for verified systems programming, extracts to OCaml with high fidelity. Each F* type has a precise OCaml representation, and the extraction preserves type safety without requiring a runtime. This precedent demonstrates that ML-family languages can target native code while preserving their essential character. F* also provides the HyperStack memory model that again corresponds to what we arrived at for Clef's region system; the correspondence was discovered, not copied.
 
-F# Native found accidental sympathy in this path. Despite using F# syntax, it was found after some hand-jamming native types into Alloy that what would become F# Native semantics align more closely with OCaml than with .NET F#. To give credit where it is due, FSharp.Core already contained some primitive types that proved essential: the `voption` type existed beyond the standard `option` type's null representation, and `NativeInterop.nativeptr` remained central to much of what we accomplished before making the "full break" to create fsnative:
+Clef found accidental sympathy in this path. Despite using F# syntax, it was found after some hand-jamming native types into Alloy that what would become Clef semantics align more closely with OCaml than with .NET F#. To give credit where it is due, FSharp.Core already contained some primitive types that proved essential: the `voption` type existed beyond the standard `option` type's null representation, and `NativeInterop.nativeptr` remained central to much of what we accomplished before making the "full break" to create Clef:
 
-| Concept | .NET F# | OCaml | F# Native |
+| Concept | .NET F# | OCaml | Clef |
 |---------|---------|-------|-----------|
 | String encoding | UTF-16 | UTF-8 | UTF-8 |
 | Option representation | Reference type, None is null | Value type | Value type (voption) |
@@ -120,17 +120,17 @@ F# Native found accidental sympathy in this path. Despite using F# syntax, it wa
 
 ### 2.3 The Native Type Universe
 
-F# Native replaces BCL types with native equivalents from the Alloy library:
+Clef replaces BCL types with native equivalents from the Alloy library:
 
 ```fsharp
 // In standard F#, this is System.String (UTF-16, heap-allocated)
 let greeting = "Hello"
 
-// In F# Native, same syntax, native semantics (UTF-8 fat pointer)
+// In Clef, same syntax, native semantics (UTF-8 fat pointer)
 let greeting = "Hello"  // Type: string (native semantics)
 ```
 
-In F# Native, `string` has native semantics - internally a fat pointer struct containing a pointer to UTF-8 bytes and a length:
+In Clef, `string` has native semantics - internally a fat pointer struct containing a pointer to UTF-8 bytes and a length:
 
 ```fsharp
 // Internal representation of string in CCS
@@ -151,7 +151,7 @@ This representation differs fundamentally from `System.String`:
 
 Similar transformations apply to other types:
 
-| F# Syntax | Standard F# | F# Native |
+| F# Syntax | Standard F# | Clef |
 |-----------|-------------|-----------|
 | `int option` | `option<int>` (heap, nullable) | `option<int>` with value semantics (voption) |
 | `int[]` | `System.Int32[]` (heap, GC tracked) | `array<int>` with native semantics (fat pointer) |
@@ -231,7 +231,7 @@ This is not a failure of the cascade deletion approach - it's the approach worki
 
 In managed environments, memory location is an implementation detail hidden from the programmer. The garbage collector may move objects during compaction, and the program remains unaware. In native compilation, memory location matters.
 
-F# Native introduces a memory region model that makes location explicit:
+Clef introduces a memory region model that makes location explicit:
 
 ```fsharp
 // Region type measures
@@ -295,7 +295,7 @@ The memory region model draws inspiration from F*'s HyperStack, a region-based m
 
 Each region has a parent, and the key invariant is this: a pointer to a region is valid only as long as that region exists. Stack frames are automatically deallocated on function return; arenas are deallocated when their scope ends; heap regions persist until explicitly freed.
 
-F# Native adopts this pattern. Region containment is verified at compile time, not enforced at runtime. If the compiler can prove that a pointer cannot escape its region, the code is accepted. If it cannot prove this, the code is rejected.
+Clef adopts this pattern. Region containment is verified at compile time, not enforced at runtime. If the compiler can prove that a pointer cannot escape its region, the code is accepted. If it cannot prove this, the code is rejected.
 
 ### 3.4 Access Kind Enforcement
 
@@ -309,7 +309,7 @@ Beyond region, pointers carry access permissions:
 
 These correspond to the CMSIS-standard volatile qualifiers used in embedded systems:
 
-| CMSIS Qualifier | C Definition | F# Native |
+| CMSIS Qualifier | C Definition | Clef |
 |-----------------|--------------|-----------|
 | `__I` | `volatile const` | `readOnly` |
 | `__O` | `volatile` | `writeOnly` |
@@ -355,7 +355,7 @@ let inline add (a: ^T) (b: ^T) : ^T
 let result = add 1 2
 ```
 
-In F# Native, there is no `System.Int32`. SRTP resolution must search elsewhere. CCS resolves against the Alloy witness hierarchy:
+In Clef, there is no `System.Int32`. SRTP resolution must search elsewhere. CCS resolves against the Alloy witness hierarchy:
 
 1. The concrete type's own members
 2. `BasicOps` for primitive operations
@@ -366,7 +366,7 @@ In F# Native, there is no `System.Int32`. SRTP resolution must search elsewhere.
 The same `add` function resolves differently:
 
 ```fsharp
-// F# Native resolution for `add 1 2`:
+// Clef resolution for `add 1 2`:
 // 1. Look for Alloy.Int32 members - not found
 // 2. Look in BasicOps - found: BasicOps.Add<int>
 // 3. Resolved witness: BasicOps, method: Add
@@ -395,7 +395,7 @@ This resolution metadata flows into the Program Semantic Graph (PSG), where subs
 
 ### 4.3 Resolution Metadata
 
-F# Native SRTP resolution captures richer metadata than standard F#:
+Clef SRTP resolution captures richer metadata than standard F#:
 
 ```fsharp
 type SRTPResolution = {
@@ -426,11 +426,11 @@ This approach depends on the BCL:
 2. The marshaling layer expects BCL types
 3. Exception handling assumes the CLR is present
 
-F# Native cannot use `DllImport`. Instead, it introduces a module convention for platform bindings.
+Clef cannot use `DllImport`. Instead, it introduces a module convention for platform bindings.
 
 ### 5.2 The Platform.Bindings Convention
 
-Platform bindings in F# Native follow a module naming convention:
+Platform bindings in Clef follow a module naming convention:
 
 ```fsharp
 module Platform.Bindings =
@@ -463,7 +463,7 @@ This separation allows Alloy to define the interface in pure F#, while Alex prov
 
 ### 5.4 Safety Boundaries
 
-Platform bindings are inherently unsafe: they cross the boundary between verified F# code and the operating system. F# Native tracks this through coeffects:
+Platform bindings are inherently unsafe: they cross the boundary between verified F# code and the operating system. Clef tracks this through coeffects:
 
 ```fsharp
 let writeData (data: array<byte>) : unit =
@@ -477,7 +477,7 @@ The coeffect system (described in Part VI) ensures that unsafe operations are ex
 
 One of the major areas of interest is how to expand a "native library system" for the Fidelity framework that can preserve all of the advantages of its operating mechanics. Many .NET libraries that "wrap" low-level C and C++ libraries offered some insight, so we are starting with a clean approach through our "Farscape" binding generator. This requires "hooks" to integrate F# wrappers into the library system of the Fidelity framework, and that means integrating those primitives into the pipeline in a way that native F# function wrappers can provide safe harbor for their integration, either as dynamic syscall external references or as pipelined targets for static binding in the LLVM LTO layer of compilation.
 
-C and C++ provide the low-level hardware access patterns that systems programming requires. F# Native incorporates CMSIS conventions for volatile qualifiers, structure layout control through `[<Struct>]` with packing and alignment, explicit type-safe pointer operations, and reserves space for inline assembly where platform-specific optimization demands it. All of this is documented while maintaining F#'s type safety guarantees.
+C and C++ provide the low-level hardware access patterns that systems programming requires. Clef incorporates CMSIS conventions for volatile qualifiers, structure layout control through `[<Struct>]` with packing and alignment, explicit type-safe pointer operations, and reserves space for inline assembly where platform-specific optimization demands it. All of this is documented while maintaining F#'s type safety guarantees.
 
 ## Part VI: Coeffects and Effect Tracking
 
@@ -485,7 +485,7 @@ C and C++ provide the low-level hardware access patterns that systems programmin
 
 Standard F# has no built-in mechanism for tracking side effects. A function with signature `int -> int` might be pure, might perform I/O, or might allocate memory; the type does not reveal this.
 
-F# Native introduces coeffects: annotations that describe what resources or effects a function requires:
+Clef introduces coeffects: annotations that describe what resources or effects a function requires:
 
 ```fsharp
 // Pure function: no side effects
@@ -562,7 +562,7 @@ let unsafeWrite data =
 
 ### 7.1 Stack Allocation
 
-The default memory strategy in F# Native is stack allocation. Value types live on the stack automatically:
+The default memory strategy in Clef is stack allocation. Value types live on the stack automatically:
 
 ```fsharp
 let point = { X = 1.0; Y = 2.0 }  // Stack allocated
@@ -573,7 +573,7 @@ Stack allocation requires no explicit management. Memory is automatically reclai
 
 ### 7.2 Arena Allocation
 
-For larger or dynamically-sized data, F# Native provides arena allocation:
+For larger or dynamically-sized data, Clef provides arena allocation:
 
 ```fsharp
 arena {
@@ -601,7 +601,7 @@ Static data is initialized at program start and never deallocated. It is appropr
 
 ### 7.4 Explicit Ownership (Future)
 
-F# Native reserves syntax for explicit ownership tracking:
+Clef reserves syntax for explicit ownership tracking:
 
 ```fsharp
 // Owned value: caller receives exclusive ownership
@@ -614,7 +614,7 @@ let processBuffer (buf: Borrowed<array<byte>>) : unit = ...
 let newOwner = move existingBuffer
 ```
 
-The relationship to Rust is one of inspiration, not imitation. Rust pioneered compile-time ownership tracking for memory safety, and F# Native will adapt these concepts to F#'s idioms rather than adopting Rust's syntax directly. The point is to have the compiler deal with these concerns without the design-time "interference" that Rust developers experience with having to deal with the borrow checker at every turn. We plan to provide options for managing this directly at design time where it is performance-critical, but for now our emphasis is on keeping the design-time experience relatively consistent with F# idioms.
+The relationship to Rust is one of inspiration, not imitation. Rust pioneered compile-time ownership tracking for memory safety, and Clef will adapt these concepts to F#'s idioms rather than adopting Rust's syntax directly. The point is to have the compiler deal with these concerns without the design-time "interference" that Rust developers experience with having to deal with the borrow checker at every turn. We plan to provide options for managing this directly at design time where it is performance-critical, but for now our emphasis is on keeping the design-time experience relatively consistent with F# idioms.
 
 ## Part VIII: The RAII Pattern
 
@@ -622,7 +622,7 @@ The relationship to Rust is one of inspiration, not imitation. Rust pioneered co
 
 RAII is a pattern from C++ where resources are tied to object lifetimes. When an object is created, it acquires resources; when the object is destroyed, it releases them.
 
-F# Native extends this pattern through its use expressions and computation expressions:
+Clef extends this pattern through its use expressions and computation expressions:
 
 ```fsharp
 let processFile path =
@@ -671,13 +671,13 @@ This predictability is essential for systems programming, where resource lifetim
 
 ### 9.1 The F* Connection
 
-F* is a verification-oriented programming language that can prove properties about programs. F# Native integrates with F* for design-time verification of memory properties. Key F* concepts that fsnative respects and in certain cases adopts include region identifiers as phantom type parameters, containment hierarchies with tree structures of stack frames and heap regions, preorders constraining how values in regions may evolve, and witnessed predicates tracking resource availability across code boundaries.
+F* is a verification-oriented programming language that can prove properties about programs. Clef integrates with F* for design-time verification of memory properties. Key F* concepts that Clef respects and in certain cases adopts include region identifiers as phantom type parameters, containment hierarchies with tree structures of stack frames and heap regions, preorders constraining how values in regions may evolve, and witnessed predicates tracking resource availability across code boundaries.
 
 This correspondence will continue to develop as Fidelity's continuation patterns with actors and arenas begins to become a more coherent part of the framework.
 
 ### 9.2 Decidable Properties
 
-Certain properties of F# Native types are decidable, meaning they can be verified automatically:
+Certain properties of Clef types are decidable, meaning they can be verified automatically:
 
 | Property | Verification Method |
 |----------|---------------------|
@@ -723,7 +723,7 @@ The hypergraph representation in Firefly carries proof obligations as edges, all
 
 ### 10.1 Recognizing BCL Dependencies
 
-The first step in migrating to F# Native is identifying BCL dependencies:
+The first step in migrating to Clef is identifying BCL dependencies:
 
 ```fsharp
 // BCL dependency: explicit System.String
@@ -771,16 +771,16 @@ For large codebases, migration can proceed incrementally:
 1. **Identify leaf modules**: Modules with no BCL dependencies in their public interface
 2. **Migrate leaf modules first**: These can be compiled with CCS independently
 3. **Abstract boundaries**: Define interfaces that work with both type systems
-4. **Migrate incrementally**: Move modules from standard F# to F# Native over time
+4. **Migrate incrementally**: Move modules from standard F# to Clef over time
 
 ## Conclusion
 
-The transition from F# on .NET to F# Native is a conceptual shift as much as a technical one. The managed runtime has abstracted away concerns that native compilation requires us to address: memory location, resource lifetimes, and the physical representation of types.
+The transition from F# on .NET to Clef is a conceptual shift as much as a technical one. The managed runtime has abstracted away concerns that native compilation requires us to address: memory location, resource lifetimes, and the physical representation of types.
 
-F# Native does not abandon F#'s strengths. Pattern matching, type inference, algebraic data types, and functional composition all remain. What changes is the relationship between source code and execution: the abstractions become transparent, the runtime disappears, and the programmer gains direct control over the machine.
+Clef does not abandon F#'s strengths. Pattern matching, type inference, algebraic data types, and functional composition all remain. What changes is the relationship between source code and execution: the abstractions become transparent, the runtime disappears, and the programmer gains direct control over the machine.
 
-This control comes with responsibility. Memory regions must be respected. Lifetimes must be valid. Resources must be released. But these responsibilities are not new burdens; they are the reality of native programming that the managed runtime previously hid. F# Native makes them visible and verifiable.
+This control comes with responsibility. Memory regions must be respected. Lifetimes must be valid. Resources must be released. But these responsibilities are not new burdens; they are the reality of native programming that the managed runtime previously hid. Clef makes them visible and verifiable.
 
-For the .NET developer willing to make this transition, F# Native offers something valuable: the expressive power of F# applied directly to the hardware, without compromise and without a runtime standing between your code and its execution.
+For the .NET developer willing to make this transition, Clef offers something valuable: the expressive power of F# applied directly to the hardware, without compromise and without a runtime standing between your code and its execution.
 
-Perhaps the most important lesson from this journey is methodological. F# Native was not designed in isolation from implementation. The type system emerged from the practical demands of making code compile and run correctly. The OCaml correspondence was discovered, not decreed. The memory region model arose from the need to distinguish peripheral registers from RAM, not from theoretical considerations about memory safety. This engineering-first approach, where theory follows practice rather than preceding it, may be uncomfortable for those who prefer clean derivations from first principles. But it has the virtue of grounding every abstraction in concrete necessity. What works, works because it had to work to solve a real problem.
+Perhaps the most important lesson from this journey is methodological. Clef was not designed in isolation from implementation. The type system emerged from the practical demands of making code compile and run correctly. The OCaml correspondence was discovered, not decreed. The memory region model arose from the need to distinguish peripheral registers from RAM, not from theoretical considerations about memory safety. This engineering-first approach, where theory follows practice rather than preceding it, may be uncomfortable for those who prefer clean derivations from first principles. But it has the virtue of grounding every abstraction in concrete necessity. What works, works because it had to work to solve a real problem.

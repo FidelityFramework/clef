@@ -2018,7 +2018,7 @@ val mkRecordExpr: TcGlobals -> RecordConstructionInfo * TyconRef * TypeInst * Re
 
 val mkIsInst: TType -> Expr -> range -> Expr
 
-// CCS: Null-related functions removed - fsnative-spec says "No null: Everything is voption"
+// CCS: Null-related functions removed - clef-lang-spec says "No null: Everything is voption"
 // Removed: mkNull, mkNullTest, mkNonNullTest, mkThrow, isThrow
 // These had no callers and mkNonNullTest used broken mkAsmExpr stub
 

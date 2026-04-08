@@ -1499,7 +1499,7 @@ let mkCoerceExpr(e, toTy, m, fromTy) =
 // - ILDataType type, AI_* instruction placeholders, ILInstr module removed
 // - mkAsmExpr removed - it returned wrong placeholder values (Coerce/Zero)
 // Native compilation uses MLIR operations, not IL assembly
-// See fsnative-spec for IL removal justification
+// See clef-lang-spec for IL removal justification
 
 let mkUnionCaseExpr(uc, tinst, args, m) =
     Expr.Op (TOp.UnionCase uc, tinst, args, m)
@@ -8065,7 +8065,7 @@ let mkThrow m ty expr =
 // They were only used by DetectAndOptimizeForEachExpression which has been removed
 // Native comparisons, arithmetic, and string operations are handled at MLIR level
 
-// CCS: mkNull removed - fsnative-spec: "No null: Everything is voption, no sentinel values"
+// CCS: mkNull removed - clef-lang-spec: "No null: Everything is voption, no sentinel values"
 // Const.Zero (null pointer) is not used in native compilation
 
 // reraise - parsed as library call - internally represented as op form.
@@ -9216,7 +9216,7 @@ let mkUnionCaseTest (g: TcGlobals) (e1, cref: UnionCaseRef, tinst, m) =
 // Called for when creating compiled form of 'let fixed ...'.
 //
 // CCS: mkNullTest, mkNonNullTest, mkNonNullCond removed
-// fsnative-spec: "No null: Everything is voption, no sentinel values"
+// clef-lang-spec: "No null: Everything is voption, no sentinel values"
 // mkNonNullTest used broken mkAsmExpr stub with AI_ldnull/AI_cgt_un
 // These functions had no external callers
 

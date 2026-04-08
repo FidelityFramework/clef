@@ -52,8 +52,8 @@
     <PackageDescription>Clef Compiler Service - F# parsing and type checking for native compilation via Firefly.</PackageDescription>
     <PackageTags>F#;fsharp;compiler;native;fidelity</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/FidelityFramework/fsnative</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/FidelityFramework/fsnative</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/FidelityFramework/clef</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/FidelityFramework/clef</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <!-- Version is set in Directory.Build.props -->
   </PropertyGroup>
@@ -433,7 +433,7 @@
 
   <!--
     FSharp.DependencyManager.Nuget - Required for #r directive resolution in FSI.
-    This is a project reference since we maintain it in fsnative.
+    This is a project reference since we maintain it in clef.
   -->
   <ItemGroup>
     <ProjectReference Include="$(RepoRoot)src/FSharp.DependencyManager.Nuget/FSharp.DependencyManager.Nuget.fsproj" />
