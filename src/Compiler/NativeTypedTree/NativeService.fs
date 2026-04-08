@@ -716,7 +716,7 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
         checkExpr env builder expr
 
     //---------------------------------------------------------------------
-    // Null - REJECTED in F# Native (FS8100)
+    // Null - REJECTED in Clef (FS8100)
     //---------------------------------------------------------------------
     | SynExpr.Null r ->
         addNullError r env
@@ -1174,7 +1174,7 @@ let private hasStructAttribute (attrs: SynAttributes) : bool =
     )
 
 /// Check if a type definition has the [<RequireQualifiedAccess>] attribute
-/// Per fsnative-spec: When true, field labels are NOT added to FieldLabels table
+/// Per clef-lang-spec: When true, field labels are NOT added to FieldLabels table
 let private hasRequireQualifiedAccessAttribute (attrs: SynAttributes) : bool =
     attrs |> List.exists (fun attrList ->
         attrList.Attributes |> List.exists (fun attr ->
@@ -1487,7 +1487,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
 
                 | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Record(_, fields, _), _) ->
                     // Record type
-                    // Per fsnative-spec: Field order determines memory layout
+                    // Per clef-lang-spec: Field order determines memory layout
                     // "Fidelity makes ALL memory layout decisions - MLIR/LLVM never determine layout"
                     let (SynComponentInfo(attrs, typars, _, _, _, _, _, _)) = typeInfo
                     let typeArity = match typars with Some tp -> tp.TyparDecls.Length | None -> 0

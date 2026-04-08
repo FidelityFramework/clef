@@ -20,9 +20,9 @@ CCS (Clef Compiler Service) is a pruned and significantly modified fork of the F
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Fidelity Ecosystem                          │
 │                                                                 │
-│  fsnative-spec          fsnative           Firefly              │
+│  clef-lang-spec          clef               Firefly              │
 │  ┌─────────────┐       ┌─────────────┐    ┌─────────────┐      │
-│  │ F# Native   │       │ CCS        │    │ PSG/Alex    │      │
+│  │ Clef   │       │ CCS        │    │ PSG/Alex    │      │
 │  │ Language    │──────▶│ Compiler    │───▶│ Native      │      │
 │  │ Spec        │ impl  │ Services    │uses│ Pipeline    │      │
 │  └─────────────┘       └─────────────┘    └─────────────┘      │
@@ -33,8 +33,8 @@ CCS (Clef Compiler Service) is a pruned and significantly modified fork of the F
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-- **fsnative-spec** defines the normative rules CCS must implement
-- **CCS** (this repository) implements the F# Native type system
+- **clef-lang-spec** defines the normative rules CCS must implement
+- **CCS** (this repository) implements the Clef type system
 - **Firefly** consumes CCS output for native code generation
 
 ## What CCS Provides
@@ -78,7 +78,7 @@ CCS exposes internal APIs that FCS keeps private:
 ### Building CCS
 
 ```bash
-cd ~/repos/fsnative
+cd ~/repos/clef
 dotnet build src/FSharp.Compiler.Service/FSharp.Compiler.Service.fsproj
 ```
 
@@ -87,7 +87,7 @@ dotnet build src/FSharp.Compiler.Service/FSharp.Compiler.Service.fsproj
 CCS is referenced as a project dependency in Firefly's `.fsproj`:
 
 ```xml
-<ProjectReference Include="$(FsnativePath)/src/FSharp.Compiler.Service/FSharp.Compiler.Service.fsproj" />
+<ProjectReference Include="$(ClefPath)/src/FSharp.Compiler.Service/FSharp.Compiler.Service.fsproj" />
 ```
 
 Firefly calls CCS for parsing and type checking:
@@ -105,7 +105,7 @@ let srtpResolutions = CCSPublicAPI.getSRTPResolutions checkResults
 ## Directory Structure
 
 ```
-fsnative/
+clef/
 ├── docs/
 │   └── fidelity/
 │       ├── README.md                 # This file
@@ -133,7 +133,7 @@ fsnative/
 | Document | Description |
 |----------|-------------|
 | [CCS_Pruning_Plan.md](CCS_Pruning_Plan.md) | Detailed implementation roadmap with phases |
-| [fsnative-spec](https://github.com/user/fsnative-spec) | Normative language specification |
+| [clef-lang-spec](https://github.com/user/clef-lang-spec) | Normative language specification |
 | [Firefly CCS_Ecosystem.md](../../../Firefly/docs/CCS_Ecosystem.md) | How all components integrate |
 
 ## Implementation Status

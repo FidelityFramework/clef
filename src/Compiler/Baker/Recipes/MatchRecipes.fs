@@ -12,7 +12,7 @@
 /// pattern match compilation. This reduces pattern matching to decision trees."
 ///
 /// See: docs/fidelity/Baker_Saturation_Architecture.md
-/// See: fsnative-spec/spec/patterns.md
+/// See: clef-lang-spec/spec/patterns.md
 module Clef.Compiler.Baker.Recipes.MatchRecipes
 
 open XParsec.Parsers

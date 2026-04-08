@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Houston Haynes / SpeakEZ Technologies
 // SPDX-License-Identifier: MIT
 
-/// Collection expression handlers for F# Native.
+/// Collection expression handlers for Clef.
 /// Handles: Tuple, Array, List, Record, AnonRecd, Indexing, Field access, Lazy, Seq
 module Clef.Compiler.NativeTypedTree.Expressions.Collections
 
@@ -144,7 +144,7 @@ let checkRecord
     let typeQualifier = fieldNodes |> List.tryPick (fun (_, q, _) -> q)
 
     // Resolve record type using Field Label Resolution Algorithm
-    // Per fsnative-spec: intersection of candidate sets for each field label
+    // Per clef-lang-spec: intersection of candidate sets for each field label
     let recordTy =
         match copyNode with
         | Some copyExpr ->

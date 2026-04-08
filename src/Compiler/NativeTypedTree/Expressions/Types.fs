@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-/// Type checking environment and helpers for F# Native expression checking.
+/// Type checking environment and helpers for Clef expression checking.
 module Clef.Compiler.NativeTypedTree.Expressions.Types
 
 open Clef.Compiler.Syntax
@@ -31,10 +31,10 @@ let instantiateTForall (ty: NativeType) (range: SourceRange) : NativeType =
     | _ -> ty
 
 //-------------------------------------------------------------------------
-// F# Native Diagnostic Codes (FS8xxx series)
+// Clef Diagnostic Codes (FS8xxx series)
 //-------------------------------------------------------------------------
 
-/// Error codes for F# Native specific diagnostics.
+/// Error codes for Clef specific diagnostics.
 /// These follow the FS8xxx range to distinguish from standard F# errors.
 module DiagnosticCodes =
     // Type system (FS8000-FS8099)
@@ -65,7 +65,7 @@ module DiagnosticCodes =
     let FS8401_UnsupportedConstruct = "FS8401"
 
     // BCL rejection (FS8500-FS8599)
-    // BCL types/namespaces are NEVER allowed in F# Native
+    // BCL types/namespaces are NEVER allowed in Clef
     let FS8500_BclReferenceNotAllowed = "FS8500"
     let FS8501_SystemNamespaceNotAllowed = "FS8501"
     let FS8502_MicrosoftNamespaceNotAllowed = "FS8502"
@@ -74,7 +74,7 @@ module DiagnosticCodes =
     let FS8600_PlatformBindingUndefined = "FS8600"
 
     // Record type resolution (FS8700-FS8799)
-    // Per fsnative-spec: Field Label Resolution Algorithm error codes
+    // Per clef-lang-spec: Field Label Resolution Algorithm error codes
     let FS8701_NoFields = "FS8701"
     let FS8702_UndefinedField = "FS8702"
     let FS8703_ConflictingFields = "FS8703"
@@ -275,25 +275,25 @@ let addWarning (r: range) (message: string) (env: TypeEnv) : unit =
 // Native-Specific Error Helpers
 //-------------------------------------------------------------------------
 
-/// Emit FS8100: Cannot use 'null' in F# Native
+/// Emit FS8100: Cannot use 'null' in Clef
 let addNullError (r: range) (env: TypeEnv) : unit =
     addNativeError DiagnosticCodes.FS8100_NullLiteral r
-        "Cannot use 'null' in F# Native; use 'ValueNone' for optional values" env
+        "Cannot use 'null' in Clef; use 'ValueNone' for optional values" env
 
-/// Emit FS8011: The type 'obj' is not available in F# Native
+/// Emit FS8011: The type 'obj' is not available in Clef
 let addObjError (r: range) (env: TypeEnv) : unit =
     addNativeError DiagnosticCodes.FS8011_ObjNotSupported r
-        "The type 'obj' (System.Object) is not available in F# Native; use discriminated unions or SRTP" env
+        "The type 'obj' (System.Object) is not available in Clef; use discriminated unions or SRTP" env
 
 /// Emit FS8012: Boxing is not supported
 let addBoxingError (r: range) (env: TypeEnv) : unit =
     addNativeError DiagnosticCodes.FS8012_BoxingNotSupported r
-        "Boxing is not supported in F# Native; the native type system does not include 'obj'" env
+        "Boxing is not supported in Clef; the native type system does not include 'obj'" env
 
-/// Emit warning for null annotation - ignored in F# Native
+/// Emit warning for null annotation - ignored in Clef
 let addNullWarning (r: range) (env: TypeEnv) : unit =
     addNativeWarning DiagnosticCodes.FS8101_UninitializedValue r
-        "Nullable annotation ignored in F# Native; native types are null-free by design" env
+        "Nullable annotation ignored in Clef; native types are null-free by design" env
 
 //-------------------------------------------------------------------------
 // Binding Management
@@ -395,7 +395,7 @@ let tryLookupTypeAbbrev (name: string) (env: TypeEnv) : NativeType option =
 
 //-------------------------------------------------------------------------
 // Record Type Infrastructure
-// Per fsnative-spec inference-procedures.md Field Label Resolution
+// Per clef-lang-spec inference-procedures.md Field Label Resolution
 //-------------------------------------------------------------------------
 
 /// Add a record type definition to the environment.
@@ -453,7 +453,7 @@ let lookupFieldLabels (fieldName: string) (env: TypeEnv) : FieldRef list =
     Map.tryFind fieldName env.FieldLabels |> Option.defaultValue []
 
 /// Resolve record type from field labels.
-/// Per fsnative-spec inference-procedures.md: Field Label Resolution Algorithm
+/// Per clef-lang-spec inference-procedures.md: Field Label Resolution Algorithm
 ///
 /// Steps:
 /// 1. For each field f_i in the expression, get C_i = candidates(f_i)
@@ -731,11 +731,11 @@ let extractFidelityExternAttribute (attrs: SynAttributes) : (string * string) op
 
 //-------------------------------------------------------------------------
 // BCL Rejection - CRITICAL
-// BCL types/namespaces are NEVER allowed in F# Native
+// BCL types/namespaces are NEVER allowed in Clef
 //-------------------------------------------------------------------------
 
 /// Check if a name references BCL (Base Class Library) namespaces
-/// BCL references are FORBIDDEN in F# Native - they require .NET runtime
+/// BCL references are FORBIDDEN in Clef - they require .NET runtime
 let isBclReference (name: string) : bool =
     // Only definitively BCL prefixes - no library-aware heuristics
     name.StartsWith("System.") ||
@@ -750,18 +750,18 @@ let isBclReference (name: string) : bool =
 let isUncheckedReference (name: string) : bool =
     name.StartsWith("Unchecked.") || name = "Unchecked"
 
-/// Emit FS8104: Unchecked.defaultof not allowed in F# Native
+/// Emit FS8104: Unchecked.defaultof not allowed in Clef
 let addUncheckedError (name: string) (r: range) (env: TypeEnv) : unit =
     addNativeError DiagnosticCodes.FS8104_UncheckedDefault r
-        $"'{name}' is not available in F# Native. Unchecked.defaultof requires runtime type information. Use explicit initialization, CCS intrinsics, or NativeDefault.zeroed instead." env
+        $"'{name}' is not available in Clef. Unchecked.defaultof requires runtime type information. Use explicit initialization, CCS intrinsics, or NativeDefault.zeroed instead." env
 
-/// Emit FS8500: BCL reference not allowed in F# Native
+/// Emit FS8500: BCL reference not allowed in Clef
 let addBclError (name: string) (r: range) (env: TypeEnv) : unit =
     if isUncheckedReference name then
         addUncheckedError name r env
     else
         addNativeError DiagnosticCodes.FS8500_BclReferenceNotAllowed r
-            $"BCL reference '{name}' is not available in F# Native. The .NET Base Class Library requires the .NET runtime. Use Alloy library equivalents instead." env
+            $"BCL reference '{name}' is not available in Clef. The .NET Base Class Library requires the .NET runtime. Use Alloy library equivalents instead." env
 
 //-------------------------------------------------------------------------
 // SynType → NativeType Boundary Conversion
@@ -928,7 +928,7 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
         resolveSynType env innerType
 
     | SynType.WithNull(innerType, _, _, _) ->
-        // Nullable annotation - ignored in F# Native (null-free)
+        // Nullable annotation - ignored in Clef (null-free)
         resolveSynType env innerType
 
     | SynType.MeasurePower(baseType, _, _) ->
