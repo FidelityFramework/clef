@@ -116,6 +116,3 @@ module RecipeSet =
     let hasRecipe (nodeId: NodeId) (rs: RecipeSet) : bool =
         Map.containsKey nodeId rs.Recipes
     
-    /// Get the replacement NodeId for an original node (if it has a recipe)
-    let tryGetReplacement (nodeId: NodeId) (rs: RecipeSet) : NodeId option =
-        Map.tryFind nodeId rs.ReplacementMap

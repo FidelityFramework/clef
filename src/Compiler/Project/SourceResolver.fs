@@ -109,14 +109,6 @@ module SourceResolver =
                         | missing :: _ ->
                             Error (DependencySourceFileNotFound (depName, missing))
 
-    /// Gets ordered source files from a dependency by reading its .fidproj.
-    /// Handles transitive dependencies automatically (deepest first).
-    /// Returns Error if dependency cannot be loaded - this is NEVER silently ignored.
-    let getDependencySources (depName: string) (depPath: string): Result<string list, SourceResolutionError> =
-        match getDependencySourcesRec depName depPath Set.empty [] with
-        | Error e -> Error e
-        | Ok (sources, _) -> Ok sources
-
     /// Resolves project source files to absolute paths.
     /// Preserves the order as declared in the fidproj.
     /// Returns Error if any source file does not exist.
@@ -180,43 +172,3 @@ module SourceResolver =
     let findProjectForSourceFile (sourceFile: string) (projects: FidprojOptions list): FidprojOptions option =
         projects |> List.tryFind (fun p -> containsSourceFile sourceFile p)
 
-    /// Gets the relative path of a source file within its project.
-    /// Returns None if the file is not part of the project.
-    let getRelativePath (sourceFile: string) (options: FidprojOptions): string option =
-        let normalizedSource = normalizePath sourceFile
-        let normalizedDir = normalizePath options.ProjectDirectory
-
-        if normalizedSource.StartsWith(normalizedDir + "/") then
-            Some (normalizedSource.Substring(normalizedDir.Length + 1))
-        else
-            // Check if it's in any dependency.
-            // dep.Path is a fidproj file path (resolved by FidprojLoader);
-            // its parent directory is the dependency's source base.
-            options.Dependencies
-            |> List.tryPick (fun dep ->
-                match dep.Path with
-                | Some depPath ->
-                    let normalizedDep =
-                        match Path.GetDirectoryName(normalizePath depPath) with
-                        | null -> normalizePath depPath
-                        | dir -> normalizePath dir
-                    if normalizedSource.StartsWith(normalizedDep + "/") then
-                        Some (normalizedSource.Substring(normalizedDep.Length + 1))
-                    else
-                        None
-                | None -> None)
-
-    /// Determines which dependency (if any) a source file belongs to.
-    /// Returns None if the file is a project source (not from any dependency).
-    let getDependencyForSource (sourceFile: string) (options: FidprojOptions): FidprojDependency option =
-        let normalizedSource = normalizePath sourceFile
-        options.Dependencies
-        |> List.tryFind (fun dep ->
-            match dep.Path with
-            | Some depPath ->
-                let normalizedDep =
-                    match Path.GetDirectoryName(normalizePath depPath) with
-                    | null -> normalizePath depPath
-                    | dir -> normalizePath dir
-                normalizedSource.StartsWith(normalizedDep + "/")
-            | None -> false)

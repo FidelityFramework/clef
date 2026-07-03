@@ -123,28 +123,9 @@ let emitIntrinsicRecipes (recipeSet: RecipeSet) : unit =
 let emitSaturationRecipes (recipeSet: RecipeSet) : unit =
     emitRecipeSetArtifact ArtifactId.SaturationRecipes recipeSet
 
-// Legacy compatibility - filename-based emission
-let emitRecipeSet (filename: string) (recipeSet: RecipeSet) : unit =
-    // Map old filenames to artifact IDs
-    let artifactId =
-        if filename.Contains("intrinsic") then ArtifactId.IntrinsicRecipes
-        elif filename.Contains("saturation") then ArtifactId.SaturationRecipes
-        else 0  // Unknown
-    emitRecipeSetArtifact artifactId recipeSet
-
 //=============================================================================
 // DIAGNOSTIC SERIALIZATION (using FSharp.Json)
 //=============================================================================
-
-/// Emit diagnostics as JSON using FSharp.Json
-let emitDiagnostics (artifactId: int) (diagnostics: RecipeDiagnostic list) : unit =
-    match getArtifactFilePath artifactId with
-    | None -> ()  // Emission disabled
-    | Some path ->
-        let json = Json.serialize diagnostics
-        ensureDirectoryForFilePath path
-        System.IO.File.WriteAllText(path, json)
-        if isVerbose() then printfn "[CCS] Wrote diagnostic artifact: %s" path
 
 /// Emit intrinsic diagnostics (artifact 02a)
 let emitIntrinsicDiagnostics (diagnostics: RecipeDiagnostic list) : unit =
