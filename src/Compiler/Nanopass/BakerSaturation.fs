@@ -22,7 +22,6 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration
 open Clef.Compiler.Nanopass.Recipe
 open Clef.Compiler.Baker.Recipes.Decomposition
-open Clef.Compiler.Baker.ShadowAST
 
 // Import existing recipe modules from Baker
 module ListRecipes = Clef.Compiler.Baker.Recipes.ListRecipes
