@@ -353,24 +353,9 @@
          that implement what Fidelity dictates. Fidelity controls memory layout - not MLIR. -->
     <!-- CodeGen removed - CCS uses Alex for code generation to MLIR -->
     <!-- FxResolver removed - .NET Framework resolution not needed -->
-    <Compile Include="DependencyManager/AssemblyResolveHandler.fsi">
-      <Link>Driver\AssemblyResolveHandler.fsi</Link>
-    </Compile>
-    <Compile Include="DependencyManager/AssemblyResolveHandler.fs">
-      <Link>Driver\AssemblyResolveHandler.fs</Link>
-    </Compile>
-    <Compile Include="DependencyManager/NativeDllResolveHandler.fsi">
-      <Link>Driver\NativeDllResolveHandler.fsi</Link>
-    </Compile>
-    <Compile Include="DependencyManager/NativeDllResolveHandler.fs">
-      <Link>Driver\NativeDllResolveHandler.fs</Link>
-    </Compile>
-    <Compile Include="DependencyManager/DependencyProvider.fsi">
-      <Link>Driver\DependencyProvider.fsi</Link>
-    </Compile>
-    <Compile Include="DependencyManager/DependencyProvider.fs">
-      <Link>Driver\DependencyProvider.fs</Link>
-    </Compile>
+    <!-- DependencyManager removed - No NuGet resolution, No REPL (see README) -->
+    <!-- FSharp.DependencyManager.Nuget projref removed with it -->
+
     <!-- CompilerConfig removed - BCL-dependent, no longer referenced -->
     <!-- CompilerImports removed - .NET assembly imports not needed for native -->
     <!-- CompilerDiagnostics removed - depends on deleted type checking modules -->
@@ -431,14 +416,6 @@
     <!-- FSharp.Json - Pure F# JSON serializer with no BCL dependencies (diagnostic output) -->
     <PackageReference Include="FSharp.Json" Version="0.4.1" />
 
-  </ItemGroup>
-
-  <!--
-    FSharp.DependencyManager.Nuget - Required for #r directive resolution in FSI.
-    This is a project reference since we maintain it in clef.
-  -->
-  <ItemGroup>
-    <ProjectReference Include="$(RepoRoot)src/FSharp.DependencyManager.Nuget/FSharp.DependencyManager.Nuget.fsproj" />
   </ItemGroup>
 
   <!-- Fidelity.Data - TOML/XML/YAML/JSON/CSV parser for .fidproj loading -->
