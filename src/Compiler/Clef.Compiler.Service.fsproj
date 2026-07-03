@@ -317,7 +317,6 @@
     <Compile Include="Nanopass\FoldIn.fs" />
     <Compile Include="Nanopass\Serialization.fs" />
     <!-- Baker - Post-construction semantic enrichment (peer to NativeTypedTree) -->
-    <Compile Include="Baker\Metadata.fs" />
     <Compile Include="Baker\ShadowAST.fs" />
     <Compile Include="Baker\ModuleInit.fs" />
     <Compile Include="Baker\Pipeline.fs" />
