@@ -151,20 +151,6 @@ let emptyResult nodeId : Result = {
     ShadowTree = None
 }
 
-/// Create result with shadow tree from context
-let mkResult 
-    (nodes: SemanticNode list) 
-    (rootId: NodeId) 
-    (auxFns: SemanticNode list)
-    (rootShadowId: ShadowId)
-    (semantic: SemanticShadow)
-    (ctx: Context) : Result =
-    let shadow = ctx.ShadowBuilder.Build(rootShadowId, semantic)
-    { NewNodes = nodes
-      ResultNodeId = rootId
-      AuxFunctions = auxFns
-      ShadowTree = Some shadow }
-
 /// Create result without shadow (for operations that don't need transparency)
 let mkResultNoShadow 
     (nodes: SemanticNode list) 
@@ -186,40 +172,6 @@ let getExpandedFrom (node: SemanticNode) : string option =
     match Map.tryFind MetadataKey_ExpandedFrom node.Metadata with
     | Some (MetadataValue.String name) -> Some name
     | _ -> None
-
-//-------------------------------------------------------------------------
-// Shadow Building Helpers
-//-------------------------------------------------------------------------
-
-/// Helper: Create a primitive call shadow (e.g., List.isEmpty)
-let shadowPrimitive (ctx: Context) (modName: string) (opName: string) (psgNode: SemanticNode) : ShadowId =
-    ctx.ShadowBuilder.Primitive(modName, opName, psgNode.Id, psgNode.Type)
-
-/// Helper: Create an application shadow
-let shadowApp (ctx: Context) (func: ShadowRef) (args: ShadowRef list) (psgNode: SemanticNode) : ShadowId =
-    ctx.ShadowBuilder.App(func, args, psgNode.Id, psgNode.Type)
-
-/// Helper: Create an if-then-else shadow
-let shadowIfThenElse (ctx: Context) (guard: ShadowRef) (thenBr: ShadowRef) (elseBr: ShadowRef) (psgNode: SemanticNode) : ShadowId =
-    ctx.ShadowBuilder.IfThenElse(guard, thenBr, elseBr, psgNode.Id, psgNode.Type)
-
-/// Helper: Create a let binding shadow
-let shadowLet (ctx: Context) (name: string) (value: ShadowRef) (body: ShadowRef) (isRec: bool) (psgNode: SemanticNode) : ShadowId =
-    ctx.ShadowBuilder.Let(name, value, body, isRec, psgNode.Id, psgNode.Type)
-
-/// Helper: Create a literal shadow (empty, none, etc.)
-let shadowLiteral (ctx: Context) (desc: string) (psgNode: SemanticNode) : ShadowId =
-    ctx.ShadowBuilder.Literal(desc, psgNode.Id, psgNode.Type)
-
-/// Helper: Create a variable reference shadow
-let shadowVar (ctx: Context) (name: string) (psgNode: SemanticNode) : ShadowId =
-    ctx.ShadowBuilder.Var(name, psgNode.Id, psgNode.Type)
-
-/// Helper: Wrap a real PSG node as a shadow reference
-let shadowReal (nodeId: NodeId) : ShadowRef = ShadowRef.Real nodeId
-
-/// Helper: Wrap a shadow ID as a shadow reference
-let shadowSynthetic (shadowId: ShadowId) : ShadowRef = ShadowRef.Synthetic shadowId
 
 /// Helper: Create a RecursivePatternShadow semantic description
 let mkRecursivePatternSemantic
