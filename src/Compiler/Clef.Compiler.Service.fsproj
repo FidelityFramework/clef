@@ -332,7 +332,6 @@
     <Compile Include="Baker\Recipes\SetRecipes.fs" />
     <Compile Include="Baker\Recipes\OptionRecipes.fs" />
     <Compile Include="Baker\Recipes\StringRecipes.fs" />
-    <Compile Include="Baker\Recipes\NativePtrRecipes.fs" />
     <Compile Include="Baker\Recipes\MatchRecipes.fs" />
     <!-- Nanopass passes - must come after Baker -->
     <Compile Include="Nanopass\IntrinsicElaboration.fs" />

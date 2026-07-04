@@ -31,7 +31,6 @@ module OptionRecipes = Clef.Compiler.Baker.Recipes.OptionRecipes
 module SeqRecipes = Clef.Compiler.Baker.Recipes.SeqRecipes
 module StringRecipes = Clef.Compiler.Baker.Recipes.StringRecipes
 module MatchRecipes = Clef.Compiler.Baker.Recipes.MatchRecipes
-module NativePtrRecipes = Clef.Compiler.Baker.Recipes.NativePtrRecipes
 
 //-------------------------------------------------------------------------
 // Type Extraction Helpers (from HOFDecomposition)
@@ -134,12 +133,6 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Seq, "getEnumerator" -> false
     // String operations
     | IntrinsicModule.String, "concat2" -> true
-    // NativePtr operations - transform to MemRef (F# semantics → MLIR semantics)
-    | IntrinsicModule.NativePtr, "stackalloc" -> true
-    | IntrinsicModule.NativePtr, "read" -> true
-    | IntrinsicModule.NativePtr, "write" -> true
-    | IntrinsicModule.NativePtr, "add" -> true
-    | IntrinsicModule.NativePtr, "copy" -> true
     // Everything else
     | _ -> false
 
@@ -248,11 +241,6 @@ let private applyIntrinsicRecipe
     | IntrinsicModule.String ->
         // String operations decompose to memory primitives
         StringRecipes.tryDecompose ctx info.Operation args returnType (Some returnType)
-
-    | IntrinsicModule.NativePtr ->
-        // NativePtr operations transform to MemRef intrinsics (F# semantics → MLIR semantics)
-        // This is the CRITICAL transformation that eliminates NativePtr from MiddleEnd
-        NativePtrRecipes.tryTransform info.Operation args returnType ctx.SourceRange ctx graph
 
     | _ -> None
 

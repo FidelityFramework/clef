@@ -55,9 +55,7 @@ type InterpolatedPart =
 [<RequireQualifiedAccess>]
 type IntrinsicModule =
     | Sys           // System calls (write, read, exit, nanosleep, etc.)
-    | NativePtr     // Pointer operations (get, set, add, stackalloc, etc.) - F# semantics
     | MemRef        // MLIR memref operations (alloca, load, store, storeIndexed) - MLIR semantics
-    | NativeStr     // Native string construction (fromPointer)
     | NativeDefault // Default value generation (zeroed)
     | String        // String operations (concat2, contains, etc.)
     | Array         // Array operations (zeroCreate, length, get, set)
@@ -88,7 +86,7 @@ type IntrinsicModule =
 [<RequireQualifiedAccess>]
 type IntrinsicCategory =
     | Platform      // Emits as platform-specific syscall (Sys.*, Console.*)
-    | Memory        // Emits as memory operation (NativePtr.get, set, stackalloc)
+    | Memory        // Emits as memory operation (MemRef.load, store, alloca)
     | Arithmetic    // Emits as arith dialect ops (op_Addition, etc.)
     | Comparison    // Emits as comparison ops (op_LessThan, etc.)
     | Bitwise       // Emits as bitwise ops (op_BitwiseAnd, etc.)

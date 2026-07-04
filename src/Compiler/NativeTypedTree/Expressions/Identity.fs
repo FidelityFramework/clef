@@ -126,7 +126,7 @@ and private resolveBinding (parts: string list) (fullName: string) (env: TypeEnv
                 BindingNode (fullName, actualType, binding.NodeId)
     | None ->
         // PARSER AMBIGUITY: LongIdent might be member access on a local binding.
-        // F# parser can produce LongIdent ["s"; "Pointer"] instead of DotGet
+        // F# parser can produce LongIdent ["r"; "Length"] instead of DotGet
         // when it doesn't know if the first part is a module or a value.
         // Try: first part as binding, rest as member access.
         // TODO: Factor this into a proper nanopass for cleaner architecture.
