@@ -940,15 +940,14 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
             children = [node1.Id; node2.Id])
 
     //---------------------------------------------------------------------
-    // Fixed: fixed expr (pin pointer)
+    // Fixed: fixed expr — C-marshaling vocabulary (GC pinning); no GC here,
+    // no pointer surface. Grammar is inherited unforked; the construct errors.
     //---------------------------------------------------------------------
-    | SynExpr.Fixed(innerExpr, _) ->
-        let innerNode = checkExpr env builder innerExpr
+    | SynExpr.Fixed _ ->
         builder.Create(
-            SemanticKind.AddressOf(innerNode.Id, true),
-            NativeType.TByref(innerNode.Type, ByrefKind.InOut),
-            range,
-            children = [innerNode.Id])
+            SemanticKind.Error "'fixed' is not supported in native compilation",
+            NativeType.TError "fixed expression",
+            range)
 
     //---------------------------------------------------------------------
     // Dynamic: expr?name (dynamic member access)

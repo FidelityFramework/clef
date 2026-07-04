@@ -45,7 +45,6 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         let modulePart = name.Substring(0, idx)
         let opPart = name.Substring(idx + 1)
         match modulePart with
-        | "NativePtr" -> Some (IntrinsicModule.NativePtr, opPart)
         | "MemRef" -> Some (IntrinsicModule.MemRef, opPart)
         | "Sys" -> Some (IntrinsicModule.Sys, opPart)
         | "String" -> Some (IntrinsicModule.String, opPart)
@@ -57,7 +56,6 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         | "FnPtr" -> Some (IntrinsicModule.FnPtr, opPart)
         | "Lazy" -> Some (IntrinsicModule.Lazy, opPart)
         | "Seq" -> Some (IntrinsicModule.Seq, opPart)
-        | "NativeStr" -> Some (IntrinsicModule.NativeStr, opPart)
         | "NativeDefault" -> Some (IntrinsicModule.NativeDefault, opPart)
         | "Math" -> Some (IntrinsicModule.Math, opPart)
         | "Arena" -> Some (IntrinsicModule.Arena, opPart)
@@ -76,59 +74,9 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
 // Intrinsic Resolvers by Category
 //-------------------------------------------------------------------------
 
-/// Resolve NativePtr.* operations
-let private resolveNativePtrOp (op: string) (range: SourceRange) : IntrinsicResolution =
-    let tyParamSpec = freshTypeParam "'T" TypeParamKind.Type range
-    let tyParam = NativeType.TVar tyParamSpec
-    let fullName = "NativePtr." + op
-    match op with
-    | "toNativeInt" ->
-        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(NativeType.TNativePtr tyParam, Types.nintType))
-        Resolved (mkIntrinsic IntrinsicModule.NativePtr op IntrinsicCategory.Memory fullName, ty)
-    | "ofNativeInt" ->
-        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(Types.nintType, NativeType.TNativePtr tyParam))
-        Resolved (mkIntrinsic IntrinsicModule.NativePtr op IntrinsicCategory.Memory fullName, ty)
-    | "toVoidPtr" ->
-        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TApp(voidptrTyCon, [])))
-        Resolved (mkIntrinsic IntrinsicModule.NativePtr op IntrinsicCategory.Memory fullName, ty)
-    | "ofVoidPtr" ->
-        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(NativeType.TApp(voidptrTyCon, []), NativeType.TNativePtr tyParam))
-        Resolved (mkIntrinsic IntrinsicModule.NativePtr op IntrinsicCategory.Memory fullName, ty)
-    | "get" ->
-        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TFun(Types.intType, tyParam)))
-        Resolved (mkIntrinsic IntrinsicModule.NativePtr op IntrinsicCategory.Memory fullName, ty)
-    | "set" ->
-        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TFun(Types.intType, NativeType.TFun(tyParam, Types.unitType))))
-        Resolved (mkIntrinsic IntrinsicModule.NativePtr op IntrinsicCategory.Memory fullName, ty)
-    | "stackalloc" ->
-        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(Types.intType, NativeType.TNativePtr tyParam))
-        Resolved (mkIntrinsic IntrinsicModule.NativePtr op IntrinsicCategory.Memory fullName, ty)
-    | "read" ->
-        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(NativeType.TNativePtr tyParam, tyParam))
-        Resolved (mkIntrinsic IntrinsicModule.NativePtr op IntrinsicCategory.Memory fullName, ty)
-    | "write" ->
-        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TFun(tyParam, Types.unitType)))
-        Resolved (mkIntrinsic IntrinsicModule.NativePtr op IntrinsicCategory.Memory fullName, ty)
-    | "add" ->
-        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TFun(Types.intType, NativeType.TNativePtr tyParam)))
-        Resolved (mkIntrinsic IntrinsicModule.NativePtr op IntrinsicCategory.Memory fullName, ty)
-    | "copy" ->
-        let ty = NativeType.TForall([tyParamSpec],
-            NativeType.TFun(NativeType.TNativePtr tyParam,
-                NativeType.TFun(NativeType.TNativePtr tyParam,
-                    NativeType.TFun(Types.intType, Types.unitType))))
-        Resolved (mkIntrinsic IntrinsicModule.NativePtr op IntrinsicCategory.Memory fullName, ty)
-    | "fill" ->
-        let ty = NativeType.TForall([tyParamSpec],
-            NativeType.TFun(NativeType.TNativePtr tyParam,
-                NativeType.TFun(tyParam,
-                    NativeType.TFun(Types.intType, Types.unitType))))
-        Resolved (mkIntrinsic IntrinsicModule.NativePtr op IntrinsicCategory.Memory fullName, ty)
-    | unknown ->
-        UnknownOperation $"Unknown NativePtr intrinsic: NativePtr.{unknown}"
-
 /// Resolve MemRef.* operations (MLIR memref semantics)
-/// These are TARGET OPERATIONS created by Baker during NativePtr transformation.
+/// These are TARGET OPERATIONS synthesized by Baker recipes (compiler-internal
+/// vocabulary over the internal TNativePtr representation — not a user surface).
 /// Alex witnesses these directly as memref dialect operations.
 let private resolveMemRefOp (op: string) (range: SourceRange) : IntrinsicResolution =
     let tyParamSpec = freshTypeParam "'T" TypeParamKind.Type range
@@ -371,19 +319,6 @@ let private resolveFormatOp (op: string) (_range: SourceRange) : IntrinsicResolu
         Resolved (mkIntrinsic IntrinsicModule.Format op IntrinsicCategory.Conversion fullName, ty)
     | unknown ->
         UnknownOperation $"Unknown Format intrinsic: Format.{unknown}. Available: int, int64, float, bool"
-
-/// Resolve NativeStr.* operations
-let private resolveNativeStrOp (op: string) (_range: SourceRange) : IntrinsicResolution =
-    let fullName = "NativeStr." + op
-    match op with
-    | "fromPointer" ->
-        // ptr:nativeptr<byte> -> len:nativeint -> string
-        // In MLIR: creates a new memref<?xi8> with specified length (NOT fat pointer struct)
-        // len is nativeint (maps to index) since it represents a buffer size/offset
-        let ty = NativeType.TFun(NativeType.TNativePtr Types.uint8Type, NativeType.TFun(Types.nintType, Types.stringType))
-        Resolved (mkIntrinsic IntrinsicModule.NativeStr op IntrinsicCategory.StringOp fullName, ty)
-    | unknown ->
-        UnknownOperation $"Unknown NativeStr intrinsic: NativeStr.{unknown}"
 
 /// Resolve NativeDefault.* operations
 let private resolveNativeDefaultOp (op: string) (range: SourceRange) : IntrinsicResolution =
@@ -832,14 +767,12 @@ let resolveModuleIntrinsic
     : IntrinsicResolution =
 
     match modl with
-    | IntrinsicModule.NativePtr -> resolveNativePtrOp op range
     | IntrinsicModule.MemRef -> resolveMemRefOp op range
     | IntrinsicModule.Sys -> resolveSysOp op range
     | IntrinsicModule.String -> resolveStringOp op range
     | IntrinsicModule.Array -> resolveArrayOp op range
     | IntrinsicModule.Parse -> resolveParseOp op range
     | IntrinsicModule.Format -> resolveFormatOp op range
-    | IntrinsicModule.NativeStr -> resolveNativeStrOp op range
     | IntrinsicModule.NativeDefault -> resolveNativeDefaultOp op range
     | IntrinsicModule.Crypto -> resolveCryptoOp op range
     | IntrinsicModule.Bits -> resolveBitsOp op range

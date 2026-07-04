@@ -1406,7 +1406,6 @@ module Types =
     let unitTyCon = mkNTUTypeConRef "unit" NTUKind.NTUunit (TypeLayout.Inline(0, 1))
     let stringTyCon = mkNTUTypeConRef "string" NTUKind.NTUstring TypeLayout.Opaque
     let decimalTyCon = mkNTUTypeConRef "decimal" NTUKind.NTUdecimal (TypeLayout.Inline(16, 8))
-    let voidptrTyCon = mkNTUTypeConRef "voidptr" NTUKind.NTUptr (TypeLayout.Inline(8, 8))
     
     // Array type constructor (arity 1, fat pointer layout)
     // C-04: No helper function - use TApp(arrayTyCon, [elemType]) directly
@@ -1504,5 +1503,3 @@ module Types =
         | Some NTUKind.NTUstring -> true
         | _ -> false
 
-// Re-export for convenience
-let voidptrTyCon = Types.voidptrTyCon

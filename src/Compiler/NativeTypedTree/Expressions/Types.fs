@@ -606,8 +606,6 @@ let resolveFieldType (baseType: NativeType) (fieldName: string) (env: TypeEnv) (
 
     // 1. Check intrinsic members (string.Pointer, string.Length, array.Length)
     match fieldName with
-    | "Pointer" when isStringType resolvedType ->
-        NativeType.TNativePtr(Types.uint8Type)
     | "Length" when isStringType resolvedType ->
         Types.intType
     | "Length" when isArrayType resolvedType ->
@@ -775,8 +773,7 @@ let addBclError (name: string) (r: range) (env: TypeEnv) : unit =
 /// Returns None if not a built-in type constructor.
 let private tryResolveBuiltinTypeConstructor (name: string) (args: NativeType list) : NativeType option =
     match name, args with
-    // Pointer types
-    | "nativeptr", [elem] -> Some (NativeType.TNativePtr elem)
+    // Byref family
     | "byref", [elem] -> Some (NativeType.TByref(elem, ByrefKind.InOut))
     | "inref", [elem] -> Some (NativeType.TByref(elem, ByrefKind.In))
     | "outref", [elem] -> Some (NativeType.TByref(elem, ByrefKind.Out))

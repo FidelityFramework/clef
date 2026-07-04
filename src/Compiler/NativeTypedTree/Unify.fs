@@ -124,11 +124,6 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
     | NativeType.TNativePtr elem1, NativeType.TNativePtr elem2 ->
         unify elem1 elem2 range
 
-    // Handle TNativePtr vs TApp(nativeptr, [elem]) - both represent the same concept
-    | NativeType.TNativePtr elem1, NativeType.TApp(tc, [elem2]) when tc.Name = "nativeptr" ->
-        unify elem1 elem2 range
-    | NativeType.TApp(tc, [elem1]), NativeType.TNativePtr elem2 when tc.Name = "nativeptr" ->
-        unify elem1 elem2 range
 
     // Lazy types (PRD-14)
     | NativeType.TLazy elem1, NativeType.TLazy elem2 ->
