@@ -783,6 +783,9 @@ let private tryResolveBuiltinTypeConstructor (name: string) (args: NativeType li
     | "list", [elem] -> Some (NativeType.TList elem)
     | "Map", [k; v] -> Some (NativeType.TMap(k, v))
     | "Set", [elem] -> Some (NativeType.TSet elem)
+    // C-04: array is NTUarray/FatPointer — already carried by arrayTyCon and
+    // every Array.* intrinsic; this makes it denotable in a signature.
+    | "array", [elem] -> Some (NativeType.TApp(Types.arrayTyCon, [elem]))
     // Built-in discriminated union type constructors
     | "option",  [elem]      -> Some (NativeType.TApp(optionTycon,  [elem]))
     | "voption", [elem]      -> Some (NativeType.TApp(voptionTycon, [elem]))
