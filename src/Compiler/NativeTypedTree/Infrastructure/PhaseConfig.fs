@@ -131,7 +131,7 @@ let getPhaseFilePath (phase: int) =
     getArtifactFilePath artifactId
 
 /// Enable all CCS artifacts (1-5)
-let enableAllFncsArtifacts (outputDir: string) =
+let enableAllCcsArtifacts (outputDir: string) =
     currentConfig <- {
         EmitIntermediates = true
         OutputDir = outputDir

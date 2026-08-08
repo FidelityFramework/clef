@@ -3,7 +3,7 @@
 /// Emits phase intermediate files as JSON for debugging and analysis.
 /// Each phase checkpoint calls into this module to write its state.
 ///
-/// Output files: fncs_phase_{N}_{suffix}.json
+/// Output files: ccs_phase_{N}_{suffix}.json
 module Clef.Compiler.NativeTypedTree.Infrastructure.PhaseEmitter
 
 open System
@@ -301,7 +301,7 @@ let emitDiff (diff: PhaseDiff) : unit =
     let config = getConfig()
     if not config.EmitIntermediates then ()
     else
-        let filename = sprintf "fncs_diff_%d_to_%d.json" diff.FromPhase.Number diff.ToPhase.Number
+        let filename = sprintf "ccs_diff_%d_to_%d.json" diff.FromPhase.Number diff.ToPhase.Number
         let path = Path.Combine(config.OutputDir, filename)
         try
             let json = serializeDiff diff
@@ -505,7 +505,7 @@ let emitExpressionView (graph: SemanticGraph) : unit =
                 ("expressions", exprsJson)
             ]
 
-            let path = Path.Combine(config.OutputDir, "fncs_expr.json")
+            let path = Path.Combine(config.OutputDir, "ccs_expr.json")
             File.WriteAllText(path, output, Encoding.UTF8)
             if PhaseConfig.isVerbose() then
                 printfn "[CCS] Wrote expression view: %s" path
@@ -525,7 +525,7 @@ let emitExpressionText (graph: SemanticGraph) : unit =
                     sprintf "=== Entry Point %d ===\n%s\n" i (ClefExpr.prettyPrint 0 expr))
                 |> String.concat "\n"
 
-            let path = Path.Combine(config.OutputDir, "fncs_expr.txt")
+            let path = Path.Combine(config.OutputDir, "ccs_expr.txt")
             File.WriteAllText(path, text, Encoding.UTF8)
             if PhaseConfig.isVerbose() then
                 printfn "[CCS] Wrote expression text: %s" path
