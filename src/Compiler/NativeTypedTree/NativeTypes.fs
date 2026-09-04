@@ -698,7 +698,7 @@ module TypeLayout =
 // Type Parameter Kind
 //-------------------------------------------------------------------------
 
-/// Distinguishes type parameters from measure parameters.
+/// Distinguishes type parameters from measure parameters and carrier parameters.
 /// In Clef, measures work on ANY type (not just numerics like in .NET F#).
 [<RequireQualifiedAccess>]
 type TypeParamKind =
@@ -707,6 +707,10 @@ type TypeParamKind =
     /// Measure parameter: [<Measure>] 'u
     /// Measures on non-numeric types enable memory region tracking, access control, etc.
     | Measure
+    /// Carrier parameter (design a.2): the numeric kind an operator scheme quantifies over,
+    /// `κ` in `κ<'u> -> κ<'u> -> κ<'u>`. The carrier variable is the numeric constraint (c.1):
+    /// it binds only to a numeric carrier, so a non-numeric operand fails to unify with it.
+    | Carrier
 
 //-------------------------------------------------------------------------
 // Type Constructor Reference
@@ -914,6 +918,11 @@ and [<RequireQualifiedAccess>] Constraint =
     | LayoutCompatible of NativeType * TypeLayout * SourceRange
     /// Type application: forall type must instantiate with given args to yield result
     | HasTypeArgs of forallTy: NativeType * args: NativeType list * resultTy: NativeType * SourceRange
+    /// Attached to a variable minted for an operand position of operator `op` (design c.1, c.3):
+    /// on a carrier variable it is the provenance CCS8000 names; on the type variable of `+` it
+    /// is the kind dispatch of D5, which fires when the variable binds (numeric or string, else
+    /// CCS8000) and travels with the variable through union, generalisation and instantiation.
+    | OperandOf of op: string * SourceRange
 
 //-------------------------------------------------------------------------
 // Native Type Representation
@@ -937,12 +946,14 @@ and [<RequireQualifiedAccess; NoComparison>] NativeType =
     /// Type variable (reference to a TypeParam)
     | TVar of typar: TypeParam
     
-    /// A numeric type (design a.2, plan D4): the carrier and the dimension. The carrier is the
-    /// numeric type constructor, which still carries the NTUKind with its interim width and is
-    /// still compared by name until step 7 (plan D7); the dimension is the measure component.
-    /// `float` is `TNum(floatTyCon, Dimension.one)` (`float = float<1>`), `float<kg m / s^2>`
-    /// the same carrier at that dimension. Identity is carrier plus `Dimension` (D2).
-    | TNum of carrier: TypeConRef * dim: Dimension
+    /// A numeric type (design a.2, plan D4): the carrier position and the dimension. The
+    /// carrier position holds the numeric type constructor (which still carries the NTUKind with
+    /// its interim width and is still compared by name until step 7, plan D7) or a carrier
+    /// variable of kind `TypeParamKind.Carrier`; the dimension is the measure component.
+    /// `float` is `TNum(Carrier floatTyCon, Dimension.one)` (`float = float<1>`),
+    /// `float<kg m / s^2>` the same carrier at that dimension, `κ<'u>` a carrier variable at a
+    /// measure variable. Identity is carrier plus `Dimension` (D2).
+    | TNum of carrier: CarrierRef * dim: Dimension
 
     /// A measure-sorted positional argument on a non-numeric constructor,
     /// `Arena<[<Measure>] 'lifetime>`: a dimension in type-argument position (design a.2).
@@ -1008,6 +1019,48 @@ and [<RequireQualifiedAccess>] ByrefKind =
     | In      // inref<T> - read-only
     | Out     // outref<T> - write-only
     | InOut   // byref<T> - read-write
+
+/// A carrier position (design a.2): a numeric type constructor, or a carrier variable. A carrier
+/// variable is a type parameter of kind `Carrier` whose cell in the one union-find store binds,
+/// kind-checked, to a constructor (`Bound (TNum (Carrier tc, one))`) or links to another
+/// carrier variable (`Bound (TVar other)`); `CarrierRef.resolve` is the only read of that cell.
+/// Interim (plan D7): the constructor is one of the per-width numeric constructors; at step 7
+/// it collapses to `Int | Real` beside a seal.
+and [<RequireQualifiedAccess; NoComparison>] CarrierRef =
+    | Carrier of tycon: TypeConRef
+    | CVar of var: TypeParam
+
+//-------------------------------------------------------------------------
+// Carrier positions: the one read of a carrier variable
+//-------------------------------------------------------------------------
+
+module CarrierRef =
+
+    /// Follow a carrier variable to what it stands for: the constructor it is bound to, or the
+    /// root variable of its class when it is still unbound. This is the only read of a carrier
+    /// cell; every reader of a `TNum` carrier goes through it (or `tryConstructor` below), so no
+    /// site outside this module inspects a carrier variable's binding. The cell's binding is
+    /// kind-checked: a carrier cell holds a constructor at the measure 1 or a link to another
+    /// carrier variable, and anything else is a kind violation, not a value.
+    let rec resolve (c: CarrierRef) : CarrierRef =
+        match c with
+        | CarrierRef.Carrier _ -> c
+        | CarrierRef.CVar tp ->
+            match tp.Parent with
+            | TypeParamState.Unbound -> c
+            | TypeParamState.Bound(NativeType.TVar other) -> resolve (CarrierRef.CVar other)
+            | TypeParamState.Bound(NativeType.TNum(carrier, dim)) when Map.isEmpty dim.Bases && Map.isEmpty dim.Vars ->
+                resolve carrier
+            | TypeParamState.Bound other ->
+                failwith $"CarrierRef.resolve: the cell of carrier variable {tp.Name} holds '%A{other}': kind violation"
+
+    /// The constructor a carrier position stands for, if it is resolved; `None` is the failure
+    /// value for a carrier variable that is still unbound, and a reader that needs a constructor
+    /// reports it (CCS8001 at a non-generalisable binding, design c.1), never defaults it.
+    let tryConstructor (c: CarrierRef) : TypeConRef option =
+        match resolve c with
+        | CarrierRef.Carrier tc -> Some tc
+        | CarrierRef.CVar _ -> None
 
 //-------------------------------------------------------------------------
 // Literal Values (NTU-typed)
@@ -1157,7 +1210,12 @@ let rec layoutOf (ty: NativeType) : TypeLayout =
                 TypeLayout.Inline(24, 8)  // tag + padding + fat ptr
             | _ -> tycon.Layout
         | _ -> tycon.Layout
-    | NativeType.TNum(carrier, _) -> carrier.Layout  // the carrier's layout; the dimension has no extent
+    // The carrier's layout; the dimension has no extent. An unresolved carrier variable has no
+    // layout yet, the same failure value a type variable has.
+    | NativeType.TNum(carrier, _) ->
+        match CarrierRef.tryConstructor carrier with
+        | Some tc -> tc.Layout
+        | None -> TypeLayout.Opaque
     | NativeType.TTuple(_, isStruct) when isStruct -> TypeLayout.Inline(-1, -1) // Size depends on elements
     | NativeType.TTuple(_, _) -> TypeLayout.Reference ArenaAffinity.CurrentActor
     | NativeType.TFun _ -> TypeLayout.Inline(16, 8)  // Function pointer + closure env
@@ -1286,6 +1344,30 @@ let instantiate (typars: TypeParam list) (args: NativeType list) (body: NativeTy
         failwith $"instantiate: arity mismatch - expected {List.length typars} args, got {List.length args}"
     
     let subst = List.zip typars args |> dict
+
+    // A measure parameter (the cell of a measure variable, quantified by design b.4) is
+    // substituted by identity in every dimension the body mentions; its argument is a dimension
+    // in a measure position (`TMeasure`, as the instantiation mints it). Anything else for a
+    // measure parameter is a kind violation, not a value.
+    let measureSubst : Map<int, Dimension> =
+        List.zip typars args
+        |> List.choose (fun (tp, arg) ->
+            match tp.Kind, arg with
+            | TypeParamKind.Measure, NativeType.TMeasure d -> Some (tp.Id, d)
+            | TypeParamKind.Measure, other ->
+                failwith $"instantiate: measure parameter {tp.Name} instantiated at a non-measure argument '%A{other}': kind violation"
+            | _ -> None)
+        |> Map.ofList
+    let substDim (d: Dimension) : Dimension =
+        if Map.isEmpty measureSubst then d
+        else
+            d.Vars
+            |> Map.fold
+                (fun acc v e ->
+                    match Map.tryFind v.Id measureSubst with
+                    | Some target -> Dimension.mul acc (Dimension.pow e target)
+                    | None -> Dimension.mul acc (Dimension.pow e (Dimension.ofVar v)))
+                (Dimension.mk d.Bases Map.empty)
     
     let rec go ty =
         match ty with
@@ -1308,8 +1390,15 @@ let instantiate (typars: TypeParam list) (args: NativeType list) (body: NativeTy
         | NativeType.TList elem -> NativeType.TList(go elem)  // PRD-13a
         | NativeType.TMap(k, v) -> NativeType.TMap(go k, go v)  // PRD-13a
         | NativeType.TSet elem -> NativeType.TSet(go elem)  // PRD-13a
-        // Measure variables are not TypeParams; instantiating them is CS-6's (design b.4).
-        | NativeType.TNum _ | NativeType.TMeasure _ -> ty
+        // A carrier parameter is substituted by the carrier of its argument, which is a numeric
+        // type at the measure 1 (the instantiation mints it so); the dimension is kept. A
+        // non-numeric argument for a carrier parameter is a kind violation, not a value.
+        | NativeType.TNum(CarrierRef.CVar tp, dim) when subst.ContainsKey tp ->
+            match subst.[tp] with
+            | NativeType.TNum(carrier, _) -> NativeType.TNum(carrier, substDim dim)
+            | other -> failwith $"instantiate: carrier parameter {tp.Name} instantiated at a non-numeric type '%A{other}': kind violation"
+        | NativeType.TNum(carrier, dim) -> NativeType.TNum(carrier, substDim dim)
+        | NativeType.TMeasure dim -> NativeType.TMeasure(substDim dim)
         | NativeType.TError _ -> ty
     
     go body
@@ -1343,8 +1432,13 @@ let rec formatType (ty: NativeType) : string =
     | NativeType.TNativePtr elem -> $"nativeptr<{formatType elem}>"
     // The one renderer for a dimension is Dimension.render (design a.4): a TNum at `one` renders
     // as its bare carrier, otherwise as the carrier applied to the normalised presentation.
+    // A carrier variable renders as its name.
     | NativeType.TNum(carrier, dim) ->
-        if dim = Dimension.one then carrier.Name else $"{carrier.Name}<{Dimension.render dim}>"
+        let name =
+            match CarrierRef.resolve carrier with
+            | CarrierRef.Carrier tc -> tc.Name
+            | CarrierRef.CVar tp -> tp.Name
+        if dim = Dimension.one then name else $"{name}<{Dimension.render dim}>"
     | NativeType.TMeasure dim -> Dimension.render dim
     | NativeType.TAnon(fields, isStruct) ->
         let fieldsStr = fields |> List.map (fun (n, t) -> $"{n}: {formatType t}") |> String.concat "; "
@@ -1422,7 +1516,7 @@ module Types =
         numericTyCons |> List.tryFind (fun tc -> tc.NTUKind = Some kind)
 
     /// A numeric type value at the dimensionless measure: `float = float<1>` (plan D4).
-    let numericType (carrier: TypeConRef) : NativeType = NativeType.TNum(carrier, Dimension.one)
+    let numericType (carrier: TypeConRef) : NativeType = NativeType.TNum(CarrierRef.Carrier carrier, Dimension.one)
     let private numType = numericType
 
     /// The seal spellings (design e.1), read in one place (e.2, sequence CS-5): every name a
@@ -1531,7 +1625,7 @@ module Types =
     /// A numeric type's kind is its carrier's (plan D7: the width still rides there).
     let tryGetNTUKind (ty: NativeType) : NTUKind option =
         match ty with
-        | NativeType.TNum(carrier, _) -> carrier.NTUKind
+        | NativeType.TNum(carrier, _) -> CarrierRef.tryConstructor carrier |> Option.bind (fun tc -> tc.NTUKind)
         | NativeType.TApp(tycon, _) -> tycon.NTUKind
         | _ -> None
 
@@ -1544,13 +1638,15 @@ module Types =
     /// Check if a type is an integer (signed or unsigned): a TNum whose carrier is an integer kind
     let isIntegerType (ty: NativeType) : bool =
         match ty with
-        | NativeType.TNum(carrier, _) -> carrier.NTUKind |> Option.exists NTUKind.isInteger
+        | NativeType.TNum(carrier, _) ->
+            CarrierRef.tryConstructor carrier |> Option.bind (fun tc -> tc.NTUKind) |> Option.exists NTUKind.isInteger
         | _ -> false
 
     /// Check if a type is a floating point type: a TNum whose carrier is a floating-point kind
     let isFloatType (ty: NativeType) : bool =
         match ty with
-        | NativeType.TNum(carrier, _) -> carrier.NTUKind |> Option.exists NTUKind.isFloatingPoint
+        | NativeType.TNum(carrier, _) ->
+            CarrierRef.tryConstructor carrier |> Option.bind (fun tc -> tc.NTUKind) |> Option.exists NTUKind.isFloatingPoint
         | _ -> false
 
     /// Check if a type is the string type

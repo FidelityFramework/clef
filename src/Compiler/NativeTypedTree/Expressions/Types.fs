@@ -28,7 +28,8 @@ module NR = Clef.Compiler.NativeTypedTree.NameResolution
 let instantiateTForall (ty: NativeType) (range: SourceRange) : NativeType =
     match ty with
     | NativeType.TForall(typars, body) ->
-        let freshVars = typars |> List.map (fun tp -> NativeType.TVar (freshTypeParamAuto tp.Kind range))
+        // Fresh variables of each parameter's kind (design b.4 step 4), from the one minting place.
+        let freshVars = typars |> List.map (fun tp -> freshInstanceOf tp range)
         NativeTypes.instantiate typars freshVars body
     | _ -> ty
 
@@ -92,6 +93,11 @@ module DiagnosticCodes =
     let FS0002_GenericWarning = "FS0002"
 
     // CCS series, type system, width and seals (CCS8000-CCS8099):
+    // CCS8000: a non-numeric operand at an operator's numeric position (design c.1, W-2).
+    let CCS8000_NotNumeric = "CCS8000"
+    // CCS8001: the kind of an operator's operands is still undetermined at a binding that is not
+    // generalisable (design c.1, c.3, D5): a carrier variable or the `+` dispatch left unbound.
+    let CCS8001_OperandKindUndetermined = "CCS8001"
     // docs/fidelity/phg/Dimensional_Step1_2_Design.md (f); allocation rule in the Plan's D3.
     let CCS8018_UnsupportedLiteralSuffix = "CCS8018"
 
@@ -105,6 +111,9 @@ module DiagnosticCodes =
     let CCS8044_MeasureVariableInLiteral = "CCS8044"
     let CCS8045_MeasureSortMismatch = "CCS8045"
     let CCS8046_NoDimension = "CCS8046"
+    // CCS8047: a measure variable left unresolved at a binding that is not generalisable (design
+    // b.4): reported, never defaulted to 1.
+    let CCS8047_UnresolvedMeasure = "CCS8047"
     let CCS8048_RationalMeasureExponent = "CCS8048"
     let CCS8049_ParameterisedMeasureDefinition = "CCS8049"
     let CCS8050_MeasureArityMismatch = "CCS8050"
@@ -127,6 +136,11 @@ type TypeEnv = {
     /// changeset builds: the `[<Measure>] type` declaration arm in NativeService.fs is not yet
     /// redirected here (sequence CS-4), so declarations still fall through to `TypeDefs`.
     Measures: MeasureEnv
+    /// The named measure variables of the enclosing binding (`'u` written in its parameter or
+    /// return annotations), one variable per name for the whole binding (spec §Generalization of
+    /// Measure Variables; design b.4). `withMeasureScope` extends it at a binding; the translator
+    /// seeds its scope from it, so `float<'u>` in two annotations is one variable.
+    MeasureScope: Map<string, MeasureVar>
     /// Record type definitions with full field information
     /// Per spec: "Field order determines memory layout"
     RecordDefs: Map<string, RecordTypeInfo>
@@ -213,6 +227,7 @@ let createTypeEnv () : TypeEnv =
         TypeDefs = Map.empty
         TypeAbbrevs = Map.empty
         Measures = MeasureEnv.empty
+        MeasureScope = Map.empty
         RecordDefs = Map.empty
         FieldLabels = Map.empty
         Constraints = ref []
@@ -846,7 +861,10 @@ let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
                 tyCon.ParamKinds
                 |> List.map (function
                     | TypeParamKind.Type -> freshTypeVar dummyRange
-                    | TypeParamKind.Measure -> NativeType.TMeasure (Dimension.ofVar (freshMeasureVar None)))
+                    | TypeParamKind.Measure -> NativeType.TMeasure (Dimension.ofVar (freshMeasureVar None))
+                    // No declared constructor takes a carrier parameter: carrier variables are
+                    // the operator schemes' (design c), never a constructor's position.
+                    | TypeParamKind.Carrier -> failwith $"resolveTypeName: constructor {tyCon.Name} declares a carrier-kinded parameter: kind violation")
             Some (NativeType.TApp(tyCon, args))
         | None ->
             // 3. NTU primitives: a numeric spelling reads the one spelling table (sequence CS-5);
@@ -1053,6 +1071,59 @@ let measureReferences (syntax: MeasureSyntax) : string list =
     | MeasureSyntax.Type t -> ofType t
     | MeasureSyntax.Applied(_, args, _) -> args |> List.collect ofType
 
+/// The names of the measure variables a type annotation writes in measure positions (the
+/// arguments of a numeric carrier or of a measure-parameterised constructor, a measure power):
+/// what a binding's scope is minted from. Reads the same forms the translator reads.
+let measureVariableNames (env: TypeEnv) (t: SynType) : string list =
+    let rec inMeasure (t: SynType) : string list =
+        match t with
+        | SynType.Var(SynTypar(id, _, _), _) -> [ id.idText ]
+        | SynType.App(head, _, args, _, _, true, _) -> (args @ [ head ]) |> List.collect inMeasure
+        | SynType.Tuple(_, segments, _) ->
+            segments |> List.collect (function SynTupleTypeSegment.Type ty -> inMeasure ty | _ -> [])
+        | SynType.MeasurePower(b, _, _) -> inMeasure b
+        | SynType.Paren(inner, _) -> inMeasure inner
+        | _ -> []
+    let headTakesMeasures (head: SynType) : bool =
+        match head with
+        | SynType.LongIdent(SynLongIdent(ids, _, _)) ->
+            let name = ids |> List.map (fun i -> i.idText) |> String.concat "."
+            (NativeTypes.Types.tryNumericTyConOfName name).IsSome
+            || (match tryLookupTypeDef name env with
+                | Some tc -> tc.ParamKinds |> List.exists (fun k -> k = TypeParamKind.Measure)
+                | None -> false)
+        | _ -> false
+    let rec inType (t: SynType) : string list =
+        match t with
+        | SynType.App(head, _, args, _, _, false, _) when headTakesMeasures head -> args |> List.collect inMeasure
+        | SynType.App(head, _, args, _, _, _, _) -> (head :: args) |> List.collect inType
+        | SynType.LongIdentApp(head, _, _, args, _, _, _) -> (head :: args) |> List.collect inType
+        | SynType.Fun(a, r, _, _) -> inType a @ inType r
+        | SynType.Tuple(_, segments, _) ->
+            segments |> List.collect (function SynTupleTypeSegment.Type ty -> inType ty | _ -> [])
+        | SynType.Array(_, elem, _) -> inType elem
+        | SynType.Paren(inner, _) -> inType inner
+        | SynType.MeasurePower(b, _, _) -> inMeasure b
+        | SynType.WithGlobalConstraints(inner, _, _)
+        | SynType.HashConstraint(inner, _)
+        | SynType.WithNull(inner, _, _, _)
+        | SynType.SignatureParameter(_, _, _, inner, _) -> inType inner
+        | _ -> []
+    inType t |> List.distinct
+
+/// The environment of a binding whose annotations write the measure variables `names`: each name
+/// not already in scope is minted once, so every annotation of the binding, and every annotation
+/// in its body, reads the same variable.
+let withMeasureScope (env: TypeEnv) (names: string list) : TypeEnv =
+    let scope =
+        names
+        |> List.fold
+            (fun (scope: Map<string, MeasureVar>) name ->
+                if Map.containsKey name scope then scope
+                else Map.add name (freshMeasureVar (Some name)) scope)
+            env.MeasureScope
+    { env with MeasureScope = scope }
+
 /// One translation from measure syntax to a `Dimension`, covering every row of the design (a.4)
 /// table, reached (from CS-4) by the type-position resolver, the literal resolver and the
 /// abbreviation registration so that no two paths can disagree. Pure: the environment is read
@@ -1187,7 +1258,7 @@ let dimensionOfSyntax
 /// (`'u`) is one variable within the syntax translated here; sharing it across the annotations of
 /// a binding, and generalising it, is CS-6's (design b.4).
 let translateDimension (env: TypeEnv) (syntax: MeasureSyntax) : Result<Dimension, MeasureFailure> =
-    let ctx = { Scope = Map.empty; Supply = freshMeasureSupply () }
+    let ctx = { Scope = env.MeasureScope; Supply = freshMeasureSupply () }
     dimensionOfSyntax env ctx syntax
     |> Result.map (fun (d, ctx') ->
         commitMeasureSupply ctx'.Supply
@@ -1206,10 +1277,10 @@ let private refuseMeasure (env: TypeEnv) (failure: MeasureFailure) : NativeType 
 /// takes no further argument: that is a sort mismatch, not a product.
 let private numericApplication (env: TypeEnv) (carrier: TypeConRef) (dim: Dimension) (typeArgs: SynType list) (r: range) : NativeType =
     if dim <> Dimension.one then
-        refuseMeasure env (MeasureFailure.SortMismatch(formatType (NativeType.TNum(carrier, dim)), r))
+        refuseMeasure env (MeasureFailure.SortMismatch(formatType (NativeType.TNum(CarrierRef.Carrier carrier, dim)), r))
     else
         match translateDimension env (MeasureSyntax.Applied(carrier, typeArgs, r)) with
-        | Ok d -> NativeType.TNum(carrier, d)
+        | Ok d -> NativeType.TNum(CarrierRef.Carrier carrier, d)
         | Result.Error failure -> refuseMeasure env failure
 
 /// A written argument in a measure-sorted position of a non-numeric constructor, `Arena<'l>`.
@@ -1232,7 +1303,8 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
                 (fun kind arg ->
                     match kind with
                     | TypeParamKind.Measure -> measureArgument env arg
-                    | TypeParamKind.Type -> resolveSynType env arg)
+                    | TypeParamKind.Type -> resolveSynType env arg
+                    | TypeParamKind.Carrier -> failwith $"resolveSynType: constructor {tyCon.Name} declares a carrier-kinded parameter: kind violation")
                 tyCon.ParamKinds
                 typeArgs
         else
@@ -1242,7 +1314,8 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
     /// sort (design a.4), a constructor in its parameters' sorts.
     let apply (head: NativeType) (typeArgs: SynType list) (r: range) : NativeType =
         match head with
-        | NativeType.TNum(carrier, dim) -> numericApplication env carrier dim typeArgs r
+        // A head resolved from a type name is always a constructor; no syntax names a carrier variable.
+        | NativeType.TNum(CarrierRef.Carrier carrier, dim) -> numericApplication env carrier dim typeArgs r
         | NativeType.TApp(tyCon, _) -> NativeType.TApp(tyCon, argumentsFor tyCon typeArgs)
         | other -> other
 

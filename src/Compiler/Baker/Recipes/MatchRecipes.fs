@@ -510,7 +510,7 @@ and private compilePattern
 /// unannotated literal is `one`). No inverse kind -> type table is kept here.
 and private numericLiteralType (kind: NTUKind) : NativeType =
     match Types.tryNumericTyConOfKind kind with
-    | Some carrier -> NativeType.TNum(carrier, Dimension.one)
+    | Some carrier -> NativeType.TNum(CarrierRef.Carrier carrier, Dimension.one)
     | None -> failwithf "numericLiteralType: no numeric carrier has kind %A" kind
 
 /// Helper to get type from literal

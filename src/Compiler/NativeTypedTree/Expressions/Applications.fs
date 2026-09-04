@@ -137,7 +137,8 @@ let checkApp
             //
             // This is the implicit counterpart to explicit TypeApp handling.
             // See memory: typeapp_preserves_kind_principle
-            let freshVars = typeParams |> List.map (fun _ -> freshTypeVar range)
+            // Fresh variables of each parameter's kind (design b.4 step 4), from the one minting place.
+            let freshVars = typeParams |> List.map (fun tp -> freshInstanceOf tp range)
             let instantiatedType = NativeTypes.instantiate typeParams freshVars bodyType
             // Now handle the instantiated type
             match instantiatedType with

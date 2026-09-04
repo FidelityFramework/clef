@@ -280,8 +280,10 @@ let private errorsToDiagnostics (errors: UnificationError list) : Diagnostic lis
             | MeasureMismatch(_, _, _, r) -> r
             | NoIntegerSolution(_, _, _, r) -> r
             | MeasureExponentOutOfRange(_, _, r) -> r
+            | NotNumeric(_, _, r) -> r
         let code =
             match e with
+            | NotNumeric _ -> DiagnosticCodes.CCS8000_NotNumeric
             | MeasureMismatch _ -> DiagnosticCodes.CCS8040_MeasureMismatch
             | NoIntegerSolution _ -> DiagnosticCodes.CCS8041_NoIntegerSolution
             | MeasureExponentOutOfRange _ -> DiagnosticCodes.CCS8048_RationalMeasureExponent
@@ -358,29 +360,166 @@ let private solveNewConstraints (env: TypeEnv) : unit =
         dischargeMemberConstraints env newOnes |> ignore
         solvedConstraintCount <- total
 
+/// A binding node whose right-hand side is a function expression (its one child is a Lambda).
+let private isFunctionBindingNode (builder: NodeBuilder) (node: SemanticNode) : bool =
+    match node.Kind, node.Children with
+    | SemanticKind.Binding _, [childId] ->
+        match Map.tryFind childId builder.Nodes with
+        | Some { Kind = SemanticKind.Lambda _ } -> true
+        | _ -> false
+    | _ -> false
+
+/// Whether `ancestorId` is an ancestor of `node` in the graph.
+let private hasAncestor (builder: NodeBuilder) (ancestorId: NodeId) (node: SemanticNode) : bool =
+    let rec up (id: NodeId option) =
+        match id with
+        | None -> false
+        | Some i when i = ancestorId -> true
+        | Some i -> Map.tryFind i builder.Nodes |> Option.bind (fun n -> n.Parent) |> up
+    up node.Parent
+
+/// The ids of the measure variables (in numeric positions) and carrier variables free in a type.
+let private freeMeasureAndCarrierIds (ty: NativeType) : Set<int> =
+    let measures = freeMeasureVars ty |> List.map (fun v -> v.Id)
+    let carriers = collectFreeTypeParams ty |> List.filter (fun tp -> tp.Kind = TypeParamKind.Carrier) |> List.map (fun tp -> tp.Id)
+    Set.ofList (measures @ carriers)
+
+/// The measure and carrier variables free in the environment at a top-level binding (design b.4
+/// step 2), resolved through the stores: those of every other binding the checker has not
+/// generalised, outside the binding's own subtree (its locals are its own). The resolvers are
+/// functions and cannot be enumerated, so the bindings checked so far are read from the graph.
+let private envFreeMeasureAndCarrierIds (builder: NodeBuilder) (binding: SemanticNode) : Set<int> =
+    builder.Nodes
+    |> Map.toSeq
+    |> Seq.map snd
+    |> Seq.filter (fun n ->
+        match n.Kind with
+        | SemanticKind.Binding _ -> n.Id <> binding.Id && not (hasAncestor builder binding.Id n)
+        | _ -> false)
+    |> Seq.map (fun n ->
+        match applySubst n.Type with
+        | NativeType.TForall _ -> Set.empty
+        | ty -> freeMeasureAndCarrierIds ty)
+    |> Set.unionMany
+
 /// Generalize a top-level, non-recursive, non-inline, non-extern function binding whose type
-/// still has free type variables after solving the constraints so far. The Binding node and
-/// the environment carry the TForall scheme (each use instantiates it freshly, see Identity);
-/// the Lambda keeps the monotype and is monomorphized per instantiation later.
+/// still has free type, carrier or measure variables after solving the constraints so far
+/// (design b.4). The Binding node and the environment carry the TForall scheme (each use
+/// instantiates it freshly, see Identity); the Lambda keeps the monotype and is monomorphized
+/// per instantiation later (carrier instantiations split bodies; measure-only ones do not, d.3).
 let private generalizeTopLevelFunction (builder: NodeBuilder) (env: TypeEnv) (node: SemanticNode) (isInline: bool) : NativeType =
     let isFunctionBinding =
-        match node.Kind, node.Children with
-        | SemanticKind.Binding (_, false, false, None), [childId] ->
-            match Map.tryFind childId builder.Nodes with
-            | Some { Kind = SemanticKind.Lambda _ } -> true
-            | _ -> false
+        match node.Kind with
+        | SemanticKind.Binding (_, false, false, None) -> isFunctionBindingNode builder node
         | _ -> false
     let isExtern = node.Metadata.ContainsKey "FidelityExtern.Library"
     if isFunctionBinding && not isInline && not isExtern then
         solveNewConstraints env
         let resolved = applySubst node.Type
-        match generalizeType resolved with
+        // The environment is walked only when there is a measure or carrier variable to subtract.
+        let envFree = if hasFreeMeasureOrCarrierVars resolved then envFreeMeasureAndCarrierIds builder node else Set.empty
+        match generalizeType envFree resolved with
         | NativeType.TForall _ as scheme ->
             builder.SetType(node.Id, scheme)
             scheme
         | _ -> node.Type
     else
         node.Type
+
+//-------------------------------------------------------------------------
+// The residual check at non-generalisable bindings (design b.4, c.1; CCS8047, CCS8001)
+//-------------------------------------------------------------------------
+
+/// The variables a binding's type may leave open because an enclosing binding quantifies them:
+/// the parameters of every enclosing scheme, and the free measure and carrier variables of every
+/// enclosing function binding the checker did not generalise (a recursive or nested function,
+/// generalisable by the spec and monomorphic here by this checker's gap). `None` under an
+/// `inline` function: its body is re-checked at every expansion site, so its variables are
+/// quantified by expansion and nothing under it is reported.
+let private quantifiedByEnclosing (builder: NodeBuilder) (node: SemanticNode) : Set<int> option =
+    let rec up (id: NodeId option) (acc: Set<int>) : Set<int> option =
+        match id |> Option.bind (fun i -> Map.tryFind i builder.Nodes) with
+        | None -> Some acc
+        | Some parent when parent.Metadata.ContainsKey "Inline" -> None
+        | Some parent ->
+            let acc =
+                match parent.Kind, applySubst parent.Type with
+                | SemanticKind.Binding _, NativeType.TForall(typars, _) ->
+                    typars |> List.fold (fun s tp -> Set.add tp.Id s) acc
+                | SemanticKind.Binding _, ty when isFunctionBindingNode builder parent ->
+                    Set.union acc (freeMeasureAndCarrierIds ty)
+                | _ -> acc
+            up parent.Parent acc
+    up node.Parent Set.empty
+
+/// After every constraint of the program is solved: a value binding (a binding whose right-hand
+/// side is not a function expression, the spec's non-generalisable case as this checker draws
+/// it) whose resolved type still mentions a measure variable no enclosing scheme quantifies is
+/// CCS8047; one that still mentions a carrier variable, or the `+` dispatch variable, is
+/// CCS8001. Never defaulted (design b.4, c.1). One diagnostic per code per binding, at the
+/// binding's range. Function bindings are not checked here: a generalised one carries its
+/// scheme, and a recursive or nested one is generalisable by the spec. A binding whose range
+/// already carries an error (`reported`) is not checked, and the variables its type leaves open
+/// are not reported at any other binding either: a variable left open by a failed unification
+/// is that failure's, not a second one.
+let private residualDiagnostics (builder: NodeBuilder) (reported: Diagnostic list) : Diagnostic list =
+    let alreadyFailed (node: SemanticNode) =
+        reported
+        |> List.exists (fun d ->
+            d.Severity = NativeDiagnosticSeverity.Error
+            && d.Range.File = node.Range.File
+            && d.Range.Start.Line >= node.Range.Start.Line
+            && d.Range.Start.Line <= node.Range.End.Line)
+    let openVariableIds (ty: NativeType) : Set<int> =
+        let dispatch = collectFreeTypeParams ty |> List.filter (fun tp -> (operandOf tp).IsSome) |> List.map (fun tp -> tp.Id)
+        Set.union (freeMeasureAndCarrierIds ty) (Set.ofList dispatch)
+    let tainted =
+        builder.Nodes
+        |> Map.toSeq
+        |> Seq.map snd
+        |> Seq.filter (fun n -> match n.Kind with SemanticKind.Binding _ -> alreadyFailed n | _ -> false)
+        |> Seq.map (fun n -> openVariableIds (applySubst n.Type))
+        |> Set.unionMany
+    let diagnostic (code: string) (message: string) (node: SemanticNode) : Diagnostic =
+        { Severity = NativeDiagnosticSeverity.Error
+          Code = code
+          Message = message
+          Range = node.Range
+          RelatedNodes = []
+          Reachability = ReachabilityContext.Unknown }
+    builder.Nodes
+    |> Map.toList
+    |> List.collect (fun (_, node) ->
+        match node.Kind with
+        | SemanticKind.Binding(name, _, _, _)
+            when not (isFunctionBindingNode builder node)
+                 && not (node.Metadata.ContainsKey "FidelityExtern.Library")
+                 && not (alreadyFailed node) ->
+            match applySubst node.Type with
+            | NativeType.TForall _ -> []
+            | ty ->
+                match quantifiedByEnclosing builder node with
+                | None -> []
+                | Some quantified ->
+                    let excused (id: int) = Set.contains id quantified || Set.contains id tainted
+                    let measures = freeMeasureVars ty |> List.filter (fun v -> not (excused v.Id))
+                    let operands =
+                        collectFreeTypeParams ty
+                        |> List.filter (fun tp ->
+                            not (excused tp.Id)
+                            && (tp.Kind = TypeParamKind.Carrier || (operandOf tp).IsSome))
+                    [ match measures with
+                      | _ :: _ ->
+                          yield diagnostic DiagnosticCodes.CCS8047_UnresolvedMeasure
+                                    $"The measure of '{name}' could not be resolved and this binding is not generalisable; annotate it" node
+                      | [] -> ()
+                      match operands with
+                      | tp :: _ ->
+                          let op = operandOf tp |> Option.defaultValue "(unknown)"
+                          yield diagnostic DiagnosticCodes.CCS8001_OperandKindUndetermined
+                                    $"The kind of the operands of '{op}' cannot be determined at this binding; annotate an operand" node
+                      | [] -> () ]
+        | _ -> [])
 
 //-------------------------------------------------------------------------
 // Entry Point Detection
@@ -534,6 +673,24 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
         
         PhaseEmitter.emitPhase output
 
+/// Record on every Application node whose function is a use of a generalised binding the instance
+/// of the scheme at that use, as the node's own annotation (design b.4 step 4): hover shows the
+/// instance while the binding keeps its scheme. Read from the resolved node map, before
+/// monomorphisation repoints the use sites.
+let private annotateInstantiations (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
+    nodes
+    |> Map.map (fun _ node ->
+        match node.Kind with
+        | SemanticKind.Application(fn, _) ->
+            match Map.tryFind fn nodes with
+            | Some { Kind = SemanticKind.VarRef(_, Some def); Type = instance } ->
+                match Map.tryFind def nodes with
+                | Some { Type = NativeType.TForall _ } ->
+                    { node with Metadata = Map.add SchemeMetadata.Instantiation (MetadataValue.Type instance) node.Metadata }
+                | _ -> node
+            | _ -> node
+        | _ -> node)
+
 /// Build a CheckResult from builder state and diagnostics
 /// platformContext: Optional platform context for freestanding builds (enables entry point elaboration)
 let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) (platformContext: PlatformContext option) : CheckResult =
@@ -547,6 +704,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         builder.Nodes
         |> Map.map (fun _id node ->
             { node with Type = applySubst node.Type })
+        // An application of a generalised binding records its instance (design b.4 step 4).
+        |> annotateInstantiations
         // Generic (TForall) top-level functions are compiled once per instantiation.
         |> Monomorphization.run
 
@@ -1554,8 +1713,8 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
         // Layout estimate of a union case payload (one word for anything without an inline layout)
         let estimatePayloadSize (ty: NativeType) : int =
             match ty with
-            | NativeType.TApp(tc, _) | NativeType.TNum(tc, _) ->
-                match tc.Layout with
+            | NativeType.TApp _ | NativeType.TNum _ ->
+                match layoutOf ty with
                 | TypeLayout.Inline(size, _) -> size
                 | TypeLayout.PlatformWord -> 8
                 | _ -> 8
@@ -1709,8 +1868,8 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // Helper to estimate type size for layout computation
                     let estimateTypeSize (ty: NativeType) : int =
                         match ty with
-                        | NativeType.TApp(tc, _) | NativeType.TNum(tc, _) ->
-                            match tc.Layout with
+                        | NativeType.TApp _ | NativeType.TNum _ ->
+                            match layoutOf ty with
                             | TypeLayout.Inline(size, _) -> size
                             | TypeLayout.PlatformWord -> 8  // 64-bit platform
                             | _ -> 8
@@ -2132,7 +2291,8 @@ let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
         |> List.map (fun (path, nodes) -> (path, nodes |> List.map (fun n -> n.Id)))
         |> Map.ofList
 
-    let diagnostics = solveAndGetDiagnostics finalEnv !(initialEnv.Constraints)
+    let solved = solveAndGetDiagnostics finalEnv !(initialEnv.Constraints)
+    let diagnostics = solved @ residualDiagnostics builder solved
 
     buildResult builder allNodes modulePaths diagnostics None
 
@@ -2177,7 +2337,8 @@ let checkParsedInputsWithPlatform (inputs: ParsedInput list) (platformContext: P
 
     // Solve constraints - now using ref cells, all environment copies share same constraints
     let constraintDiags = solveAndGetDiagnostics finalEnv !(initialEnv.Constraints)
-    let allDiagnostics = constraintDiags @ (List.rev !(initialEnv.Diagnostics))
+    let reported = constraintDiags @ (List.rev !(initialEnv.Diagnostics))
+    let allDiagnostics = reported @ residualDiagnostics builder reported
 
     buildResult builder allNodes modulePaths allDiagnostics platformContext
 

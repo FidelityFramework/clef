@@ -345,6 +345,21 @@ Decided 2026-09-04, all five by the user (D1 re-derived from the design corpus a
   lattice (PSG_to_PHG_Plan.md Phase 1), not here. `solveDim` itself stays pure over the values it is
   given (design note §b.2). (U-3) UoM-5 and UoM-8 turn on `*` and `/`, whose schemes the spec's operator
   table fixes; they are pulled forward into step 2's changeset CS-6 so step 2's gate stays as written.
+  Corrected 2026-09-04: the schemes quantify over a carrier variable (`κ<'u> -> κ<'v> -> κ<'u 'v>`,
+  design note §a.2, §c), and without it `let scale f v = f * v` cannot be typed for UoM-8, so CS-6
+  carries the carrier variable too (`CarrierRef = Carrier of the interim per-width constructor |
+  CVar`, `TypeParamKind.Carrier`, unified and generalised like a measure variable); the per-width
+  constructor stays the carrier's value until step 7 (U-1). This is the design's own element
+  arriving one changeset earlier than the sequence placed it, not a new decision.
+- **D8, representations are declared by the platform description (decided 2026-09-04; lands at
+  CS-7).** The language carries only a representation name (`int32`, `float64`, `Posit32`); the set
+  of representations a target offers, each with its capability, dynamic range and boundary
+  semantics, is declared by the platform description (`platform-bindings.md` descriptor
+  requirements; `numeric-selection.md` §7, §9 item 6), and a seal spelling resolves against that
+  declaration at saturation. The design note's §e.1 closed union of representation families
+  (`FixedInt`, `PlatformInt`, `Ieee`, `Posit`, `FixedPoint`) is therefore not the end form: it is
+  the vocabulary a declaration may use, and adding a family is a declaration, not a language
+  change. This is the same move made for width dimensions (§7.1 of the architecture chapter).
 - **D5, `+` on strings (decided: concatenates).** `+` dispatches on the kind of its operands: on numerics it
   is the unit-unified add with a range obligation; on strings it is the concat recipe with an extent
   obligation. No proof complication follows, because each dispatch emits its own obligation family.

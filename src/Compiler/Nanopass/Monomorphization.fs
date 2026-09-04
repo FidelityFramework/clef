@@ -21,6 +21,7 @@
 /// the unresolved variable then surfaces at emission, exactly as before this pass.
 module Clef.Compiler.Nanopass.Monomorphization
 
+open Clef.Compiler.NativeTypedTree.DimensionAlgebra
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
@@ -54,7 +55,18 @@ let private matchTypeArgs (typars: TypeParam list) (scheme: NativeType) (instanc
             match s, applySubst i with
             | NativeType.TApp (tc1, a1), NativeType.TApp (tc2, a2) when tc1.Name = tc2.Name && List.length a1 = List.length a2 ->
                 List.iter2 go a1 a2
-            | NativeType.TNum (c1, _), NativeType.TNum (c2, _) when c1.Name = c2.Name -> ()   // a numeric position: the dimension is not key material (d.3)
+            // A numeric position: the dimension is not key material (d.3). A carrier parameter of
+            // the scheme is learned from the instance's carrier (carrier-kinded parameters are key
+            // material); two constructors must agree by name; an instance whose carrier is still
+            // open teaches nothing.
+            | NativeType.TNum (c1, _), NativeType.TNum (c2, _) ->
+                match CarrierRef.resolve c1, CarrierRef.resolve c2 with
+                | CarrierRef.CVar tp, CarrierRef.Carrier tc when Set.contains tp.Id paramIds ->
+                    if not (Map.containsKey tp.Id subst) then
+                        subst <- Map.add tp.Id (NativeType.TNum (CarrierRef.Carrier tc, Dimension.one)) subst
+                | CarrierRef.Carrier tc1, CarrierRef.Carrier tc2 when tc1.Name = tc2.Name -> ()
+                | CarrierRef.CVar _, _ | _, CarrierRef.CVar _ -> ()
+                | _ -> ok <- false
             | NativeType.TFun (d1, r1), NativeType.TFun (d2, r2) -> go d1 d2; go r1 r2
             | NativeType.TTuple (e1, _), NativeType.TTuple (e2, _) when List.length e1 = List.length e2 -> List.iter2 go e1 e2
             | NativeType.TByref (e1, _), NativeType.TByref (e2, _) -> go e1 e2
@@ -256,84 +268,97 @@ let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
             let typars = rawTypars |> List.map (fun tp -> fst (find tp)) |> List.distinctBy (fun tp -> tp.Id)
             let schemeBody = canonicalizeVars rawSchemeBody
             let bindingName = match bindingNode.Kind with SemanticKind.Binding (n, _, _, _) -> n | _ -> "generic"
-            // Use sites: VarRefs whose definition is this binding
-            let useSites =
-                current
-                |> Map.toList
-                |> List.choose (fun (id, node) ->
-                    match node.Kind with
-                    | SemanticKind.VarRef (_, Some def) when def = bindingId -> Some (id, node)
-                    | _ -> None)
-            if List.isEmpty useSites then
-                // No instantiation anywhere: nothing to compile. Remove the generic original so no
-                // body with unbound type variables reaches emission.
-                progress <- true
-                match bindingNode.Parent with
-                | Some parentId ->
-                    match Map.tryFind parentId current with
-                    | Some ({ Kind = SemanticKind.ModuleDef (mname, members) } as parentNode) ->
-                        current <- Map.add parentId { parentNode with Kind = SemanticKind.ModuleDef (mname, members |> List.filter ((<>) bindingId)); Children = parentNode.Children |> List.filter ((<>) bindingId) } current
-                    | _ -> ()
-                | None -> ()
-                for id in collectSubtree current bindingId do
-                    current <- Map.remove id current
+            // A scheme with no key material (only measure-kinded parameters) is one body (d.3):
+            // the binding keeps its name and its monotype body (whose measure variables stay, as
+            // any monotype's do), and its use sites keep pointing at it; nothing is cloned or renamed.
+            let hasKeyMaterial = typars |> List.exists (fun tp -> tp.Kind <> TypeParamKind.Measure)
+            if not hasKeyMaterial then
+                current <- Map.add bindingId { bindingNode with Type = schemeBody } current
             else
-                // Recover the type arguments at every use site. A use site whose type cannot be
-                // matched against the scheme leaves this binding as it is (shared-variable
-                // behavior) rather than dangling a reference to a deleted node.
-                let matched =
-                    useSites
-                    |> List.map (fun (id, node) ->
-                        match matchTypeArgs typars schemeBody (canonicalizeVars node.Type) with
-                        | Some subst -> Some (instanceKey typars subst, subst, id)
-                        | None -> None)
-                let allMatched = matched |> List.forall Option.isSome
-                if not allMatched then () else
-                progress <- true
-                // Group use sites by their type-argument tuple
-                let groups =
-                    matched
-                    |> List.choose id
-                    |> List.groupBy (fun (key, _, _) -> key)
-                let mutable cloneIds : NodeId list = []
-                let mutable redirect : Map<NodeId, NodeId> = Map.empty
-                groups |> List.iteri (fun gi (_, members) ->
-                    let (_, subst, _) = List.head members
-                    // A measure-kinded parameter never appears in `subst` (matchTypeArgs), so it
-                    // is carried as itself: the clone keeps the scheme's measure variables.
-                    let args = typars |> List.map (fun tp -> match Map.tryFind tp.Id subst with Some ty -> ty | None -> NativeType.TVar tp)
-                    let substitute (ty: NativeType) = Clef.Compiler.NativeTypedTree.NativeTypes.instantiate typars args (canonicalizeVars ty)
-                    let cloneName = sprintf "%s__mono%d" bindingName (gi + 1)
-                    let newBindingId = NodeId.fresh()
-                    let (newLambdaId, clonedNodes) = cloneSubtree current lambdaId substitute (Some newBindingId)
-                    let newBinding =
-                        { bindingNode with
-                            Id = newBindingId
-                            Kind = SemanticKind.Binding (cloneName, false, false, None)
-                            Type = substitute schemeBody
-                            Children = [newLambdaId] }
-                    for n in clonedNodes do current <- Map.add n.Id n current
-                    current <- Map.add newBindingId newBinding current
-                    cloneIds <- cloneIds @ [newBindingId]
-                    for (_, _, useId) in members do redirect <- Map.add useId newBindingId redirect)
-                // Repoint use sites at their clone
-                for (useId, useNode) in useSites do
-                    match Map.tryFind useId redirect with
-                    | Some target ->
-                        let name = match useNode.Kind with SemanticKind.VarRef (n, _) -> n | _ -> bindingName
-                        current <- Map.add useId { useNode with Kind = SemanticKind.VarRef (name, Some target) } current
+                // Use sites: VarRefs whose definition is this binding
+                let useSites =
+                    current
+                    |> Map.toList
+                    |> List.choose (fun (id, node) ->
+                        match node.Kind with
+                        | SemanticKind.VarRef (_, Some def) when def = bindingId -> Some (id, node)
+                        | _ -> None)
+                if List.isEmpty useSites then
+                    // No instantiation anywhere: nothing to compile. Remove the generic original so no
+                    // body with unbound type variables reaches emission.
+                    progress <- true
+                    match bindingNode.Parent with
+                    | Some parentId ->
+                        match Map.tryFind parentId current with
+                        | Some ({ Kind = SemanticKind.ModuleDef (mname, members) } as parentNode) ->
+                            current <- Map.add parentId { parentNode with Kind = SemanticKind.ModuleDef (mname, members |> List.filter ((<>) bindingId)); Children = parentNode.Children |> List.filter ((<>) bindingId) } current
+                        | _ -> ()
                     | None -> ()
-                // Replace the generic original in its ModuleDef by the clones, and drop it
-                match bindingNode.Parent with
-                | Some parentId ->
-                    match Map.tryFind parentId current with
-                    | Some ({ Kind = SemanticKind.ModuleDef (mname, members) } as parentNode) ->
-                        let replaced = members |> List.collect (fun m -> if m = bindingId then cloneIds else [m])
-                        let children = parentNode.Children |> List.collect (fun m -> if m = bindingId then cloneIds else [m])
-                        current <- Map.add parentId { parentNode with Kind = SemanticKind.ModuleDef (mname, replaced); Children = children } current
-                    | _ -> ()
-                | None -> ()
-                // Drop the generic original and its subtree
-                for id in collectSubtree current bindingId do
-                    current <- Map.remove id current
+                    for id in collectSubtree current bindingId do
+                        current <- Map.remove id current
+                else
+                    // Recover the type arguments at every use site. A use site whose type cannot be
+                    // matched against the scheme leaves this binding as it is (shared-variable
+                    // behavior) rather than dangling a reference to a deleted node.
+                    let matched =
+                        useSites
+                        |> List.map (fun (id, node) ->
+                            match matchTypeArgs typars schemeBody (canonicalizeVars node.Type) with
+                            | Some subst -> Some (instanceKey typars subst, subst, id)
+                            | None -> None)
+                    let allMatched = matched |> List.forall Option.isSome
+                    if not allMatched then () else
+                    progress <- true
+                    // Group use sites by their type-argument tuple
+                    let groups =
+                        matched
+                        |> List.choose id
+                        |> List.groupBy (fun (key, _, _) -> key)
+                    let mutable cloneIds : NodeId list = []
+                    let mutable redirect : Map<NodeId, NodeId> = Map.empty
+                    groups |> List.iteri (fun gi (_, members) ->
+                        let (_, subst, _) = List.head members
+                        // A measure-kinded parameter never appears in `subst` (matchTypeArgs), so it
+                        // is carried as itself: the clone keeps the scheme's measure variables. A
+                        // parameter the use site left open is carried as itself too, in its kind's form.
+                        let itself (tp: TypeParam) =
+                            match tp.Kind with
+                            | TypeParamKind.Carrier -> NativeType.TNum (CarrierRef.CVar tp, Dimension.one)
+                            | TypeParamKind.Measure -> NativeType.TMeasure (Dimension.ofVar (measureVarOf tp))
+                            | TypeParamKind.Type -> NativeType.TVar tp
+                        let args = typars |> List.map (fun tp -> match Map.tryFind tp.Id subst with Some ty -> ty | None -> itself tp)
+                        let substitute (ty: NativeType) = Clef.Compiler.NativeTypedTree.NativeTypes.instantiate typars args (canonicalizeVars ty)
+                        let cloneName = sprintf "%s__mono%d" bindingName (gi + 1)
+                        let newBindingId = NodeId.fresh()
+                        let (newLambdaId, clonedNodes) = cloneSubtree current lambdaId substitute (Some newBindingId)
+                        let newBinding =
+                            { bindingNode with
+                                Id = newBindingId
+                                Kind = SemanticKind.Binding (cloneName, false, false, None)
+                                Type = substitute schemeBody
+                                Children = [newLambdaId] }
+                        for n in clonedNodes do current <- Map.add n.Id n current
+                        current <- Map.add newBindingId newBinding current
+                        cloneIds <- cloneIds @ [newBindingId]
+                        for (_, _, useId) in members do redirect <- Map.add useId newBindingId redirect)
+                    // Repoint use sites at their clone
+                    for (useId, useNode) in useSites do
+                        match Map.tryFind useId redirect with
+                        | Some target ->
+                            let name = match useNode.Kind with SemanticKind.VarRef (n, _) -> n | _ -> bindingName
+                            current <- Map.add useId { useNode with Kind = SemanticKind.VarRef (name, Some target) } current
+                        | None -> ()
+                    // Replace the generic original in its ModuleDef by the clones, and drop it
+                    match bindingNode.Parent with
+                    | Some parentId ->
+                        match Map.tryFind parentId current with
+                        | Some ({ Kind = SemanticKind.ModuleDef (mname, members) } as parentNode) ->
+                            let replaced = members |> List.collect (fun m -> if m = bindingId then cloneIds else [m])
+                            let children = parentNode.Children |> List.collect (fun m -> if m = bindingId then cloneIds else [m])
+                            current <- Map.add parentId { parentNode with Kind = SemanticKind.ModuleDef (mname, replaced); Children = children } current
+                        | _ -> ()
+                    | None -> ()
+                    // Drop the generic original and its subtree
+                    for id in collectSubtree current bindingId do
+                        current <- Map.remove id current
     current
