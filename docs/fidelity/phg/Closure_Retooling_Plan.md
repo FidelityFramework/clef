@@ -236,13 +236,12 @@ harness run at every step and must not move.
    `backend-lowering-architecture` §4.2/§7.5–6 rewritten to the multi-value
    form; `Gaining Closure` §"The Witnessed Form" updated; `mlir-plugins`
    README/ROADMAP mark `flat-closure-lowering` retired.
-8. **Supersede the DCont/INet dialect claims** that still read as live:
-   `MLIRNanopass.fs:5,15-16,139-140`, `WebView_Desktop_Architecture.md:225-226`,
-   `C-04-CoreCollections.md` §15, clef `ccs-specification.md` §12.6. Each
-   becomes a pointer to `Delimited_Continuations_Architecture` §7 (the witnessed
-   form is a discriminant + frame + `scf.index_switch`). `Single_Flattening`
-   §38/§61 stay: they already place net vocabulary below the boundary, for
-   CGRA-class targets only.
+8. **Supersede the stale design claims.** The full classified inventory is
+   [Design_Supersession_Register.md](./Design_Supersession_Register.md): three
+   normative spec chapters still bind the retired forms (c1–c3, a decision
+   about authority), seven documents state the old position as current (b),
+   and four are stale since Increment 1 (d). Category (b) and (d) can land
+   now; c2 lands with step 7; c1/c3/c4 land with the suspension recipe.
 
 ## 7. The drift gates — checked in CI, not remembered
 
