@@ -262,6 +262,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\Types.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Elaboration.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Core.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\PlatformResolution.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\NodeBuilder.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Reachability.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Traversal.fs" />
@@ -305,6 +306,7 @@
     <Compile Include="Baker\Ingredients\SaturationCombinators.fs" />
     <Compile Include="Baker\Ingredients\Primitives.fs" />
     <Compile Include="Baker\Ingredients\Patterns.fs" />
+    <Compile Include="Baker\Ingredients\Obligations.fs" />
     <!-- Baker Recipes - HOF decomposition templates (PRD-13a) -->
     <Compile Include="Baker\Recipes\Decomposition.fs" />
     <Compile Include="Baker\Recipes\SeqRecipes.fs" />
@@ -314,9 +316,13 @@
     <Compile Include="Baker\Recipes\OptionRecipes.fs" />
     <Compile Include="Baker\Recipes\StringRecipes.fs" />
     <Compile Include="Baker\Recipes\MatchRecipes.fs" />
+    <Compile Include="Baker\Recipes\ObligationRecipes.fs" />
     <!-- Nanopass passes - must come after Baker -->
     <Compile Include="Nanopass\IntrinsicElaboration.fs" />
     <Compile Include="Nanopass\BakerSaturation.fs" />
+    <!-- Pass 5 - obligations minted into V and F at saturation; design-time discharge -->
+    <Compile Include="Nanopass\ObligationElaboration.fs" />
+    <Compile Include="Nanopass\ObligationDischarge.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
 
     <Compile Include="NativeTypedTree\NativeService.fs" />

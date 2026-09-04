@@ -141,6 +141,7 @@ let private updateKindRefs (replacementMap: Map<NodeId, NodeId>) (kind: Semantic
     | SemanticKind.PlatformBinding _
     | SemanticKind.Intrinsic _
     | SemanticKind.PatternBinding _
+    | SemanticKind.Obligation _
     | SemanticKind.Error _ -> kind
 
 /// Update all NodeId references in a node's Children list
@@ -240,6 +241,12 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         Platform = graph.Platform
         ModuleClassifications = SemanticGraph.mkModuleClassifications nodesWithParents
         SeqSaturation = SemanticGraph.mkSeqSaturation nodesWithParents
+        // F survives fold-in with its references repointed at replacements.
+        Edges =
+            graph.Edges |> List.map (fun e ->
+                { e with
+                    Sources = e.Sources |> List.map (updateRef replacementMap)
+                    Target = updateRef replacementMap e.Target })
     }
 
     // NOTE: Reachability validation removed (Feb 2026)

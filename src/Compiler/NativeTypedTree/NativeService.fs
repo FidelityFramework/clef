@@ -43,6 +43,8 @@ module Monomorphization = Clef.Compiler.Nanopass.Monomorphization
 module IntrinsicElaboration = Clef.Compiler.Nanopass.IntrinsicElaboration
 module BakerSaturation = Clef.Compiler.Nanopass.BakerSaturation
 module RecipeSerialization = Clef.Compiler.Nanopass.Serialization
+module ObligationElaboration = Clef.Compiler.Nanopass.ObligationElaboration
+module ObligationDischarge = Clef.Compiler.Nanopass.ObligationDischarge
 
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.NativeTypedTree.Unify
@@ -487,6 +489,13 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
             Nodes = nodeOutputs
             EntryPoints = graph.DeclarationRoots |> List.map (fun (id, _) -> NodeId.value id)
             Diagnostics = diagStrings
+            Edges =
+                graph.Edges |> List.map (fun e ->
+                    { PhaseTypes.PhaseEdgeOutput.Sources = e.Sources |> List.map NodeId.value
+                      Target = NodeId.value e.Target
+                      Class = sprintf "%A" e.Class
+                      Role = sprintf "%A" e.Role
+                      Ordinal = e.Ordinal })
         }
         
         PhaseEmitter.emitPhase output
@@ -520,6 +529,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         ModuleClassifications = SemanticGraph.mkModuleClassifications resolvedNodes
         // Seq saturation computed lazily from SeqExpr nodes (codata pattern)
         SeqSaturation = SemanticGraph.mkSeqSaturation resolvedNodes
+        // F is empty at construction; enrichment mints into it at saturation.
+        Edges = []
     }
 
     // Phase 1: Emit structural construction result
@@ -577,6 +588,18 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             markUnreachable foldedGraph
         else
             pruneUnreachable foldedGraph
+
+    //=========================================================================
+    // Pass 5: Obligation Elaboration -- the declared platform, cross-compiled
+    // into this graph, cross-applied with the saturated program. Obligations
+    // are minted into V and F by the Baker obligation recipes (C-01 14.5;
+    // Obligation_Residency 3) and discharged from F at design time (06a/06b).
+    // Runs after final reachability: the layout obligation ranges over the
+    // complete reachable literal set. Obligation nodes are off the emission
+    // spine; the witness never sees them (PHG paper 2.4).
+    //=========================================================================
+    let finalGraph = ObligationElaboration.foldIn (ObligationElaboration.elaborate finalGraph) finalGraph
+    ObligationDischarge.emit finalGraph  // Artifacts 06a/06b: the design-time dispatch
 
     // Phase 5: Emit final result
     emitPhaseIfEnabled PhaseTypes.PhaseId.Final finalGraph diagnostics
@@ -2057,7 +2080,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
     | ParsedInput.SigFile _ ->
         // Signature files not yet supported
         {
-            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty }
+            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty; Edges = [] }
             Diagnostics = [{
                 Severity = NativeDiagnosticSeverity.Warning
                 Code = "FS0000"

@@ -333,6 +333,7 @@ module SemanticGraph =
         Platform = None
         ModuleClassifications = lazy Map.empty
         SeqSaturation = lazy Map.empty
+        Edges = []
     }
 
     /// Create an empty semantic graph with platform context
@@ -344,6 +345,7 @@ module SemanticGraph =
         Platform = Some platform
         ModuleClassifications = lazy Map.empty
         SeqSaturation = lazy Map.empty
+        Edges = []
     }
 
     /// Set the platform context on a graph
@@ -391,3 +393,34 @@ module SemanticGraph =
     /// Get all bindings in the graph
     let bindings (graph: SemanticGraph) : SemanticNode list =
         nodesOfKind (function SemanticKind.Binding _ -> true | _ -> false) graph
+
+    //---------------------------------------------------------------------
+    // F: the hyperedge set. Queries are pure projections; additions return
+    // a new graph. The emission traversal never calls these (PHG paper 2.4).
+    //---------------------------------------------------------------------
+
+    /// Add nodes to V.
+    let addNodes (nodes: SemanticNode list) (graph: SemanticGraph) : SemanticGraph =
+        { graph with Nodes = nodes |> List.fold (fun acc n -> Map.add n.Id n acc) graph.Nodes }
+
+    /// Add hyperedges to F.
+    let addEdges (edges: Hyperedge list) (graph: SemanticGraph) : SemanticGraph =
+        { graph with Edges = graph.Edges @ edges }
+
+    /// Edges whose target is `id`: what produces or constrains this node.
+    let edgesInto (id: NodeId) (graph: SemanticGraph) : Hyperedge list =
+        graph.Edges |> List.filter (fun e -> e.Target = id)
+
+    /// Edges in whose source set `id` appears: what this node produces or constrains.
+    let edgesFrom (id: NodeId) (graph: SemanticGraph) : Hyperedge list =
+        graph.Edges |> List.filter (fun e -> List.contains id e.Sources)
+
+    /// Every obligation node, with its record, in NodeId order (deterministic
+    /// for the ledger and for twin pairing).
+    let obligations (graph: SemanticGraph) : (SemanticNode * ObligationInfo) list =
+        graph.Nodes
+        |> Map.toList
+        |> List.choose (fun (_, n) ->
+            match n.Kind with
+            | SemanticKind.Obligation info -> Some (n, info)
+            | _ -> None)

@@ -138,6 +138,7 @@ let private mapKind (r: NodeId -> NodeId) (f: NativeType -> NativeType) (kind: S
     | SemanticKind.Deref e -> SemanticKind.Deref (r e)
     | SemanticKind.Set (t, v) -> SemanticKind.Set (r t, r v)
     | SemanticKind.PlatformBinding _ -> kind
+    | SemanticKind.Obligation _ -> kind
     | SemanticKind.Intrinsic _ -> kind
     | SemanticKind.TraitCall (m, tys, a) -> SemanticKind.TraitCall (m, List.map f tys, r a)
     | SemanticKind.Quote (e, t) -> SemanticKind.Quote (r e, t)
