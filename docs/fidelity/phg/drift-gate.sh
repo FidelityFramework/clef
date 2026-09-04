@@ -65,6 +65,7 @@ RETIRED=(
   '[Ii]nline-by-default|inlined by default|fsil default|\(fsil\)'   # inline-by-default was tried and reverted (PSG explosion); inline is explicit and semantic
   'resolved by Alex|erased metadata|Alex resolves dimensional'    # dimensions never erase; CCS resolves them at saturation against the platform description; Alex reads
   '\bFS[0-9]{4}\b'                                              # decision D3 (2026-09-04): every FS-prefixed diagnostic retires to the CCS series; the mapping table lands with hardening step 4
+  '\b(int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|nint|unint|float32|posit8|posit16|posit32|posit64)TyCon\b'   # plan D7 interim: per-width numeric carriers; width leaves the type at step 7 (one Int and one Real carrier beside a seal column)
 )
 
 # A line that carries one of these markers is talking *about* the retired term, not using it.
@@ -96,6 +97,8 @@ ALLOW_FILES=(
 # Each row is a Closure_Retooling_Plan / Phase 3 deliverable. Reported, never failing; remove a
 # row when its replacement lands, and the gate becomes an error for that file automatically.
 SCHEDULED=(
+  'clef/src::TyCon'                                             # hardening step 7 removes the per-width carriers; until then their count is reported here
+  'Composer/src::TyCon'                                         # same
   'BAREWire/docs::FS[0-9]{4}'                               # BAREWire's own FS9xxx analyzer codes retire to CCS with the step-4 table
   'ClefAutoComplete::FS[0-9]{4}'                             # FCS fork: its codes are the F# compiler's; disposition is archive (Lattice_Consumer_Contract.md)
   'clef/src::\bFS[0-9]{4}\b'                                    # hardening step 4: the compiler still emits FS codes

@@ -289,32 +289,30 @@ let private resolveArrayOp (op: string) (range: SourceRange) : IntrinsicResoluti
 /// Resolve Parse.* operations (string → numeric)
 let private resolveParseOp (op: string) (_range: SourceRange) : IntrinsicResolution =
     let fullName = "Parse." + op
+    // The parsers the native library provides; the target type is read from the one spelling
+    // table (sequence CS-5).
     match op with
-    | "int" ->
-        let ty = NativeType.TFun(Types.stringType, Types.intType)
-        Resolved (mkIntrinsic IntrinsicModule.Parse op IntrinsicCategory.Conversion fullName, ty)
-    | "int64" ->
-        let ty = NativeType.TFun(Types.stringType, Types.int64Type)
-        Resolved (mkIntrinsic IntrinsicModule.Parse op IntrinsicCategory.Conversion fullName, ty)
-    | "float" ->
-        let ty = NativeType.TFun(Types.stringType, Types.floatType)
-        Resolved (mkIntrinsic IntrinsicModule.Parse op IntrinsicCategory.Conversion fullName, ty)
+    | "int" | "int64" | "float" ->
+        match Types.tryNumericTyConOfName op with
+        | Some carrier ->
+            let ty = NativeType.TFun(Types.stringType, Types.numericType carrier)
+            Resolved (mkIntrinsic IntrinsicModule.Parse op IntrinsicCategory.Conversion fullName, ty)
+        | None -> UnknownOperation $"Parse.{op}: no numeric carrier is spelled '{op}'"
     | unknown ->
         UnknownOperation $"Unknown Parse intrinsic: Parse.{unknown}. Available: int, int64, float"
 
 /// Resolve Format.* operations (numeric → string)
 let private resolveFormatOp (op: string) (_range: SourceRange) : IntrinsicResolution =
     let fullName = "Format." + op
+    // The formatters the native library provides; the source type is read from the one spelling
+    // table (sequence CS-5).
     match op with
-    | "int" ->
-        let ty = NativeType.TFun(Types.intType, Types.stringType)
-        Resolved (mkIntrinsic IntrinsicModule.Format op IntrinsicCategory.Conversion fullName, ty)
-    | "int64" ->
-        let ty = NativeType.TFun(Types.int64Type, Types.stringType)
-        Resolved (mkIntrinsic IntrinsicModule.Format op IntrinsicCategory.Conversion fullName, ty)
-    | "float" | "float64" | "double" ->
-        let ty = NativeType.TFun(Types.floatType, Types.stringType)
-        Resolved (mkIntrinsic IntrinsicModule.Format op IntrinsicCategory.Conversion fullName, ty)
+    | "int" | "int64" | "float" | "float64" | "double" ->
+        match Types.tryNumericTyConOfName op with
+        | Some carrier ->
+            let ty = NativeType.TFun(Types.numericType carrier, Types.stringType)
+            Resolved (mkIntrinsic IntrinsicModule.Format op IntrinsicCategory.Conversion fullName, ty)
+        | None -> UnknownOperation $"Format.{op}: no numeric carrier is spelled '{op}'"
     | "bool" ->
         let ty = NativeType.TFun(Types.boolType, Types.stringType)
         Resolved (mkIntrinsic IntrinsicModule.Format op IntrinsicCategory.Conversion fullName, ty)
@@ -959,20 +957,11 @@ let tryResolveConversion (name: string) (range: SourceRange) : (IntrinsicInfo * 
         let ty = NativeType.TFun(tyParam, resultType)
         Some (info, ty)
 
-    match name with
-    | "float" | "float64" | "double" -> mkConvIntrinsic "toFloat" Types.floatType
-    | "int" -> mkConvIntrinsic "toInt" Types.intType           // Platform word (NTUint)
-    | "int32" -> mkConvIntrinsic "toInt32" Types.int32Type       // Fixed 32-bit (NTUint32)
-    | "int64" -> mkConvIntrinsic "toInt64" Types.int64Type
-    | "uint" -> mkConvIntrinsic "toUInt" Types.uintType           // Platform word unsigned (NTUuint)
-    | "byte" | "uint8" -> mkConvIntrinsic "toByte" Types.uint8Type
-    | "sbyte" | "int8" -> mkConvIntrinsic "toSByte" Types.int8Type
-    | "int16" -> mkConvIntrinsic "toInt16" Types.int16Type
-    | "uint16" -> mkConvIntrinsic "toUInt16" Types.uint16Type
-    | "uint32" -> mkConvIntrinsic "toUInt32" Types.uint32Type
-    | "uint64" -> mkConvIntrinsic "toUInt64" Types.uint64Type
-    | "float32" | "single" -> mkConvIntrinsic "toFloat32" Types.float32Type
-    | "char" -> mkConvIntrinsic "toChar" Types.charType
-    | "nativeint" -> mkConvIntrinsic "toNativeInt" Types.nintType
-    | "unativeint" -> mkConvIntrinsic "toUNativeInt" Types.unintType
-    | _ -> None
+    // A numeric spelling reads the one spelling table (sequence CS-5); `char` is the one
+    // non-numeric conversion intrinsic.
+    match Types.tryConversionOfName name with
+    | Some (op, carrier) -> mkConvIntrinsic op (Types.numericType carrier)
+    | None ->
+        match name with
+        | "char" -> mkConvIntrinsic "toChar" Types.charType
+        | _ -> None

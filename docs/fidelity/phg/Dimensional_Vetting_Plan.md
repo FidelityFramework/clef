@@ -180,7 +180,13 @@ the horizons impose are `Horizon_Requirements.md`.
    the annotation. Gate: W-1, W-4, W-5, W-6, and `width-inference.md` §10 items 1, 2, 4, 5, 7, plus
    accept programs for the three seeding rules of §2 (a literal is a point interval; a comparison bounds
    the branch; a counter `mod N` has range `[0, N-1]`) with their expected widths under the §3 formula; the
-   seal check and the conversion coverage of §7.1–7.2 (L-4, L-9) land here. §10 item 3 and the real cases
+   seal check and the conversion coverage of §7.1–7.2 (L-4, L-9) land here. This step retires the D7
+   scaffolding: the per-width numeric carriers (`int8TyCon` … `posit64TyCon`) collapse to one integer
+   and one real carrier beside a seal column in `Types.numericSpellings`, the name comparison of
+   carriers in `Unify.fs` goes, `NativeLiteral` carries its seal rather than an `NTUKind`, and
+   Composer's width reads key on the node's seal and range. The drift gate reports every surviving
+   per-width carrier on every run (scheduled rows for `clef/src` and `Composer/src`); when this step
+   lands the rows are removed and any survivor fails the gate. §10 item 3 and the real cases
    of item 6 belong to step 8. Requirements from the horizons (`Horizon_Requirements.md` C3): the width is
    derived from the carried interval, never stored beside it as an independent fact; loop fixpoints close
    inside the analysis with ground bounds, and no nonlinear integer term is ever posed to a solver
