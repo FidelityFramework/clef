@@ -29,10 +29,10 @@ In .NET, the CLR provides these implementations. In Fidelity's native compilatio
 Collection operations fall into two categories:
 
 **Primitives** (Alex witnesses directly to MLIR):
-- `List.empty` → null pointer
-- `List.isEmpty` → null check
-- `List.head` → GEP + load
-- `List.tail` → GEP + load  
+- `List.empty` → the static sentinel cell's index (no allocation)
+- `List.isEmpty` → literal comparison `tag = Empty`
+- `List.head` → `memref.load` of the head slot (guarded by the tag test)
+- `List.tail` → `memref.load` of the tail index  
 - `List.cons` → arena alloc + stores
 
 **HOFs** (Baker decomposes to PSG):

@@ -288,8 +288,9 @@ let mkIfThenElseNode
     { node with Children = children }
 
 /// Create an empty collection intrinsic call (List.empty, Map.empty, Set.empty)
-/// Note: Empty collections are represented as intrinsic calls, not null literals
-/// at the PSG level. Alex witnesses these to null pointers.
+/// Note: Empty collections are represented as intrinsic calls at the PSG level. The settled
+/// witnessed form is the static sentinel node's index (spec map/set/list representation chapters);
+/// INTERIM: Alex still witnesses these to a null, which the sentinel recipe retires.
 let mkEmptyCollectionNode
     (ctx: Context)
     (collModule: IntrinsicModule)

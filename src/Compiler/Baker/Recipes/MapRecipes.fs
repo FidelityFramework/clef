@@ -4,11 +4,12 @@
 /// Baker Map Recipes - Decomposition of Map HOFs to AVL tree primitives.
 ///
 /// Map is represented as an AVL tree with nodes: {key, value, left, right, height}
-/// Empty map = null pointer
+/// Links are bounded arena-relative indices. Empty map = the static sentinel node (height 0) at
+/// offset 0 of the arena (spec map-representation §2). INTERIM: the code still emits a null.
 ///
 /// PRIMITIVE OPERATIONS (Alex witnesses directly):
-/// - empty: returns null pointer
-/// - isEmpty: null check
+/// - empty: returns the sentinel's index (interim: null)
+/// - isEmpty: literal comparison height = 0 (interim: null check)
 /// - node: create AVL node (arena alloc + struct construct)
 /// - key, value, left, right, height: field access (GEP + load)
 ///

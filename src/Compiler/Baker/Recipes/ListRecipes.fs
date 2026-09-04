@@ -3,12 +3,15 @@
 
 /// Baker List Recipes - Decomposition of List HOFs to primitives.
 ///
-/// List is a singly-linked cons cell: {head: T, tail: ptr<List<T>>}
-/// Empty list = null pointer
+/// List is a tagged cons cell {tag, head: T, tail: index} placed in an arena; `tail` is a bounded
+/// arena-relative index, never an address. Empty list = the static sentinel cell (tag Empty) at
+/// offset 0 of the arena (spec list-operations-representation §5).
+/// INTERIM: the code below still emits a null for empty and a pointer for tail; the sentinel recipe
+/// replaces both (Design_Supersession_Register, Phase 3 collections).
 ///
 /// PRIMITIVE OPERATIONS (Alex witnesses directly):
-/// - empty: returns null pointer
-/// - isEmpty: null check
+/// - empty: returns the sentinel's index (interim: null)
+/// - isEmpty: literal comparison tag = Empty (interim: null check)
 /// - head: GEP to field 0, load
 /// - tail: GEP to field 1, load
 /// - cons: arena alloc + store head + store tail

@@ -46,7 +46,7 @@ String literals, option types, and arrays resolve to native types:
 ```fsharp
 // F# syntax
 let greeting = "Hello"        // Standard F#: System.String
-                              // CCS: string with native semantics (UTF-8 fat pointer)
+                              // CCS: string with native semantics (UTF-8 `memref<?xi8>` view)
 
 let maybeValue = Some 42      // Standard F#: int option (reference)
                               // CCS: int voption (value type)
