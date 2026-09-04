@@ -10,8 +10,9 @@
 /// by commutativity, associativity, identity, inverses, abbreviation; then compare).
 ///
 /// This module depends on nothing in the type checker. It is placed before NativeTypes.fs and
-/// knows no type DU; the measure environment (abbreviations, the syntax translator) and the
-/// numeric type that carries a `Dimension` arrive in later changesets.
+/// knows no type DU. The measure environment (abbreviations) is its sibling MeasureEnvironment.fs,
+/// the syntax translator is `dimensionOfSyntax` in Expressions/Types.fs, and the numeric type that
+/// carries a `Dimension` arrives in a later changeset.
 module Clef.Compiler.NativeTypedTree.DimensionAlgebra
 
 //-------------------------------------------------------------------------

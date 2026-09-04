@@ -5,6 +5,8 @@ module Clef.Compiler.NativeTypedTree.Expressions.Types
 
 open Clef.Compiler.Syntax
 open Clef.Compiler.Text
+open Clef.Compiler.NativeTypedTree.DimensionAlgebra
+open Clef.Compiler.NativeTypedTree.MeasureEnvironment
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
@@ -93,6 +95,20 @@ module DiagnosticCodes =
     // docs/fidelity/phg/Dimensional_Step1_2_Design.md (f); allocation rule in the Plan's D3.
     let CCS8018_UnsupportedLiteralSuffix = "CCS8018"
 
+    // CCS series, units of measure (CCS8040-CCS8050): design (f). CCS8040 and CCS8041 are minted
+    // by the unifier when `solveDim` fails (CS-4); the rest by the measure environment and the
+    // measure-syntax translator below, through `describeMeasureFailure`. CCS8047 is CS-6's.
+    let CCS8040_MeasureMismatch = "CCS8040"
+    let CCS8041_NoIntegerSolution = "CCS8041"
+    let CCS8042_MeasureNotInScope = "CCS8042"
+    let CCS8043_CyclicMeasureAbbreviation = "CCS8043"
+    let CCS8044_MeasureVariableInLiteral = "CCS8044"
+    let CCS8045_MeasureSortMismatch = "CCS8045"
+    let CCS8046_NoDimension = "CCS8046"
+    let CCS8048_RationalMeasureExponent = "CCS8048"
+    let CCS8049_ParameterisedMeasureDefinition = "CCS8049"
+    let CCS8050_MeasureArityMismatch = "CCS8050"
+
 //-------------------------------------------------------------------------
 // Type Environment
 //-------------------------------------------------------------------------
@@ -107,6 +123,10 @@ type TypeEnv = {
     TypeDefs: Map<string, TypeConRef>
     /// Type abbreviations (name -> NativeType it expands to)
     TypeAbbrevs: Map<string, NativeType>
+    /// The declared measures and their expansions (design a.3). Empty in every environment this
+    /// changeset builds: the `[<Measure>] type` declaration arm in NativeService.fs is not yet
+    /// redirected here (sequence CS-4), so declarations still fall through to `TypeDefs`.
+    Measures: MeasureEnv
     /// Record type definitions with full field information
     /// Per spec: "Field order determines memory layout"
     RecordDefs: Map<string, RecordTypeInfo>
@@ -192,6 +212,7 @@ let createTypeEnv () : TypeEnv =
         Resolution = NR.createContext ()
         TypeDefs = Map.empty
         TypeAbbrevs = Map.empty
+        Measures = MeasureEnv.empty
         RecordDefs = Map.empty
         FieldLabels = Map.empty
         Constraints = ref []
@@ -981,3 +1002,329 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
     | SynType.SignatureParameter(_, _, _idOpt, ty, _) ->
         // Signature parameter - resolve the underlying type
         resolveSynType env ty
+
+//-------------------------------------------------------------------------
+// Measure syntax → Dimension: the one translator (design a.4)
+//-------------------------------------------------------------------------
+//
+// Not yet reached by any caller (sequence CS-2). The arms of `resolveSynType` above that read
+// measure syntax as types (`MeasurePower` to its base type, a `Slash` segment dropped, a measure
+// name resolved as a type) stay in force until CS-4 replaces them with calls to
+// `dimensionOfSyntax`, when the numeric type that carries the result exists; the literal resolver
+// (Literals.fs) and the `[<Measure>] type` declaration arm (NativeService.fs) are redirected in
+// that same changeset. Until then `TypeEnv.Measures` is empty in every environment the checker
+// builds, and nothing below runs.
+
+/// The bound on a measure exponent, written or reached during translation: |e| <= 32767 (2^15 - 1).
+/// The algebra's exponents are `int`. Every product the translator forms adds two bounded exponents
+/// (|e1 + e2| <= 2^16) and every power multiplies a bounded exponent by a bounded written one
+/// (|n * e| <= 2^30), so no translation step can overflow before its result is checked against the
+/// bound again, and every stored expansion is within it. What the translator establishes ends
+/// there: bounding the exponents of the bindings `solveDim` produces, and of `Dimension.resolve`
+/// over them, is the unifier's obligation (sequence CS-4). An exponent past the bound is refused
+/// with the CCS8048 family (`MeasureFailure.ExponentOutOfRange`), never wrapped.
+let measureExponentBound = 32767
+
+/// The code (from `DiagnosticCodes`), the message (design (f), verbatim) and the range of a measure
+/// failure: the one projection from the failure value to a diagnostic.
+let describeMeasureFailure (failure: MeasureFailure) : string * string * range =
+    match failure with
+    | MeasureFailure.NotInScope(name, r) ->
+        DiagnosticCodes.CCS8042_MeasureNotInScope,
+        $"'{name}' is not a measure in scope",
+        r
+    | MeasureFailure.Cyclic(name, chain, r) ->
+        let chainText = String.concat " -> " chain
+        DiagnosticCodes.CCS8043_CyclicMeasureAbbreviation,
+        $"Measure abbreviation '{name}' is cyclic: {chainText}",
+        r
+    | MeasureFailure.VariableInLiteral(_, r) ->
+        DiagnosticCodes.CCS8044_MeasureVariableInLiteral,
+        "A measure variable may not appear in a literal's measure annotation; use '_'",
+        r
+    | MeasureFailure.SortMismatch(arg, r) ->
+        DiagnosticCodes.CCS8045_MeasureSortMismatch,
+        $"'{arg}' is a type where a measure is required, or a measure where a type is required",
+        r
+    | MeasureFailure.NoDimension(ty, r) ->
+        DiagnosticCodes.CCS8046_NoDimension,
+        $"'{ty}' carries no dimension; a measure cannot be applied to it",
+        r
+    | MeasureFailure.RationalExponent(rational, r) ->
+        DiagnosticCodes.CCS8048_RationalMeasureExponent,
+        $"Rational measure exponent '{rational}' is not supported; exponents are integers",
+        r
+    | MeasureFailure.ExponentOutOfRange(n, r) ->
+        DiagnosticCodes.CCS8048_RationalMeasureExponent,
+        $"Measure exponent '{n}' is not representable; exponents are integers of magnitude at most {measureExponentBound}",
+        r
+    | MeasureFailure.Parameterised(_, r) ->
+        DiagnosticCodes.CCS8049_ParameterisedMeasureDefinition,
+        "A measure definition may not have type or measure parameters",
+        r
+    | MeasureFailure.ArityMismatch(tycon, given, r) ->
+        DiagnosticCodes.CCS8050_MeasureArityMismatch,
+        $"'{tycon}' takes one measure argument; {given} were given",
+        r
+
+/// Record a measure failure through the environment's diagnostics, at the failure's own range, the
+/// way CCS8018 is recorded for a refused literal (Literals.fs).
+let addMeasureFailure (failure: MeasureFailure) (env: TypeEnv) : unit =
+    let code, message, r = describeMeasureFailure failure
+    addNativeError code r message env
+
+/// The syntax forms read in the measure sort (design a.4).
+[<RequireQualifiedAccess>]
+type MeasureSyntax =
+    /// The annotation of a constant, `1.0<kg m / s^2>`: the `SynMeasure` of `SynConst.Measure`.
+    | Measure of SynMeasure
+    /// A type argument written where a measure is required, the argument of `float<kg m / s^2>`:
+    /// read entirely in the measure sort, as every argument of a numeric carrier is.
+    | Type of SynType
+    /// The whole argument list written on a type constructor, `float<m>`, `bool<m>`. The constructor
+    /// decides: a numeric carrier takes exactly one measure (CCS8050 otherwise), a constructor whose
+    /// sole parameter is measure-sorted likewise, a constructor with no parameter carries no
+    /// dimension (CCS8046), and one with a type-sorted position is a sort mismatch (CCS8045); a
+    /// constructor with several measure-sorted positions is read positionally by the resolver,
+    /// through `Type`, and never through this form.
+    | Applied of tycon: TypeConRef * args: SynType list * range: range
+
+/// What a translation threads: the named measure variables in scope (`'u` read twice is one
+/// variable) and the supply of fresh ones. A value: every step returns the context it leaves.
+type MeasureContext = { Scope: Map<string, MeasureVar>; Supply: MeasureSupply }
+
+module MeasureContext =
+
+    /// No named variable in scope; fresh variables numbered from `first`.
+    let startingAt (first: int) : MeasureContext =
+        { Scope = Map.empty; Supply = MeasureSupply.startingAt first }
+
+/// A rational constant as written, for a message.
+let rec private renderRational (c: SynRationalConst) : string =
+    match c with
+    | SynRationalConst.Integer(n, _) -> string n
+    | SynRationalConst.Rational(n, _, _, d, _, _) -> $"{n}/{d}"
+    | SynRationalConst.Negate(inner, _) -> "-" + renderRational inner
+    | SynRationalConst.Paren(inner, _) -> "(" + renderRational inner + ")"
+
+/// A type syntax node as a message names it. Presentation only; nothing reads it back.
+let rec private renderSynType (t: SynType) : string =
+    let idents (ids: Ident list) = ids |> List.map (fun i -> i.idText) |> String.concat "."
+    let args (ts: SynType list) = ts |> List.map renderSynType |> String.concat ", "
+    match t with
+    | SynType.LongIdent(SynLongIdent(ids, _, _)) -> idents ids
+    | SynType.App(head, _, typeArgs, _, _, true, _) ->
+        typeArgs @ [ head ] |> List.map renderSynType |> String.concat " "
+    | SynType.App(head, _, typeArgs, _, _, false, _) -> renderSynType head + "<" + args typeArgs + ">"
+    | SynType.LongIdentApp(head, SynLongIdent(ids, _, _), _, typeArgs, _, _, _) ->
+        renderSynType head + "." + idents ids + "<" + args typeArgs + ">"
+    | SynType.Tuple(_, segments, _) ->
+        segments
+        |> List.map (function
+            | SynTupleTypeSegment.Type ty -> renderSynType ty
+            | SynTupleTypeSegment.Star _ -> "*"
+            | SynTupleTypeSegment.Slash _ -> "/")
+        |> String.concat " "
+    | SynType.AnonRecd(_, fields, _) ->
+        "{| " + (fields |> List.map (fun (id, ty) -> id.idText + ": " + renderSynType ty) |> String.concat "; ") + " |}"
+    | SynType.Array(rank, elem, _) -> renderSynType elem + "[" + String.replicate (rank - 1) "," + "]"
+    | SynType.Fun(a, r, _, _) -> renderSynType a + " -> " + renderSynType r
+    | SynType.Var(SynTypar(id, _, _), _) -> "'" + id.idText
+    | SynType.Anon _ -> "_"
+    | SynType.WithGlobalConstraints(inner, _, _)
+    | SynType.HashConstraint(inner, _)
+    | SynType.WithNull(inner, _, _, _)
+    | SynType.SignatureParameter(_, _, _, inner, _) -> renderSynType inner
+    | SynType.MeasurePower(b, e, _) -> renderSynType b + "^" + renderRational e
+    | SynType.StaticConstant(SynConst.Int32 n, _) -> string n
+    | SynType.StaticConstant(_, _) -> "constant"
+    | SynType.StaticConstantNull _ -> "null"
+    | SynType.StaticConstantExpr _ -> "const expression"
+    | SynType.StaticConstantNamed(SynType.LongIdent(SynLongIdent(ids, _, _)), value, _) -> idents ids + " = " + renderSynType value
+    | SynType.StaticConstantNamed(_, value, _) -> renderSynType value
+    | SynType.Paren(inner, _) -> "(" + renderSynType inner + ")"
+    | SynType.Intersection(_, types, _, _) -> args types
+    | SynType.Or(l, r, _, _) -> renderSynType l + " or " + renderSynType r
+    | SynType.FromParseError _ -> "?"
+
+/// The integer a written exponent denotes, within `measureExponentBound`. A rational form anywhere
+/// in it is CCS8048; an integer past the bound is the CCS8048 family. Read in `int64` so that the
+/// negation of any `int32` is exact before the bound is applied.
+let private exponentOf (written: SynRationalConst) (r: range) : Result<int, MeasureFailure> =
+    let rec value (c: SynRationalConst) : Result<int64, MeasureFailure> =
+        match c with
+        | SynRationalConst.Integer(n, _) -> Ok(int64 n)
+        | SynRationalConst.Rational _ -> Result.Error(MeasureFailure.RationalExponent(renderRational written, r))
+        | SynRationalConst.Negate(inner, _) -> value inner |> Result.map (fun v -> -v)
+        | SynRationalConst.Paren(inner, _) -> value inner
+    value written
+    |> Result.bind (fun v ->
+        if abs v > int64 measureExponentBound then
+            Result.Error(MeasureFailure.ExponentOutOfRange(renderRational written, r))
+        else
+            Ok(int v))
+
+/// The dimension unchanged if every exponent is within the bound, else the CCS8048 family naming the
+/// exponent reached.
+let private bounded (r: range) (d: Dimension) : Result<Dimension, MeasureFailure> =
+    let exponents = (Map.toList d.Bases |> List.map snd) @ (Map.toList d.Vars |> List.map snd)
+    match exponents |> List.tryFind (fun e -> abs e > measureExponentBound) with
+    | Some e -> Result.Error(MeasureFailure.ExponentOutOfRange(string e, r))
+    | None -> Ok d
+
+/// The bare names a measure syntax mentions, last segment of each written path: what registration
+/// orders a declaration group by (`MeasureEnv.registerGroup`). Syntax-aware, so it lives beside the
+/// translator; it reads the same forms the translator reads and nothing else.
+let measureReferences (syntax: MeasureSyntax) : string list =
+    let last (ids: Ident list) = ids |> List.tryLast |> Option.map (fun i -> i.idText) |> Option.toList
+    let rec ofMeasure (m: SynMeasure) : string list =
+        match m with
+        | SynMeasure.Named(ids, _) -> last ids
+        | SynMeasure.Product(m1, _, m2, _) -> ofMeasure m1 @ ofMeasure m2
+        | SynMeasure.Seq(ms, _) -> ms |> List.collect ofMeasure
+        | SynMeasure.Divide(m1, _, m2, _) -> (m1 |> Option.map ofMeasure |> Option.defaultValue []) @ ofMeasure m2
+        | SynMeasure.Power(m1, _, _, _) -> ofMeasure m1
+        | SynMeasure.Paren(inner, _) -> ofMeasure inner
+        | SynMeasure.One _ | SynMeasure.Anon _ | SynMeasure.Var _ -> []
+    let rec ofType (t: SynType) : string list =
+        match t with
+        | SynType.LongIdent(SynLongIdent(ids, _, _)) -> last ids
+        | SynType.App(head, _, args, _, _, true, _) -> (args @ [ head ]) |> List.collect ofType
+        | SynType.Tuple(_, segments, _) ->
+            segments |> List.collect (function SynTupleTypeSegment.Type ty -> ofType ty | _ -> [])
+        | SynType.MeasurePower(b, _, _) -> ofType b
+        | SynType.Paren(inner, _) -> ofType inner
+        | _ -> []
+    match syntax with
+    | MeasureSyntax.Measure m -> ofMeasure m
+    | MeasureSyntax.Type t -> ofType t
+    | MeasureSyntax.Applied(_, args, _) -> args |> List.collect ofType
+
+/// One translation from measure syntax to a `Dimension`, covering every row of the design (a.4)
+/// table, reached (from CS-4) by the type-position resolver, the literal resolver and the
+/// abbreviation registration so that no two paths can disagree. Pure: the environment is read
+/// (`Measures` for names, the type tables to tell CCS8045 from CCS8042), the context is threaded,
+/// and every refusal is a `MeasureFailure` value; no dimension is ever fabricated.
+///
+/// Rows: a name → `Measures` lookup (absent: CCS8042; found as a type: CCS8045); juxtaposition,
+/// `*`, and `,`-free tuple segments → `mul`; `/` and a `Slash` segment → `inv` of what follows it,
+/// as F# reads `m / s / kg` as `m s^-1 kg^-1`; `^n` → `pow n` (rational: CCS8048; past the bound:
+/// CCS8048 family); `1` → `one`; `_` → a fresh anonymous variable; `'u` → the in-scope variable of
+/// that name, else a fresh named one that the rest of the translation shares; a numeric carrier
+/// applied to other than one argument → CCS8050; a measure applied to a type that carries no
+/// dimension → CCS8046; a type where a measure is required → CCS8045.
+let dimensionOfSyntax
+    (env: TypeEnv)
+    (ctx: MeasureContext)
+    (syntax: MeasureSyntax)
+    : Result<Dimension * MeasureContext, MeasureFailure> =
+
+    /// A reading of one syntax node against a context.
+    let inverted (read: MeasureContext -> Result<Dimension * MeasureContext, MeasureFailure>) =
+        fun ctx -> read ctx |> Result.map (fun (d, ctx) -> Dimension.inv d, ctx)
+
+    /// The product of the readings, left to right, each result checked against the bound.
+    let productOf (r: range) (ctx: MeasureContext) (reads: (MeasureContext -> Result<Dimension * MeasureContext, MeasureFailure>) list) =
+        reads
+        |> List.fold
+            (fun acc read ->
+                acc
+                |> Result.bind (fun (d, ctx) ->
+                    read ctx
+                    |> Result.bind (fun (d', ctx) -> bounded r (Dimension.mul d d') |> Result.map (fun d -> d, ctx))))
+            (Ok(Dimension.one, ctx))
+
+    let powerOf (r: range) (written: SynRationalConst) (read: MeasureContext -> Result<Dimension * MeasureContext, MeasureFailure>) (ctx: MeasureContext) =
+        exponentOf written r
+        |> Result.bind (fun n ->
+            read ctx
+            |> Result.bind (fun (d, ctx) -> bounded r (Dimension.pow n d) |> Result.map (fun d -> d, ctx)))
+
+    let named (path: string list) (r: range) (ctx: MeasureContext) =
+        match MeasureEnv.tryFind path env.Measures with
+        | Some def -> Ok(MeasureDef.dimension def, ctx)
+        | None ->
+            let name = String.concat "." path
+            match resolveTypeName name env with
+            | Some _ -> Result.Error(MeasureFailure.SortMismatch(name, r))
+            | None -> Result.Error(MeasureFailure.NotInScope(name, r))
+
+    let variable (ident: Ident) (ctx: MeasureContext) =
+        match Map.tryFind ident.idText ctx.Scope with
+        | Some v -> Ok(Dimension.ofVar v, ctx)
+        | None ->
+            let v, supply = MeasureSupply.fresh (Some ident.idText) ctx.Supply
+            Ok(Dimension.ofVar v, { Scope = Map.add ident.idText v ctx.Scope; Supply = supply })
+
+    let anonymous (ctx: MeasureContext) =
+        let v, supply = MeasureSupply.fresh None ctx.Supply
+        Ok(Dimension.ofVar v, { ctx with Supply = supply })
+
+    let rec ofMeasure (ctx: MeasureContext) (m: SynMeasure) : Result<Dimension * MeasureContext, MeasureFailure> =
+        match m with
+        | SynMeasure.Named(ids, r) -> named (ids |> List.map (fun i -> i.idText)) r ctx
+        | SynMeasure.Product(m1, _, m2, r) -> productOf r ctx [ read m1; read m2 ]
+        | SynMeasure.Seq(ms, r) -> productOf r ctx (ms |> List.map read)
+        | SynMeasure.Divide(Some m1, _, m2, r) -> productOf r ctx [ read m1; inverted (read m2) ]
+        | SynMeasure.Divide(None, _, m2, _) -> inverted (read m2) ctx
+        | SynMeasure.Power(m1, _, e, r) -> powerOf r e (read m1) ctx
+        | SynMeasure.One _ -> Ok(Dimension.one, ctx)
+        | SynMeasure.Anon _ -> anonymous ctx
+        | SynMeasure.Var(SynTypar(id, _, _), r) ->
+            // `SynMeasure` occurs only under `SynConst.Measure`, so this is a literal's annotation:
+            // design (a.4) row `1.0<'u>` is CCS8044; `_` above is the form that mints a variable.
+            Result.Error(MeasureFailure.VariableInLiteral(id.idText, r))
+        | SynMeasure.Paren(inner, _) -> ofMeasure ctx inner
+
+    and read (m: SynMeasure) = fun ctx -> ofMeasure ctx m
+
+    let rec ofType (ctx: MeasureContext) (t: SynType) : Result<Dimension * MeasureContext, MeasureFailure> =
+        match t with
+        | SynType.LongIdent(SynLongIdent(ids, _, _)) -> named (ids |> List.map (fun i -> i.idText)) t.Range ctx
+        | SynType.App(head, _, args, _, _, true, r) ->
+            // Juxtaposition, `kg m`: the parser's postfix application, the head written last.
+            productOf r ctx (args @ [ head ] |> List.map readType)
+        | SynType.Tuple(_, segments, r) ->
+            // `m * s`, `kg m / s^2`, `/ s`, `m / s / kg`: a `Slash` inverts the segment after it.
+            let reads, _ =
+                segments
+                |> List.fold
+                    (fun (reads, invertNext) segment ->
+                        match segment with
+                        | SynTupleTypeSegment.Type ty ->
+                            (if invertNext then inverted (readType ty) else readType ty) :: reads, false
+                        | SynTupleTypeSegment.Star _ -> reads, false
+                        | SynTupleTypeSegment.Slash _ -> reads, true)
+                    ([], false)
+            productOf r ctx (List.rev reads)
+        | SynType.MeasurePower(b, e, r) -> powerOf r e (readType b) ctx
+        | SynType.StaticConstant(SynConst.Int32 1, _) -> Ok(Dimension.one, ctx)
+        | SynType.Anon _ -> anonymous ctx
+        | SynType.Var(SynTypar(id, _, _), _) -> variable id ctx
+        | SynType.Paren(inner, _) -> ofType ctx inner
+        | other ->
+            // Every other type form, `float<m>` or `int -> int` or `2` among them, is a type where a
+            // measure is required.
+            Result.Error(MeasureFailure.SortMismatch(renderSynType other, other.Range))
+
+    and readType (t: SynType) = fun ctx -> ofType ctx t
+
+    let applied (tycon: TypeConRef) (args: SynType list) (r: range) =
+        let oneMeasure () =
+            match args with
+            | [ arg ] -> ofType ctx arg
+            | _ -> Result.Error(MeasureFailure.ArityMismatch(tycon.Name, List.length args, r))
+        match tycon.NTUKind |> Option.map NTUKind.isNumeric with
+        | Some true -> oneMeasure ()
+        | _ ->
+            match tycon.ParamKinds with
+            | [ TypeParamKind.Measure ] -> oneMeasure ()
+            | [] -> Result.Error(MeasureFailure.NoDimension(tycon.Name, r))
+            | _ ->
+                let written = tycon.Name + "<" + (args |> List.map renderSynType |> String.concat ", ") + ">"
+                Result.Error(MeasureFailure.SortMismatch(written, r))
+
+    match syntax with
+    | MeasureSyntax.Measure m -> ofMeasure ctx m
+    | MeasureSyntax.Type t -> ofType ctx t
+    | MeasureSyntax.Applied(tycon, args, r) -> applied tycon args r
