@@ -79,18 +79,22 @@ The verdict table is rule → expected → actual; a rule is green when both pro
 | UoM-7 | annotation and inference agree at calls | `let f (x: float<m>) = x` then `f 1.0<s>` | `f 1.0<m>` | `CCS8100` | accepted |
 | UoM-8 | generalisation: a dimension-polymorphic function is used at two dimensions | (none) | `let scale f v = f * v` used at `(float, float<m>)` and `(float<s>, float<m>)`, inferred `float<'u> -> float<'v> -> float<'u 'v>` | | measure variables never bound |
 | UoM-9 | the paper's example infers without annotation | `computeForce` with a `float<m>` where a mass is expected | Appendix A as written, result `float<kg m s^-2>` | `CCS8100` | not inferable |
-| W-1 | mixed named widths need explicit conversion | `1 + 1L`; `nativeint 1 + 1` (Pointer vs Register, `ntu-dimensional` §5.1) | `1L + 2L`; `int64 x + 1L` | `CCS8000` (type mismatch) | rejected by name |
+| W-1 | two different seals meeting is an explicit-conversion site; a bare operand adopts a covering seal | `int32 x + int64 y`; `nativeint p + int32 x` | `1 + 1L` (bare literal, point range); `1L + 2L`; `int64 x + 1L` | `CCS8010` (seal mismatch) | `1 + 1L` rejected by name (wrong); seal pairs rejected by name (right result, wrong mechanism) |
 | W-2 | arithmetic operands are numeric | `true + true` | `1 + 2` | `CCS8000` | accepted |
-| W-3 | a `Resolved` width resolves per section from the platform description, never in the witness | (a program compiled for two platform contexts yields layouts with the declared widths) | | | resolved in CCS; contradicted by comment |
-| W-4 | no silent default width for an unanalysable range | per `width-inference.md` §6, §10.5 | | | no range analysis exists; see D1 |
+| W-3 | a seal at a platform boundary comes from the platform description (word, pointer, FFI and syscall widths), resolved in CCS at saturation, never in the witness | (a program compiled for two platform contexts yields layouts with each platform's declared widths) | | | resolved in CCS; contradicted by comment |
+| W-4 | no silent default: an integer whose range is unobservable and that carries no seal from any source (dataflow, library, platform, developer) is a diagnostic; a bare real lowers to IEEE `f64`; a dimensioned real with an unobservable range is a diagnostic at the dimensioning seam that names the bare source | `let f (n: int) = n + 1` exported with no bound on `n`; `let y : float<N> = bareInput * oneNewton` | `let f (n: int32) = n + 1`; `let y : float = bareInput * 2.0` | `CCS8011` (range unobservable) | no diagnostic in CCS; Alex throws `FPGA0001` on the FPGA leg, CPU leg falls back to the platform word |
+| W-5 | a seal must cover the analysed range | `let x : uint8 = 300`; `let c : int8 = counter % 1000` | `let x : uint8 = counter % 256` | `CCS8012` (seal does not cover range) | no range analysis in CCS |
+| W-6 | width is propagated, never unified: a numeric function is polymorphic over width, and each call site carries its own range | (none) | `let g x y = x + y` used at `g 1L 2L` and `g 1 2` in one program | | second use rejected by name |
 | M-1 | no write through a `ReadOnly` handle | `let p : Ptr<int, Stack, ReadOnly> = ... in p := 1` | `let p : Ptr<int, Stack, ReadWrite> = ... in p := 1` | `CCS8020` | accepted |
 | M-2 | no read through a `WriteOnly` handle | `let v = !q` with `q : Ptr<uint32, Peripheral, WriteOnly>` | read through `ReadWrite` | `CCS8021` | accepted |
-| M-3 | access is covariant | `ReadOnly` passed where `ReadWrite` expected | `ReadWrite` passed where `ReadOnly` expected | `CCS8022` | both accepted |
+| M-3 | access is part of identity, no subtyping: a `ReadWrite` handle where `ReadOnly` is required needs an explicit narrowing node | `ReadWrite` passed where `ReadOnly` expected without narrowing; `ReadOnly` passed where `ReadWrite` expected | `narrow p` (explicit) passed where `ReadOnly` expected | `CCS8022` | both accepted |
 | M-4 | region is invariant | `Ptr<int, Stack, _>` passed where `Ptr<int, Peripheral, _>` expected | matching regions | `CCS8003` (region mismatch; clef Appendix D numbers it in the wrong series) | accepted |
-| M-5 | qualifiers are part of identity once the subtyping rule is decided | `NTUint(Fixed 32, Global)` where `Stack` expected (GPU sections) | same space | `CCS8022` | erased from identity; see D2 |
+| M-5 | every component is part of identity (D2): unit, memory space, region, access, seal | `NTUint(Fixed 32, Global)` where `Stack` expected (GPU sections) | same space | `CCS8022` | qualifiers erased from identity |
 
-Rules W-4 and the representation-selection family (posit coverage warnings, `width-inference.md` §7
-conversions) join the set once decisions D1 and D4 are taken; their programs are written then.
+The W rows follow decision D1 (one width regime; a written width is a seal; width is a lattice-family
+discipline that is propagated and never unified, `arxiv-papers/research/grade-axis/02` §2, §7.1). The
+representation-selection family for reals (posit coverage, `numeric-selection.md` §2, §6; explicit
+conversion, `width-inference.md` §7) joins the set with hardening step 7; its programs are written then.
 
 ## 4. The harness
 
@@ -105,6 +109,28 @@ conversions) join the set once decisions D1 and D4 are taken; their programs are
   alongside; the drift gate runs after every step.
 
 ## 5. Hardening steps, in order, each gated by the table
+
+0. **Remove C leakage** (the object lesson: `a-lesson-in-memory-safety.md`). Every path where a numeric
+   representation is decided by a type name at one end and reinterpreted silently at the other, or where a
+   conversion is inserted by a party other than the source, is removed or replaced by a diagnostic. The
+   inventory, measured 2026-09-04:
+
+   | # | Where | What it does | Class | Disposition |
+   |---|---|---|---|---|
+   | L-1 | `Literals.fs:63-64` (`constToLiteral`), `:36-51` (`typeOfConst`) | an unsuffixed integer literal is minted at `Resolved Register`, i.e. sealed to the platform word | C's `int` = whatever the register holds | with step 7: a literal is bare with a point range and takes a seal only from context |
+   | L-2 | `Literals.fs:42-46` | the measure on a literal is discarded | implicit measured-to-dimensionless conversion | step 1 |
+   | L-3 | `Literals.fs:49-51` | `UserNum "I"` (bigint) and any unknown suffix become `intType` "for now" | fabricated representation, silent | now: `CCS80xx` unsupported literal suffix |
+   | L-4 | `Intrinsics.fs:953-976` | every conversion intrinsic is typed `'a -> Target` from a fresh type variable | the polymorphic `'T -> Target` coercion `width-inference.md` §7.3 forbids; `int x` accepts a string, a bool, a char | step 3: each conversion names its source seal and target seal; source must be numeric; target must cover the range or state a rounding/saturation discipline (§7.1-7.2) |
+   | L-5 | `SRTPResolution.fs:290-410` | a `ConversionCategory` and an MLIR op name are computed and discarded (`_category`, `_mlirOp`); int-to-int is always `Widening`; int-to-int always `extsi` ("for narrowing should be trunci"); unknown falls to `fidelity.convert`; header cites `spec/drafts/NTU_Conversion_Model.md`, which does not exist (retired by `width-inference.md` §9) | dead code shaped like a decision; a dangling citation | now: delete the category, op-name and citation; keep only the witness naming |
+   | L-6 | `Unify.fs:86-88` | placement qualifiers excluded from identity | implicit conversion between memory spaces | step 5 (D2, M-5) |
+   | L-7 | `Composer/.../Alex/Patterns/ApplicationPatterns.fs:183-233` (FPGA leg) | the witness widens both operands to the max width with `pExtSI` regardless of the source's signedness, and truncates the result; HelloArty's `07_output.mlir:116` shows `arith.extsi %periodMs : i13 to i30` | the FreeBSD class: the party that widens is not the party that knows the sign | not live today only because of L-7b; the two are removed together in step 7: width from the range per `width-inference.md` §3, extension op from the range's signedness (`extui` for a non-negative range), both settled in the graph |
+| L-7b | `Composer/.../PSGElaboration/IntervalAnalysis.fs:88-113` (`minSignedBits`, `bitsFromInterval`) | every interval gets a sign bit, non-negative ones included (`[0, 4000]` becomes 13 bits, not 12); `IsSigned` is recorded false but the bit is spent | the spec formula (§3: unsigned `ceil(log2(b+1))`) is not what runs; the spec's own example table (31/21/10/13) and HelloArty's README carry the +1 figures, while the two site posts claim 29/11 | step 7; and a spec rough edge to report: `width-inference.md` §3's table contradicts its formula |
+| L-8 | `ApplicationPatterns.fs:236-249` (CPU leg) | shift amounts "typed `int` by the front end" are truncated or zero-extended to the operand width by the witness | conversion inserted below the graph; the comment admits the front end typed it wrong | step 3: the front end types the amount; no witness cast |
+   | L-9 | `ApplicationPatterns.fs:449-490` (`pTypeConversion`) | int-to-int truncation with no range check; float-to-int with no rounding or saturation discipline; int-to-float always `sitofp` even for unsigned sources; the result type resolved by `mapNativeTypeWithGraphForArch` in Alex | Alex deciding; `width-inference.md` §7.2 requires a stated discipline | step 3: the conversion node carries source seal, target seal, discipline and fidelity; Alex transcribes |
+   | L-10 | `Alex/XParsec/PSGCombinators.fs:104,120` | CPU leg defaults an unresolved width to the platform word; FPGA leg throws `FPGA0001` | silent default on one leg, a thrown string on the other | step 7 (W-4) |
+
+   Items marked "now" have no dependence on the rewrite and are removed first; the rest are removed by
+   the step that replaces the path, so no conversion is ever re-implemented in its current shape.
 
 1. **Measures are representable and survive.** Give the NTU numeric kinds a measure component (the
    design's "type variables carry an associated dimension variable"): a normalised exponent map over the
@@ -142,9 +168,9 @@ recipe, sentinel collections, the Lattice server).
 
 ## 6. Decisions
 
-Decided 2026-09-04 (D2–D5 by the user; D1 re-derived from the design corpus and pending the user's word).
+Decided 2026-09-04, all five by the user (D1 re-derived from the design corpus and then confirmed).
 
-- **D1, one width regime, not two (re-derived; pending).** Sources: `width-inference.md` §1, §5, §6, §8,
+- **D1, one width regime, not two (confirmed).** Sources: `width-inference.md` §1, §5, §6, §8,
   §10; `numeric-selection.md` §3 (tiers), §3.4 (precedence override), §6 (unobservable ranges), §6.1
   (the bare/dimensioned seam); the site posts *The Gift of Deferred Inference* and *FPGA and Hardware
   Inference*; HelloArty (`Behavior.clef:55-58` declares `Counter: int` and receives 29 bits;
@@ -162,8 +188,10 @@ Decided 2026-09-04 (D2–D5 by the user; D1 re-derived from the design corpus an
   meeting is an explicit-conversion site, so W-1 stands for seal against seal; (2) a bare operand meeting a
   sealed one adopts the seal when its range is covered, so `1 + 1L` is accepted (the literal is bare with a
   point range); (3) an unobservable range is an error for any integer and for a dimensioned real, and
-  lowers to IEEE `f64` for a bare real, exactly as the two chapters state, which on the CPU leg means every
-  boundary integer (FFI, parse, syscall) carries a seal; (4) the CPU leg rounds a bare width up to the
+  lowers to IEEE `f64` for a bare real, exactly as the two chapters state, and the seal at a boundary is
+  supplied by the platform description (its word, pointer, FFI and syscall widths), or a range is supplied
+  as the FPGA binding does; the developer writes a seal by hand only where no platform fact governs the
+  site. No silent default at any point; (4) the CPU leg rounds a bare width up to the
   native size for arithmetic and never narrows below the range (`width-inference.md` §8). The earlier
   recommendation to soften §10.1 is withdrawn; §10.1 stands as written. The interim
   `Composer/src/MiddleEnd/PSGElaboration/IntervalAnalysis.fs` reads no declared width, checks no seal, and
@@ -173,6 +201,21 @@ Decided 2026-09-04 (D2–D5 by the user; D1 re-derived from the design corpus an
   puts a width in the slot D4 gives to the measure. The analysis moves to CCS as the range coeffect
   (step 7) and gains the seal check and the unbounded diagnostic there; seal syntax is open
   (`numeric-selection.md` §14.1) and must not collide with the measure slot.
+- **D1 addendum, the governing tension (stated by the user 2026-09-04).** Two commitments pull against
+  each other and the design holds both: **no implicit conversions**, and **defer inference for as long as
+  practical**, because cross-application in the hypergraph gathers more degrees of information than the
+  tree ever could. They reconcile in one sentence: deferral is what removes conversions; it never
+  introduces one. A representation is selected once, at saturation, after every source has been read
+  (dataflow, library, platform, seals at every use site); a bare operand meeting a covering seal is that
+  selection closing on the seal, not a conversion, because the bare value never held another
+  representation. Where the gathered claims disagree (two seals on one value, a seal that does not cover
+  the range, a range no source bounds), the diagnostic fires and names the sites; nothing is coerced. The
+  object lesson is the FreeBSD `copy_from_kernel` bug in the site post *A Lesson in Memory Safety*
+  (`clef-lang-site/hugo/content/blog/a-lesson-in-memory-safety.md:35-39`, `:65`, `:79`): a correct bound
+  check defeated by the signed-to-unsigned reinterpretation C inserts at the `memcpy` boundary, with the
+  representation decided by the type names at each end; in the discipline here signedness is derived from
+  the range and there is no signed form of the length to smuggle. Any surviving implicit numeric
+  conversion in CCS is C leakage and is removed as hardening step 0 (§5).
 - **D2, dimensional identity (decided: exact match).** Two dimensional types are the same when every
   component matches: unit, memory space, region, access, and seal where present. There is no subtyping on
   any component. A read-write pointer where a read-only one is required is an explicit narrowing, which is
