@@ -50,6 +50,10 @@ Diagnostic numbering. The verification verdicts on UoM-1 through UoM-7, UoM-9, W
 
 ---
 
+## CS-1 as built (2026-09-04), and the four places the code departs from the letter of this note
+
+`src/Compiler/NativeTypedTree/DimensionAlgebra.fs`, module `Clef.Compiler.NativeTypedTree.DimensionAlgebra`, compiled before `NativeTypes.fs` with no dependency on it. Departures, each sanctioned as the design of record: (1) `Dimension` is a public record; F# cannot forbid a record expression without hiding the fields, so `Dimension.mk` is the one constructor by contract and, in the codebase, in fact. (2) There is no `MeasureStore` type: per plan D7 (U-2) the solver is pure over a caller-supplied lookup and a threaded `MeasureSupply` value, and returns the bindings to make; the store is the existing union-find, whose only writer for measure cells is `solveDim`'s returned bindings (I2, never rebind), which is what keeps `resolve`'s fixpoint acyclic. (3) `renderVar` is exposed beside `render` because CCS8041 names a variable; it is the label `render` uses, so there is still one formatter; anonymous variables render as `'_n`. (4) `BaseMeasure.Module` is `string list`, the same type as `ModulePath`, which is declared later in `NativeTypes.fs`. Two rules the code fixes that (a.4) left implicit: "alphabetical" is ordinal and case-sensitive, as F# orders measures; a dimension whose numerator is empty renders as `1 / s^2`. `MeasureVar` identity is the `Id` alone, by custom equality and ordering, so a renamed survivor of generalisation stays the same variable. Exponents are `int`; the CS-2 syntax translator bounds the written power (a CCS8048-class diagnostic for an unrepresentable one) so the group arithmetic never overflows.
+
 ## (a) The annotation on a numeric node
 
 ### a.1 The measure component

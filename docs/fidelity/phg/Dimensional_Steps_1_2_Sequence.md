@@ -36,6 +36,8 @@ Consequence: h.2, h.5, h.6, h.7, h.8, h.9, the wiring half of h.3/h.4 and the me
 - **Size:** ~250 new lines, 1 file + fsproj.
 - **Risk:** low. `solveDim` has no consumer, so its correctness is unobserved until CS-4; the owner may want the Euclid step exercised on the spec's `m^2/s^2 = 'U^2` and `'U^2 = m` cases by hand before CS-4 lands.
 
+**CS-1 status (2026-09-04): built, reviewed, gates green** (Composer build; RoundTrip byte-identical, sha256 `33168d00…`; harness table identical to baseline; solver exercised on the spec cases including `m^2/s^2 = 'U^2` and `'U^2 = m`). CS-2 must bound the written exponent (the algebra's exponents are `int`) and CS-4 must make `solveDim`'s returned bindings the only writer of measure cells in the union-find.
+
 ### CS-2 — The measure environment and the one syntax translator
 
 - **Anchors:** (a.3), (a.4); (h) 3 and 4 (definitions only; wiring is CS-4).
