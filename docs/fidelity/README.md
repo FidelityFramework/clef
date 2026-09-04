@@ -15,8 +15,7 @@ corpus have been removed; what remains is the Clef checker and the graph it satu
 | Document | What it is |
 |---|---|
 | [phg/](phg/) | The design of record: the PSG-to-PHG plan, layout as joint constraint, the closure retooling plan, the **Design Supersession Register**, and [`drift-gate.sh`](phg/drift-gate.sh), which makes retired vocabulary a lint failure across the corpus |
-| [ccs-specification.md](ccs-specification.md) | The Clef dialect as CCS checks it: native type resolution, SRTP, SCF regions, pattern matching |
-| [native-type-universe.md](native-type-universe.md), [NTU_Type_System.md](NTU_Type_System.md) | The type universe CCS resolves into |
+| The language specification | lives in `clef-lang-spec/spec/` and nowhere else: `native-type-universe.md`, `ntu-types.md`, `ntu-dimensional-architecture.md`, `units-of-measure.md`, `width-inference.md`, `numeric-selection.md`, `access-kinds.md`, `memory-regions.md`, `platform-bindings.md`, `error-handling.md`. The parallel copies this folder carried (`ccs-specification.md`, `native-type-universe.md`, `NTU_Type_System.md`) were retired on 2026-09-04 as drift sources |
 | [Baker_Saturation_Architecture.md](Baker_Saturation_Architecture.md) | Baker: ingredients and recipes that saturate the graph (collections, obligations, closures, suspension) |
 | [CCS_Lazy_Seq_Coroutine_Intrinsics.md](CCS_Lazy_Seq_Coroutine_Intrinsics.md) | Lazy, seq and coroutine intrinsics as CCS elaborates them |
 | [Platform_Predicates.md](Platform_Predicates.md) | Platform description as declared authority; predicates read structurally from the graph |

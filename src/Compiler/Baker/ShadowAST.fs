@@ -15,7 +15,8 @@
 /// - Built alongside PSG in single pass (no separate construction)
 /// - Two levels: semantic shadow (developer-facing) + PSG nodes (compiler-facing)
 ///
-/// See: docs/fidelity/ccs-specification.md Part 14
+/// See: docs/fidelity/Baker_Saturation_Architecture.md (INTERIM: the collections decision in
+/// docs/fidelity/phg/Design_Supersession_Register.md replaces HOF decomposition with the sentinel form)
 /// See: Serena memory "baker_shadow_ast_architecture"
 module Clef.Compiler.Baker.ShadowAST
 

@@ -18,7 +18,8 @@
 /// - ShadowTree provides semantic view of synthesized code for tooling
 /// - Developer can see "code I wrote" vs "compiler-saturated" at design time
 ///
-/// See: docs/fidelity/ccs-specification.md Part 14
+/// See: docs/fidelity/Baker_Saturation_Architecture.md (INTERIM: the collections decision in
+/// docs/fidelity/phg/Design_Supersession_Register.md replaces HOF decomposition with the sentinel form)
 /// See: Serena memory "baker_shadow_ast_architecture"
 module Clef.Compiler.Baker.Recipes.Decomposition
 

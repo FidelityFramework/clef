@@ -649,7 +649,7 @@ This is the production target for embedded/MCU/unikernel deployments.
 ## Related Documentation
 
 **Semantic (CCS)**:
-- `/home/hhh/repos/clef/docs/fidelity/ccs-specification.md`
+- `clef-lang-spec/spec/lazy-representation.md`, `seq-representation.md`, `seq-operations-representation.md`
 - `/home/hhh/repos/clef/.serena/memories/coeffect_compilation_strategy.md`
 
 **Implementation (Alex)**:
