@@ -232,28 +232,8 @@
     </Compile>
     <Compile Include="SyntaxTree\LexFilter.fsi" />
     <Compile Include="SyntaxTree\LexFilter.fs" />
-    <!-- Native types - foundational types for native compilation, needed by TypedTree and tainted -->
+    <!-- Native types - foundational types for native compilation -->
     <Compile Include="NativeTypedTree\NativeTypes.fs" />
-    <Compile Include="TypedTree\tainted.fsi" />
-    <Compile Include="TypedTree\tainted.fs" />
-    <Compile Include="TypedTree\TypeProviders.fsi" />
-    <Compile Include="TypedTree\TypeProviders.fs" />
-    <Compile Include="TypedTree\QuotationPickler.fsi" />
-    <Compile Include="TypedTree\QuotationPickler.fs" />
-    <Compile Include="TypedTree\CompilerGlobalState.fsi" />
-    <Compile Include="TypedTree\CompilerGlobalState.fs" />
-    <Compile Include="TypedTree\TypedTree.fsi" />
-    <Compile Include="TypedTree\TypedTree.fs" />
-    <Compile Include="TypedTree\TypedTreeBasics.fsi" />
-    <Compile Include="TypedTree\TypedTreeBasics.fs" />
-    <Compile Include="TypedTree\TcGlobals.fsi" />
-    <Compile Include="TypedTree\TcGlobals.fs" />
-    <Compile Include="TypedTree\TypedTreeOps.fsi" />
-    <Compile Include="TypedTree\TypedTreeOps.fs" />
-    <!-- TypedTreePickle.fsi/fs REMOVED - BCL machinery for .NET assembly metadata, not needed for native compilation -->
-    <Compile Include="TypedTree\UpdatePrettyTyparNames.fsi" />
-    <Compile Include="TypedTree\UpdatePrettyTyparNames.fs" />
-    <Compile Include="Utilities\TypeHashing.fs" />
     <!-- import.fsi/fs REMOVED - "Functions to import .NET binary metadata as TAST objects" - BCL cruft -->
     <!-- TypeHierarchy.fsi/fs REMOVED - Type hierarchy via ImportMap indirection layer -->
     <!-- infos.fsi/fs REMOVED - MethInfo/PropInfo/EventInfo unification layer for IL+F# - pure indirection for native -->
@@ -282,7 +262,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\Types.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Elaboration.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Core.fs" />
-    <Compile Include="PSGSaturation\SemanticGraph\Builder.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\NodeBuilder.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Reachability.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Traversal.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Diagnostics.fs" />
@@ -377,8 +357,6 @@
     <!-- ScriptClosure removed - script handling for FSI not needed -->
     <!-- CompilerOptions removed - depends on deleted Optimizer -->
     <!-- OptimizeInputs, BinaryResourceFormats, StaticLinking, CreateILModule removed - IL generation not needed -->
-    <Compile Include="Driver\XmlDocFileWriter.fsi" />
-    <Compile Include="Driver\XmlDocFileWriter.fs" />
     <!-- fsc.fs removed - old driver, will be replaced with native driver -->
 
     <!-- Symbols API removed - depends on deleted type checking infrastructure -->

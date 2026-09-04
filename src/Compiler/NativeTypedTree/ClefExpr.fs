@@ -21,7 +21,7 @@ namespace Clef.Compiler.NativeTypedTree
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
-open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
+open Clef.Compiler.PSGSaturation.SemanticGraph.NodeBuilder
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 /// Native match case for pattern matching

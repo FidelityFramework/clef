@@ -14,7 +14,7 @@ open Clef.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
-open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
+open Clef.Compiler.PSGSaturation.SemanticGraph.NodeBuilder
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 // ═══════════════════════════════════════════════════════════════════════════

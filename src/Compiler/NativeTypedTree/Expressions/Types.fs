@@ -8,7 +8,7 @@ open Clef.Compiler.Text
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
-open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
+open Clef.Compiler.PSGSaturation.SemanticGraph.NodeBuilder
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 // Module aliases for qualified access
