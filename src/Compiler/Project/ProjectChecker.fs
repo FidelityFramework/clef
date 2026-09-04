@@ -195,6 +195,7 @@ module ProjectChecker =
                                 Platform = None
                                 ModuleClassifications = lazy Map.empty
                                 SeqSaturation = lazy Map.empty
+                                Edges = []
                             }
                             Ok {
                                 Options = options

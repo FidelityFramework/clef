@@ -42,6 +42,13 @@ module ElaborationKind =
     [<Literal>]
     let Baker = "Baker"
 
+    /// Minted at saturation as a graph citizen: a proof obligation node, with
+    /// its constraining structure as the source set of its hyperedge in F.
+    /// The third enrichment class -- it adds to F, not only to V
+    /// (Obligation_Residency 3: "from analysis to enrichment").
+    [<Literal>]
+    let Obligation = "Obligation"
+
 //-------------------------------------------------------------------------
 // Enrichment ID Generation
 //-------------------------------------------------------------------------

@@ -203,6 +203,72 @@ and [<RequireQualifiedAccess>] Pattern =
     | Exception of exnType: NativeType * bindName: string option
 
 //-------------------------------------------------------------------------
+// Proof Obligations: graph citizens (C-01 14.5; Obligation_Residency 3)
+//-------------------------------------------------------------------------
+//
+// An obligation is a node in V (its identity, provenance and source position;
+// the thing Lattice shows) and a hyperedge in F whose source set is the
+// structure it constrains. Both readings in the corpus -- "obligation node with
+// dependency edges" (C-01) and "obligations as hyperedges" (PHG paper 6.4) --
+// are this one structure seen from V and from F.
+//
+// Obligations are minted at saturation by Baker, over the saturated graph, and
+// discharged twice against the same anchor name: design-time from the graph
+// (SMT-LIB to cvc5) and build-time from the witnessed MLIR (smt dialect).
+// Nothing below the graph authors an obligation.
+//
+// INVARIANT I1: every body is a proposition over literals with an enumerated
+// source set. All fragments are quantifier-free.
+
+/// What an obligation asserts. Every constant is a literal fixed at saturation;
+/// the two dispatches transcribe, never compute.
+[<RequireQualifiedAccess>]
+type ObligationBody =
+    /// storage = len + 1 (the NUL byte is reserved at allocation)
+    | StorageReservation of len: int * storage: int
+    /// view = len AND view < storage (the terminator is never written)
+    | ViewContainment of view: int * len: int * storage: int
+    /// final storage byte is 0x00
+    | NulSentinel of lastByte: int
+    /// consecutive layout of the given storages is pairwise disjoint, spans
+    /// exactly `span` bytes, and -- where a declared space bounds it -- the
+    /// span fits the space's capacity. `capacity` is None when no declaration
+    /// was found to cite.
+    | ConsecutiveLayout of storages: int list * span: int * capacity: int64 option
+    /// String.concat2 copy discipline: for ANY operand lengths a, b >= 0
+    /// (pinned where the operand is a literal), the two copy windows [0,a) and
+    /// [a,a+b) lie within the (a+b)-byte allocation.
+    | ConcatCopyBound of leftLen: int option * rightLen: int option
+    /// A declared buffer's capacity is positive.
+    | CapacityPositive of capacity: int64
+    /// A declared buffer's capacity is at most its declared space's capacity.
+    | CapacityFits of capacity: int64 * spaceCapacity: int64
+    /// The count handed to a reader is the declared capacity, which sizes the
+    /// allocation the same declaration governs (count <= allocation).
+    | InputBufferBound of count: int64 * allocation: int64
+    /// For any successful read of r bytes, 1 <= r <= capacity, the trimmed copy
+    /// of r - 1 bytes is within bound.
+    | InputCopyBound of capacity: int64 * bound: int64
+
+/// The obligation record carried by an Obligation node.
+type ObligationInfo = {
+    /// Stable anchor name: the identity that travels through both dispatches
+    Id: string
+    /// The family (callsheet vocabulary): "storage-reservation", "buffer-capacity", ...
+    Kind: string
+    /// SMT-LIB logic fragment: "QF_LIA" or "QF_BV"
+    Logic: string
+    /// Human-readable statement (ledger and demo surface)
+    Statement: string
+    /// Origin. A program site is file:line:col; a declaration is
+    /// `<description id>:<declaration name>` (BAREWire Platform/Obligations.fs).
+    Source: string
+    /// External rule cross-references (CWE ids)
+    Refs: string list
+    Body: ObligationBody
+}
+
+//-------------------------------------------------------------------------
 // Semantic Node Kind
 //-------------------------------------------------------------------------
 
@@ -266,6 +332,9 @@ type SemanticKind =
     | YieldBang of seq: NodeId
     | TupleGet of tuple: NodeId * index: int
     | Error of message: string
+    /// A proof obligation as a graph citizen. Its constraining structure is
+    /// the source set of its hyperedge in F; it is never on the emission spine.
+    | Obligation of ObligationInfo
 
 /// Kind of type definition
 and TypeDefKind =
@@ -284,6 +353,261 @@ and MemberKind =
     | Field
     | Constructor
     | Event
+
+//-------------------------------------------------------------------------
+// Program Hypergraph: the edge set (F) and its annotation (beta)
+//-------------------------------------------------------------------------
+//
+// PHG = (V, F, alpha, beta) -- arxiv-papers/program-hypergraph-paper.md 2.1.
+//   V      the node set                     (SemanticGraph.Nodes)
+//   F      the hyperedge set                (SemanticGraph.Edges)
+//   alpha  per-node annotation              (Type, ArenaAffinity, LayoutHint, Metadata)
+//   beta   per-edge annotation              (Class, Role, Ordinal)
+//
+// A hyperedge is f = (S_f, t_f, lambda_f): a SOURCE SET that produces or
+// constrains a TARGET. The PSG is the degenerate case in which every
+// |S_f| = 1, so this embedding preserves behaviour by construction (2.4).
+//
+// DIRECTION. Sources produce or constrain the target. An Application's callee
+// and arguments are the sources of the Application node; a VarRef's definition
+// is the source of the VarRef. Reachability therefore walks target -> sources,
+// which is the direction the existing parent -> children walk already takes.
+//
+// INVARIANT I1 (enumerated source sets). S_f is finite and fixed at
+// elaboration. Nothing may construct an edge whose source set is open; that is
+// what keeps the obligations these edges will carry quantifier-free.
+
+/// How an edge participates in the graph's projections.
+[<RequireQualifiedAccess>]
+type EdgeClass =
+    /// Containment: the source is structurally part of the target.
+    /// These are the edges that materialise as SemanticNode.Children.
+    | Structural
+    /// A non-containment relation the reachability walk must still follow:
+    /// VarRef -> its binding, a node's type -> its TypeDef, an intrinsic ->
+    /// its implementation, a string literal -> the symbol it names.
+    | Reference
+    /// Provenance: groups the nodes minted by one enrichment firing.
+    | Provenance
+    /// An obligation's constraining structure -> the obligation node.
+    | Obligation
+
+/// The role the source plays relative to the target -- the edge label.
+/// Generalises Traversal.RegionKind, which named the same thing but was
+/// handed to a callback and discarded instead of being stored.
+[<RequireQualifiedAccess>]
+type EdgeRole =
+    // structural
+    | Callee
+    | Argument
+    | Parameter
+    | Body
+    | Scrutinee
+    | CaseBinding
+    | CaseGuard
+    | CaseBody
+    | Guard
+    | ThenBranch
+    | ElseBranch
+    | LoopStart
+    | LoopFinish
+    | Collection
+    | Handler
+    | Cleanup
+    | Element
+    | FieldValue
+    | CopyFrom
+    | Payload
+    | ArenaHint
+    | AssignTarget
+    | AssignValue
+    | Subject
+    | Index
+    | Member
+    | Operand
+    | InterpolationPart
+    /// A child attached by the builder rather than derived from the kind
+    /// payload -- a Binding's value, an Intrinsic's arguments.
+    | Attached
+    // reference
+    | Definition
+    | TypeDefinition
+    | IntrinsicImplementation
+    | Symbol
+    // provenance
+    | EnrichedWith
+    // declared platform (BAREWire docs/11: cross-applied with the code it governs)
+    /// A declared memory space or buffer schema constrains the value that
+    /// resides in it: source = the declaration node, target = the value.
+    | Resides
+    /// The structure an obligation constrains -> the obligation node.
+    | Constrains
+
+/// One hyperedge. In this phase every edge is degenerate (|Sources| = 1);
+/// the list is the shape arity > 1 requires and costs nothing now.
+[<NoComparison; NoEquality>]
+type Hyperedge = {
+    /// S_f -- the nodes that produce or constrain the target.
+    Sources: NodeId list
+    /// t_f -- what they produce or constrain.
+    Target: NodeId
+    /// beta: which projections this edge belongs to.
+    Class: EdgeClass
+    /// beta: the role the sources play.
+    Role: EdgeRole
+    /// beta: position among same-role siblings (argument 0, 1, ...); 0 if unique.
+    Ordinal: int
+}
+
+/// Edge construction and projection helpers.
+[<RequireQualifiedAccess>]
+module Hyperedge =
+
+    /// A degenerate edge: `source` produces or constrains `target`.
+    let edge1 (cls: EdgeClass) (role: EdgeRole) (ordinal: int) (source: NodeId) (target: NodeId) : Hyperedge =
+        { Sources = [source]; Target = target; Class = cls; Role = role; Ordinal = ordinal }
+
+    /// The single source of a degenerate edge.
+    let soleSource (e: Hyperedge) : NodeId = List.head e.Sources
+
+    let isStructural (e: Hyperedge) = (e.Class = EdgeClass.Structural)
+    let isReference (e: Hyperedge) = (e.Class = EdgeClass.Reference)
+
+/// Every edge implied by a node's SemanticKind payload.
+///
+/// THIS IS THE SINGLE DEFINITION OF THE KIND-DERIVED RELATION. It replaces the
+/// three hand-maintained case-per-kind matches that each re-derived it:
+///   Builder.extractImpliedChildren      -- the structural projection
+///   Reachability.getSemanticReferences  -- structural + reference projection
+///   FoldIn.updateKindRefs               -- the rewriting direction
+///
+/// Those three had drifted. Lambda parameters appeared in the first and not the
+/// second; Binding and Intrinsic fell back to node.Children in the second and
+/// were leaves in the first; and InterpolatedString's ExprParts were missing
+/// from the structural projection entirely, so interpolation sub-expressions
+/// never became children and survived only because the other projection caught
+/// them. One table cannot drift against itself.
+///
+/// `target` is the node whose kind this is; every returned edge points at it.
+let kindEdges (target: NodeId) (kind: SemanticKind) : Hyperedge list =
+    // one structural edge
+    let st role src = Hyperedge.edge1 EdgeClass.Structural role 0 src target
+    // an ordered run of same-role structural edges
+    let sts role srcs = srcs |> List.mapi (fun i src -> Hyperedge.edge1 EdgeClass.Structural role i src target)
+    // one reference edge
+    let rf role src = Hyperedge.edge1 EdgeClass.Reference role 0 src target
+
+    match kind with
+    | SemanticKind.Application (func, args) ->
+        st EdgeRole.Callee func :: sts EdgeRole.Argument args
+
+    | SemanticKind.Lambda (parameters, body, _, _, _) ->
+        sts EdgeRole.Parameter (parameters |> List.map (fun (_, _, nodeId) -> nodeId))
+        @ [ st EdgeRole.Body body ]
+
+    | SemanticKind.Match (scrutinee, cases) ->
+        st EdgeRole.Scrutinee scrutinee
+        :: (cases |> List.collect (fun c ->
+                sts EdgeRole.CaseBinding c.PatternBindings
+                @ (c.Guard |> Option.toList |> List.map (st EdgeRole.CaseGuard))
+                @ [ st EdgeRole.CaseBody c.Body ]))
+
+    | SemanticKind.CaseElimination (scrutinee, arms) ->
+        st EdgeRole.Scrutinee scrutinee
+        :: (arms |> List.collect (fun arm ->
+                sts EdgeRole.CaseBinding arm.Bindings
+                @ (arm.Guard |> Option.toList |> List.map (st EdgeRole.CaseGuard))
+                @ [ st EdgeRole.CaseBody arm.Body ]))
+
+    | SemanticKind.Sequential nodes -> sts EdgeRole.Element nodes
+    | SemanticKind.WhileLoop (guard, body) -> [ st EdgeRole.Guard guard; st EdgeRole.Body body ]
+    | SemanticKind.ForLoop (_, start, finish, _, body) ->
+        [ st EdgeRole.LoopStart start; st EdgeRole.LoopFinish finish; st EdgeRole.Body body ]
+    | SemanticKind.ForEach (_, collection, body) ->
+        [ st EdgeRole.Collection collection; st EdgeRole.Body body ]
+    | SemanticKind.IfThenElse (guard, thenB, elseB) ->
+        [ st EdgeRole.Guard guard; st EdgeRole.ThenBranch thenB ]
+        @ (elseB |> Option.toList |> List.map (st EdgeRole.ElseBranch))
+    | SemanticKind.TryWith (body, handler) -> [ st EdgeRole.Body body; st EdgeRole.Handler handler ]
+    | SemanticKind.TryFinally (body, cleanup) -> [ st EdgeRole.Body body; st EdgeRole.Cleanup cleanup ]
+
+    | SemanticKind.RecordExpr (fields, copyFrom) ->
+        (copyFrom |> Option.toList |> List.map (st EdgeRole.CopyFrom))
+        @ sts EdgeRole.FieldValue (fields |> List.map snd)
+    | SemanticKind.UnionCase (_, _, payload) ->
+        payload |> Option.toList |> List.map (st EdgeRole.Payload)
+    | SemanticKind.DUGetTag (duValue, _) -> [ st EdgeRole.Subject duValue ]
+    | SemanticKind.DUEliminate (duValue, _, _, _) -> [ st EdgeRole.Subject duValue ]
+    | SemanticKind.DUConstruct (_, _, payload, arenaHint) ->
+        (payload |> Option.toList |> List.map (st EdgeRole.Payload))
+        @ (arenaHint |> Option.toList |> List.map (st EdgeRole.ArenaHint))
+
+    | SemanticKind.TupleExpr elements -> sts EdgeRole.Element elements
+    | SemanticKind.ArrayExpr elements -> sts EdgeRole.Element elements
+    | SemanticKind.ListExpr elements -> sts EdgeRole.Element elements
+    | SemanticKind.TupleGet (tuple, _) -> [ st EdgeRole.Subject tuple ]
+
+    | SemanticKind.FieldGet (expr, _) -> [ st EdgeRole.Subject expr ]
+    | SemanticKind.FieldSet (expr, _, value) ->
+        [ st EdgeRole.Subject expr; st EdgeRole.AssignValue value ]
+    | SemanticKind.IndexGet (expr, index) ->
+        [ st EdgeRole.Subject expr; st EdgeRole.Index index ]
+    | SemanticKind.IndexSet (expr, index, value) ->
+        [ st EdgeRole.Subject expr; st EdgeRole.Index index; st EdgeRole.AssignValue value ]
+    | SemanticKind.NamedIndexedPropertySet (expr, _, index, value) ->
+        [ st EdgeRole.Subject expr; st EdgeRole.Index index; st EdgeRole.AssignValue value ]
+
+    | SemanticKind.TypeAnnotation (expr, _) -> [ st EdgeRole.Operand expr ]
+    | SemanticKind.Upcast (expr, _) -> [ st EdgeRole.Operand expr ]
+    | SemanticKind.Downcast (expr, _) -> [ st EdgeRole.Operand expr ]
+    | SemanticKind.TypeTest (expr, _) -> [ st EdgeRole.Operand expr ]
+    | SemanticKind.AddressOf (expr, _) -> [ st EdgeRole.Operand expr ]
+    | SemanticKind.Deref expr -> [ st EdgeRole.Operand expr ]
+    | SemanticKind.Set (target', value) ->
+        [ st EdgeRole.AssignTarget target'; st EdgeRole.AssignValue value ]
+    | SemanticKind.TraitCall (_, _, arg) -> [ st EdgeRole.Argument arg ]
+    | SemanticKind.Quote (expr, _) -> [ st EdgeRole.Operand expr ]
+
+    | SemanticKind.ObjectExpr (_, members) -> sts EdgeRole.Member members
+    | SemanticKind.ModuleDef (_, members) -> sts EdgeRole.Member members
+    | SemanticKind.TypeDef (_, _, members) -> sts EdgeRole.Member members
+    | SemanticKind.MemberDef (_, _, body) ->
+        body |> Option.toList |> List.map (st EdgeRole.Body)
+
+    | SemanticKind.LazyExpr (body, _) -> [ st EdgeRole.Body body ]
+    | SemanticKind.LazyForce lazyValue -> [ st EdgeRole.Subject lazyValue ]
+    | SemanticKind.SeqExpr (body, _) -> [ st EdgeRole.Body body ]
+    | SemanticKind.Yield value -> [ st EdgeRole.Operand value ]
+    | SemanticKind.YieldBang seq -> [ st EdgeRole.Operand seq ]
+
+    // Interpolation parts ARE structural. The previous structural projection
+    // treated this kind as a leaf, so these never became children.
+    | SemanticKind.InterpolatedString parts ->
+        sts EdgeRole.InterpolationPart
+            (parts |> List.choose (function
+                | InterpolatedPart.ExprPart id -> Some id
+                | InterpolatedPart.StringPart _ -> None))
+
+    // A resolved VarRef names the binding that produces its value. This is a
+    // relation, not containment: the definition is not part of the reference.
+    | SemanticKind.VarRef (_, Some defId) -> [ rf EdgeRole.Definition defId ]
+    | SemanticKind.VarRef (_, None) -> []
+
+    // Kinds whose children are attached by the builder rather than carried in
+    // the payload: a Binding's value, an Intrinsic's arguments. Their edges
+    // come from `attachedEdges` below, which reads node.Children.
+    | SemanticKind.Binding _
+    | SemanticKind.Intrinsic _ -> []
+
+    // Obligation nodes: their edges are minted by the obligation pass, in F,
+    // with an enumerated source set. Nothing is derived from the payload.
+    | SemanticKind.Obligation _ -> []
+
+    // Genuine leaves.
+    | SemanticKind.Literal _
+    | SemanticKind.PlatformBinding _
+    | SemanticKind.PatternBinding _
+    | SemanticKind.Error _ -> []
 
 //-------------------------------------------------------------------------
 // Typed Metadata
@@ -335,6 +659,22 @@ module ElaborationMetadata =
     [<Literal>]
     let Id = "Elaboration.Id"
 
+/// Metadata keys for a declared buffer's facts, projected onto the program
+/// site that reads into it. This is the hyperedge's consequence on alpha
+/// (PHG paper 2.4): the site carries the capacity as a saturated annotation,
+/// and the lowering reads it. Nothing below the graph authors the number.
+[<RequireQualifiedAccess>]
+module BufferMetadata =
+    /// Declared capacity in bytes (MetadataValue.Int64)
+    [<Literal>]
+    let Capacity = "Buffer.Capacity"
+    /// The declaration cited, `<platform id>:<buffer name>` (MetadataValue.String)
+    [<Literal>]
+    let Declaration = "Buffer.Declaration"
+    /// Whether the framing delimiter is trimmed from the value (MetadataValue.Bool)
+    [<Literal>]
+    let TrimDelimiter = "Buffer.TrimDelimiter"
+
 /// Metadata keys for closure pair construction decisions.
 /// Baker marks zero-capture lambdas in value position with these keys,
 /// signaling to SSAAssignment that a closure pair must be constructed
@@ -383,4 +723,10 @@ type SemanticGraph = {
     Platform: PlatformContext option
     ModuleClassifications: Lazy<Map<NodeId, ModuleClassification>>
     SeqSaturation: Lazy<Map<NodeId, SeqStateMachineInfo>>
+    /// F -- the hyperedge set. Phase 0 carries only what enrichment mints
+    /// explicitly (obligations, residence); the kind-derived structural and
+    /// reference edges are projected on demand by `kindEdges` and are not
+    /// materialised here until the fixpoint driver needs them as data.
+    /// The emission traversal never queries this set (PHG paper 2.4).
+    Edges: Hyperedge list
 }

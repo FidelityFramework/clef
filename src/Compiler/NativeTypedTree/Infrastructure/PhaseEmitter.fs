@@ -150,9 +150,21 @@ let serializePhaseOutput (output: PhaseOutput) : string =
         |> List.map escapeJsonString
         |> buildJsonArray pretty 1
 
+    let edgesJson =
+        output.Edges
+        |> List.map (fun e ->
+            buildJsonObject false 0 [
+                ("sources", buildJsonArray false 0 (e.Sources |> List.map string))
+                ("target", string e.Target)
+                ("class", escapeJsonString e.Class)
+                ("role", escapeJsonString e.Role)
+                ("ordinal", string e.Ordinal) ])
+        |> buildJsonArray pretty 1
+
     let pairs = [
         ("summary", summaryJson)
         ("nodes", nodesJson)
+        ("edges", edgesJson)
         ("entryPoints", entryPointsJson)
         ("diagnostics", diagnosticsJson)
     ]

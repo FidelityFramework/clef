@@ -187,6 +187,16 @@ type PhaseNodeOutput = {
 }
 
 /// Phase output structure for JSON emission
+/// One hyperedge of F, for the intermediates: its source set, its target,
+/// and its annotation.
+type PhaseEdgeOutput = {
+    Sources: int list
+    Target: int
+    Class: string
+    Role: string
+    Ordinal: int
+}
+
 type PhaseOutput = {
     /// Phase summary information
     Summary: PhaseSummary
@@ -196,6 +206,8 @@ type PhaseOutput = {
     EntryPoints: int list
     /// Diagnostics messages
     Diagnostics: string list
+    /// F: every hyperedge enrichment has minted (empty before saturation)
+    Edges: PhaseEdgeOutput list
 }
 
 /// Diff between two phases (for understanding what changed)

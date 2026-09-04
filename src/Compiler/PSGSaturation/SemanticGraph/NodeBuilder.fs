@@ -11,79 +11,20 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 // Node Builder
 //-------------------------------------------------------------------------
 
-/// Extract NodeIds that are structurally embedded in a SemanticKind.
-/// These are the "implied children" - nodes referenced by the kind that
-/// should be traversable via the children field.
+/// The implied children of a node: the structural projection of the single
+/// edge table (Types.kindEdges).
 ///
-/// ARCHITECTURAL PRINCIPLE (January 2026):
-/// This function ensures structural integrity of the PSG. Any NodeId
-/// referenced in a SemanticKind must be reachable via children for
-/// traversal algorithms (SSA assignment, reachability, etc.) to work.
-let private extractImpliedChildren (kind: SemanticKind) : NodeId list =
-    match kind with
-    | SemanticKind.Application (func, args) -> func :: args
-    | SemanticKind.Lambda (params', body, _, _, _) ->
-        // Parameters have NodeIds (third element of tuple) + body
-        let paramIds = params' |> List.map (fun (_, _, nodeId) -> nodeId)
-        paramIds @ [body]
-    | SemanticKind.Match (scrutinee, cases) ->
-        let caseNodeIds = cases |> List.collect (fun c ->
-            let guardAndBody = match c.Guard with Some g -> [g; c.Body] | None -> [c.Body]
-            c.PatternBindings @ guardAndBody)
-        scrutinee :: caseNodeIds
-    | SemanticKind.CaseElimination (scrutinee, arms) ->
-        scrutinee :: (arms |> List.collect (fun arm ->
-            arm.Bindings
-            @ (match arm.Guard with Some g -> [g] | None -> [])
-            @ [arm.Body]))
-    | SemanticKind.Sequential nodes -> nodes
-    | SemanticKind.WhileLoop (guard, body) -> [guard; body]
-    | SemanticKind.ForLoop (_, start, finish, _, body) -> [start; finish; body]
-    | SemanticKind.ForEach (_, collection, body) -> [collection; body]
-    | SemanticKind.IfThenElse (guard, thenB, elseB) ->
-        guard :: thenB :: (Option.toList elseB)
-    | SemanticKind.TryWith (body, handler) -> [body; handler]
-    | SemanticKind.TryFinally (body, cleanup) -> [body; cleanup]
-    | SemanticKind.RecordExpr (fields, copyFrom) ->
-        let fieldIds = fields |> List.map snd
-        (Option.toList copyFrom) @ fieldIds
-    | SemanticKind.UnionCase (_, _, payload) -> Option.toList payload
-    | SemanticKind.DUGetTag (duValue, _) -> [duValue]
-    | SemanticKind.DUEliminate (duValue, _, _, _) -> [duValue]
-    | SemanticKind.DUConstruct (_, _, payload, arenaHint) ->
-        (Option.toList payload) @ (Option.toList arenaHint)
-    | SemanticKind.TupleExpr elements -> elements
-    | SemanticKind.ArrayExpr elements -> elements
-    | SemanticKind.ListExpr elements -> elements
-    | SemanticKind.FieldGet (expr, _) -> [expr]
-    | SemanticKind.FieldSet (expr, _, value) -> [expr; value]
-    | SemanticKind.IndexGet (expr, index) -> [expr; index]
-    | SemanticKind.IndexSet (expr, index, value) -> [expr; index; value]
-    | SemanticKind.NamedIndexedPropertySet (expr, _, index, value) -> [expr; index; value]
-    | SemanticKind.TypeAnnotation (expr, _) -> [expr]
-    | SemanticKind.Upcast (expr, _) -> [expr]
-    | SemanticKind.Downcast (expr, _) -> [expr]
-    | SemanticKind.TypeTest (expr, _) -> [expr]
-    | SemanticKind.AddressOf (expr, _) -> [expr]
-    | SemanticKind.Deref expr -> [expr]
-    | SemanticKind.Set (target, value) -> [target; value]
-    | SemanticKind.TraitCall (_, _, arg) -> [arg]
-    | SemanticKind.Quote (expr, _) -> [expr]
-    | SemanticKind.ObjectExpr (_, members) -> members
-    | SemanticKind.ModuleDef (_, members) -> members
-    | SemanticKind.TypeDef (_, _, members) -> members
-    | SemanticKind.MemberDef (_, _, body) -> Option.toList body
-    | SemanticKind.LazyExpr (body, _) -> [body]
-    | SemanticKind.LazyForce lazyValue -> [lazyValue]
-    | SemanticKind.SeqExpr (body, _) -> [body]
-    | SemanticKind.Yield value -> [value]
-    | SemanticKind.YieldBang seq -> [seq]
-    | SemanticKind.TupleGet (tuple, _) -> [tuple]
-    // Leaf nodes with no embedded NodeIds
-    | SemanticKind.Binding _ | SemanticKind.Literal _ | SemanticKind.VarRef _
-    | SemanticKind.PlatformBinding _ | SemanticKind.Intrinsic _
-    | SemanticKind.PatternBinding _ | SemanticKind.Error _
-    | SemanticKind.InterpolatedString _ -> []
+/// ARCHITECTURAL PRINCIPLE: any NodeId referenced in a SemanticKind must be
+/// reachable via children for the traversal algorithms (SSA assignment,
+/// reachability) to work. That relation is now defined once, in `kindEdges`,
+/// and this is its `EdgeClass.Structural` projection -- it cannot drift from
+/// the reachability projection in Reachability.fs, because both read the same
+/// table. Reference edges (a VarRef's definition) are deliberately excluded:
+/// a definition is related to a reference, not contained by it.
+let private extractImpliedChildren (target: NodeId) (kind: SemanticKind) : NodeId list =
+    kindEdges target kind
+    |> List.filter Hyperedge.isStructural
+    |> List.map Hyperedge.soleSource
 
 /// Builder for creating semantic nodes with type attached
 type NodeBuilder() =
@@ -101,7 +42,7 @@ type NodeBuilder() =
         // Compute the final children list:
         // - If no children specified, use implied children from SemanticKind
         // - If children specified, merge with implied children (union, preserving order)
-        let impliedChildren = extractImpliedChildren kind
+        let impliedChildren = extractImpliedChildren id kind
         let finalChildren =
             match children with
             | None -> impliedChildren
@@ -187,7 +128,8 @@ type NodeBuilder() =
           Types = SemanticGraph.mkTypesIndex nodes
           Platform = None
           ModuleClassifications = SemanticGraph.mkModuleClassifications nodes
-          SeqSaturation = SemanticGraph.mkSeqSaturation nodes }
+          SeqSaturation = SemanticGraph.mkSeqSaturation nodes
+          Edges = [] }
 
     /// Build the semantic graph with platform context
     member _.BuildWithPlatform(declRoots: (NodeId * DeclRoot) list, platform: PlatformContext) : SemanticGraph =
@@ -197,7 +139,8 @@ type NodeBuilder() =
           Types = SemanticGraph.mkTypesIndex nodes
           Platform = Some platform
           ModuleClassifications = SemanticGraph.mkModuleClassifications nodes
-          SeqSaturation = SemanticGraph.mkSeqSaturation nodes }
+          SeqSaturation = SemanticGraph.mkSeqSaturation nodes
+          Edges = [] }
 
     /// Reset the builder
     member _.Reset() =

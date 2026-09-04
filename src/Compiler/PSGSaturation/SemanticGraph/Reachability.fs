@@ -30,145 +30,23 @@ let isCompilerProvidedIntrinsic (_info: IntrinsicInfo) : bool =
     // All intrinsic modules are compiler-provided (Alex handles directly)
     true
 
-/// Extract semantic references from a node's Kind (call targets, definition refs, etc.)
-/// Used by traversal to ensure all semantic children are visited.
-/// IMPORTANT: ALL SemanticKind cases MUST be handled explicitly - no wildcards!
+/// Every node the reachability walk must follow from this one: the structural
+/// AND reference projection of the single edge table (Types.kindEdges).
+///
+/// This is the same table Builder.extractImpliedChildren projects; the only
+/// difference is that this projection also admits `EdgeClass.Reference` edges
+/// -- a resolved VarRef reaches its binding, which is a relation rather than
+/// containment. Kinds whose children are attached by the builder rather than
+/// carried in the kind payload (Binding's value, Intrinsic's arguments)
+/// contribute node.Children directly.
 let getSemanticReferences (node: SemanticNode) : NodeId list =
+    let fromKind =
+        kindEdges node.Id node.Kind
+        |> List.filter (fun e -> Hyperedge.isStructural e || Hyperedge.isReference e)
+        |> List.map Hyperedge.soleSource
     match node.Kind with
-    // Application: follow function and arguments
-    | SemanticKind.Application (funcId, argIds) ->
-        funcId :: argIds
-    // VarRef with definition: follow to definition
-    | SemanticKind.VarRef (_, Some defId) ->
-        [defId]
-    | SemanticKind.VarRef (_, None) ->
-        []  // Unresolved reference - no semantic edges
-    // Match: follow scrutinee and case bodies
-    | SemanticKind.Match (scrutinee, cases) ->
-        // Include PatternBindings so they're in traversal path for SSA assignment
-        scrutinee :: (cases |> List.collect (fun c ->
-            let guardAndBody = match c.Guard with Some g -> [g; c.Body] | None -> [c.Body]
-            c.PatternBindings @ guardAndBody))
-    // CaseElimination: follow scrutinee and arm bindings/guards/bodies
-    | SemanticKind.CaseElimination (scrutinee, arms) ->
-        scrutinee :: (arms |> List.collect (fun arm ->
-            arm.Bindings
-            @ (match arm.Guard with Some g -> [g] | None -> [])
-            @ [arm.Body]))
-    // Sequential: follow all nodes
-    | SemanticKind.Sequential nodes ->
-        nodes
-    // Binding: follow value node (first child usually)
-    | SemanticKind.Binding _ ->
-        node.Children
-    // Lambda: follow body
-    | SemanticKind.Lambda (_, bodyId, _, _, _) ->
-        [bodyId]
-    // Control flow: follow branches
-    | SemanticKind.IfThenElse (guard, thenB, elseB) ->
-        guard :: thenB :: (Option.toList elseB)
-    | SemanticKind.WhileLoop (guard, body) ->
-        [guard; body]
-    | SemanticKind.ForLoop (_, start, finish, _, body) ->
-        [start; finish; body]
-    | SemanticKind.ForEach (_, collection, body) ->
-        [collection; body]
-    | SemanticKind.TryWith (body, handler) ->
-        [body; handler]
-    | SemanticKind.TryFinally (body, cleanup) ->
-        [body; cleanup]
-    // Expressions with sub-expressions
-    | SemanticKind.TupleExpr elements ->
-        elements
-    | SemanticKind.TupleGet(tupleId, _) ->
-        [tupleId]
-    | SemanticKind.ArrayExpr elements ->
-        elements
-    | SemanticKind.ListExpr elements ->
-        elements
-    | SemanticKind.RecordExpr (fields, copyFrom) ->
-        (fields |> List.map snd) @ (Option.toList copyFrom)
-    | SemanticKind.UnionCase (_, _, payload) ->
-        Option.toList payload
-    // DU Operations (January 2026)
-    | SemanticKind.DUGetTag (duValue, _) ->
-        [duValue]
-    | SemanticKind.DUEliminate (duValue, _, _, _) ->
-        [duValue]
-    | SemanticKind.DUConstruct (_, _, payload, arenaHint) ->
-        (Option.toList payload) @ (Option.toList arenaHint)
-    | SemanticKind.FieldGet (expr, _) ->
-        [expr]
-    | SemanticKind.FieldSet (expr, _, value) ->
-        [expr; value]
-    | SemanticKind.IndexGet (expr, index) ->
-        [expr; index]
-    | SemanticKind.IndexSet (expr, index, value) ->
-        [expr; index; value]
-    | SemanticKind.NamedIndexedPropertySet (expr, _, index, value) ->
-        [expr; index; value]
-    | SemanticKind.TypeAnnotation (expr, _) ->
-        [expr]
-    | SemanticKind.Upcast (expr, _) ->
-        [expr]
-    | SemanticKind.Downcast (expr, _) ->
-        [expr]
-    | SemanticKind.TypeTest (expr, _) ->
-        [expr]
-    | SemanticKind.Set (target, value) ->
-        [target; value]
-    | SemanticKind.AddressOf (expr, _) ->
-        [expr]
-    | SemanticKind.Deref expr ->
-        [expr]
-    // ModuleDef: follow member bindings
-    | SemanticKind.ModuleDef (_, memberIds) ->
-        memberIds
-    // TypeDef: follow member definitions
-    | SemanticKind.TypeDef (_, _, memberIds) ->
-        memberIds
-    // MemberDef: follow body if present
-    | SemanticKind.MemberDef (_, _, bodyOpt) ->
-        Option.toList bodyOpt
-    // ObjectExpr: follow member implementations
-    | SemanticKind.ObjectExpr (_, memberIds) ->
-        memberIds
-    // InterpolatedString: follow expression parts
-    | SemanticKind.InterpolatedString parts ->
-        parts |> List.choose (function
-            | InterpolatedPart.ExprPart id -> Some id
-            | InterpolatedPart.StringPart _ -> None)
-    // TraitCall: follow the argument
-    | SemanticKind.TraitCall (_, _, argId) ->
-        [argId]
-    // Quote: follow quoted expression
-    | SemanticKind.Quote (exprId, _) ->
-        [exprId]
-    // Intrinsic: implementation function reference is resolved during reachability walk
-    // The actual connection to implementation functions happens in computeReachable
-    | SemanticKind.Intrinsic _ ->
-        node.Children  // Follow any children (arguments)
-    // Lazy (PRD-14): deferred computation
-    | SemanticKind.LazyExpr (bodyId, _captures) ->
-        [bodyId]  // Follow the deferred computation body
-    | SemanticKind.LazyForce lazyValueId ->
-        [lazyValueId]  // Follow the lazy value to force
-    // Seq (PRD-15): sequence expressions
-    | SemanticKind.SeqExpr (bodyId, _captures) ->
-        [bodyId]  // Follow the sequence body (MoveNext thunk)
-    | SemanticKind.Yield valueId ->
-        [valueId]  // Follow the yielded value
-    | SemanticKind.YieldBang seqId ->
-        [seqId]  // Follow the nested sequence
-    // Leaf nodes with no semantic references
-    | SemanticKind.Literal _ ->
-        []
-    | SemanticKind.PlatformBinding _ ->
-        []
-    | SemanticKind.PatternBinding _ ->
-        []
-    | SemanticKind.Error _ ->
-        []
+    | SemanticKind.Binding _ | SemanticKind.Intrinsic _ -> fromKind @ node.Children
+    | _ -> fromKind
 
 /// Extract type names from a NativeType (for reachability of TypeDef nodes)
 /// Only extracts user-defined type names (records, unions) that need TypeDef lookup

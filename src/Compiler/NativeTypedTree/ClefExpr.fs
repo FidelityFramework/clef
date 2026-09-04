@@ -340,6 +340,9 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] ClefExpr =
 
     /// Error node (for recovery)
     | Error of message: string * range: SourceRange
+    /// A proof obligation node. Not an expression: it is reached through F,
+    /// never through the expression spine, and is shown so the view is honest.
+    | Obligation of info: ObligationInfo * range: SourceRange
 
 /// Part of an interpolated string
 and [<RequireQualifiedAccess>] InterpolatedStringPart =
@@ -699,6 +702,10 @@ module ClefExpr =
             | SemanticKind.Error message ->
                 ClefExpr.Error(message, node.Range)
 
+            // Obligation: a graph citizen, not an expression
+            | SemanticKind.Obligation info ->
+                ClefExpr.Obligation(info, node.Range)
+
     /// Convert a match case from SemanticGraph to native representation
     and private convertMatchCase (graph: SemanticGraph) (case: MatchCase) : NativeMatchCase =
         {
@@ -827,6 +834,9 @@ module ClefExpr =
         | ClefExpr.Error(message, range) ->
             sprintf "%sERROR: %s at %s" pad message (range.ToString())
 
+        | ClefExpr.Obligation(info, _) ->
+            sprintf "%sOBLIGATION %s [%s]: %s" pad info.Id info.Kind info.Statement
+
         | _ ->
             sprintf "%s%A" pad expr
 
@@ -874,3 +884,4 @@ module ClefExpr =
         | ClefExpr.TypeDef(name, _, _) -> sprintf "Type(%s)" name
         | ClefExpr.MemberDef(name, _, _) -> sprintf "Member(%s)" name
         | ClefExpr.Error(msg, _) -> sprintf "Error(%s)" msg
+        | ClefExpr.Obligation(info, _) -> sprintf "Obligation(%s)" info.Id
