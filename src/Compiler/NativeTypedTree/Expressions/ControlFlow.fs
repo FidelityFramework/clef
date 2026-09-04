@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Houston Haynes / SpeakEZ Technologies
+// Copyright (c) 2025 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
 /// Control flow expression handlers for F# Native.
@@ -101,15 +101,94 @@ let checkFor
     addConstraint (Constraint.Equals(startNode.Type, Types.intType, range)) env
     addConstraint (Constraint.Equals(endNode.Type, Types.intType, range)) env
 
-    // Add loop variable to environment
-    let bodyEnv = addBinding ident.idText Types.intType false None false env  // Loop vars are local
+    // A counted loop is a while loop over a mutable cell:
+    //   let __for_end = <end>            (the bound is evaluated once)
+    //   let mutable i = <start>
+    //   while i <= __for_end do           (>= for downto)
+    //       <body>
+    //       i <- i + 1                    (- 1 for downto)
+    // The loop variable is a real binding node, so every VarRef to it resolves, and the
+    // lowering reuses the while/mutable-cell machinery instead of a dedicated for form.
+    let loopVar = ident.idText
+    let endName = sprintf "__for_end_%d" (NodeId.value (NodeId.fresh()))
+    let endBinding = builder.Create(
+        SemanticKind.Binding(endName, false, false, None),
+        Types.intType,
+        range,
+        children = [endNode.Id])
+    builder.SetParent(endNode.Id, endBinding.Id)
+    let varBinding = builder.Create(
+        SemanticKind.Binding(loopVar, true, false, None),
+        Types.intType,
+        range,
+        children = [startNode.Id])
+    builder.SetParent(startNode.Id, varBinding.Id)
+
+    // Body sees the loop variable (mutability is unobservable inside the body)
+    let bodyEnv = addBinding loopVar Types.intType true (Some varBinding.Id) false env
     let bodyNode = checkExpr bodyEnv builder bodyExpr
 
-    builder.Create(
-        SemanticKind.ForLoop(ident.idText, startNode.Id, endNode.Id, direction, bodyNode.Id),
+    let mkVarRef (name: string) (defId: NodeId) =
+        builder.Create(SemanticKind.VarRef(name, Some defId), Types.intType, range, arena = env.CurrentArena)
+    let mkOperator (opName: string) (resultTy: NativeType) =
+        match Clef.Compiler.NativeTypedTree.Expressions.Intrinsics.tryResolveOperator opName range with
+        | Some (info, opTy) ->
+            // Pin the operator's type variable to int so no unbound variable survives
+            addConstraint (Constraint.Equals(opTy, NativeType.TFun(Types.intType, NativeType.TFun(Types.intType, resultTy)), range)) env
+            builder.Create(SemanticKind.Intrinsic info, opTy, range, arena = env.CurrentArena)
+        | None -> failwith ("for loop desugaring: operator intrinsic missing: " + opName)
+
+    // Guard: i <= end (or i >= end for downto)
+    let cmpNode = mkOperator (if direction then "op_LessThanOrEqual" else "op_GreaterThanOrEqual") Types.boolType
+    let guardVar = mkVarRef loopVar varBinding.Id
+    let guardEnd = mkVarRef endName endBinding.Id
+    let guardNode = builder.Create(
+        SemanticKind.Application(cmpNode.Id, [guardVar.Id; guardEnd.Id]),
+        Types.boolType,
+        range,
+        children = [cmpNode.Id; guardVar.Id; guardEnd.Id])
+    for cid in guardNode.Children do builder.SetParent(cid, guardNode.Id)
+
+    // Step: i <- i + 1 (or i - 1 for downto)
+    let stepOp = mkOperator (if direction then "op_Addition" else "op_Subtraction") Types.intType
+    let stepVar = mkVarRef loopVar varBinding.Id
+    let oneNode = builder.Create(
+        SemanticKind.Literal (NativeLiteral.Int(1L, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register))),
+        Types.intType,
+        range)
+    let stepValue = builder.Create(
+        SemanticKind.Application(stepOp.Id, [stepVar.Id; oneNode.Id]),
+        Types.intType,
+        range,
+        children = [stepOp.Id; stepVar.Id; oneNode.Id])
+    for cid in stepValue.Children do builder.SetParent(cid, stepValue.Id)
+    let setTarget = mkVarRef loopVar varBinding.Id
+    let setNode = builder.Create(
+        SemanticKind.Set(setTarget.Id, stepValue.Id),
         Types.unitType,
         range,
-        children = [startNode.Id; endNode.Id; bodyNode.Id])
+        children = [setTarget.Id; stepValue.Id])
+    for cid in setNode.Children do builder.SetParent(cid, setNode.Id)
+
+    let loopBody = builder.Create(
+        SemanticKind.Sequential [bodyNode.Id; setNode.Id],
+        Types.unitType,
+        range,
+        children = [bodyNode.Id; setNode.Id])
+    for cid in loopBody.Children do builder.SetParent(cid, loopBody.Id)
+    let whileNode = builder.Create(
+        SemanticKind.WhileLoop(guardNode.Id, loopBody.Id),
+        Types.unitType,
+        range,
+        children = [guardNode.Id; loopBody.Id])
+    for cid in whileNode.Children do builder.SetParent(cid, whileNode.Id)
+    let result = builder.Create(
+        SemanticKind.Sequential [endBinding.Id; varBinding.Id; whileNode.Id],
+        Types.unitType,
+        range,
+        children = [endBinding.Id; varBinding.Id; whileNode.Id])
+    for cid in result.Children do builder.SetParent(cid, result.Id)
+    result
 
 //-------------------------------------------------------------------------
 // Try-finally

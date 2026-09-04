@@ -14,7 +14,7 @@
     <AssemblyName>Clef.Compiler.Service</AssemblyName>
 
     <!-- Warnings -->
-    <NoWarn>$(NoWarn);44;57;75;1204;NU5125;64</NoWarn>
+    <NoWarn>$(NoWarn);44;57;75;1204;NU5125;64;3884</NoWarn>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 
     <!-- Compiler settings -->
@@ -315,6 +315,7 @@
     <Compile Include="Nanopass\Recipe.fs" />
     <Compile Include="Nanopass\FanOut.fs" />
     <Compile Include="Nanopass\FoldIn.fs" />
+    <Compile Include="Nanopass\Monomorphization.fs" />
     <Compile Include="Nanopass\Serialization.fs" />
     <!-- Baker - Post-construction semantic enrichment (peer to NativeTypedTree) -->
     <Compile Include="Baker\ShadowAST.fs" />
@@ -406,7 +407,7 @@
   <!-- Package Dependencies -->
   <ItemGroup>
     <!-- Core F# runtime -->
-    <PackageReference Include="FSharp.Core" Version="10.0.101" />
+    <PackageReference Include="FSharp.Core" Version="10.1.400" />
 
     <!-- XParsec - Parser combinators for Baker saturation (Phase 4.0: XParsec migration) -->
     <PackageReference Include="XParsec" Version="0.3.0" />

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Houston Haynes / SpeakEZ Technologies
+// Copyright (c) 2025 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
 /// Pattern checking for F# Native.
@@ -99,9 +99,14 @@ let rec checkPattern
                     // e.g., IntVal : int -> Number has type TFun(int, Number)
                     // e.g., Pair : int -> string -> T has type TFun(int, TFun(string, T))
                     // e.g., Some : forall 'a. 'a -> option<'a> (need to unwrap TForall first)
+                    // A polymorphic constructor (`Some : forall 'a. 'a -> option<'a>`) is instantiated
+                    // with fresh type variables at every pattern, exactly as at every expression use
+                    // (Types.instantiateTForall). Unwrapping the scheme and using its quantified
+                    // variable directly would make every `Some v` pattern in the program share one
+                    // payload type: whichever match unified it first would type all the others.
                     let rec extractDomains ty acc =
                         match ty with
-                        | NativeType.TForall(_, inner) -> extractDomains inner acc  // Unwrap polymorphic types
+                        | NativeType.TForall _ -> extractDomains (Types.instantiateTForall ty range) acc
                         | NativeType.TFun(domain, range) -> extractDomains range (domain :: acc)
                         | _ -> List.rev acc
                     let types = extractDomains binding.Type []

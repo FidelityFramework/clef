@@ -5,7 +5,7 @@ namespace Clef.Compiler.Xml
 open Clef.Compiler.Text
 
 /// Represents collected XmlDoc lines
-[<Class>]
+[<Class; RequireQualifiedAccess>]
 type public XmlDoc =
 
     new: unprocessedLines: string[] * range: range -> XmlDoc

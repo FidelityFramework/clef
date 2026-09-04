@@ -158,7 +158,7 @@ Clef is a distinct language. It is not F# targeting native backends. The syntax 
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
 
-Original work is copyright Microsoft Corporation. Modifications are copyright SpeakEZ Technologies.
+Original work is copyright Microsoft Corporation. Modifications are copyright Braidpoint.
 
 ## Contact
 

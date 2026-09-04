@@ -1,4 +1,4 @@
-// Copyright (c) 2025-2026 Houston Haynes / SpeakEZ Technologies
+// Copyright (c) 2025-2026 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
 /// Combinational Depth Analysis — Layer 1 Structural Heuristic

@@ -1,4 +1,4 @@
-// Copyright (c) 2025-2026 Houston Haynes / SpeakEZ Technologies
+// Copyright (c) 2025-2026 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
 /// Module Initialization - Intermediate output for debugging.
