@@ -54,6 +54,7 @@ let private matchTypeArgs (typars: TypeParam list) (scheme: NativeType) (instanc
             match s, applySubst i with
             | NativeType.TApp (tc1, a1), NativeType.TApp (tc2, a2) when tc1.Name = tc2.Name && List.length a1 = List.length a2 ->
                 List.iter2 go a1 a2
+            | NativeType.TNum (c1, _), NativeType.TNum (c2, _) when c1.Name = c2.Name -> ()   // a numeric position: the dimension is not key material (d.3)
             | NativeType.TFun (d1, r1), NativeType.TFun (d2, r2) -> go d1 d2; go r1 r2
             | NativeType.TTuple (e1, _), NativeType.TTuple (e2, _) when List.length e1 = List.length e2 -> List.iter2 go e1 e2
             | NativeType.TByref (e1, _), NativeType.TByref (e2, _) -> go e1 e2

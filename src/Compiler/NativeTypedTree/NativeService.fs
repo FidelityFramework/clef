@@ -12,6 +12,8 @@ module Clef.Compiler.NativeService
 
 open Clef.Compiler.Syntax
 open Clef.Compiler.Text
+open Clef.Compiler.NativeTypedTree.DimensionAlgebra
+open Clef.Compiler.NativeTypedTree.MeasureEnvironment
 open Clef.Compiler.NativeTypedTree.NativeTypes
 
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
@@ -261,9 +263,10 @@ let defaultCheckOptions = {
 // Diagnostic Helpers
 //-------------------------------------------------------------------------
 
-/// Convert unification errors to diagnostics
-/// NOTE: Temporarily using Warning instead of Error to allow compilation to proceed
-/// while type issues in Alloy are resolved. These should become errors again.
+/// Convert unification errors to diagnostics. A measure failure carries its own code (design b.5:
+/// CCS8040 with both sides rendered plus the residual, CCS8041 for no integer solution, the
+/// CCS8048 family for an unrepresentable exponent); the other cases keep the FS0001 blanket until
+/// the D3 mapping table lands with CS-7.
 let private errorsToDiagnostics (errors: UnificationError list) : Diagnostic list =
     errors |> List.map (fun e ->
         let range =
@@ -274,9 +277,19 @@ let private errorsToDiagnostics (errors: UnificationError list) : Diagnostic lis
             | TupleLengthMismatch(_, _, r) -> r
             | TupleKindMismatch(_, _, r) -> r
             | ByrefKindMismatch(_, _, r) -> r
+            | MeasureMismatch(_, _, _, r) -> r
+            | NoIntegerSolution(_, _, _, r) -> r
+            | MeasureExponentOutOfRange(_, _, r) -> r
+        let code =
+            match e with
+            | MeasureMismatch _ -> DiagnosticCodes.CCS8040_MeasureMismatch
+            | NoIntegerSolution _ -> DiagnosticCodes.CCS8041_NoIntegerSolution
+            | MeasureExponentOutOfRange _ -> DiagnosticCodes.CCS8048_RationalMeasureExponent
+            | TypeMismatch _ | InfiniteType _ | ArityMismatch _
+            | TupleLengthMismatch _ | TupleKindMismatch _ | ByrefKindMismatch _ -> DiagnosticCodes.FS0001_GenericError
         {
             Severity = NativeDiagnosticSeverity.Error
-            Code = "FS0001"
+            Code = code
             Message = formatError e
             Range = range
             RelatedNodes = []
@@ -699,12 +712,13 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // Literals
     //---------------------------------------------------------------------
     | SynExpr.Const(constant, _) ->
-        match Literals.checkConst constant with
+        match Literals.checkConst env constant with
         | Result.Ok (ty, litVal) ->
             builder.Create(SemanticKind.Literal litVal, ty, range)
-        | Result.Error msg ->
-            // CCS8018 (plan L-3): the constant names no representation; an error node, not a type.
-            Literals.addUnsupportedLiteralSuffix syn.Range msg env
+        | Result.Error failure ->
+            // CCS8018 (plan L-3) or a measure failure (design a.4): an error node, not a type.
+            Literals.addConstFailure syn.Range failure env
+            let msg = Literals.constFailureMessage failure
             builder.Create(SemanticKind.Error msg, NativeType.TError msg, range)
 
     //---------------------------------------------------------------------
@@ -1315,6 +1329,73 @@ let private hasStructAttribute (attrs: SynAttributes) : bool =
         )
     )
 
+/// Check if a type definition has the [<Measure>] attribute
+let private hasMeasureAttribute (attrs: SynAttributes) : bool =
+    attrs |> List.exists (fun attrList ->
+        attrList.Attributes |> List.exists (fun attr ->
+            match attr.TypeName.LongIdent with
+            | [id] -> id.idText = "Measure" || id.idText = "MeasureAttribute"
+            | _ -> false
+        )
+    )
+
+/// Register the `[<Measure>] type` declarations of one group into the measure environment
+/// (design a.3; sequence CS-4). A primitive is a declaration with no representation; an
+/// abbreviation's right-hand side is read through the one translator (`dimensionOfSyntax`, as
+/// `MeasureSyntax.Type`) against the environment as it stands, in the order
+/// `MeasureEnv.registerGroup` derives from the names each body references (`measureReferences`).
+/// Every failure is reported at its own declaration: registration returns the first failure and
+/// registers nothing, so the declaration the failure lies in is set aside and the rest register,
+/// until the group registers or no declaration remains. A declaration with a type
+/// representation (a union, a record, `class end`) is not a measure: CCS8045 at the declaration.
+/// No type node is produced: a measure lives in the environment, not in the graph.
+let private registerMeasureDeclarations (ctx: ModuleContext) (env: TypeEnv) (measureDefns: SynTypeDefn list) : TypeEnv =
+    let declOf (typeDef: SynTypeDefn) : Result<MeasureDecl<SynType>, MeasureFailure> =
+        let (SynTypeDefn(SynComponentInfo(_, typars, _, longId, _, _, _, _), typeRepr, _, _, typeRange, _)) = typeDef
+        let name = longId |> List.map (fun id -> id.idText) |> String.concat "."
+        let parameters =
+            match typars with
+            | Some decls -> decls.TyparDecls |> List.map (fun (SynTyparDecl(_, SynTypar(id, _, _), _, _)) -> id.idText)
+            | None -> []
+        let body =
+            match typeRepr with
+            | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.None _, _) -> Ok None
+            | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.TypeAbbrev(_, rhs, _), _) -> Ok (Some rhs)
+            | _ -> Result.Error (MeasureFailure.SortMismatch(name, typeRange))
+        body
+        |> Result.map (fun body ->
+            { Measure = ({ Name = name; Module = ctx.Path } : BaseMeasure)
+              Parameters = parameters
+              Body = body
+              Range = typeRange })
+    let decls, malformed =
+        measureDefns
+        |> List.fold
+            (fun (decls, failures) typeDef ->
+                match declOf typeDef with
+                | Ok decl -> (decl :: decls, failures)
+                | Result.Error failure -> (decls, failure :: failures))
+            ([], [])
+        |> fun (decls, failures) -> (List.rev decls, List.rev failures)
+    malformed |> List.iter (fun failure -> addMeasureFailure failure env)
+    let references (body: SynType) = measureReferences (MeasureSyntax.Type body)
+    let translate (measures: MeasureEnv) (body: SynType) =
+        translateDimension { env with Measures = measures } (MeasureSyntax.Type body)
+    let rec register (pending: MeasureDecl<SynType> list) (measures: MeasureEnv) : MeasureEnv =
+        match pending with
+        | [] -> measures
+        | _ ->
+            match MeasureEnv.registerGroup references translate pending measures with
+            | Ok registered -> registered
+            | Result.Error failure ->
+                addMeasureFailure failure env
+                let _, _, at = describeMeasureFailure failure
+                let failed, rest = pending |> List.partition (fun decl -> Range.rangeContainsRange decl.Range at)
+                match failed with
+                | [] -> measures   // the failure lies in no pending declaration: reported; nothing more registers
+                | _ -> register rest measures
+    { env with Measures = register decls env.Measures }
+
 /// Check if a type definition has the [<RequireQualifiedAccess>] attribute
 /// Per clef-lang-spec: When true, field labels are NOT added to FieldLabels table
 let private hasRequireQualifiedAccessAttribute (attrs: SynAttributes) : bool =
@@ -1473,13 +1554,23 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
         // Layout estimate of a union case payload (one word for anything without an inline layout)
         let estimatePayloadSize (ty: NativeType) : int =
             match ty with
-            | NativeType.TApp(tc, _) ->
+            | NativeType.TApp(tc, _) | NativeType.TNum(tc, _) ->
                 match tc.Layout with
                 | TypeLayout.Inline(size, _) -> size
                 | TypeLayout.PlatformWord -> 8
                 | _ -> 8
             | NativeType.TTuple(elems, _) -> elems.Length * 8
             | _ -> 8
+
+        // `[<Measure>] type` declarations of the group register into the measure environment and
+        // produce no type node (design a.3; sequence CS-4); the remaining members are checked
+        // against the grown environment, so an abbreviation `type metres = float<m>` beside its
+        // measure resolves.
+        let measureDefns, typeDefns =
+            typeDefns
+            |> List.partition (fun (SynTypeDefn(SynComponentInfo(attrs, _, _, _, _, _, _, _), _, _, _, _, _)) ->
+                hasMeasureAttribute attrs)
+        let env = registerMeasureDeclarations ctx env measureDefns
 
         // Recursive types: a member of this group may mention itself or a later member in a case
         // payload or a field (`Node = Leaf of int | Branch of Node`; `Field = { Type: T } and
@@ -1618,7 +1709,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // Helper to estimate type size for layout computation
                     let estimateTypeSize (ty: NativeType) : int =
                         match ty with
-                        | NativeType.TApp(tc, _) ->
+                        | NativeType.TApp(tc, _) | NativeType.TNum(tc, _) ->
                             match tc.Layout with
                             | TypeLayout.Inline(size, _) -> size
                             | TypeLayout.PlatformWord -> 8  // 64-bit platform

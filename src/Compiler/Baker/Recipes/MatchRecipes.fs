@@ -17,6 +17,7 @@ module Clef.Compiler.Baker.Recipes.MatchRecipes
 
 open XParsec.Parsers
 open XParsec.Combinators
+open Clef.Compiler.NativeTypedTree.DimensionAlgebra
 open Clef.Compiler.NativeTypedTree.NativeTypes
 
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
@@ -504,39 +505,20 @@ and private compilePattern
         // cryptic "unbound type variable" errors downstream
         failwithf "compilePattern: Unsupported pattern type: %A. This is a compiler bug - please report." unsupported
 
-/// Map NTUKind to NativeType
-and private ntuKindToType (kind: NTUKind) : NativeType =
-    match kind with
-    // Signed integers
-    | NTUKind.NTUint (NTUWidth.Fixed 8) -> Types.int8Type
-    | NTUKind.NTUint (NTUWidth.Fixed 16) -> Types.int16Type
-    | NTUKind.NTUint (NTUWidth.Fixed 32) -> Types.int32Type
-    | NTUKind.NTUint (NTUWidth.Fixed 64) -> Types.int64Type
-    | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register) -> Types.intType
-    | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer) -> Types.nintType
-    // Unsigned integers
-    | NTUKind.NTUuint (NTUWidth.Fixed 8) -> Types.uint8Type
-    | NTUKind.NTUuint (NTUWidth.Fixed 16) -> Types.uint16Type
-    | NTUKind.NTUuint (NTUWidth.Fixed 32) -> Types.uint32Type
-    | NTUKind.NTUuint (NTUWidth.Fixed 64) -> Types.uint64Type
-    | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register) -> Types.uintType
-    | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer) -> Types.unintType
-    // Floats
-    | NTUKind.NTUfloat (NTUWidth.Fixed 32) -> Types.float32Type
-    | NTUKind.NTUfloat (NTUWidth.Fixed 64) -> Types.floatType
-    // Posits
-    | NTUKind.NTUposit (NTUWidth.Fixed 8, _) -> Types.posit8Type
-    | NTUKind.NTUposit (NTUWidth.Fixed 16, _) -> Types.posit16Type
-    | NTUKind.NTUposit (NTUWidth.Fixed 32, _) -> Types.posit32Type
-    | NTUKind.NTUposit (NTUWidth.Fixed 64, _) -> Types.posit64Type
-    | _ -> failwithf "ntuKindToType: unexpected kind %A" kind
+/// The type of a numeric literal: its carrier, read from the one carrier table by the literal's
+/// NTUKind (Types.tryNumericTyConOfKind), at the dimensionless measure (design a.4: an
+/// unannotated literal is `one`). No inverse kind -> type table is kept here.
+and private numericLiteralType (kind: NTUKind) : NativeType =
+    match Types.tryNumericTyConOfKind kind with
+    | Some carrier -> NativeType.TNum(carrier, Dimension.one)
+    | None -> failwithf "numericLiteralType: no numeric carrier has kind %A" kind
 
 /// Helper to get type from literal
 and private literalToType (lit: NativeLiteral) : NativeType =
     match lit with
-    | NativeLiteral.Int (_, kind) -> ntuKindToType kind
-    | NativeLiteral.UInt (_, kind) -> ntuKindToType kind
-    | NativeLiteral.Float (_, kind) -> ntuKindToType kind
+    | NativeLiteral.Int (_, kind) -> numericLiteralType kind
+    | NativeLiteral.UInt (_, kind) -> numericLiteralType kind
+    | NativeLiteral.Float (_, kind) -> numericLiteralType kind
     | NativeLiteral.Bool _ -> Types.boolType
     | NativeLiteral.Char _ -> Types.charType
     | NativeLiteral.String _ -> Types.stringType

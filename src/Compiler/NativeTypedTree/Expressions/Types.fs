@@ -841,7 +841,12 @@ let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
         // 2. Check type definitions — ParamKinds is the single source of truth for arity
         match tryLookupTypeDef name env with
         | Some tyCon ->
-            let args = tyCon.ParamKinds |> List.map (fun _kind -> freshTypeVar dummyRange)
+            // A fresh variable per parameter, in the parameter's sort (design a.2).
+            let args =
+                tyCon.ParamKinds
+                |> List.map (function
+                    | TypeParamKind.Type -> freshTypeVar dummyRange
+                    | TypeParamKind.Measure -> NativeType.TMeasure (Dimension.ofVar (freshMeasureVar None)))
             Some (NativeType.TApp(tyCon, args))
         | None ->
             // 3. Check NTU primitives
@@ -867,163 +872,22 @@ let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
             | "decimal" -> Some NativeTypes.Types.decimalType
             | _ -> None
 
-/// Convert SynType to NativeType at the parser/checker boundary.
-/// This function is called directly at conversion sites - no callback threading.
-/// SynType dies here; only NativeType propagates into type checking.
-let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
-    match synType with
-    | SynType.LongIdent(SynLongIdent(idents, _, _)) ->
-        // Simple type name: int, string, MyType, Module.Type
-        let name = idents |> List.map (fun id -> id.idText) |> String.concat "."
-        match resolveTypeName name env with
-        | Some ty -> ty
-        | None ->
-            // Unknown type - create error type with name for diagnostics
-            NativeType.TError $"Unknown type: {name}"
-
-    | SynType.App(typeName, _, typeArgs, _, _, _, _) ->
-        // Generic type application: nativeptr<byte>, List<int>, Option<string>
-        let argTys = typeArgs |> List.map (resolveSynType env)
-        // Extract base type name for built-in type constructor check
-        match typeName with
-        | SynType.LongIdent(SynLongIdent(idents, _, _)) ->
-            let name = idents |> List.map (fun id -> id.idText) |> String.concat "."
-            // Try built-in type constructor first (nativeptr, byref, list, etc.)
-            match tryResolveBuiltinTypeConstructor name argTys with
-            | Some ty -> ty
-            | None ->
-                // Fall back to regular type resolution (user-defined generics)
-                match resolveTypeName name env with
-                | Some (NativeType.TApp(tyCon, _)) -> NativeType.TApp(tyCon, argTys)
-                | Some ty -> ty
-                | None -> NativeType.TError $"Unknown type constructor: {name}"
-        | _ ->
-            // Complex type expression - recurse
-            let baseTy = resolveSynType env typeName
-            match baseTy with
-            | NativeType.TApp(tyCon, _) -> NativeType.TApp(tyCon, argTys)
-            | _ -> baseTy
-
-    | SynType.LongIdentApp(typeName, SynLongIdent(idents, _, _), _, typeArgs, _, _, _) ->
-        // Qualified generic: Module.List<int>
-        let argTys = typeArgs |> List.map (resolveSynType env)
-        let name = idents |> List.map (fun id -> id.idText) |> String.concat "."
-        // Try built-in type constructor first
-        match tryResolveBuiltinTypeConstructor name argTys with
-        | Some ty -> ty
-        | None ->
-            // Fall back to regular type resolution
-            let baseTy = resolveSynType env typeName
-            match baseTy with
-            | NativeType.TApp(tyCon, _) -> NativeType.TApp(tyCon, argTys)
-            | _ -> baseTy
-
-    | SynType.Tuple(isStruct, segments, _) ->
-        // Tuple type: int * string * bool
-        let elemTys =
-            segments
-            |> List.choose (function
-                | SynTupleTypeSegment.Type ty -> Some (resolveSynType env ty)
-                | SynTupleTypeSegment.Star _ -> None
-                | SynTupleTypeSegment.Slash _ -> None)
-        NativeType.TTuple(elemTys, isStruct)
-
-    | SynType.Fun(argType, returnType, _, _) ->
-        // Function type: int -> string
-        let argTy = resolveSynType env argType
-        let retTy = resolveSynType env returnType
-        NativeType.TFun(argTy, retTy)
-
-    | SynType.Var(SynTypar(ident, _, _), _) ->
-        // Type variable: 'a, 'T
-        let name = "'" + ident.idText
-        let range = rangeToSourceRange ident.idRange
-        NativeType.TVar(freshTypeParam name TypeParamKind.Type range)
-
-    | SynType.Array(rank, elemType, _) ->
-        // Array type: int[], int[,]
-        let elemTy = resolveSynType env elemType
-        if rank = 1 then
-            NativeTypes.Types.mkArrayType elemTy
-        else
-            // Multi-dimensional arrays - use array of arrays for now
-            List.fold (fun ty _ -> NativeTypes.Types.mkArrayType ty) elemTy [1..rank]
-
-    | SynType.Paren(innerType, _) ->
-        // Parenthesized type: (int)
-        resolveSynType env innerType
-
-    | SynType.Anon _ ->
-        // Anonymous type - create fresh type variable
-        freshTypeVar { File = ""; Start = { Line = 0; Column = 0 }; End = { Line = 0; Column = 0 } }
-
-    | SynType.WithGlobalConstraints(innerType, _, _) ->
-        // Type with constraints - resolve inner, constraints handled separately
-        resolveSynType env innerType
-
-    | SynType.HashConstraint(innerType, _) ->
-        // Flexible type: #ISomething
-        resolveSynType env innerType
-
-    | SynType.WithNull(innerType, _, _, _) ->
-        // Nullable annotation - ignored in Clef (null-free)
-        resolveSynType env innerType
-
-    | SynType.MeasurePower(baseType, _, _) ->
-        // Measure power - resolve base type
-        resolveSynType env baseType
-
-    | SynType.StaticConstant(_, _)
-    | SynType.StaticConstantNull _
-    | SynType.StaticConstantExpr(_, _)
-    | SynType.StaticConstantNamed(_, _, _) ->
-        // Static constants in types - not supported in native
-        NativeType.TError "Static constants in types not supported"
-
-    | SynType.AnonRecd(isStruct, fields, _) ->
-        // Anonymous record: {| X: int; Y: string |}
-        let fieldTys = fields |> List.map (fun (id, ty) -> (id.idText, resolveSynType env ty))
-        NativeType.TAnon(fieldTys, isStruct)
-
-    | SynType.FromParseError _ ->
-        // Parse error recovery - return error type
-        NativeType.TError "Type from parse error"
-
-    | SynType.Intersection(_, types, _, _) ->
-        // Type intersection - resolve first type for now
-        match types with
-        | ty :: _ -> resolveSynType env ty
-        | [] -> NativeType.TError "Empty type intersection"
-
-    | SynType.Or(lhs, _rhs, _, _) ->
-        // Type union/or - resolve to first type
-        resolveSynType env lhs
-
-    | SynType.SignatureParameter(_, _, _idOpt, ty, _) ->
-        // Signature parameter - resolve the underlying type
-        resolveSynType env ty
-
 //-------------------------------------------------------------------------
 // Measure syntax → Dimension: the one translator (design a.4)
 //-------------------------------------------------------------------------
 //
-// Not yet reached by any caller (sequence CS-2). The arms of `resolveSynType` above that read
-// measure syntax as types (`MeasurePower` to its base type, a `Slash` segment dropped, a measure
-// name resolved as a type) stay in force until CS-4 replaces them with calls to
-// `dimensionOfSyntax`, when the numeric type that carries the result exists; the literal resolver
-// (Literals.fs) and the `[<Measure>] type` declaration arm (NativeService.fs) are redirected in
-// that same changeset. Until then `TypeEnv.Measures` is empty in every environment the checker
-// builds, and nothing below runs.
+// Reached (sequence CS-4) from the type-position resolver below (`resolveSynType`: a numeric
+// carrier applied to arguments, a measure-sorted constructor position), from the literal resolver
+// (Literals.fs, `SynConst.Measure`) and from the `[<Measure>] type` declaration arm
+// (NativeService.fs, abbreviation bodies), so that no two paths can disagree.
 
-/// The bound on a measure exponent, written or reached during translation: |e| <= 32767 (2^15 - 1).
-/// The algebra's exponents are `int`. Every product the translator forms adds two bounded exponents
-/// (|e1 + e2| <= 2^16) and every power multiplies a bounded exponent by a bounded written one
-/// (|n * e| <= 2^30), so no translation step can overflow before its result is checked against the
-/// bound again, and every stored expansion is within it. What the translator establishes ends
-/// there: bounding the exponents of the bindings `solveDim` produces, and of `Dimension.resolve`
-/// over them, is the unifier's obligation (sequence CS-4). An exponent past the bound is refused
-/// with the CCS8048 family (`MeasureFailure.ExponentOutOfRange`), never wrapped.
-let measureExponentBound = 32767
+// The bound on a written or reached exponent is the algebra's, `measureExponentBound`
+// (DimensionAlgebra.fs). Every product the translator forms adds two bounded exponents
+// (|e1 + e2| <= 2^16) and every power multiplies a bounded exponent by a bounded written one
+// (|n * e| <= 2^30), so no translation step can overflow before its result is checked against the
+// bound again, and every stored expansion is within it. The unifier bounds the bindings `solveDim`
+// produces and the resolved sides of every equation (Unify.fs). An exponent past the bound is
+// refused with the CCS8048 family (`MeasureFailure.ExponentOutOfRange`), never wrapped.
 
 /// The code (from `DiagnosticCodes`), the message (design (f), verbatim) and the range of a measure
 /// failure: the one projection from the failure value to a diagnostic.
@@ -1167,8 +1031,7 @@ let private exponentOf (written: SynRationalConst) (r: range) : Result<int, Meas
 /// The dimension unchanged if every exponent is within the bound, else the CCS8048 family naming the
 /// exponent reached.
 let private bounded (r: range) (d: Dimension) : Result<Dimension, MeasureFailure> =
-    let exponents = (Map.toList d.Bases |> List.map snd) @ (Map.toList d.Vars |> List.map snd)
-    match exponents |> List.tryFind (fun e -> abs e > measureExponentBound) with
+    match exponentsOf d |> List.tryFind (fun e -> abs e > measureExponentBound) with
     | Some e -> Result.Error(MeasureFailure.ExponentOutOfRange(string e, r))
     | None -> Ok d
 
@@ -1328,3 +1191,218 @@ let dimensionOfSyntax
     | MeasureSyntax.Measure m -> ofMeasure ctx m
     | MeasureSyntax.Type t -> ofType ctx t
     | MeasureSyntax.Applied(tycon, args, r) -> applied tycon args r
+
+/// One translation against the union-find's supply of fresh measure variables: the context starts
+/// at the counter and the ids the translation minted are reserved on success. A named variable
+/// (`'u`) is one variable within the syntax translated here; sharing it across the annotations of
+/// a binding, and generalising it, is CS-6's (design b.4).
+let translateDimension (env: TypeEnv) (syntax: MeasureSyntax) : Result<Dimension, MeasureFailure> =
+    let ctx = { Scope = Map.empty; Supply = freshMeasureSupply () }
+    dimensionOfSyntax env ctx syntax
+    |> Result.map (fun (d, ctx') ->
+        commitMeasureSupply ctx'.Supply
+        d)
+
+/// Record a measure failure and recover with an error type carrying its message, the way the
+/// resolver recovers from an unknown type: a diagnostic, never a fabricated type.
+let private refuseMeasure (env: TypeEnv) (failure: MeasureFailure) : NativeType =
+    addMeasureFailure failure env
+    let _, message, _ = describeMeasureFailure failure
+    NativeType.TError message
+
+/// A numeric carrier applied to written arguments, `float<kg m / s^2>`: the arguments are read in
+/// the measure sort through the one translator (design a.4; `float` has arity 0 in the type sort,
+/// D4). A carrier that already carries a measure, an abbreviation such as `type metres = float<m>`,
+/// takes no further argument: that is a sort mismatch, not a product.
+let private numericApplication (env: TypeEnv) (carrier: TypeConRef) (dim: Dimension) (typeArgs: SynType list) (r: range) : NativeType =
+    if dim <> Dimension.one then
+        refuseMeasure env (MeasureFailure.SortMismatch(formatType (NativeType.TNum(carrier, dim)), r))
+    else
+        match translateDimension env (MeasureSyntax.Applied(carrier, typeArgs, r)) with
+        | Ok d -> NativeType.TNum(carrier, d)
+        | Result.Error failure -> refuseMeasure env failure
+
+/// A written argument in a measure-sorted position of a non-numeric constructor, `Arena<'l>`.
+let private measureArgument (env: TypeEnv) (arg: SynType) : NativeType =
+    match translateDimension env (MeasureSyntax.Type arg) with
+    | Ok d -> NativeType.TMeasure d
+    | Result.Error failure -> refuseMeasure env failure
+
+/// Convert SynType to NativeType at the parser/checker boundary.
+/// This function is called directly at conversion sites - no callback threading.
+/// SynType dies here; only NativeType propagates into type checking.
+let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
+    /// The arguments of a constructor whose parameter kinds are known: a measure-sorted position
+    /// is read through the one translator to a `TMeasure`, a type-sorted one as a type (design
+    /// a.2). An argument count that disagrees with the constructor reads every argument as a type
+    /// and leaves the arity error to unification, as before.
+    let argumentsFor (tyCon: TypeConRef) (typeArgs: SynType list) : NativeType list =
+        if List.length tyCon.ParamKinds = List.length typeArgs then
+            List.map2
+                (fun kind arg ->
+                    match kind with
+                    | TypeParamKind.Measure -> measureArgument env arg
+                    | TypeParamKind.Type -> resolveSynType env arg)
+                tyCon.ParamKinds
+                typeArgs
+        else
+            typeArgs |> List.map (resolveSynType env)
+
+    /// A resolved head applied to written arguments: a numeric carrier reads them in the measure
+    /// sort (design a.4), a constructor in its parameters' sorts.
+    let apply (head: NativeType) (typeArgs: SynType list) (r: range) : NativeType =
+        match head with
+        | NativeType.TNum(carrier, dim) -> numericApplication env carrier dim typeArgs r
+        | NativeType.TApp(tyCon, _) -> NativeType.TApp(tyCon, argumentsFor tyCon typeArgs)
+        | other -> other
+
+    let hasMeasureParameter (tyCon: TypeConRef) = List.contains TypeParamKind.Measure tyCon.ParamKinds
+
+    match synType with
+    | SynType.LongIdent(SynLongIdent(idents, _, _)) ->
+        // Simple type name: int, string, MyType, Module.Type
+        let path = idents |> List.map (fun id -> id.idText)
+        let name = String.concat "." path
+        match resolveTypeName name env with
+        | Some ty -> ty
+        | None ->
+            // A measure name where a type is required is a sort mismatch (design a.4, CCS8045),
+            // never an unknown type; anything else is the unknown-type error as before.
+            match MeasureEnv.tryFind path env.Measures with
+            | Some _ -> refuseMeasure env (MeasureFailure.SortMismatch(name, synType.Range))
+            | None -> NativeType.TError $"Unknown type: {name}"
+
+    | SynType.App(typeName, _, typeArgs, _, _, _, r) ->
+        // Generic type application: nativeptr<byte>, List<int>, Option<string>, float<m>
+        match typeName with
+        | SynType.LongIdent(SynLongIdent(idents, _, _)) ->
+            let name = idents |> List.map (fun id -> id.idText) |> String.concat "."
+            match resolveTypeName name env with
+            // A numeric carrier or a measure-parameterised constructor reads its arguments in
+            // their own sorts, before any built-in constructor is tried, so that no measure
+            // argument is ever read as a type.
+            | Some (NativeType.TNum _ as head) -> apply head typeArgs r
+            | Some (NativeType.TApp(tyCon, _) as head) when hasMeasureParameter tyCon -> apply head typeArgs r
+            | resolved ->
+                let argTys = typeArgs |> List.map (resolveSynType env)
+                // Try built-in type constructor first (nativeptr, byref, list, etc.)
+                match tryResolveBuiltinTypeConstructor name argTys with
+                | Some ty -> ty
+                | None ->
+                    // Fall back to regular type resolution (user-defined generics)
+                    match resolved with
+                    | Some (NativeType.TApp(tyCon, _)) -> NativeType.TApp(tyCon, argTys)
+                    | Some ty -> ty
+                    | None -> NativeType.TError $"Unknown type constructor: {name}"
+        | _ ->
+            // Complex type expression - recurse
+            apply (resolveSynType env typeName) typeArgs r
+
+    | SynType.LongIdentApp(typeName, SynLongIdent(idents, _, _), _, typeArgs, _, _, r) ->
+        // Qualified generic: Module.List<int>
+        let name = idents |> List.map (fun id -> id.idText) |> String.concat "."
+        let baseTy = resolveSynType env typeName
+        match baseTy with
+        | NativeType.TNum _ -> apply baseTy typeArgs r
+        | NativeType.TApp(tyCon, _) when hasMeasureParameter tyCon -> apply baseTy typeArgs r
+        | _ ->
+            let argTys = typeArgs |> List.map (resolveSynType env)
+            // Try built-in type constructor first
+            match tryResolveBuiltinTypeConstructor name argTys with
+            | Some ty -> ty
+            | None ->
+                // Fall back to regular type resolution
+                match baseTy with
+                | NativeType.TApp(tyCon, _) -> NativeType.TApp(tyCon, argTys)
+                | _ -> baseTy
+
+    | SynType.Tuple(isStruct, segments, r) ->
+        // Tuple type: int * string * bool. A `/` segment is measure syntax (`m / s`), which where
+        // a type is required is a sort mismatch (design a.4, CCS8045); it is never dropped.
+        let isSlash = function SynTupleTypeSegment.Slash _ -> true | _ -> false
+        if segments |> List.exists isSlash then
+            refuseMeasure env (MeasureFailure.SortMismatch(renderSynType synType, r))
+        else
+            let elemTys =
+                segments
+                |> List.choose (function
+                    | SynTupleTypeSegment.Type ty -> Some (resolveSynType env ty)
+                    | SynTupleTypeSegment.Star _ | SynTupleTypeSegment.Slash _ -> None)
+            NativeType.TTuple(elemTys, isStruct)
+
+    | SynType.Fun(argType, returnType, _, _) ->
+        // Function type: int -> string
+        let argTy = resolveSynType env argType
+        let retTy = resolveSynType env returnType
+        NativeType.TFun(argTy, retTy)
+
+    | SynType.Var(SynTypar(ident, _, _), _) ->
+        // Type variable: 'a, 'T
+        let name = "'" + ident.idText
+        let range = rangeToSourceRange ident.idRange
+        NativeType.TVar(freshTypeParam name TypeParamKind.Type range)
+
+    | SynType.Array(rank, elemType, _) ->
+        // Array type: int[], int[,]
+        let elemTy = resolveSynType env elemType
+        if rank = 1 then
+            NativeTypes.Types.mkArrayType elemTy
+        else
+            // Multi-dimensional arrays - use array of arrays for now
+            List.fold (fun ty _ -> NativeTypes.Types.mkArrayType ty) elemTy [1..rank]
+
+    | SynType.Paren(innerType, _) ->
+        // Parenthesized type: (int)
+        resolveSynType env innerType
+
+    | SynType.Anon _ ->
+        // Anonymous type - create fresh type variable
+        freshTypeVar { File = ""; Start = { Line = 0; Column = 0 }; End = { Line = 0; Column = 0 } }
+
+    | SynType.WithGlobalConstraints(innerType, _, _) ->
+        // Type with constraints - resolve inner, constraints handled separately
+        resolveSynType env innerType
+
+    | SynType.HashConstraint(innerType, _) ->
+        // Flexible type: #ISomething
+        resolveSynType env innerType
+
+    | SynType.WithNull(innerType, _, _, _) ->
+        // Nullable annotation - ignored in Clef (null-free)
+        resolveSynType env innerType
+
+    | SynType.MeasurePower(_, _, r) ->
+        // `m^2` is measure syntax; where a type is required it is a sort mismatch (design a.4,
+        // CCS8045), never its base type.
+        refuseMeasure env (MeasureFailure.SortMismatch(renderSynType synType, r))
+
+    | SynType.StaticConstant(_, _)
+    | SynType.StaticConstantNull _
+    | SynType.StaticConstantExpr(_, _)
+    | SynType.StaticConstantNamed(_, _, _) ->
+        // Static constants in types - not supported in native
+        NativeType.TError "Static constants in types not supported"
+
+    | SynType.AnonRecd(isStruct, fields, _) ->
+        // Anonymous record: {| X: int; Y: string |}
+        let fieldTys = fields |> List.map (fun (id, ty) -> (id.idText, resolveSynType env ty))
+        NativeType.TAnon(fieldTys, isStruct)
+
+    | SynType.FromParseError _ ->
+        // Parse error recovery - return error type
+        NativeType.TError "Type from parse error"
+
+    | SynType.Intersection(_, types, _, _) ->
+        // Type intersection - resolve first type for now
+        match types with
+        | ty :: _ -> resolveSynType env ty
+        | [] -> NativeType.TError "Empty type intersection"
+
+    | SynType.Or(lhs, _rhs, _, _) ->
+        // Type union/or - resolve to first type
+        resolveSynType env lhs
+
+    | SynType.SignatureParameter(_, _, _idOpt, ty, _) ->
+        // Signature parameter - resolve the underlying type
+        resolveSynType env ty
+

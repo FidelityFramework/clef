@@ -4,6 +4,7 @@
 /// Uses path compression for near-constant-time operations.
 module Clef.Compiler.NativeTypedTree.UnionFind
 
+open Clef.Compiler.NativeTypedTree.DimensionAlgebra
 open Clef.Compiler.NativeTypedTree.NativeTypes
 
 //-------------------------------------------------------------------------
@@ -133,7 +134,9 @@ let rec applySubst (ty: NativeType) : NativeType =
 
     // Note: option<'T> is handled via TUnion - it's a discriminated union
 
-    | NativeType.TMeasure _ -> ty
+    // A dimension holds measure variables, not type parameters; the measure store is read
+    // through `Dimension.resolve` by its own readers, never through the type substitution.
+    | NativeType.TNum _ | NativeType.TMeasure _ -> ty
     | NativeType.TError _ -> ty
 
 //-------------------------------------------------------------------------
@@ -205,19 +208,10 @@ let rec occursIn (typar: TypeParam) (ty: NativeType) : bool =
 
     // Note: option<'T> is handled via TUnion - it's a discriminated union
 
-    | NativeType.TMeasure m -> occursInMeasure typar m
+    // A type parameter never occurs in a dimension: Dimension.Vars holds measure variables, and
+    // measures need no occurs check of their own (design b.3).
+    | NativeType.TNum _ | NativeType.TMeasure _ -> false
     | NativeType.TError _ -> false
-
-and occursInMeasure (typar: TypeParam) (m: Measure) : bool =
-    match m with
-    | MOne -> false
-    | MVar tp -> 
-        let (root1, _) = find typar
-        let (root2, _) = find tp
-        root1.Id = root2.Id
-    | MProd(m1, m2) -> occursInMeasure typar m1 || occursInMeasure typar m2
-    | MInv m -> occursInMeasure typar m
-    | MCon _ -> false
 
 //-------------------------------------------------------------------------
 // Free Type Variables
@@ -282,19 +276,9 @@ let rec freeTypeVars (ty: NativeType) : Set<TypeParamId> =
 
     // Note: option<'T> is handled via TUnion - it's a discriminated union
 
-    | NativeType.TMeasure m -> freeTypeVarsInMeasure m
+    // Free measure variables are Dimension.Vars, collected by the generalisation of CS-6.
+    | NativeType.TNum _ | NativeType.TMeasure _ -> Set.empty
     | NativeType.TError _ -> Set.empty
-
-and freeTypeVarsInMeasure (m: Measure) : Set<TypeParamId> =
-    match m with
-    | MOne -> Set.empty
-    | MVar tp -> 
-        match find tp with
-        | (root, None) -> Set.singleton root.Id
-        | _ -> Set.empty
-    | MProd(m1, m2) -> Set.union (freeTypeVarsInMeasure m1) (freeTypeVarsInMeasure m2)
-    | MInv m -> freeTypeVarsInMeasure m
-    | MCon _ -> Set.empty
 
 /// Check if a type contains any unbound type variables
 let hasUnboundVars (ty: NativeType) : bool =
@@ -364,7 +348,7 @@ let rec collectFreeTypeParams (ty: NativeType) : TypeParam list =
 
     // Note: option<'T> is handled via TUnion - it's a discriminated union
 
-    | NativeType.TMeasure _ -> []  // Measure type params handled separately
+    | NativeType.TNum _ | NativeType.TMeasure _ -> []  // measure variables are not TypeParams (CS-6 collects them)
     | NativeType.TError _ -> []
 
 /// Like applySubst, and additionally rewrite every still-unbound variable to its union-find
@@ -391,7 +375,7 @@ let rec canonicalizeVars (ty: NativeType) : NativeType =
     | NativeType.TList elem -> NativeType.TList(canonicalizeVars elem)
     | NativeType.TMap(keyTy, valueTy) -> NativeType.TMap(canonicalizeVars keyTy, canonicalizeVars valueTy)
     | NativeType.TSet elem -> NativeType.TSet(canonicalizeVars elem)
-    | NativeType.TMeasure _ | NativeType.TError _ -> ty
+    | NativeType.TNum _ | NativeType.TMeasure _ | NativeType.TError _ -> ty
 
 /// Generalize a type by wrapping free type variables in TForall
 /// This is used for let-bound polymorphic functions. The body is canonicalized first so the
@@ -438,10 +422,79 @@ let freshTypeParamAuto (kind: TypeParamKind) (range: SourceRange) : TypeParam =
 let freshTypeVar (range: SourceRange) : NativeType =
     NativeType.TVar(freshTypeParamAuto TypeParamKind.Type range)
 
-/// Generate a fresh measure variable
-let freshMeasureVar (range: SourceRange) : TypeParam =
-    freshTypeParamAuto TypeParamKind.Measure range
+/// Mint a fresh measure variable (design a.1: `_` anonymous, `'u` named) from the same counter as
+/// the type parameters, so a measure variable id and a type parameter id never coincide.
+let freshMeasureVar (name: string option) : MeasureVar =
+    let id = nextTypeParamId
+    nextTypeParamId <- nextTypeParamId + 1
+    { Id = id; Name = name }
 
-/// Reset the type parameter counter (for testing)
+/// A supply of fresh measure variables for a pure step (`dimensionOfSyntax`, `solveDim`), taken
+/// at the counter; the step returns the advanced supply and `commitMeasureSupply` reserves the ids
+/// it used. The invariant is that nothing mints on a path that commits: a translation that fails
+/// (the one path on which the translator's type-name check may mint a parameter) is never
+/// committed, and the solver mints nothing, so the ids stay distinct.
+let freshMeasureSupply () : MeasureSupply = MeasureSupply.startingAt nextTypeParamId
+
+/// Reserve the ids a pure step minted from a supply taken by `freshMeasureSupply`. On a path that
+/// commits, nothing mints a type parameter between the two calls, so the counter cannot have moved;
+/// the guard refuses the one state that would prove otherwise (a counter past the supply) rather
+/// than silently rewinding it.
+let commitMeasureSupply (supply: MeasureSupply) : unit =
+    if supply.Next < nextTypeParamId then
+        failwith "commitMeasureSupply: the counter has passed the supply; something minted a variable between taking and committing it"
+    nextTypeParamId <- supply.Next
+
+//-------------------------------------------------------------------------
+// Measure cells: the bindings of measure variables, in the one store (plan D7, U-2)
+//-------------------------------------------------------------------------
+
+/// The cell of a measure variable in the union-find: a Measure-kinded type parameter whose
+/// `Parent` holds `Bound (TMeasure d)` once the variable is bound. One cell per variable, made on
+/// first touch (a variable nothing has touched is unbound by definition), indexed by the
+/// variable's id, which the shared counter keeps distinct from every type parameter's.
+let private measureCells = System.Collections.Generic.Dictionary<int, TypeParam>()
+
+let private measureCell (v: MeasureVar) : TypeParam =
+    match measureCells.TryGetValue v.Id with
+    | true, cell -> cell
+    | false, _ ->
+        let cell =
+            { Id = v.Id
+              Name = Dimension.renderVar v
+              Kind = TypeParamKind.Measure
+              Constraints = []
+              Parent = TypeParamState.Unbound
+              Range = dummyRange }
+        measureCells.[v.Id] <- cell
+        cell
+
+/// The binding of a measure variable, if any: the one read of a measure cell, kind-checked (a
+/// measure cell holds a dimension and nothing else).
+let lookupMeasure (v: MeasureVar) : Dimension option =
+    match (measureCell v).Parent with
+    | TypeParamState.Unbound -> None
+    | TypeParamState.Bound(NativeType.TMeasure d) -> Some d
+    | TypeParamState.Bound other ->
+        failwith $"lookupMeasure: the cell of {Dimension.renderVar v} holds a type, '{formatType other}': kind violation"
+
+/// A dimension with every bound variable replaced by its binding, to a fixpoint: `resolve` is the
+/// only read of the measure store (design b.2, (h) 8).
+let resolveDim (d: Dimension) : Dimension =
+    Dimension.resolve lookupMeasure d
+
+/// Apply the bindings `solveDim` returned: the only writer of measure cells. Each variable is
+/// unbound in the store (the solver binds only unbound variables) and is never rebound (I2).
+let bindMeasures (bindings: (MeasureVar * Dimension) list) : unit =
+    bindings
+    |> List.iter (fun (v, d) ->
+        let cell = measureCell v
+        match cell.Parent with
+        | TypeParamState.Unbound -> cell.Parent <- TypeParamState.Bound(NativeType.TMeasure d)
+        | TypeParamState.Bound _ ->
+            failwith $"bindMeasures: {Dimension.renderVar v} is already bound; a measure variable is never rebound")
+
+/// Reset the type parameter counter and the measure cells (for testing)
 let resetTypeParamCounter () =
     nextTypeParamId <- 0
+    measureCells.Clear()

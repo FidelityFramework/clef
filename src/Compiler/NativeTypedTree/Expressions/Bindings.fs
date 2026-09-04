@@ -230,9 +230,9 @@ let checkBinding
         if isLiteral then
             match expr with
             | SynExpr.Const(constant, _) ->
-                match Literals.checkConst constant with
+                match Literals.checkConst env constant with
                 | Result.Ok (_, literal) -> Some literal
-                | Result.Error _ -> None  // CCS8018 is reported where the body is checked below
+                | Result.Error _ -> None  // the failure is reported where the body is checked below
             | _ -> None  // Non-constant [<Literal>] - will be caught by type checker
         else
             None

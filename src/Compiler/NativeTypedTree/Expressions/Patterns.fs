@@ -30,11 +30,12 @@ let rec checkPattern
 
     match pat with
     | SynPat.Const(constant, constRange) ->
-        match checkConst constant with
+        match checkConst env constant with
         | Result.Ok (_, literal) -> (Pattern.Const literal, [])
-        | Result.Error msg ->
-            // CCS8018 (plan L-3); the diagnostic is an Error, so nothing runs on the wildcard.
-            addUnsupportedLiteralSuffix constRange msg env
+        | Result.Error failure ->
+            // CCS8018 (plan L-3) or a measure failure; the diagnostic is an Error, so nothing runs
+            // on the wildcard.
+            addConstFailure constRange failure env
             (Pattern.Wildcard, [])  // Wildcard for error recovery
 
     | SynPat.Wild _ ->
@@ -196,6 +197,7 @@ let rec checkPattern
                         let tyName =
                             match resolvedTy with
                             | NativeType.TApp(tycon, _) -> tycon.Name
+                            | NativeType.TNum _ -> formatType resolvedTy
                             | NativeType.TVar tv -> sprintf "'%s (unresolved type variable)" tv.Name
                             | _ -> sprintf "%A" resolvedTy
                         addDiagnostic {

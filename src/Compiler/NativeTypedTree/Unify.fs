@@ -4,6 +4,7 @@
 /// Uses Union-Find for efficient substitution with path compression.
 module Clef.Compiler.NativeTypedTree.Unify
 
+open Clef.Compiler.NativeTypedTree.DimensionAlgebra
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 
@@ -25,6 +26,15 @@ type UnificationError =
     | TupleKindMismatch of expected: bool * actual: bool * range: SourceRange
     /// Byref kind mismatch
     | ByrefKindMismatch of expected: ByrefKind * actual: ByrefKind * range: SourceRange
+    /// A measure equation with no solution (design b.2 step 2, b.5; CCS8040): the two sides,
+    /// resolved, and the residual that is not 1, the unsatisfiable core.
+    | MeasureMismatch of lhs: Dimension * rhs: Dimension * residual: Dimension * range: SourceRange
+    /// A measure equation with no integer solution (design b.2 step 3; CCS8041): the variable, its
+    /// exponent, and the residual whose exponents that exponent does not all divide.
+    | NoIntegerSolution of var: MeasureVar * exponent: int * residual: Dimension * range: SourceRange
+    /// A dimension a unification reached or a binding it would apply has an exponent past
+    /// `measureExponentBound` (the CCS8048 family; the CS-2 obligation): refused, never wrapped.
+    | MeasureExponentOutOfRange of exponent: int * dim: Dimension * range: SourceRange
 
 exception UnificationException of UnificationError
 
@@ -49,6 +59,15 @@ let formatError (err: UnificationError) : string =
         $"Tuple kind mismatch at {formatRange range}: expected {expectedKind}, got {actualKind}"
     | ByrefKindMismatch(expected, actual, range) ->
         $"Byref kind mismatch at {formatRange range}: expected {expected}, got {actual}"
+    // The measure messages are design (f) verbatim; every dimension goes through the one renderer.
+    | MeasureMismatch(lhs, rhs, residual, _) ->
+        $"Measure mismatch: '{Dimension.render lhs}' vs '{Dimension.render rhs}'; the residual '{Dimension.render residual}' is not 1"
+    | NoIntegerSolution(v, k, residual, _) ->
+        // The equation solved was v^k * residual = 1, that is v^k = residual^-1.
+        let rhs = Dimension.render (Dimension.inv residual)
+        $"'{Dimension.renderVar v}^{k} = {rhs}' has no integer solution; the exponents of '{rhs}' are not all divisible by {k}"
+    | MeasureExponentOutOfRange(e, d, _) ->
+        $"Measure exponent '{e}' in '{Dimension.render d}' is not representable; exponents are integers of magnitude at most {measureExponentBound}"
 
 //-------------------------------------------------------------------------
 // Unification Algorithm
@@ -226,10 +245,20 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
             raise (UnificationException(TypeMismatch(t1, t2, range)))
         // Cases are part of the type definition, not compared here
     
-    // Measure types
-    | NativeType.TMeasure m1, NativeType.TMeasure m2 ->
-        unifyMeasure m1 m2 range
-    
+    // Numeric types (design b.2): the carriers as today, by name (interim: plan D7 keeps the
+    // width in the carrier and compared here until step 7), then the dimensions through the
+    // measure unifier. A type variable meeting a TNum binds to the whole TNum, dimension
+    // included, in the type-variable arm above (Paper §2.2 line 74).
+    | NativeType.TNum(c1, d1), NativeType.TNum(c2, d2) ->
+        if c1.Name <> c2.Name || c1.Module <> c2.Module then
+            raise (UnificationException(TypeMismatch(t1, t2, range)))
+        unifyDim d1 d2 range
+
+    // Measure-sorted positions (Arena<'lifetime>): the same measure unifier, argument-wise
+    // (units-of-measure.md line 197).
+    | NativeType.TMeasure d1, NativeType.TMeasure d2 ->
+        unifyDim d1 d2 range
+
     // Error types unify with anything (for error recovery)
     | NativeType.TError _, _ -> ()
     | _, NativeType.TError _ -> ()
@@ -247,37 +276,28 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
     | _ ->
         raise (UnificationException(TypeMismatch(t1, t2, range)))
 
-/// Unify two measures
-and unifyMeasure (m1: Measure) (m2: Measure) (range: SourceRange) : unit =
-    match (m1, m2) with
-    | MOne, MOne -> ()
-    | MVar v1, MVar v2 ->
-        let (root1, _) = find v1
-        let (root2, _) = find v2
-        if root1.Id <> root2.Id then
-            union v1 v2
-    | MVar v, m | m, MVar v ->
-        let (root, bound) = find v
-        match bound with
-        | None ->
-            // Bind measure variable to measure
-            // For measures, we'd need a proper measure representation, not NativeType
-            // For now, we mark the measure variable as used
-            ignore (root, m)
-            ()
-        | Some existingTy ->
-            // Already bound - would need to unify existing with m
-            ignore (existingTy, m)
-            ()
-    | MCon(n1, mod1), MCon(n2, mod2) when n1 = n2 && mod1 = mod2 -> ()
-    | MProd(a1, b1), MProd(a2, b2) ->
-        unifyMeasure a1 a2 range
-        unifyMeasure b1 b2 range
-    | MInv m1, MInv m2 ->
-        unifyMeasure m1 m2 range
-    | _ ->
-        // Measure mismatch - would need proper measure algebra
-        ()
+/// One measure equation `d1 = d2` (design b.2). `solveDim` is pure over the store's lookup and a
+/// supply taken from the union-find; its returned bindings are the only writer of measure cells
+/// (plan D7, U-2). The resolved sides and every binding are bounded before anything is applied
+/// (the CS-2 obligation: an exponent past `measureExponentBound` is the CCS8048 family, never
+/// wrapped). A failure is the error's own case, surfaced with its own code (b.5), never the
+/// blanket mismatch.
+and private unifyDim (d1: Dimension) (d2: Dimension) (range: SourceRange) : unit =
+    let bounded (d: Dimension) : unit =
+        match exponentsOf d |> List.tryFind (fun e -> abs e > measureExponentBound) with
+        | Some e -> raise (UnificationException(MeasureExponentOutOfRange(e, d, range)))
+        | None -> ()
+    bounded (resolveDim d1)
+    bounded (resolveDim d2)
+    match solveDim lookupMeasure (freshMeasureSupply ()) d1 d2 with
+    | Ok(bindings, supply) ->
+        bindings |> List.iter (fun (_, d) -> bounded d)
+        commitMeasureSupply supply
+        bindMeasures bindings
+    | Error(DimFailure.Mismatch(lhs, rhs, residual)) ->
+        raise (UnificationException(MeasureMismatch(lhs, rhs, residual, range)))
+    | Error(DimFailure.NoIntegerSolution(v, k, residual)) ->
+        raise (UnificationException(NoIntegerSolution(v, k, residual, range)))
 
 //-------------------------------------------------------------------------
 // Try Unification (non-throwing)
@@ -305,6 +325,10 @@ let canUnify (t1: NativeType) (t2: NativeType) : bool =
             tc1.Name = tc2.Name && tc1.Module = tc2.Module &&
             List.length args1 = List.length args2 &&
             List.forall2 check args1 args2
+        | NativeType.TNum(c1, d1), NativeType.TNum(c2, d2) ->
+            // The dimensions are checked by the pure solver against the store without binding.
+            c1.Name = c2.Name && c1.Module = c2.Module
+            && (match solveDim lookupMeasure (freshMeasureSupply ()) d1 d2 with Ok _ -> true | Error _ -> false)
         | NativeType.TFun(d1, r1), NativeType.TFun(d2, r2) ->
             check d1 d2 && check r1 r2
         | NativeType.TTuple(e1, s1), NativeType.TTuple(e2, s2) ->
@@ -374,11 +398,6 @@ let solveConstraint (c: Constraint) : Result<unit, UnificationError> =
         // For now, record this as a deferred constraint
         // The signature and range are kept for error reporting
         ignore (ty, name, signature, range)
-        Ok ()
-
-    | Constraint.HasMeasure(ty, measure, range) ->
-        // Measure constraint - verify ty supports the measure
-        ignore (ty, measure, range)
         Ok ()
 
     | Constraint.Subtype(sub, super, range) ->
