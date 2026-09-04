@@ -150,6 +150,16 @@ type NodeBuilder() =
             nodes <- Map.add nodeId updated nodes
         | None -> ()
 
+    /// Set the type of an existing node.
+    /// Used to attach a generalized (TForall) type scheme to a top-level function binding
+    /// after its body has been checked and the constraints so far have been solved.
+    member _.SetType(nodeId: NodeId, ty: NativeType) =
+        match Map.tryFind nodeId nodes with
+        | Some node ->
+            let updated = { node with Type = ty }
+            nodes <- Map.add nodeId updated nodes
+        | None -> ()
+
     /// Set emission strategy on an existing node
     /// Used to mark Lambda/SeqExpr bodies as SeparateFunction after creation.
     member _.SetEmissionStrategy(nodeId: NodeId, strategy: EmissionStrategy) =

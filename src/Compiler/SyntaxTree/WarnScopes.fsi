@@ -7,6 +7,7 @@ open Clef.Compiler.SyntaxTrivia
 open Clef.Compiler.Text
 open Clef.Compiler.UnicodeLexing
 
+[<RequireQualifiedAccess>]
 module internal WarnScopes =
 
     /// To be called during lexing to save #nowarn / #warnon directives.

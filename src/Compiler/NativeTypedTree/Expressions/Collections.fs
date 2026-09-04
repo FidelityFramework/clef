@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Houston Haynes / SpeakEZ Technologies
+// Copyright (c) 2025 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
 /// Collection expression handlers for Clef.
@@ -99,6 +99,21 @@ let checkArrayOrListComputed
     (range: SourceRange)
     : SemanticNode =
 
+    // A literal `[| e1; e2; e3 |]` arrives as one Sequential chain (isTrueSeq); its elements
+    // are the chain's items, checked and typed individually, exactly like `checkArrayOrList`.
+    // Comprehension bodies (for/while/ranges/yield) keep the single computed body.
+    let rec flattenElements (e: SynExpr) : SynExpr list =
+        match e with
+        | SynExpr.Sequential(_, true, e1, e2, _, _) -> e1 :: flattenElements e2
+        | other -> [other]
+    let isComprehension =
+        match compExpr with
+        | SynExpr.ForEach _ | SynExpr.For _ | SynExpr.While _
+        | SynExpr.IndexRange _ | SynExpr.YieldOrReturn _ | SynExpr.YieldOrReturnFrom _ -> true
+        | _ -> false
+    if isArray && not isComprehension then
+        checkArrayOrList checkExpr env builder true (flattenElements compExpr) range
+    else
     let compNode = checkExpr env builder compExpr
     let elemType = freshTypeVar range
     let resultType = if isArray then NativeType.TApp(Types.arrayTyCon, [elemType]) else NativeType.TList elemType

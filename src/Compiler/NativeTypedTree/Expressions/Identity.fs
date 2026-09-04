@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Houston Haynes / SpeakEZ Technologies
+// Copyright (c) 2025 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
 /// Unified identifier resolution for F# Native.
@@ -125,22 +125,26 @@ and private resolveBinding (parts: string list) (fullName: string) (env: TypeEnv
                 let actualType = instantiateTForall binding.Type range
                 BindingNode (fullName, actualType, binding.NodeId)
     | None ->
-        // PARSER AMBIGUITY: LongIdent might be member access on a local binding.
-        // F# parser can produce LongIdent ["r"; "Length"] instead of DotGet
-        // when it doesn't know if the first part is a module or a value.
-        // Try: first part as binding, rest as member access.
-        // TODO: Factor this into a proper nanopass for cleaner architecture.
-        if parts.Length >= 2 then
-            let firstPart = parts.[0]
-            let restParts = parts.[1..]  // Keep as list for nested FieldGets
-            match tryLookupBinding firstPart env with
-            | Some binding ->
-                // Found base binding - resolve member path to get types at each step
-                let resolvedType = applySubst binding.Type
-                let resultTypes = resolveMemberPath resolvedType restParts env range
-                MemberAccessNode (binding, firstPart, restParts, resultTypes)
-            | None ->
+        // PARSER AMBIGUITY: LongIdent might be member access on a binding.
+        // The parser produces LongIdent ["r"; "Length"] or ["Spaces"; "rodata"; "Name"]
+        // instead of DotGet when it cannot tell modules from values. Try the longest
+        // proper prefix that names a binding (module-qualified values first), with the
+        // remaining parts as a member path.
+        let rec tryPrefix (k: int) =
+            if k < 1 then
                 ErrorNode ($"The value or constructor '{fullName}' is not defined.", NativeType.TError $"Undefined: {fullName}")
+            else
+                let prefixParts = parts |> List.take k
+                let prefix = String.concat "." prefixParts
+                let restParts = parts |> List.skip k
+                match tryLookupBinding prefix env with
+                | Some binding when binding.NativeLiteral.IsNone ->
+                    // Found base binding - resolve member path to get types at each step
+                    let resolvedType = applySubst binding.Type
+                    let resultTypes = resolveMemberPath resolvedType restParts env range
+                    MemberAccessNode (binding, prefix, restParts, resultTypes)
+                | _ -> tryPrefix (k - 1)
+        if parts.Length >= 2 then tryPrefix (parts.Length - 1)
         else
             ErrorNode ($"The value or constructor '{fullName}' is not defined.", NativeType.TError $"Undefined: {fullName}")
 

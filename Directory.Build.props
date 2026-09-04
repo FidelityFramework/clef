@@ -52,8 +52,8 @@
 
     <!-- For NuGet packaging -->
     <Authors>SpeakEZ</Authors>
-    <Company>SpeakEZ, Inc.</Company>
-    <Copyright>Copyright (c) SpeakEZ, Inc. and Microsoft Corporation</Copyright>
+    <Company>Braidpoint, Inc.</Company>
+    <Copyright>Copyright (c) Braidpoint, Inc. and Microsoft Corporation</Copyright>
   </PropertyGroup>
 
   <!--

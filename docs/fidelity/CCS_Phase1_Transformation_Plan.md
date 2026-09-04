@@ -471,7 +471,7 @@ FCS files contain Microsoft copyright headers:
 #### Required Changes
 
 1. **Preserve Original Copyright**: The fork retains Microsoft's copyright for derived work
-2. **Add SpeakEZ Notice**: Additions are copyright SpeakEZ Technologies
+2. **Add SpeakEZ Notice**: Additions are copyright Braidpoint
 3. **Update License Reference**: Point to clef LICENSE file
 
 #### New Header Format
@@ -480,14 +480,14 @@ For **modified** files:
 
 ```fsharp
 // Original work Copyright (c) Microsoft Corporation.  All Rights Reserved.
-// Modifications Copyright (c) 2025 SpeakEZ Technologies.
+// Modifications Copyright (c) 2025 Braidpoint.
 // Licensed under the MIT license. See LICENSE.txt in the project root.
 ```
 
 For **new** files:
 
 ```fsharp
-// Copyright (c) 2025 SpeakEZ Technologies.
+// Copyright (c) 2025 Braidpoint.
 // Licensed under the MIT license. See LICENSE.txt in the project root.
 ```
 
@@ -499,7 +499,7 @@ Create or update `/LICENSE.txt`:
 MIT License
 
 Original work Copyright (c) Microsoft Corporation.
-Modifications Copyright (c) 2025 SpeakEZ Technologies.
+Modifications Copyright (c) 2025 Braidpoint.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -529,7 +529,7 @@ furnished to do so, subject to the following conditions:
     <!-- Identity -->
     <Product>Clef Compiler Service</Product>
     <Company>SpeakEZ Technologies</Company>
-    <Copyright>Original work (c) Microsoft Corporation. Modifications (c) 2025 SpeakEZ Technologies.</Copyright>
+    <Copyright>Original work (c) Microsoft Corporation. Modifications (c) 2025 Braidpoint.</Copyright>
 
     <!-- Versioning -->
     <VersionPrefix>1.0.0</VersionPrefix>
@@ -655,7 +655,7 @@ Create `FSharp.Native.Compiler.Service.nuspec`:
       symbol resolution for native F# compilation. It is the frontend
       for the Fidelity framework's native compilation pipeline.
     </description>
-    <copyright>Original work (c) Microsoft Corporation. Modifications (c) 2025 SpeakEZ Technologies.</copyright>
+    <copyright>Original work (c) Microsoft Corporation. Modifications (c) 2025 Braidpoint.</copyright>
     <tags>fsharp compiler native aot fidelity</tags>
     <dependencies>
       <group targetFramework="net9.0">
@@ -1050,7 +1050,7 @@ echo "Namespace transformation complete. Backup at src.backup/"
 # Run from clef repository root
 
 NEW_HEADER='// Original work Copyright (c) Microsoft Corporation.  All Rights Reserved.
-// Modifications Copyright (c) 2025 SpeakEZ Technologies.
+// Modifications Copyright (c) 2025 Braidpoint.
 // Licensed under the MIT license. See LICENSE.txt in the project root.'
 
 find src/Compiler -name "*.fs" -o -name "*.fsi" | while read file; do

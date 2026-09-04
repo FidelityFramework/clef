@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Houston Haynes / SpeakEZ Technologies
+// Copyright (c) 2025 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
 /// Binding handling for F# Native.
@@ -926,7 +926,8 @@ let checkLongIdentSet
     (range: SourceRange)
     : SemanticNode =
     let valueNode = checkExpr env builder valueExpr
-    let targetName = longId |> List.map (fun id -> id.idText) |> String.concat "."
+    let parts = longId |> List.map (fun id -> id.idText)
+    let targetName = parts |> String.concat "."
     match tryLookupBinding targetName env with
     | Some binding when binding.IsMutable ->
         let targetNode = builder.Create(
@@ -939,10 +940,52 @@ let checkLongIdentSet
             range,
             children = [targetNode.Id; valueNode.Id])
     | _ ->
-        builder.Create(
-            SemanticKind.Error $"Cannot assign to '{targetName}' (not found or not mutable)",
-            NativeType.TError "assignment error",
-            range)
+        // `r.Field <- v` (or `Module.r.Field <- v`): the longest proper prefix that names a
+        // binding is the record, the remaining parts are a field path. Records are memref-
+        // backed, so the store mutates the record in place, parameter or not.
+        let rec tryPrefix (k: int) =
+            if k < 1 then None
+            else
+                let prefix = parts |> List.take k |> String.concat "."
+                match tryLookupBinding prefix env with
+                | Some binding when binding.NativeLiteral.IsNone -> Some (binding, prefix, parts |> List.skip k)
+                | _ -> tryPrefix (k - 1)
+        match (if parts.Length >= 2 then tryPrefix (parts.Length - 1) else None) with
+        | Some (binding, prefix, fieldPath) ->
+            let baseNode = builder.Create(
+                SemanticKind.VarRef(prefix, binding.NodeId),
+                binding.Type,
+                range,
+                arena = env.CurrentArena)
+            // Walk the intermediate fields with FieldGet; the last one is the FieldSet target.
+            let middle = fieldPath |> List.take (fieldPath.Length - 1)
+            let lastField = List.last fieldPath
+            let (objNode, objType) =
+                middle |> List.fold (fun (node: SemanticNode, ty: NativeType) fieldName ->
+                    let fieldTy = Types.resolveFieldType (applySubst ty) fieldName env range
+                    let fieldNode = builder.Create(
+                        SemanticKind.FieldGet(node.Id, fieldName),
+                        fieldTy,
+                        range,
+                        children = [node.Id])
+                    builder.SetParent(node.Id, fieldNode.Id)
+                    (fieldNode, fieldTy)
+                ) (baseNode, applySubst binding.Type)
+            let lastFieldTy = Types.resolveFieldType (applySubst objType) lastField env range
+            addConstraint (Constraint.Equals(lastFieldTy, valueNode.Type, range)) env
+            let setNode = builder.Create(
+                SemanticKind.FieldSet(objNode.Id, lastField, valueNode.Id),
+                Types.unitType,
+                range,
+                children = [objNode.Id; valueNode.Id])
+            builder.SetParent(objNode.Id, setNode.Id)
+            builder.SetParent(valueNode.Id, setNode.Id)
+            setNode
+        | None ->
+            builder.Create(
+                SemanticKind.Error $"Cannot assign to '{targetName}' (not found or not mutable)",
+                NativeType.TError "assignment error",
+                range)
 
 /// Check DotNamedIndexedPropertySet: obj.Prop[idx] <- value
 let checkDotNamedIndexedPropertySet

@@ -377,9 +377,12 @@ let addOpen (ns: string) (env: TypeEnv) : TypeEnv =
 // Type Definition Management
 //-------------------------------------------------------------------------
 
-/// Add a type definition to the environment
+/// Add a type definition to the environment. A definition shadows an earlier abbreviation of
+/// the same name (`type FrameKind = byte` in a spliced dependency, then the program's own
+/// `type FrameKind = | Tell | Ask`): resolution consults abbreviations first, so the later
+/// declaration wins only if the earlier abbreviation is retired here.
 let addTypeDef (name: string) (tyCon: TypeConRef) (env: TypeEnv) : TypeEnv =
-    { env with TypeDefs = Map.add name tyCon env.TypeDefs }
+    { env with TypeDefs = Map.add name tyCon env.TypeDefs; TypeAbbrevs = Map.remove name env.TypeAbbrevs }
 
 /// Look up a type definition
 let tryLookupTypeDef (name: string) (env: TypeEnv) : TypeConRef option =
@@ -535,13 +538,23 @@ let resolveRecordTypeFromFields
                     Result.Error((DiagnosticCodes.FS0001_GenericError,
                            sprintf "Internal error: field labels reference record type '%s' but it is not in RecordDefs" typeName))
             | _ ->
-                // Multiple record types have all fields — use "last definition wins" rule
-                // (standard F# behavior: most recently defined/opened type takes precedence)
+                // Multiple record types have all these fields. A fresh record expression must
+                // set every field of its type, so a candidate with more fields than the
+                // expression names is not admissible ({ Name; Count } is never an F when F also
+                // has Extra). Among the exact matches, "last definition wins" (standard F#
+                // behavior: the most recently defined/opened type takes precedence).
                 // addRecordDef prepends new FieldRefs, so List.head = most recently defined
+                let exactMatches =
+                    intersection
+                    |> Set.filter (fun typeName ->
+                        match Map.tryFind typeName env.RecordDefs with
+                        | Some info -> List.length info.Fields = List.length fieldNames
+                        | None -> false)
+                let admissible = if Set.isEmpty exactMatches then intersection else exactMatches
                 let lastTypeName =
                     candidateSets
                     |> List.head |> snd
-                    |> List.filter (fun fr -> Set.contains fr.RecordType.Name intersection)
+                    |> List.filter (fun fr -> Set.contains fr.RecordType.Name admissible)
                     |> List.head
                     |> fun fr -> fr.RecordType.Name
                 match Map.tryFind lastTypeName env.RecordDefs with

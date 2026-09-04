@@ -367,9 +367,37 @@ let rec collectFreeTypeParams (ty: NativeType) : TypeParam list =
     | NativeType.TMeasure _ -> []  // Measure type params handled separately
     | NativeType.TError _ -> []
 
+/// Like applySubst, and additionally rewrite every still-unbound variable to its union-find
+/// ROOT record. TypeParam has reference equality, so a type must mention each variable through
+/// one canonical record for substitution tables (NativeTypes.instantiate) to find it.
+let rec canonicalizeVars (ty: NativeType) : NativeType =
+    match ty with
+    | NativeType.TVar typar ->
+        match find typar with
+        | (root, None) -> NativeType.TVar root
+        | (_, Some boundTy) -> canonicalizeVars boundTy
+    | NativeType.TApp(tc, args) -> NativeType.TApp(tc, List.map canonicalizeVars args)
+    | NativeType.TFun(domain, range) -> NativeType.TFun(canonicalizeVars domain, canonicalizeVars range)
+    | NativeType.TTuple(elems, isStruct) -> NativeType.TTuple(List.map canonicalizeVars elems, isStruct)
+    | NativeType.TForall(typars, body) -> NativeType.TForall(typars, canonicalizeVars body)
+    | NativeType.TByref(elem, kind) -> NativeType.TByref(canonicalizeVars elem, kind)
+    | NativeType.TNativePtr elem -> NativeType.TNativePtr(canonicalizeVars elem)
+    | NativeType.TAnon(fields, isStruct) -> NativeType.TAnon(fields |> List.map (fun (n, t) -> (n, canonicalizeVars t)), isStruct)
+    | NativeType.TUnion(tc, cases) ->
+        NativeType.TUnion(tc, cases |> List.map (fun c -> { c with Fields = c.Fields |> List.map (fun (n, t) -> (n, canonicalizeVars t)) }))
+    | NativeType.TLazy elem -> NativeType.TLazy(canonicalizeVars elem)
+    | NativeType.TSeq elem -> NativeType.TSeq(canonicalizeVars elem)
+    | NativeType.TSeqEnumerator elem -> NativeType.TSeqEnumerator(canonicalizeVars elem)
+    | NativeType.TList elem -> NativeType.TList(canonicalizeVars elem)
+    | NativeType.TMap(keyTy, valueTy) -> NativeType.TMap(canonicalizeVars keyTy, canonicalizeVars valueTy)
+    | NativeType.TSet elem -> NativeType.TSet(canonicalizeVars elem)
+    | NativeType.TMeasure _ | NativeType.TError _ -> ty
+
 /// Generalize a type by wrapping free type variables in TForall
-/// This is used for let-bound polymorphic functions
+/// This is used for let-bound polymorphic functions. The body is canonicalized first so the
+/// scheme's parameters and the variables in its body are the same TypeParam records.
 let generalizeType (ty: NativeType) : NativeType =
+    let ty = canonicalizeVars ty
     let freeParams = collectFreeTypeParams ty |> List.distinctBy (fun tp -> tp.Id)
     if List.isEmpty freeParams then
         ty
