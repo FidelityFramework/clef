@@ -8,6 +8,7 @@
 /// Intrinsic modules are matched via proper pattern matching on IntrinsicModule.
 module Clef.Compiler.NativeTypedTree.Expressions.Intrinsics
 
+open Clef.Compiler.NativeTypedTree.DimensionAlgebra
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
@@ -571,7 +572,8 @@ let private resolveArenaOp (op: string) (range: SourceRange) : IntrinsicResoluti
     let fullName = "Arena." + op
     // Create fresh measure parameter for lifetime tracking
     let lifetimeParam = freshTypeParam "'lifetime" TypeParamKind.Measure range
-    let lifetimeMeasure = NativeType.TMeasure (MVar lifetimeParam)
+    // The lifetime is a measure variable in a measure-sorted position (design a.2, sequence CS-4).
+    let lifetimeMeasure = NativeType.TMeasure (Dimension.ofVar (freshMeasureVar (Some "lifetime")))
     let arenaType = NativeType.TApp(Types.arenaTyCon, [lifetimeMeasure])
     let arenaByrefType = NativeType.TByref(arenaType, ByrefKind.InOut)
     match op with

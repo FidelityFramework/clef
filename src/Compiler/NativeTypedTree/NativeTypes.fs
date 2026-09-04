@@ -5,6 +5,7 @@
 module Clef.Compiler.NativeTypedTree.NativeTypes
 
 open System.Collections.Generic
+open Clef.Compiler.NativeTypedTree.DimensionAlgebra
 
 //-------------------------------------------------------------------------
 // Source Location
@@ -723,8 +724,8 @@ type TypeConRef = {
     Name: string
     /// The module where this type is defined
     Module: ModulePath
-    /// Parameter kinds - which are types vs measures
-    /// e.g., Ptr<'T, 'region, 'access> = [Type; Measure; Measure]
+    /// Parameter kinds - which positions are type-sorted and which measure-sorted
+    /// e.g., Arena<[<Measure>] 'lifetime> = [Measure]
     ParamKinds: TypeParamKind list
     /// Memory layout hint (may be refined during checking)
     Layout: TypeLayout
@@ -758,9 +759,6 @@ let arity (tc: TypeConRef) = List.length tc.ParamKinds
 let mkTypeConRef name typeArity layout =
     { Name = name; Module = []; ParamKinds = List.replicate typeArity TypeParamKind.Type; Layout = layout; NTUKind = None; FieldCount = 0; CaseCount = 0; Qualifiers = None; FieldPinAttributes = Map.empty }
 
-/// Create a type constructor with explicit parameter kinds (non-NTU kind)
-let mkTypeConRefWithMeasures name paramKinds layout =
-    { Name = name; Module = []; ParamKinds = paramKinds; Layout = layout; NTUKind = None; FieldCount = 0; CaseCount = 0; Qualifiers = None; FieldPinAttributes = Map.empty }
 
 /// Create a type constructor with an NTU kind (for native primitives)
 let mkNTUTypeConRef name ntuKind layout =
@@ -910,8 +908,6 @@ and [<RequireQualifiedAccess>] Constraint =
     | Equals of NativeType * NativeType * SourceRange
     /// Type must have a member with given name and signature (SRTP)
     | HasMember of ty: NativeType * name: string * signature: NativeType * SourceRange
-    /// Type must support given measure
-    | HasMeasure of NativeType * Measure * SourceRange
     /// Subtype relationship (minimal, for inheritance)
     | Subtype of sub: NativeType * super: NativeType * SourceRange
     /// Type must have compatible memory layout
@@ -941,8 +937,16 @@ and [<RequireQualifiedAccess; NoComparison>] NativeType =
     /// Type variable (reference to a TypeParam)
     | TVar of typar: TypeParam
     
-    /// Unit of measure
-    | TMeasure of measure: Measure
+    /// A numeric type (design a.2, plan D4): the carrier and the dimension. The carrier is the
+    /// numeric type constructor, which still carries the NTUKind with its interim width and is
+    /// still compared by name until step 7 (plan D7); the dimension is the measure component.
+    /// `float` is `TNum(floatTyCon, Dimension.one)` (`float = float<1>`), `float<kg m / s^2>`
+    /// the same carrier at that dimension. Identity is carrier plus `Dimension` (D2).
+    | TNum of carrier: TypeConRef * dim: Dimension
+
+    /// A measure-sorted positional argument on a non-numeric constructor,
+    /// `Arena<[<Measure>] 'lifetime>`: a dimension in type-argument position (design a.2).
+    | TMeasure of dim: Dimension
     
     /// Anonymous record type: {| field1: T1; field2: T2 |}
     /// isStruct: true for struct anonymous records (value type), false for reference type
@@ -991,14 +995,6 @@ and [<RequireQualifiedAccess; NoComparison>] NativeType =
 //-------------------------------------------------------------------------
 // Supporting Types
 //-------------------------------------------------------------------------
-
-/// Unit of measure (for dimensional analysis)
-and Measure =
-    | MOne                                    // Dimensionless
-    | MVar of TypeParam                       // Measure variable
-    | MProd of Measure * Measure              // Product m1 * m2
-    | MInv of Measure                         // Inverse 1/m
-    | MCon of name: string * ModulePath       // Named measure (e.g., Meters, Seconds)
 
 /// A case in a discriminated union
 and UnionCase = {
@@ -1161,6 +1157,7 @@ let rec layoutOf (ty: NativeType) : TypeLayout =
                 TypeLayout.Inline(24, 8)  // tag + padding + fat ptr
             | _ -> tycon.Layout
         | _ -> tycon.Layout
+    | NativeType.TNum(carrier, _) -> carrier.Layout  // the carrier's layout; the dimension has no extent
     | NativeType.TTuple(_, isStruct) when isStruct -> TypeLayout.Inline(-1, -1) // Size depends on elements
     | NativeType.TTuple(_, _) -> TypeLayout.Reference ArenaAffinity.CurrentActor
     | NativeType.TFun _ -> TypeLayout.Inline(16, 8)  // Function pointer + closure env
@@ -1311,7 +1308,8 @@ let instantiate (typars: TypeParam list) (args: NativeType list) (body: NativeTy
         | NativeType.TList elem -> NativeType.TList(go elem)  // PRD-13a
         | NativeType.TMap(k, v) -> NativeType.TMap(go k, go v)  // PRD-13a
         | NativeType.TSet elem -> NativeType.TSet(go elem)  // PRD-13a
-        | NativeType.TMeasure _ -> ty
+        // Measure variables are not TypeParams; instantiating them is CS-6's (design b.4).
+        | NativeType.TNum _ | NativeType.TMeasure _ -> ty
         | NativeType.TError _ -> ty
     
     go body
@@ -1343,7 +1341,11 @@ let rec formatType (ty: NativeType) : string =
     | NativeType.TByref(elem, ByrefKind.Out) -> $"outref<{formatType elem}>"
     | NativeType.TByref(elem, ByrefKind.InOut) -> $"byref<{formatType elem}>"
     | NativeType.TNativePtr elem -> $"nativeptr<{formatType elem}>"
-    | NativeType.TMeasure m -> formatMeasure m
+    // The one renderer for a dimension is Dimension.render (design a.4): a TNum at `one` renders
+    // as its bare carrier, otherwise as the carrier applied to the normalised presentation.
+    | NativeType.TNum(carrier, dim) ->
+        if dim = Dimension.one then carrier.Name else $"{carrier.Name}<{Dimension.render dim}>"
+    | NativeType.TMeasure dim -> Dimension.render dim
     | NativeType.TAnon(fields, isStruct) ->
         let fieldsStr = fields |> List.map (fun (n, t) -> $"{n}: {formatType t}") |> String.concat "; "
         if isStruct then $"struct {{| {fieldsStr} |}}" else $"{{| {fieldsStr} |}}"
@@ -1356,14 +1358,6 @@ let rec formatType (ty: NativeType) : string =
     | NativeType.TMap(k, v) -> $"Map<{formatType k}, {formatType v}>"  // PRD-13a
     | NativeType.TSet elem -> $"Set<{formatType elem}>"  // PRD-13a
     | NativeType.TError msg -> $"<error: {msg}>"
-
-and formatMeasure (m: Measure) : string =
-    match m with
-    | MOne -> "1"
-    | MVar tp -> tp.Name
-    | MProd(m1, m2) -> $"{formatMeasure m1}*{formatMeasure m2}"
-    | MInv m -> $"1/{formatMeasure m}"
-    | MCon(name, _) -> name
 
 //-------------------------------------------------------------------------
 // Standard Types Module (NTU-based type definitions)
@@ -1414,25 +1408,41 @@ module Types =
     // Usage: NativeType.TApp(Types.optionTyCon, [elemType])
     let optionTyCon = mkTypeConRef "option" 1 (TypeLayout.Inline(-1, -1))
 
+    /// The numeric carriers, in one place. The kind <-> carrier fact is stated by these
+    /// definitions alone; `tryNumericTyConOfKind` reads it back (a literal's type is its
+    /// carrier at `one`), so no second table maps an NTUKind to a type.
+    let numericTyCons : TypeConRef list =
+        [ intTyCon; int8TyCon; int16TyCon; int32TyCon; int64TyCon
+          uintTyCon; uint8TyCon; uint16TyCon; uint32TyCon; uint64TyCon
+          nintTyCon; unintTyCon; float32TyCon; floatTyCon
+          posit8TyCon; posit16TyCon; posit32TyCon; posit64TyCon ]
+
+    /// The numeric carrier whose NTUKind is `kind`, if any.
+    let tryNumericTyConOfKind (kind: NTUKind) : TypeConRef option =
+        numericTyCons |> List.tryFind (fun tc -> tc.NTUKind = Some kind)
+
+    /// A numeric type value at the dimensionless measure: `float = float<1>` (plan D4).
+    let private numType (carrier: TypeConRef) : NativeType = NativeType.TNum(carrier, Dimension.one)
+
     // Standard type values
-    let intType = mkSimpleType intTyCon
-    let int8Type = mkSimpleType int8TyCon
-    let int16Type = mkSimpleType int16TyCon
-    let int32Type = mkSimpleType int32TyCon
-    let int64Type = mkSimpleType int64TyCon
-    let uintType = mkSimpleType uintTyCon
-    let uint8Type = mkSimpleType uint8TyCon
-    let uint16Type = mkSimpleType uint16TyCon
-    let uint32Type = mkSimpleType uint32TyCon
-    let uint64Type = mkSimpleType uint64TyCon
-    let nintType = mkSimpleType nintTyCon
-    let unintType = mkSimpleType unintTyCon
-    let float32Type = mkSimpleType float32TyCon
-    let floatType = mkSimpleType floatTyCon
-    let posit8Type = mkSimpleType posit8TyCon
-    let posit16Type = mkSimpleType posit16TyCon
-    let posit32Type = mkSimpleType posit32TyCon
-    let posit64Type = mkSimpleType posit64TyCon
+    let intType = numType intTyCon
+    let int8Type = numType int8TyCon
+    let int16Type = numType int16TyCon
+    let int32Type = numType int32TyCon
+    let int64Type = numType int64TyCon
+    let uintType = numType uintTyCon
+    let uint8Type = numType uint8TyCon
+    let uint16Type = numType uint16TyCon
+    let uint32Type = numType uint32TyCon
+    let uint64Type = numType uint64TyCon
+    let nintType = numType nintTyCon
+    let unintType = numType unintTyCon
+    let float32Type = numType float32TyCon
+    let floatType = numType floatTyCon
+    let posit8Type = numType posit8TyCon
+    let posit16Type = numType posit16TyCon
+    let posit32Type = numType posit32TyCon
+    let posit64Type = numType posit64TyCon
     let boolType = mkSimpleType boolTyCon
     let charType = mkSimpleType charTyCon
     let unitType = mkSimpleType unitTyCon
@@ -1447,10 +1457,11 @@ module Types =
     // Usage: NativeType.TApp(Types.fnPtrTyCon, [funcType])
     let fnPtrTyCon = mkNTUTypeConRefWithArity "FnPtr" NTUKind.NTUfnptr 1 (TypeLayout.Inline(8, 8))
 
-    // Arena type constructor (arity 1 - lifetime measure parameter)
+    // Arena type constructor (arity 1 - lifetime measure parameter, design a.2:
+    // `Arena<[<Measure>] 'lifetime>`; the position is measure-sorted and holds a TMeasure)
     // Usage: NativeType.TApp(Types.arenaTyCon, [lifetimeMeasure])
     // Layout: fat pointer (ptr to memory region + remaining size)
-    let arenaTyCon = mkTypeConRef "Arena" 1 TypeLayout.FatPointer
+    let arenaTyCon = { mkTypeConRef "Arena" 1 TypeLayout.FatPointer with ParamKinds = [ TypeParamKind.Measure ] }
 
     // Expr type constructor (arity 1 - for quoted expressions)
     // Usage: NativeType.TApp(Types.exprTyCon, [innerType])
@@ -1472,29 +1483,31 @@ module Types =
     let mkExprType exprType =
         NativeType.TApp(exprTyCon, [exprType])
 
-    /// Try to extract NTUKind from a NativeType (for use with NTUKind predicates)
+    /// Try to extract NTUKind from a NativeType (for use with NTUKind predicates).
+    /// A numeric type's kind is its carrier's (plan D7: the width still rides there).
     let tryGetNTUKind (ty: NativeType) : NTUKind option =
         match ty with
+        | NativeType.TNum(carrier, _) -> carrier.NTUKind
         | NativeType.TApp(tycon, _) -> tycon.NTUKind
         | _ -> None
 
-    /// Check if a type is numeric (integer or float)
+    /// A numeric type is a TNum; nothing else carries a dimension (design a.2).
     let isNumericType (ty: NativeType) : bool =
-        match tryGetNTUKind ty with
-        | Some kind -> NTUKind.isNumeric kind
-        | None -> false
+        match ty with
+        | NativeType.TNum _ -> true
+        | _ -> false
 
-    /// Check if a type is an integer (signed or unsigned)
+    /// Check if a type is an integer (signed or unsigned): a TNum whose carrier is an integer kind
     let isIntegerType (ty: NativeType) : bool =
-        match tryGetNTUKind ty with
-        | Some kind -> NTUKind.isInteger kind
-        | None -> false
+        match ty with
+        | NativeType.TNum(carrier, _) -> carrier.NTUKind |> Option.exists NTUKind.isInteger
+        | _ -> false
 
-    /// Check if a type is a floating point type
+    /// Check if a type is a floating point type: a TNum whose carrier is a floating-point kind
     let isFloatType (ty: NativeType) : bool =
-        match tryGetNTUKind ty with
-        | Some kind -> NTUKind.isFloatingPoint kind
-        | None -> false
+        match ty with
+        | NativeType.TNum(carrier, _) -> carrier.NTUKind |> Option.exists NTUKind.isFloatingPoint
+        | _ -> false
 
     /// Check if a type is the string type
     let isStringType (ty: NativeType) : bool =

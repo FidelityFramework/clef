@@ -253,7 +253,7 @@ let private tryResolveViaTable (table: WitnessTable) (memberName: string) (argTy
             | TypePattern.Any -> Some entry.Resolution
             | TypePattern.Exact tyCon ->
                 match argType with
-                | NativeType.TApp(tc, _) when tc.Name = tyCon.Name -> Some entry.Resolution
+                | NativeType.TApp(tc, _) | NativeType.TNum(tc, _) when tc.Name = tyCon.Name -> Some entry.Resolution
                 | _ -> None
             | TypePattern.Numeric ->
                 if Types.isNumericType argType then Some entry.Resolution
@@ -271,7 +271,7 @@ let private tryResolveViaTable (table: WitnessTable) (memberName: string) (argTy
 let private resolveAlloyDollar (argType: NativeType) : WitnessResolution option =
     // $ is dispatched based on the argument type to find a WritableString implementation
     match argType with
-    | NativeType.TApp(tyCon, _) ->
+    | NativeType.TApp(tyCon, _) | NativeType.TNum(tyCon, _) ->
         Some {
             Operator = "$"
             ArgType = argType
@@ -323,7 +323,7 @@ let private resolveConversion (funcName: string) (sourceType: NativeType) : Witn
         // Create internal name following F* convention
         let sourceTypeName =
             match sourceType with
-            | NativeType.TApp(tc, _) -> tc.Name
+            | NativeType.TApp(tc, _) | NativeType.TNum(tc, _) -> tc.Name
             | NativeType.TVar spec -> spec.Name
             | _ -> "unknown"
 

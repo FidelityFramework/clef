@@ -208,6 +208,9 @@ let checkRecord
                 | NativeType.TVar typar ->
                     addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
                         (sprintf "Could not resolve record type - type variable '%s' is still unbound" typar.Name) env
+                | NativeType.TNum _ ->
+                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                        (sprintf "Expected record type, got numeric type '%s'" (formatType resolvedTy)) env
                 | NativeType.TMeasure _ ->
                     addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
                         "Expected record type, got unit of measure" env

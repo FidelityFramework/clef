@@ -34,9 +34,9 @@ open Clef.Compiler.Baker.Recipes.Decomposition
 ///   - Register-dimension (int, uint) → MLIR TInt(wordWidth)
 /// Conversions between these categories must be preserved for correct MLIR emission.
 let private mapsToIndex (ty: NativeType) : bool =
-    match ty with
-    | NativeType.TNativePtr _ | NativeType.TByref _ -> true
-    | NativeType.TApp(tycon, _) ->
+    // One kind table for the arity-0 constructor form and the numeric carrier (plan D7: the
+    // pointer-dimension width still rides on the carrier's NTUKind).
+    let kindMapsToIndex (tycon: TypeConRef) : bool =
         match tycon.NTUKind with
         | Some (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer))
         | Some (NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer))
@@ -45,6 +45,10 @@ let private mapsToIndex (ty: NativeType) : bool =
         | Some NTUKind.NTUptr
         | Some NTUKind.NTUfnptr -> true
         | _ -> false
+    match ty with
+    | NativeType.TNativePtr _ | NativeType.TByref _ -> true
+    | NativeType.TNum(carrier, _) -> kindMapsToIndex carrier
+    | NativeType.TApp(tycon, _) -> kindMapsToIndex tycon
     | _ -> false
 
 /// Check if two types have the same memory layout AND the same MLIR representation

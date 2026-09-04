@@ -151,6 +151,21 @@ module Dimension =
         | _ -> numerator + " / " + String.concat " " negatives
 
 //-------------------------------------------------------------------------
+// The exponent bound
+//-------------------------------------------------------------------------
+
+/// The bound on a measure exponent, written or reached: |e| <= 32767 (2^15 - 1). The algebra's
+/// exponents are `int`; the syntax translator (Expressions/Types.fs) checks every step of a
+/// translation against it, and the unifier (Unify.fs) checks the resolved sides of every equation
+/// and every binding `solveDim` returns before applying it, so the group arithmetic never
+/// overflows. Past the bound is the CCS8048 family, never wrapped.
+let measureExponentBound = 32767
+
+/// The exponents of a dimension, bases and variables.
+let exponentsOf (d: Dimension) : int list =
+    (Map.toList d.Bases |> List.map snd) @ (Map.toList d.Vars |> List.map snd)
+
+//-------------------------------------------------------------------------
 // Fresh variables
 //-------------------------------------------------------------------------
 
