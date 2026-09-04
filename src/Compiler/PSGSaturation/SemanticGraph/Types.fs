@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 /// Core type definitions for the Program Semantic Graph (PSG).
-/// These types form the unified representation for Firefly.
+/// These types form the unified representation for Composer.
 module Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
 open Clef.Compiler.NativeTypedTree.NativeTypes

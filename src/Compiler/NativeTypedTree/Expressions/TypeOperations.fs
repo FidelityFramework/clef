@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
-/// Type operation handlers for F# Native.
+/// Type operation handlers for Clef.
 /// Handles: Typed (annotation), Upcast, Downcast, TypeTest, AddressOf, Quote
 module Clef.Compiler.NativeTypedTree.Expressions.TypeOperations
 

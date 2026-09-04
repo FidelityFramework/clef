@@ -1,162 +1,54 @@
 # Clef Compiler Service (CCS)
 
-## Overview
+CCS is the front end of the Fidelity toolchain: it lexes, parses and type-checks Clef source in the
+Native Type Universe (NTU) and produces the **Program Semantic Graph (PSG)**, a hypergraph that is the
+sole, exhaustive semantic authority for everything downstream. Composer's middle end (Alex) witnesses
+the saturated graph into MLIR; the editor tooling (Lattice) witnesses it into hover, diagnostics and
+proof surfacing. Neither computes anything the graph does not already carry.
 
-CCS (Clef Compiler Service) is a pruned and significantly modified fork of the F# Compiler Services (FCS) optimized for native compilation. It includes some contributions from F* (F-Star) as well as its own unique ['dimensional' type system](https://arxiv.org/abs/2603.16437). It provides the frontend for the Fidelity framework, producing typed abstract syntax trees and resolved SRTP constraints that flow to Firefly for native code generation.
+CCS descends from a surgical fork of dotnet/fsharp's front end (lexer, parser, syntax tree, diagnostics
+infrastructure). The typed tree, IL generation, optimizer, FSI, MSBuild tasks and the inherited test
+corpus have been removed; what remains is the Clef checker and the graph it saturates.
 
-**Key Differences from FCS:**
+## Where the design lives
 
-| Aspect | FCS | CCS |
-|--------|-----|------|
-| Target | .NET runtime | Native binaries |
-| Type universe | BCL types (System.String, etc.) | Standard F# types with native semantics |
-| SRTP resolution | .NET method tables | Alloy witness hierarchy |
-| Output | IL generation | Typed tree + SRTP metadata |
-| Dependencies | Full MSBuild, project system | Minimal, no IL generation |
+| Document | What it is |
+|---|---|
+| [phg/](phg/) | The design of record: the PSG-to-PHG plan, layout as joint constraint, the closure retooling plan, the **Design Supersession Register**, and [`drift-gate.sh`](phg/drift-gate.sh), which makes retired vocabulary a lint failure across the corpus |
+| [ccs-specification.md](ccs-specification.md) | The Clef dialect as CCS checks it: native type resolution, SRTP, SCF regions, pattern matching |
+| [native-type-universe.md](native-type-universe.md), [NTU_Type_System.md](NTU_Type_System.md) | The type universe CCS resolves into |
+| [Baker_Saturation_Architecture.md](Baker_Saturation_Architecture.md) | Baker: ingredients and recipes that saturate the graph (collections, obligations, closures, suspension) |
+| [CCS_Lazy_Seq_Coroutine_Intrinsics.md](CCS_Lazy_Seq_Coroutine_Intrinsics.md) | Lazy, seq and coroutine intrinsics as CCS elaborates them |
+| [Platform_Predicates.md](Platform_Predicates.md) | Platform description as declared authority; predicates read structurally from the graph |
+| [SMT_Integration_Strategy.md](SMT_Integration_Strategy.md) | Obligations born in the PSG, dispatched to cvc5 at design time and re-checked at build time |
+| [From_FSharp_to_Clef.md](From_FSharp_to_Clef.md), [Clef_Language_Vision.md](Clef_Language_Vision.md) | Orientation: how Clef differs from F#, and why |
+| [Safety_Critical_Certification.md](Safety_Critical_Certification.md), [Certification_Lab_Strategy.md](Certification_Lab_Strategy.md) | The certification posture the proof story serves |
 
-## Relationship to Fidelity Ecosystem
+The normative language specification is [clef-lang-spec](https://github.com/FidelityFramework/clef-lang-spec);
+the Composer-side architecture (Alex, the witness boundary, the thin middle end) is in `Composer/docs/`.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Fidelity Ecosystem                          │
-│                                                                 │
-│  clef-lang-spec          clef               Firefly              │
-│  ┌─────────────┐       ┌─────────────┐    ┌─────────────┐      │
-│  │ Clef   │       │ CCS        │    │ PSG/Alex    │      │
-│  │ Language    │──────▶│ Compiler    │───▶│ Native      │      │
-│  │ Spec        │ impl  │ Services    │uses│ Pipeline    │      │
-│  └─────────────┘       └─────────────┘    └─────────────┘      │
-│        │                     │                   │              │
-│        ▼                     ▼                   ▼              │
-│   Normative rules      Typed tree +        MLIR → LLVM         │
-│   for native types     SRTP resolution     → Native            │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-- **clef-lang-spec** defines the normative rules CCS must implement
-- **CCS** (this repository) implements the Clef type system
-- **Firefly** consumes CCS output for native code generation
-
-## What CCS Provides
-
-### 1. Native Type Resolution
-
-String literals, option types, and arrays resolve to native types:
-
-```fsharp
-// F# syntax
-let greeting = "Hello"        // Standard F#: System.String
-                              // CCS: string with native semantics (UTF-8 `memref<?xi8>` view)
-
-let maybeValue = Some 42      // Standard F#: int option (reference)
-                              // CCS: int voption (value type)
-```
-
-### 2. SRTP Resolution Against Alloy
-
-Statically resolved type parameters resolve against the Alloy witness hierarchy:
-
-```fsharp
-let inline add a b = a + b
-
-// Standard F#: Searches System.Int32.op_Addition
-// CCS: Searches Alloy.BasicOps, finds Add<int>
-```
-
-### 3. Exposed APIs for Firefly Integration
-
-CCS exposes internal APIs that FCS keeps private:
-
-| API | Purpose |
-|-----|---------|
-| `RangeCorrelationService` | Map SynExpr ranges to FSharpExpr for PSG construction |
-| `SymbolContextService` | Binding scopes for def-use analysis |
-| `SRTPService` | Witness resolution details for native SRTP |
-
-## Quick Start
-
-### Building CCS
-
-```bash
-cd ~/repos/clef
-dotnet build src/FSharp.Compiler.Service/FSharp.Compiler.Service.fsproj
-```
-
-### Using with Firefly
-
-CCS is referenced as a project dependency in Firefly's `.fsproj`:
-
-```xml
-<ProjectReference Include="$(ClefPath)/src/FSharp.Compiler.Service/FSharp.Compiler.Service.fsproj" />
-```
-
-Firefly calls CCS for parsing and type checking:
-
-```fsharp
-// In Firefly's FCS integration
-let checker = FSharpChecker.Create()
-let parseResults, checkResults = checker.ParseAndCheckFileInProject(...)
-
-// Extract typed tree and SRTP resolutions
-let typedTree = checkResults.ImplementationFile
-let srtpResolutions = CCSPublicAPI.getSRTPResolutions checkResults
-```
-
-## Directory Structure
+## Source layout
 
 ```
-clef/
-├── docs/
-│   └── fidelity/
-│       ├── README.md                 # This file
-│       └── CCS_Pruning_Plan.md      # Implementation roadmap
-├── src/
-│   └── Compiler/
-│       ├── Checking/                 # Type checking, SRTP
-│       │   ├── CheckExpressions.fs   # Literal type resolution
-│       │   ├── ConstraintSolver.fs   # SRTP resolution
-│       │   ├── NativeTypes.fs        # (NEW) Native type constructors
-│       │   └── NativeSRTP.fs         # (NEW) Alloy witness resolution
-│       ├── Service/
-│       │   ├── FSharpCheckerResults.fs
-│       │   └── CCSPublicAPI.fs      # (NEW) Stability layer
-│       ├── Symbols/
-│       │   └── Exprs.fs              # FSharpExpr API
-│       └── TypedTree/
-│           ├── TcGlobals.fs          # Type universe
-│           └── PeripheralTypes.fs    # (NEW) Farscape descriptors
-└── tests/
+src/Compiler/
+├── SyntaxTree/        lexer, parser, syntax tree (inherited front end)
+├── NativeTypedTree/   the Clef checker: NTU types, unification, expressions, NativeService (the pipeline)
+├── PSGSaturation/     the semantic graph: nodes, hyperedges, reachability, platform resolution
+├── Baker/             ingredients and recipes that saturate the graph
+├── Nanopass/          fan-out / fold-in passes, obligation elaboration and discharge, monomorphization
+├── Project/           .fidproj loading and project checking
+├── Driver/, Facilities/, Utilities/   inherited infrastructure that survived the pruning
+└── Clef.Compiler.Service.fsproj
 ```
 
-## Documentation
+CCS builds inside Composer's solution as a project reference; it is not a standalone .NET library.
 
-| Document | Description |
-|----------|-------------|
-| [CCS_Pruning_Plan.md](CCS_Pruning_Plan.md) | Detailed implementation roadmap with phases |
-| [clef-lang-spec](https://github.com/user/clef-lang-spec) | Normative language specification |
-| [Firefly CCS_Ecosystem.md](../../../Firefly/docs/CCS_Ecosystem.md) | How all components integrate |
+## The one rule
 
-## Implementation Status
+The design decides; the code conforms. Where code and design disagree, the code is the gap, and the
+[register](phg/Design_Supersession_Register.md) records what was retired and why. Run the drift gate
+before proposing a change to any document in this tree:
 
-See [CCS_Pruning_Plan.md](CCS_Pruning_Plan.md) for the phased implementation timeline:
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| Phase 0 | Foundation (fork, rename, initial pruning) | Pending |
-| Phase 1 | Core Pruning (remove MSBuild, IL gen) | Pending |
-| Phase 2 | Native Type Semantics (string, option with native semantics) | Pending |
-| Phase 3 | API Exposure (Range correlation, SRTP) | Pending |
-| Phase 4 | Native SRTP (Alloy witnesses) | Pending |
-| Phase 5 | Memory Semantics (BAREWire/Farscape) | Future |
-| Phase 6 | Integration Testing | Future |
-
-## Contributing
-
-CCS follows the architectural principles documented in:
-- Serena memory: `architecture_principles`
-- Serena memory: `fncs_architecture`
-
-Key constraints:
-1. No BCL type dependencies in the native type path
-2. All changes must preserve typed tree structure for Firefly correlation
-3. New APIs go through `CCSPublicAPI.fs` stability layer
+```
+docs/fidelity/phg/drift-gate.sh
+```

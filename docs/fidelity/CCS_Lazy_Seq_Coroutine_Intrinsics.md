@@ -4,7 +4,6 @@
 
 This document specifies the **semantic contracts** for computation expression types in CCS. These are the stable "what" - behavioral guarantees that any implementation must satisfy.
 
-**Implementation strategies** (the "how") live in Alex and are documented separately. See `/home/hhh/repos/Firefly/.serena/memories/computation_strategy_architecture.md`.
 
 ### Feature Dependency Graph
 
@@ -644,7 +643,6 @@ This is the production target for embedded/MCU/unikernel deployments.
 
 **Future Strategies** may use custom dialects (DCont, Inet) or platform-specific optimizations.
 
-See `/home/hhh/repos/Firefly/.serena/memories/computation_strategy_architecture.md` for details.
 
 ---
 
@@ -655,11 +653,7 @@ See `/home/hhh/repos/Firefly/.serena/memories/computation_strategy_architecture.
 - `/home/hhh/repos/clef/.serena/memories/coeffect_compilation_strategy.md`
 
 **Implementation (Alex)**:
-- `/home/hhh/repos/Firefly/.serena/memories/computation_strategy_architecture.md`
-- `/home/hhh/repos/Firefly/.serena/memories/async_llvm_coroutines.md` (StateMachine strategy)
-- `/home/hhh/repos/Firefly/.serena/memories/mailboxprocessor_first_stage.md` (MailboxProcessor strategy)
-- `/home/hhh/repos/Firefly/.serena/memories/delimited_continuations_architecture.md` (DCont vision)
 
 **WRENStack**:
-- `/home/hhh/repos/Firefly/docs/WRENStack_Roadmap.md`
-- `/home/hhh/repos/Firefly/docs/FidelityHelloWorld_Progression.md`
+- `Composer/docs/WRENStack_Roadmap.md`
+- `Composer/docs/FidelityHelloWorld_Progression.md`

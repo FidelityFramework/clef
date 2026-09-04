@@ -405,7 +405,7 @@ let detectMapFilterFusion (site: DecompositionSite) (graph: SemanticGraph) =
 
 ---
 
-## 6. Lessons from Firefly's Alex Architecture
+## 6. Lessons from Composer's Alex Architecture
 
 Baker is NOT a copy of Alex, but several architectural patterns transfer beautifully.
 

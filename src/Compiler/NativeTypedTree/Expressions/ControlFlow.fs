@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
-/// Control flow expression handlers for F# Native.
+/// Control flow expression handlers for Clef.
 /// Handles: If-then-else, While, For, ForEach, Match, Try-with, Try-finally, Assert, MatchBang
 module Clef.Compiler.NativeTypedTree.Expressions.ControlFlow
 

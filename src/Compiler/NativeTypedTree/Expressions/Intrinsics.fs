@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-/// Intrinsic resolution for F# Native.
+/// Intrinsic resolution for Clef.
 /// This module provides proper discriminated union dispatch for intrinsics,
 /// replacing the string prefix matching anti-pattern.
 ///

@@ -2,14 +2,14 @@
 
 ## Overview
 
-This document specifies the **Clef** dialect - extensions and modifications to standard F# semantics for native compilation via the Fidelity framework. Clef is implemented by CCS (Clef Compiler Service) and compiled to native binaries by Firefly.
+This document specifies the **Clef** dialect - extensions and modifications to standard F# semantics for native compilation via the Fidelity framework. Clef is implemented by CCS (Clef Compiler Service) and compiled to native binaries by Composer.
 
 **Relationship to Standard F#**: Clef is a superset of F# syntax with modified type semantics. Valid Clef code parses identically to standard F#, but type resolution follows native rules.
 
 ## Companion Documents
 
-- `docs/CCS_Pruning_Plan.md` - Implementation plan for CCS
-- `Firefly/docs/CCS_Architecture.md` - Integration with Firefly
+- `docs/fidelity/phg/` - the Program Hypergraph design of record: plans, the Design Supersession Register, and the drift gate
+- `Composer/docs/CCS_Architecture.md` - Integration with Composer
 - `fslang-spec/spec/*` - Standard F# specification (reference)
 
 ---
@@ -228,7 +228,7 @@ type SRTPResolution = {
 }
 ```
 
-This metadata flows to Firefly's PSG for code generation.
+This metadata flows to Composer's PSG for code generation.
 
 ---
 
@@ -326,7 +326,7 @@ module Platform.Bindings =
 
 ### 6.2 Binding Resolution
 
-Firefly's Alex layer provides platform-specific implementations:
+Composer's Alex layer provides platform-specific implementations:
 
 | Binding | Linux x86_64 | macOS arm64 | Windows x86_64 |
 |---------|--------------|-------------|----------------|
@@ -1186,15 +1186,15 @@ These parse as standard F# (attributes, operators) but have special semantics in
 | Part 3: SRTP Resolution | **Specified** | Pending in CCS |
 | Part 4: Memory Semantics | Draft | Future |
 | Part 5: Coeffects | Draft | Future |
-| Part 6: Platform Bindings | **Specified** | Implemented in Firefly |
+| Part 6: Platform Bindings | **Specified** | Implemented in Composer |
 | Part 7: Compatibility | **Specified** | Reference |
 | Part 8: Diagnostics | **Specified** | Partial in CCS |
 | Part 9: Memory Region Types | **Specified** | Pending in CCS |
 | Part 10: Access Kind Enforcement | **Specified** | Pending in CCS |
 | Part 11: Peripheral Descriptors | **Specified** | Pending (Farscape integration) |
 | Part 12: Ownership/Coeffects | Reserved | Future |
-| Part 12: SCF Regions | **Specified** | Implemented in Firefly |
-| Part 13: Pattern Matching | **Specified** | Implemented in Firefly |
+| Part 12: SCF Regions | **Specified** | Implemented in Composer |
+| Part 13: Pattern Matching | **Specified** | Implemented in Composer |
 | Part 14: Collection HOF Decomposition | **Specified** | Design phase |
 
 ---

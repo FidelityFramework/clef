@@ -84,10 +84,10 @@ module Capabilities =
 let fits_u64: Expr<bool> = <@ true @>
 ```
 
-### 2. Firefly Extraction
+### 2. Composer Extraction
 
 ```fsharp
-// Firefly loads platform library and extracts quotations
+// Composer loads platform library and extracts quotations
 let capabilities = loadPlatformCapabilities platformPath
 // capabilities.fits_u64 = <@ true @>
 ```

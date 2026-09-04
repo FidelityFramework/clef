@@ -104,6 +104,24 @@ Three adversarial lenses (consistency and references, decidability and proof sou
 - **`remove` supplied** for map and set in sentinel form (deletion is where a null-based AVL returns "no node"); `setLeft`/`setRight` defined as path-copy placements; `cons` places the new node in the arena of its tail; the one-arena invariant carries its lifetime implication (the arena's class is the join over derivation edges; a join with no home is the DU §8.2 lifetime error, never a cross-arena link).
 - **Working assumption applied corpus-wide:** a string or array field inside an aggregate is two words, base `index` plus `index` extent (the boxes now read `{base: index, extent: index}`); the byte totals in the NTU chapters were left as they were on that assumption. Confirm or the totals need re-deriving.
 
+## The pre-NTU/PSG naming — FNCS, "F# Native", fsnative, FSNAC, Firefly (2026-09-04)
+
+Retired as a vocabulary family: the product is Clef, the service is CCS, the type universe is NTU, the graph is the PSG, the compiler is Composer. The gate fails on any of these names outside the places listed below. What the sweep removed from clef, all staged for review:
+
+- **The inherited test corpus** (`tests/`, 8,575 files, 18 trees). None was in `Clef.Compiler.Service.sln`; every external reference was an inherited dotnet/fsharp artefact. The one CCS-named project (`FSharp.Native.Compiler.Service.Tests`) was the FCS service suite plus three CCS-era files that open namespaces which no longer exist. The *intent* of those three — `Primitive Types per Spec`, `BCL Rejection per Spec`, `Option Type per Spec`, `Name Resolution per Architecture`, `Metaprogramming per Spec`, `Quotations as Memory Mapping Carriers` (`SpecDrivenNativeTypeTests.fs`), `NativeTypeCheckerTests.fs`, `TypeCheckerRecoveryTests.fs` — is the seed of the **dimensional test set** the next increment measures; the content is in history at the deletion commit, and the new set is written against the current spec and namespaces, not ported.
+- **Three FNCS-era plans** (`CCS_Phase1_Transformation_Plan`, `CCS_Pruning_Plan`, `RESTRUCTURING_PLAN`): FCS→FNCS→CCS transformation plans from December and January, executed or superseded by `phg/`.
+- **Twenty upstream compiler docs** (IL backend, optimizer, FSI, MSBuild, perf, CI); `changing-the-ast.md` and `diagnostics.md` stay because CCS keeps that machinery.
+- **Root artefacts**: dotnet/fsharp build and test scripts, VS setup, `.github` policies and workflows, upstream release notes and contributing guide, the `.DotSettings` and `.nuspec` under the old name, test-only MSBuild props, two scratch scripts. The build-imported props/targets, `buildtools/`, `global.json`, `NuGet.config` and `attributions.md` stay.
+- **Generated lexer/parser outputs**: the obsolete `net9.0` copies removed; `net10.0` untracked and ignored (the fsproj regenerates them; the "fsnative" text they carried came from stale outputs, not from `lex.fsl`).
+- **Code**: the dead `FSharp.Native.*` namespace whitelist in `NativeService.fs` (nothing opens it; the BCL block stands); "for F# Native" and "for Firefly" in doc comments.
+- **Docs**: `docs/fidelity/README.md` rewritten from the current tree; `Firefly` → `Composer` across the spec and clef design docs; dead `/repos/Firefly/...` and agent-memory paths dropped from `CCS_Lazy_Seq_Coroutine_Intrinsics.md`.
+
+Agent memories: the tracked `.serena/memories` in BAREWire (13 files, all carrying "FNCS reached production maturity", Firefly build claims, `nativeptr` intrinsics) and ClefAutoComplete (5) are removed. Composer's seventy memory files are untracked; sixteen carry retired claims (`fncs_functional_decomposition_principle`, `mlir_dialect_architecture`, `delimited_continuations_architecture`, `ccs_architecture`, `naming_and_ecosystem`, among them) and are listed for deletion or regeneration from the design of record; the gate reports them until they go.
+
+Verification: Composer (which builds CCS as a project reference) builds clean after the sweep.
+
+Reported, not failing: the tooling forks' module and project names (`FsNativeAutoComplete.*`, `HAVE_FNCS`), which are the first mechanical step of the Lattice migration; the ship-of-theseus talk, which narrates the rename; implementation PRDs; dated posts. Agent-memory directories (`.serena/memories`) are in the gate's corpus: they are a drift vector like any other document.
+
 ## Scheduled (code; reported, not failing)
 
 | Site | Replacement | Plan step |

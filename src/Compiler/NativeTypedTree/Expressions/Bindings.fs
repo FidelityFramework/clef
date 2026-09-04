@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
-/// Binding handling for F# Native.
+/// Binding handling for Clef.
 /// Handles: Let, LetRec, Lambda, pattern bindings, Set operations
 module Clef.Compiler.NativeTypedTree.Expressions.Bindings
 
