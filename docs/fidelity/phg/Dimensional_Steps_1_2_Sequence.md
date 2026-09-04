@@ -58,6 +58,8 @@ Consequence: h.2, h.5, h.6, h.7, h.8, h.9, the wiring half of h.3/h.4 and the me
 - **Size:** ~20 lines, 1 file (untracked; the owner should know the diff lands on an uncommitted file).
 - **Risk:** the `TMeasure, TMeasure -> ok <- false` arm today makes `matchTypeArgs` return `None` for any generic over `Arena<'l>`; the pass's handling of `None` should be read before this changeset to be sure it is a diagnostic and not a skip. Not verified here.
 
+**CS-3 status (2026-09-04): built by hand, gates green.** `matchTypeArgs` no longer learns a measure-kinded parameter and treats a `TMeasure` pair as nothing to learn (it fell to "shapes disagree" before, which made every generic over `Arena<'l>` unmatched); `instanceKey` excludes measure-kinded parameters; the clone carries them as themselves. The risk the sequence named is confirmed and recorded: an unmatched use site leaves the generic binding in place unspecialised, by design ("shared-variable behaviour"), which is conservative rather than silent about code but is not a diagnostic; CS-4 revisits it when `TNum` changes what a use site's type can look like.
+
 ### CS-4 — `TNum`: the numeric type, the measure form, and the unifier (the one large slice)
 
 - **Anchors:** (a.2), (a.4) wiring, (b.2), (b.6), (e.2) "read once", (e.6) interim staging; (h) 2, 5, 6, 7, 8, 9, the wiring of 3 and 4, and the CCS8040/8041 half of 11.
