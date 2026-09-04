@@ -101,7 +101,6 @@ SCHEDULED=(
   'clef/src::\bFS[0-9]{4}\b'                                    # hardening step 4: the compiler still emits FS codes
   'clef-lang-spec/spec/lexical-filtering.md::\bFS[0-9]{4}\b'    # the offside example moves with the step-4 table
   'clef/docs/diagnostics.md::\bFS[0-9]{4}\b'                    # step 4
-  'clef/docs/fidelity/ccs-specification.md::\bFS[0-9]{4}\b'     # retirement of the parallel spec is pending the owner's word
   'Composer/docs/WebView_Build_Integration.md::\bFS[0-9]{4}\b'  # step 4
   # 'path-substring::pattern-substring' — the row applies only to lines matching that retired pattern;
   # an empty pattern applies to every retired pattern in that path.

@@ -252,6 +252,6 @@ This happens at compile time, resulting in smaller binaries with no runtime over
 
 ## Related Documentation
 
-- `NTU_Type_System.md` - NTU type implementation
+- `clef-lang-spec/spec/ntu-types.md` - the NTU numeric kinds, seals and platform resolution
 - `Fidelity.Platform/Capabilities.fs` - Predicate definitions
-- `ccs-specification.md` - CCS specification
+- `clef-lang-spec/spec/platform-bindings.md` - platform descriptions and predicates

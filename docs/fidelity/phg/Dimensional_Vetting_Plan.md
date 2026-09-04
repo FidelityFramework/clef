@@ -57,7 +57,7 @@ Every row is a primary-source reading of `clef/src/Compiler/NativeTypedTree` as 
 | Memory space and access qualifiers | `NTUQualifiers` exist but are explicitly excluded from type identity ("types with different placement qualifiers unify as the same type") | `NativeTypes.fs:248`; `Unify.fs:86-88` |
 | `Ptr<'T, 'region, 'access>` | region and access are measure parameters (`mkTypeConRefWithMeasures`), so they pass through the never-failing measure unifier | `NativeTypes.fs:725, 760` |
 | Access-kind diagnostics | none are emitted anywhere; the collections chapters' VC-RO cites `CCS8020`, which the checker does not know | grep of `NativeTypedTree/`, `PSGSaturation/`: only `FS8000`, `FS8010-8013`, `FS8500` |
-| Diagnostic series | the code's codes are `FS8xxx` (`FS8000_TypeMismatch` ...); the spec's are `CCS8xxx` (`access-kinds.md` §Diagnostics); clef's `ccs-specification.md` Appendix D still lists `FS8xxx` | `Expressions/Types.fs:39-45`; `NativeService.fs:1878` |
+| Diagnostic series | the code's codes are `FS8xxx` (`FS8000_TypeMismatch` ...); the spec's are `CCS8xxx` (`access-kinds.md` §Diagnostics); clef's former `ccs-specification.md` Appendix D (retired 2026-09-04) listed `FS8xxx` | `Expressions/Types.fs:39-45`; `NativeService.fs:1878` |
 | Verdict mechanism | `composer compile` prints CCS diagnostics to stderr as `location: error CODE: message` and exits 1 on errors | `Composer/src/CLI/Output.fs:84-120`, `Program.fs:67-71` |
 
 Summary: the width family is checked by name and resolved in the right place; units of measure are not
@@ -165,7 +165,7 @@ the horizons impose are `Horizon_Requirements.md`.
    propagated); they share operands and no variables and discharge as separate queries
    (`Horizon_Requirements.md` C5).
 4. **Diagnostics on the `CCS8xxx` series.** Rename the `DiagnosticCodes` module's values and clef's
-   `ccs-specification.md` Appendix D to the spec's series; add `CCS8040` (measure mismatch), `CCS8020-8022`
+   the retired Appendix D's occupants to the spec's series in `error-handling.md` and clef's `DiagnosticCodes`; add `CCS8040` (measure mismatch), `CCS8020-8022`
    (access), `CCS8003` (region). Gate: every rule's expected code exists in `DiagnosticCodes`.
 5. **Access kind and region are checked.** Region and access measures unify under the rule of D2
    (region and access are enumeration-sort components, not measures: they compare by identity under D2, never enter the measure unifier, and a `ReadWrite` handle where `ReadOnly` is required passes only through `Ptr.asReadOnly`); writes through `ReadOnly` and reads through `WriteOnly` are
@@ -243,7 +243,7 @@ Decided 2026-09-04, all five by the user (D1 re-derived from the design corpus a
   is the binding range (`dynrange(r)` when no tighter source bounds the value); arithmetic on sealed
   operands yields a result whose range is the interval image, and re-sealing that result
   (`let z : int64 = x + 1L`) is a `width-inference.md` §7.2 site that must be covered or state a wrap or
-  saturation discipline (W-4's wrap rule). Phase: `numeric-selection.md` §9 item 1 and
+  saturation discipline (W-4's wrap rule). Settled with the owner (2026-09-04): what an operation does at a representation's boundary is a declared fact of the target, carried by the platform description beside its representation set (wrap on a two's-complement ALU, saturate on a posit unit or a saturating DSP block, exact on fabric where the width came from the range); the language never discerns it from a cold start. The range coeffect is the analyzer: when the interval image of a sealed operation stays inside the seal's dynamic range nothing can wrap and nothing is said; when the range proves the boundary reachable, `CCS8015` fires as a warning promoted to an error under `--warnaserror`, naming the two knobs (bound the range, widen the seal) and the third, an explicitly saturating or wrapping operation written by the developer. The compiler selects nothing. Phase: `numeric-selection.md` §9 item 1 and
   `fixed-point-scaffolding.md` §4 say range analysis and selection run "during elaboration";
   `ntu-dimensional-architecture.md` §4.3 places platform-width resolution at Saturation. This plan runs
   range propagation in Elaboration where no platform fact is needed and closes it, with selection, at
@@ -325,20 +325,20 @@ Decided 2026-09-04, all five by the user (D1 re-derived from the design corpus a
   residual is whether a coefficient's range is a marginal box or a projection of a joint manifold range
   (`research/fabric-inference/07`), which the spec answers "the coefficient's own analysed range" today and
   the research leaves as horizon-three work.
-- **D7, implementation decisions for steps 1–2 (taken 2026-09-04 from the standing rules; veto if wrong).**
-  The changeset sequence (`Dimensional_Steps_1_2_Sequence.md`) found three places the design note leaves
-  open for implementation. (U-1) Where the seal rides before step 7's propagation pass exists: `TNum`
-  carries an interim third component, the seal read once at its site, which the unifier compares
-  strictly so that two seals meeting is rejected as it is today (the plan's "right result, wrong
-  mechanism", design note §e.6) and which Composer reads for every node's width so RoundTrip stays
-  byte-identical; step 7 moves the seal to the range coeffect and deletes the comparison. The component
-  is never part of identity in the design; it is scaffolding, marked as such in the code. (U-2) The
-  measure and carrier stores are persistent maps threaded through `unify`, `solveConstraints`,
-  `applySubst` and every reader, `resolve` the only read (functional patterns rule; design note §b.2);
-  the type union-find's own mutability is pre-existing and is retired with the PHG saturation lattice,
-  not here. (U-3) UoM-5 and UoM-8 turn on `*` and `/`, whose schemes are step 3's; the two schemes are
-  pulled forward into step 2's changeset CS-6 (the spec's operator table fixes them and no decision is
-  involved), so step 2's gate stays as written.
+- **D7, implementation decisions for steps 1–2 (reframed 2026-09-04 after the owner asked to zoom out;
+  pending the owner's word).** The changeset sequence (`Dimensional_Steps_1_2_Sequence.md`) found three
+  places the design note leaves open for implementation. (U-1) Width before step 7: nothing in CS-1 to
+  CS-8 redesigns width. It stays where it is today, in the numeric carrier and compared by name, until
+  step 7's range coeffect exists to replace it; the plan already calls that "right result, wrong
+  mechanism" for W-1, and every W row is gated at step 7. The sequence's phrase "an interim third
+  component on `TNum` that the unifier compares" describes the same code and is withdrawn as a
+  description, because it reads as putting width back into the type. (U-2) The stores: measure and
+  carrier variables live in the store the type variables already use, kind-checked, with `resolve` the
+  only read; a second, persistent store beside the existing mutable union-find would be two mechanisms
+  for one fact, against one-place pull. The mutable union-find is retired once, by the PHG saturation
+  lattice (PSG_to_PHG_Plan.md Phase 1), not here. `solveDim` itself stays pure over the values it is
+  given (design note §b.2). (U-3) UoM-5 and UoM-8 turn on `*` and `/`, whose schemes the spec's operator
+  table fixes; they are pulled forward into step 2's changeset CS-6 so step 2's gate stays as written.
 - **D5, `+` on strings (decided: concatenates).** `+` dispatches on the kind of its operands: on numerics it
   is the unit-unified add with a range obligation; on strings it is the concat recipe with an extent
   obligation. No proof complication follows, because each dispatch emits its own obligation family.
@@ -357,11 +357,11 @@ items are reported, never edited.
 | R-4 | `native-type-universe.md` §2.3 | `int` = platform word; `int` and `nativeint` synonyms | rewritten: `int` is the bare integer kind, width from the range, word-sealed only at an ABI site; `nativeint` is the pointer seal; they coincide at the ABI and nowhere else |
 | R-5 | `dts-dmm-paper.md` Appendix A step 1 vs Appendix C and §2.6 | a bare literal given a fresh dimension variable | paper: the design is Appendix C and the spec's dimensionless-literal rule; Appendix A step 1 is the rough edge, for the next publication cycle |
 | R-6 | `ntu-dimensional-architecture.md` §7.2 | "covariant access" left open | answered: exact identity on every component, access invariant, coercion only through `Ptr.asReadOnly` |
-| R-7 | clef `docs/fidelity/ccs-specification.md`, `From_FSharp_to_Clef.md` | FS codes, `!`/`:=` pointer forms, "regions form a subtyping hierarchy", a null-assignment error | narrative doc corrected; `ccs-specification.md` is a parallel spec and a drift source, see the retirement item in the report |
+| R-7 | clef `docs/fidelity/ccs-specification.md`, `native-type-universe.md`, `NTU_Type_System.md`, `From_FSharp_to_Clef.md` | FS codes, `!`/`:=` pointer forms, "regions form a subtyping hierarchy", a null-assignment error; three parallel copies of spec chapters | narrative doc corrected; the three parallel documents retired on the owner's word (2026-09-04), references redirected to `clef-lang-spec/spec` and `Baker_Saturation_Architecture.md` |
 | R-8 | `units-of-measure.md` line 12, §Measure Parameter Erasure | F#'s erasure text | rewritten: the checker never erases; measures ride the graph and drop at native emission |
 | R-9 | `decidable-by-construction.md` §2.2 | Z^7 as the dimension space | paper: base measures are declared, not fixed at seven (DBC §4.1's own currency example); for the amendment schedule |
 | R-10 | `research/grade-axis/00` | two `../spec/` drafts cited that exist nowhere | research folder: reported |
-| R-11 | `numeric-selection.md` §5, §8, §14.1; `width-inference.md` §7 | seal syntax open | resolved: the seal is the named representation type in type position; the angle brackets stay the measure slot; the parameterised posit form is a synthesis configuration, never a seal; the lossy-conversion discipline syntax stays open (the one item to decide) |
+| R-11 | `numeric-selection.md` §5, §8, §14.1; `width-inference.md` §7 | seal syntax open | resolved: the seal is the named representation type in type position; the angle brackets stay the measure slot; the parameterised posit form is a synthesis configuration, never a seal; the compiler never selects a discipline: a conversion whose analysed range is covered is lossless and admitted bare; one that would lose information must carry the developer's stated discipline (`width-inference.md` §7) or is rejected; only the spelling of that statement is open, and the owner (2026-09-04) will not pre-decide it |
 | R-12 | `numeric-selection.md` §9 item 1; `fixed-point-scaffolding.md` §4 | "during elaboration" versus Saturation | spec reworded: propagation in Elaboration where no platform fact is needed, closed with selection at Saturation; paper: reported |
 | R-13 | `dts-dmm-paper.md` §2.6 vs `numeric-selection.md` §2.1, §13.2 | warning in the paper, hard error in the spec | the owner's rule: always a warning with `--warnaserror` to make it an error, as the FPGA timing budget does; spec amended, the paper was right |
 | R-14 | `fixed-point-scaffolding.md` §4 | sign-extends an unsigned value; elaborator versus lowering | paper: reported; the same defect as L-7b |
