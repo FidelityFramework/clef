@@ -232,16 +232,22 @@ harness run at every step and must not move.
    DU payloads, citing spec §8.1 and `Partial_Application_Closure_Reification`
    Option A. Then `makeScaledAdder` returns to sample 11 and prints. Gate:
    sample 11's TODO is gone and it passes; sample 12 passes.
-7. **Spec follows.** `closure-representation` §6.3 and
-   `backend-lowering-architecture` §4.2/§7.5–6 rewritten to the multi-value
-   form; `Gaining Closure` §"The Witnessed Form" updated; `mlir-plugins`
-   README/ROADMAP mark `flat-closure-lowering` retired.
-8. **Supersede the stale design claims.** The full classified inventory is
-   [Design_Supersession_Register.md](./Design_Supersession_Register.md): three
-   normative spec chapters still bind the retired forms (c1–c3, a decision
-   about authority), seven documents state the old position as current (b),
-   and four are stale since Increment 1 (d). Category (b) and (d) can land
-   now; c2 lands with step 7; c1/c3/c4 land with the suspension recipe.
+7. **Spec leads — done 2026-09-04.** The spec moved ahead of the code rather
+   than following it: `closure-representation` §2.1/§6.3, `backend-lowering`
+   §2.2/§4/§7, `lazy-representation`, `seq-representation`,
+   `seq-operations-representation`, `ntu-types` §8.1, and `ffi-boundary` §3.2
+   now bind the multi-value form and SHALL NOT the cast. Steps 4–5 therefore
+   have a normative target to conform to, and the code is the gap until they
+   land. The consequence drawn there — no `code_ptr` word in any environment,
+   captures from `[0]` (closure) and `[2]` (lazy, seq) — is recorded in the
+   register's *Open* item for veto.
+
+8. **Supersede the stale design claims — done 2026-09-04.** The full
+   classified inventory is `Design_Supersession_Register.md`, executed across
+   clef, Composer, clef-lang-spec, clef-lang-site, and ship-of-theseus, and
+   enforced by `drift-gate.sh` (below). c1/c3/c4 (the continuation chapters)
+   were rewritten to the suspension recipe ahead of the recipe's code, on the
+   same footing as step 7: the design decides, the code conforms.
 
 ## 7. The drift gates — checked in CI, not remembered
 
@@ -252,8 +258,9 @@ must only shrink) and becomes an error when its list empties.
 | Gate | Rule | Enforces |
 |---|---|---|
 | **Dialect register** | every op prefix in `07_output.mlir` ∈ {`func`, `memref`, `arith`, `scf`, `index`} ∪ the admitted list in `Thin_Middle_End` §5; anything else fails | `Thin_Middle_End` §22, §5. **Admitting `affine` (or any dialect) = a row in the register, a design citation, and the sample that needs it.** Step-wise by construction. |
-| **No deferred casts** | `unrealized_conversion_cast` count in witnessed MLIR = 0 | §14.3 |
-| **No plugins** | `Lowering.fs` contains no `--load-pass-plugin` for closure resolution | `Thin_Middle_End` §3 |
+| **Retired vocabulary** | `docs/fidelity/phg/drift-gate.sh` exits 0: no `cont.*`/`dcont.*` surface, no DCont/Inet dialect, no `unrealized_conversion_cast`, no `memref<2xindex>`, no `code_ptr`, no `flattenSequentials`, no `resolve-closure-casts`, no seven-dialect list, anywhere in the corpus except the superseding designs and the *scheduled* code rows (which only shrink) | `Design_Supersession_Register` |
+| **No deferred casts** | `unrealized_conversion_cast` count in witnessed MLIR = 0 | §14.3 | — today a *scheduled* row in `drift-gate.sh` (`Alex/`, `PSGElaboration/`, `tests/`, `samples/`); removing the row turns this gate on
+| **No plugins** | `Lowering.fs` contains no `--load-pass-plugin` for closure resolution | `Thin_Middle_End` §3 | — today a *scheduled* row (`BackEnd/LLVM/Lowering.fs`, `mlir-plugins/`)
 | **Witnesses read** | no `sizeOf`, `mlirTypeSize*`, mutable byte-offset accumulator, or `V (10000 +` in `Alex/Witnesses/` or `Alex/Patterns/` | spec §9; audit §4d/4f |
 | **No F in the witness** | no reference to `graph.Edges` / `SemanticGraph.edges*` under `Alex/` | PHG §2.4 (I4) |
 | **I1 — enumerated sources** | in-tree assertion at fold-in: every hyperedge has ≥1 source, every source ∈ V, every closure hyperedge's sources = exactly the lambda's `CaptureInfo` list | finiteness lemma |

@@ -350,11 +350,11 @@ These low-level intrinsics support MailboxProcessor and explicit threading scena
 
 | Operation | Type | Description |
 |-----------|------|-------------|
-| `Atomic.load` | `nativeptr<'T> -> 'T` | Atomic read |
-| `Atomic.store` | `nativeptr<'T> -> 'T -> unit` | Atomic write |
-| `Atomic.compareExchange` | `nativeptr<'T> -> 'T -> 'T -> 'T` | CAS, returns old |
-| `Atomic.fetchAdd` | `nativeptr<int> -> int -> int` | Add, returns old |
-| `Atomic.fetchSub` | `nativeptr<int> -> int -> int` | Subtract, returns old |
+| `Atomic.load` | `Ptr<'T, 'Region, ReadWrite> -> 'T` | Atomic read |
+| `Atomic.store` | `Ptr<'T, 'Region, ReadWrite> -> 'T -> unit` | Atomic write |
+| `Atomic.compareExchange` | `Ptr<'T, 'Region, ReadWrite> -> 'T -> 'T -> 'T` | CAS, returns old |
+| `Atomic.fetchAdd` | `Ptr<int, 'Region, ReadWrite> -> int -> int` | Add, returns old |
+| `Atomic.fetchSub` | `Ptr<int, 'Region, ReadWrite> -> int -> int` | Subtract, returns old |
 
 ### Memory Ordering
 

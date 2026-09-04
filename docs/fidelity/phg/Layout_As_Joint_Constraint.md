@@ -77,10 +77,10 @@ type SlotMode = ByValue | ByRef
 /// The literal shapes clef-lang-spec closure-representation.md 7 already fixes.
 [<RequireQualifiedAccess>]
 type PrefixShape =
-    | None                       // record, tuple
-    | CodePtr                    // closure:    {code_ptr, slots...}
-    | LazyThunk                  // lazy:       {computed, value, code_ptr, slots...}
-    | SeqFrame                   // seq:        {state, current, code_ptr, slots...}
+    | None                       // record, tuple, closure environment: {slots...}
+                                 //   (the function value is the other half of the pair, never a slot)
+    | LazyThunk                  // lazy:       {computed, value, slots...}
+    | SeqFrame                   // seq:        {state, current, slots...}
     | Discriminant of states:int // suspension: {state, slots...}
     | Tag of caseCount:int       // DU:         {tag, payload}
 
