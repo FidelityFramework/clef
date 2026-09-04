@@ -210,16 +210,11 @@ let private builtinOps : Map<string, (NativeType -> WitnessResolution option)> =
 /// Names of conversion functions (bare identifiers in F#)
 /// Used by isSRTPOperator to include conversions in SRTP resolution
 let private conversionFunctions =
-    Set.ofList [
-        // Integer conversions
-        "int"; "int8"; "sbyte"; "int16"; "int32"; "int64"; "nativeint"
-        // Unsigned integer conversions
-        "byte"; "uint8"; "uint16"; "uint32"; "uint64"; "unativeint"
-        // Floating point conversions
-        "float"; "double"; "float32"; "single"; "decimal"
-        // Other conversions
-        "char"; "string"
-    ]
+    // The numeric spellings are the one table (sequence CS-5); the three non-numeric conversion
+    // targets are named here.
+    Set.ofList (
+        (Types.numericSpellings |> List.map (fun (spelling, _, _) -> spelling))
+        @ [ "decimal"; "char"; "string" ])
 
 /// Check if a name is a conversion function
 let isConversionFunction (name: string) : bool =
@@ -295,24 +290,14 @@ let private hasUnboundTypeVars (ty: NativeType) : bool =
 
 /// Get the target type for a conversion function name
 let private getConversionTargetType (funcName: string) : NativeType option =
-    match funcName with
-    | "int" -> Some Types.intType
-    | "int8" | "sbyte" -> Some Types.int8Type
-    | "int16" -> Some Types.int16Type
-    | "int32" -> Some Types.int32Type
-    | "int64" -> Some Types.int64Type
-    | "nativeint" -> Some Types.nintType
-    | "byte" | "uint8" -> Some Types.uint8Type
-    | "uint16" -> Some Types.uint16Type
-    | "uint32" -> Some Types.uint32Type
-    | "uint64" -> Some Types.uint64Type
-    | "unativeint" -> Some Types.unintType
-    | "float" | "double" -> Some Types.floatType
-    | "float32" | "single" -> Some Types.float32Type
-    | "decimal" -> Some Types.decimalType
-    | "char" -> Some Types.charType
-    | "string" -> Some Types.stringType
-    | _ -> None
+    match Types.tryNumericTyConOfName funcName with
+    | Some carrier -> Some (Types.numericType carrier)
+    | None ->
+        match funcName with
+        | "decimal" -> Some Types.decimalType
+        | "char" -> Some Types.charType
+        | "string" -> Some Types.stringType
+        | _ -> None
 
 /// Resolve a conversion function application
 /// Returns WitnessResolution if valid, None if invalid conversion

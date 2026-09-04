@@ -849,28 +849,18 @@ let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
                     | TypeParamKind.Measure -> NativeType.TMeasure (Dimension.ofVar (freshMeasureVar None)))
             Some (NativeType.TApp(tyCon, args))
         | None ->
-            // 3. Check NTU primitives
-            match name with
-            | "int" -> Some NativeTypes.Types.intType
-            | "int8" -> Some NativeTypes.Types.int8Type
-            | "int16" -> Some NativeTypes.Types.int16Type
-            | "int32" -> Some NativeTypes.Types.int32Type
-            | "int64" -> Some NativeTypes.Types.int64Type
-            | "uint" -> Some NativeTypes.Types.uintType
-            | "uint8" | "byte" -> Some NativeTypes.Types.uint8Type
-            | "uint16" -> Some NativeTypes.Types.uint16Type
-            | "uint32" -> Some NativeTypes.Types.uint32Type
-            | "uint64" -> Some NativeTypes.Types.uint64Type
-            | "nativeint" -> Some NativeTypes.Types.nintType
-            | "unativeint" -> Some NativeTypes.Types.unintType
-            | "float" | "double" -> Some NativeTypes.Types.floatType
-            | "float32" | "single" -> Some NativeTypes.Types.float32Type
-            | "bool" -> Some NativeTypes.Types.boolType
-            | "char" -> Some NativeTypes.Types.charType
-            | "string" -> Some NativeTypes.Types.stringType
-            | "unit" -> Some NativeTypes.Types.unitType
-            | "decimal" -> Some NativeTypes.Types.decimalType
-            | _ -> None
+            // 3. NTU primitives: a numeric spelling reads the one spelling table (sequence CS-5);
+            //    the non-numeric primitives are named here.
+            match NativeTypes.Types.tryNumericTyConOfName name with
+            | Some carrier -> Some (NativeTypes.Types.numericType carrier)
+            | None ->
+                match name with
+                | "bool" -> Some NativeTypes.Types.boolType
+                | "char" -> Some NativeTypes.Types.charType
+                | "string" -> Some NativeTypes.Types.stringType
+                | "unit" -> Some NativeTypes.Types.unitType
+                | "decimal" -> Some NativeTypes.Types.decimalType
+                | _ -> None
 
 //-------------------------------------------------------------------------
 // Measure syntax → Dimension: the one translator (design a.4)

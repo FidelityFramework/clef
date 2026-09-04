@@ -1422,7 +1422,51 @@ module Types =
         numericTyCons |> List.tryFind (fun tc -> tc.NTUKind = Some kind)
 
     /// A numeric type value at the dimensionless measure: `float = float<1>` (plan D4).
-    let private numType (carrier: TypeConRef) : NativeType = NativeType.TNum(carrier, Dimension.one)
+    let numericType (carrier: TypeConRef) : NativeType = NativeType.TNum(carrier, Dimension.one)
+    let private numType = numericType
+
+    /// The seal spellings (design e.1), read in one place (e.2, sequence CS-5): every name a
+    /// source may write for a numeric carrier, with the carrier it names and the conversion
+    /// operation the intrinsic of that name performs. Aliases (`sbyte`, `byte`, `double`,
+    /// `float64`, `single`) share their carrier's row. The type-position resolver, the conversion
+    /// intrinsics, the SRTP conversion set and the parse/format dispatch all read this list;
+    /// no second name-to-carrier table exists. The posit seals take their spelling with the seal
+    /// form of step 7 (`Posit32`, numeric-selection.md §5) and are not written here.
+    ///
+    /// Interim shape (plan D7): the carrier column points at a per-width constructor because width
+    /// still lives in the type until step 7. In the design's end state there is one integer carrier
+    /// and one real carrier; every spelling here except `int` and `float` is a seal, so at step 7
+    /// this column becomes `Int | Real` beside a seal column (`FixedInt(8, signed)`, `Ieee 64`,
+    /// `Posit(32, 2)`; design note e.1) and the per-width constructors are deleted. `float64` is
+    /// the explicit IEEE-64 seal (numeric-selection.md readouts); today it aliases `float`.
+    let numericSpellings : (string * TypeConRef * string) list =
+        [ "int", intTyCon, "toInt"
+          "int8", int8TyCon, "toSByte"
+          "sbyte", int8TyCon, "toSByte"
+          "int16", int16TyCon, "toInt16"
+          "int32", int32TyCon, "toInt32"
+          "int64", int64TyCon, "toInt64"
+          "nativeint", nintTyCon, "toNativeInt"
+          "uint", uintTyCon, "toUInt"
+          "uint8", uint8TyCon, "toByte"
+          "byte", uint8TyCon, "toByte"
+          "uint16", uint16TyCon, "toUInt16"
+          "uint32", uint32TyCon, "toUInt32"
+          "uint64", uint64TyCon, "toUInt64"
+          "unativeint", unintTyCon, "toUNativeInt"
+          "float", floatTyCon, "toFloat"
+          "double", floatTyCon, "toFloat"
+          "float64", floatTyCon, "toFloat"
+          "float32", float32TyCon, "toFloat32"
+          "single", float32TyCon, "toFloat32" ]
+
+    /// The numeric carrier a spelling names, if any.
+    let tryNumericTyConOfName (name: string) : TypeConRef option =
+        numericSpellings |> List.tryPick (fun (spelling, tc, _) -> if spelling = name then Some tc else None)
+
+    /// The conversion operation and target carrier the conversion intrinsic of a spelling performs.
+    let tryConversionOfName (name: string) : (string * TypeConRef) option =
+        numericSpellings |> List.tryPick (fun (spelling, tc, op) -> if spelling = name then Some (op, tc) else None)
 
     // Standard type values
     let intType = numType intTyCon

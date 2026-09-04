@@ -90,6 +90,8 @@ Consequence: h.2, h.5, h.6, h.7, h.8, h.9, the wiring half of h.3/h.4 and the me
 - **Size:** ~120 lines, 4 files.
 - **Risk:** low; behaviour-preserving by construction (same spellings, one table). Not an (h) row; included because (e.2) requires the width name to be read once and CS-4 leaves it read four times.
 
+**CS-5 status (2026-09-04): built by hand, gates green.** `Types.numericSpellings` in `NativeTypes.fs` is the one table (spelling, carrier, conversion operation), with `tryNumericTyConOfName`, `tryConversionOfName` and `numericType`; the type-position resolver, the SRTP conversion set and target table, the conversion intrinsics and the parse/format dispatch read it. The four tables had disagreed in three places, reconciled by the one table: `sbyte` was absent from the resolver, `uint` and `float64` were absent from the SRTP conversion set. Posit spellings are not in the table; they arrive with the seal form of step 7 (`Posit32`).
+
 ### CS-6 — Generalisation and instantiation over measure and carrier variables
 
 - **Anchors:** (b.4); (h) 10; spec lines 209, 515-572; DBC line 204.
