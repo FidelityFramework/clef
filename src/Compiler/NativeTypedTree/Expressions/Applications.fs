@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
-/// Application expression handlers for F# Native.
+/// Application expression handlers for Clef.
 /// Handles: App (function application), Lambda, TypeApp, New, ObjExpr, TraitCall
 /// Includes: Pipe operator reduction, intrinsic saturation, DU constructor detection
 module Clef.Compiler.NativeTypedTree.Expressions.Applications
@@ -175,7 +175,7 @@ let checkApp
     // PIPE OPERATOR REDUCTION:
     // F# pipe operators (|>, <|) are syntactic sugar that CCS reduces during
     // type checking. This is a SEMANTIC TRANSFORM that belongs in CCS, not
-    // downstream in Firefly.
+    // downstream in Composer.
     //
     // Forward pipe: App(App(|>, x), f) -> App(f, [x])
     //   - The value x flows into function f

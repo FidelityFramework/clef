@@ -166,7 +166,7 @@ It resolves `array<int>` with native semantics (a `memref<?xT>` view) rather tha
 
 This transformation is systematic. CCS does not attempt to translate BCL code to native equivalents at runtime. Instead, it establishes a parallel type universe where native types are the primitive types, and BCL types do not exist.
 
-The path to CCS itself illustrates the engineering-driven nature of this work. The original approach attempted to intercept type resolution at the Baker phase in Firefly, substituting native types for BCL types after the fact. This proved fragile; the type system assumptions of the standard compiler leaked through in unexpected ways. The realization that a cleaner approach required modifying type resolution at its source, in the compiler services themselves, came from debugging these failures rather than from architectural foresight. Sometimes the right abstraction reveals itself only after the wrong ones have been tried.
+The path to CCS itself illustrates the engineering-driven nature of this work. The original approach attempted to intercept type resolution at the Baker phase in Composer, substituting native types for BCL types after the fact. This proved fragile; the type system assumptions of the standard compiler leaked through in unexpected ways. The realization that a cleaner approach required modifying type resolution at its source, in the compiler services themselves, came from debugging these failures rather than from architectural foresight. Sometimes the right abstraction reveals itself only after the wrong ones have been tried.
 
 Arriving at a generalized pattern for memory layout that adheres to the goals of the Fidelity framework while providing maximum degrees of freedom to target different processors is going to be a non-trivial challenge. We expect to start with some relatively straightforward hard-coded patterns and develop a proper abstraction pattern later. Our sense is that a plug-in system will need to be developed that will have some coupling to project-level declaration of the targeted hardware, but that story has yet to develop at this early stage. We are willing to live with some brittle implementations to help us target early wins and avoid over-engineering in the abstract.
 
@@ -448,7 +448,7 @@ The function bodies are placeholders. CCS recognizes `Unchecked.defaultof<T>` an
 
 ### 5.3 Platform-Specific Implementation
 
-The Firefly compiler's Alex layer provides platform-specific implementations:
+The Composer compiler's Alex layer provides platform-specific implementations:
 
 | Binding | Linux x86_64 | macOS arm64 | Windows x86_64 |
 |---------|--------------|-------------|----------------|
@@ -714,7 +714,7 @@ These specifications are verified once, at design time. The verified properties 
 
 Proofs enable rather than hinder optimization. When the compiler knows that bounds checks always succeed, it can eliminate them. When it knows that values never alias, it can reorder operations freely.
 
-The hypergraph representation in Firefly carries proof obligations as edges, allowing the optimization passes to reason about what transformations preserve correctness.
+The hypergraph representation in Composer carries proof obligations as edges, allowing the optimization passes to reason about what transformations preserve correctness.
 
 ## Part X: Migration Path
 

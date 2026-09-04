@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 /// Public API for Clef Compiler Service.
-/// Provides native type checking for Firefly consumption.
+/// Provides native type checking for Composer consumption.
 ///
 /// This module builds a unified SemanticGraph where:
 /// - Types are attached during construction (not post-hoc)
@@ -1872,12 +1872,9 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
             match target with
             | SynOpenDeclTarget.ModuleOrNamespace(longId, _) ->
                 let ns = longId.LongIdent |> List.map (fun id -> id.idText) |> String.concat "."
-                // Whitelist: FSharp.Native.* IS native compilation - always allow
-                // Blacklist: Other FSharp.*, System.*, Microsoft.* are BCL - block
-                if ns.StartsWith("FSharp.Native.") || ns = "FSharp.Native" then
-                    // Native compilation namespace - allow
-                    addOpen ns env
-                elif ns.StartsWith("System.") || ns.StartsWith("FSharp.") || ns.StartsWith("Microsoft.") then
+                // BCL namespaces are not available in native compilation: System.*, FSharp.*, Microsoft.*
+                // are blocked. (The former FSharp.Native.* whitelist was a pre-NTU vestige; nothing opens it.)
+                if ns.StartsWith("System.") || ns.StartsWith("FSharp.") || ns.StartsWith("Microsoft.") then
                     addNativeError DiagnosticCodes.FS8500_BclReferenceNotAllowed range
                         (sprintf "Cannot open namespace '%s'. BCL namespaces are not available in native compilation. Use intrinsics instead." ns) env
                     env

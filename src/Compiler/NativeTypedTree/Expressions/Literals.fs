@@ -1,6 +1,6 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
-/// Literal and constant handling for F# Native expression checking.
+/// Literal and constant handling for Clef expression checking.
 /// This module handles SynConst → NativeLiteral and type inference for literals,
 /// and interpolated string expression checking.
 module Clef.Compiler.NativeTypedTree.Expressions.Literals

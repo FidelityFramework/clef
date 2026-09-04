@@ -21,9 +21,20 @@ CORPUS=(
   "$ROOT/Composer/docs" "$ROOT/Composer/src" "$ROOT/Composer/samples" "$ROOT/Composer/tests"
   "$ROOT/BAREWire/docs"
   "$ROOT/ship-of-theseus"
+  # agent memory directories are a drift vector like any other doc
+  "$ROOT/clef/.serena" "$ROOT/Composer/.serena" "$ROOT/ClefAutoComplete/.serena" "$ROOT/BAREWire/.serena"
   "$ROOT/clef-lang-site/hugo/content"
   "$ROOT/mlir-plugins/README.md"
+  # Lattice: the editor witnesses the PSG exactly as Alex does; the forks are corpus, not exhibits
+  "$ROOT/lattice-analyzers" "$ROOT/lattice-vim" "$ROOT/lattice-vscode" "$ROOT/lattice-vscode-helpers" "$ROOT/ClefAutoComplete"
+  "$ROOT/ionide-native-analyzers" "$ROOT/Ionide-vim-fsnative" "$ROOT/FsNativeAutoComplete"
 )
+
+# Measurement, never failing: how much of each Lattice fork still addresses the F# Compiler Service
+# typed tree as its authority. The canonical position is that Lattice reads the saturated PSG through
+# CCS and computes nothing; this count is the size of that migration, reported per repo.
+FCS_SURFACE='FSharpChecker|ParseAndCheckFileInProject|FSharpSymbolUse|GetBackgroundCheckResults|FSharp\.Compiler\.(CodeAnalysis|Service|Symbols)'
+LATTICE_REPOS=( lattice-analyzers lattice-vim lattice-vscode lattice-vscode-helpers ClefAutoComplete )
 
 # Retired vocabulary. Each entry is an extended regex; the comment is the superseding design.
 RETIRED=(
@@ -44,10 +55,12 @@ RETIRED=(
   '(^|[^.[:alnum:]_])ptr<'                                 # representation chapters: links are bounded index values, values are memref views; no pointer notation (llvm.ptr</fir.ptr< in below-boundary listings excluded)
   'null pointer|= null :|is a null (pointer )?check'       # map/set/list: the empty collection is the static sentinel; isEmpty is a literal comparison
   'fat pointer|fat ptr|\{ptr: \*|ptr: \*u8|ptr: \*T|\{ptr, len\}'   # strings/arrays are memref views (buffer + dimension); no {ptr, len} header
+  'FNCS|F# Native|FSharp\.Native\.|fsnative|FSNAC|FsNative'      # pre-NTU/PSG naming, fully set aside: the product is Clef, the service is CCS, the universe is NTU, the graph is the PSG
+  '\bFirefly\b'                                            # the pre-rename Composer; same family
 )
 
 # A line that carries one of these markers is talking *about* the retired term, not using it.
-SUPERSESSION_MARKERS='retired|retires|superseded|supersession|SHALL NOT|earlier revision|earlier framing|prior art|no longer|not planned|Retired\)|is going away|was written as|dissolved|interim|proposal(.s)? instruction|not denotable|user-denotable|replaces|stripped|NOT null|no null|not a null|never null|non-null|FFI boundary|at the boundary|C boundary|the sentinel|sentinel node|CHandle|no fat|not a fat|not fat|not user-denotable|no raw pointer|no raw-pointer|compiler-internal|internal-only|pre-strip|below the witness boundary|backend leg'
+SUPERSESSION_MARKERS='retired|retires|superseded|supersession|SHALL NOT|earlier revision|earlier framing|prior art|no longer|not planned|Retired\)|is going away|was written as|dissolved|interim|proposal(.s)? instruction|not denotable|user-denotable|replaces|stripped|NOT null|no null|not a null|never null|non-null|FFI boundary|at the boundary|C boundary|the sentinel|sentinel node|CHandle|no fat|not a fat|not fat|set aside|pre-NTU|formerly|renamed from|supersed|since deleted|-era |re-labeled|relabeled|now Composer|formerly Firefly|Firefly, now|renamed to Composer|rename .Firefly|Firefly talk|~~Firefly~~|not user-denotable|no raw pointer|no raw-pointer|compiler-internal|internal-only|pre-strip|below the witness boundary|backend leg'
 
 # Files whose purpose is to record the retirement itself, or history that must stay verbatim.
 ALLOW_FILES=(
@@ -87,6 +100,18 @@ SCHEDULED=(
   'BAREWire/docs/::nativeptr'                                               # BAREWire's .NET-side implementation legitimately uses NativeInterop; the strip governs the cross-compiled Clef surface
   'clef-lang-site/hugo/content/blog/::nativeptr'                            # dated posts, each carrying an editor's note; not rewritten
   'clef-lang-site/hugo/content/docs/internals/farscape/::nativeptr'         # Farscape's generated-code sketches, bannered; move with the generator
+  'FsNativeAutoComplete/::'                                                 # superseded by ClefAutoComplete (same tree + 2 housekeeping commits); archive
+  'Ionide-vim-fsnative/::'                                                  # superseded by lattice-vim, pending confirmation that its last commit (Multi-LSP docs, MLIR navigation) carried over
+  'ClefAutoComplete/src/::FNCS'                                             # the fork's module/project names and HAVE_FNCS: the rename IS the first migration step; counted, not failing
+  'ClefAutoComplete/test/::FNCS'                                            # same
+  'ClefAutoComplete/benchmarks/::FNCS'                                      # same
+  'ClefAutoComplete/build/::FNCS'                                           # same
+  'lattice-vscode/src/::FNCS'                                               # client code still addressing the old server name; same migration step
+  'lattice-vscode/release/::FNCS'                                           # release notes, history
+  'Composer/docs/PRDs/::FNCS'                                               # implementation PRDs written under the old name; bannered elsewhere; move with the code
+  'clef-lang-site/hugo/content/blog/::FNCS'                                 # dated posts
+  'Composer/docs/PRDs/::Firefly'                                            # implementation PRDs under the old name
+  'ship-of-theseus/::Firefly'                                               # the talk that narrates the rename itself; history
   'clef/tests/::null'                                                       # inherited F# test corpus (null : T annotations)
   'Composer/docs/PRDs/::ptr<'                                               # implementation PRDs, bannered; move with the code
   'Composer/docs/PRDs/::null'                                               # same
@@ -100,7 +125,7 @@ SCHEDULED=(
   'clef/src/Compiler/Baker/Recipes/::ptr<'                                  # same
   'clef/src/Compiler/Baker/Recipes/Decomposition.fs::null'                  # same
 )
-ALLOW_DIRS=( '/archive/' '/history/' '/proof-trace/' '/bin/' '/obj/' '/intermediates/' '/node_modules/' '/.git/' '/build/' '/target/' )
+ALLOW_DIRS=( '/archive/' '/history/' '/proof-trace/' '/net10.0/' '/net9.0/' '/net8.0/' '/bin/' '/obj/' '/intermediates/' '/node_modules/' '/.git/' '/build/' '/target/' )
 
 is_allowed() {
   local f="$1"
@@ -139,6 +164,11 @@ for dir in "${CORPUS[@]}"; do
 done
 
 (( scheduled > 0 )) && echo "drift-gate: $scheduled line(s) in SCHEDULED code (retooling-plan deliverables; not failing)"
+for r in "${LATTICE_REPOS[@]}"; do
+  [[ -d "$ROOT/$r" ]] || continue
+  n=$(grep -rEc --include='*.fs' --include='*.fsi' --include='*.ts' "$FCS_SURFACE" "$ROOT/$r" 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
+  echo "fcs-surface: $r: $n reference(s) to the F# Compiler Service typed tree (migration size; not failing)"
+done
 if (( hits == 0 )); then
   echo "drift-gate: clean (no retired vocabulary in corpus)"
   exit 0

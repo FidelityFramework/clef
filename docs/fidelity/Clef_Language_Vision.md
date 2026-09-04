@@ -170,6 +170,6 @@ The fork between substrates happens at Alex (code generation). CCS, Baker, nanop
 | **Type system** | Native Type Universe (NTU) |
 | **Compiler frontend** | CCS (Keystone Compiler Services) |
 | **Code generation** | Alex (Elements / Patterns / Witnesses) |
-| **Backend orchestration** | Firefly |
+| **Backend orchestration** | Composer |
 | **Memory layout contracts** | BAREWire |
 | **Scheduling substrate** | Incremental<'T> |

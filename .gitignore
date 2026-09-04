@@ -173,3 +173,7 @@ tests/projects/CompilerCompat/**/obj/
 targets/
 target/
 deps/
+
+# fslex/fsyacc outputs (FsLexOutputFolder/FsYaccOutputFolder = $(TargetFramework)/)
+src/Compiler/net10.0/
+src/Compiler/net*/

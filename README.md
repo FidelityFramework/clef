@@ -80,65 +80,55 @@ actor Sensor (mailbox: Mailbox<Reading>) =
 ```
 Clef Source (.clef)
     ↓
-CCS (this repository)       ← Parsing, type checking, NTU resolution
+CCS (this repository)       ← parsing, type checking in the NTU, saturation of the semantic graph
     ↓
-Program Semantic Graph (PSG)
+Program Semantic Graph (PSG, a hypergraph: nodes, hyperedges, obligations, residence, layout)
     ↓
-Alex (MiddleEnd)            ← Nanopasses, optimization, target selection
+Composer / Alex             ← witnesses the saturated graph into MLIR (func, scf, arith, memref, index)
     ↓
-MLIR → LLVM
+MLIR → target pathway (LLVM, CIRCT, MLIR-AIE, JSIR)
     ↓
-Native Binary / FPGA Bitstream / NPU Microcode
+Native binary / FPGA bitstream / NPU binary / JavaScript module
 ```
 
-CCS hands a fully-typed tree to Composer. Every type is already native — NTU strings, value options, region-annotated pointers. Composer's nanopasses operate on resolved types, not BCL references.
+CCS hands Composer a **saturated graph**, not a typed tree. Every type is native (NTU strings as `memref`
+views, value options, region-typed handles), every layout is a literal settled at saturation, and every
+proof obligation is a graph citizen with its design-time discharge already recorded. Composer's middle
+end witnesses that structure; it does not compute, infer, or decide.
 
 ## What CCS Provides
 
-- **Parsing** — Full Clef syntax via the battle-tested FCS lexer and parser, extended for Clef constructs
-- **Native Type Resolution** — String literals, options, and arrays resolve to NTU types at the type-checking stage
-- **Memory Region Tracking** — Pointers carry region and access-kind annotations through the typed tree
-- **SRTP Resolution** — Statically resolved type parameters resolve against the Alloy witness hierarchy, not .NET method tables
-- **Typed Tree Output** — Complete `ClefExpr` output for downstream PSG construction in Composer
-- **LSP Services** — Symbol resolution, type information, and semantic classification consumed by Lattice
+- **Parsing** — full Clef syntax via the inherited FCS lexer and parser, extended for Clef constructs
+- **Native type resolution** — literals, options, arrays and strings resolve to NTU types at check time; dimensional types carry numeric format, memory region and access kind
+- **SRTP resolution** — statically resolved type parameters resolve against source-defined witnesses, not .NET method tables
+- **The Program Semantic Graph** — nodes and first-class hyperedges, saturated by Baker recipes: collections, closures, suspension, obligations
+- **Proof obligations as graph citizens** — born at saturation, emitted as an SMT-LIB2 ledger, dispatched to cvc5 at design time and re-derived from the artifact at build time
+- **Platform residence** — the platform description read structurally from the graph; buffers, spaces and layouts cited by name
+- **Editor facts** — everything Lattice surfaces (types, dimensions, residence, obligation status) is read from the graph, never recomputed
 
 ## What CCS Does Not Provide
 
-CCS is a focused frontend, not a complete compiler:
+CCS is a focused front end, not a complete compiler:
 
 - **No IL generation** — Clef does not target .NET IL
-- **No MSBuild integration** — Project files are `.fidproj`, handled by Composer
-- **No NuGet resolution** — Package management is ClefPak (`cpk`)
-- **No REPL** — Interactive scripting requires a managed runtime; Clef has none
-
-CCS stops at the typed tree. Code generation happens in Composer via Alex and MLIR.
+- **No MSBuild integration** — project files are `.fidproj`, loaded by CCS and driven by Composer
+- **No NuGet resolution** — package management is ClefPak (`cpk`)
+- **No REPL** — interactive scripting requires a managed runtime; Clef has none
+- **No code generation** — that is Composer's, through Alex and MLIR
 
 ## Getting Started
 
-CCS is consumed as a library by Composer:
+CCS builds inside Composer's solution as a project reference; it is not a standalone .NET library, and
+there is no separate CCS CLI. Build and run samples through Composer:
 
-```clef
-// Composer uses CCS for parsing and type checking
-let checker = CCSChecker.create ()
-let results = checker.parseAndCheck sourceFiles config
-
-// Results contain the typed tree with NTU type resolution
-let typedTree = results.typedTree
-let srtpResolutions = results.srtpResolutions
+```
+dotnet build /home/hhh/repos/Composer/src/Composer.fsproj
+dotnet <Composer>/src/bin/Debug/net10.0/Composer.dll compile samples/RoundTrip/RoundTrip.fidproj
 ```
 
-For most use cases, you will interact with CCS through Composer rather than directly.
-
-## Implementation Status
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| Phase 1 | Structural pruning and namespace transformation | In Progress |
-| Phase 2 | Native Type Universe (NTU) integration | Pending |
-| Phase 3 | SRTP resolution against Alloy witnesses | Pending |
-| Phase 4 | Memory region and access-kind annotations | Future |
-
-See [docs/fidelity/CCS_Phase1_Transformation_Plan.md](docs/fidelity/CCS_Phase1_Transformation_Plan.md) for detailed phase status.
+The design of record for the graph, its obligations and the retirement of earlier designs is
+[docs/fidelity/phg/](docs/fidelity/phg/); run [`drift-gate.sh`](docs/fidelity/phg/drift-gate.sh)
+before proposing a documentation change anywhere in the corpus.
 
 ## Documentation
 

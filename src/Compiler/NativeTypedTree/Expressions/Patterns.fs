@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
-/// Pattern checking for F# Native.
+/// Pattern checking for Clef.
 /// Handles: Pattern matching cases (Const, Wild, Named, Typed, Tuple, etc.)
 module Clef.Compiler.NativeTypedTree.Expressions.Patterns
 

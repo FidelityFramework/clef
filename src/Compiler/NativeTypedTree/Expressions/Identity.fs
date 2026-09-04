@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
-/// Unified identifier resolution for F# Native.
+/// Unified identifier resolution for Clef.
 /// This module provides ONE code path for both SynExpr.Ident and SynExpr.LongIdent,
 /// eliminating the duplicate resolution logic that existed before restructuring.
 ///

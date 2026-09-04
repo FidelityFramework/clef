@@ -29,7 +29,7 @@ module ArtifactId =
     let [<Literal>] SaturationRecipes = 4  // Baker saturation recipes
     let [<Literal>] Psg2 = 5               // Final saturated PSG
 
-    // Alex artifacts (reserved for Firefly side)
+    // Alex artifacts (reserved for Composer side)
     let [<Literal>] Coeffects = 6          // Coeffect analysis
     let [<Literal>] Mlir = 7               // MLIR output
     let [<Literal>] Llvm = 8               // LLVM IR
