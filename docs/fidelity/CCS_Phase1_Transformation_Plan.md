@@ -135,7 +135,7 @@ From the strategic document section "What Moves Into CCS":
 | `string` | System.String (UTF-16, GC) | UTF-8 encoded, deterministic lifetime |
 | `option<'T>` | Reference type, heap allocated | Value type, zero-cost None |
 | `array<'T>` | System.Array (GC, boxed elements) | Contiguous memory, compile-time or runtime size |
-| `nativeptr<'T>` | Bare pointer, no safety | Region-tracked, access-kind constrained |
+| `nativeptr<'T>` (F#; not denotable in Clef) | Bare pointer, no safety | Region-tracked, access-kind constrained |
 | Inline semantics | Requires explicit attributes | Default behavior |
 | Measure types for non-numerics | UMX workaround patterns | First-class support |
 | Memory region measures | Not expressible | First-class support |
@@ -852,7 +852,7 @@ let customerId: string<customerId> = %"cust-123"
 let customerId: string<customerId> = "cust-123"  // No % operator needed
 
 // Memory regions and access kinds as measures
-let ptr: nativeptr<byte, sram, readWrite> = ...
+let ptr: Ptr<byte, Sram, ReadWrite> = ...
 ```
 
 **User Experience**: Measures become first-class on all types, not just numeric. The UMX workarounds become unnecessary.

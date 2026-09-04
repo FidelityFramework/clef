@@ -320,7 +320,7 @@ Platform bindings use module convention (no DllImport):
 
 ```fsharp
 module Platform.Bindings =
-    let writeBytes (fd: int) (buf: nativeptr<byte>) (count: int) : int =
+    let writeBytes (fd: int) (buf: array<byte, 'n, Stack>) (count: int) : int =
         Unchecked.defaultof<int>  // Placeholder - Alex provides implementation
 ```
 
@@ -591,9 +591,9 @@ NORMATIVE: Platform bindings SHALL be declared in `Platform.Bindings` modules:
 
 ```fsharp
 module Platform.Bindings =
-    let writeBytes (fd: int) (buffer: nativeptr<byte>) (count: int) : int =
+    let writeBytes (fd: int) (buffer: array<byte, 'n, Stack>) (count: int) : int =
         Unchecked.defaultof<int>
-    let readBytes (fd: int) (buffer: nativeptr<byte>) (maxCount: int) : int =
+    let readBytes (fd: int) (buffer: array<byte, 'n, Stack>) (maxCount: int) : int =
         Unchecked.defaultof<int>
     let getCurrentTicks () : int64 =
         Unchecked.defaultof<int64>
@@ -698,7 +698,7 @@ type MessageHeader = {
 
 // BAREWire-compatible zero-copy deserialization
 let parseHeader (ptr: Ptr<byte, sram, readOnly>) : MessageHeader =
-    NativePtr.read<MessageHeader> (NativePtr.cast ptr)
+    BAREWire.view<MessageHeader> ptr   // zero-copy: a typed view over the declared layout; access kind preserved
 ```
 
 ---
@@ -864,19 +864,15 @@ while count < 10 do
 
 **Analyze Then Witness Pattern**: The `BeforeRegion` hook for a loop's GuardRegion analyzes the body subtree to find Set nodes (mutable assignments), then pre-binds iter_args before body traversal. This ensures operations in both guard and body naturally use the rebound SSA names.
 
-### 12.6 Future Direction: DCont/Inet Dialects
+### 12.6 Suspension and Nets on the PSG
 
-The SCF dialect is a stepping stone. The full Fidelity compilation strategy involves:
+The SCF dialect is not a stepping stone; it is the witnessed form. Both halves of the compilation strategy are hypergraph structure settled by Baker at saturation:
 
-1. **DCont (Delimited Continuations)** - For sequential effects (async, state monads)
-   - Explicit continuation capture with `dcont.shift`, `dcont.resume`, `dcont.reset`
-   - Zero-cost async through stack-based continuation management
+1. **Delimited continuations** — for sequential effects (async, state, actor receive). The suspension recipe splits a computation-expression region at its cuts into segments, enumerates each cut's live-across set into a frame, and records a delimiter edge from every cut to its builder extent. Witnessed as a discriminant, a byte frame, and `scf.index_switch`.
 
-2. **Inet (Interaction Nets)** - For parallel pure computation (queries, list comprehensions)
-   - Massive parallelism through simultaneous graph reduction
-   - Direct compilation to SIMD/GPU operations
+2. **Interaction nets** — for parallel pure computation (queries, comprehensions). The net's rule system is hyperedge structure over enumerated source sets; its parallelism is a consequence of that structure and is witnessed as data flow.
 
-The computation expression builder determines which pattern applies. Sequential patterns with dependencies flow through DCont; pure parallel patterns flow through Inet.
+The computation-expression builder's extent determines the region; saturation determines which structure applies and where the effect boundary splits them. No continuation or net dialect exists above the witness boundary (spec: `program-hypergraph.md`, `dcont-representation.md`; Composer: `Thin_Middle_End_Design.md`).
 
 ---
 

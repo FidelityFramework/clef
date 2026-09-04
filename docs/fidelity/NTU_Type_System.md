@@ -51,7 +51,7 @@ type NTUKind =
 | `uint64` | NTUuint64 | Fixed 64-bit unsigned |
 | `nativeint` | NTUnint | Pointer-sized signed |
 | `unativeint` | NTUunint | Pointer-sized unsigned |
-| `nativeptr<'T>` | NTUptr | Pointer |
+| `Ptr<'T, 'Region, 'Access>` | NTUptr | Pointer-shaped handle; `nativeptr<'T>` is not denotable (`TNativePtr` is compiler-internal) |
 | `float32` / `single` | NTUfloat32 | 32-bit float |
 | `float` / `double` | NTUfloat64 | 64-bit float |
 

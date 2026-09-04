@@ -135,11 +135,8 @@ In Clef, `string` has native semantics - internally a fat pointer struct contain
 ```fsharp
 // Internal representation of string in CCS
 // (Users just write "string" - this is transparent)
-[<Struct>]
-type internal StringRepr = {
-    Pointer: nativeptr<byte>
-    Length: int
-}
+// string ≡ memref<?xi8>: the buffer is the string and its length is the memref's
+// dimension. There is no fat-pointer struct and no raw pointer.
 ```
 
 This representation differs fundamentally from `System.String`:
@@ -434,10 +431,10 @@ Platform bindings in Clef follow a module naming convention:
 
 ```fsharp
 module Platform.Bindings =
-    let writeBytes (fd: int) (buffer: nativeptr<byte>) (count: int) : int =
+    let writeBytes (fd: int) (buffer: array<byte, 'n, Stack>) (count: int) : int =
         Unchecked.defaultof<int>
 
-    let readBytes (fd: int) (buffer: nativeptr<byte>) (maxCount: int) : int =
+    let readBytes (fd: int) (buffer: array<byte, 'n, Stack>) (maxCount: int) : int =
         Unchecked.defaultof<int>
 
     let getCurrentTicks () : int64 =
@@ -541,7 +538,7 @@ Platform bindings are marked as `Unsafe`:
 ```fsharp
 module Platform.Bindings =
     // Coeffect: Unsafe
-    let writeBytes (fd: int) (buffer: nativeptr<byte>) (count: int) : int = ...
+    let writeBytes (fd: int) (buffer: array<byte, 'n, Stack>) (count: int) : int = ...
 ```
 
 Functions that call unsafe operations must be in an unsafe context or explicitly declare the `Unsafe` coeffect:

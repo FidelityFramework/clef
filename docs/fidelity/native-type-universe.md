@@ -277,7 +277,7 @@ Tuple: int * string (64-bit platform)
 | **Allocation** | Stack by default, arena when escaping |
 | **Alignment** | Natural alignment (largest field alignment) |
 | **Nesting** | `(a * b) * c` ≠ `a * (b * c)` (different memory layouts) |
-| **MLIR** | `tuple<index, !fidelity.str>` |
+| **MLIR** | `tuple<index, memref<?xi8>>` |
 
 **OCaml Comparison**:
 
@@ -334,7 +334,7 @@ Record: Person (64-bit platform)
 | **Field order** | Declaration order determines memory layout |
 | **Allocation** | Stack by default, arena when escaping |
 | **Alignment** | Natural alignment per field, struct alignment = max field alignment |
-| **MLIR** | `!fidelity.record<"Person", name: !fidelity.str, age: index>` |
+| **MLIR** | `memref<Exi8>` — record layout settled at saturation, fields at literal offsets (`name` a `memref<?xi8>` view, `age` an `index`) |
 
 **OCaml Comparison**:
 
@@ -416,7 +416,7 @@ Union: Shape (64-bit platform)
 | **Payload size** | Size of largest variant (all variants same size) |
 | **Payload alignment** | Max alignment of any variant's fields |
 | **Total alignment** | Max(tag alignment, payload alignment) |
-| **MLIR** | `!fidelity.union<"Shape", tag: i8, payload: ...>` |
+| **MLIR** | `memref<Exi8>` — tag at `[0]`, payload at its literal offset ([Discriminated Union Representation](discriminated-union-representation.md)) |
 
 **OCaml Comparison**:
 
@@ -547,7 +547,7 @@ string
 | **Encoding** | UTF-8 (NOT UTF-16) |
 | **Length semantics** | Byte count, not character count |
 | **Empty string** | `{ ptr: valid, len: 0 }` - NOT null |
-| **MLIR** | `!fidelity.str` or `tuple<ptr<i8>, index>` |
+| **MLIR** | `memref<?xi8>` or `tuple<ptr<i8>, index>` |
 
 **Why UTF-8?**
 1. **Native interop** - Rust, C, and most systems APIs use UTF-8
@@ -598,7 +598,7 @@ array<'T>
 | **Element layout** | Contiguous, naturally aligned |
 | **Bounds checking** | Always (no unsafe indexing by default) |
 | **Empty array** | `{ ptr: valid, len: 0 }` - NOT null |
-| **MLIR** | `!fidelity.array<T>` or `tuple<ptr<T>, index>` |
+| **MLIR** | `memref<?xT>` |
 
 **Monomorphized Layout**: Unlike uniform representations that box generic elements, Clef arrays are monomorphized - `array<int>` stores unboxed integers contiguously. Sequential access is cache-optimal (8 `int64` or 16 `int32` values per 64-byte cache line).
 
@@ -671,7 +671,7 @@ option<'T>  (voption semantics)
 | **Tag values** | `None` = 0, `Some` = 1 |
 | **Stack allocated** | Always (never heap) |
 | **Null-freedom** | `None` is tag 0, NOT null pointer |
-| **MLIR** | `!fidelity.option<T>` |
+| **MLIR** | `memref<Exi8>` — `{tag, payload}`, stack-placed ([Option Operations](option-operations-representation.md)) |
 
 **Stack-Only Guarantee**: Unlike heap-allocated options (cf. OCaml blocks, .NET reference types), Clef options are always stack-allocated with no GC involvement. This enables predictable memory layout for embedded targets and eliminates heap fragmentation from frequent option use.
 
@@ -718,7 +718,7 @@ Result<'T, 'E>
 |----------|-------|
 | **Tag values** | `Ok` = 0, `Error` = 1 |
 | **Stack allocated** | Always |
-| **MLIR** | `!fidelity.result<T, E>` |
+| **MLIR** | `memref<Exi8>` — `{tag, payload}` as a two-case union |
 
 **Stack Allocation**: Like `option`, Result is always stack-allocated with zero heap overhead.
 
@@ -759,7 +759,7 @@ list<'T>
 | **Empty list** | Special tag, no allocation |
 | **Immutable** | Always (structural sharing) |
 | **Allocation** | Arena or stack (not GC heap) |
-| **MLIR** | `!fidelity.list<T>` |
+| **MLIR** | `index` — link to an arena-placed cons cell ([List Operations](list-operations-representation.md)) |
 
 **Arena Allocation**: List cons cells are allocated in arenas (not GC heap), providing better cache locality and batch deallocation at scope end. The immutable structure enables structural sharing as in OCaml.
 
@@ -817,7 +817,7 @@ Closure
 |----------|-------|
 | **Environment** | Struct containing captured values |
 | **Invocation** | `fn_ptr(env, args...)` |
-| **MLIR** | `!fidelity.closure<(args) -> ret, env>` |
+| **MLIR** | `(fn, env)`: a function value `(memref<Exi8>, args...) -> ret` and `memref<Exi8>` ([Closure Representation §6.3](closure-representation.md)) |
 
 **Closure Allocation**: Closures are allocated on stack or in arenas (not GC heap). Small closures (<64 bytes) fit within one cache line for efficient invocation.
 
@@ -880,7 +880,7 @@ ref<'T>
 |----------|-------|
 | **Representation** | Single-field mutable record |
 | **Allocation** | Stack or arena (not GC) |
-| **MLIR** | `!fidelity.ref<T>` or `ptr<T>` |
+| **MLIR** | `memref<1xT>` |
 
 **Stack/Arena Allocation**: Refs are allocated on stack or in arenas (not GC heap), eliminating allocation pressure in loops and providing predictable memory behavior for embedded targets.
 
@@ -1135,12 +1135,12 @@ val it : int = 8  // Reflects target, not host
 | `int64` | `i64` |
 | `float` | `f64` |
 | `float32` | `f32` |
-| `string` | `!fidelity.str` |
-| `option<'T>` | `!fidelity.option<T>` |
+| `string` | `memref<?xi8>` |
+| `option<'T>` | `memref<Exi8>` — `{tag, payload}`, stack-placed ([Option Operations](option-operations-representation.md)) |
 | `'a * 'b` | `tuple<A, B>` |
-| Record | `!fidelity.record<...>` |
-| DU | `!fidelity.union<...>` |
-| `'a -> 'b` | `!fidelity.fn<A, B>` or direct `(A) -> B` |
+| Record | `memref<Exi8>` (settled layout) |
+| DU | `memref<Exi8>` (`{tag, payload}`) |
+| `'a -> 'b` | `(A) -> B` — a `func` value |
 
 ---
 
@@ -1244,7 +1244,7 @@ This tagging allows integers to remain "unboxed" (stored directly without heap a
 |------|----------|-------|
 | `voption<'T>` | FSharp.Core | THE underlying option implementation |
 | `nativeint` | FSharp.Core | Platform-sized integer |
-| `nativeptr<'T>` | FSharp.NativePtr | Native pointer operations |
+| `Ptr<'T, 'Region, 'Access>` (`nativeptr<'T>` not denotable) | `Ptr.*` | Native pointer operations |
 | `Span<'T>` | FSharp.Core | Contiguous memory view |
 
 ### Why Shadow Types Were Created (Historical Context)
