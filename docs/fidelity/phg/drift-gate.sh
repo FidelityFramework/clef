@@ -78,6 +78,8 @@ ALLOW_FILES=(
   'clef/docs/fidelity/phg/drift-gate.sh'
   'clef/docs/fidelity/phg/Lattice_Consumer_Contract.md'
   'clef/docs/fidelity/phg/Dimensional_Vetting_Plan.md'
+  'clef/docs/fidelity/phg/Dimensional_Step1_2_Design.md'
+  'clef/docs/fidelity/phg/Types_As_Ranges_Position.md'
   'Composer/docs/Witness_Boundary_Audit.md'
   # the superseding designs: they quote the retired vocabulary in order to retire it,
   # and they define the one place it may survive (below the boundary, as transliteration)
