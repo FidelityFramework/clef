@@ -269,7 +269,7 @@ let buffer: Ptr<byte, sram, readWrite> = ...
 
 // This is a compile error: cannot pass sram pointer where peripheral is expected
 readPeripheral statusReg  // OK
-readPeripheral buffer     // Error FS8003: Memory region mismatch
+readPeripheral buffer     // Error CCS8100: Region mismatch
 ```
 
 The runtime representation of both pointers is identical: a single machine word containing an address. The type parameters carry semantic information that the compiler uses for safety checking but that vanishes in the generated code.
@@ -319,16 +319,16 @@ let inputReg: Ptr<uint32, peripheral, readOnly> = ...
 let outputReg: Ptr<uint32, peripheral, writeOnly> = ...
 
 // OK: reading a read-only register
-let status = !inputReg
+let status = Ptr.read inputReg
 
-// Error FS8002: Cannot write read-only pointer
-inputReg := 42u
+// Error CCS8020: Cannot write to ReadOnly pointer
+Ptr.write inputReg 42u
 
-// Error FS8001: Cannot read write-only pointer
-let value = !outputReg
+// Error CCS8021: Cannot read from WriteOnly pointer
+let value = Ptr.read outputReg
 
 // OK: writing a write-only register
-outputReg := 42u
+Ptr.write outputReg 42u
 ```
 
 ### 3.5 Zero Runtime Overhead

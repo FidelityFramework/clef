@@ -89,6 +89,10 @@ module DiagnosticCodes =
     let FS0001_GenericError = "FS0001"
     let FS0002_GenericWarning = "FS0002"
 
+    // CCS series, type system, width and seals (CCS8000-CCS8099):
+    // docs/fidelity/phg/Dimensional_Step1_2_Design.md (f); allocation rule in the Plan's D3.
+    let CCS8018_UnsupportedLiteralSuffix = "CCS8018"
+
 //-------------------------------------------------------------------------
 // Type Environment
 //-------------------------------------------------------------------------

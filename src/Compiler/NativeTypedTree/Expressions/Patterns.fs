@@ -29,8 +29,13 @@ let rec checkPattern
     : Pattern * (string * NativeType) list =
 
     match pat with
-    | SynPat.Const(constant, _) ->
-        (Pattern.Const(constToLiteral constant), [])
+    | SynPat.Const(constant, constRange) ->
+        match checkConst constant with
+        | Result.Ok (_, literal) -> (Pattern.Const literal, [])
+        | Result.Error msg ->
+            // CCS8018 (plan L-3); the diagnostic is an Error, so nothing runs on the wildcard.
+            addUnsupportedLiteralSuffix constRange msg env
+            (Pattern.Wildcard, [])  // Wildcard for error recovery
 
     | SynPat.Wild _ ->
         (Pattern.Wildcard, [])

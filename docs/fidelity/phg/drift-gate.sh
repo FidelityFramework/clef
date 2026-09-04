@@ -64,6 +64,7 @@ RETIRED=(
   '!fir\.'                                                 # a custom type dialect; the witnessed vocabulary is five dialects and a string is memref<?xi8>
   '[Ii]nline-by-default|inlined by default|fsil default|\(fsil\)'   # inline-by-default was tried and reverted (PSG explosion); inline is explicit and semantic
   'resolved by Alex|erased metadata|Alex resolves dimensional'    # dimensions never erase; CCS resolves them at saturation against the platform description; Alex reads
+  '\bFS[0-9]{4}\b'                                              # decision D3 (2026-09-04): every FS-prefixed diagnostic retires to the CCS series; the mapping table lands with hardening step 4
 )
 
 # A line that carries one of these markers is talking *about* the retired term, not using it.
@@ -80,6 +81,9 @@ ALLOW_FILES=(
   'clef/docs/fidelity/phg/Dimensional_Vetting_Plan.md'
   'clef/docs/fidelity/phg/Dimensional_Step1_2_Design.md'
   'clef/docs/fidelity/phg/Types_As_Ranges_Position.md'
+  'clef/docs/fidelity/phg/Horizon_Requirements.md'
+  'clef/docs/fidelity/phg/Dimensional_Steps_1_2_Sequence.md'
+  'ship-of-theseus/scaffold/demo-runbook.md'                      # names the real F# compiler's codes in an F# build runbook
   'Composer/docs/Witness_Boundary_Audit.md'
   # the superseding designs: they quote the retired vocabulary in order to retire it,
   # and they define the one place it may survive (below the boundary, as transliteration)
@@ -92,6 +96,13 @@ ALLOW_FILES=(
 # Each row is a Closure_Retooling_Plan / Phase 3 deliverable. Reported, never failing; remove a
 # row when its replacement lands, and the gate becomes an error for that file automatically.
 SCHEDULED=(
+  'BAREWire/docs::FS[0-9]{4}'                               # BAREWire's own FS9xxx analyzer codes retire to CCS with the step-4 table
+  'ClefAutoComplete::FS[0-9]{4}'                             # FCS fork: its codes are the F# compiler's; disposition is archive (Lattice_Consumer_Contract.md)
+  'clef/src::\bFS[0-9]{4}\b'                                    # hardening step 4: the compiler still emits FS codes
+  'clef-lang-spec/spec/lexical-filtering.md::\bFS[0-9]{4}\b'    # the offside example moves with the step-4 table
+  'clef/docs/diagnostics.md::\bFS[0-9]{4}\b'                    # step 4
+  'clef/docs/fidelity/ccs-specification.md::\bFS[0-9]{4}\b'     # retirement of the parallel spec is pending the owner's word
+  'Composer/docs/WebView_Build_Integration.md::\bFS[0-9]{4}\b'  # step 4
   # 'path-substring::pattern-substring' — the row applies only to lines matching that retired pattern;
   # an empty pattern applies to every retired pattern in that path.
   'clef/src/Compiler/PSGSaturation/SemanticGraph/Core.fs::'                 # SeqSaturation two-shape recognizer → suspension recipe (spec seq §6)

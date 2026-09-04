@@ -157,8 +157,15 @@ let parseString (source: string) (fileName: string) (options: ParseOptions) : Pa
         // Set up position info with the file name
         resetLexbufPos fileName lexbuf
 
-        // Create the diagnostics logger for capturing errors
+        // Create the diagnostics logger for capturing errors, and install it, with the Parse phase,
+        // for the duration of the parse: the parser reports through the thread-installed logger
+        // (ParseHelpers.reportParseErrorAt is `errorR`), not through the logger handed to the lexer,
+        // so without this installation every parse error went to the discarding default logger and
+        // a damaged tree reached the checker with no diagnostic (found 2026-09-04 by the dimensional
+        // vetting harness: a syntax error surfaced downstream as "No declaration roots found in PSG").
         let diagnosticsLogger = CapturingDiagnosticsLogger("parseString")
+        use _installedLogger = UseDiagnosticsLogger diagnosticsLogger
+        use _installedPhase = UseBuildPhase BuildPhase.Parse
 
         // Create lexer arguments
         let resourceManager = LexResourceManager()
@@ -199,12 +206,26 @@ let parseString (source: string) (fileName: string) (options: ParseOptions) : Pa
         let implFileInput = implFileToInput fileName parsedImplFile
         let parsedInput = ParsedInput.ImplFile implFileInput
 
-        // Check for diagnostics - convert any errors
+        // Every error-severity diagnostic the parse logged is a parse failure. The message is
+        // located where the exception carries a range; the parser family takes its CCS codes with
+        // the step-4 mapping table (Dimensional_Vetting_Plan.md D3), so no code is minted here.
+        let located (m: range) (text: string) =
+            sprintf "%s(%d,%d): %s" m.FileName m.StartLine (m.StartColumn + 1) text
+        let rec render (exn: exn) =
+            match exn with
+            | DiagnosticWithText(_, text, m) -> located m text
+            | Clef.Compiler.ParseHelpers.IndentationProblem(text, m) -> located m text
+            | Clef.Compiler.ParseHelpers.SyntaxError(_, m) -> located m "Syntax error: unexpected token"
+            | WrappedError(inner, m) ->
+                match inner with
+                | DiagnosticWithText _ | Clef.Compiler.ParseHelpers.IndentationProblem _ | Clef.Compiler.ParseHelpers.SyntaxError _ -> render inner
+                | _ -> located m inner.Message
+            | _ -> exn.Message
         let errors =
             diagnosticsLogger.Diagnostics
             |> List.choose (fun diag ->
-                if diag.Phase = BuildPhase.Parse then
-                    Some (sprintf "%s" (diag.Exception.Message))
+                if diag.Severity = Clef.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error then
+                    Some (render diag.Exception)
                 else
                     None)
 
@@ -678,9 +699,13 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // Literals
     //---------------------------------------------------------------------
     | SynExpr.Const(constant, _) ->
-        let ty = Literals.typeOfConst constant
-        let litVal = Literals.constToLiteral constant
-        builder.Create(SemanticKind.Literal litVal, ty, range)
+        match Literals.checkConst constant with
+        | Result.Ok (ty, litVal) ->
+            builder.Create(SemanticKind.Literal litVal, ty, range)
+        | Result.Error msg ->
+            // CCS8018 (plan L-3): the constant names no representation; an error node, not a type.
+            Literals.addUnsupportedLiteralSuffix syn.Range msg env
+            builder.Create(SemanticKind.Error msg, NativeType.TError msg, range)
 
     //---------------------------------------------------------------------
     // Parenthesized expressions (transparent)

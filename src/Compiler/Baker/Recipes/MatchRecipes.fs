@@ -544,7 +544,6 @@ and private literalToType (lit: NativeLiteral) : NativeType =
     | NativeLiteral.Decimal _ -> Types.decimalType
     | NativeLiteral.ByteArray _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint8Type])
     | NativeLiteral.UInt16Array _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint16Type])
-    | NativeLiteral.BigInt _ -> Types.int64Type  // BigInt maps to int64 for now
 
 /// Get the type from a pattern (uses literalToType for Const patterns)
 and private getPatternType (pattern: Pattern) : NativeType =

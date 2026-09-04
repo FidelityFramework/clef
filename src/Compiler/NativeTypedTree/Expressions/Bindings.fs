@@ -229,7 +229,10 @@ let checkBinding
     let literalValue =
         if isLiteral then
             match expr with
-            | SynExpr.Const(constant, _) -> Some (Literals.constToLiteral constant)
+            | SynExpr.Const(constant, _) ->
+                match Literals.checkConst constant with
+                | Result.Ok (_, literal) -> Some literal
+                | Result.Error _ -> None  // CCS8018 is reported where the body is checked below
             | _ -> None  // Non-constant [<Literal>] - will be caught by type checker
         else
             None

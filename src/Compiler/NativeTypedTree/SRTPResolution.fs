@@ -288,19 +288,10 @@ let private hasUnboundTypeVars (ty: NativeType) : bool =
 //-------------------------------------------------------------------------
 // NTU Conversion Resolution (placed before tryResolve due to F# ordering)
 //
-// Conversions follow the F# syntax: `float x`, `int y`, `string z`
-// SRTP resolution determines the operation based on source type.
-//
-// See: clef-lang-spec/spec/drafts/NTU_Conversion_Model.md
+// Conversions follow the F# syntax: `float x`, `int y`, `string z`.
+// Resolution names the witness for the source type; the typing of the
+// conversion itself is the front end's (plan L-4, step 3), not decided here.
 //-------------------------------------------------------------------------
-
-/// Conversion category determines semantics and MLIR operation
-type ConversionCategory =
-    | Widening      // Safe, no data loss (int→int64, int→float)
-    | Narrowing     // May truncate (int64→int32, float→int)
-    | CrossFamily   // Different representations (large int↔float)
-    | Formatting    // To string
-    | Parsing       // From string
 
 /// Get the target type for a conversion function name
 let private getConversionTargetType (funcName: string) : NativeType option =
@@ -323,83 +314,12 @@ let private getConversionTargetType (funcName: string) : NativeType option =
     | "string" -> Some Types.stringType
     | _ -> None
 
-/// Check if a type is signed (helper using NTUKind)
-let private isSignedType (ty: NativeType) : bool =
-    match ty with
-    | NativeType.TApp(tc, []) ->
-        match tc.NTUKind with
-        | Some kind -> NTUKind.isSigned kind
-        | None -> false
-    | _ -> false
-
-/// Check if a type is string
-let private isStringType (ty: NativeType) : bool =
-    match ty with
-    | NativeType.TApp(tc, _) -> tc.Name = "string"
-    | _ -> false
-
-/// Determine conversion category based on source and target types
-let private categorizeConversion (sourceType: NativeType) (targetType: NativeType) : ConversionCategory =
-    match sourceType, targetType with
-    // Formatting: any → string
-    | _, t when isStringType t -> Formatting
-
-    // Parsing: string → any
-    | s, _ when isStringType s -> Parsing
-
-    // Int → Float (widening, may lose precision for large ints)
-    | s, t when Types.isIntegerType s && Types.isFloatType t -> Widening
-
-    // Float → Int (narrowing, truncates fractional part)
-    | s, t when Types.isFloatType s && Types.isIntegerType t -> Narrowing
-
-    // Integer to integer - simplified categorization
-    | s, t when Types.isIntegerType s && Types.isIntegerType t -> Widening
-
-    // Float to float
-    | s, t when Types.isFloatType s && Types.isFloatType t -> Widening
-
-    // Default to narrowing (conservative)
-    | _ -> Narrowing
-
-/// Get the MLIR operation for a conversion
-let private getConversionMLIROp (sourceType: NativeType) (targetType: NativeType) : string =
-    match sourceType, targetType with
-    // Int → Float
-    | s, t when Types.isIntegerType s && Types.isFloatType t ->
-        if isSignedType s then "arith.sitofp" else "arith.uitofp"
-
-    // Float → Int
-    | s, t when Types.isFloatType s && Types.isIntegerType t ->
-        if isSignedType t then "arith.fptosi" else "arith.fptoui"
-
-    // Int → Int (widening/narrowing)
-    | s, t when Types.isIntegerType s && Types.isIntegerType t ->
-        if isSignedType s then "arith.extsi" else "arith.extui"
-        // Note: for narrowing, should be "arith.trunci" - need size comparison
-
-    // Float → Float
-    | s, t when Types.isFloatType s && Types.isFloatType t ->
-        "arith.extf"  // or truncf depending on direction
-
-    // Formatting
-    | _, t when isStringType t -> "fidelity.format"
-
-    // Parsing
-    | s, _ when isStringType s -> "fidelity.parse"
-
-    // Unknown
-    | _ -> "fidelity.convert"
-
 /// Resolve a conversion function application
 /// Returns WitnessResolution if valid, None if invalid conversion
 let private resolveConversion (funcName: string) (sourceType: NativeType) : WitnessResolution option =
     match getConversionTargetType funcName with
     | None -> None  // Not a conversion function
-    | Some targetType ->
-        let _category = categorizeConversion sourceType targetType
-        let _mlirOp = getConversionMLIROp sourceType targetType
-
+    | Some _ ->
         // Create internal name following F* convention
         let sourceTypeName =
             match sourceType with
