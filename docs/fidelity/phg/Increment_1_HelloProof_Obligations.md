@@ -166,19 +166,42 @@ is the owner's act.
 - **The ledger description changed** from "coeffect" to "graph citizens". The
   word was wrong.
 
+## Also landed — the two findings from the handoff
+
+**The reified attribute (PHG §2.4b).** Every obligation hyperedge is projected
+onto its source nodes at saturation as `Obligation.Anchors` (form a, derived
+from $F$ in the pass — no recipe annotates by hand, so a node constrained by
+several obligations carries all of them). `LiteralWitness` reads it as codata
+and `GlobalString` reifies it (form b):
+
+```
+memref.global "private" constant @str_4116459851 : memref<6xi8> = dense<[...]>
+    {clef.obligations = ["storage_hello", "view_hello", "sentinel_hello", "layout_user_strings"]}
+```
+
+The artifact now carries the correspondence explicitly. The five-way joint claim
+sits on all five globals; a literal that is a `concat2` operand also carries
+that site's anchor, because it is in the hyperedge's source set. The extern
+boundary's strings (`dlopen` path, `dlsym` symbol) carry none — they are
+synthesized below the graph, a recorded gap at the FFI fence
+(`Witness_Boundary_Audit` §4g; C-01 §6.7). The `concat2` site's own
+alloc/memcpy chain does not yet carry its anchor; that is `StringPatterns`'
+work and the harness already records its artifact extraction as pending.
+
+**`cf` / `vector` removed.** `Thin_Middle_End_Design` §22 fixes the witnessed
+vocabulary at `func, memref, arith, scf, index`. `cf` is unstructured control
+flow — what `scf` lowers *to* below the boundary — and `Delimited_Continuations`
+§7 chooses `scf.index_switch` for the discriminant. `CFElements`,
+`VectorElements`, the `CFOp`/`VectorOp` unions and the one dead `pSwitch`
+pattern (no callers) are gone. Not a side quest: the design decided it.
+
 ## Next, in order
 
-1. **The reified-attribute form** (PHG §2.4 b). The witness that emits
-   `memref.global @str_hello` should carry `{clef.obligations = ["storage_hello",
-   "view_hello", "sentinel_hello"]}` on the op, so the artifact-side re-check
-   finds each obligation on the structure it constrains rather than by slug. That
-   is the transport rule's second carrier and the honest form of twin pairing at
-   the artifact.
-2. **Storage-cell fan-out.** `LiteralPatterns` still synthesizes the `n+1`
+1. **Storage-cell fan-out.** `LiteralPatterns` still synthesizes the `n+1`
    storage with the sentinel below the graph. The obligation recipe should fan
    out the storage and view nodes and cite *them* — "the recipe that fans out a
    string global fans out its obligations in the same firing", in full.
-3. **A finding, not touched:** `ControlFlowPatterns.fs:203` calls
-   `CFElements.pSwitch`, but `Serialize.fs` has no `CFOp` arm — a `cf.switch`
-   reaching emission serializes as `// TODO`. Either the path is dead or the
-   output is broken; it needs a sample that reaches it.
+2. **The `concat2` chain carries its anchor** (`StringPatterns`), and the
+   harness's "artifact extraction pending (concat chain)" row closes.
+3. **Extern-boundary strings** become graph citizens under the C-01 §6.7
+   boundary contract, so `dlopen`/`dlsym` globals cite something.

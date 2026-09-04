@@ -109,10 +109,45 @@ let elaborate (graph: SemanticGraph) : Enrichment =
           concatSites graph |> List.map (Recipes.concat enrichId) |> Enrichment.concat
           Enrichment.concat readln ]
 
+/// Project every obligation hyperedge onto its source nodes as an
+/// `Obligation.Anchors` annotation: the hyperedge's consequence on alpha (PHG
+/// paper 2.4a). Derived from F after the recipes have minted it, so a node
+/// constrained by several obligations carries all of their anchors and no
+/// recipe has to know about another. Declaration nodes are annotated too;
+/// they are never emitted, and they are constrained.
+let private projectAnchors (e: Enrichment) (graph: SemanticGraph) : SemanticNode list =
+    let obligationId (target: NodeId) =
+        e.NewNodes |> List.tryPick (fun n ->
+            match n.Kind with
+            | SemanticKind.Obligation info when n.Id = target -> Some info.Id
+            | _ -> None)
+    let anchorsBySource =
+        e.NewEdges
+        |> List.filter (fun edge -> edge.Class = EdgeClass.Obligation)
+        |> List.fold (fun (acc: Map<NodeId, string list>) edge ->
+            match obligationId edge.Target with
+            | Some anchor ->
+                edge.Sources |> List.fold (fun acc src ->
+                    let existing = Map.tryFind src acc |> Option.defaultValue []
+                    Map.add src (existing @ [ anchor ]) acc) acc
+            | None -> acc) Map.empty
+    // Annotate over the already-annotated form of a node where one exists
+    // (the readln site carries Buffer.* too), else over the graph's node.
+    let current (id: NodeId) =
+        e.Annotated |> List.tryFind (fun n -> n.Id = id)
+        |> Option.orElse (SemanticGraph.tryGetNode id graph)
+    anchorsBySource
+    |> Map.toList
+    |> List.choose (fun (id, anchors) ->
+        current id |> Option.map (fun n ->
+            { n with Metadata = n.Metadata |> Map.add ObligationMetadata.Anchors (MetadataValue.StringList anchors) }))
+
 /// Fold the enrichment into the graph: annotated nodes replace their originals
-/// by id, obligation nodes join V, their hyperedges join F.
+/// by id, obligation nodes join V, their hyperedges join F, and every source
+/// of an obligation edge carries its anchors.
 let foldIn (e: Enrichment) (graph: SemanticGraph) : SemanticGraph =
     graph
     |> SemanticGraph.addNodes e.Annotated
+    |> SemanticGraph.addNodes (projectAnchors e graph)
     |> SemanticGraph.addNodes e.NewNodes
     |> SemanticGraph.addEdges e.NewEdges
