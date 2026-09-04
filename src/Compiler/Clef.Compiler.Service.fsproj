@@ -232,6 +232,8 @@
     </Compile>
     <Compile Include="SyntaxTree\LexFilter.fsi" />
     <Compile Include="SyntaxTree\LexFilter.fs" />
+    <!-- Dimension algebra - the measure component and its unifier; no dependency on the type DU -->
+    <Compile Include="NativeTypedTree\DimensionAlgebra.fs" />
     <!-- Native types - foundational types for native compilation -->
     <Compile Include="NativeTypedTree\NativeTypes.fs" />
     <!-- import.fsi/fs REMOVED - "Functions to import .NET binary metadata as TAST objects" - BCL cruft -->
