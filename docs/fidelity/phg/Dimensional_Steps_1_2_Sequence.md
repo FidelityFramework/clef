@@ -47,6 +47,8 @@ Consequence: h.2, h.5, h.6, h.7, h.8, h.9, the wiring half of h.3/h.4 and the me
 - **Size:** ~200 lines, 3 files.
 - **Risk:** low. The `[<Measure>]` declaration arm in `NativeService.fs` is not yet redirected, so declarations still fall through to `ClassDef`/`unitType`; that is deliberate (nothing reads the env yet) and is stated in the diff.
 
+**CS-2 status (2026-09-04): built, reviewed, gates green**; the reviewer's must-fix (dependency order discovered by trial could bind a sibling to an outer declaration) was applied by hand: the group is ordered by referenced names before translation. Obligations handed to CS-4: the declaration arm reports per declaration (registration returns the first failure); the unifier bounds the exponents of `solveDim`'s bindings; the literal resolver reaches the translator through `MeasureSyntax.Measure` (CCS8044 is minted there).
+
 ### CS-3 — The monomorphisation key excludes measure variables
 
 - **Anchors:** (d.3); (h) 12; Paper line 106.
