@@ -37,7 +37,7 @@ CCS resolves types to native representations at compile-time. **No Alloy shadow 
 | `int64` | `System.Int64` | 64-bit signed | `i64` |
 | `float` | `System.Double` | IEEE 754 double | `f64` |
 | `float32` | `System.Single` | IEEE 754 single | `f32` |
-| `string` | `System.String` | UTF-8 fat pointer | `{ptr, len}` |
+| `string` | `System.String` | UTF-8 `memref<?xi8>` view | `{base, extent}` |
 | `char` | `System.Char` | Unicode codepoint | `i32` |
 | `bool` | `System.Boolean` | 8-bit | `i8` |
 | `unit` | `FSharp.Core.Unit` | Zero-sized | (elided) |
@@ -52,25 +52,25 @@ CCS resolves types to native representations at compile-time. **No Alloy shadow 
 
 **Standard F#**: String literals have type `System.String`.
 
-**Clef**: String literals have type `string` (UTF-8 fat pointer, resolved by CCS).
+**Clef**: String literals have type `string` (UTF-8 `memref<?xi8>` view, resolved by CCS).
 
 ```fsharp
 // Clef semantics
-let greeting = "Hello"  // Type: string (UTF-8 fat pointer, not System.String)
+let greeting = "Hello"  // Type: string (UTF-8 `memref<?xi8>` view, not System.String)
 ```
 
-CCS resolves `string` to a UTF-8 fat pointer:
+CCS resolves `string` to a UTF-8 `memref<?xi8>` view:
 
 ```
 Memory layout:
 ┌─────────────┬─────────────┐
-│ ptr: *u8    │ len: usize  │
+│ base: index │ ext: index  │
 └─────────────┴─────────────┘
      8 bytes      8 bytes     (on 64-bit)
 ```
 
 **Implications**:
-- No null strings (fat pointer is always valid or zero-length)
+- No null strings (buffer view is always valid or zero-length)
 - UTF-8 encoding (not UTF-16)
 - Known length (no null terminator scanning)
 - Stack or arena allocated (no GC)
@@ -101,17 +101,17 @@ let nothing: int option = None        // Stack-allocated, NOT null
 
 **Standard F#**: `'T[]` is `System.Array` (heap allocated, GC managed).
 
-**Clef**: `array<'T>` is a fat pointer (pointer + length).
+**Clef**: `array<'T>` is a `memref<?xT>` view: a base index into its buffer and an extent, two words in an aggregate.
 
 ```fsharp
 // Clef semantics - user writes familiar syntax
-let numbers = [| 1; 2; 3 |]  // Type: array<int> (fat pointer)
+let numbers = [| 1; 2; 3 |]  // Type: array<int> (buffer view)
 ```
 
 ```
 Memory layout:
 ┌─────────────┬─────────────┐
-│ ptr: *T     │ len: usize  │
+│ base: index │ ext: index  │
 └─────────────┴─────────────┘
 ```
 
@@ -1140,9 +1140,9 @@ When processing `Pattern.Tuple elements`:
 
 | F# Syntax | CCS Native Semantics | Notes |
 |-----------|----------------------|-------|
-| `string` | UTF-8 fat pointer | `{ptr, len}` |
+| `string` | UTF-8 `memref<?xi8>` view | `{base, extent}` |
 | `option<'T>` | `voption<'T>` | Stack-allocated, non-null |
-| `array<'T>` | Fat pointer | `{ptr, len}` |
+| `array<'T>` | `memref<?xT>` view | `{base, extent}` |
 | `list<'T>` | Cons cells | Arena or stack allocated |
 | `Map<'K,'V>` | Balanced tree | Arena allocated |
 | `Set<'T>` | Balanced tree | Arena allocated |

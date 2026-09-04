@@ -51,7 +51,7 @@ Everything else is derived from these primitives.
 | User Writes | Underlying Implementation | Notes |
 |-------------|--------------------------|-------|
 | `option<'T>` | `voption<'T>` | Stack-allocated, non-null |
-| `string` | UTF-8 fat pointer | `{ptr: *u8, len: usize}` |
+| `string` | UTF-8 `memref<?xi8>` view | `{base: index, extent: index}` |
 | `int` | Platform word | `nativeint` semantics |
 
 ---
@@ -221,7 +221,7 @@ type char = (* Unicode scalar value *)
 **Design Decision (RESOLVED)**: Characters are UTF-32 codepoints (4 bytes), not UTF-16 code units.
 
 **Rationale**:
-1. **String encoding is UTF-8**: Clef strings are UTF-8 fat pointers (see Part 4.1)
+1. **String encoding is UTF-8**: Clef strings are UTF-8 `memref<?xi8>` views (see Part 4.1)
 2. **Iteration yields codepoints**: When iterating over a UTF-8 string, each `char` is a decoded Unicode scalar value
 3. **No surrogate pairs**: Unlike UTF-16, a single `char` always represents a complete character
 4. **Consistency with Rust**: Rust's `char` is also a 32-bit Unicode scalar value
@@ -442,7 +442,7 @@ type Result<'T, 'E> = Ok of 'T | Error of 'E
 ```fsharp
 type Message =
     | Ping                              // Tag only: 1 byte + padding
-    | Data of payload: array<byte>      // Tag + fat pointer: 1 + 7 + 16 = 24 bytes
+    | Data of payload: array<byte>      // Tag + view (base, extent): 1 + 7 + 16 = 24 bytes
     | Error of code: int * msg: string  // Tag + int + string: 1 + 7 + 8 + 16 = 32 bytes
 ```
 
@@ -484,14 +484,14 @@ type Tree<'T> = Leaf of 'T | Node of left: Tree<'T> * value: 'T * right: Tree<'T
 
 | Property | Value |
 |----------|-------|
-| **Recursion** | Pointer indirection for recursive field |
-| **Nil/Leaf** | May be optimized to null pointer (special case) |
+| **Recursion** | A bounded arena-relative `index` link for the recursive field |
+| **Nil (nullary case)** | The static sentinel node at offset 0 of the arena; no allocation, no null |
 | **Cons/Node** | Allocated in arena or stack |
 
 ```
 Cons cell: List<int>
 ┌──────────┬─────────┬──────────┬────────────────────┐
-│ Tag (i8) │ padding │ head: T  │ tail: ptr<List<T>> │
+│ Tag (i8) │ padding │ head: T  │ tail: index (link)  │
 └──────────┴─────────┴──────────┴────────────────────┘
    1 byte    7 bytes   8 bytes        8 bytes         = 24 bytes
 ```
@@ -522,7 +522,7 @@ switch (shape.tag) {
 
 ## Part 4: Reference Types
 
-> **Principle**: Reference types use fat pointers (pointer + length). No null pointers - empty is represented by length 0.
+> **Principle**: A reference type is a `memref` view whose length is the memref's dimension; there is no fat-pointer struct. No null: empty is length 0, and an empty collection is the static sentinel node.
 >
 > **CCS Resolution**: See [`ccs-specification.md` Parts 1.2-1.4](ccs-specification.md#12-string-literals) for compiler-level type resolution.
 
@@ -533,11 +533,11 @@ let greeting : string = "Hello, World!"
 let empty : string = ""
 ```
 
-**Memory Layout** (UTF-8 fat pointer):
+**Memory Layout** (UTF-8 `memref<?xi8>` view):
 ```
 string
 ┌─────────────────┬─────────────────┐
-│ ptr: *u8        │ len: usize      │
+│ base: index     │ extent: index   │
 └─────────────────┴─────────────────┘
      8 bytes           8 bytes       = 16 bytes (64-bit)
 ```
@@ -547,7 +547,7 @@ string
 | **Encoding** | UTF-8 (NOT UTF-16) |
 | **Length semantics** | Byte count, not character count |
 | **Empty string** | `{ ptr: valid, len: 0 }` - NOT null |
-| **MLIR** | `memref<?xi8>` or `tuple<ptr<i8>, index>` |
+| **MLIR** | `memref<?xi8>` |
 
 **Why UTF-8?**
 1. **Native interop** - Rust, C, and most systems APIs use UTF-8
@@ -562,7 +562,7 @@ for c in String.chars s do
     printfn "%c" c  // c : char (UTF-32 codepoint, 4 bytes)
 ```
 
-**Zero-Copy Slicing**: The fat pointer representation (pointer + length) enables zero-copy string slicing - substrings reference the same underlying bytes with adjusted pointer/length.
+**Zero-Copy Slicing**: The view representation (base index + extent) enables zero-copy string slicing - substrings reference the same underlying bytes with adjusted pointer/length.
 
 > **See**: Appendix E for encoding comparison with OCaml (Latin-1) and .NET (UTF-16).
 
@@ -583,11 +583,11 @@ let numbers : array<int> = [| 1; 2; 3; 4; 5 |]
 let empty : array<int> = [| |]
 ```
 
-**Memory Layout** (fat pointer):
+**Memory Layout** (`memref<?xT>` view: base index + extent; two words in an aggregate):
 ```
 array<'T>
 ┌─────────────────┬─────────────────┐
-│ ptr: *T         │ len: usize      │
+│ base: index     │ extent: index   │
 └─────────────────┴─────────────────┘
      8 bytes           8 bytes       = 16 bytes (header)
                                      + len * sizeof<'T> (elements)
@@ -627,7 +627,7 @@ let roSpan : ReadOnlySpan<byte> = ReadOnlySpan(bytes)
 ```
 Span<'T>
 ┌─────────────────┬─────────────────┐
-│ ptr: *T         │ len: usize      │
+│ base: index     │ extent: index   │
 └─────────────────┴─────────────────┘
 ```
 
@@ -749,9 +749,9 @@ let empty : int list = []
 ```
 list<'T>
 ┌────────────────────┬─────────────────────┐
-│ head: 'T           │ tail: ptr<list<'T>> │
+│ head: 'T           │ tail: index (link)  │
 └────────────────────┴─────────────────────┘
-     sizeof<'T>            8 bytes (pointer)
+     sizeof<'T>        platform word (arena-relative index)
 ```
 
 | Property | Value |
@@ -804,13 +804,13 @@ let makeAdder n =
     fun x -> x + n  // Captures 'n'
 ```
 
-**Memory Layout**:
+**Form** — two SSA values, never packed (spec `closure-representation.md` §6.3):
 ```
-Closure
-┌─────────────────────┬─────────────────────┐
-│ fn_ptr: ptr<fn>     │ env: captured values│
-└─────────────────────┴─────────────────────┘
-     8 bytes              sizeof<env>
+Closure = (fn, env)
+fn:  a function value (func.constant), not stored as data
+env: ┌─────────────────────┐
+     │ captured values     │   memref<Exi8>, E = sizeof<env>, literal at saturation
+     └─────────────────────┘
 ```
 
 | Property | Value |
@@ -1101,7 +1101,7 @@ Script files (`.fsnx`) follow the same type semantics as compiled modules:
 // script.fsnx
 #require "Alloy"
 
-let greeting : string = "Hello"  // string with native UTF-8 fat pointer semantics
+let greeting : string = "Hello"  // string with native UTF-8 `memref<?xi8>` view semantics
 let maybe : int option = Some 42  // voption<int>, non-null
 ```
 
@@ -1186,7 +1186,7 @@ This tagging allows integers to remain "unboxed" (stored directly without heap a
 |--------------|-----------------|-----------|
 | 63-bit tagged int | Full word `nativeint` | No GC tag needed (compile-time safety) |
 | Latin-1 char | UTF-32 codepoint | Modern Unicode support |
-| Byte-sequence string | UTF-8 fat pointer | Text correctness + Rust interop |
+| Byte-sequence string | UTF-8 `memref<?xi8>` view | Text correctness + Rust interop |
 | Boxed option (sometimes) | Always stack `voption` | Null-freedom guarantee |
 | Runtime type tagging | Compile-time only | No runtime overhead |
 
@@ -1225,7 +1225,7 @@ This tagging allows integers to remain "unboxed" (stored directly without heap a
    - Define proper base types in CCS (Clef compiler (CCS))
    - Types resolve at compile-time, not via library shadowing
    - `option<'T>` → compiler knows this is `voption` semantics
-   - `string` → compiler knows this is UTF-8 fat pointer
+   - `string` → compiler knows this is UTF-8 `memref<?xi8>` view
 
 2. **Phase 2: Alloy Cleanup**
    - Remove shadow type aliases from `Core.fs`
@@ -1271,11 +1271,11 @@ OCaml contemplates direct memory layout in ways F#/.NET never does:
 | **Products/Sums/Functions as primitives** | Foundation | Type universe axioms (Part 1) |
 | **Value-oriented structural assembly** | Core principle | Records/tuples laid out contiguously |
 | **Deterministic tag layout for DUs** | Directly usable | Tag = 0,1,2... in declaration order |
-| **Fat pointer concept** | Directly usable | `{ptr, len}` for strings/arrays |
+| **Buffer-view concept** | Directly usable | `{base, extent}` for strings/arrays |
 | **No null philosophy** | Core principle | Everything representable without sentinel values |
 | **Unboxed by default** | Core principle | No implicit heap allocation |
 
-These concepts form the bedrock of the Native Type Universe (NTU). The structural assembly semantics, deterministic tag assignment, and fat pointer model are adopted with minimal modification.
+These concepts form the bedrock of the Native Type Universe (NTU). The structural assembly semantics, deterministic tag assignment, and buffer view model are adopted with minimal modification.
 
 ### E.2 What OCaml Lacks (SET ASIDE)
 
@@ -1358,7 +1358,7 @@ Clef introduces memory regions unknown to both OCaml and Rust:
 
 the Native Type Universe (NTU) represents a synthesis:
 
-1. **From OCaml**: Products, sums, functions as primitives; value-oriented assembly; fat pointers; no null
+1. **From OCaml**: Products, sums, functions as primitives; value-oriented assembly; buffer views; no null
 2. **Set Aside from OCaml**: GC tagging overhead; desktop assumptions; runtime discrimination
 3. **From Rust**: Deterministic cleanup; ownership tracking (adapted to coeffects); RAII semantics
 4. **Fidelity Original**: Memory regions; access kinds; cache hierarchy awareness; processor-specific optimization

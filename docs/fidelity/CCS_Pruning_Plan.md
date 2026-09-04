@@ -189,7 +189,7 @@ let nativeStrTycon = ...
 /// Native option (voption, not nullable)
 let nativeOptionTycon = ...
 
-/// Native array (fat pointer, not System.Array)
+/// Native array (a `memref<?xT>` view, not System.Array)
 let nativeArrayTycon = ...
 
 /// Native span with lifetime
@@ -358,7 +358,7 @@ FSharp.Compiler.Symbols.*   → FSharp.Native.Compiler.Symbols.*
 1. **Build Time**: Clean build < 1 minute
 2. **Binary Size**: `FSharp.Native.Compiler.Service.dll` < 5 MB
 3. **API Simplicity**: < 10 public types
-4. **Native Types**: String literals have native semantics (UTF-8 fat pointer)
+4. **Native Types**: String literals have native semantics (UTF-8 `memref<?xi8>` view)
 5. **SRTP**: Resolves against Alloy witnesses
 6. **Firefly Integration**: HelloWorld samples compile correctly
 
@@ -424,9 +424,9 @@ The type universe is defined in `TcGlobals.fs`. Add native types alongside BCL t
 
 ```
 TcGlobals.fs modifications:
-├── Modify string_ty to have native semantics (UTF-8 fat pointer)
+├── Modify string_ty to have native semantics (UTF-8 `memref<?xi8>` view)
 ├── Modify option_tcr to have native semantics (voption: value type, never null)
-├── Modify array_tcr to have native semantics (fat pointer)
+├── Modify array_tcr to have native semantics (a `memref<?xT>` view)
 ├── Add memory region phantom types (Peripheral, SRAM, Flash, Arena, Stack)
 └── Add access kind phantom types (ReadOnly, WriteOnly, ReadWrite)
 ```
@@ -450,7 +450,7 @@ The critical change is at ~line 7342 in `CheckExpressions.fs`:
     TcPropagatingExprLeafThenConvert cenv overallTy g.string_ty env m (fun () ->
         mkString g m s, tpenv)
 
-// CCS (string with native UTF-8 fat pointer semantics)
+// CCS (string with native UTF-8 `memref<?xi8>` view semantics)
 | false, LiteralArgumentType.Inline ->
     TcPropagatingExprLeafThenConvert cenv overallTy g.string_ty env m (fun () ->
         mkString g m s, tpenv)  // Same API, string_ty now has native semantics

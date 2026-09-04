@@ -126,11 +126,11 @@ Clef replaces BCL types with native equivalents from the Alloy library:
 // In standard F#, this is System.String (UTF-16, heap-allocated)
 let greeting = "Hello"
 
-// In Clef, same syntax, native semantics (UTF-8 fat pointer)
+// In Clef, same syntax, native semantics (UTF-8 `memref<?xi8>` view)
 let greeting = "Hello"  // Type: string (native semantics)
 ```
 
-In Clef, `string` has native semantics - internally a fat pointer struct containing a pointer to UTF-8 bytes and a length:
+In Clef, `string` has native semantics - internally a `memref<?xi8>` view over UTF-8 bytes: a base index into the buffer and an extent, no pointer:
 
 ```fsharp
 // Internal representation of string in CCS
@@ -151,7 +151,7 @@ Similar transformations apply to other types:
 | F# Syntax | Standard F# | Clef |
 |-----------|-------------|-----------|
 | `int option` | `option<int>` (heap, nullable) | `option<int>` with value semantics (voption) |
-| `int[]` | `System.Int32[]` (heap, GC tracked) | `array<int>` with native semantics (fat pointer) |
+| `int[]` | `System.Int32[]` (heap, GC tracked) | `array<int>` with native semantics (a `memref<?xT>` view) |
 | Records without `[<Struct>]` | Heap allocated | Struct by default |
 
 ### 2.4 The CCS Transformation
@@ -162,7 +162,7 @@ Clef Compiler Service (CCS) is a fork of the standard F# compiler that performs 
 let numbers = [| 1; 2; 3 |]
 ```
 
-It resolves `array<int>` with native semantics (fat pointer) rather than `System.Int32[]` (heap, GC tracked). The syntax is identical; the semantics differ.
+It resolves `array<int>` with native semantics (a `memref<?xT>` view) rather than `System.Int32[]` (heap, GC tracked). The syntax is identical; the semantics differ.
 
 This transformation is systematic. CCS does not attempt to translate BCL code to native equivalents at runtime. Instead, it establishes a parallel type universe where native types are the primitive types, and BCL types do not exist.
 
@@ -693,7 +693,7 @@ Alloy types can carry F* specifications that the compiler verifies:
 ```fstar
 module Alloy.String.Spec
 
-// Layout invariants (string has native UTF-8 fat pointer semantics)
+// Layout invariants (string has native UTF-8 `memref<?xi8>` view semantics)
 val sizeof_string: unit -> Lemma (sizeof string == 16)
 val alignof_string: unit -> Lemma (alignof string == 8)
 
@@ -750,7 +750,7 @@ let numbers = [| 1; 2; 3 |]
 let items = [ 1; 2; 3 ]
 ```
 
-These will compile under CCS with native semantics. The `string` greeting has UTF-8 fat pointer semantics, the `array<int>` has native array semantics, and the `list<int>` has native list semantics - but users write standard F# type names throughout.
+These will compile under CCS with native semantics. The `string` greeting has UTF-8 `memref<?xi8>` view semantics, the `array<int>` has native array semantics, and the `list<int>` has native list semantics - but users write standard F# type names throughout.
 
 ### 10.3 Semantic Differences to Consider
 

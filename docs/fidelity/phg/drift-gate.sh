@@ -41,10 +41,13 @@ RETIRED=(
   '`func`, `cf`, `scf`'                                    # backend-lowering §2.1: the witnessed vocabulary is five dialects; cf/builtin are not among them
   'nativeptr<|NativePtr\.|FSharp\.NativeInterop|voidptr'      # ffi-boundary §1: no raw pointer type in interior Clef; TNativePtr is compiler-internal
   '!fidelity\.'                                            # Thin_Middle_End §3: no custom dialect or type above the boundary
+  '(^|[^.[:alnum:]_])ptr<'                                 # representation chapters: links are bounded index values, values are memref views; no pointer notation (llvm.ptr</fir.ptr< in below-boundary listings excluded)
+  'null pointer|= null :|is a null (pointer )?check'       # map/set/list: the empty collection is the static sentinel; isEmpty is a literal comparison
+  'fat pointer|fat ptr|\{ptr: \*|ptr: \*u8|ptr: \*T|\{ptr, len\}'   # strings/arrays are memref views (buffer + dimension); no {ptr, len} header
 )
 
 # A line that carries one of these markers is talking *about* the retired term, not using it.
-SUPERSESSION_MARKERS='retired|retires|superseded|supersession|SHALL NOT|earlier revision|earlier framing|prior art|no longer|not planned|Retired\)|is going away|was written as|dissolved|interim|proposal(.s)? instruction|not denotable|user-denotable|replaces|stripped|not user-denotable|no raw pointer|no raw-pointer|compiler-internal|internal-only|pre-strip|below the witness boundary|backend leg'
+SUPERSESSION_MARKERS='retired|retires|superseded|supersession|SHALL NOT|earlier revision|earlier framing|prior art|no longer|not planned|Retired\)|is going away|was written as|dissolved|interim|proposal(.s)? instruction|not denotable|user-denotable|replaces|stripped|NOT null|no null|not a null|never null|non-null|FFI boundary|at the boundary|C boundary|the sentinel|sentinel node|CHandle|no fat|not a fat|not fat|not user-denotable|no raw pointer|no raw-pointer|compiler-internal|internal-only|pre-strip|below the witness boundary|backend leg'
 
 # Files whose purpose is to record the retirement itself, or history that must stay verbatim.
 ALLOW_FILES=(
@@ -84,8 +87,20 @@ SCHEDULED=(
   'BAREWire/docs/::nativeptr'                                               # BAREWire's .NET-side implementation legitimately uses NativeInterop; the strip governs the cross-compiled Clef surface
   'clef-lang-site/hugo/content/blog/::nativeptr'                            # dated posts, each carrying an editor's note; not rewritten
   'clef-lang-site/hugo/content/docs/internals/farscape/::nativeptr'         # Farscape's generated-code sketches, bannered; move with the generator
+  'clef/tests/::null'                                                       # inherited F# test corpus (null : T annotations)
+  'Composer/docs/PRDs/::ptr<'                                               # implementation PRDs, bannered; move with the code
+  'Composer/docs/PRDs/::null'                                               # same
+  'Composer/docs/PRDs/::fat'                                                # implementation PRDs describing the interim string/array form
+  'clef/src/Compiler/NativeTypedTree/::fat'                                 # NTUstring/array layout comments: two words, right size, retired meaning ({ptr,len} → {base index, extent})
+  'clef/src/Compiler/NativeTypedTree/::ptr: \*'                             # same
+  'clef/tests/::fat'                                                        # SpecDrivenNativeTypeTests pins the retired wording; moves with the layout
+  'clef-lang-site/hugo/content/blog/::fat'                                  # dated posts
+  'clef-lang-site/hugo/content/blog/::null'                                 # dated posts
+  'clef/src/Compiler/Baker/Recipes/::null'                                  # collection recipes still emit a null for empty; the sentinel recipe replaces them (Phase 3 collections)
+  'clef/src/Compiler/Baker/Recipes/::ptr<'                                  # same
+  'clef/src/Compiler/Baker/Recipes/Decomposition.fs::null'                  # same
 )
-ALLOW_DIRS=( '/archive/' '/history/' '/bin/' '/obj/' '/intermediates/' '/node_modules/' '/.git/' '/build/' '/target/' )
+ALLOW_DIRS=( '/archive/' '/history/' '/proof-trace/' '/bin/' '/obj/' '/intermediates/' '/node_modules/' '/.git/' '/build/' '/target/' )
 
 is_allowed() {
   local f="$1"
