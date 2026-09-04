@@ -94,6 +94,8 @@ Consequence: h.2, h.5, h.6, h.7, h.8, h.9, the wiring half of h.3/h.4 and the me
 
 ### CS-6 — Generalisation and instantiation over measure and carrier variables
 
+**Scope correction (plan D7 U-3, 2026-09-04):** CS-6 also introduces the carrier variable (`CarrierRef`, `TypeParamKind.Carrier`) and the operator schemes over it (`+ - %` and comparison at one dimension; `*` and `/` composing dimensions), because UoM-8's `let scale f v = f * v` cannot be typed without it. The per-width constructor remains the carrier's value until step 7.
+
 - **Anchors:** (b.4); (h) 10; spec lines 209, 515-572; DBC line 204.
 - **Files by role:** the free-variable collection and scheme builder (`UnionFind.fs` `collectFreeTypeParams`, `canonicalizeVars`, `generalizeType`) collect measure and carrier variables through `resolve`, subtract the environment's, apply the spec's non-generalisable cases, and simplify by column Hermite normal form over the exponent matrix (rank many survivors, renamed in first-occurrence order); the instantiation (`NativeTypes.instantiate`, `Identity.fs:87-125`) mints fresh variables of the same kind; the `Application` node records its instantiation as an annotation (the application checker in `Expressions/Applications.fs`); the top-level generalisation site in `Bindings.fs` (the disabled path at `:397-399` is left as it is: nested generalisation is not this step); CCS8047 in `DiagnosticCodes` for an unresolved measure variable at a non-generalisable binding.
 - **Removes:** the assumption that only `Type`-kinded parameters are quantified (`UnionFind.fs:399-405`).
@@ -101,7 +103,11 @@ Consequence: h.2, h.5, h.6, h.7, h.8, h.9, the wiring half of h.3/h.4 and the me
 - **Size:** ~180 lines, 5 files.
 - **Risk:** medium. The Hermite step is the one piece of new numerical code beyond `solveDim`; the environment-free-variable subtraction must resolve through the measure store or a variable bound after generalisation is quantified twice.
 
+**CS-6 status (2026-09-04): built in three gated slices, reviewed, one blocker and three must-fixes applied by hand, gates green** (build; RoundTrip hash unchanged; `vet.sh --through 2` exit 0, 10 of 10 judged, 24 of 46 overall; HelloProof unchanged). Step 2's gate is closed. Carried forward: step 3 owes witnesses for unary negation, unary plus, `abs` and `sign` in Composer (pre-existing gap, loud today) and the library schemes for `abs`, `sign`, `sqrt`, `atan2`; CS-7 owes CCS8000 for the mixed `1 + "a"`, the source spelling of operators in messages, and the located CCS8001 for non-generalised function bindings; CS-8 owes the saturation residual assertion at the store boundary.
+
 ### CS-7 — Diagnostics on their own codes
+
+**Added by plan D8 (2026-09-04):** CS-7 also introduces the representation declaration: the platform description declares the representations it offers with capability, dynamic range and boundary semantics; the language carries a representation name that resolves against the declaration; the §e.1 families become the declaration's vocabulary.
 
 - **Anchors:** (b.5), (f); (h) 11 (the remainder); D3.
 - **Files by role:** the diagnostic table (`Types.fs` `DiagnosticCodes`) gains the (f) CCS80xx and CCS804x entries not yet minted (CCS8000–8002, 8011–8017, 8042–8050 where not added by CS-2/CS-4/CS-6) and retires the clef-side `FS8010`–`FS8013` occupants of W-row numbers; the surfacing (`NativeService.fs:246-259`) carries each `UnificationError` case's own code.

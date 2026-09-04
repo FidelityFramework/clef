@@ -248,7 +248,8 @@ let private tryResolveViaTable (table: WitnessTable) (memberName: string) (argTy
             | TypePattern.Any -> Some entry.Resolution
             | TypePattern.Exact tyCon ->
                 match argType with
-                | NativeType.TApp(tc, _) | NativeType.TNum(tc, _) when tc.Name = tyCon.Name -> Some entry.Resolution
+                | NativeType.TApp(tc, _) when tc.Name = tyCon.Name -> Some entry.Resolution
+                | NativeType.TNum(carrier, _) when (CarrierRef.tryConstructor carrier |> Option.exists (fun tc -> tc.Name = tyCon.Name)) -> Some entry.Resolution
                 | _ -> None
             | TypePattern.Numeric ->
                 if Types.isNumericType argType then Some entry.Resolution
@@ -265,8 +266,7 @@ let private tryResolveViaTable (table: WitnessTable) (memberName: string) (argTy
 /// Resolve the Alloy $ operator for string formatting
 let private resolveAlloyDollar (argType: NativeType) : WitnessResolution option =
     // $ is dispatched based on the argument type to find a WritableString implementation
-    match argType with
-    | NativeType.TApp(tyCon, _) | NativeType.TNum(tyCon, _) ->
+    let named (tyCon: TypeConRef) =
         Some {
             Operator = "$"
             ArgType = argType
@@ -274,6 +274,9 @@ let private resolveAlloyDollar (argType: NativeType) : WitnessResolution option 
             ImplementingModule = ["Alloy"; "Text"]
             Kind = WitnessKind.StaticMember
         }
+    match argType with
+    | NativeType.TApp(tyCon, _) -> named tyCon
+    | NativeType.TNum(carrier, _) -> CarrierRef.tryConstructor carrier |> Option.bind named
     | _ -> None
 
 /// Check if a type has any unbound type variables
@@ -308,7 +311,11 @@ let private resolveConversion (funcName: string) (sourceType: NativeType) : Witn
         // Create internal name following F* convention
         let sourceTypeName =
             match sourceType with
-            | NativeType.TApp(tc, _) | NativeType.TNum(tc, _) -> tc.Name
+            | NativeType.TApp(tc, _) -> tc.Name
+            | NativeType.TNum(carrier, _) ->
+                match CarrierRef.resolve carrier with
+                | CarrierRef.Carrier tc -> tc.Name
+                | CarrierRef.CVar tp -> tp.Name
             | NativeType.TVar spec -> spec.Name
             | _ -> "unknown"
 

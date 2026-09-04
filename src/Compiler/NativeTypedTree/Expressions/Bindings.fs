@@ -217,6 +217,24 @@ let checkBinding
     let (SynBinding(_, _, isInline, isMutable, attrs, _, _, headPat, returnInfo, expr, bindingRange, _, _)) = binding
     let range = rangeToSourceRange bindingRange
     let name = getBindingName binding
+    // One measure variable per name for the whole binding (spec §Generalization of Measure
+    // Variables): the names written in the parameter and return annotations are minted here, so
+    // `(y: float<'u>) (z: float<'u>)` share `'u` and a use at two dimensions is CCS8040.
+    let env =
+        let rec annotations (p: SynPat) : SynType list =
+            match p with
+            | SynPat.Typed(inner, ty, _) -> ty :: annotations inner
+            | SynPat.Paren(inner, _) -> annotations inner
+            | SynPat.Tuple(_, ps, _, _) -> ps |> List.collect annotations
+            | SynPat.LongIdent(_, _, _, SynArgPats.Pats ps, _, _) -> ps |> List.collect annotations
+            | SynPat.Attrib(inner, _, _) -> annotations inner
+            | _ -> []
+        let returnAnnotation =
+            match returnInfo with
+            | Some (SynBindingReturnInfo(typeName = synType)) -> [ synType ]
+            | None -> []
+        let names = (annotations headPat @ returnAnnotation) |> List.collect (measureVariableNames env)
+        withMeasureScope env names
     let declRoot =
         if hasEntryPointAttribute attrs then Some DeclRoot.EntryPoint
         elif hasHardwareModuleAttribute attrs then Some DeclRoot.HardwareModule
@@ -459,6 +477,12 @@ let checkBinding
             builder.SetMetadata(bindingNode.Id, "FidelityExtern.Library", MetadataValue.String library) |> ignore
             builder.SetMetadata(bindingNode.Id, "FidelityExtern.Symbol", MetadataValue.String symbol) |> ignore
         | None -> ()
+
+        // An `inline` function's own body is never emitted: it is re-checked at every expansion
+        // site with the site's types, so the variables its definition leaves open are quantified
+        // by expansion. The marker lets the residual check (NativeService) skip its subtree.
+        if isInline then
+            builder.SetMetadata(bindingNode.Id, "Inline", MetadataValue.Bool true) |> ignore
 
         // Capture inline body only for functions explicitly marked `inline`
         // This enables escape analysis - inline functions have their allocations

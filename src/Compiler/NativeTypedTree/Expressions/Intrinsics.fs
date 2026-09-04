@@ -799,6 +799,19 @@ let resolveModuleIntrinsic
 // Operator Intrinsics
 //-------------------------------------------------------------------------
 
+/// A fresh carrier variable for an operand position of operator `op` (design a.2, c.1): the
+/// variable carries the operator it was minted for, so CCS8000 can name it.
+let private freshCarrierFor (op: string) (range: SourceRange) : CarrierRef =
+    let k = freshTypeParamAuto TypeParamKind.Carrier range
+    k.Constraints <- [ Constraint.OperandOf(op, range) ]
+    CarrierRef.CVar k
+
+/// A fresh measure variable as a dimension.
+let private freshDimension () : Dimension = Dimension.ofVar (freshMeasureVar None)
+
+/// The numeric type at a carrier position and a dimension: `κ<'u>`.
+let private numeric (k: CarrierRef) (d: Dimension) : NativeType = NativeType.TNum(k, d)
+
 /// Try to resolve an operator intrinsic (not, op_BooleanAnd, op_Addition, etc.)
 let tryResolveOperator (name: string) (range: SourceRange) : (IntrinsicInfo * NativeType) option =
     match name with
@@ -814,11 +827,42 @@ let tryResolveOperator (name: string) (range: SourceRange) : (IntrinsicInfo * Na
         let info = mkIntrinsic IntrinsicModule.Operators "op_BooleanOr" IntrinsicCategory.Comparison name
         let ty = NativeType.TFun(Types.boolType, NativeType.TFun(Types.boolType, Types.boolType))
         Some (info, ty)
-    | "op_Addition" | "op_Subtraction" | "op_Multiply" | "op_Division" | "op_Modulus" ->
-        // Polymorphic arithmetic: 'T -> 'T -> 'T
-        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+    // The measure-aware operator schemes (design (c), units-of-measure.md §Type Definitions with
+    // Measures), each stated once here and instantiated with fresh carrier and measure variables
+    // at every use. `κ` is a carrier variable, the numeric constraint itself (c.1): a `bool`
+    // operand fails to unify with it and is CCS8000.
+    | "op_Addition" ->
+        // `+` dispatches on the kind of its operands (c.3, D5): both numeric, the scheme
+        // `κ<'u> -> κ<'u> -> κ<'u>` realised by one shared operand type; both string, concat.
+        // The dispatch is attached to the operand variable and fires when it binds.
+        let operand = freshTypeParamAuto TypeParamKind.Type range
+        operand.Constraints <- [ Constraint.OperandOf(name, range) ]
+        let tyParam = NativeType.TVar operand
         let info = mkIntrinsic IntrinsicModule.Operators name IntrinsicCategory.Arithmetic name
         let ty = NativeType.TFun(tyParam, NativeType.TFun(tyParam, tyParam))
+        Some (info, ty)
+    | "op_Subtraction" | "op_Modulus" ->
+        // `κ<'u> -> κ<'u> -> κ<'u>` (spec: `N<'U> -> N<'U> -> N<'U>`)
+        let k = freshCarrierFor name range
+        let u = freshDimension ()
+        let info = mkIntrinsic IntrinsicModule.Operators name IntrinsicCategory.Arithmetic name
+        let ty = NativeType.TFun(numeric k u, NativeType.TFun(numeric k u, numeric k u))
+        Some (info, ty)
+    | "op_Multiply" ->
+        // `κ<'u> -> κ<'v> -> κ<'u 'v>` (spec: `N<'U> -> N<'V> -> N<'U 'V>`)
+        let k = freshCarrierFor name range
+        let u = freshDimension ()
+        let v = freshDimension ()
+        let info = mkIntrinsic IntrinsicModule.Operators name IntrinsicCategory.Arithmetic name
+        let ty = NativeType.TFun(numeric k u, NativeType.TFun(numeric k v, numeric k (Dimension.mul u v)))
+        Some (info, ty)
+    | "op_Division" ->
+        // `κ<'u> -> κ<'v> -> κ<'u 'v^-1>` (spec: `N<'U> -> N<'V> -> N<'U/'V>`)
+        let k = freshCarrierFor name range
+        let u = freshDimension ()
+        let v = freshDimension ()
+        let info = mkIntrinsic IntrinsicModule.Operators name IntrinsicCategory.Arithmetic name
+        let ty = NativeType.TFun(numeric k u, NativeType.TFun(numeric k v, numeric k (Dimension.mul u (Dimension.inv v))))
         Some (info, ty)
     | "op_LessThan" | "op_GreaterThan" | "op_LessThanOrEqual" | "op_GreaterThanOrEqual" | "op_Equality" | "op_Inequality" ->
         // Polymorphic comparison: 'T -> 'T -> bool
@@ -826,11 +870,14 @@ let tryResolveOperator (name: string) (range: SourceRange) : (IntrinsicInfo * Na
         let info = mkIntrinsic IntrinsicModule.Operators name IntrinsicCategory.Comparison name
         let ty = NativeType.TFun(tyParam, NativeType.TFun(tyParam, Types.boolType))
         Some (info, ty)
-    | "op_UnaryNegation" ->
-        // Polymorphic negation: 'T -> 'T
-        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+    | "op_UnaryNegation" | "op_UnaryPlus" ->
+        // `κ<'u> -> κ<'u>` (spec: `N<'U> -> N<'U>`). `abs` and `sign` are library functions
+        // with these schemes (design (c) "if in scope", step 3), not operator names: an
+        // operator name pre-empts binding lookup, and a user's `abs` must not be shadowed.
+        let k = freshCarrierFor name range
+        let u = freshDimension ()
         let info = mkIntrinsic IntrinsicModule.Operators name IntrinsicCategory.Arithmetic name
-        let ty = NativeType.TFun(tyParam, tyParam)
+        let ty = NativeType.TFun(numeric k u, numeric k u)
         Some (info, ty)
     | "op_BitwiseAnd" | "op_BitwiseOr" | "op_ExclusiveOr" ->
         // Polymorphic bitwise: 'T -> 'T -> 'T

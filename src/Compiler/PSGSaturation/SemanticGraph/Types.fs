@@ -687,6 +687,15 @@ module ObligationMetadata =
     [<Literal>]
     let Anchors = "Obligation.Anchors"
 
+/// Metadata keys for the generalisation of let-bound schemes (design b.4 step 4).
+[<RequireQualifiedAccess>]
+module SchemeMetadata =
+    /// On an Application node whose function is a use of a generalised binding: the instance
+    /// of the scheme at this use (MetadataValue.Type), so hover shows the instance while the
+    /// binding keeps its scheme.
+    [<Literal>]
+    let Instantiation = "Scheme.Instantiation"
+
 /// Metadata keys for closure pair construction decisions.
 /// Baker marks zero-capture lambdas in value position with these keys,
 /// signaling to SSAAssignment that a closure pair must be constructed

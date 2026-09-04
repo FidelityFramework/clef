@@ -35,6 +35,10 @@ type UnificationError =
     /// A dimension a unification reached or a binding it would apply has an exponent past
     /// `measureExponentBound` (the CCS8048 family; the CS-2 obligation): refused, never wrapped.
     | MeasureExponentOutOfRange of exponent: int * dim: Dimension * range: SourceRange
+    /// A non-numeric type met an operator's numeric operand position (design c.1, W-2; CCS8000):
+    /// the carrier variable is the numeric constraint, and `actual` is not numeric. `op` is the
+    /// operator the position was minted for, when the variable carries that provenance.
+    | NotNumeric of op: string option * actual: NativeType * range: SourceRange
 
 exception UnificationException of UnificationError
 
@@ -68,6 +72,9 @@ let formatError (err: UnificationError) : string =
         $"'{Dimension.renderVar v}^{k} = {rhs}' has no integer solution; the exponents of '{rhs}' are not all divisible by {k}"
     | MeasureExponentOutOfRange(e, d, _) ->
         $"Measure exponent '{e}' in '{Dimension.render d}' is not representable; exponents are integers of magnitude at most {measureExponentBound}"
+    | NotNumeric(op, actual, _) ->
+        let operator = match op with Some name -> $"'{name}'" | None -> "(unknown)"
+        $"Operator {operator} requires numeric operands; '{formatType actual}' is not numeric"
 
 //-------------------------------------------------------------------------
 // Unification Algorithm
@@ -98,6 +105,7 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
             if occursIn root ty then
                 raise (UnificationException(InfiniteType(root, ty, range)))
             bind root ty
+            fireOperandDispatch root ty range
         | Some boundTy ->
             unify boundTy ty range
     
@@ -250,8 +258,7 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
     // measure unifier. A type variable meeting a TNum binds to the whole TNum, dimension
     // included, in the type-variable arm above (Paper §2.2 line 74).
     | NativeType.TNum(c1, d1), NativeType.TNum(c2, d2) ->
-        if c1.Name <> c2.Name || c1.Module <> c2.Module then
-            raise (UnificationException(TypeMismatch(t1, t2, range)))
+        unifyCarrier t1 t2 c1 c2 range
         unifyDim d1 d2 range
 
     // Measure-sorted positions (Arena<'lifetime>): the same measure unifier, argument-wise
@@ -267,14 +274,46 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
     // This handles implicit polymorphic instantiation (e.g., `let f x = x` being used at a specific type)
     | NativeType.TForall(tps, body), other
     | other, NativeType.TForall(tps, body) ->
-        // Instantiate with fresh type variables
-        let freshVars = tps |> List.map (fun tp -> NativeType.TVar (freshTypeParamAuto tp.Kind range))
+        // Instantiate with fresh variables of each parameter's kind
+        let freshVars = tps |> List.map (fun tp -> freshInstanceOf tp range)
         let instantiatedBody = NativeTypes.instantiate tps freshVars body
         unify instantiatedBody other range
+
+    // A non-numeric type at an operator's numeric operand position (design c.1): the carrier
+    // variable is the numeric constraint; nothing but a numeric type or a variable can meet it.
+    | NativeType.TNum(CarrierRef.CVar v, _), other
+    | other, NativeType.TNum(CarrierRef.CVar v, _) ->
+        raise (UnificationException(NotNumeric(operandOf v, other, range)))
 
     // Anything else is a mismatch
     | _ ->
         raise (UnificationException(TypeMismatch(t1, t2, range)))
+
+/// `+` dispatches on the kind of its operands (design c.3, D5): the variable minted for its
+/// operand positions may bind to a numeric type or to string; anything else is CCS8000. The
+/// dispatch is attached to the variable and fires here, when the variable binds; it travels
+/// with the variable through union (`UnionFind.union`), generalisation and instantiation
+/// (`freshInstanceOf`), so a generalised `let g x y = x + y` re-dispatches at each instance.
+and private fireOperandDispatch (root: TypeParam) (ty: NativeType) (range: SourceRange) : unit =
+    match operandOf root with
+    | None -> ()
+    | Some op ->
+        match ty with
+        | NativeType.TNum _ | NativeType.TError _ -> ()
+        | other when Types.isStringType other -> ()
+        | other -> raise (UnificationException(NotNumeric(Some op, other, range)))
+
+/// One carrier equation (design a.2, plan D7): two constructors agree by name (the interim
+/// width comparison, retired at step 7); a carrier variable binds to a constructor or unions
+/// with another carrier variable, in the one store, through its kind-checked writers.
+and private unifyCarrier (t1: NativeType) (t2: NativeType) (c1: CarrierRef) (c2: CarrierRef) (range: SourceRange) : unit =
+    match CarrierRef.resolve c1, CarrierRef.resolve c2 with
+    | CarrierRef.Carrier tc1, CarrierRef.Carrier tc2 ->
+        if tc1.Name <> tc2.Name || tc1.Module <> tc2.Module then
+            raise (UnificationException(TypeMismatch(t1, t2, range)))
+    | CarrierRef.CVar v, CarrierRef.Carrier tc
+    | CarrierRef.Carrier tc, CarrierRef.CVar v -> bindCarrier v tc
+    | CarrierRef.CVar v1, CarrierRef.CVar v2 -> unionCarriers v1 v2
 
 /// One measure equation `d1 = d2` (design b.2). `solveDim` is pure over the store's lookup and a
 /// supply taken from the union-find; its returned bindings are the only writer of measure cells
@@ -326,8 +365,13 @@ let canUnify (t1: NativeType) (t2: NativeType) : bool =
             List.length args1 = List.length args2 &&
             List.forall2 check args1 args2
         | NativeType.TNum(c1, d1), NativeType.TNum(c2, d2) ->
-            // The dimensions are checked by the pure solver against the store without binding.
-            c1.Name = c2.Name && c1.Module = c2.Module
+            // The carriers are read without binding; the dimensions are checked by the pure
+            // solver against the store without binding.
+            let carriersAgree =
+                match CarrierRef.resolve c1, CarrierRef.resolve c2 with
+                | CarrierRef.Carrier tc1, CarrierRef.Carrier tc2 -> tc1.Name = tc2.Name && tc1.Module = tc2.Module
+                | _ -> true
+            carriersAgree
             && (match solveDim lookupMeasure (freshMeasureSupply ()) d1 d2 with Ok _ -> true | Error _ -> false)
         | NativeType.TFun(d1, r1), NativeType.TFun(d2, r2) ->
             check d1 d2 && check r1 r2
@@ -418,6 +462,10 @@ let solveConstraint (c: Constraint) : Result<unit, UnificationError> =
         | _ ->
             ignore range  // Would be used for error location
             Ok ()  // For now, accept - codegen will validate
+
+    | Constraint.OperandOf _ ->
+        // Lives on a variable and fires in `unify` when that variable binds; never in the list.
+        Ok ()
 
     | Constraint.HasTypeArgs(forallTy, args, resultTy, range) ->
         // Type application constraint - forallTy should be generic and instantiate to resultTy

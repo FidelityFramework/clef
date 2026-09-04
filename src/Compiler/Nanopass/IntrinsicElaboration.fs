@@ -47,7 +47,7 @@ let private mapsToIndex (ty: NativeType) : bool =
         | _ -> false
     match ty with
     | NativeType.TNativePtr _ | NativeType.TByref _ -> true
-    | NativeType.TNum(carrier, _) -> kindMapsToIndex carrier
+    | NativeType.TNum(carrier, _) -> CarrierRef.tryConstructor carrier |> Option.exists kindMapsToIndex
     | NativeType.TApp(tycon, _) -> kindMapsToIndex tycon
     | _ -> false
 
