@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 /// Node builder for constructing SemanticNodes with proper type attachment.
-module Clef.Compiler.PSGSaturation.SemanticGraph.Builder
+module Clef.Compiler.PSGSaturation.SemanticGraph.NodeBuilder
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
