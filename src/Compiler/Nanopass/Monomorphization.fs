@@ -40,9 +40,16 @@ let private matchTypeArgs (typars: TypeParam list) (scheme: NativeType) (instanc
         if not ok then () else
         match s with
         | NativeType.TVar tp when Set.contains tp.Id paramIds ->
-            match Map.tryFind tp.Id subst with
-            | None -> subst <- Map.add tp.Id (applySubst i) subst
-            | Some _ -> ()
+            // A measure-kinded parameter is neither key material nor substituted at cloning
+            // (design note d.3, DTS/DMM §2.3: dimensions never change the emitted instructions,
+            // so a measure-only instantiation is one body). Only type-kinded parameters are
+            // learned here; later, carrier-kinded ones join them.
+            match tp.Kind with
+            | TypeParamKind.Measure -> ()
+            | _ ->
+                match Map.tryFind tp.Id subst with
+                | None -> subst <- Map.add tp.Id (applySubst i) subst
+                | Some _ -> ()
         | _ ->
             match s, applySubst i with
             | NativeType.TApp (tc1, a1), NativeType.TApp (tc2, a2) when tc1.Name = tc2.Name && List.length a1 = List.length a2 ->
@@ -60,6 +67,7 @@ let private matchTypeArgs (typars: TypeParam list) (scheme: NativeType) (instanc
                 List.iter2 (fun (_, a) (_, b) -> go a b) f1 f2
             | NativeType.TVar _, _ -> ()          // a non-parameter variable in the scheme: nothing to learn
             | _, NativeType.TVar _ -> ()          // instance still open here: nothing to learn
+            | NativeType.TMeasure _, NativeType.TMeasure _ -> ()   // a measure position: nothing to learn (d.3)
             | NativeType.TForall (_, b1), other -> go b1 other
             | _ -> ok <- false
     go scheme instance
@@ -217,9 +225,11 @@ let private isGenericFunctionBinding (nodes: Map<NodeId, SemanticNode>) (node: S
         | _ -> None
     | _ -> None
 
-/// A printable key for a type-argument tuple (grouping instantiations).
+/// A printable key for a type-argument tuple (grouping instantiations). Measure-kinded parameters
+/// are not key material: two use sites that differ only in dimension share one body (d.3).
 let private instanceKey (typars: TypeParam list) (subst: Map<int, NativeType>) : string =
     typars
+    |> List.filter (fun tp -> tp.Kind <> TypeParamKind.Measure)
     |> List.map (fun tp ->
         match Map.tryFind tp.Id subst with
         | Some ty -> formatType (applySubst ty)
@@ -288,6 +298,8 @@ let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
                 let mutable redirect : Map<NodeId, NodeId> = Map.empty
                 groups |> List.iteri (fun gi (_, members) ->
                     let (_, subst, _) = List.head members
+                    // A measure-kinded parameter never appears in `subst` (matchTypeArgs), so it
+                    // is carried as itself: the clone keeps the scheme's measure variables.
                     let args = typars |> List.map (fun tp -> match Map.tryFind tp.Id subst with Some ty -> ty | None -> NativeType.TVar tp)
                     let substitute (ty: NativeType) = Clef.Compiler.NativeTypedTree.NativeTypes.instantiate typars args (canonicalizeVars ty)
                     let cloneName = sprintf "%s__mono%d" bindingName (gi + 1)
