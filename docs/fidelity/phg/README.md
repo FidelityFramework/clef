@@ -9,6 +9,7 @@ two.
 |---|---|
 | [PSG_to_PHG_Plan.md](./PSG_to_PHG_Plan.md) | The plan. The PHG writ large, the four integrity invariants, the two dispatches, the verified state of the code, Track A + Phases 0–5, the *Draining Alex* inventory, verification. |
 | [Increment_1_HelloProof_Obligations.md](./Increment_1_HelloProof_Obligations.md) | The first built increment: DMM layout invariants from the cross-compiled platform, as hyperedges. What it required, what was cobbled, what was built, measured results, decisions, next steps. |
+| [Closure_Retooling_Plan.md](./Closure_Retooling_Plan.md) | Increment 2, the microcosm: the flat closure moves from an MLIR plugin into PSG elaboration and saturation. The measured 24-sample baseline (17 pass; 5 of 7 failures are the closure family), the target form (C-01 §14.3, no casts, no plugin), the one open design decision, eight gated steps, and the CI drift gates including the dialect register. |
 | [Layout_As_Joint_Constraint.md](./Layout_As_Joint_Constraint.md) | The Phase 2 design: bringing layout up out of Alex into the PSG as joint constraints. The layout hyperedge, `placeSlots`, the seven VCs, projection onto $\alpha$, and why placement must move from type-check time to saturation. |
 
 Companion outside this folder: **`Composer/docs/Witness_Boundary_Audit.md`** —
@@ -22,5 +23,5 @@ Sections 4b and 4d document.
   land with it.
 - **Phase 0** — landed with Increment 1: `Hyperedge`/`EdgeClass`/`EdgeRole`, `kindEdges`, `SemanticGraph.Edges`; `NodeBuilder` and `Reachability` project the one table. `FoldIn.updateKindRefs` not yet converted.
 - **Increment 1** ([Increment_1_HelloProof_Obligations.md](./Increment_1_HelloProof_Obligations.md)) — **built and verified**: obligations are graph citizens minted by Baker recipes; the cross-compiled platform description is cross-applied to the values in it; 23 obligations, 23 × `unsat`, `pSysReadline` reads the declaration. **HelloProof's harness: PASS** — the two recorded readln leaks are retired (its `Prover.fsx` re-pointed at the graph-born pair, uncommitted in ship-of-theseus). Every string global carries `{clef.obligations = [...]}` — the transport rule's second carrier. Dead `cf`/`vector` vocabulary removed from Alex.
-- **Phase 2 design** — written. Implementation not started.
+- **Phase 2 / Increment 2** — planned ([Closure_Retooling_Plan.md](./Closure_Retooling_Plan.md)); baseline measured; implementation not started.
 - Phases 1, 3, 4, 5 — not started.
