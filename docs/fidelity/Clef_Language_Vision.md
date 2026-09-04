@@ -1,18 +1,18 @@
-# Keystone: A Concurrent Programming Language for Heterogeneous Compute
+# Clef: A Concurrent Programming Language for Heterogeneous Compute
 
 > ML semantics are the foundation, hardware targeting creates the structure, and incrementalism is the keystone.
 
-## What Keystone Is
+## What Clef Is
 
-Keystone is a concurrent programming language that happens to use functional idioms.
+Clef is a concurrent programming language that happens to use functional idioms.
 
 It compiles to CPU, GPU, NPU, FPGA, and CGRA via MLIR. It infers memory lifetimes, dimensional types, and hardware targeting from program structure alone.
 
-Keystone uses ML-family syntax with Python-like ergonomics, strong type inference, and a pure-functional programming model built on the actor paradigm.
+Clef uses ML-family syntax with Python-like ergonomics, strong type inference, and a pure-functional programming model built on the actor paradigm.
 
 ## The Three Inferences
 
-Most languages require the developer to specify at least one of these. Keystone infers all three from the same architectural constraints.
+Most languages require the developer to specify at least one of these. Clef infers all three from the same architectural constraints.
 
 ### 1. Dimensional Type Inference
 
@@ -52,7 +52,7 @@ This inference reads the program's *shape* - its dependency structure, dimension
 
 ### Actors as the Computation Substrate
 
-Keystone programs are networks of communicating actors. Every stateful interaction is a message. The actor model is the programming model.
+Clef programs are networks of communicating actors. Every stateful interaction is a message. The actor model is the programming model.
 
 An actor is a delimited continuation that suspends at message receipt and resumes when a message arrives. The mailbox is a continuation prompt. Actors are *continuations scheduled by a dependency graph*.
 
@@ -79,13 +79,13 @@ This is the central architectural insight.
 
 Traditional CPUs are **control-flow machines**: an instruction pointer moves through code sequentially. Emerging architectures - CGRAs, NPUs, FPGAs, spatial accelerators - are **data-flow machines**: computation is triggered by data availability.
 
-Keystone bridges this divide:
+Clef bridges this divide:
 
 - **Pure functional code is inherently a data-flow graph.** Referential transparency means ordering follows data dependencies alone.
 - **The same source code** lowers to a data-flow graph on spatial architectures (CGRA, NPU, FPGA) and to control-flow code on CPUs/GPUs.
 - **The CPU version is a degraded fallback** with explicit "flow loss" - the structural parallelism that data-flow hardware exploits natively is serialized on a von Neumann machine.
 
-This inverts the current industry assumption where CPU is primary and accelerators are optional add-ons. In Keystone, the data-flow graph is the primary semantic representation. CPU execution is what you get when the natural parallelism must be serialized.
+This inverts the current industry assumption where CPU is primary and accelerators are optional add-ons. In Clef, the data-flow graph is the primary semantic representation. CPU execution is what you get when the natural parallelism must be serialized.
 
 ### How Each Component Enables the Pivot
 
@@ -98,7 +98,7 @@ This inverts the current industry assumption where CPU is primary and accelerato
 | Delimited continuations | Actor suspension/resumption | Data-flow token semantics |
 | Dimensional types | Memory layout and cache optimization | Hardware mapping contract |
 
-## Why Keystone Exists
+## Why Clef Exists
 
 The computing industry is fragmenting into heterogeneous architectures. Every major chip - AMD Strix Halo, Apple M-series, Intel Meteor Lake - integrates multiple compute substrates with shared or coherent memory. New processor types (CGRAs, NPUs, photonic accelerators, spatial architectures) are emerging at an increasing rate.
 
@@ -106,13 +106,13 @@ Every one of these architectures ships with a bespoke, low-level SDK. There is n
 
 The 40-50 year old operating model - write for a von Neumann machine, optimize later for accelerators - cannot scale to a world with five or six fundamentally different compute substrates on a single chip.
 
-Keystone is designed to break this impasse: a high-level language with strong type inference and ML-family ergonomics where the dimensional type system is the contract between software intent and hardware capability. When a new processor type appears, it is a new substrate kind with new dimensional resolutions, expressed in the same language and the same programming model.
+Clef is designed to break this impasse: a high-level language with strong type inference and ML-family ergonomics where the dimensional type system is the contract between software intent and hardware capability. When a new processor type appears, it is a new substrate kind with new dimensional resolutions, expressed in the same language and the same programming model.
 
 ## Relationship to F#
 
-Keystone uses F#-compatible syntax and inherits Don Syme's design philosophy of lightweight, accessible ML-family programming. Pure F# libraries that do not depend on .NET framework types can compile on Keystone directly.
+Clef uses F#-compatible syntax and inherits Don Syme's design philosophy of lightweight, accessible ML-family programming. Pure F# libraries that do not depend on .NET framework types can compile on Clef directly.
 
-Keystone is its own language with its own type system, execution model, and targets:
+Clef is its own language with its own type system, execution model, and targets:
 
 - NTU dimensional type system with intrinsic units of measure
 - Actor-based execution with delimited continuations
@@ -125,7 +125,7 @@ The relationship is analogous to F* and F#: shared ML heritage and syntax famili
 ## Compiler Architecture
 
 ```
-                    Keystone Source (.ks)
+                    Clef Source (.clef)
                          |
                     +----------+
                     |   CCS   |  NTU types, dimensional inference
@@ -162,13 +162,13 @@ The fork between substrates happens at Alex (code generation). CCS, Baker, nanop
 
 | | |
 |---|---|
-| **Language** | Keystone |
-| **File extension** | `.ks` |
+| **Language** | Clef |
+| **File extension** | `.clef` |
 | **CLI** | `ks` |
 | **Search / SEO** | kslang |
 | **Actor model** | Olivier (actors) / Prospero (supervisors) |
 | **Type system** | Native Type Universe (NTU) |
-| **Compiler frontend** | CCS (Keystone Compiler Services) |
+| **Compiler frontend** | CCS (Clef Compiler Services) |
 | **Code generation** | Alex (Elements / Patterns / Witnesses) |
 | **Backend orchestration** | Composer |
 | **Memory layout contracts** | BAREWire |

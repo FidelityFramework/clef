@@ -28,6 +28,8 @@ CORPUS=(
   # Lattice: the editor witnesses the PSG exactly as Alex does; the forks are corpus, not exhibits
   "$ROOT/lattice-analyzers" "$ROOT/lattice-vim" "$ROOT/lattice-vscode" "$ROOT/lattice-vscode-helpers" "$ROOT/ClefAutoComplete"
   "$ROOT/ionide-native-analyzers" "$ROOT/Ionide-vim-fsnative" "$ROOT/FsNativeAutoComplete"
+  # Atelier: the commercial home of the toolchain (native/WREN cross-platform); 100% design today
+  "$ROOT/Atelier"
 )
 
 # Measurement, never failing: how much of each Lattice fork still addresses the F# Compiler Service
@@ -57,10 +59,12 @@ RETIRED=(
   'fat pointer|fat ptr|\{ptr: \*|ptr: \*u8|ptr: \*T|\{ptr, len\}'   # strings/arrays are memref views (buffer + dimension); no {ptr, len} header
   'FNCS|F# Native|FSharp\.Native\.|fsnative|FSNAC|FsNative'      # pre-NTU/PSG naming, fully set aside: the product is Clef, the service is CCS, the universe is NTU, the graph is the PSG
   '\bFirefly\b'                                            # the pre-rename Composer; same family
+  '\bKeystone\b|\bkeystone/|\.ks\b'                         # the pre-rename language name and its file extension
+  '!fir\.'                                                 # a custom type dialect; the witnessed vocabulary is five dialects and a string is memref<?xi8>
 )
 
 # A line that carries one of these markers is talking *about* the retired term, not using it.
-SUPERSESSION_MARKERS='retired|retires|superseded|supersession|SHALL NOT|earlier revision|earlier framing|prior art|no longer|not planned|Retired\)|is going away|was written as|dissolved|interim|proposal(.s)? instruction|not denotable|user-denotable|replaces|stripped|NOT null|no null|not a null|never null|non-null|FFI boundary|at the boundary|C boundary|the sentinel|sentinel node|CHandle|no fat|not a fat|not fat|set aside|pre-NTU|formerly|renamed from|supersed|since deleted|-era |re-labeled|relabeled|now Composer|formerly Firefly|Firefly, now|renamed to Composer|rename .Firefly|Firefly talk|~~Firefly~~|not user-denotable|no raw pointer|no raw-pointer|compiler-internal|internal-only|pre-strip|below the witness boundary|backend leg'
+SUPERSESSION_MARKERS='retired|retires|superseded|supersession|SHALL NOT|earlier revision|earlier framing|prior art|no longer|not planned|Retired\)|is going away|was written as|dissolved|interim|proposal(.s)? instruction|not denotable|user-denotable|replaces|stripped|NOT null|no null|not a null|never null|non-null|FFI boundary|at the boundary|C boundary|the sentinel|sentinel node|CHandle|no fat|not a fat|not fat|set aside|pre-NTU|formerly|renamed from|supersed|since deleted|-era |re-labeled|relabeled|now Composer|formerly Firefly|renamed|does not exist|no compiler|kept as reference|Firefly, now|renamed to Composer|rename .Firefly|Firefly talk|~~Firefly~~|not user-denotable|no raw pointer|no raw-pointer|compiler-internal|internal-only|pre-strip|below the witness boundary|backend leg'
 
 # Files whose purpose is to record the retirement itself, or history that must stay verbatim.
 ALLOW_FILES=(
@@ -69,6 +73,7 @@ ALLOW_FILES=(
   'clef/docs/fidelity/phg/Closure_Retooling_Plan.md'
   'clef/docs/fidelity/phg/PSG_to_PHG_Plan.md'
   'clef/docs/fidelity/phg/drift-gate.sh'
+  'clef/docs/fidelity/phg/Lattice_Consumer_Contract.md'
   'Composer/docs/Witness_Boundary_Audit.md'
   # the superseding designs: they quote the retired vocabulary in order to retire it,
   # and they define the one place it may survive (below the boundary, as transliteration)
@@ -108,6 +113,19 @@ SCHEDULED=(
   'ClefAutoComplete/build/::FNCS'                                           # same
   'lattice-vscode/src/::FNCS'                                               # client code still addressing the old server name; same migration step
   'lattice-vscode/release/::FNCS'                                           # release notes, history
+  # The forks' upstream bodies are slated for retirement/reduction per Lattice_Consumer_Contract §6; their
+  # READMEs state the position, and the remainder is counted, not failed, until the reduction lands.
+  'ClefAutoComplete/docs/::FNCS' 'ClefAutoComplete/utils/::FNCS' 'ClefAutoComplete/.github/::FNCS'
+  'ClefAutoComplete/build.fsx::FNCS' 'ClefAutoComplete/CONTRIBUTING.md::FNCS' 'ClefAutoComplete/CHANGELOG.md::FNCS'
+  'ClefAutoComplete/FsNativeAutoComplete.sln::FNCS' 'ClefAutoComplete/Directory.Build.props::FNCS'
+  'ClefAutoComplete/paket::FNCS' 'ClefAutoComplete/.devcontainer/::FNCS' 'ClefAutoComplete/.gitpod.yml::FNCS'
+  'ClefAutoComplete/.vscode/::FNCS' 'ClefAutoComplete/.config/::FNCS' 'ClefAutoComplete/global.json::FNCS'
+  'lattice-vscode/IONIDE_HERITAGE.md::FNCS' 'lattice-vscode/RELEASE_NOTES.md::FNCS' 'lattice-vscode/CONTRIBUTING.md::FNCS'
+  'lattice-vscode/paket::FNCS' 'lattice-vscode/build/::FNCS' 'lattice-vscode/.github/::FNCS'
+  'lattice-vim/README.mkd::FNCS' 'lattice-vim/IONIDE_HERITAGE.md::FNCS' 'lattice-vim/doc/::FNCS'
+  'lattice-analyzers/IONIDE_HERITAGE.md::FNCS' 'lattice-analyzers/docs/::FNCS' 'lattice-analyzers/.github/::FNCS'
+  'lattice-vscode-helpers/::FNCS'
+  'lattice-vscode/release/::Firefly' 'ClefAutoComplete/test/::Firefly'
   'Composer/docs/PRDs/::FNCS'                                               # implementation PRDs written under the old name; bannered elsewhere; move with the code
   'clef-lang-site/hugo/content/blog/::FNCS'                                 # dated posts
   'Composer/docs/PRDs/::Firefly'                                            # implementation PRDs under the old name

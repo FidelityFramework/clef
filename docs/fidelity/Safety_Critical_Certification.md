@@ -1,6 +1,6 @@
 # Safety-Critical Certification and Industrial Control Systems
 
-> Keystone's nanopass architecture, graph-native compilation, and proof-carrying pipeline satisfy safety-critical certification requirements by construction.
+> Clef's nanopass architecture, graph-native compilation, and proof-carrying pipeline satisfy safety-critical certification requirements by construction.
 
 ## The Industry Problem
 
@@ -8,7 +8,7 @@ Safety-critical certification standards (DO-178C for avionics, IEC 61508 for ind
 
 As of early 2026, no Rust component has achieved DO-178C certification. The Rust compiler hides control flow paths through MIR transformations and LLVM optimization passes, complicating the traceability that auditors require.
 
-## How Keystone Satisfies Certification by Construction
+## How Clef Satisfies Certification by Construction
 
 ### Source-to-Object Traceability
 
@@ -56,15 +56,15 @@ This provides formal verification integrated into the compilation pipeline, stro
 | Deterministic behavior | Required | Required | Required |
 | Formal verification | Recommended for Level A | Recommended for SIL 4 | Recommended for ASIL D |
 
-All five requirements are addressed by Keystone's architecture: PSG traceability, graph-native structural coverage, nanopass tool qualification, pure functional determinism, and proof-carrying formal verification.
+All five requirements are addressed by Clef's architecture: PSG traceability, graph-native structural coverage, nanopass tool qualification, pure functional determinism, and proof-carrying formal verification.
 
 ## Control Systems as Natural Fit
 
-Industrial control systems are networks of communicating agents (sensors, controllers, actuators, supervisors) operating across multiple compute substrates (PLCs, embedded processors, SCADA servers, HMI workstations). This maps directly to Keystone's programming model.
+Industrial control systems are networks of communicating agents (sensors, controllers, actuators, supervisors) operating across multiple compute substrates (PLCs, embedded processors, SCADA servers, HMI workstations). This maps directly to Clef's programming model.
 
 ### The Actor Model Maps to Control Architecture
 
-| Control System Component | Keystone Equivalent |
+| Control System Component | Clef Equivalent |
 |---|---|
 | Sensors | Actors that emit readings |
 | Controllers (PID, state machines) | Actors that process inputs and emit commands |
@@ -87,9 +87,9 @@ A control system propagates changes through a dependency graph: sensor reading c
 
 A refinery control system already spans multiple compute substrates. Today these are programmed in separate languages (ladder logic for PLCs, C for embedded, C++ for SCADA, JavaScript for HMI) with separate toolchains and no type safety across boundaries.
 
-Keystone compiles a single codebase to all substrates with BAREWire contracts ensuring type-safe communication at every boundary:
+Clef compiles a single codebase to all substrates with BAREWire contracts ensuring type-safe communication at every boundary:
 
-| Substrate | Control System Role | Keystone Target |
+| Substrate | Control System Role | Clef Target |
 |---|---|---|
 | FPGA / PLC | Safety interlocks, fast inner loops | CIRCT → SystemVerilog |
 | Embedded CPU | Control algorithms, protocol handling | LLVM → native binary |
@@ -106,7 +106,7 @@ Keystone compiles a single codebase to all substrates with BAREWire contracts en
 
 ### Deterministic Execution for Real-Time
 
-Control systems require predictable timing. Keystone provides:
+Control systems require predictable timing. Clef provides:
 
 - Deterministic memory via escape analysis and per-actor arenas (no GC pauses)
 - Delimited continuations as compiler transformations (no async runtime)
