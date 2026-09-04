@@ -675,6 +675,18 @@ module BufferMetadata =
     [<Literal>]
     let TrimDelimiter = "Buffer.TrimDelimiter"
 
+/// Metadata keys for the obligations a node is constrained by: the anchor
+/// names of every obligation hyperedge this node is a source of, projected
+/// onto the node at saturation. This is the transport rule's first carrier
+/// (PHG paper 2.4a) -- a saturated annotation the witness reads as codata --
+/// and the witness reifies it as the second (2.4b): an attribute on the op it
+/// emits, so the artifact carries the correspondence explicitly.
+[<RequireQualifiedAccess>]
+module ObligationMetadata =
+    /// Anchor names, in obligation-node order (MetadataValue.StringList)
+    [<Literal>]
+    let Anchors = "Obligation.Anchors"
+
 /// Metadata keys for closure pair construction decisions.
 /// Baker marks zero-capture lambdas in value position with these keys,
 /// signaling to SSAAssignment that a closure pair must be constructed

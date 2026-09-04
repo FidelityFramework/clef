@@ -21,6 +21,6 @@ Sections 4b and 4d document.
 - **Track A** — landed (`65fa9407d`). The matching `fsproj` entry removal must
   land with it.
 - **Phase 0** — landed with Increment 1: `Hyperedge`/`EdgeClass`/`EdgeRole`, `kindEdges`, `SemanticGraph.Edges`; `NodeBuilder` and `Reachability` project the one table. `FoldIn.updateKindRefs` not yet converted.
-- **Increment 1** ([Increment_1_HelloProof_Obligations.md](./Increment_1_HelloProof_Obligations.md)) — **built and verified**: obligations are graph citizens minted by Baker recipes; the cross-compiled platform description is cross-applied to the values in it; 23 obligations, 23 × `unsat`, `pSysReadline` reads the declaration. **HelloProof's harness: PASS** — the two recorded readln leaks are retired (its `Prover.fsx` re-pointed at the graph-born pair, uncommitted in ship-of-theseus).
+- **Increment 1** ([Increment_1_HelloProof_Obligations.md](./Increment_1_HelloProof_Obligations.md)) — **built and verified**: obligations are graph citizens minted by Baker recipes; the cross-compiled platform description is cross-applied to the values in it; 23 obligations, 23 × `unsat`, `pSysReadline` reads the declaration. **HelloProof's harness: PASS** — the two recorded readln leaks are retired (its `Prover.fsx` re-pointed at the graph-born pair, uncommitted in ship-of-theseus). Every string global carries `{clef.obligations = [...]}` — the transport rule's second carrier. Dead `cf`/`vector` vocabulary removed from Alex.
 - **Phase 2 design** — written. Implementation not started.
 - Phases 1, 3, 4, 5 — not started.
