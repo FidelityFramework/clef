@@ -140,19 +140,50 @@ conversions) join the set once decisions D1 and D4 are taken; their programs are
 Steps 1–5 are the increment agreed on 2026-09-04; they precede every fan-out (closure retooling, suspension
 recipe, sentinel collections, the Lattice server).
 
-## 6. Decisions for the user
+## 6. Decisions
 
-- **D1, two width regimes.** `ntu-types.md` and `ntu-dimensional-architecture.md` define named widths as
-  distinct types; `width-inference.md` §10.1 says width "SHALL be derived from the value's analyzed range,
-  not from a target type name". Recommendation: named widths are declared representations and remain type
-  identity; range inference is a coeffect that validates declared widths (overflow, narrowing), narrows
-  unannotated values, and drives FPGA register sizing; §10.1 is softened to "not only from a type name".
-- **D2, dimensional identity and subtyping** (`ntu-dimensional` §7.2, left as a question). Recommendation:
-  access covariant (`ReadWrite ≤ ReadOnly`), region and memory space invariant, both part of identity.
-- **D3, diagnostic series.** `CCS8xxx` is the spec's; the code and clef's Appendix D move to it.
-- **D4, representation of a measured numeric.** A measure slot on the numeric kind (recommended) versus a
-  measure type argument on the constructor; the slot keeps `float` arity 0 and puts the dimension where the
-  paper puts it, on the numeric type itself.
-- **D5, `+` on strings.** `'T -> 'T -> 'T` currently admits `"a" + "b"`; whether string concatenation stays
-  on `+` (F# heritage) or goes to `String.concat2` only decides whether the numeric constraint in step 3
-  admits `string`.
+Decided 2026-09-04 (D2–D5 by the user; D1 re-derived from the design corpus and pending the user's word).
+
+- **D1, one width regime, not two (re-derived; pending).** Sources: `width-inference.md` §1, §5, §6, §8,
+  §10; `numeric-selection.md` §3 (tiers), §3.4 (precedence override), §6 (unobservable ranges), §6.1
+  (the bare/dimensioned seam); the site posts *The Gift of Deferred Inference* and *FPGA and Hardware
+  Inference*; HelloArty (`Behavior.clef:55-58` declares `Counter: int` and receives 29 bits;
+  `docs/AutomaticPipelineInference.md` places the analysis in CCS and limits it to structurally certain
+  facts). What they say: the type of a number is its kind (integer or real) and its dimension. Width and
+  representation are not part of the type; they are coeffects derived from the analysed range per target at
+  saturation, and a declared machine model is the established pattern for how a declaration meets an
+  inference: the analysis runs regardless, validates the declaration, and a mismatch is a diagnostic. A
+  written concrete width (`int32`, `uint8`, `float32`, `posit<32,2>`) is therefore a Tier-3 **seal**: the
+  highest-precedence range claim, which turns the selector into a checker (the analysed range must be
+  covered by the seal, else a coverage diagnostic). `nativeint` is a seal whose width the platform
+  description supplies. Ada is the precedent: range and precision belong to the type declaration, a
+  representation clause (`'Size`) is validated against them, and dimensions are an aspect of the numeric
+  type; VHDL puts range and width on the subtype the same way. Consequences: (1) two different seals
+  meeting is an explicit-conversion site, so W-1 stands for seal against seal; (2) a bare operand meeting a
+  sealed one adopts the seal when its range is covered, so `1 + 1L` is accepted (the literal is bare with a
+  point range); (3) an unobservable range is an error for any integer and for a dimensioned real, and
+  lowers to IEEE `f64` for a bare real, exactly as the two chapters state, which on the CPU leg means every
+  boundary integer (FFI, parse, syscall) carries a seal; (4) the CPU leg rounds a bare width up to the
+  native size for arithmetic and never narrows below the range (`width-inference.md` §8). The earlier
+  recommendation to soften §10.1 is withdrawn; §10.1 stands as written. The interim
+  `Composer/src/MiddleEnd/PSGElaboration/IntervalAnalysis.fs` reads no declared width, checks no seal, and
+  records nothing for an unbounded value; the failure is raised later by the witness
+  (`Alex/XParsec/PSGCombinators.fs:120`, `failwithf "error FPGA0001"`, FPGA only, CPU falls back to the
+  platform word at `:104`), which is Alex deciding, in a non-CCS series, and its suggested fix `int<32>`
+  puts a width in the slot D4 gives to the measure. The analysis moves to CCS as the range coeffect
+  (step 7) and gains the seal check and the unbounded diagnostic there; seal syntax is open
+  (`numeric-selection.md` §14.1) and must not collide with the measure slot.
+- **D2, dimensional identity (decided: exact match).** Two dimensional types are the same when every
+  component matches: unit, memory space, region, access, and seal where present. There is no subtyping on
+  any component. A read-write pointer where a read-only one is required is an explicit narrowing, which is
+  a node in the graph rather than a rule in the checker.
+- **D3, diagnostic series (decided: CCS).** Every `FS`-prefixed code is retired, including the lexer and
+  parser codes inherited from FCS; a mapping table lands with hardening step 4 and clef's Appendix D moves
+  with it.
+- **D4, where the measure lives (decided: on the numeric type).** The measure is a component of the
+  numeric type node, beside the range and representation annotations that accrue to it, as Ada's dimension
+  aspect and VHDL's range constraint sit on the type rather than as a parameter. `float<newtons>` is
+  Kennedy's surface syntax for that component, not a type-constructor application; `float` keeps arity 0.
+- **D5, `+` on strings (decided: concatenates).** `+` dispatches on the kind of its operands: on numerics it
+  is the unit-unified add with a range obligation; on strings it is the concat recipe with an extent
+  obligation. No proof complication follows, because each dispatch emits its own obligation family.
