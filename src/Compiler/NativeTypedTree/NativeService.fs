@@ -211,17 +211,19 @@ let parseString (source: string) (fileName: string) (options: ParseOptions) : Pa
         // Every error-severity diagnostic the parse logged is a parse failure. The message is
         // located where the exception carries a range; the parser family takes its CCS codes with
         // the step-4 mapping table (Dimensional_Vetting_Plan.md D3), so no code is minted here.
-        let located (m: range) (text: string) =
-            sprintf "%s(%d,%d): %s" m.FileName m.StartLine (m.StartColumn + 1) text
+        // An inherited lexer or parser diagnostic keeps its F# number under the CCS prefix
+        // (error-handling.md, the CCS code table): F# number 10 is CCS0010, 58 is CCS0058.
+        let located (number: int) (m: range) (text: string) =
+            sprintf "CCS%04d: %s(%d,%d): %s" number m.FileName m.StartLine (m.StartColumn + 1) text
         let rec render (exn: exn) =
             match exn with
-            | DiagnosticWithText(_, text, m) -> located m text
-            | Clef.Compiler.ParseHelpers.IndentationProblem(text, m) -> located m text
-            | Clef.Compiler.ParseHelpers.SyntaxError(_, m) -> located m "Syntax error: unexpected token"
+            | DiagnosticWithText(number, text, m) -> located number m text
+            | Clef.Compiler.ParseHelpers.IndentationProblem(text, m) -> located 58 m text
+            | Clef.Compiler.ParseHelpers.SyntaxError(_, m) -> located 10 m "Syntax error: unexpected token"
             | WrappedError(inner, m) ->
                 match inner with
                 | DiagnosticWithText _ | Clef.Compiler.ParseHelpers.IndentationProblem _ | Clef.Compiler.ParseHelpers.SyntaxError _ -> render inner
-                | _ -> located m inner.Message
+                | _ -> located 0 m inner.Message
             | _ -> exn.Message
         let errors =
             diagnosticsLogger.Diagnostics
@@ -265,7 +267,7 @@ let defaultCheckOptions = {
 
 /// Convert unification errors to diagnostics. A measure failure carries its own code (design b.5:
 /// CCS8040 with both sides rendered plus the residual, CCS8041 for no integer solution, the
-/// CCS8048 family for an unrepresentable exponent); the other cases keep the FS0001 blanket until
+/// CCS8048 family for an unrepresentable exponent); every other case carries its own CCS code (D3, error-handling.md's table) since
 /// the D3 mapping table lands with CS-7.
 let private errorsToDiagnostics (errors: UnificationError list) : Diagnostic list =
     errors |> List.map (fun e ->
@@ -287,8 +289,11 @@ let private errorsToDiagnostics (errors: UnificationError list) : Diagnostic lis
             | MeasureMismatch _ -> DiagnosticCodes.CCS8040_MeasureMismatch
             | NoIntegerSolution _ -> DiagnosticCodes.CCS8041_NoIntegerSolution
             | MeasureExponentOutOfRange _ -> DiagnosticCodes.CCS8048_RationalMeasureExponent
-            | TypeMismatch _ | InfiniteType _ | ArityMismatch _
-            | TupleLengthMismatch _ | TupleKindMismatch _ | ByrefKindMismatch _ -> DiagnosticCodes.FS0001_GenericError
+            | TypeMismatch _ -> DiagnosticCodes.CCS8003_TypeMismatch
+            | InfiniteType _ -> DiagnosticCodes.CCS8005_InfiniteType
+            | ArityMismatch _ -> DiagnosticCodes.CCS8004_ArityMismatch
+            | TupleLengthMismatch _ | TupleKindMismatch _ -> DiagnosticCodes.CCS8006_TupleMismatch
+            | ByrefKindMismatch _ -> DiagnosticCodes.CCS8007_ByrefKindMismatch
         {
             Severity = NativeDiagnosticSeverity.Error
             Code = code
@@ -1032,7 +1037,7 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
         checkExpr env builder expr
 
     //---------------------------------------------------------------------
-    // Null - REJECTED in Clef (FS8100)
+    // Null - REJECTED in Clef (CCS8010)
     //---------------------------------------------------------------------
     | SynExpr.Null r ->
         addNullError r env
@@ -2150,7 +2155,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 // BCL namespaces are not available in native compilation: System.*, FSharp.*, Microsoft.*
                 // are blocked. (The former FSharp.Native.* whitelist was a pre-NTU vestige; nothing opens it.)
                 if ns.StartsWith("System.") || ns.StartsWith("FSharp.") || ns.StartsWith("Microsoft.") then
-                    addNativeError DiagnosticCodes.FS8500_BclReferenceNotAllowed range
+                    addNativeError DiagnosticCodes.CCS8080_BclReferenceNotAllowed range
                         (sprintf "Cannot open namespace '%s'. BCL namespaces are not available in native compilation. Use intrinsics instead." ns) env
                     env
                 else
@@ -2352,13 +2357,14 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
     match input with
     | ParsedInput.ImplFile implFile -> checkImplFile implFile
     | ParsedInput.SigFile _ ->
-        // Signature files not yet supported
+        // A signature file has no checker yet: the input contributes no graph, and that is an
+        // error rather than a warning, because a warning would let the program lose a file silently.
         {
             Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty; Edges = [] }
             Diagnostics = [{
-                Severity = NativeDiagnosticSeverity.Warning
-                Code = "FS0000"
-                Message = "Signature files not yet supported in native checker"
+                Severity = NativeDiagnosticSeverity.Error
+                Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+                Message = "Signature files are not supported by the checker; the file contributes nothing"
                 Range = dummyRange
                 RelatedNodes = []
                 Reachability = ReachabilityContext.Unknown

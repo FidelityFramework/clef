@@ -237,7 +237,7 @@ let mkGraph (filePairs: FilePairMap) (files: FileInProject array) : Graph<FileIn
                 | Some sigIdx -> Array.singleton sigIdx
 
             // Add a link from signature files to their implementation files, if the implementation file comes before the signature file.
-            // This allows us to emit FS0238 (implementation already given).
+            // This allows us to emit CCS0238 (implementation already given).
             let implementationGivenBeforeSignature =
                 match filePairs.TryGetOutOfOrderImplementationIndex file.Idx with
                 | None -> Array.empty

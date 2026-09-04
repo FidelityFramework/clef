@@ -40,57 +40,51 @@ let instantiateTForall (ty: NativeType) (range: SourceRange) : NativeType =
 /// Error codes for Clef specific diagnostics.
 /// These follow the FS8xxx range to distinguish from standard F# errors.
 module DiagnosticCodes =
-    // Type system (FS8000-FS8099)
-    let FS8000_TypeMismatch = "FS8000"
-    let FS8010_NullNotSupported = "FS8010"
-    let FS8011_ObjNotSupported = "FS8011"
-    let FS8012_BoxingNotSupported = "FS8012"
-    let FS8013_DynamicNotSupported = "FS8013"
-
-    // Null-freedom (FS8100-FS8199)
-    let FS8100_NullLiteral = "FS8100"
-    let FS8101_UninitializedValue = "FS8101"
-    let FS8102_ExceptionPattern = "FS8102"
-    let FS8103_TypeDoesNotSupportNull = "FS8103"
-    let FS8104_UncheckedDefault = "FS8104"
-
-    // Memory management (FS8200-FS8299)
-    let FS8200_LifetimeError = "FS8200"
-    let FS8201_RegionMismatch = "FS8201"
-    let FS8202_EscapingReference = "FS8202"
-
-    // Platform bindings (FS8300-FS8399)
-    let FS8300_PlatformBindingError = "FS8300"
-    let FS8301_UnsupportedPlatformOperation = "FS8301"
-
-    // Code generation (FS8400-FS8499)
-    let FS8400_CodeGenError = "FS8400"
-    let FS8401_UnsupportedConstruct = "FS8401"
-
-    // BCL rejection (FS8500-FS8599)
-    // BCL types/namespaces are NEVER allowed in Clef
-    let FS8500_BclReferenceNotAllowed = "FS8500"
-    let FS8501_SystemNamespaceNotAllowed = "FS8501"
-    let FS8502_MicrosoftNamespaceNotAllowed = "FS8502"
-
-    // Platform binding resolution (FS8600-FS8699)
-    let FS8600_PlatformBindingUndefined = "FS8600"
-
-    // Record type resolution (FS8700-FS8799)
-    // Per clef-lang-spec: Field Label Resolution Algorithm error codes
-    let FS8701_NoFields = "FS8701"
-    let FS8702_UndefinedField = "FS8702"
-    let FS8703_ConflictingFields = "FS8703"
-    let FS8704_AmbiguousFields = "FS8704"
-    let FS8705_MissingFields = "FS8705"
-
-    // Constraint-related errors (FS8710-FS8719)
-    let FS8710_NullConstraint = "FS8710"
-    let FS8711_UnsupportedConstraint = "FS8711"
-
-    // Generic/fallback
-    let FS0001_GenericError = "FS0001"
-    let FS0002_GenericWarning = "FS0002"
+    // Decision D3 (Dimensional_Vetting_Plan.md): every diagnostic carries a CCS-series code, allocated
+    // inside the blocks error-handling.md fixes and never reassigned; the table there is the record.
+    // Type system (CCS8000-CCS8099)
+    let CCS8003_TypeMismatch = "CCS8003"
+    let CCS8004_ArityMismatch = "CCS8004"
+    let CCS8005_InfiniteType = "CCS8005"
+    let CCS8006_TupleMismatch = "CCS8006"
+    let CCS8007_ByrefKindMismatch = "CCS8007"
+    let CCS8008_UndefinedConstructor = "CCS8008"
+    let CCS8009_UndefinedValue = "CCS8009"
+    let CCS8010_NullKeyword = "CCS8010"
+    let CCS8060_ObjNotSupported = "CCS8060"
+    let CCS8061_BoxingNotSupported = "CCS8061"
+    let CCS8062_DynamicNotSupported = "CCS8062"
+    let CCS8063_QuotePatternNotSupported = "CCS8063"
+    let CCS8064_InstanceMemberPatternNotSupported = "CCS8064"
+    let CCS8080_BclReferenceNotAllowed = "CCS8080"
+    let CCS8081_SystemNamespaceNotAllowed = "CCS8081"
+    let CCS8082_MicrosoftNamespaceNotAllowed = "CCS8082"
+    let CCS8083_UncheckedDefault = "CCS8083"
+    let CCS8090_InternalInvariant = "CCS8090"
+    let CCS8091_NullableAnnotationIgnored = "CCS8091"
+    let CCS8092_TypeArgumentsOnNonScheme = "CCS8092"
+    // Memory management (CCS8100-CCS8199)
+    let CCS8100_RegionMismatch = "CCS8100"
+    let CCS8101_LifetimeError = "CCS8101"
+    let CCS8102_EscapingReference = "CCS8102"
+    // Platform bindings (CCS8200-CCS8299)
+    let CCS8200_PlatformBindingError = "CCS8200"
+    let CCS8201_UnsupportedPlatformOperation = "CCS8201"
+    let CCS8202_PlatformBindingUndefined = "CCS8202"
+    // Effect system (CCS8300-CCS8399)
+    let CCS8300_ExceptionPattern = "CCS8300"
+    // Code generation (CCS8400-CCS8499)
+    let CCS8400_CodeGenError = "CCS8400"
+    let CCS8401_UnsupportedConstruct = "CCS8401"
+    // Record field label resolution (CCS8701-CCS8705, inference-name-resolution.md)
+    let CCS8701_NoFields = "CCS8701"
+    let CCS8702_UndefinedField = "CCS8702"
+    let CCS8703_ConflictingFields = "CCS8703"
+    let CCS8704_AmbiguousFields = "CCS8704"
+    let CCS8705_MissingFields = "CCS8705"
+    // Constraints (CCS8710-CCS8719)
+    let CCS8710_NullConstraint = "CCS8710"
+    let CCS8711_UnsupportedConstraint = "CCS8711"
 
     // CCS series, type system, width and seals (CCS8000-CCS8099):
     // CCS8000: a non-numeric operand at an operator's numeric position (design c.1, W-2).
@@ -292,9 +286,6 @@ let addNativeError (code: string) (r: range) (message: string) (env: TypeEnv) : 
         Reachability = ReachabilityContext.Unknown
     } env
 
-/// Create and add an error diagnostic (generic fallback - prefer addNativeError with specific code)
-let addError (r: range) (message: string) (env: TypeEnv) : unit =
-    addNativeError DiagnosticCodes.FS0001_GenericError r message env
 
 /// Create and add a warning diagnostic with specific code
 let addNativeWarning (code: string) (r: range) (message: string) (env: TypeEnv) : unit =
@@ -307,32 +298,29 @@ let addNativeWarning (code: string) (r: range) (message: string) (env: TypeEnv) 
         Reachability = ReachabilityContext.Unknown
     } env
 
-/// Create and add a warning diagnostic (generic fallback)
-let addWarning (r: range) (message: string) (env: TypeEnv) : unit =
-    addNativeWarning DiagnosticCodes.FS0002_GenericWarning r message env
 
 //-------------------------------------------------------------------------
 // Native-Specific Error Helpers
 //-------------------------------------------------------------------------
 
-/// Emit FS8100: Cannot use 'null' in Clef
+/// Emit CCS8010: Cannot use 'null' in Clef
 let addNullError (r: range) (env: TypeEnv) : unit =
-    addNativeError DiagnosticCodes.FS8100_NullLiteral r
+    addNativeError DiagnosticCodes.CCS8010_NullKeyword r
         "Cannot use 'null' in Clef; use 'ValueNone' for optional values" env
 
-/// Emit FS8011: The type 'obj' is not available in Clef
+/// Emit CCS8060: The type 'obj' is not available in Clef
 let addObjError (r: range) (env: TypeEnv) : unit =
-    addNativeError DiagnosticCodes.FS8011_ObjNotSupported r
+    addNativeError DiagnosticCodes.CCS8060_ObjNotSupported r
         "The type 'obj' (System.Object) is not available in Clef; use discriminated unions or SRTP" env
 
-/// Emit FS8012: Boxing is not supported
+/// Emit CCS8061: Boxing is not supported
 let addBoxingError (r: range) (env: TypeEnv) : unit =
-    addNativeError DiagnosticCodes.FS8012_BoxingNotSupported r
+    addNativeError DiagnosticCodes.CCS8061_BoxingNotSupported r
         "Boxing is not supported in Clef; the native type system does not include 'obj'" env
 
 /// Emit warning for null annotation - ignored in Clef
 let addNullWarning (r: range) (env: TypeEnv) : unit =
-    addNativeWarning DiagnosticCodes.FS8101_UninitializedValue r
+    addNativeWarning DiagnosticCodes.CCS8091_NullableAnnotationIgnored r
         "Nullable annotation ignored in Clef; native types are null-free by design" env
 
 //-------------------------------------------------------------------------
@@ -512,7 +500,7 @@ let resolveRecordTypeFromFields
     : Result<NativeType, string * string> =
 
     if List.isEmpty fieldNames then
-        Result.Error((DiagnosticCodes.FS8701_NoFields, "Record expression must have at least one field"))
+        Result.Error((DiagnosticCodes.CCS8701_NoFields, "Record expression must have at least one field"))
     else
         // Step 1: Get candidates for each field
         let candidateSets =
@@ -529,8 +517,8 @@ let resolveRecordTypeFromFields
 
         match undefinedFields with
         | first :: _ ->
-            // FS8702: Undefined field label
-            Result.Error((DiagnosticCodes.FS8702_UndefinedField,
+            // CCS8702: Undefined field label
+            Result.Error((DiagnosticCodes.CCS8702_UndefinedField,
                    sprintf "Field '%s' is not defined in any record type in scope" first))
         | [] ->
             // Step 2: Compute intersection
@@ -559,9 +547,9 @@ let resolveRecordTypeFromFields
             // Step 4: Disambiguate
             match Set.count intersection with
             | 0 ->
-                // FS8703: Conflicting fields - no record type has all fields
+                // CCS8703: Conflicting fields - no record type has all fields
                 let fieldListStr = fieldNames |> String.concat ", "
-                Result.Error((DiagnosticCodes.FS8703_ConflictingFields,
+                Result.Error((DiagnosticCodes.CCS8703_ConflictingFields,
                        sprintf "No record type has all fields: %s" fieldListStr))
             | 1 ->
                 // Exactly one candidate - success!
@@ -575,7 +563,7 @@ let resolveRecordTypeFromFields
                 | None ->
                     // INTERNAL ERROR: Field label resolution found this type name,
                     // so it MUST exist in RecordDefs.
-                    Result.Error((DiagnosticCodes.FS0001_GenericError,
+                    Result.Error((DiagnosticCodes.CCS8090_InternalInvariant,
                            sprintf "Internal error: field labels reference record type '%s' but it is not in RecordDefs" typeName))
             | _ ->
                 // Multiple record types have all these fields. A fresh record expression must
@@ -603,7 +591,7 @@ let resolveRecordTypeFromFields
                     Result.Ok (NativeType.TApp(recordInfo.TypeCon, freshArgs))
                 | None ->
                     let typeNames = intersection |> Set.toList |> String.concat ", "
-                    Result.Error((DiagnosticCodes.FS8704_AmbiguousFields,
+                    Result.Error((DiagnosticCodes.CCS8704_AmbiguousFields,
                            sprintf "Field labels are ambiguous; could be any of: %s. Use type annotation or qualified field access." typeNames))
 
 //-------------------------------------------------------------------------
@@ -801,17 +789,17 @@ let isBclReference (name: string) : bool =
 let isUncheckedReference (name: string) : bool =
     name.StartsWith("Unchecked.") || name = "Unchecked"
 
-/// Emit FS8104: Unchecked.defaultof not allowed in Clef
+/// Emit CCS8083: Unchecked.defaultof not allowed in Clef
 let addUncheckedError (name: string) (r: range) (env: TypeEnv) : unit =
-    addNativeError DiagnosticCodes.FS8104_UncheckedDefault r
+    addNativeError DiagnosticCodes.CCS8083_UncheckedDefault r
         $"'{name}' is not available in Clef. Unchecked.defaultof requires runtime type information. Use explicit initialization, CCS intrinsics, or NativeDefault.zeroed instead." env
 
-/// Emit FS8500: BCL reference not allowed in Clef
+/// Emit CCS8080: BCL reference not allowed in Clef
 let addBclError (name: string) (r: range) (env: TypeEnv) : unit =
     if isUncheckedReference name then
         addUncheckedError name r env
     else
-        addNativeError DiagnosticCodes.FS8500_BclReferenceNotAllowed r
+        addNativeError DiagnosticCodes.CCS8080_BclReferenceNotAllowed r
             $"BCL reference '{name}' is not available in Clef. The .NET Base Class Library requires the .NET runtime. Use Alloy library equivalents instead." env
 
 //-------------------------------------------------------------------------

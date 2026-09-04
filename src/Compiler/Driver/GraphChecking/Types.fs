@@ -179,7 +179,7 @@ type internal FilePairMap(files: FileInProject array) =
     let sigToImpl, implToSig = buildBiDirectionalMaps goodPairs
 
     // Pairs where the signature file comes after the implementation file in the project order.
-    // We need to track them to report FS0238 (implementation already given).
+    // We need to track them to report CCS0238 (implementation already given).
     let misordered = misorderedPairs |> Map.ofArray
 
     member x.GetSignatureIndex(implementationIndex: FileIndex) = Map.find implementationIndex implToSig

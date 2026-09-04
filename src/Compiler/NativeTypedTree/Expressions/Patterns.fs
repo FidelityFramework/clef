@@ -90,7 +90,7 @@ let rec checkPattern
                         | None -> 0  // Fallback for non-DU constructors
                     | None ->
                         addDiagnostic { Severity = NativeDiagnosticSeverity.Error
-                                        Code = DiagnosticCodes.FS0001_GenericError
+                                        Code = DiagnosticCodes.CCS8008_UndefinedConstructor
                                         Message = $"The constructor '{caseName}' is not defined."
                                         Range = range; RelatedNodes = []; Reachability = ReachabilityContext.Unknown } env
                         0
@@ -124,7 +124,7 @@ let rec checkPattern
                     (types, idx)
                 | None ->
                     addDiagnostic { Severity = NativeDiagnosticSeverity.Error
-                                    Code = DiagnosticCodes.FS0001_GenericError
+                                    Code = DiagnosticCodes.CCS8008_UndefinedConstructor
                                     Message = $"The constructor '{caseName}' is not defined."
                                     Range = range; RelatedNodes = []; Reachability = ReachabilityContext.Unknown } env
                     (pats |> List.map (fun _ -> freshTypeVar range), 0)
@@ -147,7 +147,7 @@ let rec checkPattern
                     | None -> 0
                 | None ->
                         addDiagnostic { Severity = NativeDiagnosticSeverity.Error
-                                        Code = DiagnosticCodes.FS0001_GenericError
+                                        Code = DiagnosticCodes.CCS8008_UndefinedConstructor
                                         Message = $"The constructor '{caseName}' is not defined."
                                         Range = range; RelatedNodes = []; Reachability = ReachabilityContext.Unknown } env
                         0
@@ -202,7 +202,7 @@ let rec checkPattern
                             | _ -> sprintf "%A" resolvedTy
                         addDiagnostic {
                             Severity = NativeDiagnosticSeverity.Error
-                            Code = "FS8720"
+                            Code = DiagnosticCodes.CCS8702_UndefinedField
                             Message = sprintf "Record pattern field '%s' not found in type '%s'. Record type may not be registered in RecordDefs, or expectedTy is not resolved." fieldName tyName
                             Range = range
                             RelatedNodes = []
@@ -257,8 +257,8 @@ let rec checkPattern
         // Quote expression pattern - not supported in native compilation
         addDiagnostic {
             Severity = NativeDiagnosticSeverity.Error
-            Code = "FS8700"
-            Message = "Quote expression patterns are not supported in native F# compilation."
+            Code = DiagnosticCodes.CCS8063_QuotePatternNotSupported
+            Message = "Quote expression patterns are not a Clef construct."
             Range = range
             RelatedNodes = []
             Reachability = ReachabilityContext.Unknown
@@ -273,8 +273,8 @@ let rec checkPattern
         // Instance member pattern - for object expressions (not supported in native)
         addDiagnostic {
             Severity = NativeDiagnosticSeverity.Error
-            Code = "FS8701"
-            Message = "Instance member patterns (object expressions) are not supported in native F# compilation."
+            Code = DiagnosticCodes.CCS8064_InstanceMemberPatternNotSupported
+            Message = "Instance member patterns (object expressions) are not a Clef construct."
             Range = range
             RelatedNodes = []
             Reachability = ReachabilityContext.Unknown

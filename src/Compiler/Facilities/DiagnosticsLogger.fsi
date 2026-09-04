@@ -197,7 +197,7 @@ type PhasedDiagnostic =
 
     /// This is the textual subcategory to display in error and warning messages (shows only under --vserrors):
     ///
-    ///     file1.fs(72): subcategory warning FS0072: This is a warning message
+    ///     file1.fs(72): subcategory warning CCS0072: This is a warning message
     ///
     member Subcategory: unit -> string
 
