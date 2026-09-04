@@ -249,7 +249,7 @@ let resolveIdentifier
         if isBclReference fullName then
             addBclError fullName synRange env
         else
-            addNativeError DiagnosticCodes.FS0001_GenericError synRange msg env
+            addNativeError DiagnosticCodes.CCS8009_UndefinedValue synRange msg env
         builder.Create(
             SemanticKind.Error msg,
             ty,

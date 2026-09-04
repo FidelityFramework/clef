@@ -101,7 +101,6 @@ SCHEDULED=(
   'Composer/src::TyCon'                                         # same
   'BAREWire/docs::FS[0-9]{4}'                               # BAREWire's own FS9xxx analyzer codes retire to CCS with the step-4 table
   'ClefAutoComplete::FS[0-9]{4}'                             # FCS fork: its codes are the F# compiler's; disposition is archive (Lattice_Consumer_Contract.md)
-  'clef/src::\bFS[0-9]{4}\b'                                    # hardening step 4: the compiler still emits FS codes
   'clef-lang-spec/spec/lexical-filtering.md::\bFS[0-9]{4}\b'    # the offside example moves with the step-4 table
   'clef/docs/diagnostics.md::\bFS[0-9]{4}\b'                    # step 4
   'Composer/docs/WebView_Build_Integration.md::\bFS[0-9]{4}\b'  # step 4

@@ -481,7 +481,7 @@ let checkTypeApp
             // Check arity match
             if List.length typeParams <> List.length typeArgTypes then
                 // Arity mismatch - this is a type error
-                addError synRange
+                addNativeError DiagnosticCodes.CCS8004_ArityMismatch synRange
                     (sprintf "Type application arity mismatch: expected %d type arguments, got %d"
                         (List.length typeParams) (List.length typeArgTypes)) env
                 NativeType.TError "Type application arity mismatch"
@@ -519,7 +519,7 @@ let checkTypeApp
         | other ->
             // Unexpected type receiving type arguments
             // This is likely a bug or unresolved type - add warning but continue
-            addWarning synRange
+            addNativeWarning DiagnosticCodes.CCS8092_TypeArgumentsOnNonScheme synRange
                 (sprintf "Type application on unexpected type form: %s"
                     (NativeTypes.formatType other)) env
             // Still add constraint for later resolution

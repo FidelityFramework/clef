@@ -116,6 +116,8 @@ Consequence: h.2, h.5, h.6, h.7, h.8, h.9, the wiring half of h.3/h.4 and the me
 - **Size:** ~50 lines, 2 files.
 - **Risk:** low mechanically; blocked in scope by the missing general-mismatch number (step 4).
 
+**CS-7 status (2026-09-04), first half built by hand, gates green:** no FS code survives in the compiler service (the drift gate now fails on one); RoundTrip hash unchanged; `vet.sh --through 2` 10 of 10 with every verdict identical to CS-6 and every printed code now CCS; the parse-error path prints the inherited number under the CCS prefix. Second half, D8, is CS-7b: the platform description declares its width dimensions by name and its representations with capability, dynamic range and boundary semantics; `buildPlatformContext` reads the declaration and never falls back (plan L-13); a seal spelling resolves against the declaration.
+
 ### CS-8 — The saturation residual check
 
 - **Anchors:** (0.4), (b.4) last paragraph; (h) 13; I2.

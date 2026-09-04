@@ -185,11 +185,11 @@ let checkRecord
                                 addConstraint (Constraint.Equals(exprNode.Type, expectedTy, range)) env
                             | None ->
                                 // Field not found in record definition - this is an error
-                                addNativeError DiagnosticCodes.FS8702_UndefinedField recordRange
+                                addNativeError DiagnosticCodes.CCS8702_UndefinedField recordRange
                                     (sprintf "Field '%s' is not defined in record type '%s'" fieldName tyCon.Name) env
                     | None ->
                         // Record type not in RecordDefs - internal error in resolution
-                        addNativeError DiagnosticCodes.FS0001_GenericError recordRange
+                        addNativeError DiagnosticCodes.CCS8090_InternalInvariant recordRange
                             (sprintf "Internal error: record type '%s' not found in RecordDefs" tyCon.Name) env
                 // Named records use TApp with field lookup via RecordDefs
                 | NativeType.TError _ ->
@@ -197,53 +197,53 @@ let checkRecord
                     ()
                 // All other NativeType cases are invalid for record expressions
                 | NativeType.TForall _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Record expression cannot have polymorphic type" env
                 | NativeType.TTuple _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Expected record type, got tuple. Use record syntax { Field = value } not tuple syntax (a, b)" env
                 | NativeType.TFun _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Expected record type, got function type" env
                 | NativeType.TVar typar ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         (sprintf "Could not resolve record type - type variable '%s' is still unbound" typar.Name) env
                 | NativeType.TNum _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         (sprintf "Expected record type, got numeric type '%s'" (formatType resolvedTy)) env
                 | NativeType.TMeasure _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Expected record type, got unit of measure" env
                 | NativeType.TAnon _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Expected nominal record type. For anonymous records, use {| Field = value |} syntax" env
                 | NativeType.TUnion _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Expected record type, got discriminated union. Use union case constructors instead" env
                 | NativeType.TByref _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Expected record type, got byref type" env
                 | NativeType.TNativePtr _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Expected record type, got native pointer type" env
                 | NativeType.TLazy _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Expected record type, got Lazy<'T> type" env  // PRD-14
                 | NativeType.TSeq _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Expected record type, got seq<'T> type" env  // PRD-15
                 | NativeType.TSeqEnumerator _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Expected record type, got SeqEnumerator<'T> type" env  // PRD-15/16
                 // PRD-13a: Collection types
                 | NativeType.TList _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Expected record type, got list<'T> type. Use list syntax [a; b; c]" env
                 | NativeType.TMap _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Expected record type, got Map<'K,'V> type. Use Map.ofList or Map.add" env
                 | NativeType.TSet _ ->
-                    addNativeError DiagnosticCodes.FS8000_TypeMismatch recordRange
+                    addNativeError DiagnosticCodes.CCS8003_TypeMismatch recordRange
                         "Expected record type, got Set<'T> type. Use Set.ofList or Set.add" env
                 // Note: option<'T> is handled via TUnion - it's a discriminated union
                 resolvedTy

@@ -77,7 +77,7 @@ let (|StopProcessing|_|) exn =
 
 let StopProcessing<'T> = StopProcessingExn None
 
-// int is e.g. 191 in FS0191
+// int is e.g. 191 in CCS0191
 exception DiagnosticWithText of number: int * message: string * range: range with
     override this.Message =
         match this :> exn with
@@ -123,7 +123,7 @@ exception UnresolvedPathReferenceNoRange of assemblyName: string * path: string 
 
 exception UnresolvedPathReference of assemblyName: string * path: string * range: range
 
-exception DiagnosticWithSuggestions of number: int * message: string * range: range * identifier: string * suggestions: Suggestions with // int is e.g. 191 in FS0191
+exception DiagnosticWithSuggestions of number: int * message: string * range: range * identifier: string * suggestions: Suggestions with // int is e.g. 191 in CCS0191
     override this.Message =
         match this :> exn with
         | DiagnosticWithSuggestions(_, msg, _, _, _) -> msg
@@ -304,7 +304,7 @@ type PhasedDiagnostic =
 
     /// This is the textual subcategory to display in error and warning messages (shows only under --vserrors):
     ///
-    ///     file1.fs(72): subcategory warning FS0072: This is a warning message
+    ///     file1.fs(72): subcategory warning CCS0072: This is a warning message
     ///
     member pe.Subcategory() =
         match pe.Phase with

@@ -27,7 +27,7 @@ For the compiler, a key file is `https://github.com/dotnet/fsharp/blob/main/src/
 Adding or adjusting diagnostics emitted by the compiler is usually straightforward (though it can sometimes imply deeper compiler work). Here's the general process:
 
 1. Reproduce the compiler error or warning with the latest F# compiler built from the [F# compiler repository](https://github.com/dotnet/fsharp).
-2. Find the error code (such as `FS0020`) in the message.
+2. Find the error code (such as `CCS0020`) in the message.
 3. Use a search tool and search for a part of the message. You should find it in `FSComp.fs` with a title, such as `parsMissingTypeArgs`.
 4. Use another search tool or a tool like Find All References / Find Usages to see where it's used in the compiler source code.
 5. Set a breakpoint at the location in source you found. If you debug the compiler with the same steps, it should trigger the breakpoint you set. This verifies that the location you found is the one that emits the error or warning you want to improve.

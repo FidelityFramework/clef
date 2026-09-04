@@ -118,9 +118,9 @@ val internal ConvertLogicalNameToDisplayName: name: string -> string
 ///
 /// If the text is immediately in quotes, this is generally ok, e.g.
 ///
-///         error FS0038: '+' is bound twice in this pattern
-///         error FS0038: '|A|_|' is bound twice in this pattern
-///         error FS0038: 'a a' is bound twice in this pattern
+///         error CCS0038: '+' is bound twice in this pattern
+///         error CCS0038: '|A|_|' is bound twice in this pattern
+///         error CCS0038: 'a a' is bound twice in this pattern
 ///
 /// If not, the it is likely this should be replaced by ConvertValLogicalNameToDisplayName.
 val ConvertValLogicalNameToDisplayNameCore: opName: string -> string

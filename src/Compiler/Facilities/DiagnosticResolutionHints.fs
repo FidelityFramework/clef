@@ -87,7 +87,7 @@ type SuggestionBuffer(idText: string) =
 
             // Because beginning a name with _ is used both to indicate an unused
             // value as well as to formally squelch the associated compiler
-            // error/warning (FS1182), we remove such names from the suggestions,
+            // error/warning (CCS1182), we remove such names from the suggestions,
             // both to prevent accidental usages as well as to encourage good taste
             if
                 suggestion.Length >= minStringLengthForSuggestion
