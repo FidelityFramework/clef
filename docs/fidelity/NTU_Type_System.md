@@ -74,7 +74,7 @@ Type identity and type width are **separate concerns**:
 NTUint ≠ NTUint64   // Different types!
 NTUint ≠ NTUint32   // Different types!
 
-// Type width - resolved by Alex
+// Type width - resolved by CCS at saturation against the platform description; Alex reads it
 NTUint on x86_64 → i64
 NTUint on ARM32 → i32
 ```
@@ -100,7 +100,7 @@ Following F*'s pattern:
 /// Platform-resolved type layout (erased at runtime)
 type NTULayout = {
     Kind: NTUKind
-    /// Erased - only for type checking, resolved by Alex
+    /// Resolved by CCS at saturation from the platform description; never erased, it is part of type identity
     AssumedSize: int option
     AssumedAlignment: int option
 }

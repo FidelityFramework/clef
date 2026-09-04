@@ -67,7 +67,9 @@ module NodeId =
 // NTU (Native Type Universe) Kind System
 // Following F* pattern: type identity is separate from type width.
 // Width is a first-class dimension, not baked into discrete variants.
-// Width is erased metadata resolved by Alex via platform quotations.
+// Width is part of type identity and never erases: CCS resolves a Resolved width against the
+// platform description at saturation (see PlatformContext.resolveWidth) and the resolved value
+// rides on the PSG as an annotation that Alex reads. (Design: ntu-dimensional-architecture.md §0/§4.3.)
 //-------------------------------------------------------------------------
 
 /// Platform-resolved width dimensions — NTU-native vocabulary.
@@ -85,7 +87,7 @@ type WidthDimension =
 type NTUWidth =
     /// Known at all times: 8, 16, 32, 64, 128 bits
     | Fixed of bits: int
-    /// Platform-dependent, resolved by Alex via PlatformContext
+    /// Platform-dependent, resolved by CCS at saturation via PlatformContext; Alex reads the result
     | Resolved of WidthDimension
 
 /// NTU (Native Type Universe) type kinds.
@@ -263,7 +265,7 @@ module NTUQualifiers =
 
 /// Platform predicate types (abstract, erased at runtime).
 /// F*-inspired propositions for conditional compilation without runtime checks.
-/// These flow through CCS unchanged and are resolved by Alex using platform quotations.
+/// CCS resolves these at saturation against the platform description; the verdict rides on the PSG and Alex reads it.
 [<RequireQualifiedAccess>]
 type PlatformPredicate =
     /// Platform supports 32-bit word operations
@@ -1374,7 +1376,7 @@ and formatMeasure (m: Measure) : string =
 /// These are the canonical type values used throughout the compiler.
 module Types =
     // Type constructors for primitive types (NTU kinds)
-    // Platform-dependent types use PlatformWord layout (size resolved by Alex)
+    // Platform-dependent types use PlatformWord layout (size resolved by CCS at saturation from PlatformContext)
     let intTyCon = mkNTUTypeConRef "int" (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)) TypeLayout.PlatformWord
     // Fixed-width types use Inline layout with known sizes
     let int8TyCon = mkNTUTypeConRef "int8" (NTUKind.NTUint (NTUWidth.Fixed 8)) (TypeLayout.Inline(1, 1))

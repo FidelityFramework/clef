@@ -777,7 +777,7 @@ list<'T>
 
 ## Part 6: Function Types
 
-> **Principle**: Functions are first-class values. Inline-by-default semantics (fsil) eliminates most closure overhead.
+> **Principle**: Functions are first-class values. Explicit `inline` (never inline-by-default, which was tried and reverted because it multiplied bodies at every call site and exploded the PSG) lifts a scope-bounded buffer into the caller's frame so a returned view stays valid.
 
 ### 6.1 Pure Functions
 
@@ -791,7 +791,7 @@ let apply : ('a -> 'b) -> 'a -> 'b = fun f x -> f x
 | Case | Representation |
 |------|----------------|
 | **Known call site** | Direct call (no indirection) |
-| **Inline function** | Inlined at call site (fsil default) |
+| **Inline function** | Expanded at the call site only when explicitly marked `inline` (SRTP generalization, buffer lifting) |
 | **First-class value** | Function pointer or closure |
 | **Captures environment** | Closure struct |
 
@@ -821,23 +821,22 @@ env: ┌─────────────────────┐
 
 **Closure Allocation**: Closures are allocated on stack or in arenas (not GC heap). Small closures (<64 bytes) fit within one cache line for efficient invocation.
 
-### 6.3 Inline Semantics (fsil Absorption)
+### 6.3 Inline Semantics
 
-Most functions are inlined by default:
+Functions are real functions unless marked `inline`, and `inline` is a semantic tool, not an optimization hint. CCS expands a body at its call sites only when the definition is explicitly marked `inline`, and the keyword is mandatory in exactly two cases:
+
+| Case | Why `inline` is required |
+|------|--------------------------|
+| SRTP-constrained definition | a `^typar` can only be generalized at an `inline` definition |
+| Lifting a scope-bounded buffer | a function that fills a stack buffer and returns a view over it must expand into the caller's frame so the view does not dangle ([Special Attributes and Types](special-attributes-and-types.md), "Inline Functions and Escape Analysis") |
+
+Everywhere else `inline` is discouraged, and platform-library code stays real functions: Clef targets many substrates through MLIR, and the optimizer decides inlining with whole-program context that a source-level `inline` binds away early. Inline-by-default (every function transparent, the model absorbed from an earlier library) was tried and reverted: it multiplied bodies at every call site and exploded the PSG.
 
 ```fsharp
-// These are inlined at call site - no closure allocation
-let inline double x = x * 2
-let inline (|>) x f = f x
+let inline dot (a: ^V) (b: ^V) = ...        // required: SRTP generalization
+let inline readln () : string = ...         // required: returns a view over a stack buffer it fills
+let double x = x * 2                        // a real function; the optimizer may inline it
 ```
-
-| Function Type | Default Behavior |
-|---------------|------------------|
-| Simple arithmetic | Always inlined |
-| Pipe operators | Always inlined |
-| SRTP-constrained | Always inlined |
-| Recursive | Not inlined (requires call) |
-| Large body | Compiler decides |
 
 ### 6.4 Partial Application
 
@@ -851,7 +850,7 @@ let add5 = add 5  // Partial application
 add5 = { fn_ptr: add_impl, env: { x = 5 } }
 ```
 
-**Currying Optimization** (fsil): Fully-applied curried calls compile to direct multi-argument calls (no intermediate closures). Partial application creates flat closures capturing applied arguments. Higher-order uses like `List.map f` are typically inlined at call sites.
+**Currying Optimization**: Fully-applied curried calls compile to direct multi-argument calls (no intermediate closures). Partial application creates flat closures capturing applied arguments. Higher-order uses like `List.map f` are typically inlined at call sites.
 
 ---
 
