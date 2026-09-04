@@ -1043,12 +1043,10 @@ type NativeLiteral =
     | ByteArray of byte[]
     /// Embedded uint16 array (for some string encodings)
     | UInt16Array of uint16[]
-    /// Big integer (stored as string for arbitrary precision)
-    | BigInt of string
 
 module NativeLiteral =
     /// Get the NTUKind for a literal.
-    /// Returns None for compound literals (ByteArray, UInt16Array, BigInt)
+    /// Returns None for compound literals (ByteArray, UInt16Array)
     /// that decompose to NTUarray or user-defined composite types.
     let tryKind = function
         | NativeLiteral.Int (_, k) -> Some k
@@ -1061,7 +1059,6 @@ module NativeLiteral =
         | NativeLiteral.Decimal _ -> Some NTUKind.NTUdecimal
         | NativeLiteral.ByteArray _ -> Some NTUKind.NTUarray   // array<uint8>
         | NativeLiteral.UInt16Array _ -> Some NTUKind.NTUarray  // array<uint16>
-        | NativeLiteral.BigInt _ -> Some (NTUKind.NTUint (NTUWidth.Fixed 64))  // Maps to int64
 
     /// Get the NTUKind for a literal (backward-compat; use tryKind for new code)
     let kind lit =

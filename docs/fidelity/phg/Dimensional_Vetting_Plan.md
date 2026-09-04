@@ -37,7 +37,7 @@ depend on it.
 | **Alignment, tensor shape** | design only | | `ntu-dimensional-architecture.md` §2.4–2.5 |
 
 Grade (the parity component of Clifford grade, valued in Z2) is a further generator the PHG paper carries;
-it is out of this plan's first increment; when it enters, the group is no longer free (Z^n ⊕ Z2, DTS/DMM §2.1) and the solver moves from Hermite to Smith normal form, with the same signature.
+it is out of this plan's first increment. When it enters, parity joins the measure algebra as a Z2 generator (the group is no longer free, DTS/DMM §2.1; the solver moves from Hermite to Smith normal form with the same signature), blade support enters as a lattice coeffect beside the range and never through the unifier, and the signature enters as a universe parameter of the algebra declaration (`Horizon_Requirements.md` C1, C2).
 
 ## 2. What CCS does today (measured)
 
@@ -88,15 +88,15 @@ The verdict table is rule → expected → actual; a rule is green when both pro
 | W-3 | a seal at a platform boundary comes from the platform description (word and pointer widths from `PlatformContext.Dimensions`) or from the `Fixed` seals the binding generator emits for C ABI types from `PlatformABI` (`ntu-dimensional-architecture.md` §2.1), resolved in CCS at saturation, never in the witness | (differential: `type Pair = { Addr: nativeint; Tag: int32 }` compiled under x86_64 Linux and the Cortex-M33 descriptor of `platform-bindings.md`, `Dimensions = [(Pointer, 32); (Register, 32)]`; `expect.toml` names both layouts) | | | resolved in CCS (`NativeTypes.fs:443-448`; the header comment at `:69-72` now agrees); still contradicted by `NativeTypes.fs:658`, `:663` and `ntu-types.md` §1, §1.1, §3.2, §3.3, §7.1, §9.2 |
 | W-4 | no silent default: an integer whose range is unobservable and that carries no seal from any source (dataflow, library, platform, developer) is a diagnostic. Arithmetic on a sealed operand keeps the seal's wrapping semantics (`native-type-universe.md` §2.3, `width-inference.md` §8), so a sealed result is covered by construction | `let rec run n = run (n + 1)` (no modulus, comparison or seal: unobservable on every target) | `let f (n: int32) = n + 1` (the sum wraps in the seal) | `CCS8011` (range unobservable) | no diagnostic in CCS; Alex throws `FPGA0001` on the FPGA leg (`PSGCombinators.fs:120`), CPU leg falls back to the platform word (`:104`) |
 | NS-1 | dimensioning seam (reals): a bare real with an unobservable range lowers to IEEE `f64` without error and still carries range propagation; an unbounded bare real flowing into a dimensioned context fires at the dimensioning boundary and names the bare source (`numeric-selection.md` §6, §6.1, §13.7–13.8) | `let y (bareInput: float) (oneNewton: float<N>) : float<N> = bareInput * oneNewton` with `bareInput` unbounded | `let y (bareInput: float) = bareInput * 2.0` | numeric-selection family code (peer of the width codes, §11), allocated with the D3 table; gated by step 8 | nothing exists; the real interval domain "does not yet exist in the integer twin" (§3.1) |
-| NS-2 | coverage-empty: no offered representation covers the dimensional range | `astronomicalDistance<m>` with range `[1e-11, 1e72]` on a posit-only target | the same on a target offering `f64` | numeric-selection family, error (§2.1, §13.2) | nothing exists |
-| NS-3 | tier disagreement: an observed dataflow range not contained in the binding claim (`R₁ ⊄ R_binding`) is a diagnostic, never a change to the binding range (§3.4 item 3, §13.5) | a `Fidelity.Physics` range narrower than a literal the dataflow proves | contained | numeric-selection family | nothing exists |
+| NS-2 | coverage-empty: no offered representation covers the dimensional range | `astronomicalDistance<m>` with range `[1e-11, 1e72]` on a posit-only target | the same on a target offering `f64` | numeric-selection family, Warning promoted under `--warnaserror`; selection falls to the argmin over the full offered set with the uncovered range recorded (§2.1, §13.2 as amended) | nothing exists |
+| NS-3 | tier disagreement: an observed dataflow range not contained in the binding claim (`R₁ ⊄ R_binding`) is a diagnostic, never a change to the binding range (§3.4 item 3, §13.5) | a `Fidelity.Physics` range narrower than a literal the dataflow proves | contained | numeric-selection family, Warning promoted under `--warnaserror` (§13.5 as amended) | nothing exists |
 | NS-4 | a covering-but-suboptimal seal compiles and is witnessed with the representation the open argmin would have chosen (§13.9) | (none) | a `float64` seal on a near-unity range on a posit target: accept with the design-time witness | numeric-selection family, Info | nothing exists |
-| W-5 | a seal must cover the analysed range (a bare range meeting a seal is the `width-inference.md` §7.2 conversion check on a singleton candidate set, `numeric-selection.md` §2.1) | `let x : uint8 = 300`; `let c (counter: uint32) : int8 = counter % 1000` (range `[0, 999]`) | `let x (counter: uint32) : uint8 = counter % 256` (range `[0, 255]`); `let y : int8 = -128` | `CCS8012` (seal does not cover range; the spec states the non-covering case with two severities, §3.4 item 3 "a diagnostic" and §5 "the §2.1 hard error", and the plan takes the error reading, §13.2) | no range analysis in CCS |
+| W-5 | a seal must cover the analysed range (a bare range meeting a seal is the `width-inference.md` §7.2 conversion check on a singleton candidate set, `numeric-selection.md` §2.1) | `let x : uint8 = 300`; `let c (counter: uint32) : int8 = counter % 1000` (range `[0, 999]`) | `let x (counter: uint32) : uint8 = counter % 256` (range `[0, 255]`); `let y : int8 = -128` | `CCS8012` (seal does not cover range: a Warning promoted to an error under `--warnaserror`, the rule every coverage finding follows, as the FPGA timing budget's `CCS0100` does; `numeric-selection.md` §2.1, §5, §13.2 as amended) | no range analysis in CCS |
 | W-6 | width is propagated, never unified (`width-inference.md` §2, §5; `arxiv-papers/research/grade-axis/02` §2, §7.1): the range coeffect of a generalised function is analysed per instantiation (DTS/DMM §2.6: a call-site instantiation with its argument ranges yields the result range, which propagates onward); a non-`inline` function is emitted as one body whose width is the join over its instantiations (only carrier instantiations split bodies, design note §d.3); per-call-site bodies arise only under explicit `inline` | (none) | `let g x y = x + y` used at `g 1L 2L` and `g 1 2` in one program: the first instantiation is sealed `int64` with the seal-bound image as its result range, the second is bare with range `[3, 3]`, both accepted, one body | | second use rejected by name (`Bindings.fs:397` disables generalisation, so `'T` binds to `int64` at the first use); `ntu-types.md` §6.1 prescribes that rejection, a spec tension for step 6 |
 | M-1 | no write through a `ReadOnly` handle | `let w (p: Ptr<byte, Flash, ReadOnly>) = Ptr.write p 0uy` | `let w (p: Ptr<int, Stack, ReadWrite>) = Ptr.write p 1` | `CCS8020` | `Ptr<'T, 'Region, 'Access>` is not a type constructor CCS knows: `mkTypeConRefWithMeasures` (`NativeTypes.fs:762`) has no caller, `Ptr` appears only in a comment (`:727`), and the samples call `Ptr.read`/`Ptr.write` on a bare `nativeint` (`stm32l5-blinky/STM32L5.fs:92-94`), so there is no access component to check |
 | M-2 | no read through a `WriteOnly` handle | `let r (q: Ptr<uint32, Peripheral, WriteOnly>) = Ptr.read q` | `let r (q: Ptr<uint32, Peripheral, ReadWrite>) = Ptr.read q` | `CCS8021` | as M-1: no `Ptr` type constructor exists in CCS |
 | M-3 | access is part of identity, no subtyping: a `ReadWrite` handle where `ReadOnly` is required passes only through the explicit coercion `Ptr.asReadOnly` (`Ptr.asWriteOnly` for `WriteOnly`), a node in the graph rather than a rule in the checker | `let ro : Ptr<int, Stack, ReadOnly> = rw` with `rw : Ptr<int, Stack, ReadWrite>`; `let rw2 : Ptr<int, Stack, ReadWrite> = ro` | `let ro : Ptr<int, Stack, ReadOnly> = Ptr.asReadOnly rw` | `CCS8022` | as M-1; `ntu-dimensional-architecture.md` §7.2 (Prospective) still says "covariant", superseded by D2 |
-| M-4 | region is invariant: an enumeration sort unified by equality (DTS/DMM §2.5) | `let f (p: Ptr<int, Peripheral, ReadWrite>) = Ptr.read p` then `f stackPtr` with `stackPtr : Ptr<int, Stack, ReadWrite>` | `f gpioReg` with `gpioReg : Ptr<int, Peripheral, ReadWrite>` | `CCS8110` (region mismatch, proposed in the spec's memory block; the spec assigns no number, and its own table spends `CCS8040`–`CCS8104` on null-freedom inside the block it reserves for memory; clef's Appendix D `FS8003` is on the wrong series) | accepted |
+| M-4 | region is invariant: an enumeration sort unified by equality (DTS/DMM §2.5) | `let f (p: Ptr<int, Peripheral, ReadWrite>) = Ptr.read p` then `f stackPtr` with `stackPtr : Ptr<int, Stack, ReadWrite>` | `f gpioReg` with `gpioReg : Ptr<int, Peripheral, ReadWrite>` | `CCS8100` (region mismatch; `error-handling.md` §Diagnostics as amended 2026-09-04) | accepted |
 | M-5 | every dimensional component is part of identity (D2): unit, region, access | `let f (b: array<int, 4, Stack>) = b` applied to `s : array<int, 4, Sram>` | same region | region code as M-4 | `NTUQualifiers` are excluded from identity (`NativeTypes.fs:248`, `Unify.fs:86-88`); no surface form carries a memory space on a numeric (`ntu-dimensional-architecture.md` §2.2 is marked Design), so the numeric-carried row joins the set when §2.2 leaves Design |
 
 The W rows follow decision D1 (one width regime; a written width is a seal; the range is a coeffect
@@ -104,12 +104,14 @@ propagated by interval arithmetic, `width-inference.md` §2, §5, and composed w
 `numeric-selection.md` §3.4; the grade-axis note's lattice-family placement of width is directional and
 agrees in verdict). The NS rows are the real-valued family of `numeric-selection.md`, gated by step 8; explicit
 conversion (`width-inference.md` §7) is gated by step 7 (L-4, L-9). The design for steps 1 and 2 is
-`Dimensional_Step1_2_Design.md`; the ranged-type position is `Types_As_Ranges_Position.md`.
+`Dimensional_Step1_2_Design.md`; the ranged-type position is `Types_As_Ranges_Position.md`; the requirements
+the horizons impose are `Horizon_Requirements.md`.
 
 ## 4. The harness
 
 - `Composer/samples/dimensional/vet.sh` compiles every `<rule>/<verdict>/*.fidproj` with
-  `composer compile <fidproj> -k`, records the exit code and the stderr diagnostics, matches the
+  `composer compile <fidproj>` (intermediates on request, `--intermediates`, since keeping them costs
+  about a minute per leaf and changes no verdict), records the exit code and the stderr diagnostics, matches the
   `expect.toml` (`verdict = "reject" | "accept"`, `code = "CCS8040"`, optional `range = "L:C-L:C"`), and
   prints the rule table with a final count. It never calls `tests/regression/Runner.fsx`.
 - A rejected program is green only if the expected code appears; an accepted program is green only if the
@@ -129,17 +131,20 @@ conversion (`width-inference.md` §7) is gated by step 7 (L-4, L-9). The design 
    |---|---|---|---|---|
    | L-1 | `Literals.fs:63-64` (`constToLiteral`), `:36-51` (`typeOfConst`) | an unsuffixed integer literal is minted at `Resolved Register`, i.e. sealed to the platform word | C's `int` = whatever the register holds | with step 7: a literal is bare with a point range and takes a seal only from context |
    | L-2 | `Literals.fs:42-46` | the measure on a literal is discarded | implicit measured-to-dimensionless conversion | step 1 |
-   | L-3 | `Literals.fs:49-51` | `UserNum "I"` (bigint) and any unknown suffix become `intType` "for now" | fabricated representation, silent | now: `CCS80xx` unsupported literal suffix |
+   | L-3 | `Literals.fs:49-51` | `UserNum "I"` (bigint) and any unknown suffix become `intType` "for now" | fabricated representation, silent | done 2026-09-04: `CCS8018` unsupported literal suffix (`Literals.fs` `checkConst`, `Types.fs` `DiagnosticCodes`) |
    | L-4 | `Intrinsics.fs:953-976` | every conversion intrinsic is typed `'a -> Target` from a fresh type variable | the polymorphic `'T -> Target` coercion `width-inference.md` §7.3 forbids; `int x` accepts a string, a bool, a char | step 3: each conversion intrinsic is typed with a numeric constraint on its source and names its target seal, removing the `'a -> Target` shape (§7.3); step 7: the coverage check of the target against the source's analysed range and the stated-discipline requirement (§7.1–7.2), which need the range coeffect |
-   | L-5 | `SRTPResolution.fs:290-410` | a `ConversionCategory` and an MLIR op name are computed and discarded (`_category`, `_mlirOp`); int-to-int is always `Widening`; int-to-int always `extsi` ("for narrowing should be trunci"); unknown falls to `fidelity.convert`; header cites `spec/drafts/NTU_Conversion_Model.md`, which does not exist (retired by `width-inference.md` §9) | dead code shaped like a decision; a dangling citation | now: delete the category, op-name and citation; keep only the witness naming |
+   | L-5 | `SRTPResolution.fs:290-410` | a `ConversionCategory` and an MLIR op name are computed and discarded (`_category`, `_mlirOp`); int-to-int is always `Widening`; int-to-int always `extsi` ("for narrowing should be trunci"); unknown falls to `fidelity.convert`; header cites `spec/drafts/NTU_Conversion_Model.md`, which does not exist (retired by `width-inference.md` §9) | dead code shaped like a decision; a dangling citation | done 2026-09-04: category, op-name and citation deleted; only the witness naming remains |
    | L-6 | `Unify.fs:86-88` | placement qualifiers excluded from identity | implicit conversion between memory spaces | step 5 (D2, M-5) |
    | L-7 | `Composer/.../Alex/Patterns/ApplicationPatterns.fs:183-233` (FPGA leg) | the witness widens both operands to the max width with `pExtSI` regardless of the source's signedness, and truncates the result; HelloArty's `07_output.mlir:116` shows `arith.extsi %periodMs : i13 to i30` | the FreeBSD class: the party that widens is not the party that knows the sign | not live today only because of L-7b; the two are removed together in step 7: width from the range per `width-inference.md` §3, extension op from the range's signedness (`extui` for a non-negative range), both settled in the graph |
 | L-7b | `Composer/.../PSGElaboration/IntervalAnalysis.fs:88-113` (`minSignedBits`, `bitsFromInterval`) | every interval gets a sign bit, non-negative ones included (`[0, 4000]` becomes 13 bits, not 12); `IsSigned` is recorded false but the bit is spent | the spec formula (§3: unsigned `ceil(log2(b+1))`) is not what runs; the spec's own example table (31/21/10/13) and HelloArty's README carry the +1 figures, while the two site posts claim 29/11 | step 7; and a spec rough edge to report: `width-inference.md` §3's table contradicts its formula |
 | L-8 | `ApplicationPatterns.fs:236-249` (CPU leg) | shift amounts "typed `int` by the front end" are truncated or zero-extended to the operand width by the witness | conversion inserted below the graph; the comment admits the front end typed it wrong | step 3: the front end types the amount; no witness cast |
    | L-9 | `ApplicationPatterns.fs:449-490` (`pTypeConversion`) | int-to-int truncation with no range check; float-to-int with no rounding or saturation discipline; int-to-float always `sitofp` even for unsigned sources; the result type resolved by `mapNativeTypeWithGraphForArch` in Alex | Alex deciding; `width-inference.md` §7.2 requires a stated discipline | step 3: the conversion node carries source seal, target seal, discipline and fidelity; Alex transcribes |
    | L-10 | `Alex/XParsec/PSGCombinators.fs:104,120` | CPU leg defaults an unresolved width to the platform word; FPGA leg throws `FPGA0001` | silent default on one leg, a thrown string on the other | step 7 (W-4) |
+| L-11 | `NativeService.fs` `parseString` (clef); `Core/CompilationOrchestrator.fs` `requireCleanDiagnostics` (Composer) | the parser reported through the thread-installed logger, which the parse function never installed, so every parse error went to the discarding default logger; the checker then received a damaged tree and the failure surfaced as "No declaration roots found in PSG" or a witness error with no code | the FreeBSD class in the front end: a failure decided by the wrong party and reported by none | done 2026-09-04: the capturing logger and the Parse phase are installed for the parse, every error-severity diagnostic is rendered with its range, Composer prints them and stops with "Compilation failed with N parse error(s)"; the parser family's CCS codes land with the step-4 table |
+| L-12 | `NativeTypes.fs` `NativeLiteral.BigInt`; `MatchRecipes.fs`; Composer `SSAAssignment.fs` | a `BigInt` literal case with no producer, mapped to `int64` "for now" in two places | fabricated representation | done 2026-09-04: case and both arms removed, Composer's arm with them |
 
-   Items marked "now" have no dependence on the rewrite and are removed first; the rest are removed by
+   Items marked "now" have no dependence on the rewrite and were removed first (L-3, L-5, L-11, L-12 on
+   2026-09-04, each gated by a Composer build and a byte-identical RoundTrip); the rest are removed by
    the step that replaces the path, so no conversion is ever re-implemented in its current shape.
 
 1. **Measures are representable and survive.** Give the NTU numeric kinds a measure component (the
@@ -155,17 +160,20 @@ conversion (`width-inference.md` §7) is gated by step 7 (L-4, L-9). The design 
    unbound measure variables at `let` (§Generalization of Measure Variables). Gate: UoM-1, -5, -6, -7, -8.
 3. **Operator types carry dimensions.** `op_Addition`/`op_Subtraction`/comparison: `num<'u> -> num<'u> -> _`;
    `op_Multiply`: `num<'u> -> num<'v> -> num<'u 'v>`; `op_Division`: `num<'u 'v^-1>`; a numeric constraint on
-   `'T` for all of them (W-2); dimensionless literals scale (UoM-4). Gate: UoM-2, -3, -4, -9, W-2.
+   `'T` for all of them (W-2); dimensionless literals scale (UoM-4). Gate: UoM-2, -3, -4, -9, W-2. One operator node carries
+   two obligations, the unit equation (group family, unified) and the range image (lattice family,
+   propagated); they share operands and no variables and discharge as separate queries
+   (`Horizon_Requirements.md` C5).
 4. **Diagnostics on the `CCS8xxx` series.** Rename the `DiagnosticCodes` module's values and clef's
    `ccs-specification.md` Appendix D to the spec's series; add `CCS8040` (measure mismatch), `CCS8020-8022`
    (access), `CCS8003` (region). Gate: every rule's expected code exists in `DiagnosticCodes`.
 5. **Access kind and region are checked.** Region and access measures unify under the rule of D2
-   (access covariant, region invariant); writes through `ReadOnly` and reads through `WriteOnly` are
+   (region and access are enumeration-sort components, not measures: they compare by identity under D2, never enter the measure unifier, and a `ReadWrite` handle where `ReadOnly` is required passes only through `Ptr.asReadOnly`); writes through `ReadOnly` and reads through `WriteOnly` are
    diagnosed at the assignment and dereference sites; `NTUQualifiers` join type identity with the same
    rule. This is also what makes the collections chapters' VC-RO real. Gate: M-1 to M-5.
 6. **Resolution stays in CCS, and the texts say so.** Rewrite `ntu-dimensional-architecture.md` §4.3 and
    §5.2 to "CCS resolves per section at saturation; Alex reads"; delete the `NativeTypes.fs:69-70` comment;
-   confirm `TypeMapping.fs` in Composer reads `LayoutHint`/resolved widths rather than resolving. Gate: W-3;
+   confirm `TypeMapping.fs` in Composer reads `LayoutHint`/resolved widths rather than resolving. Gate: the layout differential is observed at step 7, when W-3 compiles (its accept program puts a bare literal into a sealed field, which needs the seal rule);
    the drift gate learns "resolved by Alex".
 7. **Width inference as a coeffect** (after D1): interval analysis over the PSG placing the analysed range
    and minimal width as annotations; overflow and narrowing diagnosed; the FPGA leg narrows registers from
@@ -173,9 +181,13 @@ conversion (`width-inference.md` §7) is gated by step 7 (L-4, L-9). The design 
    accept programs for the three seeding rules of §2 (a literal is a point interval; a comparison bounds
    the branch; a counter `mod N` has range `[0, N-1]`) with their expected widths under the §3 formula; the
    seal check and the conversion coverage of §7.1–7.2 (L-4, L-9) land here. §10 item 3 and the real cases
-   of item 6 belong to step 8.
+   of item 6 belong to step 8. Requirements from the horizons (`Horizon_Requirements.md` C3): the width is
+   derived from the carried interval, never stored beside it as an independent fact; loop fixpoints close
+   inside the analysis with ground bounds, and no nonlinear integer term is ever posed to a solver
+   (Matiyasevich); a range containment over Z is a QF_LIA obligation, QF_BV carries fixed-width facts only;
+   the range is analysed per node, and per coefficient of an aggregate.
 8. **Representation selection** (after D4): the covering-set argmin over the platform's declared
-   representations, placed as an annotation; coverage-empty and a non-covering seal as errors (`numeric-selection.md` §2.1, §5, §13.2), reported with the paper's diagnostic text (DTS/DMM §2.6, whose "Warning" severity the spec supersedes), the design-time warning reserved for the covering-but-suboptimal seal (§13.9), and the prerequisite real interval domain of §9.1 (outward rounding, sign-split reciprocal, format-boundary widening). Gate: the
+   representations, placed as an annotation; coverage-empty and a non-covering seal as warnings promoted to errors under `--warnaserror` (the owner's rule, 2026-09-04: a coverage finding is always a warning with a flag; `numeric-selection.md` §2.1, §5, §13.2 as amended; the paper's severity in DTS/DMM §2.6 was right), the design-time Info reserved for the covering-but-suboptimal seal (§13.9), per-coefficient selection for aggregates (`grade-discipline.md` §5.2), and the prerequisite real interval domain of §9.1 (outward rounding, sign-split reciprocal, format-boundary widening). Gate: the
    `numeric-selection.md` programs.
 
 Steps 1–5 are the increment agreed on 2026-09-04; they precede every fan-out (closure retooling, suspension
@@ -243,8 +255,10 @@ Decided 2026-09-04, all five by the user (D1 re-derived from the design corpus a
   (`Alex/XParsec/PSGCombinators.fs:120`, `failwithf "error FPGA0001"`, FPGA only, CPU falls back to the
   platform word at `:104`), which is Alex deciding, in a non-CCS series, and its suggested fix `int<32>`
   puts a width in the slot D4 gives to the measure. The analysis moves to CCS as the range coeffect
-  (step 7) and gains the seal check and the unbounded diagnostic there; seal syntax is open
-  (`numeric-selection.md` §14.1) and must not collide with the measure slot.
+  (step 7) and gains the seal check and the unbounded diagnostic there. The seal form is the named
+  representation type in type position (`int32`, `uint8`, `float32`, `Posit32`; `numeric-selection.md` §5 as
+  amended 2026-09-04) and the angle brackets stay the measure slot (`Posit32<newtons>`); only the
+  rounding-or-saturation discipline of a lossy explicit conversion remains open (§14.1).
 - **D1 addendum, the governing tension (stated by the user 2026-09-04).** Two commitments pull against
   each other and the design holds both: **no implicit conversions**, and **defer inference for as long as
   practical**, because cross-application in the hypergraph gathers more degrees of information than the
@@ -279,7 +293,7 @@ Decided 2026-09-04, all five by the user (D1 re-derived from the design corpus a
   CCS8300–8399 effect system; CCS8400–8499 code generation) and never reassigns a code the spec has bound:
   `CCS8010` (null not permitted), `CCS8020`–`CCS8022` (access kinds), `CCS8030`–`CCS8033` (platform
   intrinsics), `CCS8040`–`CCS8104` (null-freedom). The measure family takes `CCS8040`–`CCS8050`, width and
-  seals `CCS8011`–`CCS8018`, region mismatch `CCS8110` (proposed); the full list is in the step 1–2 design
+  seals `CCS8011`–`CCS8018`, region mismatch `CCS8100` (the first code of the memory block, freed by removing the null codes from `error-handling.md`); the full list is in the step 1–2 design
   note, §(f).
 - **D4, where the measure lives (decided: on the numeric type).** The measure is a component of the
   numeric type node, beside the range and representation annotations that accrue to it, as Ada's dimension
@@ -293,7 +307,7 @@ Decided 2026-09-04, all five by the user (D1 re-derived from the design corpus a
   component of identity: dimension is unified (group family, Tier 1), the range is propagated (a coeffect,
   Tier 2 content), and the two meet only at the dimensioning seam (§6.1), where the dimension is the
   promise that a range exists and the obligation crystallises.
-- **D6, ranged types (recommended from the corpus sweep of 2026-09-04; pending the user's word).** The
+- **D6, ranged types (settled by the corpus, 2026-09-04; the horizon requirements find no choice on where the range lives, `Horizon_Requirements.md` C3).** The
   continuum the site names (point, range, distribution) is real and the corpus places the numeric type on
   it three times: a point is an interval of width zero (`width-inference.md` §2: a literal is `[a, a]`) and
   a posterior of variance zero (site only); a ranged value is one whose interval has positive width and
@@ -306,28 +320,49 @@ Decided 2026-09-04, all five by the user (D1 re-derived from the design corpus a
   "ranged real" of `numeric-selection.md` §8 item 1 are not specified), so no vet program reaches for one.
   A written width is a representation read as a range claim (D1). The seven items the corpus designs
   completely but no spec chapter yet admits are listed in the ranged-type note beside the step 1–2 design
-  note. The corpus leaves no choice open on where the range lives; the open choices are the seal form, the
-  phase wording (R-12), and per-instantiation analysis with joined emission (W-6).
+  note. The corpus leaves no choice open on where the range lives. The seal form and the phase wording are
+  resolved (R-11, R-12); per-instantiation analysis with joined emission is recorded at W-6; the one
+  residual is whether a coefficient's range is a marginal box or a projection of a joint manifold range
+  (`research/fabric-inference/07`), which the spec answers "the coefficient's own analysed range" today and
+  the research leaves as horizon-three work.
+- **D7, implementation decisions for steps 1–2 (taken 2026-09-04 from the standing rules; veto if wrong).**
+  The changeset sequence (`Dimensional_Steps_1_2_Sequence.md`) found three places the design note leaves
+  open for implementation. (U-1) Where the seal rides before step 7's propagation pass exists: `TNum`
+  carries an interim third component, the seal read once at its site, which the unifier compares
+  strictly so that two seals meeting is rejected as it is today (the plan's "right result, wrong
+  mechanism", design note §e.6) and which Composer reads for every node's width so RoundTrip stays
+  byte-identical; step 7 moves the seal to the range coeffect and deletes the comparison. The component
+  is never part of identity in the design; it is scaffolding, marked as such in the code. (U-2) The
+  measure and carrier stores are persistent maps threaded through `unify`, `solveConstraints`,
+  `applySubst` and every reader, `resolve` the only read (functional patterns rule; design note §b.2);
+  the type union-find's own mutability is pre-existing and is retired with the PHG saturation lattice,
+  not here. (U-3) UoM-5 and UoM-8 turn on `*` and `/`, whose schemes are step 3's; the two schemes are
+  pulled forward into step 2's changeset CS-6 (the spec's operator table fixes them and no decision is
+  involved), so step 2's gate stays as written.
 - **D5, `+` on strings (decided: concatenates).** `+` dispatches on the kind of its operands: on numerics it
   is the unit-unified add with a range obligation; on strings it is the concat recipe with an extent
   obligation. No proof complication follows, because each dispatch emits its own obligation family.
 
-## 7. Corpus rough edges surfaced by verification (for the owner to rule on; nothing edited)
+## 7. Corpus rough edges surfaced by verification, and their resolution
 
-| # | Where | What | Bearing |
+Resolved from the design on 2026-09-04 (the owner's rule: a table is not right because it exists; what
+aligns with the design is kept, what does not is corrected). Spec edits are in `clef-lang-spec`; paper
+items are reported, never edited.
+
+| # | Where | Finding | Resolution |
 |---|---|---|---|
-| R-1 | `width-inference.md` §3 | the formula gives 29 bits for HelloArty's counter; the chapter's own example table says 31 (copied from the implementation, which adds a sign bit to every range, L-7b) | W-4, step 7 |
-| R-2 | `error-handling.md` §Error Codes vs §Diagnostics | CCS8100–8199 is reserved for memory management while CCS8100–8104 are spent on null-freedom inside it | D3 |
-| R-3 | `ntu-types.md` §1, §1.1, §3.2, §3.3, §6.1, §6.2, §7.1, §9.2 | width as type identity, `int ≠ int64` by name, "resolved by Alex", "erased before code generation" | D1, §0, step 6 |
-| R-4 | `native-type-universe.md` §2.3 | `int` = platform word; `int` and `nativeint` are synonyms | D1 |
-| R-5 | `dts-dmm-paper.md` Appendix A vs Appendix C and §2.6 | Appendix A gives the bare literal `g` a fresh dimension variable; Appendix C annotates it and §2.6 says constraints alone do not determine magnitudes | UoM-4, UoM-9 |
-| R-6 | `ntu-dimensional-architecture.md` §7.2 | "covariant access" left as an open question | D2, M-3 |
-| R-7 | clef `docs` Appendix D | `FS8003` region mismatch on the wrong series; "regions form a subtyping hierarchy for assignment" | D2, D3, M-4 |
-| R-8 | `units-of-measure.md` line 12, §Measure Parameter Erasure | F#'s erasure text survives in a chapter whose framework never erases (DTS/DMM §2.3) | §0, step 6 |
-| R-9 | `decidable-by-construction.md` §2.2 | Z^7 as the dimension space, where base measures are declared and not fixed at seven (DBC §4.1's currency example) | step 1 |
-| R-10 | `arxiv-papers/research/grade-axis/00` | cites `../spec/draft-grade-discipline-chapter.md` and `../spec/clef-spec-amendment-schedule.md`, which exist nowhere under the repos | grade increment |
-| R-11 | `numeric-selection.md` §14 item 1; `width-inference.md` §7 | seal syntax and explicit-conversion syntax are open; the angle brackets are the measure slot, so a seal form cannot use them | step 3, step 7 |
-| R-12 | `numeric-selection.md` §9 item 1; `fixed-point-scaffolding.md` §4 vs `ntu-dimensional-architecture.md` §4.3 | "during elaboration" versus "at saturation" for range analysis and selection; Elaboration and Saturation are reserved phase terms and the lowercase uses read as the phase | D1 phase note |
-| R-13 | `dts-dmm-paper.md` §2.6 line 176 vs `numeric-selection.md` §2.1, §13.2 | an uncovered range is a Warning in the paper and a hard error in the spec | step 8, W-5 |
-| R-14 | `fixed-point-scaffolding.md` §4 (Appendix C) | sign-extends a `[0, 1023]` value the same listing and `width-inference.md` §3 treat as unsigned; line 59 says the elaborator fixes the representation, line 61 says lowering reads the coeffect | L-7, step 7 |
-| R-15 | `numeric-selection.md` §3.4 item 3 vs §5 | the non-covering case is "a diagnostic" in one place and "the §2.1 hard error" in the other | W-5 |
+| R-1 | `width-inference.md` §3 | the example table (31/21/10/13) carried the implementation's sign bit; the formula gives 30/20/9/12 | table corrected to the formula; a sentence added: a non-negative range spends no sign bit, extension follows the range's signedness, an implementation that adds a sign bit to every range does not conform (L-7b is that defect) |
+| R-2 | `error-handling.md` | null codes `CCS8100`–`CCS8104` inside the memory block | removed; null-freedom has one diagnostic, `CCS8010`; `CCS8100` is region mismatch; the exception-style warning moves to the effect block as `CCS8300`; a sentence states the warning-plus-flag rule |
+| R-3 | `ntu-types.md` §1, §1.1, §3, §4.1, §6, §7.1, §9 | width as identity, `int ≠ int64` by name, resolution and erasure attributed to Alex | chapter rewritten to the seal model: identity is kind and dimension; seals are coeffects, never unified; CCS resolves at saturation; Alex reads; nothing erased by the checker |
+| R-4 | `native-type-universe.md` §2.3 | `int` = platform word; `int` and `nativeint` synonyms | rewritten: `int` is the bare integer kind, width from the range, word-sealed only at an ABI site; `nativeint` is the pointer seal; they coincide at the ABI and nowhere else |
+| R-5 | `dts-dmm-paper.md` Appendix A step 1 vs Appendix C and §2.6 | a bare literal given a fresh dimension variable | paper: the design is Appendix C and the spec's dimensionless-literal rule; Appendix A step 1 is the rough edge, for the next publication cycle |
+| R-6 | `ntu-dimensional-architecture.md` §7.2 | "covariant access" left open | answered: exact identity on every component, access invariant, coercion only through `Ptr.asReadOnly` |
+| R-7 | clef `docs/fidelity/ccs-specification.md`, `From_FSharp_to_Clef.md` | FS codes, `!`/`:=` pointer forms, "regions form a subtyping hierarchy", a null-assignment error | narrative doc corrected; `ccs-specification.md` is a parallel spec and a drift source, see the retirement item in the report |
+| R-8 | `units-of-measure.md` line 12, §Measure Parameter Erasure | F#'s erasure text | rewritten: the checker never erases; measures ride the graph and drop at native emission |
+| R-9 | `decidable-by-construction.md` §2.2 | Z^7 as the dimension space | paper: base measures are declared, not fixed at seven (DBC §4.1's own currency example); for the amendment schedule |
+| R-10 | `research/grade-axis/00` | two `../spec/` drafts cited that exist nowhere | research folder: reported |
+| R-11 | `numeric-selection.md` §5, §8, §14.1; `width-inference.md` §7 | seal syntax open | resolved: the seal is the named representation type in type position; the angle brackets stay the measure slot; the parameterised posit form is a synthesis configuration, never a seal; the lossy-conversion discipline syntax stays open (the one item to decide) |
+| R-12 | `numeric-selection.md` §9 item 1; `fixed-point-scaffolding.md` §4 | "during elaboration" versus Saturation | spec reworded: propagation in Elaboration where no platform fact is needed, closed with selection at Saturation; paper: reported |
+| R-13 | `dts-dmm-paper.md` §2.6 vs `numeric-selection.md` §2.1, §13.2 | warning in the paper, hard error in the spec | the owner's rule: always a warning with `--warnaserror` to make it an error, as the FPGA timing budget does; spec amended, the paper was right |
+| R-14 | `fixed-point-scaffolding.md` §4 | sign-extends an unsigned value; elaborator versus lowering | paper: reported; the same defect as L-7b |
+| R-15 | `numeric-selection.md` §3.4 vs §5 | two severities for one condition | one severity now: warning promoted under the flag |

@@ -14,75 +14,48 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.NodeBuilder
 open Clef.Compiler.NativeTypedTree.Expressions.Types
 
 //-------------------------------------------------------------------------
-// Constant Type Inference
+// Constant Checking
 //-------------------------------------------------------------------------
 
-/// Get the NativeType of a SynConst
-let rec typeOfConst (c: SynConst) : NativeType =
+/// The type and the NativeLiteral of a SynConst, decided together in one place so the two
+/// projections cannot disagree, or the message of the one diagnostic a constant can raise.
+///
+/// The parser folds every literal suffix it does not itself carry into `SynConst.UserNum`;
+/// the bigint suffix `I` is among them. None of these names a representation Clef supports,
+/// so the constant is refused with CCS8018 (design note (f); plan L-3). No representation is
+/// fabricated in its place: the caller records the diagnostic through
+/// `addUnsupportedLiteralSuffix` and recovers the way its own surrounding code recovers.
+let rec checkConst (c: SynConst) : Result<NativeType * NativeLiteral, string> =
     match c with
-    | SynConst.Unit -> Types.unitType
-    | SynConst.Bool _ -> Types.boolType
-    | SynConst.SByte _ -> Types.int8Type
-    | SynConst.Byte _ -> Types.uint8Type
-    | SynConst.Int16 _ -> Types.int16Type
-    | SynConst.UInt16 _ -> Types.uint16Type
-    | SynConst.Int32 _ -> Types.intType
-    | SynConst.UInt32 _ -> Types.uintType
-    | SynConst.Int64 _ -> Types.int64Type
-    | SynConst.UInt64 _ -> Types.uint64Type
-    | SynConst.IntPtr _ -> Types.nintType
-    | SynConst.UIntPtr _ -> Types.unintType
-    | SynConst.Single _ -> Types.float32Type
-    | SynConst.Double _ -> Types.floatType
-    | SynConst.Char _ -> Types.charType
-    | SynConst.Decimal _ -> Types.decimalType
-    | SynConst.String _ -> Types.stringType
-    | SynConst.Bytes _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint8Type])
-    | SynConst.UInt16s _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint16Type])
-    | SynConst.Measure(innerConst, _, synMeasure, _) ->
-        // For now, just use the base type; measure annotation is tracked separately
-        let baseType = typeOfConst innerConst
-        let _ = synMeasure  // Suppress warning
-        baseType
+    | SynConst.Unit -> Ok (Types.unitType, NativeLiteral.Unit)
+    | SynConst.Bool b -> Ok (Types.boolType, NativeLiteral.Bool b)
+    | SynConst.SByte v -> Ok (Types.int8Type, NativeLiteral.Int(int64 v, NTUKind.NTUint (NTUWidth.Fixed 8)))
+    | SynConst.Byte v -> Ok (Types.uint8Type, NativeLiteral.Int(int64 v, NTUKind.NTUuint (NTUWidth.Fixed 8)))
+    | SynConst.Int16 v -> Ok (Types.int16Type, NativeLiteral.Int(int64 v, NTUKind.NTUint (NTUWidth.Fixed 16)))
+    | SynConst.UInt16 v -> Ok (Types.uint16Type, NativeLiteral.Int(int64 v, NTUKind.NTUuint (NTUWidth.Fixed 16)))
+    | SynConst.Int32 v -> Ok (Types.intType, NativeLiteral.Int(int64 v, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)))
+    | SynConst.UInt32 v -> Ok (Types.uintType, NativeLiteral.Int(int64 v, NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register)))
+    | SynConst.Int64 v -> Ok (Types.int64Type, NativeLiteral.Int(v, NTUKind.NTUint (NTUWidth.Fixed 64)))
+    | SynConst.UInt64 v -> Ok (Types.uint64Type, NativeLiteral.UInt(v, NTUKind.NTUuint (NTUWidth.Fixed 64)))
+    | SynConst.IntPtr v -> Ok (Types.nintType, NativeLiteral.Int(int64 v, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer)))
+    | SynConst.UIntPtr v -> Ok (Types.unintType, NativeLiteral.UInt(uint64 v, NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer)))
+    | SynConst.Single v -> Ok (Types.float32Type, NativeLiteral.Float(float v, NTUKind.NTUfloat (NTUWidth.Fixed 32)))
+    | SynConst.Double v -> Ok (Types.floatType, NativeLiteral.Float(v, NTUKind.NTUfloat (NTUWidth.Fixed 64)))
+    | SynConst.Char v -> Ok (Types.charType, NativeLiteral.Char v)
+    | SynConst.Decimal v -> Ok (Types.decimalType, NativeLiteral.Decimal v)
+    | SynConst.String(s, _, _) -> Ok (Types.stringType, NativeLiteral.String s)
+    | SynConst.Bytes(bytes, _, _) -> Ok (NativeType.TApp(Types.arrayTyCon, [Types.uint8Type]), NativeLiteral.ByteArray bytes)
+    | SynConst.UInt16s values -> Ok (NativeType.TApp(Types.arrayTyCon, [Types.uint16Type]), NativeLiteral.UInt16Array values)
+    | SynConst.Measure(innerConst, _, _, _) ->
+        // The measure annotation is not yet carried on the literal (plan L-2, step 1).
+        checkConst innerConst
     | SynConst.UserNum(_, suffix) ->
-        // UserNum with suffix - "I" is bigint, others are user-defined
-        match suffix with
-        | "I" -> Types.intType  // Treat bigint as int for now
-        | _ -> Types.intType  // Fallback
-    | SynConst.SourceIdentifier _ -> Types.stringType
+        Error $"Literal suffix '{suffix}' is not a representation Clef supports"
+    | SynConst.SourceIdentifier(_, value, _) -> Ok (Types.stringType, NativeLiteral.String value)
 
-//-------------------------------------------------------------------------
-// Constant to NativeLiteral Conversion
-//-------------------------------------------------------------------------
-
-/// Convert SynConst to SemanticGraph NativeLiteral
-let rec constToLiteral (c: SynConst) : NativeLiteral =
-    match c with
-    | SynConst.Unit -> NativeLiteral.Unit
-    | SynConst.Bool b -> NativeLiteral.Bool b
-    | SynConst.SByte v -> NativeLiteral.Int(int64 v, NTUKind.NTUint (NTUWidth.Fixed 8))
-    | SynConst.Byte v -> NativeLiteral.Int(int64 v, NTUKind.NTUuint (NTUWidth.Fixed 8))
-    | SynConst.Int16 v -> NativeLiteral.Int(int64 v, NTUKind.NTUint (NTUWidth.Fixed 16))
-    | SynConst.UInt16 v -> NativeLiteral.Int(int64 v, NTUKind.NTUuint (NTUWidth.Fixed 16))
-    | SynConst.Int32 v -> NativeLiteral.Int(int64 v, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register))
-    | SynConst.UInt32 v -> NativeLiteral.Int(int64 v, NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register))
-    | SynConst.Int64 v -> NativeLiteral.Int(v, NTUKind.NTUint (NTUWidth.Fixed 64))
-    | SynConst.UInt64 v -> NativeLiteral.UInt(v, NTUKind.NTUuint (NTUWidth.Fixed 64))
-    | SynConst.IntPtr v -> NativeLiteral.Int(int64 v, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer))
-    | SynConst.UIntPtr v -> NativeLiteral.UInt(uint64 v, NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer))
-    | SynConst.Single v -> NativeLiteral.Float(float v, NTUKind.NTUfloat (NTUWidth.Fixed 32))
-    | SynConst.Double v -> NativeLiteral.Float(v, NTUKind.NTUfloat (NTUWidth.Fixed 64))
-    | SynConst.Char v -> NativeLiteral.Char v
-    | SynConst.Decimal v -> NativeLiteral.Decimal v
-    | SynConst.String(s, _, _) -> NativeLiteral.String s
-    | SynConst.Measure(innerConst, _, _, _) -> constToLiteral innerConst
-    | SynConst.UserNum(value, suffix) ->
-        match suffix with
-        | "I" -> NativeLiteral.BigInt value
-        | _ -> NativeLiteral.String value  // Fallback
-    | SynConst.SourceIdentifier(_, value, _) -> NativeLiteral.String value
-    | SynConst.Bytes(bytes, _, _) -> NativeLiteral.ByteArray bytes
-    | SynConst.UInt16s values -> NativeLiteral.UInt16Array values
+/// Record CCS8018 for a constant `checkConst` refused, at the constant's own range.
+let addUnsupportedLiteralSuffix (r: range) (message: string) (env: TypeEnv) : unit =
+    addNativeError DiagnosticCodes.CCS8018_UnsupportedLiteralSuffix r message env
 
 
 //-------------------------------------------------------------------------

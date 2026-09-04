@@ -16,6 +16,15 @@ Reconciliation with Dimensional_Vetting_Plan.md (the plan wins where they differ
 - (0.4) range propagation runs in Elaboration where no platform fact is needed and closes, with
   selection, at Saturation; plan D1 phase note and rough edge R-12.
 - (f) codes are provisional until the D3 mapping table lands; the plan's D3 states the allocation rule.
+  Region mismatch is CCS8100 (the null codes are gone from error-handling.md). Every coverage finding
+  (CCS8012, CCS8016, coverage-empty) is a Warning promoted to an Error under --warnaserror, the owner's
+  rule of 2026-09-04; unobservable-range findings (CCS8011, CCS8047) stay Errors.
+- The seal form is resolved (numeric-selection.md §5 as amended): the named representation type in type
+  position; only the lossy-conversion discipline syntax is open. Open items i.1 and i.6 are closed.
+- Horizon_Requirements.md adds: per-coefficient selection for aggregates; a range containment over Z is
+  a QF_LIA obligation and QF_BV carries fixed-width facts; region and access are an enumeration-sort
+  family discharged in QF_UF, a third family beside group and lattice; a hyperedge may span families and
+  is projected per family before discharge.
 -->
 # Design note: units of measure in the PHG and Kennedy unification in CCS
 
@@ -352,8 +361,8 @@ All codes are in the CCS series, D3 as amended. None reuses a code the spec has 
 | CCS8000 | Error | Operator '{op}' requires numeric operands; '{ty}' is not numeric | operator application, W-2 |
 | CCS8001 | Error | The kind of the operands of '{op}' cannot be determined at this binding; annotate an operand | non-generalisable binding after saturation, D5 |
 | CCS8002 | Error | Conversion '{f}' requires a numeric source; '{ty}' is not numeric | conversion application, L-4 |
-| CCS8011 | Error | '{name}' has no bounded range from any source; annotate it or seal its representation. Seam variant appends: its range derives from '{bare}', bare and unbounded at {site} | e.5, W-4 |
-| CCS8012 | Error | Sealed representation '{s}' with range {dynrange} does not cover the analysed range {range} of '{name}' | e.4, W-5 |
+| CCS8011 | Error | '{name}' has no bounded range from any source; annotate it or seal its representation | e.5, W-4 (the dimensioning-seam variant is NS-1's numeric-selection-family code, allocated with the D3 table) |
+| CCS8012 | Warning, promoted to Error under `--warnaserror` | Sealed representation '{s}' with range {dynrange} does not cover the analysed range {range} of '{name}' | e.4, W-5 |
 | CCS8013 | Error | Representations '{s1}' sealed at {site1} and '{s2}' sealed at {site2} meet here; an explicit conversion is required | e.3, W-1 |
 | CCS8014 | Info | Seal '{s}' covers the range; the open selection would choose '{r}' | e.4, step 8 |
 | CCS8015 | Warning | Sealed arithmetic may wrap: pre-wrap range {range} exceeds '{s}' | e.4 |
@@ -384,7 +393,7 @@ All codes are in the CCS series, D3 as amended. None reuses a code the spec has 
 | CCS8020 | Error | Cannot write to ReadOnly pointer | `access-kinds.md` line 141 |
 | CCS8021 | Error | Cannot read from WriteOnly pointer | line 142 |
 | CCS8022 | Error | Access kind mismatch in assignment | line 143 |
-| CCS8110 | Error | Region mismatch: '{r1}' where '{r2}' is required | proposed, unallocated in the memory block; M-4 as amended says the spec assigns no number; open, i.1 |
+| CCS8100 | Error | Region mismatch: '{r1}' where '{r2}' is required | `error-handling.md` §Diagnostics as amended 2026-09-04: the null codes that occupied the block are removed |
 
 The site's `E_RANGE_UNBOUNDED` and `W_COVERAGE`, `blog/deferred-inference.md` lines 162 and 189, map to CCS8011 and CCS8012; the post says they are "the designed experience … not screenshots from a build", line 331.
 
