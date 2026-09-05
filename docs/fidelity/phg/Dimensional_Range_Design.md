@@ -360,11 +360,31 @@ it reads the node.
 width (`mlirTypeSize arch` reads it through the architecture), `mlirTypeSizeForArch` deleted,
 `TypeSizing` already gone; the serializer takes the declared pointer width and sizes no struct by a
 silent word. Deleted with them: the `X86_64`-defaulting `mapNativeType` and `mapNativeTypeWithGraph`
-and the string-based type helpers, all without a caller. Still standing, owed to the node-reading
-CPU leg (the CS-11 as-built below): L-7's CPU branch of `pBinaryArithOp` and `pComparisonOp`, L-8's
-shift-amount cast, L-9's `pTypeConversion`, and `TypeMapping`'s mapping of the bare kind to the
-declared word on CPU (`mapNTUKindToMLIRType`, `mapNativeTypeForArch`), which reads the declaration
-now and the node's selection later.
+and the string-based type helpers, all without a caller.
+
+**What the CPU leg deleted (2026-09-05, "CS-11 as built, the CPU leg" below).** L-7's CPU branch of
+`pBinaryArithOp` and `pComparisonOp`: the CS-10 fabric logic runs on every substrate (operands
+extended by the sign of their range to the operation range's held width, the result truncated to
+its own, the unsigned form by the join's sign; `arith` on a core, `comb` on fabric), and the
+NTUKind-keyed signedness dispatch with it. L-8's shift-amount cast: the amount is an operand like
+any other. L-9's `pTypeConversion`: a conversion between integers is the extension by the sign of
+the argument's range or the truncation between the two nodes' held widths, and nothing else (the
+`sourceIsUnsigned` kind read is gone). `TypeMapping`'s mapping of the bare kind to the declared
+word: `mapNTUKindToMLIRType` and `mapNativeTypeForArch` give the sentinel `TInt (IntWidth 0)` on
+every substrate and `narrowType` puts the node's held width on it. Composer's remaining size
+computations: `maxPayloadBytes`, the `FieldCount × pointer` estimate, `unionRepresentation` and
+`unionPayloadSlotBytes`, `calculateFieldOffsetForArch`, `structFieldByteOffset`'s sum,
+`physicalStorageType`'s and `extractMemRefShape`'s sums, `SSAAssignment.mapCaptureType` and
+`getDUSlotType` (which read `TypeLayout.Inline` sizes), `buildDULayout`'s `1 + payload`, the SysV
+byval threshold literals, and the dead byte-offset patterns (`pFieldAccess`, `pFieldSet`,
+`pAllocaImmutable`, `pConvertType`, `pRecordCopyWith`, `pArrayAccess`, `pArraySet`,
+`pRecordStruct`, `pTupleStruct`). The type-check-time layout sizes in CCS: `computeRecordLayout`
+and its word of eight, `estimatePayloadSize`, `estimateTypeSize`, the union `1 + max` with its
+alignment of eight, and the option and Result arithmetic in `layoutOf`; `TypeLayout` is symbolic
+(`Record` and `Union` are identities) and `Unify.fs`'s and `IntrinsicElaboration.fs`'s layout
+comparisons are identity comparisons. What stands as a read: `mlirTypeSize` of a scalar's
+selected width, of a pointer-sized type at the declared Pointer width, and of a struct at its
+settled size.
 
 **SSA is a nanopass derivation (the owner, 2026-09-05: "No minting. No push style application.
 This is nanopass." "NO POOLS." "NO POOL MANAGEMENT." "THIS IS ARCHITECTURE.").** `SSAAssignment`
@@ -940,3 +960,339 @@ for an unrecognised platform id (an ISA default, to become a diagnostic); Compos
 the lexer's 32-bit literal limit (CCS1147) against D10; the relational refinement of §1.2a
 (`count <= length - offset`) or the CS-12 source sweep for BAREWire's cursors; the platform
 description's records as declared boundaries (CS-12).
+
+## Rulings for the CPU leg (the owner, 2026-09-05)
+
+All four follow from one sentence the design already carries, Horizon C3: width is a function of
+the node's range, read from the platform's declarations, never stored beside the range and never
+fabricated. Each ruling is the place where that sentence meets a second fact.
+
+**Ruling 1, the closure calling convention: a declared boundary, keyed by escape, not by call
+site.** A call through a function value cannot know which lambda it reaches, and two unifiable
+lambdas can carry different parameter ranges. So the value-call ABI is a boundary in §4.1's sense:
+a representation fixed by declaration because the range cannot fix it. The declaration is the
+description's `Register` width, §4.1's second row already. Parameters and the result both sit at
+the word. The check is §4.2 coverage: a parameter whose joined range leaves the Register's declared
+range is CCS8012 with the two standard remedies. No CCS8014 at this boundary, since there is no
+developer declaration to tighten and it would fire on every closure. Direct calls to a lambda that
+never escapes meet the parameter node's width, which the range pass already computes as the join
+over its call sites. A lambda that is both called directly and taken as a value has one body and
+one parameter width, so the boundary applies to the whole lambda, and the set to key it on is the
+escaping map RangeAnalysis already builds. The caller extends its argument by the sign of its own
+range, the same rule the fabric leg uses when a field value is narrower than its field.
+
+**Ruling 2, record layouts: a consequence of selection, settled in the graph.** §3.3 states it:
+a record's layout is the consequence of its fields' selections, settled in the graph.
+`Layout_As_Joint_Constraint.md` §3 names the resolution point: CCS preserves identity at
+type-check time and resolves size at saturation, because that is where the platform is. The
+hardcoded eight in `computeRecordLayout` is the anomaly that note already indicts. So placement
+runs after `PlatformDeclaration.fill` and after `RangeAnalysis.run`, reading `FieldRanges` and the
+declared `Pointer` width, and `TypeConRef.Layout` becomes the symbolic identity fact its
+neighbours already are. Two consequences, stated so the implementer does not rediscover them: a
+wire-schema or FFI struct is a boundary, so its field widths come from the declaration, not the
+range (in CS-11 automatic, because width-named carriers select their own representation, which
+is why RoundTrip's wire structs stay byte-identical; the boundary rows take over at CS-12); and a
+field nothing constructs has the `Empty` range, which on a core selects the smallest declared
+representation, not zero bytes, so the layout still tiles.
+
+**Ruling 3, refined reads of wide cells: truncate at the read.** The cell's width is the slot's
+fact, the join of every write. The read under a guard is a different node with a narrower range,
+and by C3 its width is its own range's. The crossing between the two is a truncation, lossless by
+construction: the guard is what refined the range, so the value on that branch lies within the
+narrower representation. This is the fabric leg's field rule read in reverse, extension at the
+write and truncation at the read. Adapting the read's type from the physical cell would make the
+read's width depend on something other than its range, a second width source, exactly what C3
+forbids. Truncating at the read also gives verification a named site: the `trunci` carries the
+refined range as its obligation, the QF_BV Tier 2 shape `fixed-point-scaffolding`'s appendix
+describes for a `%wrap` in a range. On a core the truncation is emitted only where the refinement
+crosses a declared representation, and is identity otherwise.
+
+**Ruling 4, the length: keep CCS8012 and bound `n` in source.** The finding is real:
+`3 * n + bitCount + 2` sizes an allocation, and a length that can reach the Pointer maximum makes
+the product leave `uint64`; a C programmer would have to guard the same expression, and §4.2 names
+the remedies, bound the value or change the declaration. Loosening the analysis is not a third
+remedy, and making one warning disappear by tuning is the pattern §1.3 exists to prevent. The
+literal-length alternative would not close this case honestly: the array is a record field of a
+parameter, so "traces to a literal" means tracking lengths through element stores keyed by
+element type, the same keying whose closed-element rule was a review blocker. The source bound is
+a domain invariant: a hardware struct descriptor with a field count near 2^63 is not a descriptor;
+a declared maximum field count in the descriptor vocabulary, checked where a descriptor is built,
+gives `n` the range `[0, Max]`, and the fabric leg needs that bound anyway (an unbounded `n` there
+is CCS8011 and unsynthesizable). `Descriptors.fs` declares no such maximum today: that is the
+one-line BAREWire change. The literal-length rule is a fine precision refinement of
+`RangeSources.intrinsic`'s `length` row on its own merits, as a §1.2 change first, not the
+resolution of this warning. Declined: bounding a length by address space over element size, which
+would make `3 * n` fit by coincidence, and coincidence is not a bound.
+
+## CS-11 as built, the CPU leg (2026-09-05)
+
+The node-reading CPU leg, delivered in the five slices the brief set after the four rulings, each
+built inside Composer and gated before the next; every gate below was re-run on the final binary by the owner's session.
+Every decision cites the ruling or section it follows.
+
+**Slice 0, settled layouts (ruling 2; §3.3; Layout_As_Joint_Constraint.md §3;
+native-type-universe.md §2.3).** `PSGSaturation/SemanticGraph/Types.fs`: `SettledSlot` (`Integer
+of bits * representation name option`, `Bool`, `Char`, `Real of bits`, `Pointer of words`, `Unit`,
+`Opaque of what`), `SettledField` (name, slot, and on a core its offset, size and alignment),
+`SettledLayout` (`Record of fields * size * align`, `Union of cases * payloadOffset * size *
+align`), and two graph fields defaulted at every construction (`Core.fs`, `NodeBuilder.fs`,
+`NativeService.fs`, `FoldIn.fs`, `ProjectChecker.fs`): `Layouts: Lazy<Map<string, SettledLayout>>`
+and `Escaping: Lazy<Map<NodeId, string>>`. New `PSGSaturation/SemanticGraph/Placement.fs`
+(`Placement.settle`, registered after `RangeAnalysis.fs`, run in `NativeService.buildResult` after
+`RangeAnalysis.run` and before `PlatformDeclaration.check`): for every aggregate type the
+reachable graph mentions, through node types, lambda parameter types, record fields and union
+cases, one settled layout keyed as `FieldRanges` keys a record or union (the constructor's name)
+and as `ElementRanges` keys an element type (the rendered form) for a tuple, an option and a
+Result. An integer field of the bare kind is held at the representation its `FieldRanges` range
+selects (`RangeAnalysis.heldWidthOf`, with the representation's declared name); an `Empty` range,
+a field nothing constructs, selects the smallest declared representation (`uint8`, one byte) and
+never zero bytes; a width-named carrier is its own representation (`RangeSources.representationOfKind`),
+which is what keeps a wire or FFI struct's field widths declared until CS-12's boundary rows take
+over; a bool is one byte, a char its code-point representation (four bytes), a real its declared
+bits; every pointer-sized field is `Pointer words` at the declared Pointer width: one word for an
+address (a handle, a byref, a list or map node), two for a function value (the closure pair), five
+for a view of a buffer (a string, an array, a nested record, a tuple, an option, a union, a lazy,
+a seq), which the CPU leg holds as its memref descriptor. A record's or tuple's fields tile in
+declaration order, each at the next offset aligned to its slot, the aggregate aligned to its widest
+field and its size rounded to that alignment; a union is one byte of tag at offset zero and the
+payload slot of its widest case at offset one, alignment one (the leg's byte-buffer realisation of
+a union, its payloads read through typed views); a tuple position's range is the join of the
+element's range over every reachable `TupleExpr` of that type (a position nothing constructs is
+`Empty`). On a context declaring no representations (fabric) the layout records widths only and no
+offset or size; an opaque slot (an unresolved type variable, a kind the leg does not place) leaves
+the whole layout unsized, a stop for any reader that needs it. `TypeConRef.Layout` is symbolic:
+`NativeTypes.fs` adds `TypeLayout.Record` and `TypeLayout.Union`; `NativeService.fs` registers a
+record as `Record` and a union as `Union` (the placeholder constructors for recursive groups
+likewise), and `computeRecordLayout` with its word of eight, `estimatePayloadSize`,
+`estimateTypeSize` and the union `1 + max` at alignment eight are deleted; `layoutOf` no longer
+computes an option's or a Result's bytes, and a function value is `NTUCompound 2` (the closure
+pair, two platform words). The identity cases that remain and what each means: `Inline (size,
+align)` a primitive of fixed extent (the width-named carriers, interim to CS-12; bool, char,
+float, decimal; `Inline (0, 1)` the unit and a measure; `Inline (-1, -1)` a container whose size
+depends on its argument, an option, a Result, a lazy, a seq, an `Expr`); `Record` a record or a
+struct tuple, field by field in declaration order; `Union` a union, tag then payload;
+`PlatformWord` a value of the declared word (the bare kinds, a byref, a native pointer, a list, a
+map, a set); `FatPointer` a pointer and a length (an array, an arena); `NTUCompound n` n platform
+words (a function value); `Reference` an arena-allocated value; `Opaque` a type not yet known; and
+`Qualified` a placement qualifier over one of these. Every reader of `Inline`'s sizes is corrected:
+`Unify.fs` `LayoutCompatible` compares layout families (`Record` with `Record`, `Union` with
+`Union`, `NTUCompound n` with the same n) and reads no size; `IntrinsicElaboration.hasSameLayout`
+eliminates a same-width conversion by the carriers' declared widths (`NTUWidth.Fixed` bits equal,
+or one dimension), never by a computed size; the `PlatformWord` comment in `NativeTypes.fs` names
+the resolution point (CCS preserves identity at type checking and resolves the size at saturation;
+Alex reads the settled layout and resolves nothing). Composer's `Alex/Dialects/Core/Types.fs`:
+`TStruct` carries its settled bytes (`StructBytes = { Offsets; Size; Align }`, `None` on fabric);
+`mlirTypeSizeWith` reads a struct's settled size and stops on a struct with none or on an
+unnarrowed sentinel; `structFieldOffset` reads a field's settled offset. `Serialize.typeToString`
+writes `memref<Sizexi8>` from the settled bytes. `TypeMapping.mapNativeTypeForTarget` builds a
+record's or tuple's `TStruct` from the settled layout (`settledStruct`: an integer field at its
+slot's bits, every other field at its own mapping, the bytes from the layout), a union, an option
+and a Result as a byte memref of the settled size (`settledUnion`; an enumeration as its tag), an
+array's element at the element range's width (`elementWidth`, `ElementRanges`) or its physical
+storage; `physicalStorageType` and `MemoryPatterns.extractMemRefShape` read the settled size;
+`RecordPatterns.structFieldByteOffset`, `pBuildRecord`, `pBuildRecordCopyWith`, `pRecordFieldGet`
+and `pRecordFieldSet` read the settled offsets and size; `MemoryPatterns.unionPayloadOffset` reads
+the union's payload offset for `pDUCase` and `pExtractDUPayload` (`DUWitness` hands the scrutinee's
+native type down). A record captured by a closure is held as its base index, as before.
+
+**Slice 1, the escaping-lambda boundary (ruling 1; §4.1 second row; §4.2).** `RangeAnalysis.fs`:
+`Program.EscapingLambdas` (the candidates of `escapingOf` keyed by the Lambda node, with the
+reason each escapes) is written to the graph as `Escaping` by `run`, and `RangeAnalysis.escapes
+graph lambdaId` reads it (`None` for a lambda that never escapes). `boundaryOf` classifies a node
+from the graph's structure: `Parameter` (a `PatternBinding` among the parameters of a lambda that
+escapes or is a declaration root's, whose parameters are ABI-governed by §1.1), `Result` (the
+lambda's body, or the last value of the body through a block's last child or an annotation), or
+`ValueCall` (an application whose root is no lambda named directly or applied in place, a
+parameter, a field, a tuple element, an unresolved reference or a non-lambda binding; a direct
+call to a lambda that also escapes, since one body has one width; a named lambda handed more
+arguments than it has parameters). `selectedWidth` and `selectedRepresentation` read the boundary
+first: a node at it is at the declared Register width and the Register representation of its
+range's sign (`registerRepresentation`), regardless of the range; a direct-only lambda's parameter
+selects from its joined range as before. The rule is in `RangeAnalysis.selectedWidth`, the one
+place, and Composer reads it. Coverage at the boundary, `boundaryDiagnostics`: a parameter or
+result whose bounded range leaves the Register representation's declared range is CCS8012
+(Warning, promoted by `--warnaserror`) naming the value, the lambda (and how it escapes, or that it
+is a declaration root), the range and the representation, with the two remedies; an unobservable
+one stays CCS8011; no CCS8014 fires at this boundary. A value call's result is at the Register
+width likewise.
+
+**Slice 2(a), the leg reads the node.** `TypeMapping.mapNTUKindToMLIRType` and `mapNativeTypeForArch`
+give the bare kind the sentinel `TInt (IntWidth 0)` on every substrate (a width-named carrier its
+own bits, interim to CS-12; a pointer-width kind `index`); `TypeMapping.nodeWidth` reads
+`RangeAnalysis.heldWidth` for a word integer (`isWordInteger`: the bare kind and the width-named
+carriers, never an index, a bool or a char); `PSGCombinators.narrowType` puts it on the sentinel
+on a core and keeps the CS-10 fabric narrowing on fabric. What each consumer reads: a record
+field through `Layouts` (the settled representation), an array element through `ElementRanges`, a
+tuple position through the tuple's settled layout (the join over its constructions), a mutable
+cell at its Binding node's joined range (`BindingWitness`, `VarRefWitness`,
+`MutableAssignmentWitness`), a function parameter at the parameter node (`LambdaWitness`,
+`VarRefWitness`), a return at the body node (`LambdaWitness`, and every direct call's result type
+`ApplicationWitness.calleeReturnType`), a closure capture at the captured binding
+(`SSAAssignment.captureSlotType`), a literal at its point range (`LiteralPatterns`), a length at
+its node (`StringPatterns.pStringLength`, `MemoryPatterns.pArrayLengthIntrinsic`), a conversion's
+target at its node (`pTypeConversion`, `pTruncate`), an option's payload at its settled slot
+(`OptionWitness`), a `memref.load`'s element at the memref's own element type
+(`MemRefElements.pLoad`). THE ONE INTERIM, stated here and nowhere else: an integer node on a core
+whose range is unobservable has no selection (`selectedWidthOf` is `None`; CCS8011 is information
+on cores until the inventory is drained and promoted, §1.3 and the slice-4 rule) and is held at
+the declared Register width read from the context. The one site is `RangeAnalysis.heldWidthOf`,
+whose comment says so and names CCS8011; `Placement` (a field or position of unobservable range)
+and Composer's `TypeMapping.nodeWidth` and `elementWidth` both read it, so the interim has one
+site; when CCS8011 is promoted it becomes a stop naming the range, since no such value reaches
+emission. Nothing else defaults: on fabric an unobservable node is a stop as before. Boundaries
+keep the platform's declared widths read from the context: `main`'s return (a declaration root's
+result is a `Boundary.Result`, so the entry point returns at the Register width and its last value
+is brought to it by the return meet), an index and a native integer (`index`), the syscall ABI in
+`PlatformPatterns` (arguments and results at `PlatformWordType`, the declared Register width; a
+descriptor argument is extended or truncated to it by the sign of its range at the boundary
+through the call's derived meet), a C binding's parameters at its descriptor (the binding's
+parameter nodes: a width-named carrier at its bits, the bare kind at the Register width while
+CS-12's declaration is owed; every argument brought to it by the call's derived meet). Deleted:
+every remaining computation of a size in Composer (§8.3's list above); one size model remains, the
+settled layout for aggregates and the selected width for scalars. The SysV byval threshold is
+not a declared ABI fact of the description: a record crossing the C boundary by value is a stop
+naming the missing declaration (`PlatformPatterns.byvalOf`, CCS8203-class), never a literal.
+
+**Slice 2(b), meets derived in SSAAssignment (§3.1, §8.3; rulings 1 and 3; L-8, L-9, L-10
+retired).** `PSGElaboration/Coeffects.fs`: `Meet` (`Consumer`, `Operand`, `SSA`, `From`, `To`,
+`Kind` of `ExtendUnsigned`, `ExtendSigned`, `Truncate`), `CaptureSlot.ByteOffset`, and
+`ClosureLayout.CaptureInsertSSAs` per capture. `PSGElaboration/SSAAssignment.fs`, "The derivation
+table of meets", one function per consumer kind (`applicationMeets`, `callResultMeet`, `readMeet`,
+`nodeMeets`, `applicationReadMeets`, `returnMeet`), each reading both widths from CCS's selection
+(`TypeMapping.nodeWidth`, the settled layouts, the element ranges) and the extension's sign from
+the operand's range; a consumer whose operand already sits at the slot's width has no meet. The
+table, consumer kind -> values derived -> position the witness reads:
+
+| Consumer | Values derived | Position |
+|---|---|---|
+| Application, direct call to a lambda | each argument -> the parameter node's width; the result read from the callee's body width to the call node's own | `Meets[call]` in argument order, then the result read keyed with the call as its own operand; yielded right after the node's own values (`ApplicationWitness.adaptArguments`, `callResult`) |
+| Application through a value, to an escaping lambda, a closure call | each argument -> the declared Register width (ruling 1) | `Meets[call]` (`ApplicationWitness`) |
+| Application, the syscall ABI (`Sys.write`, `read`, `readline`) | the descriptor -> the Register width | `Meets[call]` (`PlatformPatterns.pSys*Intrinsic`) |
+| Application, a C binding | each argument -> the binding's parameter node | `Meets[call]` (`PlatformPatterns.recallArgs`) |
+| Application, `Array.set` / `Array.create` / `Array.blit` | the value -> the element's settled width; blit's indices -> the word | `Meets[call]` (`MemoryPatterns`) |
+| `Set`, mutable `Binding` | the value -> the cell's width (the Binding node's) | `Meets[set]`, `Meets[binding]` (`MutableAssignmentWitness`, `BindingWitness`) |
+| `RecordExpr`, `TupleExpr` | each field value -> the field's settled representation (the fabric rule of `pBuildRecord`, both legs) | `Meets[record]` in field order (`RecordPatterns.pBuildRecord`, `pBuildRecordCopyWith`) |
+| `IfThenElse`, `CaseElimination`, `Match` | each arm's value -> the join's width (the node's) | `Meets[join]` in arm order, emitted inside the arm's region before its yield (`ControlFlowPatterns.pBuildConditional`, `pBuildMatchElimination`) |
+| Lambda, the return | the body's last value -> the body node's width | `ReturnMeets[lambda]`, the last value of the body's scope (`LambdaWitness`, both the entry point and every function) |
+| `VarRef` of a cell, a binding or a parameter; `FieldGet`; `TupleGet`; `IndexGet`; `Array.get`; `DUEliminate` | the slot's width -> the read's width (ruling 3: a refined read truncates, one value, only where the read's representation differs from the cell's; a boundary read extends) | `Meets[read]` keyed with the read as its own operand (`VarRefWitness`, `RecordPatterns.pRecordFieldGet`, `StructuralWitness`, `MemoryPatterns.pReadElement`, `DUPatterns.pBuildDUEliminate`) |
+| `IndexSet`, `ArrayExpr` | each value -> the element's settled width | `Meets[node]` (`MemoryPatterns`) |
+| `DUConstruct`, `Option.Some` | the payload -> the payload slot's width | `Meets[node]` (`DUWitness`, `OptionWitness`) |
+| `Operators` (`pBinaryArithOp`, `pComparisonOp`, `pUnaryNegate`, `pBitwiseNot`) and `Convert` (`pTypeConversion`) | within the node's own five (three) values at the CS-10 positions: `[ext0?, ext1?, result, trunc?]`; a unary op `[const, result, ext, trunc]`; a conversion `[0]` | the node's allocation (`ApplicationPatterns`) |
+| Literal | none: its point range's width | |
+
+Numbering stays consecutive per function scope in emission order: a meet's value follows the
+consumer's own values (`FunctionScope.meet`), the return meet is the body scope's last value. The
+witnesses read a meet through `SSAAssignment.lookupMeet consumer operand` and `lookupReturnMeet`,
+transcribed by `PSGCombinators.meetOp` / `adaptOperand` / `pAdapt` (the operand looked up at the
+node the witness recalled and at its last value through a block or an annotation); `adaptOperand`
+takes the SSA from the derivation and constructs nothing, and stops if the operand arrives at a
+width other than the one derived. Where a truncation is emitted at a refined read, its obligation
+attaches to the `trunci` the read meet emits, carrying the read node's refined range as the
+`%wrap`-in-a-range shape (`fixed-point-scaffolding`'s appendix, QF_BV Tier 2); the obligation
+recipe itself is a later changeset. The closure environment's layout (the header, each slot's
+byte offset, the struct's bytes) is derived once in `buildClosureLayout` (`tileSlots`) and read by
+`LambdaWitness` and `ClosurePatterns.pExtractCaptures` through `CaptureSlot.ByteOffset` and the
+per-capture value lists, which removed the two mutable byte-offset accumulators there.
+
+**Slice 2(c), the survivors.** In the diff, `TInt (IntWidth 32)` appears for a char's code-point
+representation and the unit's zero (fixed representations of non-integer kinds, moved code), and
+in the lazy and seq headers (the leg's own aggregates, PRD-14/15, moved code); `declaredWordWidth`
+in `SSAAssignment.applicationMeets` (the value-call boundary and the syscall ABI) and for a seq's
+internal state (was a literal 64: now the declared word, owed with the seq aggregate). No
+`IntWidth 64` is added. `mlirTypeSize` survives as a read: of a scalar's selected width, of a
+pointer-sized type at the declared Pointer width, of a struct's settled size (`physicalStorageType`,
+`extractMemRefShape`, `pRecordFieldGet`/`Set`'s memref type, `Array.blit`'s element size);
+`SSAAssignment.tileSlots` folds those reads into the closure environment's layout; the lazy and
+seq struct sums in `TypeMapping`, `ClosurePatterns` and `getActualFunctionReturnType` are the
+leg's own aggregates and are owed to the settled layouts with PRD-14/15.
+
+**Slice 3, the descriptor bound (ruling 4).** `BAREWire/src/Hardware/Descriptors.fs`, module
+`Layout`: `[<Literal>] MaxFields = 4096`, the most fields a register block or struct descriptor
+declares (a descriptor with more is not a descriptor), and `Layout.fits`, the invariant a layout
+keeps. `BAREWire/src/Hardware/Validator.fs`: `FindingKind.TooManyFields`; `validate` checks `n >
+Layout.MaxFields` first and returns that one finding, else `findingsWithin abi descriptor fields
+n`, the former body, whose parameter `n` is the call's read of `n` under the guard, `[0, 4096]`,
+so `3 * n + bitCount + 2` sizes the finding buffer from a bounded count and CCS8012 disappears
+without loosening the analysis; `derive` documents that a derived descriptor passes through
+`validate`. A guard or a returned finding, never a clamp; RoundTrip's transcript is byte-identical.
+
+**Gates (the owner's session, on the final binary; the implementer was interrupted mid-chain and the
+workflow's silent respawn of a second implementer was stopped, so every transcript below is the
+owner's session's).** Composer build clean. RoundTrip (`rt-leg-final.*`): compile 0, run 0,
+transcript identical to `expected.txt`; the binary hash moves to
+`96734b153e63753d107c08700f8bc73768307f83e927484e02f203cb5c56b51f`, re-baselined here, from
+`aefcc865…`; 0 CCS8012 (the descriptor bound, slice 3) and 117 CCS8011 information lines (as
+before the leg); `07_output.mlir` against the pre-leg capture (`cs11/roundtrip-before-leg.mlir`):
+10800 ops become 11186, the integer sites move from 116 `i8`, 0 `i16`, 556 `i32`, 2484 `i64` to 987
+`i8`, 34 `i16`, 576 `i32`, 2250 `i64` (interior values held at the representation their range
+selects), the extensions at the meets from 14 `extui` and 1 `extsi` to 334 and 38, `divsi`/`remsi`
+become `divui`/`remui` where the operation range is non-negative; every class follows from a range,
+a settled layout or a declared boundary, none from a table (the reviewer classifies the diff
+site by site). Harness `vet.sh --through 3` (`vet-leg-final.txt`): exit 0, every row identical to
+`vet-cs10-final.txt` (W-4/reject unchanged, CCS8011 not promoted). HelloArty
+(`helloarty-leg-final.txt`): exit 0, 0 CCS8011, `07_output.mlir` freshly written and identical to
+CS-10 modulo SSA names (0 lines of difference with `%v<digits>` erased, 532 ops in the same order,
+the same integer widths); the raw numbering is shifted by a constant per function, as the owner
+expects whenever the derivation changes ("what would surprise me is if the assignment code for that
+pass was changed and the number didn't get altered"), and the fabric gate is stated as identity
+modulo names from here on. HelloProof (`hp-leg-final.*`): compile 0 with 0 CCS8011 and 0 CCS8012,
+run prints `Enter your name: Hello, Houston!`, 23 obligations, PASS, verdict lines identical to
+CS-10. Drift gate clean. SSA: no `V (` or `SSA.V` outside `SSAAssignment.fs`; no counter, pool,
+budget or spare vocabulary; no `platformWordWidth`, `mlirTypeSizeForArch`, `TypeSizing`,
+`computeRecordLayout`, `estimatedSize` or `maxPayloadBytes` survives in Composer.
+
+**Inventory.** RoundTrip: 117 CCS8011 before and after the leg (the leg selects widths and
+does not change what is observable; the residual is the cursor group and its consequences, the
+unsupplied parameters and the unconstructed record fields listed at "CS-11 slices 1, 2(a)"),
+CCS8012 1 → 0 by the descriptor bound. HelloProof 0 and 0. Harness rows unchanged (M-3 2+2, W-8 4,
+others 0).
+
+**Probes (gate 7), on the final binary (`probe/cs11leg/`, the review's `probe/cs11r/`, and
+`probe/cs11/`).** (g) `counter`: the cell `i` is held in `memref<1xi8>` with `cmpi ult … : i8`
+and `extui i8 → i64` at its meet with `total` (unobservable, the interim word); the program prints
+1045. (i) `guarded`: `c` `[0, 200]` is an `i8` cell, `d` `[0, 70000]` an `i32` cell; the read of
+`d` under `d < 100` is `arith.trunci i32 → i8` and the product runs at `i8`; the read of `c`
+under `c < 100` crosses no representation and has no truncation; prints `big`, `bigger`.
+(j) `escaping`: `f` passed as a value gives the eta lambda `@lambda_N(index, i64) -> i64`, both
+at the Register width, while `@Probe.f(i8) -> i8` and the direct-only `@Probe.k(i8) -> i8` hold
+their parameters at the representation of `[3, 3]` and `[5, 5]`; prints 8. Found on the way and
+fixed by hand: the lambda's result was `i8` because `boundaryOf` classified an `Application` by
+its callee before asking whether the node is a bounded lambda's body; the result position is now
+classified first for any node kind. `escaping2` (`h (2147483647 * 2147483647 * 2147483647)`):
+CCS8012 at the boundary naming `_eta0` and the Register representation, plus the general coverage
+warnings on `x` and the product, no CCS8014. (k) `record`: `{ A: int; B: int }` with `A` `[0, 100]`
+and `B` `[0, 70000]` is `memref<8xi8>`, `A` stored through a `memref<1xi8>` view and `B` through a
+`memref<1xi32>` view at the aligned offset; the closure `add` takes its parameter at `i32`
+(`[5, 70000]`) and extends its `i8` captures to it. The review's `valcall`, `valcall2`, `arrmap2`
+and `carrierloop` and the earlier `fnvalue`, `overflow` and `bytebuf` give the ranges recorded at
+"CS-11 slices 1, 2(a)": unobservable stays unobservable. After the classification fix the RoundTrip
+hash is unchanged (`96734b15…`), HelloArty identical modulo names, HelloProof PASS, harness rows
+identical.
+
+**Decisions, for the owner (each with the ruling or section it follows).** (1) `MaxFields = 4096`
+is the descriptor vocabulary's maximum (ruling 4; a register block or C struct descriptor with more
+fields is not one); the number is the declaration and can be revised there. (2) The one interim,
+an unobservable integer on a core held at the declared Register width at `RangeAnalysis.heldWidthOf`,
+named with CCS8011 at that one site and read by `Placement` and `TypeMapping.nodeWidth`, until
+CCS8011 is promoted (§1.3; slice 4 left it at Info with the residual 117). (3) A union on a core is
+one byte of tag at offset zero and its widest payload at offset one, alignment one, the leg's
+byte-buffer realisation read through typed views (§3.3; the placement writes it, Composer reads
+it). (4) Pointer-sized fields are placed at one, two or five words of the declared Pointer width
+(an address, a closure pair, a buffer view as the memref descriptor), the words a constant of the
+leg's realisation recorded in `Placement`, never summed below the graph (§3.3, §8.3). (5) A record
+crossing the C boundary by value is a stop naming the missing ABI declaration (CCS8203-class)
+rather than the SysV threshold literal (§4.1). (6) `TypeLayout.Record` and `TypeLayout.Union` are
+the symbolic identity cases that replace the computed `Inline` sizes (ruling 2); `Unify` compares
+families and reads no size. (7) A refined read's `trunci` carries the read node's refined range;
+the obligation recipe for it is a later changeset (ruling 3).
+
+**Owed.** The leg's own aggregates, lazy, seq and the seq enumerator (PRD-14/15), whose byte sums
+remain in `TypeMapping`, `ClosurePatterns` and `getActualFunctionReturnType`, to the settled
+layouts; the obligation recipe for the refined-read truncation (ruling 3); a C binding's bare-kind
+parameters at the Register width until CS-12 declares them; the CCS8011 residual (117 on RoundTrip:
+the relational refinement of §1.2a for the cursor group, or CS-12's declarations) and with it the
+promotion and the deletion of the interim site; `resolveOSArch`'s `X86_64` ISA fallback for an
+unrecognised platform id, to become a diagnostic; Composer's witnesses for `Array.init` and
+`List.length` on cores (pre-existing); the lexer's 32-bit literal limit (CCS1147) against D10; the
+scratch copies of the trees the first implementer made under the scratchpad (`head`, `cs11leg`),
+to delete.

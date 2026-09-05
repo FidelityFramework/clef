@@ -394,6 +394,19 @@ Decided 2026-09-04, all five by the user (D1 re-derived from the design corpus a
   restructure or step the clock down. Recorded with its two refinements (width-aware weights; the
   clock as a declared fact selected from the description) in `Dimensional_Range_Design.md` §8.4.
   No step of the range discipline may remove or weaken either.
+- **D12, the four rulings for the CPU leg (the user, 2026-09-05).** All from Horizon C3, width a
+  function of the node's range read from the platform's declarations, never stored beside the
+  range and never fabricated. (1) The value-call ABI is a boundary at the description's `Register`
+  width, keyed by RangeAnalysis's escaping map, not by call site; CCS8012 there, no CCS8014;
+  direct calls to a non-escaping lambda meet the parameter node's width. (2) Record layouts settle
+  at saturation, after `PlatformDeclaration.fill` and `RangeAnalysis.run`, from `FieldRanges` and
+  the declared `Pointer` width; `TypeConRef.Layout` is symbolic; an `Empty` field selects the
+  smallest declared representation; wire and FFI structs keep their declared widths. (3) A refined
+  read of a wide cell truncates at the read, losslessly, the `trunci` carrying the refined range as
+  its obligation; emitted only where the refinement crosses a declared representation. (4)
+  RoundTrip's `3 * n` stays CCS8012 and `n` is bounded in source by a declared maximum field count
+  in BAREWire's descriptor vocabulary; no literal-length rule as the fix. Recorded in
+  `Dimensional_Range_Design.md`, "Rulings for the CPU leg".
 - **D5, `+` on strings (decided: concatenates).** `+` dispatches on the kind of its operands: on numerics it
   is the unit-unified add with a range obligation; on strings it is the concat recipe with an extent
   obligation. No proof complication follows, because each dispatch emits its own obligation family.

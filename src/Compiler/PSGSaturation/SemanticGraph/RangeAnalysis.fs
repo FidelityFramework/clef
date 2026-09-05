@@ -117,6 +117,9 @@ type private Program = {
     /// A Lambda parameter node -> the reason its lambda escapes, for every parameter of an
     /// escaping candidate; the diagnostic names it when nothing supplies the parameter.
     Escaping: Map<NodeId, string>
+    /// An escaping Lambda node -> the reason it escapes (ruling 1: the whole lambda sits at the
+    /// value-call boundary, its parameters and its result at the declared Register width).
+    EscapingLambdas: Map<NodeId, string>
     /// Every Lambda parameter node.
     Parameters: Set<NodeId>
     /// A Lambda parameter node -> its lambda's declaration root, for a root's parameters.
@@ -679,6 +682,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         CallArguments = Map.empty
         IndexSeeds = Map.empty
         Escaping = Map.empty
+        EscapingLambdas = Map.empty
         Parameters = Set.empty
         RootParameters = Map.empty
         Assignments = Map.empty
@@ -709,6 +713,9 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         candidates
         |> List.collect (fun c -> c.Parameters |> List.skip (min c.Offset c.Parameters.Length) |> List.map (fun (_, _, id) -> (id, c.Escape)))
         |> List.fold (fun acc (id, why) -> if Map.containsKey id acc then acc else Map.add id why acc) Map.empty
+    let escapingLambdas =
+        candidates
+        |> List.fold (fun acc c -> if Map.containsKey c.LambdaId acc then acc else Map.add c.LambdaId c.Escape acc) Map.empty
     let callees =
         ordered
         |> List.fold (fun acc node ->
@@ -958,6 +965,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             CallArguments = callArguments
             IndexSeeds = indexSeeds
             Escaping = escaping
+            EscapingLambdas = escapingLambdas
             Parameters = parameters
             RootParameters = rootParameters
             Assignments = assignments
@@ -1367,6 +1375,106 @@ let private selectNode (ctx: PlatformContext) (node: SemanticNode) (range: Value
         | None -> selectRange ctx range
 
 //-------------------------------------------------------------------------
+// The value-call boundary (Dimensional_Range_Design.md, ruling 1; §4.1 second row; CS-11 slice 1)
+//-------------------------------------------------------------------------
+
+/// Where a node sits at the boundary a declaration, not the range, fixes.
+[<RequireQualifiedAccess>]
+type private Boundary =
+    /// A parameter of an escaping lambda, or of a declaration root: the closure calling
+    /// convention, or the exported entry's ABI, at the declared Register width.
+    | Parameter of lambdaId: NodeId
+    /// The result of such a lambda (its body, or the last value of its body through a block or
+    /// an annotation): held at the Register width for the same reason.
+    | Result of lambdaId: NodeId
+    /// A call through a function value, or a direct call to a lambda that also escapes: the
+    /// call site cannot know which lambda it reaches, so its result is the word's.
+    | ValueCall
+
+/// The lambdas of the graph's declaration roots (an entry point, an exported function), whose
+/// parameters and results are ABI-governed (§1.1 last bullet, §4.1 second row).
+let private rootLambdas (nodes: Map<NodeId, SemanticNode>) (roots: (NodeId * DeclRoot) list) : Set<NodeId> =
+    roots
+    |> List.collect (fun (rootId, _) ->
+        match Map.tryFind rootId nodes with
+        | Some { Kind = SemanticKind.Lambda _ } -> [ rootId ]
+        | Some { Kind = SemanticKind.Binding _ } -> lambdaOf nodes rootId |> Option.map (fun (l, _, _) -> l) |> Option.toList
+        | Some { Kind = SemanticKind.ModuleDef (_, members) } ->
+            members
+            |> List.choose (fun memberId ->
+                match Map.tryFind memberId nodes with
+                | Some { Kind = SemanticKind.Binding (_, _, _, Some DeclRoot.HardwareModule) } -> None
+                | Some { Kind = SemanticKind.Binding (_, _, _, Some _) } -> lambdaOf nodes memberId |> Option.map (fun (l, _, _) -> l)
+                | Some { Kind = SemanticKind.Binding ("main", _, _, None) } -> lambdaOf nodes memberId |> Option.map (fun (l, _, _) -> l)
+                | _ -> None)
+        | _ -> [])
+    |> Set.ofList
+
+/// The lambda whose result this node is: the lambda's body, or the last value of the body
+/// through a block's last child or an annotation.
+let rec private lambdaOfResult (nodes: Map<NodeId, SemanticNode>) (id: NodeId) : NodeId option =
+    match Map.tryFind id nodes |> Option.bind (fun n -> n.Parent) with
+    | Some parentId ->
+        match Map.tryFind parentId nodes with
+        | Some { Kind = SemanticKind.Lambda (_, body, _, _, _) } when body = id -> Some parentId
+        | Some { Kind = SemanticKind.Sequential ids } when List.tryLast ids = Some id -> lambdaOfResult nodes parentId
+        | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } when inner = id -> lambdaOfResult nodes parentId
+        | _ -> None
+    | None -> None
+
+/// The boundary a node sits at, if any, read from the graph's structure: `escaping` is the
+/// escaping-lambda map (`Program.EscapingLambdas`, written to the graph as `Escaping`) and `roots`
+/// the declaration roots' lambdas. A call is through a value when its root is no lambda named
+/// directly or applied in place (a parameter, a field, a tuple element, an unresolved reference),
+/// when the lambda it names also escapes, or when it hands surplus arguments to the value its
+/// body returns.
+let private boundaryOf (nodes: Map<NodeId, SemanticNode>) (escaping: Map<NodeId, string>) (roots: Set<NodeId>) (node: SemanticNode) : Boundary option =
+    let bounded (lambdaId: NodeId) = Map.containsKey lambdaId escaping || Set.contains lambdaId roots
+    // The result position comes first, whatever the node's kind: the body of an escaping lambda
+    // is at the word even when it is itself a direct call (Baker's eta-expanded lambda for a named
+    // function in value position has exactly that body, `f _eta0`), so that the value the caller
+    // reads through the closure pair and the value the body returns are one width (ruling 1).
+    match lambdaOfResult nodes node.Id with
+    | Some lambdaId when bounded lambdaId -> Some (Boundary.Result lambdaId)
+    | _ ->
+    match node.Kind with
+    | SemanticKind.PatternBinding _ ->
+        match node.Parent |> Option.bind (fun p -> Map.tryFind p nodes) with
+        | Some { Id = lambdaId; Kind = SemanticKind.Lambda (parameters, _, _, _, _) }
+            when bounded lambdaId && parameters |> List.exists (fun (_, _, id) -> id = node.Id) -> Some (Boundary.Parameter lambdaId)
+        | _ -> None
+    | SemanticKind.Application (funcId, args) ->
+        let (rootId, allArgs) = flattenApplication nodes funcId args
+        match Map.tryFind rootId nodes with
+        | Some { Kind = SemanticKind.Intrinsic _ } -> None
+        | Some { Kind = SemanticKind.Lambda (parameters, _, _, _, _) } ->
+            if bounded rootId || allArgs.Length > parameters.Length then Some Boundary.ValueCall else None
+        | Some { Kind = SemanticKind.VarRef (_, Some defId) } ->
+            match lambdaOf nodes defId with
+            | Some (lambdaId, parameters, _) ->
+                if bounded lambdaId || allArgs.Length > parameters.Length then Some Boundary.ValueCall else None
+            | None ->
+                // a binding that is no lambda: a function value, or a binding descriptor
+                // (a boundary call, whose result is the declaration's, CS-12); both sit at the word
+                Some Boundary.ValueCall
+        | Some { Kind = SemanticKind.VarRef (_, None) } -> Some Boundary.ValueCall
+        | Some _ -> Some Boundary.ValueCall
+        | None -> None
+    | _ -> None
+
+/// The representation the Register boundary holds a range in: the offered representation of the
+/// family the range's sign selects (§3.1) at the declared Register width; None where the
+/// description declares no Register or offers no integer representation at it.
+let private registerRepresentation (ctx: PlatformContext) (range: ValueRange) : NumericRepresentation option =
+    match PlatformContext.tryWidth ctx (WidthDimension.name WidthDimension.Register) with
+    | Result.Ok bits ->
+        let family = familyOf ctx range
+        offeredIntegers ctx family
+        |> List.tryFind (fun r -> r.Bits = bits)
+        |> Option.orElse (offeredIntegers ctx "int" |> List.tryFind (fun r -> r.Bits = bits))
+    | Result.Error _ -> None
+
+//-------------------------------------------------------------------------
 // CCS8011, CCS8012
 //-------------------------------------------------------------------------
 
@@ -1535,6 +1643,50 @@ let private coverageDiagnostics (program: Program) (state: State) : Diagnostic l
                   Reachability = ReachabilityContext.Reachable })
     | _ -> []
 
+/// CCS8012 at the value-call boundary (ruling 1, §4.2): a parameter or a result of an escaping
+/// lambda (or of a declaration root) whose bounded range leaves the declared range of the
+/// Register representation, naming the value, the lambda, the range and the representation, with
+/// the two remedies. An unobservable one stays CCS8011; no CCS8014 fires here, since there is no
+/// developer declaration to tighten and it would fire on every closure.
+let private boundaryDiagnostics (program: Program) (state: State) : Diagnostic list =
+    match program.Context with
+    | Some ctx when not program.Fabric ->
+        let roots = rootLambdas program.Reachable program.Graph.DeclarationRoots
+        let lambdaName (lambdaId: NodeId) =
+            Map.tryFind lambdaId program.Reachable
+            |> Option.bind (fun l -> l.Parent)
+            |> Option.bind (fun p -> Map.tryFind p program.Reachable)
+            |> Option.bind (spelling program)
+            |> Option.defaultValue (sprintf "the lambda at node %d" (NodeId.value lambdaId))
+        let uncovered (node: SemanticNode) =
+            match Map.tryFind node.Id state with
+            | Some r when ValueRange.isObservable r && isIntegerNode node ->
+                match boundaryOf program.Reachable program.EscapingLambdas roots node with
+                | Some (Boundary.Parameter lambdaId) | Some (Boundary.Result lambdaId) ->
+                    match registerRepresentation ctx r with
+                    | Some rep when not (RangeSources.declaredRange rep |> Option.exists (fun d -> ValueRange.contains d r)) -> Some (lambdaId, r, rep)
+                    | _ -> None
+                | _ -> None
+            | _ -> None
+        program.Ordered
+        |> List.choose (fun node -> uncovered node |> Option.map (fun found -> (node, found)))
+        |> fun found ->
+            let byNode = found |> List.map (fun (n, f) -> (n.Id, f)) |> Map.ofList
+            oncePerBinding program (found |> List.map fst) (fun node name where ->
+                let (lambdaId, r, rep) = Map.find node.Id byNode
+                let why = Map.tryFind lambdaId program.EscapingLambdas |> Option.map (sprintf ", which is %s,") |> Option.defaultValue ", a declaration root,"
+                { Severity = NativeDiagnosticSeverity.Warning
+                  Code = DiagnosticCodes.CCS8012_RangeNotCovered
+                  Message =
+                    sprintf "The range %s of '%s'%s is not covered by '%s' (%d bits, %s), the representation of the platform description of '%s' at its declared Register width, the calling convention of '%s'%s so its parameters and result sit at the word; bound the value with a comparison, a modulus or a clamp, or change the declaration"
+                        (ValueRange.render r) name where rep.Name rep.Bits
+                        (RangeSources.declaredRange rep |> Option.map ValueRange.render |> Option.defaultValue "?")
+                        ctx.PlatformId (lambdaName lambdaId) why
+                  Range = node.Range
+                  RelatedNodes = [ node.Id ]
+                  Reachability = ReachabilityContext.Reachable })
+    | _ -> []
+
 //-------------------------------------------------------------------------
 // Entry
 //-------------------------------------------------------------------------
@@ -1591,8 +1743,8 @@ let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph
         |> Set.toList
         |> List.choose (fun key -> typeOfKey key |> Option.map (fun elem -> key, elementRange program state elem))
         |> Map.ofList
-    let diagnostics = unobservableDiagnostics program state @ coverageDiagnostics program state
-    ({ graph with Nodes = nodes; FieldRanges = lazy fieldRanges; ElementRanges = lazy elementRanges }, diagnostics)
+    let diagnostics = unobservableDiagnostics program state @ coverageDiagnostics program state @ boundaryDiagnostics program state
+    ({ graph with Nodes = nodes; FieldRanges = lazy fieldRanges; ElementRanges = lazy elementRanges; Escaping = lazy program.EscapingLambdas }, diagnostics)
 
 //-------------------------------------------------------------------------
 // Reads for the witnesses (Composer transcribes; it computes no range and no width)
@@ -1651,51 +1803,117 @@ let tupleElementRange (graph: SemanticGraph) (nodeId: NodeId) (index: int) : Val
             | _ -> None
     trace Set.empty nodeId
 
+/// The escape reason of a lambda that escapes as a value (ruling 1; slice 1), read from the map
+/// RangeAnalysis wrote on the graph; None for a lambda that never escapes. Composer reads this
+/// for the closure calling convention; every width at that boundary comes through
+/// `selectedWidth` / `heldWidth`, never from here.
+let escapes (graph: SemanticGraph) (lambdaId: NodeId) : string option =
+    Map.tryFind lambdaId graph.Escaping.Value
+
+/// The boundary a node of the settled graph sits at, if any (ruling 1): read from the graph's
+/// structure, its escaping map and its declaration roots.
+let private boundaryOfNode (graph: SemanticGraph) (node: SemanticNode) : Boundary option =
+    boundaryOf graph.Nodes graph.Escaping.Value (rootLambdas graph.Nodes graph.DeclarationRoots) node
+
+/// The declared Register width of the graph's platform, the representation of every value at the
+/// value-call boundary (§4.1's second row); None where the description declares none.
+let private registerWidth (ctx: PlatformContext) : int option =
+    PlatformContext.tryWidth ctx (WidthDimension.name WidthDimension.Register) |> Result.toOption
+
+/// Whether the graph's platform is a core with declared integer representations: the leg that
+/// selects from a declared set (§3.1). Fabric, and a description offering no integer
+/// representation, hold a value at exactly its range's width.
+let private selectsFromDeclared (ctx: PlatformContext) : bool =
+    PlatformContext.substrateKind ctx <> SubstrateKind.FPGA
+    && not (List.isEmpty (offeredIntegers ctx "int" @ offeredIntegers ctx "uint"))
+
+/// The integer representation a range of the bare kind selects on the graph's platform (§3.1):
+/// the offered representation of the sign's family with the fewest bits whose declared range
+/// covers the range, or the widest when none does (CCS8012 was reported); None for an
+/// unobservable range, or a context declaring no integer representation. A read of the settled
+/// range against the declaration, never stored (C3).
+let selectedRepresentationOf (graph: SemanticGraph) (range: ValueRange) : NumericRepresentation option =
+    match graph.Platform with
+    | Some ctx when selectsFromDeclared ctx -> (selectRange ctx range).Representation
+    | _ -> None
+
 /// The integer representation a node selects on the graph's platform (§3.1), derived on read from
-/// the node's range, its carrier and the declared representations: a width-named carrier's own;
-/// for the bare kind, the offered representation of the sign's family with the fewest bits whose
-/// declared range covers the range, or the widest when none does (CCS8012 was reported); None for
-/// an unobservable range, a context declaring no integer representation, or a node that is not an
+/// the node's range, its carrier, its boundary and the declared representations: at the
+/// value-call boundary (ruling 1) the Register representation of the range's sign; a width-named
+/// carrier's own; for the bare kind, `selectedRepresentationOf` its range. None for an
+/// unobservable range, a context declaring no integer representation, or a node that is not an
 /// integer. Never stored beside the range (Horizon C3).
 let selectedRepresentation (graph: SemanticGraph) (nodeId: NodeId) : NumericRepresentation option =
     match graph.Platform, SemanticGraph.tryGetNode nodeId graph with
-    | Some ctx, Some node when isIntegerNode node ->
-        match node.ValueRange with
-        | Some r -> (selectNode ctx node r).Representation
-        | None -> None
+    | Some ctx, Some node when isIntegerNode node && selectsFromDeclared ctx ->
+        match node.ValueRange, boundaryOfNode graph node with
+        | Some r, Some _ -> registerRepresentation ctx r
+        | Some r, None -> (selectNode ctx node r).Representation
+        | None, _ -> None
     | _ -> None
 
 /// The width a range of the bare kind selects on the graph's platform: on fabric, which declares
 /// no core, the exact width of the range (§3, `ValueRange.width`); on a core, the bits of the
 /// selected representation, or of the widest declared one for a range no representation covers
-/// (CCS8012 named it) or an unobservable range while CCS8011 is information there (emission only:
-/// the fact of record is the range and the declaration, and the diagnostic already names the
-/// value). None where no integer representation is declared and the range has no width.
+/// (CCS8012 named it). None for an unobservable range on a core: no width is fabricated for it
+/// here (C3, width-inference.md §6); `heldWidthOf` is the one site that holds such a value at
+/// the declared word while CCS8011 is information there.
 let selectedWidthOf (graph: SemanticGraph) (range: ValueRange) : int option =
     match graph.Platform with
-    | Some ctx when PlatformContext.substrateKind ctx <> SubstrateKind.FPGA
-                    && not (List.isEmpty (offeredIntegers ctx "int" @ offeredIntegers ctx "uint")) ->
-        // A range no declared representation covers has been reported (CCS8012) and selects the
-        // widest; an unobservable range selects nothing: no width is fabricated for it here (C3,
-        // width-inference.md section 6), and a leg that needs one stops naming the node.
+    | Some ctx when selectsFromDeclared ctx ->
         match ValueRange.isObservable range, (selectRange ctx range).Representation with
         | false, _ -> None
         | true, Some r -> Some r.Bits
         | true, None -> None
     | _ -> ValueRange.width range
 
-/// The width a node's value is held at on the graph's platform (§3.1, width-inference.md §8):
-/// `selectedWidthOf` of its range, except that a width-named carrier is held at its own
-/// representation's bits (interim, CS-12), or at the bits its spelling states where the context
-/// offers no such representation. None for a node with no range.
+/// THE ONE INTERIM of the node-reading CPU leg (Dimensional_Range_Design.md, "CS-11 as built, the
+/// CPU leg"; §1.3): an integer value on a core whose range is unobservable has no selection
+/// (`selectedWidthOf` is None; CCS8011 is information on cores until the migration inventory is
+/// drained and promoted, §1.3 and the slice-4 rule) and is held at the declared Register width
+/// read from the context. Nothing else defaults: on fabric an unobservable range stays None and
+/// the leg stops naming the node. When CCS8011 is promoted to an error on every substrate this
+/// site becomes a stop naming the range, since no such value reaches emission. The record and
+/// union placement (Placement.fs) and Composer's width reads both come through here, so the
+/// interim has one site.
+let heldWidthOf (graph: SemanticGraph) (range: ValueRange) : int option =
+    match selectedWidthOf graph range with
+    | Some bits -> Some bits
+    | None ->
+        match graph.Platform with
+        | Some ctx when PlatformContext.substrateKind ctx <> SubstrateKind.FPGA && not (ValueRange.isObservable range) ->
+            registerWidth ctx   // the interim: an unobservable range on a core, CCS8011 information
+        | _ -> None
+
+/// The width a node's value is selected at on the graph's platform (§3.1, width-inference.md
+/// §8): at the value-call boundary (ruling 1: a parameter or the result of a lambda that escapes
+/// as a value or is a declaration root, and a call through a value) the declared Register width,
+/// regardless of the range; a width-named carrier at its own representation's bits (interim,
+/// CS-12), or at the bits its spelling states where the context offers no such representation;
+/// otherwise `selectedWidthOf` its range. None for a node with no range, or an unobservable one
+/// on a core (see `heldWidth`).
 let selectedWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
     match graph.Platform, SemanticGraph.tryGetNode nodeId graph with
     | Some ctx, Some node when isIntegerNode node && PlatformContext.substrateKind ctx <> SubstrateKind.FPGA ->
-        match Types.tryGetNTUKind node.Type |> Option.bind (RangeSources.representationOfKind ctx) with
-        | Some r -> Some r.Bits
+        match boundaryOfNode graph node with
+        | Some _ -> registerWidth ctx
         | None ->
-            match Types.tryGetNTUKind node.Type with
-            | Some (NTUKind.NTUint (NTUWidth.Fixed bits)) | Some (NTUKind.NTUuint (NTUWidth.Fixed bits)) -> Some bits
-            | _ -> node.ValueRange |> Option.bind (selectedWidthOf graph)
+            match Types.tryGetNTUKind node.Type |> Option.bind (RangeSources.representationOfKind ctx) with
+            | Some r -> Some r.Bits
+            | None ->
+                match Types.tryGetNTUKind node.Type with
+                | Some (NTUKind.NTUint (NTUWidth.Fixed bits)) | Some (NTUKind.NTUuint (NTUWidth.Fixed bits)) -> Some bits
+                | _ -> node.ValueRange |> Option.bind (selectedWidthOf graph)
     | _, Some node -> node.ValueRange |> Option.bind (selectedWidthOf graph)
     | _ -> None
+
+/// The width a node's value is held at: `selectedWidth`, or, for an unobservable range on a core,
+/// the interim word of `heldWidthOf`. The read Composer's CPU leg makes for every integer node;
+/// None is a stop there (fabric, or a node with no range).
+let heldWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
+    match selectedWidth graph nodeId with
+    | Some bits -> Some bits
+    | None ->
+        match SemanticGraph.tryGetNode nodeId graph with
+        | Some node when isIntegerNode node -> node.ValueRange |> Option.bind (heldWidthOf graph)
+        | _ -> None

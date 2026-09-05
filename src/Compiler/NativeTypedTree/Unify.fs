@@ -511,12 +511,18 @@ let solveConstraint (c: Constraint) : Result<unit, UnificationError> =
         tryUnify sub super range
 
     | Constraint.LayoutCompatible(ty, layout, range) ->
-        // Layout constraint - verify ty has compatible layout
-        let actualLayout = layoutOf ty
-        match (actualLayout, layout) with
+        // Layout constraint: the two layouts are of one family. An identity comparison of the
+        // symbolic layout (Layout_As_Joint_Constraint.md §3): no size is read here, sizes being
+        // settled at saturation (Placement). Opaque and PlatformWord defer to that settlement.
+        let actualLayout = TypeLayout.baseLayout (layoutOf ty)
+        match (actualLayout, TypeLayout.baseLayout layout) with
         | TypeLayout.Opaque, _ -> Ok ()  // Unknown layout, defer check
         | _, TypeLayout.Opaque -> Ok ()  // Any layout is compatible with opaque
-        | TypeLayout.Inline(s1, a1), TypeLayout.Inline(s2, a2) when s1 = s2 && a1 = a2 -> Ok ()
+        | TypeLayout.Inline _, TypeLayout.Inline _ -> Ok ()
+        | TypeLayout.Record, TypeLayout.Record -> Ok ()
+        | TypeLayout.Union, TypeLayout.Union -> Ok ()
+        | TypeLayout.FatPointer, TypeLayout.FatPointer -> Ok ()
+        | TypeLayout.NTUCompound a, TypeLayout.NTUCompound b when a = b -> Ok ()
         | TypeLayout.Reference _, TypeLayout.Reference _ -> Ok ()
         | TypeLayout.PlatformWord, TypeLayout.PlatformWord -> Ok ()  // Platform word matches platform word
         | TypeLayout.PlatformWord, _ -> Ok ()  // Platform word deferred to codegen

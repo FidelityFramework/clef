@@ -191,6 +191,8 @@ module ProjectChecker =
                                 SeqSaturation = lazy Map.empty
                                 FieldRanges = lazy Map.empty
                                 ElementRanges = lazy Map.empty
+                                Layouts = lazy Map.empty
+                                Escaping = lazy Map.empty
                                 Edges = []
                             }
                             Ok {

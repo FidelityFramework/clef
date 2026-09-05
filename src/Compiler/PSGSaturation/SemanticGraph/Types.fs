@@ -736,6 +736,61 @@ type SemanticNode = {
 }
 
 //-------------------------------------------------------------------------
+// Settled layouts (Dimensional_Range_Design.md §3.3, ruling 2; Layout_As_Joint_Constraint.md §3)
+//-------------------------------------------------------------------------
+
+/// How one field of a settled layout is held on the graph's platform. A record's layout is the
+/// consequence of its fields' selections, settled at saturation once the range pass has run and
+/// the platform has filled the context (CS-11 slice 0); `TypeConRef.Layout` keeps the identity of
+/// a type's layout family and never a byte count.
+[<RequireQualifiedAccess>]
+type SettledSlot =
+    /// An integer at the representation its range selects: the bits, and the declared
+    /// representation's name on a core (`None` on fabric, where the width is exactly the range's).
+    | Integer of bits: int * representation: string option
+    /// A boolean: one byte on a core, one bit on fabric.
+    | Bool
+    /// A char at its code-point representation (32 bits).
+    | Char
+    /// A real at its declared bits.
+    | Real of bits: int
+    /// A pointer-sized field: `words` declared Pointer widths. One word is an address (a handle,
+    /// a byref, a list or map node); two words a function value (the closure pair); five words a
+    /// view of a buffer (a string, an array, a nested record, a tuple, an option, a union, a lazy
+    /// or a seq), which the CPU leg holds as its memref descriptor: two addresses, an offset, a
+    /// size and a stride. The word count is the leg's realisation, read here and never summed
+    /// below the graph; a declaration of it belongs to the platform description (CS-12, owed).
+    | Pointer of words: int
+    /// The unit value, held as the leg's zero of 32 bits.
+    | Unit
+    /// A type the pass cannot place (an unresolved variable, an unmapped kind): a stop for any
+    /// reader that needs its size, naming the type.
+    | Opaque of what: string
+
+/// One field of a settled layout: its slot, and on a core its byte offset, size and alignment,
+/// tiled in declaration order with the alignment the selected representation declares
+/// (native-type-universe.md §2.3). `None` on a context declaring no representations (fabric).
+type SettledField = {
+    Name: string
+    Slot: SettledSlot
+    Offset: int option
+    Size: int option
+    Align: int option
+}
+
+/// The settled layout of an aggregate type.
+[<RequireQualifiedAccess>]
+type SettledLayout =
+    /// A record (or a tuple, `Item1`..): its fields, its size and its alignment (`None` on fabric,
+    /// or where a field is opaque).
+    | Record of fields: SettledField list * size: int option * align: int option
+    /// A union (a user union, an option, a Result): one byte of tag at offset zero, then the
+    /// payload slot of the widest case at `payloadOffset`; each case names its payload slot
+    /// (`None` for a case without one). The tag-then-payload form is the leg's realisation of a
+    /// union as a byte buffer read through typed views; its alignment is one.
+    | Union of cases: (string * SettledSlot option) list * payloadOffset: int option * size: int option * align: int option
+
+//-------------------------------------------------------------------------
 // Semantic Graph
 //-------------------------------------------------------------------------
 
@@ -764,6 +819,18 @@ type SemanticGraph = {
     /// the element type's rendered form; a type nothing reachable stores into has no entry, and a
     /// read of it is unobservable. Filled by RangeAnalysis.
     ElementRanges: Lazy<Map<string, ValueRange>>
+    /// Per aggregate type, its settled layout (Dimensional_Range_Design.md §3.3, ruling 2): every
+    /// reachable record and union type keyed by the type constructor's name (as `FieldRanges`),
+    /// every reachable tuple, option and Result type keyed by its rendered form (as
+    /// `ElementRanges`). Filled by Placement after RangeAnalysis; defaulted empty at every graph
+    /// construction. The CPU leg reads a field's representation, offset and size here and computes
+    /// none of them.
+    Layouts: Lazy<Map<string, SettledLayout>>
+    /// Per escaping lambda (Dimensional_Range_Design.md ruling 1; CS-11 slice 1): the reason it
+    /// escapes as a value, keyed by the Lambda node. A lambda here has its parameters and its
+    /// result at the declared Register width, the value-call boundary (§4.1's second row);
+    /// `RangeAnalysis.escapes` reads it. Filled by RangeAnalysis.run; defaulted empty.
+    Escaping: Lazy<Map<NodeId, string>>
     /// F -- the hyperedge set. Phase 0 carries only what enrichment mints
     /// explicitly (obligations, residence); the kind-derived structural and
     /// reference edges are projected on demand by `kindEdges` and are not

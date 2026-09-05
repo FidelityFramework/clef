@@ -333,6 +333,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\PlatformDeclaration.fs" />
     <!-- The range pass: every integer's analysed range as a coeffect on the node, CCS8011 (CS-10) -->
     <Compile Include="PSGSaturation\SemanticGraph\RangeAnalysis.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\Placement.fs" />
 
     <Compile Include="NativeTypedTree\NativeService.fs" />
 

@@ -347,6 +347,8 @@ module SemanticGraph =
         SeqSaturation = lazy Map.empty
         FieldRanges = lazy Map.empty
         ElementRanges = lazy Map.empty
+        Layouts = lazy Map.empty
+        Escaping = lazy Map.empty
         Edges = []
     }
 
@@ -361,6 +363,8 @@ module SemanticGraph =
         SeqSaturation = lazy Map.empty
         FieldRanges = lazy Map.empty
         ElementRanges = lazy Map.empty
+        Layouts = lazy Map.empty
+        Escaping = lazy Map.empty
         Edges = []
     }
 
