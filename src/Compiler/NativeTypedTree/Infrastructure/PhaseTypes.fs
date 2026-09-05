@@ -169,6 +169,8 @@ type PhaseNodeOutput = {
     Body: string option
     /// Emission strategy (Inline, SeparateFunction, MainPrologue)
     EmissionStrategy: string option
+    /// The analysed value range, rendered (`[lo, hi]`), once the range pass has run
+    ValueRange: string option
 
     // Elaboration Fields (for "pierce the veil" debugging)
     // Source-based nodes have all None/false; elaborated nodes have values.

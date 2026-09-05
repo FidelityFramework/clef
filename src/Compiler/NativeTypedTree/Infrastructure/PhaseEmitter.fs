@@ -120,6 +120,7 @@ let private serializeNode (pretty: bool) (indent: int) (node: PhaseNodeOutput) :
             node.SRTPResolution |> Option.map (fun r -> ("srtpResolution", escapeJsonString r))
             node.Body |> Option.map (fun b -> ("body", escapeJsonString b))
             node.EmissionStrategy |> Option.map (fun s -> ("emissionStrategy", escapeJsonString s))
+            node.ValueRange |> Option.map (fun r -> ("valueRange", escapeJsonString r))
             // Elaboration fields (unified - source-based nodes have no elaboration)
             node.ElaborationKind |> Option.map (fun k -> ("elaborationKind", escapeJsonString k))
             node.ElaborationFor |> Option.map (fun f -> ("elaborationFor", escapeJsonString f))
@@ -235,6 +236,7 @@ let createNodeOutput
         SRTPResolution = None
         Body = None
         EmissionStrategy = None
+        ValueRange = None
         // Elaboration defaults (None = source-based, not elaborated)
         ElaborationKind = None
         ElaborationFor = None

@@ -64,6 +64,7 @@ type NodeBuilder() =
             Metadata = Map.empty
             IsReachable = true  // Default to reachable; soft-delete marks false
             EmissionStrategy = defaultArg emission EmissionStrategy.Inline
+            ValueRange = None   // written by RangeAnalysis at saturation
         }
         nodes <- Map.add id node nodes
         node
@@ -129,6 +130,7 @@ type NodeBuilder() =
           Platform = None
           ModuleClassifications = SemanticGraph.mkModuleClassifications nodes
           SeqSaturation = SemanticGraph.mkSeqSaturation nodes
+          FieldRanges = lazy Map.empty
           Edges = [] }
 
     /// Build the semantic graph with platform context
@@ -140,6 +142,7 @@ type NodeBuilder() =
           Platform = Some platform
           ModuleClassifications = SemanticGraph.mkModuleClassifications nodes
           SeqSaturation = SemanticGraph.mkSeqSaturation nodes
+          FieldRanges = lazy Map.empty
           Edges = [] }
 
     /// Reset the builder

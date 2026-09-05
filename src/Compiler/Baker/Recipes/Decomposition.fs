@@ -125,7 +125,8 @@ let mkExpandedNode (ctx: Context) (kind: SemanticKind) (ty: NativeType) : Semant
           Parent = None
           Metadata = Map.empty
           IsReachable = true
-          EmissionStrategy = EmissionStrategy.Inline }
+          EmissionStrategy = EmissionStrategy.Inline
+          ValueRange = None }
     markBaker ctx.OriginalHOF ctx.ExpansionId baseNode
 
 //-------------------------------------------------------------------------

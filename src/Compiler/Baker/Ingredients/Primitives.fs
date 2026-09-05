@@ -46,7 +46,8 @@ let internal mkNode (state: SaturationState) (kind: SemanticKind) (ty: NativeTyp
           Parent = None
           Metadata = Map.empty
           IsReachable = true
-          EmissionStrategy = EmissionStrategy.Inline }
+          EmissionStrategy = EmissionStrategy.Inline
+          ValueRange = None }
     markBaker state.OriginalHOF state.ExpansionId baseNode
 
 /// Create a node at a SPECIFIC NodeId (for replacing PatternBindings in-place)
@@ -63,7 +64,8 @@ let internal mkNodeAt (state: SaturationState) (nodeId: NodeId) (kind: SemanticK
           Parent = None
           Metadata = Map.empty
           IsReachable = true
-          EmissionStrategy = EmissionStrategy.Inline }
+          EmissionStrategy = EmissionStrategy.Inline
+          ValueRange = None }
     markBaker state.OriginalHOF state.ExpansionId baseNode
 
 //=============================================================================

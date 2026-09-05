@@ -128,6 +128,11 @@ module DiagnosticCodes =
     // CCS8002: a conversion's source is not numeric (design (c) last row; plan L-4): `int "a"`.
     // The conversion is `κ<'u> -> Target<'u>`, and the carrier variable is the constraint.
     let CCS8002_ConversionSourceNotNumeric = "CCS8002"
+    // CCS8011: an integer whose analysed range is unobservable (Dimensional_Range_Design.md §1.3,
+    // §7): a loop or recursion nothing bounds, an input no declaration ranges. An error on fabric,
+    // where the width has no other source; information on every other substrate until CS-12
+    // supplies the declared boundary ranges (RangeAnalysis).
+    let CCS8011_UnobservableRange = "CCS8011"
     // docs/fidelity/phg/Dimensional_Step1_2_Design.md (f); allocation rule in the Plan's D3.
     let CCS8018_UnsupportedLiteralSuffix = "CCS8018"
 
