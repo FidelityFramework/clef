@@ -125,6 +125,9 @@ module DiagnosticCodes =
     // CCS8001: the kind of an operator's operands is still undetermined at a binding that is not
     // generalisable (design c.1, c.3, D5): a carrier variable or the `+` dispatch left unbound.
     let CCS8001_OperandKindUndetermined = "CCS8001"
+    // CCS8002: a conversion's source is not numeric (design (c) last row; plan L-4): `int "a"`.
+    // The conversion is `κ<'u> -> Target<'u>`, and the carrier variable is the constraint.
+    let CCS8002_ConversionSourceNotNumeric = "CCS8002"
     // docs/fidelity/phg/Dimensional_Step1_2_Design.md (f); allocation rule in the Plan's D3.
     let CCS8018_UnsupportedLiteralSuffix = "CCS8018"
 

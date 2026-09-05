@@ -39,12 +39,43 @@ type UnificationError =
     /// the carrier variable is the numeric constraint, and `actual` is not numeric. `op` is the
     /// operator the position was minted for, when the variable carries that provenance.
     | NotNumeric of op: string option * actual: NativeType * range: SourceRange
+    /// The two operands of a kind-dispatched operator are of different kinds (design c.3, D5;
+    /// CCS8000): `+` accepts two numerics or two strings, and `1 + "a"` is neither. `lhs` is the
+    /// kind that met the operand variable, `rhs` the kind it had already bound to. Constraints are
+    /// discharged newest-first, so for a direct `a + b` the later operand binds and the earlier one
+    /// meets it: rendered as `lhs and rhs`, the message reads in source order.
+    | OperandKindMismatch of op: string * lhs: NativeType * rhs: NativeType * range: SourceRange
 
 exception UnificationException of UnificationError
+
+/// The source spelling of an operator name, for a diagnostic that names what the developer wrote
+/// (`op_Addition` is `+`); a name with no symbolic spelling (`abs`, `sign`) is itself.
+let operatorSpelling (op: string) : string =
+    match op with
+    | "op_Addition" -> "+"
+    | "op_Subtraction" -> "-"
+    | "op_Multiply" -> "*"
+    | "op_Division" -> "/"
+    | "op_Modulus" -> "%"
+    | "op_UnaryNegation" -> "~-"
+    | "op_UnaryPlus" -> "~+"
+    | "op_LeftShift" -> "<<<"
+    | "op_RightShift" -> ">>>"
+    | "op_BitwiseAnd" -> "&&&"
+    | "op_BitwiseOr" -> "|||"
+    | "op_ExclusiveOr" -> "^^^"
+    | "op_LogicalNot" -> "~~~"
+    | other -> other
 
 /// Format source range for display
 let formatRange (range: SourceRange) : string =
     $"{range.File}({range.Start.Line},{range.Start.Column})"
+
+/// A `NotNumeric` failure whose operand position belongs to a conversion intrinsic (`int "a"`):
+/// the position's name is a spelling in the one conversion table, so the failure is CCS8002,
+/// "the source is not numeric", rather than the operator's CCS8000.
+let isConversionSource (op: string option) : bool =
+    op |> Option.exists (fun name -> (Types.tryConversionOfName name).IsSome)
 
 /// Format a unification error for display
 let formatError (err: UnificationError) : string =
@@ -72,9 +103,13 @@ let formatError (err: UnificationError) : string =
         $"'{Dimension.renderVar v}^{k} = {rhs}' has no integer solution; the exponents of '{rhs}' are not all divisible by {k}"
     | MeasureExponentOutOfRange(e, d, _) ->
         $"Measure exponent '{e}' in '{Dimension.render d}' is not representable; exponents are integers of magnitude at most {measureExponentBound}"
+    | NotNumeric(Some name, actual, _) when isConversionSource (Some name) ->
+        $"The source of '{name}' must be numeric; got {formatType actual}"
     | NotNumeric(op, actual, _) ->
-        let operator = match op with Some name -> $"'{name}'" | None -> "(unknown)"
+        let operator = match op with Some name -> $"'{operatorSpelling name}'" | None -> "(unknown)"
         $"Operator {operator} requires numeric operands; '{formatType actual}' is not numeric"
+    | OperandKindMismatch(op, lhs, rhs, _) ->
+        $"The operands of '{operatorSpelling op}' must both be numeric or both string; got {formatType lhs} and {formatType rhs}"
 
 //-------------------------------------------------------------------------
 // Unification Algorithm
@@ -83,6 +118,9 @@ let formatError (err: UnificationError) : string =
 /// Unify two types, updating the Union-Find structure.
 /// Raises UnificationException on failure.
 let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
+    // A kind-dispatched operand variable that is already bound is read before the substitution
+    // erases it: the two kinds meeting at `+` are that operator's failure, not a type mismatch.
+    checkOperandKinds t1 t2 range
     // Apply current substitutions first
     let t1 = applySubst t1
     let t2 = applySubst t2
@@ -281,6 +319,7 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
 
     // A non-numeric type at an operator's numeric operand position (design c.1): the carrier
     // variable is the numeric constraint; nothing but a numeric type or a variable can meet it.
+    // At a conversion's source position the same failure is CCS8002 (`isConversionSource`).
     | NativeType.TNum(CarrierRef.CVar v, _), other
     | other, NativeType.TNum(CarrierRef.CVar v, _) ->
         raise (UnificationException(NotNumeric(operandOf v, other, range)))
@@ -302,6 +341,29 @@ and private fireOperandDispatch (root: TypeParam) (ty: NativeType) (range: Sourc
         | NativeType.TNum _ | NativeType.TError _ -> ()
         | other when Types.isStringType other -> ()
         | other -> raise (UnificationException(NotNumeric(Some op, other, range)))
+
+/// The second half of the `+` dispatch (design c.3, D5): once the operand variable has bound to
+/// one kind, an operand of the other kind is CCS8000 naming the operator and both kinds, not the
+/// CCS8003 the substituted types would produce. Read on the raw sides, before `applySubst`, because
+/// the substitution replaces the variable and with it the provenance; only a numeric kind meeting
+/// the string kind (either way round) is this failure. Two numeric carriers (`1.0 + 2`) are left
+/// to the carrier equation, CCS8003, and `bool` to `fireOperandDispatch`, CCS8000.
+and private checkOperandKinds (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
+    let kind (ty: NativeType) : int option =
+        if Types.isNumericType ty then Some 1 elif Types.isStringType ty then Some 2 else None
+    let check (v: TypeParam) (other: NativeType) : unit =
+        let (root, bound) = find v
+        match operandOf root, bound with
+        | Some op, Some boundTy ->
+            let bound = applySubst boundTy
+            let meeting = applySubst other
+            match kind meeting, kind bound with
+            | Some k1, Some k2 when k1 <> k2 ->
+                raise (UnificationException(OperandKindMismatch(op, meeting, bound, range)))
+            | _ -> ()
+        | _ -> ()
+    match t1 with NativeType.TVar v -> check v t2 | _ -> ()
+    match t2 with NativeType.TVar v -> check v t1 | _ -> ()
 
 /// One carrier equation (design a.2, plan D7): two constructors agree by name (the interim
 /// width comparison, retired at step 7); a carrier variable binds to a constructor or unions

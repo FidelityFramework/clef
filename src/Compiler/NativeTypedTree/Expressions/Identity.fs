@@ -90,7 +90,12 @@ let rec private resolveIdentifierCore
                         let actualType = instantiateTForall binding.Type range
                         BindingNode (name, actualType, binding.NodeId)
             | None ->
-                ErrorNode ($"The value or constructor '{name}' is not defined.", NativeType.TError $"Undefined: {name}")
+                // 2e. Library schemes (abs, sign, min, max, clamp, sqrt, atan2, floor, ceiling,
+                // round, truncate): after binding lookup, so a user's binding of the same name wins.
+                match tryResolveLibraryScheme name range with
+                | Some (info, ty) -> IntrinsicNode (info, ty)
+                | None ->
+                    ErrorNode ($"The value or constructor '{name}' is not defined.", NativeType.TError $"Undefined: {name}")
 
     // 3. Two-part identifier (Module.operation) - check for module intrinsics
     elif parts.Length = 2 then

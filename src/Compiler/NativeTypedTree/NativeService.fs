@@ -284,9 +284,11 @@ let private errorsToDiagnostics (errors: UnificationError list) : Diagnostic lis
             | NoIntegerSolution(_, _, _, r) -> r
             | MeasureExponentOutOfRange(_, _, r) -> r
             | NotNumeric(_, _, r) -> r
+            | OperandKindMismatch(_, _, _, r) -> r
         let code =
             match e with
-            | NotNumeric _ -> DiagnosticCodes.CCS8000_NotNumeric
+            | NotNumeric(op, _, _) when isConversionSource op -> DiagnosticCodes.CCS8002_ConversionSourceNotNumeric
+            | NotNumeric _ | OperandKindMismatch _ -> DiagnosticCodes.CCS8000_NotNumeric
             | MeasureMismatch _ -> DiagnosticCodes.CCS8040_MeasureMismatch
             | NoIntegerSolution _ -> DiagnosticCodes.CCS8041_NoIntegerSolution
             | MeasureExponentOutOfRange _ -> DiagnosticCodes.CCS8048_RationalMeasureExponent
@@ -839,6 +841,39 @@ let private quotationDiagnostics (graph: SemanticGraph) : Diagnostic list =
             | _ -> None)
     atReferences @ (standing |> List.map diagnostic)
 
+//-------------------------------------------------------------------------
+// `+` on strings is concat (design c.3, D5; sequence CS-9)
+//-------------------------------------------------------------------------
+
+/// `+` is one intrinsic whose typing dispatches on the kind of its operands: the operand variable
+/// binds to a numeric type or to string in the unifier (`fireOperandDispatch`), and the unifier
+/// has no node to rewrite. This is the one place the dispatch reaches the graph: at the store
+/// boundary, over the resolved node map after monomorphisation (so a generalised `x + y` used at
+/// strings is rewritten in its string clone), every application of `op_Addition` whose resolved
+/// type is string has its function node carry the `String.concat2` intrinsic that Alex witnesses
+/// atomically. Composer transcribes; it never decides which `+` this is. A `+` whose type is still
+/// a variable here is the CCS8001 the binding-level check reports, never rewritten.
+let private dispatchStringAddition (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
+    let concat2 =
+        { Module = IntrinsicModule.String; Operation = "concat2"; Category = IntrinsicCategory.StringOp; FullName = "String.concat2" }
+    let isAddition (fn: NodeId) =
+        match Map.tryFind fn nodes with
+        | Some { Kind = SemanticKind.Intrinsic info } -> info.Module = IntrinsicModule.Operators && info.Operation = "op_Addition"
+        | _ -> false
+    let stringAdditions =
+        nodes
+        |> Map.toSeq
+        |> Seq.choose (fun (_, node) ->
+            match node.Kind with
+            | SemanticKind.Application (fn, _) when isStringType node.Type && isAddition fn -> Some fn
+            | _ -> None)
+        |> Set.ofSeq
+    if Set.isEmpty stringAdditions then nodes
+    else
+        nodes
+        |> Map.map (fun id node ->
+            if Set.contains id stringAdditions then { node with Kind = SemanticKind.Intrinsic concat2 } else node)
+
 /// Build a CheckResult from builder state and diagnostics
 /// platformContext: Optional platform context for freestanding builds (enables entry point elaboration)
 let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) (platformContext: PlatformContext option) : CheckResult =
@@ -861,6 +896,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         resolvedNodes
         // Generic (TForall) top-level functions are compiled once per instantiation.
         |> Monomorphization.run
+        // `+` resolved at the string kind carries the concat intrinsic (design c.3, D5).
+        |> dispatchStringAddition
 
     let graph = {
         Nodes = resolvedNodes

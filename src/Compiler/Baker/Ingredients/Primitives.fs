@@ -448,6 +448,123 @@ let add (leftId: NodeId) (rightId: NodeId) (numType: NativeType) : SaturationPar
         return appNode.Id
     }
 
+/// Create a subtraction: a - b
+let sub (leftId: NodeId) (rightId: NodeId) (numType: NativeType) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+        let funcType = NativeType.TFun (numType, NativeType.TFun (numType, numType))
+        let info = { Module = IntrinsicModule.Operators; Operation = "op_Subtraction"; Category = IntrinsicCategory.Arithmetic; FullName = "op_Subtraction" }
+        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
+        do! emit funcNode
+        let! state' = getUserState
+        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [leftId; rightId])) numType [funcNode.Id; leftId; rightId]
+        do! emit appNode
+        return appNode.Id
+    }
+
+/// Create a negation: -x (the `op_UnaryNegation` intrinsic Alex witnesses atomically)
+let neg (valueId: NodeId) (numType: NativeType) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+        let funcType = NativeType.TFun (numType, numType)
+        let info = { Module = IntrinsicModule.Operators; Operation = "op_UnaryNegation"; Category = IntrinsicCategory.Arithmetic; FullName = "op_UnaryNegation" }
+        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
+        do! emit funcNode
+        let! state' = getUserState
+        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [valueId])) numType [funcNode.Id; valueId]
+        do! emit appNode
+        return appNode.Id
+    }
+
+/// Create greater-than-or-equal comparison: a >= b
+let ge (leftId: NodeId) (rightId: NodeId) (operandType: NativeType) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+        let funcType = NativeType.TFun (operandType, NativeType.TFun (operandType, Types.boolType))
+        let info = { Module = IntrinsicModule.Operators; Operation = "op_GreaterThanOrEqual"; Category = IntrinsicCategory.Comparison; FullName = "op_GreaterThanOrEqual" }
+        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
+        do! emit funcNode
+        let! state' = getUserState
+        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [leftId; rightId])) Types.boolType [funcNode.Id; leftId; rightId]
+        do! emit appNode
+        return appNode.Id
+    }
+
+/// Create less-than-or-equal comparison: a <= b
+let le (leftId: NodeId) (rightId: NodeId) (operandType: NativeType) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+        let funcType = NativeType.TFun (operandType, NativeType.TFun (operandType, Types.boolType))
+        let info = { Module = IntrinsicModule.Operators; Operation = "op_LessThanOrEqual"; Category = IntrinsicCategory.Comparison; FullName = "op_LessThanOrEqual" }
+        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
+        do! emit funcNode
+        let! state' = getUserState
+        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [leftId; rightId])) Types.boolType [funcNode.Id; leftId; rightId]
+        do! emit appNode
+        return appNode.Id
+    }
+
+/// A numeric literal at a numeric type: the value at that type's carrier and dimension (a
+/// measured literal is the carrier at the dimension, as Literals.fs types one), so the zero
+/// of `abs` and the one of `sign` take the operand's kind. A carrier with no literal form
+/// (a posit) fails the recipe loudly.
+let numLit (value: int64) (numType: NativeType) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+        match Types.tryGetNTUKind numType with
+        | Some (NTUKind.NTUint _ as kind) | Some (NTUKind.NTUuint _ as kind) ->
+            let node = mkNode state (SemanticKind.Literal (NativeLiteral.Int (value, kind))) numType []
+            do! emit node
+            return node.Id
+        | Some (NTUKind.NTUfloat _ as kind) ->
+            let node = mkNode state (SemanticKind.Literal (NativeLiteral.Float (float value, kind))) numType []
+            do! emit node
+            return node.Id
+        | other ->
+            return! fail (XParsec.ErrorType.Message $"numLit: no literal form for the carrier of '{formatType numType}' ({other})")
+    }
+
+/// A real literal at a real type (the 0.5 of `round`); an integer carrier fails the recipe loudly.
+let floatLit (value: float) (realType: NativeType) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+        match Types.tryGetNTUKind realType with
+        | Some (NTUKind.NTUfloat _ as kind) ->
+            let node = mkNode state (SemanticKind.Literal (NativeLiteral.Float (value, kind))) realType []
+            do! emit node
+            return node.Id
+        | other ->
+            return! fail (XParsec.ErrorType.Message $"floatLit: '{formatType realType}' is not a real carrier ({other})")
+    }
+
+/// Integer to real: `float x` (the `Convert.toFloat` intrinsic Alex witnesses as sitofp)
+let toFloat (valueId: NodeId) (sourceType: NativeType) (realType: NativeType) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+        let funcType = NativeType.TFun (sourceType, realType)
+        let info = { Module = IntrinsicModule.Convert; Operation = "toFloat"; Category = IntrinsicCategory.Conversion; FullName = "float" }
+        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
+        do! emit funcNode
+        let! state' = getUserState
+        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [valueId])) realType [funcNode.Id; valueId]
+        do! emit appNode
+        return appNode.Id
+    }
+
+/// Real to integer toward zero: `truncate x` (the `Math.truncate` intrinsic Alex witnesses as fptosi)
+let truncate (valueId: NodeId) (realType: NativeType) (intType: NativeType) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+        let funcType = NativeType.TFun (realType, intType)
+        let info = { Module = IntrinsicModule.Math; Operation = "truncate"; Category = IntrinsicCategory.Arithmetic; FullName = "truncate" }
+        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
+        do! emit funcNode
+        let! state' = getUserState
+        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [valueId])) intType [funcNode.Id; valueId]
+        do! emit appNode
+        return appNode.Id
+    }
+
 //=============================================================================
 // COMPOSITE PRIMITIVES (built from other primitives)
 //=============================================================================

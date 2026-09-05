@@ -30,6 +30,7 @@ module SetRecipes = Clef.Compiler.Baker.Recipes.SetRecipes
 module OptionRecipes = Clef.Compiler.Baker.Recipes.OptionRecipes
 module SeqRecipes = Clef.Compiler.Baker.Recipes.SeqRecipes
 module StringRecipes = Clef.Compiler.Baker.Recipes.StringRecipes
+module NumericRecipes = Clef.Compiler.Baker.Recipes.NumericRecipes
 module MatchRecipes = Clef.Compiler.Baker.Recipes.MatchRecipes
 
 //-------------------------------------------------------------------------
@@ -133,6 +134,9 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Seq, "getEnumerator" -> false
     // String operations
     | IntrinsicModule.String, "concat2" -> true
+    // Library schemes (design (c); Dimensional_Range_Design.md §5): compare-and-select and the
+    // rounding functions decompose; truncate, sqrt, atan2 and the transcendentals are atomic.
+    | IntrinsicModule.Math, ("abs" | "sign" | "min" | "max" | "clamp" | "floor" | "ceiling" | "round") -> true
     // Everything else
     | _ -> false
 
@@ -241,6 +245,15 @@ let private applyIntrinsicRecipe
     | IntrinsicModule.String ->
         // String operations decompose to memory primitives
         StringRecipes.tryDecompose ctx info.Operation args returnType (Some returnType)
+
+    | IntrinsicModule.Math ->
+        // The library schemes decompose over the arguments' resolved types (the operand's
+        // carrier and dimension type its literals) and the application's result type.
+        let argTypes =
+            args |> List.choose (fun argId -> SemanticGraph.tryGetNode argId graph |> Option.map (fun n -> n.Type))
+        if List.length argTypes = List.length args then
+            NumericRecipes.tryDecompose ctx info.Operation args argTypes returnType
+        else None
 
     | _ -> None
 

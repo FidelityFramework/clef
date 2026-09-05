@@ -114,8 +114,13 @@ let rec checkPattern
                         match ty with
                         | NativeType.TForall _ -> extractDomains (Types.instantiateTForall ty range) acc
                         | NativeType.TFun(domain, range) -> extractDomains range (domain :: acc)
-                        | _ -> List.rev acc
-                    let types = extractDomains binding.Type []
+                        | result -> (List.rev acc, result)
+                    let (types, constructedTy) = extractDomains binding.Type []
+                    // The constructor builds the scrutinee's type: `Some b` against `int option` ties
+                    // the instance's payload variable to `int`, so `b` has the payload's type at every
+                    // use and not only the type its uses happen to give it (sequence CS-9: a
+                    // conversion `float b` binds nothing through its result, and needed this).
+                    addConstraint (Constraint.Equals(expectedTy, constructedTy, range)) env
                     // Extract tag index from UnionCaseInfo
                     let idx =
                         match binding.UnionCaseInfo with
