@@ -51,22 +51,35 @@ let private mapsToIndex (ty: NativeType) : bool =
     | NativeType.TApp(tycon, _) -> kindMapsToIndex tycon
     | _ -> false
 
-/// Check if two types have the same memory layout AND the same MLIR representation
-/// category. Same-size elimination is only safe when the lowering target treats both
+/// The declared width of a numeric carrier as its kind states it: the bits of a width-named
+/// carrier, or the width dimension a resolved one names. An identity of the carrier, never a
+/// size computed from it.
+let private carrierWidthOf (ty: NativeType) : NTUWidth option =
+    match Types.tryGetNTUKind ty with
+    | Some (NTUKind.NTUint w) | Some (NTUKind.NTUuint w) | Some (NTUKind.NTUfloat w) | Some (NTUKind.NTUposit (w, _)) -> Some w
+    | _ -> None
+
+/// Check if two types are held in the same representation AND the same MLIR representation
+/// category, by identity: two carriers naming the same declared width (`int32` and `uint32`,
+/// or two resolved to one dimension), or two platform-word types on the same side of the
+/// index boundary. Same-width elimination is only safe when the lowering target treats both
 /// types identically. Conversions between index-mapped types (nativeint, nativeptr,
 /// size_t) and integer-mapped types (int, uint) must be preserved because they
-/// produce different MLIR types (index vs i64/i32).
+/// produce different MLIR types (index vs i64/i32). No size is read here (Layout_As_Joint_Constraint.md §3).
 let private hasSameLayout (sourceType: NativeType) (targetType: NativeType) : bool =
     let sourceLayout = TypeLayout.baseLayout (layoutOf sourceType)
     let targetLayout = TypeLayout.baseLayout (layoutOf targetType)
     match sourceLayout, targetLayout with
     | TypeLayout.PlatformWord, TypeLayout.PlatformWord ->
-        // Same memory size, but check MLIR representation compatibility.
+        // Same declared word, but check MLIR representation compatibility.
         // Index-mapped types (nativeint, nativeptr, size_t, etc.) lower to
         // MLIR index, while register-dimension types (int, uint) lower to
         // TInt(wordWidth). Don't eliminate conversions that cross this boundary.
         mapsToIndex sourceType = mapsToIndex targetType
-    | TypeLayout.Inline (s1, _), TypeLayout.Inline (s2, _) when s1 = s2 -> true
+    | TypeLayout.Inline _, TypeLayout.Inline _ ->
+        match carrierWidthOf sourceType, carrierWidthOf targetType with
+        | Some a, Some b -> a = b
+        | _ -> false
     | _ -> false
 
 /// Check if a node is a same-size conversion Application that can be eliminated

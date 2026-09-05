@@ -24,6 +24,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Reachability
 module DepthAnalysis = Clef.Compiler.PSGSaturation.SemanticGraph.DepthAnalysis
 module PlatformDeclaration = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformDeclaration
 module RangeAnalysis = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis
+module Placement = Clef.Compiler.PSGSaturation.SemanticGraph.Placement
 open Clef.Compiler.NativeTypedTree.NameResolution
 open Clef.Compiler.NativeTypedTree.Expressions.Types
 
@@ -918,6 +919,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         // Per-field record ranges: written by RangeAnalysis at saturation (CS-10)
         FieldRanges = lazy Map.empty
         ElementRanges = lazy Map.empty
+        Layouts = lazy Map.empty
+        Escaping = lazy Map.empty
         // F is empty at construction; enrichment mints into it at saturation.
         Edges = []
     }
@@ -1009,6 +1012,14 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // thresholds) and before the declaration is checked.
     //=========================================================================
     let finalGraph, rangeDiagnostics = RangeAnalysis.run platformContext finalGraph
+
+    //=========================================================================
+    // Placement (CS-11 slice 0, Dimensional_Range_Design.md ruling 2): every
+    // reachable record, union, tuple, option and Result type takes its settled
+    // layout from its fields' selections and the declared Pointer width, and
+    // the graph carries it (Layouts). Composer reads it and computes no size.
+    //=========================================================================
+    let finalGraph = Placement.settle platformContext finalGraph
 
     let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
     let quotationErrors = quotationDiagnostics finalGraph
@@ -1929,17 +1940,6 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     | [] -> simpleTypeName
                     | _ -> (modPath |> String.concat ".") + "." + simpleTypeName)
 
-        // Layout estimate of a union case payload (one word for anything without an inline layout)
-        let estimatePayloadSize (ty: NativeType) : int =
-            match ty with
-            | NativeType.TApp _ | NativeType.TNum _ ->
-                match layoutOf ty with
-                | TypeLayout.Inline(size, _) -> size
-                | TypeLayout.PlatformWord -> 8
-                | _ -> 8
-            | NativeType.TTuple(elems, _) -> elems.Length * 8
-            | _ -> 8
-
         // `[<Measure>] type` declarations of the group register into the measure environment and
         // produce no type node (design a.3; sequence CS-4); the remaining members are checked
         // against the grown environment, so an abbreviation `type metres = float<m>` beside its
@@ -1984,16 +1984,9 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 match m with
                 | Choice1Of2 (simpleName, arity, cases) ->
                     let typeName = List.head (typeNameSuffixesOf simpleName)
-                    let payloadSizes =
-                        cases |> List.map (fun (SynUnionCase(_, _, caseKind, _, _, _, _)) ->
-                            match caseKind with
-                            | SynUnionCaseKind.Fields synFields ->
-                                synFields |> List.sumBy (fun (SynField(_, _, _, fieldType, _, _, _, _, _)) ->
-                                    estimatePayloadSize (resolveSynType placeholderEnv fieldType))
-                            | SynUnionCaseKind.FullType(synType, _) ->
-                                estimatePayloadSize (resolveSynType placeholderEnv synType))
-                    let unionSize = 1 + (payloadSizes |> List.fold max 0)
-                    (typeName, mkUnionTypeConRef typeName arity (TypeLayout.Inline(unionSize, 8)) (List.length cases))
+                    // The layout is the union's identity; its tag and payload slot are settled at
+                    // saturation (Placement), where the platform's representations are known.
+                    (typeName, mkUnionTypeConRef typeName arity TypeLayout.Union (List.length cases))
                 | Choice2Of2 (simpleName, arity, fields) ->
                     let typeName = List.head (typeNameSuffixesOf simpleName)
                     let fieldInfosWithPins =
@@ -2005,7 +1998,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         fieldInfosWithPins
                         |> List.choose (fun (n, _, pins) -> if List.isEmpty pins then None else Some (n, pins))
                         |> Map.ofList
-                    let layout = computeRecordLayout fieldInfos
+                    let layout = TypeLayout.Record
                     let tycon =
                         if Map.isEmpty pinAttrs then mkRecordTypeConRef typeName ctx.Path arity layout (List.length fieldInfos)
                         else mkRecordTypeConRefWithPins typeName ctx.Path arity layout (List.length fieldInfos) pinAttrs
@@ -2084,17 +2077,6 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     let (SynComponentInfo(_, typars, _, _, _, _, _, _)) = typeInfo
                     let arity = match typars with Some tp -> tp.TyparDecls.Length | None -> 0
 
-                    // Helper to estimate type size for layout computation
-                    let estimateTypeSize (ty: NativeType) : int =
-                        match ty with
-                        | NativeType.TApp _ | NativeType.TNum _ ->
-                            match layoutOf ty with
-                            | TypeLayout.Inline(size, _) -> size
-                            | TypeLayout.PlatformWord -> 8  // 64-bit platform
-                            | _ -> 8
-                        | NativeType.TTuple(elems, _) -> elems.Length * 8
-                        | _ -> 8  // Default to word size
-
                     // Process union cases to extract case info
                     // Each case is: CaseName of field1: type1 * field2: type2 * ...
                     // Format for TypeDefKind.UnionDef: (caseName, [(fieldNameOpt, fieldType), ...])
@@ -2119,16 +2101,10 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                 (caseName, fields)
                         )
 
-                    // Compute union layout: tag byte + max payload size
-                    // Per Fidelity memory model: deterministic, compiler-controlled layout
-                    let maxPayloadSize =
-                        caseInfos
-                        |> List.map (fun (_, fields) ->
-                            fields |> List.sumBy (fun (_, ty) -> estimateTypeSize ty))
-                        |> List.fold max 0
-                    let unionSize = 1 + maxPayloadSize  // 1 byte tag + payload
-                    let unionAlign = 8  // Align to word boundary
-                    let layout = TypeLayout.Inline(unionSize, unionAlign)
+                    // The union's layout is its identity (tag, then the payload slot of the widest
+                    // case); the bytes are settled at saturation by Placement from the declared
+                    // representations (Dimensional_Range_Design.md ruling 2), never estimated here.
+                    let layout = TypeLayout.Union
 
                     // Create TypeConRef for the union type
                     let caseCount = List.length caseInfos
@@ -2233,9 +2209,10 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                             else Some (name, pins))
                         |> Map.ofList
 
-                    // Compute memory layout from fields
-                    // Per spec Step 4: "Initialize offset = 0, max_align = 1..."
-                    let layout = computeRecordLayout fieldInfos
+                    // The record's layout is its identity: field by field in declaration order.
+                    // Its offsets and size are settled at saturation by Placement from each
+                    // field's selected representation and the declared Pointer width (ruling 2).
+                    let layout = TypeLayout.Record
 
                     // Create TypeConRef with computed layout and pin attributes
                     // Field info is accessed via SemanticGraph.Types lookup (TypeDef node)
@@ -2574,7 +2551,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
         // A signature file has no checker yet: the input contributes no graph, and that is an
         // error rather than a warning, because a warning would let the program lose a file silently.
         {
-            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty; FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Edges = [] }
+            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty; FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Layouts = lazy Map.empty; Escaping = lazy Map.empty; Edges = [] }
             Diagnostics = [{
                 Severity = NativeDiagnosticSeverity.Error
                 Code = DiagnosticCodes.CCS8401_UnsupportedConstruct

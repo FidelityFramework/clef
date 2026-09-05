@@ -1126,8 +1126,10 @@ type TypeLayout =
     | Reference of arena: ArenaAffinity
     /// Platform-specific, size determined at codegen
     | Opaque
-    /// Platform word size - size/alignment depend on target architecture
-    /// CCS preserves type identity; Alex resolves to concrete size
+    /// Platform word size - size/alignment depend on target architecture.
+    /// CCS preserves type identity at type checking and resolves the size at saturation, where
+    /// the platform is (Placement reads the declared Pointer width into `SemanticGraph.Layouts`);
+    /// Alex reads the settled layout and resolves nothing (Layout_As_Joint_Constraint.md §3).
     | PlatformWord
     /// Fat pointer: pointer + length (both platform word sized)
     /// Used for arrays, strings, spans - compound of two NTU components.
@@ -1142,6 +1144,14 @@ type TypeLayout =
     /// Qualifiers do NOT affect type identity — only inform codegen
     /// and BAREWire inter-substrate transfer strategy.
     | Qualified of inner: TypeLayout * qualifiers: NTUQualifiers
+    /// A record: the identity of a type laid out field by field in declaration order. Its byte
+    /// layout is settled at saturation from its fields' selected representations and the declared
+    /// Pointer width (Placement, `SemanticGraph.Layouts`; Dimensional_Range_Design.md ruling 2),
+    /// never computed here against a word of eight.
+    | Record
+    /// A union: the identity of a type laid out as a tag and the payload slot of its widest case,
+    /// settled at saturation likewise.
+    | Union
 
 /// Arena affinity for memory management
 and [<RequireQualifiedAccess>] ArenaAffinity =
@@ -1646,58 +1656,26 @@ type RecordTypeInfo = {
 /// Get the layout of a type (may need refinement after solving)
 let rec layoutOf (ty: NativeType) : TypeLayout =
     match ty with
-    | NativeType.TApp(tycon, args) ->
-        match tycon.Name, tycon.Layout, args with
-        // Option<T>: tag (1 byte) + T - compute from type argument
-        | "option", TypeLayout.Inline(-1, -1), [innerTy] ->
-            let innerLayout = layoutOf innerTy
-            match innerLayout with
-            | TypeLayout.Inline(innerSize, innerAlign) when innerSize >= 0 ->
-                // tag (1 byte) + padding + payload
-                let align = max 1 innerAlign
-                let tagPadding = if innerAlign > 1 then innerAlign - 1 else 0
-                TypeLayout.Inline(1 + tagPadding + innerSize, align)
-            | TypeLayout.PlatformWord ->
-                // tag + padding + word (8 bytes on 64-bit)
-                TypeLayout.Inline(16, 8)
-            | TypeLayout.FatPointer ->
-                // tag + padding + fat ptr (16 bytes)
-                TypeLayout.Inline(24, 8)
-            | _ -> tycon.Layout
-        // Result<T, E>: tag (1 byte) + max(T, E) - compute from type arguments
-        | "result", TypeLayout.Inline(-1, -1), [okTy; errorTy] ->
-            let okLayout = layoutOf okTy
-            let errorLayout = layoutOf errorTy
-            match okLayout, errorLayout with
-            | TypeLayout.Inline(okSize, okAlign), TypeLayout.Inline(errSize, errAlign) when okSize >= 0 && errSize >= 0 ->
-                let maxPayloadSize = max okSize errSize
-                let maxAlign = max okAlign errAlign
-                let align = max 1 maxAlign
-                let tagPadding = if align > 1 then align - 1 else 0
-                TypeLayout.Inline(1 + tagPadding + maxPayloadSize, align)
-            | TypeLayout.PlatformWord, _ | _, TypeLayout.PlatformWord ->
-                TypeLayout.Inline(16, 8)  // tag + padding + word
-            | TypeLayout.FatPointer, _ | _, TypeLayout.FatPointer ->
-                TypeLayout.Inline(24, 8)  // tag + padding + fat ptr
-            | _ -> tycon.Layout
-        | _ -> tycon.Layout
+    // A type constructor's layout is the identity it declares: a record or union's family, a
+    // primitive's fixed extent, a platform word, a view. An option or a Result is a union whose
+    // size is settled with its argument at saturation (Placement), not computed here.
+    | NativeType.TApp(tycon, _) -> tycon.Layout
     // The carrier's layout; the dimension has no extent. An unresolved carrier variable has no
     // layout yet, the same failure value a type variable has.
     | NativeType.TNum(carrier, _) ->
         match CarrierRef.tryConstructor carrier with
         | Some tc -> tc.Layout
         | None -> TypeLayout.Opaque
-    | NativeType.TTuple(_, isStruct) when isStruct -> TypeLayout.Inline(-1, -1) // Size depends on elements
+    | NativeType.TTuple(_, isStruct) when isStruct -> TypeLayout.Record  // laid out by position, settled at saturation
     | NativeType.TTuple(_, _) -> TypeLayout.Reference ArenaAffinity.CurrentActor
-    | NativeType.TFun _ -> TypeLayout.Inline(16, 8)  // Function pointer + closure env
+    | NativeType.TFun _ -> TypeLayout.NTUCompound 2  // a function value: the closure pair, two platform words
     | NativeType.TVar _ -> TypeLayout.Opaque  // Not yet known
     | NativeType.TNativePtr _ -> TypeLayout.PlatformWord  // Pointer size is platform-dependent
     | NativeType.TByref _ -> TypeLayout.PlatformWord  // Byref size is platform-dependent
     | NativeType.TForall(_, body) -> layoutOf body
     | NativeType.TMeasure _ -> TypeLayout.Inline(0, 1)  // Phantom type
-    | NativeType.TAnon(_, isStruct) when isStruct -> TypeLayout.Inline(-1, -1) // Size depends on fields
+    | NativeType.TAnon(_, isStruct) when isStruct -> TypeLayout.Record
     | NativeType.TAnon(_, _) -> TypeLayout.Reference ArenaAffinity.CurrentActor
-    // Named records use TApp - layout comes from tycon.Layout (handled above)
     | NativeType.TUnion(tycon, _) -> tycon.Layout
     | NativeType.TLazy _ -> TypeLayout.Inline(-1, -1)  // Size depends on element type (PRD-14)
     | NativeType.TSeq _ -> TypeLayout.Inline(-1, -1)  // Size depends on element type (PRD-15)
@@ -1706,86 +1684,6 @@ let rec layoutOf (ty: NativeType) : TypeLayout =
     | NativeType.TMap _ -> TypeLayout.PlatformWord  // Pointer to tree root (PRD-13a)
     | NativeType.TSet _ -> TypeLayout.PlatformWord  // Pointer to tree root (PRD-13a)
     | NativeType.TError _ -> TypeLayout.Opaque
-
-/// Compute memory layout for a record from its fields.
-/// Per clef-lang-spec: "Field order determines memory layout" and
-/// "Fidelity makes ALL memory layout decisions - MLIR/LLVM never determine layout."
-///
-/// Algorithm (from spec inference-procedures.md Step 4):
-/// 1. For each field in declaration order, compute offset with padding for alignment
-/// 2. Total layout = (sum of sizes + padding, max alignment)
-/// Compute record layout from field types.
-/// Uses 64-bit (8-byte word size) as the compilation target.
-/// ARCHITECTURAL NOTE: Fidelity targets 64-bit platforms exclusively.
-/// This is a deliberate design choice, not a limitation to be worked around.
-let computeRecordLayout (fields: (string * NativeType) list) : TypeLayout =
-    // 64-bit platform constants
-    let wordSize = 8
-    let wordAlign = 8
-
-    let folder (offset, maxAlign) (_, fieldType) =
-        let fieldLayout = TypeLayout.baseLayout (layoutOf fieldType)
-        match fieldLayout with
-        | TypeLayout.Inline(size, align) when size >= 0 && align > 0 ->
-            // Known inline size - add padding for alignment
-            let pad =
-                let remainder = offset % align
-                if remainder = 0 then 0 else align - remainder
-            let paddedOffset = offset + pad
-            (paddedOffset + size, max maxAlign align)
-        | TypeLayout.Inline _ ->
-            // Size or alignment is unknown (-1), propagate unknown
-            (-1, -1)
-        | TypeLayout.Opaque ->
-            // Truly unknown at compile time - can't compute exact layout
-            (-1, -1)
-        | TypeLayout.PlatformWord ->
-            // nativeint, nativeptr - word-sized on 64-bit platform
-            let pad =
-                let remainder = offset % wordAlign
-                if remainder = 0 then 0 else wordAlign - remainder
-            let paddedOffset = offset + pad
-            (paddedOffset + wordSize, max maxAlign wordAlign)
-        | TypeLayout.FatPointer ->
-            // Fat pointer = {ptr, len} = 2 words on 64-bit
-            let fatPtrSize = 2 * wordSize
-            let pad =
-                let remainder = offset % wordAlign
-                if remainder = 0 then 0 else wordAlign - remainder
-            let paddedOffset = offset + pad
-            (paddedOffset + fatPtrSize, max maxAlign wordAlign)
-        | TypeLayout.NTUCompound count ->
-            // NTU compound = n words on 64-bit (e.g., tuple of nativeints)
-            let compoundSize = count * wordSize
-            let pad =
-                let remainder = offset % wordAlign
-                if remainder = 0 then 0 else wordAlign - remainder
-            let paddedOffset = offset + pad
-            (paddedOffset + compoundSize, max maxAlign wordAlign)
-        | TypeLayout.Reference _ ->
-            // Reference types are pointer-sized (8 bytes on 64-bit)
-            let pad =
-                let remainder = offset % wordAlign
-                if remainder = 0 then 0 else wordAlign - remainder
-            let paddedOffset = offset + pad
-            (paddedOffset + wordSize, max maxAlign wordAlign)
-        | TypeLayout.Qualified _ ->
-            // Defensive: baseLayout should have stripped this, but handle for exhaustiveness
-            failwith "computeRecordLayout: Qualified layout should have been unwrapped by baseLayout"
-
-    let (totalSize, maxAlign) = List.fold folder (0, 1) fields
-
-    if totalSize < 0 || maxAlign < 0 then
-        // Some field has unknown size - layout is opaque
-        TypeLayout.Opaque
-    else
-        // Final padding for struct alignment
-        let finalPad =
-            if maxAlign > 0 then
-                let remainder = totalSize % maxAlign
-                if remainder = 0 then 0 else maxAlign - remainder
-            else 0
-        TypeLayout.Inline(totalSize + finalPad, maxAlign)
 
 /// Check if a type is a function type
 let isFunctionType = function
