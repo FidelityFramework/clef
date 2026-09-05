@@ -557,3 +557,60 @@ remedies, so D11's temporal budget stands; HelloProof 23, PASS; drift gate clean
 HelloArty copy gives exactly one CCS8011 error naming `state.Counter`; `x <<< 63` is `[0, +∞)` and
 CCS8011 information. HelloArty's `Behavior.clef` comments now say 256 levels and 1024 phase steps.
 
+## CS-11 slice 0 as built (2026-09-05): SSA is a nanopass derivation
+
+**Why first.** The first CS-11 attempt minted MLIR-level values in Alex (`freshTemp`, a counter from
+1,000,000) for the CPU meets, extending a counter (`MLIRTempCounter`) and three minting sites that
+had survived from before the plan, hidden by two blanket drift-gate rows that exempted the whole
+middle end. The owner stopped the attempt: SSA assignment is the nanopass at the end of graph
+building, principal and principled, and one file (`SSAAssignment.fs`) is where an SSA fault from
+`mlir-opt` is located. The attempt's edits were saved as patches and both `src/` trees reset to
+CS-10 before the cut.
+
+**Landed (Composer 9d2feb6, clef fc4128c66).** Every value a witness emits is read from
+`SSAAssignment.fs`: the callee prologue (`ClosureLayout.CaptureExtractionSSAs`,
+`EnvReconstructionSSAs`), the base-pointer extraction a slot holding a memref value needs
+(`CaptureSlot.ExtractsBasePointer`, derived from the capture's type; the witness checks the
+accumulator's type against it and stops on disagreement), the zero a unit-typed function returns
+(`UnitReturns`, the first value of the body's scope), and the whole Mealy machine body
+(`HardwareModuleLayout`: power-on reset, reset constants, registers, input packs, state, instance,
+step result, output flatten in `outputExtractions` order, next fields), with `PlatformPinResolution`
+moved before `SSAAssignment` in the pipeline so the derivation reads reset and pin facts. Gone:
+`MLIRTempCounter`, `freshTemp`, `V (10000 + …)`, the LambdaWitness extraction schedule
+(`V (n + workIdx + k)`), both `ssaCounter` builders in `HardwareModulePatterns` and their
+forward-reference arithmetic (which counted an input pack for any multi-pin field while emitting one
+only for tuple fields). The dead `MemRef` intrinsic family (nothing produced it after the NativePtr
+strip) and the `NativePtr` wording are removed on both sides; the `"Ptr" | "nativeptr"` name arms
+and `extractPtrElementType` with them. The `SSAAssignment.fs` header, `Architecture_Canonical.md`
+and `Closure_Nanopass_Architecture.md` now state the design (a post-saturation coeffect nanopass,
+read as codata, scheduled into CCS) instead of "an MLIR/LLVM concern" and "the zipper carries SSA
+counters". The drift gate's blanket rows are narrowed to the six closure-retooling patterns; the SSA
+row (`V (a + b)`, the counter names) is live with `SSAAssignment.fs` its one allowed file.
+
+**The thunk builder (this changeset, uncommitted).** `pNamedFunctionAsClosure` synthesised a
+forwarding function `f_as_closure` with no graph node when a named function was used as a value,
+deduplicated through accumulator state (`EmittedThunks`), driven by Composer's own
+`ValuePositionAnalysis`. It is replaced by a Baker recipe (`BakerSaturation.fs`, `FunctionValue`,
+beside the zero-capture lambda marking): a capture-free named function in value position fans out
+to an eta-expanded Lambda whose body is the flat direct call over the definition's arity (then one
+application per remaining currying level, as the binding eta-expansion applies a returned closure),
+marked `RequiresClosurePair`, with the enclosing function's name recorded; fold-in wires it in and
+the closure path witnesses it like any written lambda. A field of a `[<HardwareModule>]` binding's
+Design record is a declaration read structurally and is not elaborated. Deleted in Composer:
+`ValuePositionAnalysis.fs`, the `ValuePosition` coeffect, the 7-SSA VarRef cost, the thunk pattern,
+`EmittedThunks`. Consequence to close in Baker: one lambda per use site (sample 12 carries 14 where
+6 thunks were deduplicated by name); the principled dedup is a fan-out memo per definition and type.
+
+**Gates.** Composer build clean. RoundTrip: compile 0, run 0, transcript identical to
+`expected.txt`; the binary hash moves from `e10c2ce1…` to `aefcc865…` (the thunk became a lambda)
+and is re-baselined; diagnostics identical to CS-10 plus one CCS8011 information line for the
+synthesised `_eta1` parameter of `tryReadHello` (320 lines). Harness `--through 3` rows identical
+to CS-10. HelloArty `07_output.mlir` byte-identical to CS-10, SSA numbers included. HelloProof 23,
+PASS. Drift gate clean. Samples 11 and 12 (an oracle for the surface, not a gate) produce run output
+identical to a CS-10 reference binary built from HEAD in the scratchpad; 12's segfault and 14's
+failure are pre-existing on that binary. No `V (…)` outside `SSAAssignment.fs`.
+
+**Found on the way, not this changeset.** Ten `Fidelity.Platform` files (WebSocket, libc, pthread
+bindings) still spell `NativePtr.*` 448 times and cannot compile under current CCS; the design's
+`CHandle` and `Mmio` replace them (ffi-boundary §1). The CS-11 workflow brief describes a working
+tree that no longer exists and is rewritten before it resumes with slices 1-4.
