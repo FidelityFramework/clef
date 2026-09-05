@@ -131,7 +131,11 @@ Consequence: h.2, h.5, h.6, h.7, h.8, h.9, the wiring half of h.3/h.4 and the me
 - **Size:** ~80 lines, 2 files.
 - **Risk:** low; the check is a fold over the node map. If U-2 chooses a threaded store, this is where the store's final value is read, and the place is right.
 
-**Order:** CS-0 (in tree) → CS-1 → CS-2 → CS-3 → CS-4 → CS-5 → CS-6 → CS-7 → CS-8; then (h) 14 as step 3. Each leaves Composer building and RoundTrip byte-identical by the gate stated; the Composer edits are confined to CS-4 and are reads.
+### CS-9 to CS-13 — steps 3, 7 and 8 under one note
+
+Specified by `Dimensional_Range_Design.md` (2026-09-04), the one statement of the range discipline, whose §12 table is the sequence: CS-9 operators and kind functions (step 3); CS-10 the range pass in CCS with the FPGA leg reading the node (step 7, first half); CS-11 one integer kind and one real kind, the width-named types and suffixes deleted, the corpus migrated by the lean fleet (step 7, second half); CS-12 boundaries and coverage, Composer's conversion and default sites deleted, one size model (after step 5); CS-13 representation selection for reals (step 8). Their gates, the restated W rows, and what is closed are in that note; nothing about them is restated here so that there is one place to read.
+
+**Order:** CS-0 (in tree) → CS-1 → CS-2 → CS-3 → CS-4 → CS-5 → CS-6 → CS-7 → CS-8 → CS-9 → CS-10 → CS-11 → step 5 → CS-12 → CS-13. Each leaves Composer building and RoundTrip byte-identical by the gate stated; the Composer edits are confined to CS-4 and are reads.
 
 ## 3. Where the design note is under-specified for implementation
 

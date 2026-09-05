@@ -1,0 +1,392 @@
+# One discipline: the range, from the literal to the boundary
+
+> Design note for hardening steps 3, 7 and 8 of `Dimensional_Vetting_Plan.md`, written as one
+> statement on 2026-09-04 at the owner's instruction ("Please write them as one design note and
+> ensure they are unified. We keep relitigating this. That is drift."). It supersedes the step-3
+> preview and the width sections of `Dimensional_Step1_2_Design.md` ((e), (h) 14–16, (i) 4–6), the
+> per-step text of plan §5 steps 3, 7 and 8, and every spec passage §10 below lists. Authority order:
+> the white papers, then the spec, then the docs; the owner's rulings quoted in §0 are the position
+> where the spec drafts disagreed with them, and those drafts are corrected here, not argued with.
+
+## 0. The underscore
+
+**There is one integer kind, `int`, and one real kind, `float`, each with a dimension. A value is a
+range until it is used. The platform declares the selection of widths and representations it has,
+and the analysed range picks from that selection. Nothing else decides a width.**
+
+The owner's words, 2026-09-04:
+
+- "One of the things I can't stop thinking about is that the value *can* be a range until it's
+  used, and then the range will be known. This is the FPGA case. I don't understand why that
+  doesn't apply to all cases."
+- "I don't think there's any place for an int8 - there is only int that happens to be 8 wide. Do
+  you understand? There is no int16, no int32 and no int64. There is just int with a specified width
+  selection and the range determines which one is used. Is that so difficult to understand? This
+  is number theory, yet?"
+- On stating an intended loss: "I would say per-seal, but would strongly advise updating Platform"
+  — read with the second ruling, the per-seal spelling has no seal to attach to, and what survives
+  of it is the platform's declaration of what each of its representations does at its boundary
+  (§4.3, §7).
+- Earlier, in force: no silent defaults ("the platform information for the target should either
+  provide it or it should [provide] a range that is supplied as with FPGA"); no implicit
+  conversion (the FreeBSD lesson, `a-lesson-in-memory-safety.md`); the compiler never selects a
+  wrap or saturate discipline; a coverage finding is a warning promoted by `--warnaserror`; the
+  platform declares, the language carries only names (D8); quotations are intrinsic (D9).
+
+The FPGA case is the general case. On fabric an interior value's width is synthesised from its
+range and nothing is selected; on a CPU the same range selects from the finite set the platform
+declares. The input is the same, the range; the check at a boundary is the same, coverage; only the
+codomain differs. `width-inference.md` §1 already says it: "representation follows from analyzed
+range, precision loss is explicit and tracked, and an unanalyzable range is a reported error, never
+a silent default"; §3: "A value uses exactly the bits its range requires — no more"; §10 item 1:
+"Integer representation width SHALL be derived from the value's analyzed range, not from a target
+type name." The only thing the corpus had beside this was a second mechanism, the written width as
+a "Tier-3 seal" (`numeric-selection.md` §3.3, §5; `ntu-types.md` as rewritten in CS-7), and that
+second mechanism is what kept the question open. It is retired.
+
+### 0.1 Closed. Not to be re-opened by any later step, note, review or changeset.
+
+1. **No width-named type exists in the language.** `int8`, `int16`, `int32`, `int64`, `uint8`,
+   `uint16`, `uint32`, `uint64`, `byte`, `sbyte`, `uint`, `nativeint`, `unativeint`, `float32`,
+   `single`, `double`, `float64`, `Posit8`…`Posit64` are not types and not spellings. A program
+   that writes one is CCS8706 (the type is not defined) once the migration of §9 has run.
+2. **No width-bearing literal suffix exists.** `1L`, `1u`, `1uy`, `1s`, `1n`, `1.0f` are CCS8018.
+   A literal is `int` or `float` at the dimensionless measure `1`, with the point range `[v, v]`.
+3. **No seal, no conversion syntax, no discipline syntax.** There is nothing to write a width or a
+   representation into and nothing to convert between. The "explicit conversion" of
+   `width-inference.md` §7, the "Tier-3 seal" of `numeric-selection.md` §3.3 and §5, the "conversion
+   and seal form" of `rounding.md` §6 and the `int32`-style spellings in `ntu-types.md` are retired
+   together (§10). The critical-path gap those chapters named is closed by having no syntax.
+4. **Intended loss is arithmetic.** Reduction modulo `2^n` is `x % 2^n` (or `x &&& mask`) and has
+   range `[0, 2^n − 1]`; saturation is `clamp lo hi x`, i.e. `min hi (max lo x)`, and has range
+   `[lo, hi]`; a real becomes an integer through `floor`, `ceiling`, `round` or `truncate`, each with
+   its range image; an integer becomes a real through `float`, exactly where the selected real
+   representation holds the range. Every one of these is a function with a range, and the width
+   follows from the range as it does everywhere. No operation is a representation change.
+5. **A width appears in exactly two places, and both are declarations the compiler reads:** the
+   platform description (widths by name, representations with family, bits, range, capability and
+   boundary semantics: CS-7b, D8) and a boundary declaration (a wire-schema field, an MMIO register
+   width, a C ABI parameter in a binding descriptor, an endpoint contract). A value meeting a
+   declared boundary is checked for coverage of its range, never converted.
+6. **The compiler never selects a wrap or saturate discipline and never inserts a conversion.** A
+   range that a boundary does not cover is CCS8012, a warning promoted by `--warnaserror`, whose
+   remedies are to bound the range at its source or to change the declaration. Arithmetic on
+   analysed ranges never overflows: the result's range is computed and its representation selected
+   to cover it.
+7. **Width and representation are coeffects beside the type**, derived from the range and read by
+   every later pass (D1, `width-inference.md` §5, GA-02 §2 lattice row). They never enter
+   unification (§1.2 below; `Dimensional_Step1_2_Design.md` e.6 stands).
+8. **The platform declares; the language carries names only** (D8). A representation's boundary
+   semantics are a fact about hardware the compiler reads to realise `%` and `clamp` cheaply and to
+   witness, never to decide a program's meaning.
+
+### 0.2 Open, and only these (the spec's own genuinely-open items, unchanged)
+
+`ulp_min(r)` per family (`numeric-selection.md` §14.9, `rounding.md` §11.2); the `Fidelity.Physics`
+binding contract (§14.2); profiling-evidence provenance (§14.4); tier-disagreement tolerance for
+reals (§14.3); `R_eff = ∅` versus `R_cov = ∅` precedence (§14.8); cascade rounding (`rounding.md`
+§11.4); the quire conversion mode (§11.5); type-directed posit synthesis (§14.7). None of them is a
+question about whether a width is a type.
+
+## 1. The value as a range
+
+### 1.1 Seeding
+
+- A literal is a point: `124` has range `[124, 124]` (`width-inference.md` §2). Its type is `int`
+  at measure `1`; a measured literal `1.0<m>` is `float` at `m`. No literal carries a width; plan
+  row L-1 (a bare literal minted at `Resolved Register`) is retired with the spellings.
+- A comparison bounds the branch it guards: `if n < 1000 then … n …` gives `n` the range
+  `[lo(n), 999]` inside the branch (§2, "Comparisons seed ranges").
+- `x % k` has range `[0, k − 1]` for a non-negative `x` and `k > 0`; `clamp lo hi x` has `[lo, hi]`;
+  `abs x` is non-negative; a DU tag has `[0, cases − 1]`; a boolean is `[0, 1]`
+  (Composer's `IntervalAnalysis.fs` seeds these today for the FPGA leg; the seeding moves into CCS,
+  §8).
+- An input arrives through a declaration and carries the declared range: a platform endpoint's
+  contract, a wire-schema field, an MMIO register's width, an exported entry point's argument at the
+  platform's Register or Pointer width, a C ABI parameter at the width its binding descriptor
+  declares. There is no input whose range is unknown by construction; there are only inputs whose
+  declaration is missing, and that is CCS8203 or CCS8012 at the declaration site, never a guess.
+
+### 1.2 Propagation, and why it is not unification
+
+Ranges propagate forward along dataflow to a least fixed point: interval arithmetic through the
+operators, joins at merges and at the parameters of a function called from several sites, widening
+for loops. They are the lattice family (GA-02 §2, §7.1: "support is propagated, never unified;
+parity and dimension are unified, never propagated"). Dimensions are the group family and are
+unified (`solveDim`, CS-2). One operator node carries both obligations, the unit equation and the
+range image; they share operands and no variables and are discharged separately, QF_LIA for the
+range containment and the unit equation, QF_BV only for a fixed-width fact once a representation is
+selected (`Horizon_Requirements.md` C5; `grade-discipline.md` §4.1). The range never enters the
+unifier: it has no inverses, its principal object is a least fixed point, and a claim about it is
+checked by containment, never solved by an equation (`Dimensional_Step1_2_Design.md` e.6, which
+stands).
+
+A non-`inline` function has one body; each parameter's range is the join over its call sites, the
+whole-program least fixed point available because saturation runs over the program hypergraph after
+every use is elaborated. A call site carries its own range only under explicit `inline`, by
+expansion (`inline` is semantic, never a width-solving device). Generalisation quantifies measure
+and carrier variables (CS-6) and never ranges: a range is per instantiation and joined.
+
+### 1.3 The unobservable range
+
+A loop or recursion the program never bounds has no range: `let rec run n = run (n + 1)`. That is
+CCS8011, an error, on every substrate, and the remedy is to bound it: a comparison that terminates
+it, a modulus, an `abs`, a `clamp`. Nothing is defaulted to the platform word. A bare `float`
+with an unobservable range selects IEEE `f64`, the no-bet representation, without a diagnostic, and
+keeps propagating (`numeric-selection.md` §6, §13.7); a dimensioned real with an unobservable range
+is CCS8011 at the dimensioning seam, naming the bare source (§6.1, §13.8).
+
+## 2. The kinds
+
+| Kind | Spelling | Dimension | Signedness | What selects its representation |
+|---|---|---|---|---|
+| integer | `int` | `int<m>`, Kennedy's slot, ASCII (C8.1) | a fact of the range: non-negative ranges spend no sign bit (`width-inference.md` §3) | the smallest offered integer representation covering the range, §3.1 |
+| real | `float` | `float<m>` | — | the argmin of `numeric-selection.md` §2 over the offered real representations covering the range, §3.2 |
+
+The angle-bracket slot is the measure slot and nothing else is ever written there (C8.1); the
+carrier keeps arity 0 and the measure is a component of the numeric type node (D4). `int<1>` and
+`float<1>` are the bare kinds. `TNum(carrier, dim)` with `Carrier = Int | Real` is the type form
+the CS-1 note (a.2) named and D7 deferred; D7's per-width carriers are deleted, not collapsed into a
+seal column (§8.1).
+
+Signedness is not a kind. `uint` had been "`int` with the range claim `[0, ∞)`"; a claim of that
+shape is a fact the range already carries, so `uint` goes with the widths. `nativeint` had been
+"the platform's pointer seal"; an address is not an integer the program does arithmetic on
+(`ffi-boundary.md` §1: `nativeint`-as-pointer is not denotable; addresses live in `Ptr`, `Mmio`
+and `CHandle`), and an integer at the platform's Pointer width is `int` at a boundary the
+description declares (§4.1). Both spellings go.
+
+## 3. Selection: the platform's declared set, the range's choice
+
+### 3.1 Integers
+
+The platform description declares its representations (CS-7b): for each, a family (`int`, `uint`,
+`ieee`, `posit`, `fixed`), its bits, its exact dynamic range, its capability (native, emulated,
+unavailable) and its boundary semantics (wrap, saturate, exact). For an integer value with range
+`[a, b]` the compiler selects the offered representation of the integer family with the fewest
+bits whose range covers `[a, b]`, choosing the signed family only when `a < 0`. That is
+`width-inference.md` §8's "rounded up to the nearest native integer size" stated as selection over
+a declared set, and it is the same `R_cov` filter §3.2 uses. On fabric there is no core and no set:
+the width is exactly `width([a, b])` by the §3 formula, a non-negative range spending no sign bit,
+and the extension an operand needs when it meets a wider one is `extui` or `extsi` by the sign of
+its range, never by a type name. The result is the width coeffect on the node, read by Alex; it is
+never stored as a fact independent of the range it was derived from (C3).
+
+### 3.2 Reals
+
+For a real with range `[a, b]` on a target offering `R(T)`, the representation is the argmin of
+worst-case ULP-floored error over `R_cov(T, [a, b])`, the offered representations whose dynamic
+range covers `[a, b]` (`numeric-selection.md` §2, §2.1, §2.2; DTS/DMM §2.6). Performance is a
+capability filter on the candidate set, never a score term (§7). If `R_cov` is empty, that is the
+coverage warning, promoted by `--warnaserror`, and selection falls to the argmin over the full
+offered set with the uncovered range recorded (§2.1, §13.2). The real interval domain is a new
+abstract domain (outward rounding, sign-split reciprocal, transcendentals, widening with the
+declared formats' range boundaries as thresholds, §9.1); it rides the same traversal and carriage
+as the integer one and reuses none of its transfer functions.
+
+### 3.3 Aggregates
+
+Each coefficient of an aggregate, each field of a record, each element type of an array, selects
+independently from its own range (`grade-discipline.md` §5.2; C4). A record's layout is the
+consequence of its fields' selections, settled in the graph, and Composer's three size models
+collapse to a read of the selected representations (§8.3). A byte buffer is `array<int>` whose
+element range is the buffer's declared cell range, `[0, 255]` for a platform buffer schema over
+octets; the width of the cell is that range's.
+
+## 4. Boundaries
+
+### 4.1 What a boundary is
+
+A boundary is any place a value meets a representation that a declaration, not the range, fixed:
+
+| Boundary | Where the width is declared | Read by |
+|---|---|---|
+| platform endpoint and its contract (a syscall's arguments, a console buffer) | `Description.clef` / `Platform.clef`, BAREWire vocabulary | PlatformResolution |
+| exported entry point, ABI-governed parameter | the description's `Register` and `Pointer` widths | PlatformDeclaration |
+| wire-schema field | the BAREWire schema (`Field { Width = … }`) | the schema reader |
+| MMIO register | the register's declared width on the `Mmio` handle (Contracts leaf) | the peripheral reader |
+| C ABI parameter or return | the binding descriptor Farscape emits (`Expr<FunctionDescriptor>`), a quotation | the binding reader |
+| JavaScript number | the JSIR profile's documented realisation (`width-inference.md` §8) | the pathway |
+
+### 4.2 The check
+
+At a boundary with declared range `D` and a value with analysed range `R`: `R ⊆ D` is the
+obligation. Covered, the value takes the boundary's representation, the transfer is exact, and
+nothing is written in source. Not covered, CCS8012, a warning promoted by `--warnaserror`, naming
+`R`, `D`, the declaration and the two remedies: bound the value (a `%`, a `clamp`, a guard) or
+change the declaration. A boundary whose declared representation the platform does not offer is
+CCS8204 (CS-7b). A covering boundary whose representation is wider than the range needs is
+information, CCS8014, the design-time witness of `numeric-selection.md` §13.9 with the seal word
+removed. An analysed range not contained in a higher-provenance claim (a library law's range, a
+declaration) is CCS8016, a warning promoted by the flag: the claim binds and the disagreement is
+witnessed (§3.4 item 3; NS-3).
+
+### 4.3 Boundary semantics are the platform's, and are read, never chosen
+
+The description declares for each representation what its hardware does when a result would leave
+its range: wrap on a two's-complement unit, saturate on a saturating DSP block or posit unit, exact
+on fabric. Under §0.1 item 6 no program ever depends on that fact for its meaning: a covered range
+never leaves its representation. The compiler reads it for two things only: to realise `x % 2^n`
+as the free truncation a wrap-native representation performs, or `clamp` as the saturating
+instruction a saturating unit has, when the selected representation is that one; and to witness the
+build-time twin of the design-time obligation. This is what "updating Platform" comes to: the
+declaration CS-7b built is the whole of it, and a representation may declare several boundary
+disciplines with their capabilities (wrap native, saturate emulated) so that a `clamp` on such a
+target is realised where it is native and emulated where it is not, with the capability gate of
+`numeric-selection.md` §7 reporting emulation under the `allow-emulated-warn` policy. The language
+still carries no name for any of it.
+
+### 4.4 The three provenances, without a type in any of them
+
+`numeric-selection.md` §3's tiers are provenances of one range input: dataflow (Tier 1), a library
+law evaluated at compile time from its quotation (Tier 2, §4; D9), and a declaration (Tier 3). The
+third tier had been read as a type written in source; it is the boundary declaration of §4.1 and,
+where the compiler cannot infer a property of input data, the one supplied hypothesis in one
+construct that C7.5 admits, which is a number about data, not a type about a value. Composition is
+unchanged: the highest provenance binds, the lower claims are containment obligations, disagreement
+is witnessed, never merged (§3.4).
+
+## 5. Intended loss is arithmetic
+
+| Intent | Written as | Range image | Realised as |
+|---|---|---|---|
+| reduce modulo `2^n` | `x % 2^n`, `x &&& (2^n − 1)` | `[0, 2^n − 1]` | truncation, free on a wrap-native representation of `n` bits; a `rem` otherwise |
+| saturate to `[lo, hi]` | `clamp lo hi x` (`min hi (max lo x)`) | `[lo, hi]` | compare-and-select; a saturating instruction where the unit declares one |
+| real to integer | `floor`, `ceiling`, `round`, `truncate` | the image interval, integer-valued | the rounding op of the selected real representation |
+| integer to real | `float x` | `[a, b]` as reals | exact where the selected real holds `[a, b]` exactly; else CCS8012 at the boundary of that representation |
+| change nothing | (nothing) | — | — |
+
+The "fidelity" of `width-inference.md` §7 item 1 recorded a loss a representation change caused;
+with no representation change there is nothing to record beside what the graph already carries, the
+range into and out of each of these functions, which Lattice shows on hover. The requirement that a
+lossy step be explicit is kept in its only remaining form: the developer wrote the `%` or the
+`clamp`.
+
+## 6. Reals, rounding and the quire
+
+Everything in §1, §3.2 and §4 applies. What `rounding.md` adds stands: a sound interval enclosure
+carries its directed rounding as representation identity (§3.1) and an ordinary value carries
+rounding as a coeffect (§3.2); a quire rounds once (§4); a boundary between two real representations
+of different families, a posit value meeting an IEEE parameter in a C ABI, rounds by the mode the
+boundary's declared representation offers and the platform's declared boundary discipline, never by
+a source-level conversion (§4.3 above replaces `rounding.md` §6). `rounding.md` §5's saturate-versus-
+wrap axis is the platform's declaration of §4.3, not a conversion attribute.
+
+## 7. Diagnostics
+
+| Code | Severity | Meaning under this note |
+|---|---|---|
+| CCS8000 | Error | an operator's operand is not of a numeric kind (`+` dispatches on kind: numeric add or string concat, D5) |
+| CCS8001 | Error | the kind of an operator's operands cannot be determined at a non-generalisable binding |
+| CCS8011 | Error | an integer or dimensioned real whose range is unobservable; at the dimensioning seam for a bare real that flows into a dimension |
+| CCS8012 | Warning, `--warnaserror` | a value's analysed range is not covered by the boundary's declared representation |
+| CCS8013 | retired | "two seals meet": there are no seals |
+| CCS8014 | Info | a declared boundary representation wider than the range requires |
+| CCS8015 | retired | "sealed arithmetic may wrap": arithmetic on analysed ranges never overflows |
+| CCS8016 | Warning, `--warnaserror` | an analysed range exceeds a higher-provenance claim |
+| CCS8017 | retired | "a conversion cannot hold the range": there are no conversions |
+| CCS8018 | Error | a literal suffix: every width suffix, `I`, and any suffix the language does not have |
+| CCS8040–8050 | Error | measures (CS-2 to CS-6, unchanged) |
+| CCS8203/8204 | Error | a width dimension or representation the description does not declare or offer (CS-7b, unchanged) |
+| CCS8706 | Error | a type name that is not defined, which after §9 is what `int32` is |
+
+## 8. What is deleted and what moves
+
+### 8.1 Deleted from CCS
+
+The per-width type constructors `int8TyCon` … `uint64TyCon`, `float32TyCon`, `posit8TyCon` …
+`posit64TyCon`, `nintTyCon`, `unintTyCon`, `uintTyCon`; the width column of `Types.numericSpellings`
+and every spelling but `int` and `float`; `NTUWidth.Fixed`; the `SealRepresentation` type and
+`representationOfCarrier`; `NativeLiteral`'s `NTUKind` field (a literal carries its value and its
+kind, `Int` or `Real`); the `SynConst` arms for width-suffixed constants, which become CCS8018; the
+width conversion intrinsics (`int8` … `uint64`, `nativeint`, `float32`), leaving `float`, `floor`,
+`ceiling`, `round`, `truncate` and `char`; the name comparison of carriers in `Unify.fs`; the
+`Fixed` seal Farscape's output relied on. `Carrier` becomes `Int | Real`. The drift gate's scheduled
+`TyCon` rows become failures when this lands.
+
+### 8.2 Moved into CCS
+
+`Composer/src/MiddleEnd/PSGElaboration/IntervalAnalysis.fs` in substance: the range pass runs at
+saturation in CCS over the whole graph (seeding §1.1, propagation §1.2, widening §1.3, joins at
+function parameters), and writes the range and the selected width or representation as coeffects
+on the node. Its `minSignedBits` spends a sign bit on every range (plan L-7b); the spec's §3 formula
+is what runs, and HelloArty's `07_output.mlir` changes on purpose: `Counter` 30 bits, `StepTick` 20,
+`Phase` 9, `PeriodMs` 12, the `arith.extsi %periodMs : i13 to i30` at line 116 becoming an `extui`
+of `i12` to `i30`. HelloArty's README table (31/21/10/13) is corrected with it.
+
+### 8.3 Deleted from Composer
+
+`ApplicationPatterns.fs` L-7 (widening both operands with `pExtSI` and truncating the result: the
+extension op is read from the node's range sign), L-8 (shift amounts cast by the witness: typed by
+the front end), L-9 (`pTypeConversion`: no conversions exist); `PSGCombinators.fs` L-10 (the
+platform-word default and the `FPGA0001` throw: the node carries its width); the three size models
+(`mlirTypeSize`, `mlirTypeSizeForArch`, `TypeSizing.computeSize`) reduced to one read of the selected
+representation; `TypeMapping.fs` and `SSAAssignment.fs` keying widths on `NTUKind` widths or on the
+architecture table (`platformWordWidth arch`, checked at `MLIRGeneration.generate` since CS-7b,
+retired here). The FPGA leg keeps `IntervalAnalysis.fs` only as long as CS-10 has not landed; then
+it reads the node.
+
+## 9. The migration
+
+The spellings are everywhere Clef source was written in F#'s vocabulary. Measured 2026-09-04,
+excluding a worktree copy under `Fidelity.Platform/.claude`:
+
+| Where | Files | Mentions | What they are |
+|---|---|---|---|
+| `BAREWire/src` | 25 | 420 | encoding cursors and wire fields: `uint32`, `byte`, `uint64` |
+| `Fidelity.Platform` (leaves and Bindings) | ~45 | ~1,600 | mostly Farscape-generated C ABI declarations under `Bindings/` (`uint32`, `byte`, `uint`); the leaves' own logic is a minority |
+| `Composer/samples` | 27 | 131 | regression and dimensional samples |
+| harness leaves W-1, W-3, W-4, W-5, W-6, M-1 to M-5 | 10 | — | rewritten with this note (§11) |
+| spec chapters | — | — | §10 |
+| blog posts | dated | — | allowed by the drift gate as history |
+
+Farscape's output is the largest item and the most mechanical: a C parameter of `uint32_t` is a
+boundary fact the descriptor quotation carries, and the Clef signature beside it says `int`; the
+generator changes once and the bindings are regenerated. The BAREWire encoders write wire fields
+whose widths the schema declares and whose values are `int` with ranges; each `uint32` in a cursor
+becomes an `int` whose range the schema field gives it. The sweep is a corpus job for the lean
+fleet shape (one implementer per repository with the gates in its brief, one light reviewer, fixes
+by hand), and the drift gate's scheduled rows are its inventory until each repository is clean.
+
+## 10. Spec passages this note corrects (done 2026-09-04)
+
+| Chapter | Passage | Correction |
+|---|---|---|
+| `ntu-types.md` | the whole chapter as rewritten in CS-7 (seal model, `Fixed n` widths, `int32` spellings, CCS8013) | rewritten to the one-kind model: §2 kinds, §3 identity and coeffects, §4 source mapping (`int`, `float`, handles), §6 no conversion, §8 MLIR mapping from the node's width |
+| `width-inference.md` | §7 "Explicit Conversion", its "Not yet specified" note; §10 items 6–7 | §7 becomes "Intended Loss Is Arithmetic" (§5 above); items 6–7 restated; the open item closed |
+| `numeric-selection.md` | §3 table row "3 — Direct … a seal form"; §3.3; §5 "Sealing and Reverse Selection"; §13.9; §14.1 | Tier 3 is the boundary declaration; §5 becomes "Boundaries and Reverse Selection"; §13.9 names the boundary; §14.1 closed |
+| `rounding.md` | §5 last sentence, §6, §10.1–10.2, §11.1, §11.3 | §6 becomes "No Conversion Form"; the saturate/wrap axis is the platform's declaration; §11.1 and §11.3 closed |
+| `native-type-universe.md` | §2.3 table and decisions 3–4, alignment table, overflow table, `Checked`; §2.4 table, `float32`/`single`/`double` | one integer kind, one real kind; overflow does not occur on analysed ranges; alignment follows the selected representation |
+| `units-of-measure.md` | the constant grammar's `byte<…>` … `uint64<…>` rows | `int<measure-literal>` and `float<measure-literal>` |
+| `ntu-dimensional-architecture.md` | §2.1 (`Fixed` as "a developer's seal", Farscape emitting Fixed-width NTU types), §7.1, §7.2 | `NTUWidth` is the selected width coeffect; Farscape emits descriptor widths; §7.1/§7.2 repointed |
+| `error-handling.md` | the CCS8011–8018 row | the §7 table above |
+
+## 11. The vetting rows, restated
+
+| Rule | Statement | Reject | Accept | Code |
+|---|---|---|---|---|
+| W-1 | there is no width-named type and no width suffix | `let f (x: int32) (y: int64) = x + y` | `let f (x: int) (y: int) = x + y`; `let a = 1 + 1` | CCS8706 ×2 (the suffix case `1L` is CCS8018, exercised by L-3's probe) |
+| W-2 | operands of `-`, `*`, `/`, `%` are numeric; `+` is both numeric or both string | `true + true`; `true - true` | `1 + 2`; `"a" + "b"` | CCS8000 |
+| W-3 | a boundary width comes from the platform description, resolved in CCS at saturation, never in the witness | (differential) | `type Pair = { Addr: Ptr<int, Stack, ReadOnly>; Tag: int }` with `Tag`'s range `[1, 1]`, compiled under x86_64 and Cortex-M33: `Addr` 8 then 4 bytes, `Tag` 1 byte on both | layouts in `expect.toml` |
+| W-4 | no silent default: an unobservable integer range is a diagnostic; a bounded one is not | `let rec run n = run (n + 1)` | `let f (n: int) = if n < 1000 then n + 1 else 0` | CCS8011 |
+| W-5 | a boundary's declared representation must cover the analysed range; intended loss is written as arithmetic | `Mmio.store reg8 300` (an 8-bit register declared in the Contracts leaf; range `[300, 300]`) | `Mmio.store reg8 (v % 256)`; `Mmio.store reg8 (clamp 0 255 v)` | CCS8012, Warning, `--warnaserror` |
+| W-6 | width is propagated, never unified: one body, the parameter range the join over call sites | (none) | `let g x y = x + y` at `g 1 2` and `g 100000 200000`: one body at the joined range `[2, 300000]` | accept, one emitted body |
+| M-1…M-5 | unchanged in substance; their handles are `Ptr<int, …>` and their literals bare | | | |
+| NS-1…NS-4 | unchanged; NS-4's "seal" is a declared boundary representation | | | |
+
+## 12. The changesets, in order, each gated by the table
+
+| CS | Delivers | Gate |
+|---|---|---|
+| CS-9 | step 3: the numeric constraint on every operator (W-2, CCS8000 for `1 + "a"`), `+` as kind dispatch, unary negation and plus witnessed in Composer, `abs`/`sign`/`sqrt`/`atan2` as library schemes, shift amounts typed by the front end (L-8), the width conversion intrinsics deleted and `float`/`floor`/`ceiling`/`round`/`truncate` typed as kind functions with range images | W-2 both; UoM-2/3/4/9 stay green; RoundTrip; HelloProof |
+| CS-10 | step 7, first half: the range pass in CCS (§1) writing range and width coeffects; Composer's FPGA leg reads the node (L-7, L-7b retired), HelloArty's MLIR changes as §8.2 states and its README with it | W-4 both; W-6; HelloArty `07_output.mlir` at the §8.2 figures; RoundTrip |
+| CS-11 | step 7, second half: one kind (§2, §8.1), CCS8706/CCS8018 for the spellings and suffixes, the corpus migration (§9) by the lean fleet, the harness leaves of §11, the drift gate's `TyCon` and spelling rows turned to failures | W-1; every leaf compiles; BAREWire 309; RoundTrip transcript identical (the hash re-baselined, since BAREWire's own source migrates) |
+| CS-12 | boundaries (§4): coverage at declared boundaries with CCS8012/8014/8016, the `Mmio` register width and the schema field as boundaries, Composer's L-9 and L-10 deleted, one size model | W-3, W-5; M rows after step 5 supplies `Ptr`/`Mmio` |
+| CS-13 | step 8: the real interval domain (§3.2), the selection objective with its filters, per-coefficient selection, the boundary-representation witness | NS-1 to NS-4; `numeric-selection.md`'s programs |
+
+Step 5 (access and region, M rows) precedes CS-12 in the plan's order and is unchanged by this note
+except that its handles carry `int`.
+
+Tied off means: 46 of 46 judged through step 8, RoundTrip's transcript byte-identical, HelloArty's
+MLIR at the §8.2 figures and unchanged thereafter, HelloProof's 23 obligations unchanged or joined
+by width obligations, and the drift gate with no scheduled row left for a width spelling.
