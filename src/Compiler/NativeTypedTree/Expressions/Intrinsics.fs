@@ -46,7 +46,6 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         let modulePart = name.Substring(0, idx)
         let opPart = name.Substring(idx + 1)
         match modulePart with
-        | "MemRef" -> Some (IntrinsicModule.MemRef, opPart)
         | "Sys" -> Some (IntrinsicModule.Sys, opPart)
         | "String" -> Some (IntrinsicModule.String, opPart)
         | "Array" -> Some (IntrinsicModule.Array, opPart)
@@ -74,40 +73,6 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
 //-------------------------------------------------------------------------
 // Intrinsic Resolvers by Category
 //-------------------------------------------------------------------------
-
-/// Resolve MemRef.* operations (MLIR memref semantics)
-/// These are TARGET OPERATIONS synthesized by Baker recipes (compiler-internal
-/// vocabulary over the internal TNativePtr representation — not a user surface).
-/// Alex witnesses these directly as memref dialect operations.
-let private resolveMemRefOp (op: string) (range: SourceRange) : IntrinsicResolution =
-    let tyParamSpec = freshTypeParam "'T" TypeParamKind.Type range
-    let tyParam = NativeType.TVar tyParamSpec
-    let fullName = "MemRef." + op
-    match op with
-    | "alloca" ->
-        // nativeint -> memref<?x'T> (dynamic alloca, size at runtime)
-        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(Types.nintType, NativeType.TNativePtr tyParam))
-        Resolved (mkIntrinsic IntrinsicModule.MemRef op IntrinsicCategory.Memory fullName, ty)
-    | "load" ->
-        // memref<?x'T> -> nativeint -> 'T (indexed load)
-        let ty = NativeType.TForall([tyParamSpec], NativeType.TFun(NativeType.TNativePtr tyParam, NativeType.TFun(Types.nintType, tyParam)))
-        Resolved (mkIntrinsic IntrinsicModule.MemRef op IntrinsicCategory.Memory fullName, ty)
-    | "store" ->
-        // 'T -> memref<?x'T> -> nativeint -> unit (indexed store)
-        let ty = NativeType.TForall([tyParamSpec],
-            NativeType.TFun(tyParam,
-                NativeType.TFun(NativeType.TNativePtr tyParam,
-                    NativeType.TFun(Types.nintType, Types.unitType))))
-        Resolved (mkIntrinsic IntrinsicModule.MemRef op IntrinsicCategory.Memory fullName, ty)
-    | "copy" ->
-        // dest:memref -> src:memref -> count:nativeint -> unit
-        let ty = NativeType.TForall([tyParamSpec],
-            NativeType.TFun(NativeType.TNativePtr tyParam,
-                NativeType.TFun(NativeType.TNativePtr tyParam,
-                    NativeType.TFun(Types.nintType, Types.unitType))))
-        Resolved (mkIntrinsic IntrinsicModule.MemRef op IntrinsicCategory.Memory fullName, ty)
-    | unknown ->
-        UnknownOperation $"Unknown MemRef intrinsic: MemRef.{unknown}"
 
 /// Resolve Sys.* operations (system calls)
 let private resolveSysOp (op: string) (range: SourceRange) : IntrinsicResolution =
@@ -842,7 +807,6 @@ let resolveModuleIntrinsic
     : IntrinsicResolution =
 
     match modl with
-    | IntrinsicModule.MemRef -> resolveMemRefOp op range
     | IntrinsicModule.Sys -> resolveSysOp op range
     | IntrinsicModule.String -> resolveStringOp op range
     | IntrinsicModule.Array -> resolveArrayOp op range

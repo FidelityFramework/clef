@@ -55,7 +55,6 @@ type InterpolatedPart =
 [<RequireQualifiedAccess>]
 type IntrinsicModule =
     | Sys           // System calls (write, read, exit, nanosleep, etc.)
-    | MemRef        // MLIR memref operations (alloca, load, store, storeIndexed) - MLIR semantics
     | NativeDefault // Default value generation (zeroed)
     | String        // String operations (concat2, contains, etc.)
     | Array         // Array operations (zeroCreate, length, get, set)

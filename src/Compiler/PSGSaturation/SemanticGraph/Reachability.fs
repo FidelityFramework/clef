@@ -184,7 +184,7 @@ let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId>
 
 /// Check for missing intrinsic implementation functions.
 /// Only checks LIBRARY-BACKED intrinsics (Signal, Effect, Memo, Batch).
-/// COMPILER-PROVIDED intrinsics (Sys, Console, NativePtr, etc.) are handled
+/// COMPILER-PROVIDED intrinsics (Sys, Console, Array, etc.) are handled
 /// directly by Alex and don't need F# implementation functions.
 /// Returns list of (intrinsicName, implName, range) for missing functions.
 let findMissingIntrinsicImplementations (graph: SemanticGraph) : (string * string * SourceRange) list =

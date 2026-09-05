@@ -59,6 +59,7 @@ RETIRED=(
   'fat pointer|fat ptr|\{ptr: \*|ptr: \*u8|ptr: \*T|\{ptr, len\}'   # strings/arrays are memref views (buffer + dimension); no {ptr, len} header
   'FNCS|F# Native|FSharp\.Native\.|fsnative|FSNAC|FsNative'      # pre-NTU/PSG naming, fully set aside: the product is Clef, the service is CCS, the universe is NTU, the graph is the PSG
   'FSharp\.Quotations'                                    # plan D9: quotations are intrinsic; Expr<'T> is the compiler's, there is no quotations library to open
+  '(^|[^A-Za-z])V \([A-Za-z0-9_]+ *[-+*] *[A-Za-z0-9_ +*-]*\)|MLIRTempCounter|freshTemp|ssaCounter|mintSSA'   # SSA is a nanopass derivation (Dimensional_Range_Design.md §8.3): a witness that constructs a name is the push model; no minting, no pools
   '\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # plan D10 (Dimensional_Range_Design.md): one int, one float; the width is the range's; no width-named type or suffix
   '\bFirefly\b'                                            # the pre-rename Composer; same family
   '\bKeystone\b|\bkeystone/|\.ks\b'                         # the pre-rename language name and its file extension
@@ -87,6 +88,7 @@ ALLOW_FILES=(
   'clef/docs/fidelity/phg/Horizon_Requirements.md'
   'clef/docs/fidelity/phg/Dimensional_Steps_1_2_Sequence.md'
   'clef/docs/fidelity/phg/Dimensional_Range_Design.md'
+  'Composer/src/MiddleEnd/PSGElaboration/SSAAssignment.fs'
   'ship-of-theseus/scaffold/demo-runbook.md'                      # names the real F# compiler's codes in an F# build runbook
   'Composer/docs/Witness_Boundary_Audit.md'
   # the superseding designs: they quote the retired vocabulary in order to retire it,
@@ -136,8 +138,18 @@ SCHEDULED=(
   'clef/src/Compiler/PSGSaturation/SemanticGraph/Types.fs::code_ptr'        # LambdaContext base indices → closure hyperedge in CCS
   'clef/src/Compiler/Nanopass/BakerSaturation.fs::code_ptr'                 # same
   'Composer/src/MiddleEnd/PSGElaboration/YieldStateIndices.fs::'            # recognizer, Composer side → retired with it
-  'Composer/src/MiddleEnd/PSGElaboration/::'                                # ClosureLayout / closure-pair coeffects → Closure_Retooling_Plan steps 1–3
-  'Composer/src/MiddleEnd/Alex/::'                                          # cast sites and memref<2xindex> closure pair → steps 4–5
+  'Composer/src/MiddleEnd/PSGElaboration/::unrealized_conversion_cast'   # ClosureLayout / closure-pair coeffects → Closure_Retooling_Plan steps 1–3 (narrowed 2026-09-05 from a blanket row that had exempted the whole middle end from every retired pattern)
+  'Composer/src/MiddleEnd/PSGElaboration/::memref<2xindex>'   # ClosureLayout / closure-pair coeffects → Closure_Retooling_Plan steps 1–3 (narrowed 2026-09-05 from a blanket row that had exempted the whole middle end from every retired pattern)
+  'Composer/src/MiddleEnd/PSGElaboration/::code_ptr'   # ClosureLayout / closure-pair coeffects → Closure_Retooling_Plan steps 1–3 (narrowed 2026-09-05 from a blanket row that had exempted the whole middle end from every retired pattern)
+  'Composer/src/MiddleEnd/PSGElaboration/::resolve-closure-casts'   # ClosureLayout / closure-pair coeffects → Closure_Retooling_Plan steps 1–3 (narrowed 2026-09-05 from a blanket row that had exempted the whole middle end from every retired pattern)
+  'Composer/src/MiddleEnd/PSGElaboration/::ContStateMachine'   # ClosureLayout / closure-pair coeffects → Closure_Retooling_Plan steps 1–3 (narrowed 2026-09-05 from a blanket row that had exempted the whole middle end from every retired pattern)
+  'Composer/src/MiddleEnd/PSGElaboration/::flattenSequentials'   # ClosureLayout / closure-pair coeffects → Closure_Retooling_Plan steps 1–3 (narrowed 2026-09-05 from a blanket row that had exempted the whole middle end from every retired pattern)
+  'Composer/src/MiddleEnd/Alex/::unrealized_conversion_cast'   # cast sites and the memref<2xindex> closure pair → steps 4–5 (narrowed 2026-09-05, same reason)
+  'Composer/src/MiddleEnd/Alex/::memref<2xindex>'   # cast sites and the memref<2xindex> closure pair → steps 4–5 (narrowed 2026-09-05, same reason)
+  'Composer/src/MiddleEnd/Alex/::code_ptr'   # cast sites and the memref<2xindex> closure pair → steps 4–5 (narrowed 2026-09-05, same reason)
+  'Composer/src/MiddleEnd/Alex/::resolve-closure-casts'   # cast sites and the memref<2xindex> closure pair → steps 4–5 (narrowed 2026-09-05, same reason)
+  'Composer/src/MiddleEnd/Alex/::ContStateMachine'   # cast sites and the memref<2xindex> closure pair → steps 4–5 (narrowed 2026-09-05, same reason)
+  'Composer/src/MiddleEnd/Alex/::flattenSequentials'   # cast sites and the memref<2xindex> closure pair → steps 4–5 (narrowed 2026-09-05, same reason)
   'Composer/src/BackEnd/LLVM/Lowering.fs::'                                 # resolve-closure-casts plugin pipeline → step 5
   'Composer/tests/::'                                                       # test expectations that pin the cast form → move with the witness
   'Composer/samples/::'                                                     # sample intermediates/expectations that carry the cast form → move with the witness
