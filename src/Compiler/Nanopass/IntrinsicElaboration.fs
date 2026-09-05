@@ -209,6 +209,7 @@ let private buildStartWrapper
         Metadata = Map.empty
         IsReachable = true
         EmissionStrategy = EmissionStrategy.Inline
+        ValueRange = None
     }
 
     // 2. Call Sys.emptyStringArray() to produce the argv value
@@ -225,6 +226,7 @@ let private buildStartWrapper
         Metadata = Map.empty
         IsReachable = true
         EmissionStrategy = EmissionStrategy.Inline
+        ValueRange = None
     }
 
     // 3. Reference to main function
@@ -241,6 +243,7 @@ let private buildStartWrapper
         Metadata = Map.empty
         IsReachable = true
         EmissionStrategy = EmissionStrategy.Inline
+        ValueRange = None
     }
 
     // 4. Call main(argv) -> returnType
@@ -257,6 +260,7 @@ let private buildStartWrapper
         Metadata = Map.empty
         IsReachable = true
         EmissionStrategy = EmissionStrategy.Inline
+        ValueRange = None
     }
 
     // 5. Create the Sys.exit intrinsic (the function itself)
@@ -279,6 +283,7 @@ let private buildStartWrapper
         Metadata = Map.empty
         IsReachable = true
         EmissionStrategy = EmissionStrategy.Inline
+        ValueRange = None
     }
 
     // 6. Call Sys.exit(result) -> unit
@@ -295,6 +300,7 @@ let private buildStartWrapper
         Metadata = Map.empty
         IsReachable = true
         EmissionStrategy = EmissionStrategy.Inline
+        ValueRange = None
     }
 
     // 7. Sequential wrapper: call emptyStringArray; call main; call exit
@@ -311,6 +317,7 @@ let private buildStartWrapper
         Metadata = Map.empty
         IsReachable = true
         EmissionStrategy = EmissionStrategy.Inline
+        ValueRange = None
     }
 
     // 8. Lambda: () -> unit (the _start function body)
@@ -328,6 +335,7 @@ let private buildStartWrapper
         Metadata = Map.empty
         IsReachable = true
         EmissionStrategy = EmissionStrategy.SeparateFunction 0  // No captures
+        ValueRange = None
     }
 
     // 9. Binding: let _start = ... (marked as entry point)
@@ -344,6 +352,7 @@ let private buildStartWrapper
         Metadata = Map.empty
         IsReachable = true
         EmissionStrategy = EmissionStrategy.SeparateFunction 0
+        ValueRange = None
     }
 
     let nodes = [

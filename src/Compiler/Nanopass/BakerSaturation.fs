@@ -353,7 +353,8 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
               Parent = None
               Metadata = node.Metadata
               IsReachable = true
-              EmissionStrategy = node.EmissionStrategy }
+              EmissionStrategy = node.EmissionStrategy
+              ValueRange = None }
             |> markBaker "UnionCase" ctx.ExpansionId
         let result = mkResultNoShadow [newNode] newNode.Id []
         RecipeCreated (toRecipe node.Id "UnionCase" result)
@@ -397,7 +398,8 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                       node.Metadata
                       |> Map.add ClosureMetadata.RequiresClosurePair (MetadataValue.Bool true)
                   IsReachable = true
-                  EmissionStrategy = node.EmissionStrategy }
+                  EmissionStrategy = node.EmissionStrategy
+                  ValueRange = None }
                 |> markBaker "Lambda" ctx.ExpansionId
             let result = mkResultNoShadow [enrichedNode] enrichedNode.Id []
             RecipeCreated (toRecipe node.Id "Lambda" result)

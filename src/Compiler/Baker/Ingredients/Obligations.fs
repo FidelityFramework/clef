@@ -94,7 +94,8 @@ let obligationNode (subject: SemanticNode) (enrichId: int) (info: ObligationInfo
       Parent = None
       Metadata = Map.empty
       IsReachable = false
-      EmissionStrategy = EmissionStrategy.Inline }
+      EmissionStrategy = EmissionStrategy.Inline
+      ValueRange = None }
     |> mark ElaborationKind.Obligation info.Kind enrichId
 
 /// The obligation's hyperedge: its constraining structure -> the obligation.

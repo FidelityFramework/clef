@@ -387,6 +387,13 @@ Decided 2026-09-04, all five by the user (D1 re-derived from the design corpus a
   "a written width is a Tier-3 seal" and D7's "seal column" are retired by this decision; the per-width
   carriers are deleted. The rulings are quoted in the note's §0, and the note's §0.1 is the list of what
   is closed. Re-opening any item on that list is drift.
+- **D11, the FPGA's design-time integrity tooling is preserved (the user, 2026-09-05).** Width
+  inference is general; the fabric keeps its own: machine-type inference of a `[<HardwareModule>]`
+  design, and the temporal budget (`DepthAnalysis`, CCS0100 warning under `--warnaserror`) that
+  weighs the combinational chain against the period of the selected clock and offers both remedies,
+  restructure or step the clock down. Recorded with its two refinements (width-aware weights; the
+  clock as a declared fact selected from the description) in `Dimensional_Range_Design.md` §8.4.
+  No step of the range discipline may remove or weaken either.
 - **D5, `+` on strings (decided: concatenates).** `+` dispatches on the kind of its operands: on numerics it
   is the unit-unified add with a range obligation; on strings it is the concat recipe with an extent
   obligation. No proof complication follows, because each dispatch emits its own obligation family.

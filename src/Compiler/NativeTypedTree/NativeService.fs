@@ -23,6 +23,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 open Clef.Compiler.PSGSaturation.SemanticGraph.Reachability
 module DepthAnalysis = Clef.Compiler.PSGSaturation.SemanticGraph.DepthAnalysis
 module PlatformDeclaration = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformDeclaration
+module RangeAnalysis = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis
 open Clef.Compiler.NativeTypedTree.NameResolution
 open Clef.Compiler.NativeTypedTree.Expressions.Types
 
@@ -670,6 +671,8 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
                   PhaseTypes.PhaseNodeOutput.SRTPResolution = node.SRTPResolution |> Option.map (sprintf "%A")
                   PhaseTypes.PhaseNodeOutput.Body = None
                   PhaseTypes.PhaseNodeOutput.EmissionStrategy = emissionStr
+                  // The analysed range, once RangeAnalysis has run (CS-10)
+                  PhaseTypes.PhaseNodeOutput.ValueRange = node.ValueRange |> Option.map ValueRange.render
                   // Elaboration fields (unified - source-based nodes have None)
                   PhaseTypes.PhaseNodeOutput.ElaborationKind = elaborationKind
                   PhaseTypes.PhaseNodeOutput.ElaborationFor = elaborationFor
@@ -912,6 +915,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         ModuleClassifications = SemanticGraph.mkModuleClassifications resolvedNodes
         // Seq saturation computed lazily from SeqExpr nodes (codata pattern)
         SeqSaturation = SemanticGraph.mkSeqSaturation resolvedNodes
+        // Per-field record ranges: written by RangeAnalysis at saturation (CS-10)
+        FieldRanges = lazy Map.empty
         // F is empty at construction; enrichment mints into it at saturation.
         Edges = []
     }
@@ -993,6 +998,17 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     //=========================================================================
     let platformContext = PlatformDeclaration.fill platformContext finalGraph
     let finalGraph = { finalGraph with Platform = platformContext }
+
+    //=========================================================================
+    // The range pass (CS-10, Dimensional_Range_Design.md §1): every reachable
+    // integer carries its analysed range as a coeffect beside its type, every
+    // record type its per-field ranges, and an unobservable range is CCS8011.
+    // Runs on every substrate over the complete graph, after the declared
+    // platform has filled the context (its representations are the widening
+    // thresholds) and before the declaration is checked.
+    //=========================================================================
+    let finalGraph, rangeDiagnostics = RangeAnalysis.run platformContext finalGraph
+
     let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
     let quotationErrors = quotationDiagnostics finalGraph
 
@@ -1035,7 +1051,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics
+        Diagnostics = taggedDiagnostics @ rangeDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics
         PlatformContext = platformContext
     }
 
@@ -2557,7 +2573,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
         // A signature file has no checker yet: the input contributes no graph, and that is an
         // error rather than a warning, because a warning would let the program lose a file silently.
         {
-            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty; Edges = [] }
+            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty; FieldRanges = lazy Map.empty; Edges = [] }
             Diagnostics = [{
                 Severity = NativeDiagnosticSeverity.Error
                 Code = DiagnosticCodes.CCS8401_UnsupportedConstruct

@@ -728,6 +728,12 @@ type SemanticNode = {
     Metadata: Map<string, MetadataValue>
     IsReachable: bool
     EmissionStrategy: EmissionStrategy
+    /// The analysed range of an integer value (Dimensional_Range_Design.md §1; Horizon C3): a
+    /// coeffect beside the type, written once by RangeAnalysis at saturation and read by every
+    /// later pass. `None`: not a numeric node, or not analysed (unreachable). `Some r`: analysed;
+    /// `r` is the range, and the width is derived from it on read (`ValueRange.width`), never
+    /// stored beside it. An unobservable `r` (no width) is CCS8011 at the node.
+    ValueRange: ValueRange option
 }
 
 //-------------------------------------------------------------------------
@@ -744,6 +750,12 @@ type SemanticGraph = {
     Platform: PlatformContext option
     ModuleClassifications: Lazy<Map<NodeId, ModuleClassification>>
     SeqSaturation: Lazy<Map<NodeId, SeqStateMachineInfo>>
+    /// Per record type, per field: the join of the field's range over every reachable
+    /// construction of that type (Dimensional_Range_Design.md §3.3: a record's field widths are
+    /// one settled fact on the graph, the `hw.struct` of a module signature). Keyed by the type
+    /// constructor's name; every integer field of every record type definition has an entry, the
+    /// empty range where nothing reachable constructs it. Filled by RangeAnalysis.
+    FieldRanges: Lazy<Map<string, Map<string, ValueRange>>>
     /// F -- the hyperedge set. Phase 0 carries only what enrichment mints
     /// explicitly (obligations, residence); the kind-derived structural and
     /// reference edges are projected on demand by `kindEdges` and are not

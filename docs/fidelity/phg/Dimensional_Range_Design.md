@@ -99,8 +99,7 @@ question about whether a width is a type.
   `[lo(n), 999]` inside the branch (§2, "Comparisons seed ranges").
 - `x % k` has range `[0, k − 1]` for a non-negative `x` and `k > 0`; `clamp lo hi x` has `[lo, hi]`;
   `abs x` is non-negative; a DU tag has `[0, cases − 1]`; a boolean is `[0, 1]`
-  (Composer's `IntervalAnalysis.fs` seeds these today for the FPGA leg; the seeding moves into CCS,
-  §8).
+  (seeded by `RangeAnalysis.fs` in CCS since CS-10; Composer's `IntervalAnalysis.fs` is deleted).
 - An input arrives through a declaration and carries the declared range: a platform endpoint's
   contract, a wire-schema field, an MMIO register's width, an exported entry point's argument at the
   platform's Register or Pointer width, a C ABI parameter at the width its binding descriptor
@@ -126,6 +125,25 @@ whole-program least fixed point available because saturation runs over the progr
 every use is elaborated. A call site carries its own range only under explicit `inline`, by
 expansion (`inline` is semantic, never a width-solving device). Generalisation quantifies measure
 and carrier variables (CS-6) and never ranges: a range is per instantiation and joined.
+
+### 1.2a Precision (the owner, 2026-09-05: the earlier analysis "was to simply show the
+possibility. This is a good opportunity for refinement and recalibration")
+
+The pass is a new analysis, not a port. Its precision comes from: per-node ranges, so a variable
+read under a comparison guard carries the refined range on that branch (§1.1's comparison rule)
+instead of a seeded guess; a widening operator whose thresholds are the declared representations'
+boundaries of the sign-selected family, then the program's own settled constants (`c − 1`, `c`
+above a rising endpoint; `c`, `c + 1` below a falling one, for every point range the program
+holds), then the infinity (the CS-10 review: without the constants a counter that carries its own
+value on one branch, `if not advance then state.Phase else (state.Phase + 1) % cycleSteps`, widens
+past its modulus and no guard can bring it back, and the spec's `[0, N − 1]` for a free-running
+counter is unreachable; ratified 2026-09-05 as the owner's "refinement and recalibration"),
+followed by a bounded narrowing pass that recovers the precision widening gave up
+(standard descending iteration; sound because it only tightens a post-fixpoint); arithmetic that
+saturates to "unbounded" rather than wrapping an endpoint; parameters joined over every call site
+and record fields ranged per field; and the §3 formula for the width, which spends no sign bit on a
+non-negative range. Any later refinement (a relational domain, congruences for `%` and shifts) is a
+change to this section first.
 
 ### 1.3 The unobservable range
 
@@ -171,6 +189,12 @@ the width is exactly `width([a, b])` by the §3 formula, a non-negative range sp
 and the extension an operand needs when it meets a wider one is `extui` or `extsi` by the sign of
 its range, never by a type name. The result is the width coeffect on the node, read by Alex; it is
 never stored as a fact independent of the range it was derived from (C3).
+
+A range that sits away from zero has a cheaper realisation than two's complement: stored as
+`value − lo`, it needs `⌈log2(hi − lo + 1)⌉` bits (`[1000, 1023]` is five bits, not ten). That is a
+representation, an offset encoding the fabric may declare, and its choice belongs to step 8's
+selection (§3.2, CS-13), not to the range fact; recorded here (the owner, 2026-09-05) so the
+opportunity is not lost.
 
 ### 3.2 Reals
 
@@ -310,9 +334,11 @@ width conversion intrinsics (`int8` … `uint64`, `nativeint`, `float32`), leavi
 saturation in CCS over the whole graph (seeding §1.1, propagation §1.2, widening §1.3, joins at
 function parameters), and writes the range and the selected width or representation as coeffects
 on the node. Its `minSignedBits` spends a sign bit on every range (plan L-7b); the spec's §3 formula
-is what runs, and HelloArty's `07_output.mlir` changes on purpose: `Counter` 30 bits, `StepTick` 20,
-`Phase` 9, `PeriodMs` 12, the `arith.extsi %periodMs : i13 to i30` at line 116 becoming an `extui`
-of `i12` to `i30`. HelloArty's README table (31/21/10/13) is corrected with it.
+is what runs, and HelloArty's `07_output.mlir` changes on purpose (the figures computed by the
+CS-10 pass from the current source, correcting the spec table's older cadence quoted here before):
+`Counter` `[0, 799999999]` 30 bits, `StepTick` `[0, 390624]` 19 bits, `Phase` `[0, 1023]` 10 bits,
+`PeriodMs` `[500, 4000]` 12 bits, and every `arith.extsi` of a non-negative value becoming an
+`arith.extui`. HelloArty's README table (31/21/10/13) is corrected with it.
 
 ### 8.3 Deleted from Composer
 
@@ -325,6 +351,40 @@ representation; `TypeMapping.fs` and `SSAAssignment.fs` keying widths on `NTUKin
 architecture table (`platformWordWidth arch`, checked at `MLIRGeneration.generate` since CS-7b,
 retired here). The FPGA leg keeps `IntervalAnalysis.fs` only as long as CS-10 has not landed; then
 it reads the node.
+
+### 8.4 The FPGA's own design-time integrity tooling, preserved
+
+The owner, 2026-09-05: "while I want width inference to be available to any target, there's
+*still* FPGA specific tooling I want to see preserved in a way that supports design-time integrity
+for that platform target." Width inference is general (§0); two things stay the fabric's own, and
+this note keeps them:
+
+- **Machine-type inference.** A `[<HardwareModule>]` design (`Design { InitialState; Step; Clock }`)
+  is read as a Mealy machine: the state register, the step function's combinational body, the
+  registered outputs; today synthesised by Composer's `HardwareModulePatterns`, later a Baker recipe
+  under the PHG plan's drain, unchanged in meaning by any step of this note.
+- **The temporal budget** (`DepthAnalysis`, CCS0100, a warning promoted by `--warnaserror`). The
+  chain of combinational operations between register boundaries is weighed and compared with the
+  budget one clock period allows: `threshold = ⌊period_ns / ns_per_weight_unit⌋`, the period from
+  the clock the design runs at, the nanoseconds per weight unit a fabric calibration against
+  Vivado's post-route slack. "This would get caught in Vivado synthesis, so we set a warning"; the
+  diagnostic names the chain and offers both remedies, restructure the computation to shorten the
+  chain, or step the clock down so more compute fits the window, and the budget relaxes with the
+  chosen clock (the Arty A7 has four; HelloArty runs at 25 MHz against the leaf's 100).
+
+Two refinements the range annotation makes possible, recorded for the FPGA leg after CS-10:
+
+1. **Weights that read the width.** An adder's carry chain is deeper at 30 bits than at 10; a
+   multiplier's more so. The weight table (`DepthAnalysis.arithmeticWeight`: multiply, divide and
+   modulus 2, everything else 1, unitless) can read `ValueRange.width` of the operation's result
+   node and weigh by width, recalibrated against the same Vivado ground truth; the estimate then
+   tightens as the widths do.
+2. **The clock as a declared fact.** The leaf declares its clocks (`Clocks = [ sysClk ]` on the
+   Arty; the board has four) and the design selects one (`Clock = Endpoints.clock`). The project
+   file's `clock_mhz` override is today a free number; under D8 it becomes a selection among the
+   declared clocks, or an explicitly declared derived clock, so that the budget is always computed
+   against a clock the description knows and the "step down" remedy names the declared alternatives.
+   With CS-12 (boundaries are declarations) or as its own small changeset.
 
 ## 9. The migration
 
@@ -360,6 +420,7 @@ by hand), and the drift gate's scheduled rows are its inventory until each repos
 | `units-of-measure.md` | the constant grammar's `byte<…>` … `uint64<…>` rows | `int<measure-literal>` and `float<measure-literal>` |
 | `ntu-dimensional-architecture.md` | §2.1 (`Fixed` as "a developer's seal", Farscape emitting Fixed-width NTU types), §7.1, §7.2 | `NTUWidth` is the selected width coeffect; Farscape emits descriptor widths; §7.1/§7.2 repointed |
 | `error-handling.md` | the CCS8011–8018 row | the §7 table above |
+| `numeric-selection.md` | §9.1 "the integer interval domain is `int64`-only (a min/max pair with two's-complement bit-counting transfer functions)" and "the widening introduces no thresholds of its own" | corrected 2026-09-05: the integer domain is the five-case lattice of `ValueRange` (empty, bounded, two half-lines, unbounded) with exact `bigint` transfer saturating to an infinity; the widening's thresholds are the declared boundaries, then the program's settled constants, then the infinity (§1.2a) |
 
 ## 11. The vetting rows, restated
 
@@ -427,4 +488,57 @@ the one spelling table or reversed by migrating those sites to a code-point func
 the plan's W-2, W-7 and W-8 rows, which the owner's assistant wrote before the handoff. Pre-existing
 and recorded: `true - true` reports CCS8000 twice and `1 + true` reports a CCS8000 beside a CCS8003
 at the same range; both collapse when operand positions are carried through the store.
+
+## CS-10 as built (2026-09-05)
+
+Delivered in five slices, each built inside Composer and gated before the next; every gate below was re-run on the final binary.
+
+**Slice 1, the annotation (§0.1 item 7, Horizon C3).** `NativeTypedTree/NativeTypes.fs`, beside `NTUWidth`: `ValueRange` with the cases `Empty` (the join of no values: a record field nothing reachable constructs, width one), `Bounded (lo, hi)` (the one form with a width), `Above lo` and `Below hi` (the half-lines a widening leaves; unobservable if they survive the narrowing) and `Unbounded`; the module `ValueRange` with `join`, `meet`, `contains`, the interval arithmetic (`add`, `sub`, `neg`, `mul`, `div`, `rem`, `shl`, `shr`, `band`, `bor`, `bnot`, each exact in `bigint` and saturating an endpoint that leaves int64 to its infinity, never wrapping), `width` (the §3 formula: a non-negative range spends no sign bit, minimum one bit; `Empty` is one bit; a half-line and `Unbounded` have none), `isNonNegative`, `isObservable`, `render`, and `widen`. `PSGSaturation/SemanticGraph/Types.fs`: `SemanticNode.ValueRange: ValueRange option` (`None`: not a numeric node or not analysed; `Some r`: the range, the width derived on read and never stored), defaulted in `NodeBuilder.Create` and in the seventeen full constructions; `SemanticGraph.FieldRanges: Lazy<Map<string, Map<string, ValueRange>>>` (record type name, field name, the join over every reachable construction), defaulted in every graph construction. `Infrastructure/PhaseTypes.fs`, `PhaseEmitter.fs`, `NativeService.fs`: the range is written as `valueRange` on every node of the phase JSON (`05_psg2.json`, the final graph; `01_psg0.json` precedes the pass). `Expressions/Types.fs`: `DiagnosticCodes.CCS8011_UnobservableRange`.
+
+**Slice 2, the pass (§1; width-inference.md §2, §3, §6).** New `PSGSaturation/SemanticGraph/RangeAnalysis.fs`, registered after `PlatformDeclaration.fs`, run in `NativeService.buildResult` after `PlatformDeclaration.fill` and before `PlatformDeclaration.check` on every substrate over reachable nodes only. The transfer rules, as implemented: an `Int` or `UInt` literal is its point, a `Bool` `[0, 1]`, a `Char` its code point; every boolean-typed node is at most `[0, 1]` and every char-typed node at most `[0, 0x10FFFF]` by its type; `DUGetTag` is `[0, cases − 1]` and a `UnionCase` or `DUConstruct` its tag; a comparison, `not`, `&&`, `||` is `[0, 1]`; `+ − * / %`, unary negation, `&&& ||| ^^^ ~~~`, `<<<` and `>>>` by the interval rules of slice 1 (division or modulus by a range containing zero has no image; `x % k` for a bounded positive `k` is `[0, k.hi − 1]` for a non-negative `x`, clipped to `x.hi`, and `[−(k.hi − 1), k.hi − 1]` otherwise, the sign following the dividend); `truncate`, `floor`, `ceiling`, `round` and every other integer-valued intrinsic (a length, a read, a conversion from a real) are unobservable here, the real domain being CS-13's; `IfThenElse`, `Match` and `CaseElimination` are the join of their branches; `Sequential` its last value; `Binding` its value, a mutable binding the join of its value and every `Set` to it; a `VarRef` its binding's; a Lambda parameter the join of the argument at every reachable call of its function (curried calls flattened), and a parameter no reachable call supplies (a declaration root's, an entry the platform calls) is unobservable here and takes the declared boundary range at CS-12; an `Application` of a user function is its body's range; `FieldGet` reads the record type's per-field join over every reachable `RecordExpr` (`FieldRanges` in the making); `TupleGet` reads element `i` of the `TupleExpr` constructions the tuple expression traces to, joined; a `[<HardwareModule>]` design's `InitialState` and the returned state (both `RecordExpr`s of the state type) feed the state type's `FieldRanges`, which the Step function's state parameter reads through `FieldGet`, and the Step function's inputs record is seeded from its declaration, a boolean pin `[0, 1]` (an integer pin has no declared range until CS-12). A counted `for` is the checker's `while` over a mutable cell, so the loop variable's cell is `[start, finish + 1]` and every read inside the body `[start, finish]` through the guard.
+
+Comparison refinement (width-inference.md §2) is on use edges: for an `if` whose guard is `x < K`, `x <= K`, `x > K`, `x >= K`, `x = K` (either operand order, `K` any range, through `not`, `&&`, `||`, a boolean binding's definition and Baker's conditional forms of `&&`/`||`), every read of `x` by a node exclusive to the then-subtree, and the `if`'s own read of its then-branch, carries `x`'s range met with the bound (`< K`: `hi ≤ K.hi − 1`; `<= K`: `hi ≤ K.hi`; `> K`: `lo ≥ K.lo + 1`; `>= K`: `lo ≥ K.lo`; `= K`: `K`), and the else-subtree the complement; a `while` body likewise under its guard. "Read of `x`" is a reference to a compared binding or the compared node itself (Baker's recipes share one node between a guard and a branch, `min hi (max lo x)`), which is why the refinement lives on the consumer's edge and not on the node: a shared node has one range, its reads under different guards do not. A mutable binding's bound holds until the first assignment to it in tree order and, for a loop nested in the guarded subtree, is dead from that loop's first read of any mutable the loop assigns, since the loop's iterations never re-check the guard; a reference to such a mutable reads its definition unrefined on its own edge (the CS-10 review's `if n < 100 then while c < 5 do (read n; n <- n + 50; ...)`, whose inner read is now `[0, +∞)`); and never inside a nested lambda. This replaces IntervalAnalysis's "widen the narrower non-constant operand to the other's maximum" heuristic.
+
+The fixpoint: a pure fold over an immutable `Map<NodeId, ValueRange>` in node order (Gauss–Seidel), each node the join of what it has and its transfer, to a post-fixpoint. The widening: after eight rounds an endpoint that still moves goes to the nearest threshold beyond it, the thresholds being the boundaries of the declared integer representations of the family the range's sign selects (`uint` for a non-negative range when the platform declares one, else `int`; `PlatformContext.Representations`) and, for either family, the program's settled constants (`c − 1` and `c` above, `c` and `c + 1` below, for every point range the analysis has found), then past the last threshold to its infinity; on fabric, which declares no representations, the constants and then the infinity. The constants are what let a free-running counter stop at its modulus when nothing but the modulus bounds it: `nextPhase = if not advancePhase then state.Phase else (state.Phase + 1) % cycleSteps` carries its own value forward on one branch, so a widening that overshoots the modulus is kept by the identity and no guard can narrow it back; with `cycleSteps − 1 = 1023` a threshold, the ascent stops at `[0, 1023]` exactly. Widening is per endpoint, so a counter whose ceiling is a comparison keeps its floor. After the ascent settles, up to eight rounds of narrowing recompute every node from its transfer and take the result only where it tightens (a monotone transfer applied at a post-fixpoint stays above the least fixpoint; §1.2a), which is what turns `StepTick`'s widened `[0, +inf)` into `[0, 390624]` through `nextStepTick < threshold`. An ascent past 8192 rounds is a stop naming the defect.
+
+**Slice 3, CCS8011 (§1.3, §7).** `RangeAnalysis.diagnostics`: for every reachable integer node whose final range has no width (`Above`, `Below`, `Unbounded`), once per enclosing binding (a binding is its own; a parameter's is its function's) at the first such node in node order, `The range of '<spelling>' in '<function>' cannot be observed; bound it with a comparison, a modulus or a clamp`, the spelling being the reference, the field access (`state.Counter`), the operator result or the binding; a reference whose own binding is unobservable is that binding's finding, not a second one. Severity Error on fabric (`PlatformContext.substrateKind ctx = FPGA`: the width has no other source, and this replaces every Composer-side `FPGA0001` and the `IntWidth 0` stop with a located CCS diagnostic), Info on every other substrate in this changeset, because the CPU leg reads the carrier's width until CS-12 supplies the declared boundary ranges and CS-11 migrates the sources; the staging is a decision. `Reachability = Reachable`, so Composer prints them as information and never demotes them. Bare reals get no CCS8011 (numeric-selection.md §6: a bare float of unobservable range selects `f64`); the seam rule for dimensioned reals is CS-13's. Unreachable code is not analysed, so W-4/reject's `let rec run n = run (n + 1)`, which nothing calls, reports nothing and its row stays at the baseline.
+
+**Slice 4, the FPGA leg reads the node (§8.2, §8.3; plan L-7, L-7b).** Deleted: `Composer/src/MiddleEnd/PSGElaboration/IntervalAnalysis.fs` and its fsproj entry, `TransferCoeffects.WidthInference` (`TransferTypes.fs`) and its computation (`MLIRGeneration.fs`), `clampZeroWidths` (`Dialects/Core/Types.fs`, the IntWidth 0 → 1 fallback). `Alex/XParsec/PSGCombinators.fs`: `nodeRange`, `extensionOp` (the `extui`/`extsi` of a value by the sign of its node's range), and `narrowType coeffects graph nodeId ty`, type-directed: `TInt (IntWidth 0)` is the width of the node's range; a struct's sentinel fields are the widths of the record type's `FieldRanges` by the node's native type, nested records, options and tuples included (a tuple's elements through the `TupleExpr` the expression traces to); a node with no range or an unobservable one is a stop naming it, defence in depth only. Every caller passes the graph (`ControlFlowWitness`, `MatchWitness`, `HardwareModuleWitness`, `LambdaWitness`, `RecordWitness`, `ApplicationWitness`, `VarRefWitness`, `DUPatterns` for a payload-less DU's zero aggregate, and the two module-value slot sites in `BindingWitness` and `VarRefWitness`). `Alex/Patterns/ApplicationPatterns.fs`, `pBinaryArithOp` on fabric: the operation runs at the width of the join of the operand and result ranges (never narrower than an operand's physical width), each operand extended to it by the sign of its own range, the result truncated to its own range's width only where that is narrower (a modulus, a quotient, a mask), and a division, modulus or right shift in its unsigned form (`comb.divu`, the new `comb.modu`, `comb.shru`) when the join is non-negative; `pComparisonOp`: both operands extended to the join's width by their own sign, the predicate signed only when the join has a negative value. `Alex/Patterns/ControlFlowPatterns.fs`: a mux operand narrower than the result is extended by its range's sign, one wider (a reference refined below its binding's width) truncated. `Alex/Patterns/RecordPatterns.fs`, `pBuildRecord`: `hw.struct_create` at the record type's settled field widths, a narrower field value extended by its sign (the CPU layout's spare per-field SSA); a wider one is a stop. `Alex/Elements/CombElements.fs`, `Dialects/Core/Types.fs`, `Serialize.fs`: `CombModU`. The CPU leg (`TypeMapping` for CPU, `SSAAssignment`) is untouched.
+
+Found on the way, in Composer's FPGA leg, and closed because gate 4 required HelloArty to compile: a module-level value was realised as a program-lifetime `memref.global` slot on every target (`ModuleValues.isSlotBinding`), which an `hw` design cannot hold and whose initialisers the walk emitted at module scope, so the platform's clock-endpoint record (`Description = Some …`, a payload DU) was witnessed and stopped; the old `IntWidth 0` stop came first and masked it. `Alex/Traversal/TransferTypes.fs`, `ModuleValues.isSlotBinding platform graph node`: nothing is a slot on FPGA; a module-level value is a constant expression witnessed inside each `hw.module` that reads it, which the walk's per-module visited set already does. `Alex/Traversal/NanopassArchitecture.fs`: module-init bindings are not walked as roots on FPGA; the design's metadata chain is consumed structurally by `HardwareModuleWitness` as before.
+
+**Slice 5, HelloArty, the harness, docs.** HelloArty compiles end to end (`Composer compile HelloArty.fidproj -k`, exit 0, Verilog and XDC generated, 25 ports verified) with no CCS8011; its `07_output.mlir` has the state struct at `Counter: i30, StepTick: i19, Phase: i10, PeriodMs: i12` (was `i31, i20, i11, i13`), from the ranges the pass wrote: `Counter` `[0, 799999999]` (`nextCounter = (state.Counter + 1) % maxTicks`, `maxTicks = 4000 * 100000 * 2 = 800000000`; `⌈log2(800000000)⌉ = 30`), `StepTick` `[0, 390624]` (`resetStepTick = if advancePhase then 0 else nextStepTick`, the else-read of `nextStepTick` refined by `< threshold` with `threshold = (periodMs * 100000) / 1024` in `[48828, 390625]`; `⌈log2(390625)⌉ = 19`), `Phase` `[0, 1023]` (`(state.Phase + 1) % 1024`; 10 bits), `PeriodMs` `[500, 4000]` (the join of `4000 / 8`, `4000 / 4`, `4000 / 2`, `4000` and the latched initial `4000`; `⌈log2(4001)⌉ = 12`); `ticksPerStep` is `in i12, out i19` and `periodFromButtons` `in i12, out i12`. Every extension is `arith.extui` (131; `arith.extsi` 0, was 120): every extended value in the design is non-negative. Every `arith.trunci` (32) is to its result's range width, never below it (`pwmSubCycle` i30 to i8, `(state.Phase + 1) % 1024` i11 to i10, `ticksPerStep`'s quotient i29 to i19, a refined `ph0` read i10 to i8). Divisions and moduli are `comb.divu`/`comb.modu` except the four signed `comb.divs` of the Hermite terms (one per LED, join `[-129541, 195075]`) and four `comb.icmp slt` of `pwmSubCycle < smoothN` (`smooth` in `[-506, 762]`), whose join `[-129541, 195075]` is signed; comparisons of non-negative operands are `comb.icmp uge`/`ult`. No `memref` op remains in the design (was 201, the module-value slots). HelloArty's `README.md`: the width table at the four figures with their ranges, the paragraph below it stating the branch rule (no "seeding", no "protected constants"), the sentence that a non-negative range spends no sign bit, and the wave-chase phase counter corrected to `0..1023` (its `cycleSteps` is `4 * 256`). `width-inference.md` §3's table at the same four rows, so the table and the formula agree (L-7b). §8.2 above corrected to the computed figures.
+
+**Decisions, for the owner.** (1) `ValueRange` has five cases, not two: the standard widening moves one endpoint at a time, so the working lattice needs the half-lines `Above` and `Below` (a two-case type cannot express `[0, +inf)` and every widened loop would be unobservable, including `StepTick`), and the join over zero constructions needs `Empty` (a record field nothing reachable constructs, `ArtyReport.PeriodMs` in HelloArty's `voption` payload, is one bit, the minimum wire, not a fabricated value and not an error). Only `Bounded` and `Empty` have a width; the annotation is `Some` for every reachable integer, boolean and char. (2) The node field is `ValueRange`, not `Range`: `SemanticNode.Range` is the source range and is read everywhere. (3) The widening's thresholds include the program's settled constants beside the declared representations (the reason above; the design's "a free-running counter mod N has range [0, N−1]" is otherwise unreachable for a counter that carries its own value on one branch), followed by the bounded narrowing the owner's §1.2a names. (4) Refinement is on use edges, forced by Baker's shared nodes (the `abs` and `clamp` recipes); a shared node's own annotation stays its binding's, its reads under a guard are refined. (5) The counted `for` is the checker's `while` over a mutable cell; the cell's range is one past `finish`, the body's reads are `[start, finish]`, and no `ForLoop` rule is separate. (6) On fabric, an unsigned integer literal above int64's maximum is `Above Int64.MaxValue` and so unobservable; such a literal is CCS8018 in any case. (7) A `TupleGet` on fabric narrows only through a `TupleExpr` the expression traces to by references, bindings and blocks; a tuple element that reaches Composer through a branch join is a stop, owed. (8) The FPGA module-value model above, a Composer change outside the slice list, taken because the gate required it and the alternative was a silent default.
+
+**Gates.** Composer build clean (`cs10-build-final.txt`). RoundTrip (`rt-cs10-final.*`): compile 0, run 0, transcript identical to `expected.txt`, hash `e10c2ce1cb87076328f8151c47b36e2d7dbe69632581c66c081e67a52386116d` unchanged (the CPU leg does not read the annotation). Harness `vet.sh --through 3` (`vet-cs10.txt`): exit 0, every row identical to `vet-cs9-final.txt` (30 of 49, 23 of 23 judged; W-4/accept and W-6/accept ok). HelloArty as above (`helloarty-cs10-final.txt`). HelloProof (`hp-cs10-*.txt`): compile 0, run prints `Hello, Houston!`, 23 obligations PASS. Drift gate clean (`driftgate-cs10.txt`). The unbounded copy of HelloArty (`nextCounter = state.Counter + 1`): exactly one `error CCS8011: The range of 'state.Counter' in 'step' cannot be observed`, no Composer stop; `let rec run n = run (n + 1)` called from `main` on x86_64: one `info CCS8011: The range of 'n' in 'run'`.
+
+**CCS8011 inventory.** Information on CPU until CS-12; the count is the migration inventory. RoundTrip: 310 lines (0 tagged unreachable), by binding: intrinsic results (`length` 52, `write`, `toUInt32`, `+`/`-`/`*` on them), parameters no reachable call bounds (`v`, `value`, `upto`, `i`, `n`, `w`, `va`, `vb`), `Abi.alignUp`, `writeMessage`, `writeHello`, and 35 tuple elements of `readHello`/`tryReadHello`/`tryDecodeStream`/`main` (`__tuple_N.ItemK`) whose sources are those. HelloProof: 2 (`the result of 'write'` in `write` and `writeln`). Harness leaves: M-3/accept 2 and M-3/reject 2 (`coerce`), W-1/reject 1 (`x` in `f`), W-7/accept 2 (`write`), W-8/accept 4 (`fl`, `ce`, `ro`, `truncate`: the rounding intrinsics, CS-13's); every other leaf 0. HelloArty: 0.
+
+**Owed.** The CPU leg still reads the carrier's width (`TypeMapping` for CPU, `SSAAssignment`): CCS8011 is information there until CS-12 supplies the declared boundary ranges (an entry point's argument, an FFI parameter, a wire-schema field, an MMIO register: every parameter no reachable call supplies, every intrinsic result, every array element and every `DUEliminate` payload is unobservable in this changeset) and CS-11 migrates the sources. The real domain (CS-13): a rounding of a real is unobservable, and a bare real has no range. Tuple elements on fabric beyond a traceable `TupleExpr`. A `for … in a .. b` loop is checked as a `ForEach` whose loop variable does not resolve (`VarRef ("i", None)`) and has no `Set` witness on CPU, a pre-existing defect found by the for-loop probe and not this changeset's. The `sqrt`, `atan2` and transcendental owings of CS-9 stand.
+
+**Owner pass (2026-09-05), after review.** The reviewer's five must-fixes are applied: the
+mutable refinement's loop rule and reference-edge rule above (`RangeAnalysis.refineEdges`,
+`assignedWithin`); the constant widening thresholds ratified and written into §1.2a; the operation
+range read by Composer from CCS (`RangeAnalysis.operationRange` for an arithmetic op, the join of
+its operands and result; `RangeAnalysis.operandRange` for a comparison, its operands alone) so
+that no witness computes a range, `pBinaryArithOp` and `pComparisonOp` now reading it and an
+unranged operand a stop, never an empty default; a `FieldGet` on a record type nothing reachable
+constructs and nothing declares is unobservable (CCS8011), not a one-bit fabrication, while
+`Empty` remains the `FieldRanges` entry of a field nothing reads; `x <<< n` with `n ≥ 63` is the
+half-line by the sign of `x`, never empty. Also applied: `HardwareModuleWitness` no longer takes a
+per-field `max` of the parameter and returned state widths, a disagreement being a stop. Stated
+for the record: the pass stops with an internal failure past 8192 ascent rounds, a defect stop
+with no CCS code, since termination is otherwise guaranteed per endpoint; a comparison of a
+non-reference expression (`state.Counter`, an arithmetic node) refines only reads of that exact
+node, so a second identical `state.Counter` under the guard is not refined (sound, a precision
+limit); the narrowing runs eight rounds after widening. Re-gated on the final binary: build;
+RoundTrip transcript identical at `e10c2ce1…` with 319 CCS8011 information lines (the nine beyond
+the implementer's 310 are field reads of record types nothing constructs, now honest); harness
+`--through 3` rows identical to CS-9; HelloArty compiles with 0 CCS8011 and its `07_output.mlir`
+byte-identical to the reviewed copy (`Counter: i30, StepTick: i19, Phase: i10, PeriodMs: i12`, 131
+`extui`, 0 `extsi`); the same design at 100 MHz reports CCS0100 (depth 10 against 6) with both
+remedies, so D11's temporal budget stands; HelloProof 23, PASS; drift gate clean; the unbounded
+HelloArty copy gives exactly one CCS8011 error naming `state.Counter`; `x <<< 63` is `[0, +∞)` and
+CCS8011 information. HelloArty's `Behavior.clef` comments now say 256 levels and 1024 phase steps.
 
