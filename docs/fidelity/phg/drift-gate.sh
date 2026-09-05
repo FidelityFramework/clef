@@ -59,6 +59,7 @@ RETIRED=(
   'fat pointer|fat ptr|\{ptr: \*|ptr: \*u8|ptr: \*T|\{ptr, len\}'   # strings/arrays are memref views (buffer + dimension); no {ptr, len} header
   'FNCS|F# Native|FSharp\.Native\.|fsnative|FSNAC|FsNative'      # pre-NTU/PSG naming, fully set aside: the product is Clef, the service is CCS, the universe is NTU, the graph is the PSG
   'FSharp\.Quotations'                                    # plan D9: quotations are intrinsic; Expr<'T> is the compiler's, there is no quotations library to open
+  '\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # plan D10 (Dimensional_Range_Design.md): one int, one float; the width is the range's; no width-named type or suffix
   '\bFirefly\b'                                            # the pre-rename Composer; same family
   '\bKeystone\b|\bkeystone/|\.ks\b'                         # the pre-rename language name and its file extension
   '\bwrendit\b|__wrendit_'                                 # the pre-rename WREN stack name; the built sample (WrenHello) uses `wren`
@@ -85,6 +86,7 @@ ALLOW_FILES=(
   'clef/docs/fidelity/phg/Types_As_Ranges_Position.md'
   'clef/docs/fidelity/phg/Horizon_Requirements.md'
   'clef/docs/fidelity/phg/Dimensional_Steps_1_2_Sequence.md'
+  'clef/docs/fidelity/phg/Dimensional_Range_Design.md'
   'ship-of-theseus/scaffold/demo-runbook.md'                      # names the real F# compiler's codes in an F# build runbook
   'Composer/docs/Witness_Boundary_Audit.md'
   # the superseding designs: they quote the retired vocabulary in order to retire it,
@@ -99,6 +101,28 @@ ALLOW_FILES=(
 # row when its replacement lands, and the gate becomes an error for that file automatically.
 SCHEDULED=(
   'clef/src::TyCon'                                             # hardening step 7 removes the per-width carriers; until then their count is reported here
+  'clef/src::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'          # D10: the compiler is F# implementation code; the spellings it admits for Clef go with CS-11, its own use of .NET widths goes at self-hosting
+  'Composer/src::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'      # same: F# implementation code
+  'Composer/samples::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'  # D10: samples migrate with CS-11 (the dimensional leaves already have)
+  'Composer/docs::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'     # D10: Composer's docs migrate with CS-11
+  'Composer/tests::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'    # same
+  'BAREWire/docs::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'     # D10: BAREWire's wire vocabulary migrates with CS-11 (its widths are schema facts)
+  'clef-lang-spec/spec::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # D10: the chapters of Dimensional_Range_Design.md §10 are corrected; the rest of the spec migrates with CS-11
+  'clef/docs::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'         # D10: clef's docs migrate with CS-11
+  'clef/tests::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'        # inherited F# test corpus; moves with CS-11
+  'clef/samples::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'      # same
+  'ship-of-theseus::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # HelloProof's sample and proof trace migrate with CS-11
+  'clef-lang-site/hugo/content::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'  # dated posts and docs pages; migrate with CS-11 or stand as history
+  'mlir-plugins/README.md::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'      # same
+  'Atelier::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'           # same
+  'ClefAutoComplete::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # F# tooling, not Clef source; its .NET widths are its own until self-hosting
+  'lattice-analyzers::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # F# tooling, not Clef source; its .NET widths are its own until self-hosting
+  'lattice-vim::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # F# tooling, not Clef source; its .NET widths are its own until self-hosting
+  'lattice-vscode::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # F# tooling, not Clef source; its .NET widths are its own until self-hosting
+  'lattice-vscode-helpers::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # F# tooling, not Clef source; its .NET widths are its own until self-hosting
+  'ionide-native-analyzers::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # F# tooling, not Clef source; its .NET widths are its own until self-hosting
+  'Ionide-vim-fsnative::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # F# tooling, not Clef source; its .NET widths are its own until self-hosting
+  'FsNativeAutoComplete::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # F# tooling, not Clef source; its .NET widths are its own until self-hosting
   'Composer/src::TyCon'                                         # same
   'BAREWire/docs::FS[0-9]{4}'                               # BAREWire's own FS9xxx analyzer codes retire to CCS with the step-4 table
   'ClefAutoComplete::FS[0-9]{4}'                             # FCS fork: its codes are the F# compiler's; disposition is archive (Lattice_Consumer_Contract.md)
