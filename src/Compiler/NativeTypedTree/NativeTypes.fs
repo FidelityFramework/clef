@@ -76,12 +76,39 @@ module NodeId =
 /// Platform-resolved width dimensions — NTU-native vocabulary.
 /// These are NOT named after C types. Farscape maps C types to these dimensions;
 /// the NTU doesn't know or care about C.
+///
+/// A width dimension is a name the platform description declares
+/// (ntu-dimensional-architecture.md §7.1); these two cases are the spellings the
+/// language's own seals (`int`, `nativeint`) name, and `WidthDimension.name` is
+/// the one place that spelling meets the declared name. `PlatformContext.Dimensions`
+/// is keyed by the declared name, so a fabric binding may declare dimensions the
+/// language has no spelling for.
 [<RequireQualifiedAccess>]
 type WidthDimension =
-    /// Address width — pointer-sized (64-bit on x86_64, 32-bit on ARM32)
+    /// Address width — the description's `Pointer` declaration
     | Pointer
-    /// Machine register / natural computational word width
+    /// Machine register / natural computational word width — the description's `Register` declaration
     | Register
+
+module WidthDimension =
+    /// The name the platform description declares the dimension under.
+    let name (dimension: WidthDimension) : string =
+        match dimension with
+        | WidthDimension.Pointer -> "Pointer"
+        | WidthDimension.Register -> "Register"
+
+/// The representation a numeric seal spelling names (plan D8): the language carries
+/// only a name, the platform description declares what that name is on the target.
+/// `nativeint` names no fixed representation: it is the signed integer of the Pointer
+/// dimension's declared width, `int<bits>` once the dimension resolves.
+[<RequireQualifiedAccess>]
+type SealRepresentation =
+    /// A representation named outright: `int32` -> "int32", `float` -> "float64".
+    | Named of string
+    /// A representation named through a declared width dimension: the offered
+    /// representation of the family ("int" or "uint") at the dimension's declared
+    /// width, found by family and bits, never by a synthesised name.
+    | OfDimension of family: string * dimension: WidthDimension
 
 /// How the width of a numeric type is determined.
 [<RequireQualifiedAccess>]
@@ -356,6 +383,50 @@ module FreestandingStartup =
 // Substrate and Platform Context (NTU Resolution)
 //-------------------------------------------------------------------------
 
+/// One numeric representation the platform description declares (plan D8; the
+/// `Representation` record of BAREWire's `Platform/Description.fs` and of the
+/// Contracts twin, read structurally at saturation). Every tag is the declared
+/// string; the range bounds are exact decimal text.
+type NumericRepresentation = {
+    Name: string
+    /// "native" | "emulated" | "unavailable"
+    Capability: string
+    /// "int" | "uint" | "ieee" | "posit" | "fixed"
+    Family: string
+    Bits: int
+    MinMagnitude: string
+    MaxMagnitude: string
+    /// "wrap" | "saturate" | "exact"
+    Boundary: string
+}
+
+/// The closed vocabularies a declared representation may use, and what "offered"
+/// means: the three sets BAREWire's `Platform/Tags.fs` and the Contracts twin fix.
+/// A tag outside its set is a defect of the declaration (CCS8207), never an
+/// offered representation.
+module NumericRepresentation =
+    let capabilities = [ "native"; "emulated"; "unavailable" ]
+    let families = [ "int"; "uint"; "ieee"; "posit"; "fixed" ]
+    let boundaries = [ "wrap"; "saturate"; "exact" ]
+
+    /// A representation the platform offers: native or emulated. `unavailable` is
+    /// declared so that the name is known and refused, not silently absent.
+    let isOffered (r: NumericRepresentation) : bool =
+        r.Capability = "native" || r.Capability = "emulated"
+
+    /// Every way the declaration is outside its vocabulary; empty when it is sound.
+    let problems (r: NumericRepresentation) : string list =
+        [ if not (List.contains r.Capability capabilities) then
+              yield sprintf "capability '%s' is not one of native, emulated, unavailable" r.Capability
+          if not (List.contains r.Family families) then
+              yield sprintf "family '%s' is not one of int, uint, ieee, posit, fixed" r.Family
+          if not (List.contains r.Boundary boundaries) then
+              yield sprintf "boundary '%s' is not one of wrap, saturate, exact" r.Boundary
+          if r.Bits <= 0 then
+              yield sprintf "declares %d bits; a representation has a positive number of bits" r.Bits
+          if r.MinMagnitude = "" || r.MaxMagnitude = "" then
+              yield "declares no dynamic range; MinMagnitude and MaxMagnitude are exact decimal text" ]
+
 /// Runtime model — what execution environment services are available.
 /// This is a capability coeffect: what the computation requires from
 /// its environment. Comes from the platform binding's [platform] section.
@@ -395,13 +466,18 @@ type PlatformContext = {
     /// Platform identifier (e.g., "Linux_x86_64", "Windows_ARM64")
     PlatformId: string
 
-    /// Width dimension resolutions (bits).
-    /// Maps WidthDimension → concrete bit width.
-    /// e.g., Pointer → 64, Register → 64 on x86_64
-    Dimensions: Map<WidthDimension, int>
+    /// The width dimensions the platform description declares, by declared name
+    /// (ntu-dimensional-architecture.md §7.1): `Pointer` -> 64, `Register` -> 64 on
+    /// x86_64. Filled once, at the saturation entry, from the description compiled
+    /// into the graph (PlatformDeclaration.fill); empty until then and empty when
+    /// the description declares no core. A dimension absent here is CCS8203 at the
+    /// site that needs it, never a default.
+    Dimensions: Map<string, int>
 
-    /// Pointer alignment in bytes
-    PointerAlign: int
+    /// The numeric representations the platform description offers, by name
+    /// (plan D8). Filled with `Dimensions`. A sealed value whose representation is
+    /// absent here, or declared unavailable, is CCS8204 at its site.
+    Representations: Map<string, NumericRepresentation>
 
     /// Path to the Fidelity.Platform library
     PlatformLibraryPath: string option
@@ -440,112 +516,134 @@ type PlatformContext = {
 /// Type alias for documentation and gradual migration — not a separate type.
 type SubstrateContext = PlatformContext
 
-/// Platform context operations for NTU type resolution
+/// Why a seal has no representation on this platform: the two messages the site
+/// reports, CCS8203's or CCS8204's.
+[<RequireQualifiedAccess>]
+type SealFailure =
+    /// The dimension the seal names is not declared; carries CCS8203's text.
+    | UndeclaredWidth of message: string
+    /// The representation is not offered; carries CCS8204's text.
+    | NotOffered of message: string
+
+/// Platform context operations for NTU type resolution. Every width read goes
+/// through `tryWidth`: the declaration is the one source, and the `Error` case
+/// carries the text of CCS8203 for the site that needed the width to report
+/// (plan L-13, D8). There is no default context and no platform-word fallback.
 module PlatformContext =
-    /// Resolve an NTUWidth to concrete bits using the platform dimensions.
-    let resolveWidth (ctx: PlatformContext) (width: NTUWidth) : int =
+    /// The message of CCS8203: the description declares no such dimension.
+    let undeclaredWidthMessage (ctx: PlatformContext) (name: string) : string =
+        sprintf "The platform description of '%s' declares no width dimension '%s'" ctx.PlatformId name
+
+    /// The message of CCS8204: the description does not offer the representation.
+    let unofferedRepresentationMessage (ctx: PlatformContext) (name: string) : string =
+        sprintf "The platform description of '%s' does not offer the representation '%s'" ctx.PlatformId name
+
+    /// The declared width of the named dimension, in bits; `Error` is CCS8203's text.
+    let tryWidth (ctx: PlatformContext) (name: string) : Result<int, string> =
+        match Map.tryFind name ctx.Dimensions with
+        | Some bits -> Ok bits
+        | None -> Error (undeclaredWidthMessage ctx name)
+
+    /// Resolve an NTUWidth to bits: a fixed width is its own, a resolved one is read
+    /// from the declaration under the dimension's declared name.
+    let resolveWidth (ctx: PlatformContext) (width: NTUWidth) : Result<int, string> =
         match width with
-        | NTUWidth.Fixed bits -> bits
-        | NTUWidth.Resolved dim -> ctx.Dimensions.[dim]
+        | NTUWidth.Fixed bits -> Ok bits
+        | NTUWidth.Resolved dim -> tryWidth ctx (WidthDimension.name dim)
 
-    /// Convenience: pointer size in bytes for this platform
-    let pointerSize (ctx: PlatformContext) : int =
-        ctx.Dimensions.[WidthDimension.Pointer] / 8
+    /// The representation the description offers under this name: declared, and
+    /// native or emulated. `Error` is CCS8204's text.
+    let tryRepresentation (ctx: PlatformContext) (name: string) : Result<NumericRepresentation, string> =
+        match Map.tryFind name ctx.Representations with
+        | Some r when NumericRepresentation.isOffered r -> Ok r
+        | _ -> Error (unofferedRepresentationMessage ctx name)
 
-    /// Convenience: word size in bits for this platform
-    let wordSize (ctx: PlatformContext) : int =
-        ctx.Dimensions.[WidthDimension.Register]
+    /// The representation a seal resolves to on this platform. A named seal is
+    /// looked up by its name. One named through a dimension (`int`, `nativeint`) is
+    /// the offered representation of that family at the dimension's declared width,
+    /// whatever the description calls it: no name is synthesised, so a description
+    /// is free in how it names its representations.
+    let tryRepresentationOfSeal (ctx: PlatformContext) (seal: SealRepresentation) : Result<NumericRepresentation, SealFailure> =
+        match seal with
+        | SealRepresentation.Named name ->
+            tryRepresentation ctx name |> Result.mapError SealFailure.NotOffered
+        | SealRepresentation.OfDimension (family, dim) ->
+            match tryWidth ctx (WidthDimension.name dim) with
+            | Error message -> Error (SealFailure.UndeclaredWidth message)
+            | Ok bits ->
+                let offered =
+                    ctx.Representations
+                    |> Map.toList
+                    |> List.tryPick (fun (_, r) ->
+                        if r.Family = family && r.Bits = bits && NumericRepresentation.isOffered r then Some r else None)
+                match offered with
+                | Some r -> Ok r
+                | None ->
+                    let wanted = sprintf "%s at the declared %s width of %d bits" family (WidthDimension.name dim) bits
+                    Error (SealFailure.NotOffered (unofferedRepresentationMessage ctx wanted))
 
-    /// Default platform context for x86_64 Linux (most common development target)
-    let defaultLinux_x86_64 = {
-        PlatformId = "Linux_x86_64"
-        Dimensions = Map.ofList [
-            (WidthDimension.Pointer, 64)
-            (WidthDimension.Register, 64)
-        ]
-        PointerAlign = 8
-        PlatformLibraryPath = None
-        Predicates = Map.ofList [
-            (PlatformPredicate.FitsU32, true)
-            (PlatformPredicate.FitsU64, true)
-            (PlatformPredicate.HasAtomics64, true)
-            (PlatformPredicate.HasUnalignedAccess, true)
-            (PlatformPredicate.HasHardwareFloat, true)
-        ]
-        FreestandingStartup = None  // Set when building freestanding binaries
-        SubstrateKind = None  // None = CPU (backward compat)
-        RuntimeModel = None  // None = inferred from DeploymentMode (backward compat)
-        AvailableMemorySpaces = []  // Empty = all (backward compat)
-        DefaultMemorySpace = None  // None = substrate default
-        ClockFrequencyMhz = None  // None = no timing analysis
-        NsPerWeightUnit = None  // None = use default threshold
-    }
+    /// Pointer size in bytes, from the declared Pointer width.
+    let pointerSize (ctx: PlatformContext) : Result<int, string> =
+        tryWidth ctx (WidthDimension.name WidthDimension.Pointer) |> Result.map (fun bits -> bits / 8)
 
-    /// Create a platform context from a platform library path
-    let fromPlatformPath (path: string) : PlatformContext =
-        // Extract platform ID from path (e.g., "Linux_x86_64" from ".../Fidelity.Platform/Linux_x86_64")
-        let platformId =
-            let parts = path.Replace("\\", "/").Split('/')
-            parts |> Array.tryLast |> Option.defaultValue "Unknown"
-
-        // Default to x86_64 assumptions, will be refined by quotation evaluation
-        { defaultLinux_x86_64 with
-            PlatformId = platformId
-            PlatformLibraryPath = Some path }
+    /// Word size in bits, from the declared Register width.
+    let wordSize (ctx: PlatformContext) : Result<int, string> =
+        tryWidth ctx (WidthDimension.name WidthDimension.Register)
 
     /// Resolve the byte size for an NTU kind on this platform
-    let resolveSize (ctx: PlatformContext) (kind: NTUKind) : int =
+    let resolveSize (ctx: PlatformContext) (kind: NTUKind) : Result<int, string> =
         match kind with
         // Parameterized numeric types — resolve width dimension
         | NTUKind.NTUint w | NTUKind.NTUuint w | NTUKind.NTUfloat w
         | NTUKind.NTUposit (w, _) ->
-            resolveWidth ctx w / 8
+            resolveWidth ctx w |> Result.map (fun bits -> bits / 8)
         // Pointer types — pointer-sized
         | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff ->
             pointerSize ctx
         // Special types
-        | NTUKind.NTUstring -> 16  // Fat pointer: ptr + length
-        | NTUKind.NTUbool -> 1
-        | NTUKind.NTUchar -> 4  // UTF-32
-        | NTUKind.NTUunit -> 0
-        | NTUKind.NTUdecimal -> 16
+        | NTUKind.NTUstring -> Ok 16  // Fat pointer: ptr + length
+        | NTUKind.NTUbool -> Ok 1
+        | NTUKind.NTUchar -> Ok 4  // UTF-32
+        | NTUKind.NTUunit -> Ok 0
+        | NTUKind.NTUdecimal -> Ok 16
         // Temporal and identity types
-        | NTUKind.NTUuuid -> 16  // 128-bit UUID
-        | NTUKind.NTUdatetime -> 8  // 64-bit ticks
-        | NTUKind.NTUtimespan -> 8  // 64-bit duration
-        | NTUKind.NTUlazy -> -1  // Size depends on element type (PRD-14)
-        | NTUKind.NTUseq -> -1  // Size depends on element type (PRD-15)
-        | NTUKind.NTUarray -> 16  // Fat pointer: ptr + length (C-04)
+        | NTUKind.NTUuuid -> Ok 16  // 128-bit UUID
+        | NTUKind.NTUdatetime -> Ok 8  // 64-bit ticks
+        | NTUKind.NTUtimespan -> Ok 8  // 64-bit duration
+        | NTUKind.NTUlazy -> Ok -1  // Size depends on element type (PRD-14)
+        | NTUKind.NTUseq -> Ok -1  // Size depends on element type (PRD-15)
+        | NTUKind.NTUarray -> Ok 16  // Fat pointer: ptr + length (C-04)
         | NTUKind.NTUlist -> pointerSize ctx  // Pointer to cons cell (PRD-13a)
         | NTUKind.NTUmap -> pointerSize ctx  // Pointer to tree root (PRD-13a)
         | NTUKind.NTUset -> pointerSize ctx  // Pointer to tree root (PRD-13a)
 
-    /// Resolve the alignment for an NTU kind on this platform
-    let resolveAlign (ctx: PlatformContext) (kind: NTUKind) : int =
+    /// Resolve the alignment for an NTU kind on this platform: a pointer aligns to
+    /// the declared Pointer width, a numeric to its own.
+    let resolveAlign (ctx: PlatformContext) (kind: NTUKind) : Result<int, string> =
         match kind with
         // Parameterized numeric types — align to width
         | NTUKind.NTUint w | NTUKind.NTUuint w | NTUKind.NTUfloat w
         | NTUKind.NTUposit (w, _) ->
-            resolveWidth ctx w / 8
+            resolveWidth ctx w |> Result.map (fun bits -> bits / 8)
         // Pointer types — pointer alignment
         | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff ->
-            ctx.PointerAlign
+            pointerSize ctx
         // Special types
-        | NTUKind.NTUstring -> 8  // Pointer alignment for fat pointer
-        | NTUKind.NTUbool -> 1
-        | NTUKind.NTUchar -> 4
-        | NTUKind.NTUunit -> 1
-        | NTUKind.NTUdecimal -> 8
+        | NTUKind.NTUstring -> Ok 8  // Pointer alignment for fat pointer
+        | NTUKind.NTUbool -> Ok 1
+        | NTUKind.NTUchar -> Ok 4
+        | NTUKind.NTUunit -> Ok 1
+        | NTUKind.NTUdecimal -> Ok 8
         // Temporal and identity types
-        | NTUKind.NTUuuid -> 8  // 64-bit aligned (two i64s)
-        | NTUKind.NTUdatetime -> 8  // 64-bit aligned
-        | NTUKind.NTUtimespan -> 8  // 64-bit aligned
-        | NTUKind.NTUlazy -> 8  // Pointer-aligned (PRD-14)
-        | NTUKind.NTUseq -> 8  // Pointer-aligned (PRD-15)
-        | NTUKind.NTUarray -> 8  // Pointer-aligned (C-04)
-        | NTUKind.NTUlist -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
-        | NTUKind.NTUmap -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
-        | NTUKind.NTUset -> ctx.PointerAlign  // Pointer-aligned (PRD-13a)
+        | NTUKind.NTUuuid -> Ok 8  // 64-bit aligned (two i64s)
+        | NTUKind.NTUdatetime -> Ok 8  // 64-bit aligned
+        | NTUKind.NTUtimespan -> Ok 8  // 64-bit aligned
+        | NTUKind.NTUlazy -> Ok 8  // Pointer-aligned (PRD-14)
+        | NTUKind.NTUseq -> Ok 8  // Pointer-aligned (PRD-15)
+        | NTUKind.NTUarray -> Ok 8  // Pointer-aligned (C-04)
+        | NTUKind.NTUlist -> pointerSize ctx  // Pointer-aligned (PRD-13a)
+        | NTUKind.NTUmap -> pointerSize ctx  // Pointer-aligned (PRD-13a)
+        | NTUKind.NTUset -> pointerSize ctx  // Pointer-aligned (PRD-13a)
 
     /// Get the substrate kind (defaults to CPU for backward compatibility)
     let substrateKind (ctx: PlatformContext) : SubstrateKind =
@@ -1520,12 +1618,16 @@ module Types =
     let private numType = numericType
 
     /// The seal spellings (design e.1), read in one place (e.2, sequence CS-5): every name a
-    /// source may write for a numeric carrier, with the carrier it names and the conversion
-    /// operation the intrinsic of that name performs. Aliases (`sbyte`, `byte`, `double`,
+    /// source may write for a numeric carrier, with the carrier it names, the conversion
+    /// operation the intrinsic of that name performs, and the representation the spelling
+    /// seals (plan D8, CS-7b): the name the platform description must declare, or the width
+    /// dimension through which that name is found (`int` and `nativeint` are the signed
+    /// integer of the Register and Pointer widths). Aliases (`sbyte`, `byte`, `double`,
     /// `float64`, `single`) share their carrier's row. The type-position resolver, the conversion
-    /// intrinsics, the SRTP conversion set and the parse/format dispatch all read this list;
-    /// no second name-to-carrier table exists. The posit seals take their spelling with the seal
-    /// form of step 7 (`Posit32`, numeric-selection.md §5) and are not written here.
+    /// intrinsics, the SRTP conversion set, the parse/format dispatch and the saturation
+    /// representation check all read this list; no second name-to-carrier table exists. The
+    /// posit seals take their spelling with the seal form of step 7 (`Posit32`,
+    /// numeric-selection.md §5) and are not written here.
     ///
     /// Interim shape (plan D7): the carrier column points at a per-width constructor because width
     /// still lives in the type until step 7. In the design's end state there is one integer carrier
@@ -1533,34 +1635,42 @@ module Types =
     /// this column becomes `Int | Real` beside a seal column (`FixedInt(8, signed)`, `Ieee 64`,
     /// `Posit(32, 2)`; design note e.1) and the per-width constructors are deleted. `float64` is
     /// the explicit IEEE-64 seal (numeric-selection.md readouts); today it aliases `float`.
-    let numericSpellings : (string * TypeConRef * string) list =
-        [ "int", intTyCon, "toInt"
-          "int8", int8TyCon, "toSByte"
-          "sbyte", int8TyCon, "toSByte"
-          "int16", int16TyCon, "toInt16"
-          "int32", int32TyCon, "toInt32"
-          "int64", int64TyCon, "toInt64"
-          "nativeint", nintTyCon, "toNativeInt"
-          "uint", uintTyCon, "toUInt"
-          "uint8", uint8TyCon, "toByte"
-          "byte", uint8TyCon, "toByte"
-          "uint16", uint16TyCon, "toUInt16"
-          "uint32", uint32TyCon, "toUInt32"
-          "uint64", uint64TyCon, "toUInt64"
-          "unativeint", unintTyCon, "toUNativeInt"
-          "float", floatTyCon, "toFloat"
-          "double", floatTyCon, "toFloat"
-          "float64", floatTyCon, "toFloat"
-          "float32", float32TyCon, "toFloat32"
-          "single", float32TyCon, "toFloat32" ]
+    let numericSpellings : (string * TypeConRef * string * SealRepresentation) list =
+        [ "int", intTyCon, "toInt", SealRepresentation.OfDimension ("int", WidthDimension.Register)
+          "int8", int8TyCon, "toSByte", SealRepresentation.Named "int8"
+          "sbyte", int8TyCon, "toSByte", SealRepresentation.Named "int8"
+          "int16", int16TyCon, "toInt16", SealRepresentation.Named "int16"
+          "int32", int32TyCon, "toInt32", SealRepresentation.Named "int32"
+          "int64", int64TyCon, "toInt64", SealRepresentation.Named "int64"
+          "nativeint", nintTyCon, "toNativeInt", SealRepresentation.OfDimension ("int", WidthDimension.Pointer)
+          "uint", uintTyCon, "toUInt", SealRepresentation.OfDimension ("uint", WidthDimension.Register)
+          "uint8", uint8TyCon, "toByte", SealRepresentation.Named "uint8"
+          "byte", uint8TyCon, "toByte", SealRepresentation.Named "uint8"
+          "uint16", uint16TyCon, "toUInt16", SealRepresentation.Named "uint16"
+          "uint32", uint32TyCon, "toUInt32", SealRepresentation.Named "uint32"
+          "uint64", uint64TyCon, "toUInt64", SealRepresentation.Named "uint64"
+          "unativeint", unintTyCon, "toUNativeInt", SealRepresentation.OfDimension ("uint", WidthDimension.Pointer)
+          "float", floatTyCon, "toFloat", SealRepresentation.Named "float64"
+          "double", floatTyCon, "toFloat", SealRepresentation.Named "float64"
+          "float64", floatTyCon, "toFloat", SealRepresentation.Named "float64"
+          "float32", float32TyCon, "toFloat32", SealRepresentation.Named "float32"
+          "single", float32TyCon, "toFloat32", SealRepresentation.Named "float32" ]
 
     /// The numeric carrier a spelling names, if any.
     let tryNumericTyConOfName (name: string) : TypeConRef option =
-        numericSpellings |> List.tryPick (fun (spelling, tc, _) -> if spelling = name then Some tc else None)
+        numericSpellings |> List.tryPick (fun (spelling, tc, _, _) -> if spelling = name then Some tc else None)
 
     /// The conversion operation and target carrier the conversion intrinsic of a spelling performs.
     let tryConversionOfName (name: string) : (string * TypeConRef) option =
-        numericSpellings |> List.tryPick (fun (spelling, tc, op) -> if spelling = name then Some (op, tc) else None)
+        numericSpellings |> List.tryPick (fun (spelling, tc, op, _) -> if spelling = name then Some (op, tc) else None)
+
+    /// The representation a numeric carrier seals: its spelling row's, or, for a carrier the
+    /// table does not spell (a posit carrier before step 7's seal form), the carrier's own
+    /// name, so the description is asked for it by that name rather than passed over.
+    let representationOfCarrier (carrier: TypeConRef) : SealRepresentation =
+        numericSpellings
+        |> List.tryPick (fun (_, tc, _, representation) -> if tc.Name = carrier.Name then Some representation else None)
+        |> Option.defaultValue (SealRepresentation.Named carrier.Name)
 
     // Standard type values
     let intType = numType intTyCon

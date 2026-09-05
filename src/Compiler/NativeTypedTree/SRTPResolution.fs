@@ -213,7 +213,7 @@ let private conversionFunctions =
     // The numeric spellings are the one table (sequence CS-5); the three non-numeric conversion
     // targets are named here.
     Set.ofList (
-        (Types.numericSpellings |> List.map (fun (spelling, _, _) -> spelling))
+        (Types.numericSpellings |> List.map (fun (spelling, _, _, _) -> spelling))
         @ [ "decimal"; "char"; "string" ])
 
 /// Check if a name is a conversion function

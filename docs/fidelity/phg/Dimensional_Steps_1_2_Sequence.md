@@ -118,6 +118,8 @@ Consequence: h.2, h.5, h.6, h.7, h.8, h.9, the wiring half of h.3/h.4 and the me
 
 **CS-7 status (2026-09-04), first half built by hand, gates green:** no FS code survives in the compiler service (the drift gate now fails on one); RoundTrip hash unchanged; `vet.sh --through 2` 10 of 10 with every verdict identical to CS-6 and every printed code now CCS; the parse-error path prints the inherited number under the CCS prefix. Second half, D8, is CS-7b: the platform description declares its width dimensions by name and its representations with capability, dynamic range and boundary semantics; `buildPlatformContext` reads the declaration and never falls back (plan L-13); a seal spelling resolves against the declaration.
 
+**CS-7b status (2026-09-04): built in two gated slices by one implementer, reviewed, one blocker ruled and two must-fixes applied by hand, gates green** (build; BAREWire 309 of 309; RoundTrip transcript identical, the hash moved by the BAREWire slice alone because RoundTrip calls the extended `Check.run`, `e10c2ce1…` the reference from here pending the owner's word; harness identical to CS-7; HelloArty unchanged; HelloProof 23, PASS; drift gate clean). The declaration is read from a quotation or a plain record, only from the binding's own sources; its own defects are CCS8206–CCS8208 at the declaration, before any site; a dimension-named seal resolves by family and width. Carried forward: step 7 retires Alex's architecture table (L-10) with the per-width carriers; the STM32F7, GPU and NPU cores and the RA6M5 float representations are declared when their source packs are staged.
+
 ### CS-8 — The saturation residual check
 
 - **Anchors:** (0.4), (b.4) last paragraph; (h) 13; I2.

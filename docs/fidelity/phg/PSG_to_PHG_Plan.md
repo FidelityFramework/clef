@@ -45,7 +45,7 @@ $V$ is the node set. $F$ is a set of hyperedges $f = (S_f, t_f, \lambda_f)$ with
 
 ## I.2 The four integrity invariants
 
-These are the load-bearing constraint, not quality goals. The graph's *construction* must be the proof structure the program is witnessed from.
+These are the governing constraints, not quality goals. The graph's *construction* must be the proof structure the program is witnessed from.
 
 **I1 — Enumerated source sets.** Every $S_f$ is finite and fixed at elaboration. This is what keeps obligations quantifier-free. DTS/DMM §3.2.1 and `Closure_Nanopass_Architecture.md:59-74` both name the case that matters: *"The flat closure is … the **finiteness lemma** of the memory discipline."* Because the capture set is enumerated, a closure's reachability frontier is exactly its field list, its extent a literal, its release a single site. A linked environment forfeits this — reachability becomes unbounded, obligations leave QF, and discharge becomes interactive proof. **Any hyperedge whose source set cannot be enumerated at elaboration is rejected by construction.**
 
@@ -114,7 +114,7 @@ Measured, not inferred.
 
 **Closures are half-settled.** Captures *are* computed in CCS (`Applications.computeCaptures:561`, ordering fixed alphabetically by `Set.toList`), per `Closure_Nanopass_Architecture.md:23`: "Capture analysis is NOT a Composer nanopass." But `ClosureLayout` is built in **Composer** (`SSAAssignment.fs:202-320`), and `LambdaWitness.fs` then:
 
-- computes byte offsets itself (`:548`, `:632`), with two `// Approximate` comments on load-bearing prefix offsets (`:324`, `:327`)
+- computes byte offsets itself (`:548`, `:632`), with two `// Approximate` comments on material prefix offsets (`:324`, `:327`)
 - re-derives the extraction SSA schedule (`:328-362`), duplicating `captureExtractionWorkSSACount`
 - mints SSAs at emission: `V (10000 + tempIdx)` (`:617`)
 - snapshots the accumulator because it distrusts the coeffect's SSAs (`:295-307`)

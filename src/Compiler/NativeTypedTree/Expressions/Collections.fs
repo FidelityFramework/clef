@@ -99,9 +99,10 @@ let checkArrayOrListComputed
     (range: SourceRange)
     : SemanticNode =
 
-    // A literal `[| e1; e2; e3 |]` arrives as one Sequential chain (isTrueSeq); its elements
-    // are the chain's items, checked and typed individually, exactly like `checkArrayOrList`.
-    // Comprehension bodies (for/while/ranges/yield) keep the single computed body.
+    // A one-line literal `[| e1; e2; e3 |]` or `[ e1; e2; e3 ]` arrives as one Sequential
+    // chain (isTrueSeq); its elements are the chain's items, checked and typed individually,
+    // exactly like `checkArrayOrList` and exactly as the multi-line form of the same literal
+    // is. Comprehension bodies (for/while/ranges/yield) keep the single computed body.
     let rec flattenElements (e: SynExpr) : SynExpr list =
         match e with
         | SynExpr.Sequential(_, true, e1, e2, _, _) -> e1 :: flattenElements e2
@@ -111,8 +112,8 @@ let checkArrayOrListComputed
         | SynExpr.ForEach _ | SynExpr.For _ | SynExpr.While _
         | SynExpr.IndexRange _ | SynExpr.YieldOrReturn _ | SynExpr.YieldOrReturnFrom _ -> true
         | _ -> false
-    if isArray && not isComprehension then
-        checkArrayOrList checkExpr env builder true (flattenElements compExpr) range
+    if not isComprehension then
+        checkArrayOrList checkExpr env builder isArray (flattenElements compExpr) range
     else
     let compNode = checkExpr env builder compExpr
     let elemType = freshTypeVar range
