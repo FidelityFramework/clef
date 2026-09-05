@@ -131,6 +131,7 @@ type NodeBuilder() =
           ModuleClassifications = SemanticGraph.mkModuleClassifications nodes
           SeqSaturation = SemanticGraph.mkSeqSaturation nodes
           FieldRanges = lazy Map.empty
+          ElementRanges = lazy Map.empty
           Edges = [] }
 
     /// Build the semantic graph with platform context
@@ -143,6 +144,7 @@ type NodeBuilder() =
           ModuleClassifications = SemanticGraph.mkModuleClassifications nodes
           SeqSaturation = SemanticGraph.mkSeqSaturation nodes
           FieldRanges = lazy Map.empty
+          ElementRanges = lazy Map.empty
           Edges = [] }
 
     /// Reset the builder

@@ -243,6 +243,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         SeqSaturation = SemanticGraph.mkSeqSaturation nodesWithParents
         // Fold-in runs before the range pass; the pass fills this on the final graph.
         FieldRanges = lazy Map.empty
+        ElementRanges = lazy Map.empty
         // F survives fold-in with its references repointed at replacements.
         Edges =
             graph.Edges |> List.map (fun e ->

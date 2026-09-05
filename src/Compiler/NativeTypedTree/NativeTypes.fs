@@ -127,40 +127,37 @@ type NTUWidth =
 ///   `Unbounded`         no bound either way, unobservable (§1.3, CCS8011);
 ///   `Empty`             the join of no values at all, the least element: a record field no
 ///                       reachable expression constructs. Its width is the minimum, one bit.
+/// The endpoints are exact integers (CS-11): arithmetic on analysed ranges never overflows (§0.1
+/// item 6), so a product that leaves 64 bits is a bounded range the coverage check can name
+/// (CCS8012, §4.2) rather than an unobservable one, and a declared representation's range (a
+/// 64-bit unsigned unit's `[0, 2^64 - 1]`) is representable as declared. A half-line arises only
+/// from the widening, never from arithmetic.
 /// `Range`, `Width` and `Empty` are not spellings of the language (§0.1 items 1, 5): nothing in a
 /// program names a width, and no value of this type is ever written by a program.
 [<RequireQualifiedAccess>]
 type ValueRange =
     | Empty
-    | Bounded of lo: int64 * hi: int64
-    | Above of lo: int64
-    | Below of hi: int64
+    | Bounded of lo: bigint * hi: bigint
+    | Above of lo: bigint
+    | Below of hi: bigint
     | Unbounded
 
 /// Interval arithmetic and the lattice operations the range pass uses, and the §3 width formula.
 /// Every arithmetic rule is over-approximating: the result contains every value the operation can
-/// produce from values in the operands. An endpoint that would leave int64 becomes the infinity in
-/// that direction (a half-line), never a wrapped number: the computation is exact in `bigint` and
-/// only the reading back saturates.
+/// produce from values in the operands. The computation is exact; nothing wraps and nothing
+/// saturates.
 [<RequireQualifiedAccess>]
 module ValueRange =
 
-    /// An endpoint of the working interval: finite, or the infinity a widening or a saturation
-    /// leaves. Ordered NegInf < Finite < PosInf by the case order.
+    /// An endpoint of the working interval: finite, or the infinity a widening leaves.
+    /// Ordered NegInf < Finite < PosInf by the case order.
     [<RequireQualifiedAccess>]
     type Endpoint =
         | NegInf
-        | Finite of int64
+        | Finite of bigint
         | PosInf
 
-    let private int64Min = bigint System.Int64.MinValue
-    let private int64Max = bigint System.Int64.MaxValue
-
-    /// Read an exact value back into an endpoint, saturating to the infinity it passed.
-    let private ofBig (v: bigint) : Endpoint =
-        if v > int64Max then Endpoint.PosInf
-        elif v < int64Min then Endpoint.NegInf
-        else Endpoint.Finite (int64 v)
+    let private zero = Endpoint.Finite bigint.Zero
 
     /// The endpoints of a non-empty range: `(lo, hi)` with lo in {NegInf, Finite}, hi in {Finite, PosInf}.
     let endpoints (r: ValueRange) : (Endpoint * Endpoint) option =
@@ -181,13 +178,25 @@ module ValueRange =
         | Endpoint.PosInf, _ | _, Endpoint.NegInf -> ValueRange.Empty
 
     /// The point range of one value.
-    let point (v: int64) : ValueRange = ValueRange.Bounded (v, v)
+    let point (v: bigint) : ValueRange = ValueRange.Bounded (v, v)
+
+    /// The bounded range `[lo, hi]` of two exact values (empty when inverted).
+    let bounded (lo: bigint) (hi: bigint) : ValueRange = ofEndpoints (Endpoint.Finite lo) (Endpoint.Finite hi)
 
     /// The range of a boolean, `[0, 1]` (§1.1).
-    let boolean : ValueRange = ValueRange.Bounded (0L, 1L)
+    let boolean : ValueRange = ValueRange.Bounded (bigint.Zero, bigint.One)
 
     /// The range of a `char`: a code point, `[0, 0x10FFFF]`.
-    let codePoint : ValueRange = ValueRange.Bounded (0L, 0x10FFFFL)
+    let codePoint : ValueRange = ValueRange.Bounded (bigint.Zero, bigint 0x10FFFF)
+
+    /// The two's-complement range of `bits` bits: `[-2^(bits-1), 2^(bits-1) - 1]`.
+    let twosComplement (bits: int) : ValueRange =
+        let half = bigint.Pow (bigint 2, max 0 (bits - 1))
+        ValueRange.Bounded (-half, half - bigint.One)
+
+    /// The unsigned range of `bits` bits: `[0, 2^bits - 1]`.
+    let unsignedOf (bits: int) : ValueRange =
+        ValueRange.Bounded (bigint.Zero, bigint.Pow (bigint 2, max 0 bits) - bigint.One)
 
     /// The least upper bound: the smallest interval containing both.
     let join (a: ValueRange) (b: ValueRange) : ValueRange =
@@ -214,7 +223,7 @@ module ValueRange =
     let isNonNegative (r: ValueRange) : bool =
         match r with
         | ValueRange.Empty -> true
-        | ValueRange.Bounded (lo, _) | ValueRange.Above lo -> lo >= 0L
+        | ValueRange.Bounded (lo, _) | ValueRange.Above lo -> lo.Sign >= 0
         | ValueRange.Below _ | ValueRange.Unbounded -> false
 
     /// Whether the range has a width: finite at both ends, or empty.
@@ -236,10 +245,10 @@ module ValueRange =
     let width (r: ValueRange) : int option =
         match r with
         | ValueRange.Empty -> Some 1
-        | ValueRange.Bounded (lo, hi) when lo >= 0L ->
-            Some (max 1 (ceilLog2 (bigint hi + bigint.One)))
+        | ValueRange.Bounded (lo, hi) when lo.Sign >= 0 ->
+            Some (max 1 (ceilLog2 (hi + bigint.One)))
         | ValueRange.Bounded (lo, hi) ->
-            let magnitude = max (bigint.Abs (bigint lo)) (bigint hi + bigint.One)
+            let magnitude = max (bigint.Abs lo) (hi + bigint.One)
             Some (max 1 (1 + ceilLog2 magnitude))
         | ValueRange.Above _ | ValueRange.Below _ | ValueRange.Unbounded -> None
 
@@ -247,41 +256,41 @@ module ValueRange =
     let render (r: ValueRange) : string =
         match r with
         | ValueRange.Empty -> "[]"
-        | ValueRange.Bounded (lo, hi) -> sprintf "[%d, %d]" lo hi
-        | ValueRange.Above lo -> sprintf "[%d, +inf)" lo
-        | ValueRange.Below hi -> sprintf "(-inf, %d]" hi
+        | ValueRange.Bounded (lo, hi) -> sprintf "[%s, %s]" (lo.ToString()) (hi.ToString())
+        | ValueRange.Above lo -> sprintf "[%s, +inf)" (lo.ToString())
+        | ValueRange.Below hi -> sprintf "(-inf, %s]" (hi.ToString())
         | ValueRange.Unbounded -> "(-inf, +inf)"
 
     //---------------------------------------------------------------------
     // Interval arithmetic
     //---------------------------------------------------------------------
 
-    /// Endpoint sum: an infinity absorbs; a finite sum is exact then read back saturating.
+    /// Endpoint sum: an infinity absorbs; a finite sum is exact.
     let private addE (a: Endpoint) (b: Endpoint) : Endpoint =
         match a, b with
-        | Endpoint.Finite x, Endpoint.Finite y -> ofBig (bigint x + bigint y)
+        | Endpoint.Finite x, Endpoint.Finite y -> Endpoint.Finite (x + y)
         | Endpoint.NegInf, _ | _, Endpoint.NegInf -> Endpoint.NegInf
         | Endpoint.PosInf, _ | _, Endpoint.PosInf -> Endpoint.PosInf
 
     let private negE (a: Endpoint) : Endpoint =
         match a with
-        | Endpoint.Finite x -> ofBig (-(bigint x))
+        | Endpoint.Finite x -> Endpoint.Finite (-x)
         | Endpoint.NegInf -> Endpoint.PosInf
         | Endpoint.PosInf -> Endpoint.NegInf
 
     let private signE (a: Endpoint) : int =
         match a with
-        | Endpoint.Finite x -> sign x
+        | Endpoint.Finite x -> x.Sign
         | Endpoint.NegInf -> -1
         | Endpoint.PosInf -> 1
 
     /// Endpoint product with the interval-arithmetic reading of 0 * infinity = 0.
     let private mulE (a: Endpoint) (b: Endpoint) : Endpoint =
         match a, b with
-        | Endpoint.Finite x, Endpoint.Finite y -> ofBig (bigint x * bigint y)
+        | Endpoint.Finite x, Endpoint.Finite y -> Endpoint.Finite (x * y)
         | _ ->
             match signE a * signE b with
-            | 0 -> Endpoint.Finite 0L
+            | 0 -> zero
             | s when s > 0 -> Endpoint.PosInf
             | _ -> Endpoint.NegInf
 
@@ -289,8 +298,8 @@ module ValueRange =
     /// over a finite keeps its sign; two infinities have no quotient (None).
     let private divE (a: Endpoint) (b: Endpoint) : Endpoint option =
         match a, b with
-        | Endpoint.Finite x, Endpoint.Finite y -> Some (ofBig (bigint x / bigint y))   // y <> 0 by the caller
-        | Endpoint.Finite _, _ -> Some (Endpoint.Finite 0L)
+        | Endpoint.Finite x, Endpoint.Finite y -> Some (Endpoint.Finite (bigint.Divide (x, y)))   // y <> 0 by the caller
+        | Endpoint.Finite _, _ -> Some zero
         | _, Endpoint.Finite _ -> Some (if signE a * signE b > 0 then Endpoint.PosInf else Endpoint.NegInf)
         | _ -> None
 
@@ -324,7 +333,7 @@ module ValueRange =
     /// the four corner quotients.
     let div : ValueRange -> ValueRange -> ValueRange =
         lift2 (fun (alo, ahi) (blo, bhi) ->
-            let containsZero = blo <= Endpoint.Finite 0L && Endpoint.Finite 0L <= bhi
+            let containsZero = blo <= zero && zero <= bhi
             if containsZero then ValueRange.Unbounded
             else
                 let corners = [ divE alo blo; divE alo bhi; divE ahi blo; divE ahi bhi ]
@@ -338,44 +347,47 @@ module ValueRange =
     /// a divisor whose range contains zero has no image.
     let rem : ValueRange -> ValueRange -> ValueRange =
         lift2 (fun (xlo, xhi) (klo, khi) ->
-            let containsZero = klo <= Endpoint.Finite 0L && Endpoint.Finite 0L <= khi
+            let containsZero = klo <= zero && zero <= khi
             if containsZero then ValueRange.Unbounded
             else
                 // the largest |k| less one: the bound on |x % k|
                 let magnitude = max (negE klo) khi   // |k| <= max(-klo, khi); one of them is the magnitude
-                let bound = addE magnitude (Endpoint.Finite -1L)
+                let bound = addE magnitude (Endpoint.Finite bigint.MinusOne)
                 let clip (e: Endpoint) = min bound e
-                if xlo >= Endpoint.Finite 0L then ofEndpoints (Endpoint.Finite 0L) (clip xhi)
-                elif xhi <= Endpoint.Finite 0L then ofEndpoints (negE (clip (negE xlo))) (Endpoint.Finite 0L)
+                if xlo >= zero then ofEndpoints zero (clip xhi)
+                elif xhi <= zero then ofEndpoints (negE (clip (negE xlo))) zero
                 else ofEndpoints (negE (clip (negE xlo))) (clip xhi))
 
-    /// 2^n as an endpoint for n in [0, 63]; 64 and above leave int64.
-    let private pow2 (n: int64) : Endpoint = if n >= 63L then Endpoint.PosInf else Endpoint.Finite (1L <<< int n)
+    /// The largest shift amount the arithmetic follows exactly. A shift past it is a value no
+    /// declared representation holds and no program means (a `<<< 5000`), read as the half-line
+    /// by the sign of the operand rather than computed.
+    let private shiftLimit = bigint 4096
 
     /// `x <<< n` as `x * 2^n` for a non-negative bounded amount; any other amount has no image.
     let shl (x: ValueRange) (n: ValueRange) : ValueRange =
         match n with
-        | ValueRange.Bounded (nlo, _) when nlo >= 63L ->
-            // Every value leaves int64: the half-line by the sign of x, never an empty range
-            // (an empty range is observable and one bit wide, which would be a silent wrong width).
-            if x = ValueRange.Empty then ValueRange.Empty
-            elif isNonNegative x then ValueRange.Above 0L
-            else ValueRange.Unbounded
-        | ValueRange.Bounded (nlo, nhi) when nlo >= 0L ->
+        | ValueRange.Bounded (nlo, nhi) when nlo.Sign >= 0 && nhi <= shiftLimit ->
+            let pow2 (k: bigint) = Endpoint.Finite (bigint.Pow (bigint 2, int k))
             mul x (ofEndpoints (pow2 nlo) (pow2 nhi))
+        | ValueRange.Bounded (nlo, _) when nlo.Sign >= 0 ->
+            // Past the limit: the half-line by the sign of x, never an empty range (an empty
+            // range is observable and one bit wide, which would be a silent wrong width).
+            if x = ValueRange.Empty then ValueRange.Empty
+            elif isNonNegative x then ValueRange.Above bigint.Zero
+            else ValueRange.Unbounded
         | ValueRange.Empty -> ValueRange.Empty
         | _ -> if x = ValueRange.Empty then ValueRange.Empty else ValueRange.Unbounded
 
     /// `x >>> n` (arithmetic on a signed value) for a non-negative bounded amount: the extreme
     /// shifts of each endpoint; an infinite endpoint stays infinite.
     let shr (x: ValueRange) (n: ValueRange) : ValueRange =
-        let shiftE (e: Endpoint) (k: int64) : Endpoint =
+        let shiftE (e: Endpoint) (k: bigint) : Endpoint =
             match e with
-            | Endpoint.Finite v -> Endpoint.Finite (v >>> int (min k 63L))
+            | Endpoint.Finite v -> Endpoint.Finite (v >>> int (min k shiftLimit))
             | _ -> e
         match endpoints x, n with
         | None, _ -> ValueRange.Empty
-        | Some (lo, hi), ValueRange.Bounded (nlo, nhi) when nlo >= 0L ->
+        | Some (lo, hi), ValueRange.Bounded (nlo, nhi) when nlo.Sign >= 0 ->
             ofEndpoints (min (shiftE lo nlo) (shiftE lo nhi)) (max (shiftE hi nlo) (shiftE hi nhi))
         | Some _, ValueRange.Empty -> ValueRange.Empty
         | Some _, _ -> ValueRange.Unbounded
@@ -383,7 +395,7 @@ module ValueRange =
     /// The smallest 2^k - 1 at or above every value of a non-negative range: the bound of `|||` and `^^^`.
     let private maskAbove (hi: Endpoint) : Endpoint =
         match hi with
-        | Endpoint.Finite v -> Endpoint.Finite ((1L <<< ceilLog2 (bigint v + bigint.One)) - 1L)
+        | Endpoint.Finite v -> Endpoint.Finite (bigint.Pow (bigint 2, ceilLog2 (v + bigint.One)) - bigint.One)
         | _ -> Endpoint.PosInf
 
     /// `x &&& m`: with a non-negative mask the result is `[0, m.hi]` for any `x` (the mask clears
@@ -391,12 +403,12 @@ module ValueRange =
     let band (x: ValueRange) (m: ValueRange) : ValueRange =
         match endpoints x, endpoints m with
         | None, _ | _, None -> ValueRange.Empty
-        | Some (xlo, xhi), Some (mlo, mhi) when mlo >= Endpoint.Finite 0L ->
-            let hi = if xlo >= Endpoint.Finite 0L then min xhi mhi else mhi
-            ofEndpoints (Endpoint.Finite 0L) hi
-        | Some (xlo, xhi), Some _ when xlo >= Endpoint.Finite 0L ->
+        | Some (xlo, xhi), Some (mlo, mhi) when mlo >= zero ->
+            let hi = if xlo >= zero then min xhi mhi else mhi
+            ofEndpoints zero hi
+        | Some (xlo, xhi), Some _ when xlo >= zero ->
             // a non-negative x masked by anything is in [0, x]
-            ofEndpoints (Endpoint.Finite 0L) xhi
+            ofEndpoints zero xhi
         | _ -> ValueRange.Unbounded
 
     /// `x ||| y` and `x ^^^ y`: for two non-negative ranges, `[0, 2^k - 1]` where `2^k` is the
@@ -404,12 +416,29 @@ module ValueRange =
     let bor (x: ValueRange) (y: ValueRange) : ValueRange =
         match endpoints x, endpoints y with
         | None, _ | _, None -> ValueRange.Empty
-        | Some (xlo, xhi), Some (ylo, yhi) when xlo >= Endpoint.Finite 0L && ylo >= Endpoint.Finite 0L ->
-            ofEndpoints (Endpoint.Finite 0L) (maskAbove (max xhi yhi))
+        | Some (xlo, xhi), Some (ylo, yhi) when xlo >= zero && ylo >= zero ->
+            ofEndpoints zero (maskAbove (max xhi yhi))
         | _ -> ValueRange.Unbounded
 
     /// `~~~x` is `-x - 1`.
-    let bnot (x: ValueRange) : ValueRange = sub (neg x) (point 1L)
+    let bnot (x: ValueRange) : ValueRange = sub (neg x) (point bigint.One)
+
+    /// The non-negative image of a range: `|x|` (§1.1: `abs x` is non-negative).
+    let abs (x: ValueRange) : ValueRange =
+        match endpoints x with
+        | None -> ValueRange.Empty
+        | Some (lo, hi) ->
+            if lo >= zero then x
+            elif hi <= zero then neg x
+            else ofEndpoints zero (max (negE lo) hi)
+
+    /// `min x y`: `[min lo, min hi]`.
+    let minOf : ValueRange -> ValueRange -> ValueRange =
+        lift2 (fun (xlo, xhi) (ylo, yhi) -> ofEndpoints (min xlo ylo) (min xhi yhi))
+
+    /// `max x y`: `[max lo, max hi]`.
+    let maxOf : ValueRange -> ValueRange -> ValueRange =
+        lift2 (fun (xlo, xhi) (ylo, yhi) -> ofEndpoints (max xlo ylo) (max xhi yhi))
 
     //---------------------------------------------------------------------
     // Widening (§1.2; numeric-selection.md §9.1: the thresholds are the declared representations'
@@ -417,7 +446,7 @@ module ValueRange =
     //---------------------------------------------------------------------
 
     /// One declared integer representation's range, a widening threshold.
-    type Threshold = { Family: string; Lo: int64; Hi: int64 }
+    type Threshold = { Family: string; Lo: bigint; Hi: bigint }
 
     /// `old` widened by `grown`: an endpoint that moved goes to the nearest threshold beyond it,
     /// and past the last threshold to its infinity; an endpoint that did not move is kept. The
@@ -430,13 +459,13 @@ module ValueRange =
     /// it, since a cycle that carries its own value forward (`if hold then x else (x + 1) % k`)
     /// keeps whatever the widening overshoots to. Per endpoint, so a counter whose ceiling is a
     /// comparison keeps its floor, and the narrowing recovers the ceiling from the comparison.
-    let widen (thresholds: Threshold list) (constants: int64 list) (old: ValueRange) (grown: ValueRange) : ValueRange =
+    let widen (thresholds: Threshold list) (constants: bigint list) (old: ValueRange) (grown: ValueRange) : ValueRange =
         match endpoints old, endpoints grown with
         | _, None -> old
         | None, _ -> grown
         | Some (olo, ohi), Some (glo, ghi) ->
             let family =
-                if glo >= Endpoint.Finite 0L && thresholds |> List.exists (fun t -> t.Family = "uint") then "uint" else "int"
+                if glo >= zero && thresholds |> List.exists (fun t -> t.Family = "uint") then "uint" else "int"
             let declared = thresholds |> List.filter (fun t -> t.Family = family)
             let hi =
                 if ghi <= ohi then ohi
@@ -445,7 +474,7 @@ module ValueRange =
                     | Endpoint.Finite g ->
                         let above =
                             (declared |> List.map (fun t -> t.Hi))
-                            @ (constants |> List.collect (fun c -> [ (if c > System.Int64.MinValue then c - 1L else c); c ]))
+                            @ (constants |> List.collect (fun c -> [ c - bigint.One; c ]))
                             |> List.filter (fun v -> v >= g)
                         if List.isEmpty above then Endpoint.PosInf else Endpoint.Finite (List.min above)
                     | _ -> Endpoint.PosInf
@@ -456,7 +485,7 @@ module ValueRange =
                     | Endpoint.Finite g ->
                         let below =
                             (declared |> List.map (fun t -> t.Lo))
-                            @ (constants |> List.collect (fun c -> [ c; (if c < System.Int64.MaxValue then c + 1L else c) ]))
+                            @ (constants |> List.collect (fun c -> [ c; c + bigint.One ]))
                             |> List.filter (fun v -> v <= g)
                         if List.isEmpty below then Endpoint.NegInf else Endpoint.Finite (List.max below)
                     | _ -> Endpoint.NegInf
