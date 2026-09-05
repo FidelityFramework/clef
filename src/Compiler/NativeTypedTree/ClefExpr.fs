@@ -285,7 +285,7 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] ClefExpr =
         args: ClefExpr list *
         ty: NativeType
 
-    /// Compiler intrinsic function (e.g., NativePtr.toNativeInt)
+    /// Compiler intrinsic function (e.g., Sys.write)
     | Intrinsic of
         info: IntrinsicInfo *
         args: ClefExpr list *

@@ -352,6 +352,20 @@ architecture table (`platformWordWidth arch`, checked at `MLIRGeneration.generat
 retired here). The FPGA leg keeps `IntervalAnalysis.fs` only as long as CS-10 has not landed; then
 it reads the node.
 
+**SSA is a nanopass derivation (the owner, 2026-09-05: "No minting. No push style application.
+This is nanopass." "NO POOLS." "NO POOL MANAGEMENT." "THIS IS ARCHITECTURE.").** `SSAAssignment`
+runs once over the finished graph, after every range and selection is settled, and derives each
+node's SSAs exactly from its structure, as its own header states: "SSA count is a deterministic
+function of instance structure ... no generation during emission". A string literal derives its
+three values; a meet that adapts an operand to another width derives one more, from the same
+settled facts; nothing is allocated, budgeted, pooled or counted at witness time, and no witness
+constructs a name. Composer's witnesses read the derivation and transcribe. The three files that
+still minted names by arithmetic (`LambdaWitness.fs`'s extraction schedule, `ClosurePatterns.fs`,
+`HardwareModulePatterns.fs`'s forward references) are corrected in CS-11, not scheduled; the
+first attempt at CS-11, which added a counter, was stopped for it. The drift gate's row for a
+constructed name outside `SSAAssignment.fs` is a lint behind the code, not the enforcement: the
+enforcement is that the code shows one pattern.
+
 ### 8.4 The FPGA's own design-time integrity tooling, preserved
 
 The owner, 2026-09-05: "while I want width inference to be available to any target, there's
@@ -441,12 +455,13 @@ by hand), and the drift gate's scheduled rows are its inventory until each repos
 |---|---|---|
 | CS-9 | step 3: the numeric constraint on every operator (W-2, CCS8000 for `1 + "a"`), `+` as kind dispatch, unary negation and plus witnessed in Composer, `abs`/`sign`/`min`/`max`/`clamp`/`sqrt`/`atan2` as library schemes with Baker recipes, shift amounts typed by the front end (L-8), every conversion typed with a numeric source (`κ<'u> -> Target<'u>`, CCS8002; the width-named conversions are typed here like the rest and deleted in CS-11) and `float`/`floor`/`ceiling`/`round`/`truncate` typed as kind functions (built 2026-09-04, below) | W-2 both, W-7, W-8 both; UoM-2/3/4/9 stay green; RoundTrip; HelloProof |
 | CS-10 | step 7, first half: the range pass in CCS (§1) writing range and width coeffects; Composer's FPGA leg reads the node (L-7, L-7b retired), HelloArty's MLIR changes as §8.2 states and its README with it | W-4 both; W-6; HelloArty `07_output.mlir` at the §8.2 figures; RoundTrip |
-| CS-11 | step 7, second half: one kind (§2, §8.1), CCS8706/CCS8018 for the spellings and suffixes, the corpus migration (§9) by the lean fleet, the harness leaves of §11, the drift gate's `TyCon` and spelling rows turned to failures | W-1; every leaf compiles; BAREWire 309; RoundTrip transcript identical (the hash re-baselined, since BAREWire's own source migrates) |
-| CS-12 | boundaries (§4): coverage at declared boundaries with CCS8012/8014/8016, the `Mmio` register width and the schema field as boundaries, Composer's L-9 and L-10 deleted, one size model | W-3, W-5; M rows after step 5 supplies `Ptr`/`Mmio` |
+| CS-11 | step 7, second half, the CPU leg (order corrected 2026-09-05: the deletion of the spellings cannot precede the CPU leg reading the node, since BAREWire's wire structs and FFI calls carry their widths in those spellings until the migration; so the CPU leg comes first): the range's declared sources (§1.1's last bullet: intrinsic result ranges as the compiler's own facts, the platform's declared representation range of a width-named carrier as an interim boundary, array element and tuple position ranges on the graph), the CPU leg selecting the smallest declared integer representation covering each node's range (§3.1) with extension and truncation at meets as the fabric leg does, one size model reading the node, the L-9 and L-10 sites deleted, and CCS8011 promoted to an error on CPU once RoundTrip, HelloProof and the harness carry none | W-4/reject once promoted; RoundTrip transcript identical with the hash re-baselined (narrower interior widths change the binary); HelloArty MLIR byte-identical; HelloProof |
+| CS-12 | one kind (§2, §8.1): the width-named types and suffixes deleted, CCS8706/CCS8018 for the spellings and suffixes, the corpus migration (§9) by the lean fleet with each width-named use becoming `int` plus a declaration where a boundary genuinely exists (a wire-schema field, a C ABI parameter, an MMIO register) and nothing where the range suffices; `int` of a `char` kept as a kind function (code point, `[0, 1114111]`) in the one spelling table and the interim `retypeCharConversion` deleted (decided 2026-09-05 under the owner's ratification); the harness leaves of §11 (W-1, W-3, W-5 with step 5's `Ptr`); the drift gate's `TyCon` and spelling rows turned to failures | W-1, W-3, W-5; every leaf compiles; BAREWire 309; RoundTrip transcript identical (hash re-baselined again, BAREWire's own source migrates) |
 | CS-13 | step 8: the real interval domain (§3.2), the selection objective with its filters, per-coefficient selection, the boundary-representation witness | NS-1 to NS-4; `numeric-selection.md`'s programs |
 
-Step 5 (access and region, M rows) precedes CS-12 in the plan's order and is unchanged by this note
-except that its handles carry `int`.
+Step 5 (access and region, M rows) sits between CS-11 and CS-12 in the plan's order and is unchanged by
+this note except that its handles carry `int`. The order from CS-10 on is therefore CS-11 (CPU leg and
+boundaries), step 5, CS-12 (one kind and the migration), CS-13 (reals).
 
 Tied off means: 46 of 46 judged through step 8, RoundTrip's transcript byte-identical, HelloArty's
 MLIR at the §8.2 figures and unchanged thereafter, HelloProof's 23 obligations unchanged or joined

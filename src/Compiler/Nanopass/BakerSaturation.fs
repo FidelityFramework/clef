@@ -274,7 +274,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
     | SemanticKind.Application (funcNodeId, argNodeIds) ->
         match SemanticGraph.tryGetNode funcNodeId graph with
         | Some funcNode ->
-            // Unwrap TypeAnnotation for generic intrinsics (e.g., NativePtr.stackalloc<'T>)
+            // Unwrap TypeAnnotation for generic intrinsics (e.g., Array.zeroCreate<'T>)
             let unwrappedKind =
                 match funcNode.Kind with
                 | SemanticKind.TypeAnnotation (innerNodeId, _) ->

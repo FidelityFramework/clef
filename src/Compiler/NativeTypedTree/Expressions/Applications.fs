@@ -151,8 +151,8 @@ let checkApp
             // value arguments (no explicit TypeApp), we instantiate with fresh type
             // variables that will be unified with argument types.
             //
-            // Example: NativePtr.set buffer index value
-            //   - NativePtr.set has type TForall(['T], nativeptr<'T> -> int -> 'T -> unit)
+            // Example: Array.set buffer index value
+            //   - Array.set has type TForall(['T], 'T array -> int -> 'T -> unit)
             //   - buffer has type nativeptr<uint8>
             //   - Instantiate 'T with fresh '?n, then unify nativeptr<'?n> with nativeptr<uint8>
             //   - Result: 'T = uint8, return type is int -> uint8 -> unit
@@ -213,10 +213,10 @@ let checkApp
     // INTRINSIC APPLICATION SATURATION:
     // Intrinsics don't support partial application - they're primitives that must
     // be called with all arguments at once. When we see curried application of an
-    // intrinsic (e.g., NativePtr.set buffer count byte), we flatten into a single
+    // intrinsic (e.g., Array.set buffer count byte), we flatten into a single
     // Application node with all arguments.
     //
-    // Without this, NativePtr.set buffer count byte creates:
+    // Without this, Array.set buffer count byte creates:
     //   App(App(App(Intrinsic, buffer), count), byte)  -- nested, hard to codegen
     //
     // With this fix:
