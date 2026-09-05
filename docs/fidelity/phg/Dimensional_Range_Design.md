@@ -352,6 +352,20 @@ architecture table (`platformWordWidth arch`, checked at `MLIRGeneration.generat
 retired here). The FPGA leg keeps `IntervalAnalysis.fs` only as long as CS-10 has not landed; then
 it reads the node.
 
+**What CS-11 deleted of this list (2026-09-05).** L-10: the architecture table
+`platformWordWidth arch` and the agreement check at `MLIRGeneration.generate` are gone;
+`Architecture` carries the declared `Register` and `Pointer` widths read once from the CCS context
+(`PlatformConfig.resolveOSArch`), and every site reads `declaredWordWidth` or
+`declaredPointerBytes`. The three size models are one: `mlirTypeSizeWith` over the declared Pointer
+width (`mlirTypeSize arch` reads it through the architecture), `mlirTypeSizeForArch` deleted,
+`TypeSizing` already gone; the serializer takes the declared pointer width and sizes no struct by a
+silent word. Deleted with them: the `X86_64`-defaulting `mapNativeType` and `mapNativeTypeWithGraph`
+and the string-based type helpers, all without a caller. Still standing, owed to the node-reading
+CPU leg (the CS-11 as-built below): L-7's CPU branch of `pBinaryArithOp` and `pComparisonOp`, L-8's
+shift-amount cast, L-9's `pTypeConversion`, and `TypeMapping`'s mapping of the bare kind to the
+declared word on CPU (`mapNTUKindToMLIRType`, `mapNativeTypeForArch`), which reads the declaration
+now and the node's selection later.
+
 **SSA is a nanopass derivation (the owner, 2026-09-05: "No minting. No push style application.
 This is nanopass." "NO POOLS." "NO POOL MANAGEMENT." "THIS IS ARCHITECTURE.").** `SSAAssignment`
 runs once over the finished graph, after every range and selection is settled, and derives each
@@ -481,9 +495,60 @@ Delivered in four slices, each built inside Composer and gated before the next; 
 
 **Found on the way, fixed in CCS.** `Expressions/Patterns.fs`, the `SynArgPats.Pats` arm of a union-case pattern: the constructor's result type is now unified with the scrutinee's (`Some b` against `int option` ties the instance's payload variable to `int`). Before, a `Some b` payload was typed only by its uses: `match (o: string option) with Some b -> b + 1` compiled through the checker and failed at `mlir-opt`, and `float b` on a pattern variable left its carrier open (BAREWire `Manifest.fs:33`, unreachable). Now `b` has the payload's type, and the `string option` case is CCS8003 at the checker.
 
-**Decisions, for the owner.** (1) A `char` at a conversion's source: the (c) row says the source must be numeric and `char` is not (ntu-types.md), but BAREWire `Description.fs:364` (`int (Text.charAt a ia)`) and the platform's `Parse.clef` (`int c`) read a code point through the conversion, and BAREWire is not edited in this changeset; `Applications.retypeCharConversion` gives a `Convert` intrinsic whose argument is already known to be `char` at the application the second, explicit signature `char -> Target<1>` (the code point at the measure 1, witnessed as the integer widening it already was). Nothing else admits `char` at a numeric position, a `char` source not known at the application is CCS8002, and the admission is interim until CS-11 migrates the corpus (a code-point function, or the ruling that `char` is a source). (2) The CCS8000 kind message renders the operand that met the bound variable first (source order for a direct application) rather than carrying operand positions through the store. (3) The library schemes are `IntrinsicModule.Math` intrinsics, so `Math.truncate` is the witnessed spelling of `truncate` and the Math SSA budget (5) covers them. (4) W-8/accept keeps `sqrt` and `atan2` typed and unwitnessed inside quotations (D9): a module-level value is initialised and a top-level function is emitted whether or not `main` uses it, so a quotation is the one typed-and-never-witnessed binding.
+**Decisions, for the owner.** (1) `ValueRange` endpoints are `bigint` (the reason above: CCS8012
+needs the bounded range a product leaves 64 bits with). (2) A width-named element carrier's range
+is its declared range regardless of the stores (buffers are filled by endpoints the pass does not
+see), and an array handed to a boundary call takes an unbounded store. (3) The candidate rule joins
+every value call's arguments into every unifiable escaping lambda; a partial application makes the
+open parameters candidates; a non-lambda function value poisons the value calls it may reach.
+(4) `Architecture` carries the declared widths as `Result`s rather than a module-level setting, so
+that no mutable and no default exists; a core's leg refuses to start on a description declaring no
+`Register` or `Pointer` (`MLIRGeneration.generate`, `CCS8203` in the message, before any witness
+runs), and the fabric leg derives no byte layout (no DU, no closure) and reads neither. (5) The CPU
+leg is owed whole, for the three decisions below; `platformWordWidth` is gone but
+`mapNTUKindToMLIRType` still maps the bare kind to the declared word on CPU, and
+`RangeAnalysis.selectedWidthOf` returns `None` for an unobservable range rather than a widest
+(C3; the eventual leg stops naming the node). (6) CCS8011 stays Info on CPU: the residual is 117
+on RoundTrip. (7) For the owner to rule: a length is the Pointer maximum, so `3 * n` on x86_64 is
+CCS8012 (RoundTrip's `Validator.validate`); the alternative is an exact length where the array
+traces to a literal (`RangeSources.intrinsic`'s `length` row through the element stores), which
+would close that warning without a source change.
 
-**Gates.** Composer build clean. RoundTrip: compile 0, run 0, transcript identical to `expected.txt`, hash `e10c2ce1…` unchanged, diagnostic lines identical to CS-8's. Harness `vet.sh --through 3`: exit 0, 23 of 23 judged, 30 of 49; W-2/reject `reject CCS8000 x3` ok, W-2/accept ok (was MISMATCH at `arith.addi` on a memref), W-7/accept ok (prints `ab`), W-8/accept ok, W-8/reject ok (CCS8041 once; the code column shows the CCS8040 printed first); every other row identical to the D10 baseline except the pending column, `judged` for the step-3 rows. HelloArty: the same pre-existing `Width inference failure: IntWidth 0` stop, `07_output.mlir` diff empty, transcript identical to CS-8's. HelloProof: compile 0, run prints `Hello, Houston!`, 23 obligations PASS, prover transcript identical. Drift gate clean.
+**Gates (the owner's session, on the final binary).** Composer build clean. RoundTrip
+(`rt-cs11-final.*`): compile 0, run 0, transcript identical to `expected.txt`, hash
+`aefcc865bd4817195ea61b0a676ba6cb00d403b1539ad9062d950a66986d83c9` unchanged (the CPU leg does not
+read the annotation; `07_output.mlir` byte-identical to the pre-changeset capture
+`cs11/roundtrip-before.mlir`); 117 CCS8011 information lines (from 320) and 1 CCS8012 warning
+(`Validator.validate`, `3 * n` with `n = Array.length fields` in `[0, 2^63 − 1]`, range
+`[0, 27670116110564327421]`, `uint64` selected; a finding the design intends, and a failure under
+`--warnaserror` until the source bounds `n` or the owner rules on a literal array's length, below).
+Harness `vet.sh --through 3` (`vet-cs11-final.txt`): exit 0, every row identical to
+`vet-cs10-final.txt` (W-4/reject unchanged, CCS8011 not promoted). HelloArty
+(`helloarty-cs11-fix2.txt`): exit 0, 0 CCS8011, `07_output.mlir` written by that compile (13:39:14)
+and byte-identical to CS-10; the implementer's run had failed (`declares no width dimension
+'Pointer'`) and its as-built had recorded a stale file as identical. HelloProof (`hp-cs11-final.*`):
+compile 0 with 0 CCS8011 (was 2: `write`'s result is tabled), run prints
+`Enter your name: Hello, Houston!`, 23 obligations, PASS, verdict lines identical to CS-10. Drift
+gate clean. SSA: no `V (` or `SSA.V` outside `SSAAssignment.fs`; no counter, pool, budget or spare
+vocabulary; no `platformWordWidth`, `mlirTypeSizeForArch` or `TypeSizing` reader.
+
+**Review, and the fixes applied by hand (2026-09-05).** The reviewer rejected the implementer's
+tree: (1) HelloArty failed (`declares no width dimension 'Pointer'`): `SSAAssignment` derived a
+core's byte layouts (`buildDULayout`, `buildClosureLayout`) on the fabric leg, sized before this
+changeset by the silent `X86_64` fallback the deleted table hid; fixed by deriving neither on the
+FPGA target (`SSAContext.TargetPlatform`), and by `MLIRGeneration.generate` refusing a core's leg
+on a description that declares no `Register` or `Pointer` (`generateCore` is the former body).
+(2) A non-lambda function value made value calls unsound (valcall `[0, 1]` for `103`); fixed by
+`poisoningOf`/`poisonReaches` above. (3) An array producer the store fold did not see took other
+arrays' elements (arrmap2 `[1, 3]` for `1000000`); fixed by the closed element rule above. (4) The
+carrier meet on a widened half-line was narrower than the carrier's set (carrierloop); fixed by the
+source-only, whole-range rule above. Must-fixes: `selectedWidthOf` no longer fabricates a widest
+width for an unobservable range; `coverageDiagnostics` reports through a `List.choose` with no
+placeholder representation; the as-built's gate paragraph is rewritten from the owner's session's
+transcripts and the section re-titled to its scope. Notes kept as owed: `resolveOSArch`'s `X86_64`
+ISA fallback; Composer's pre-existing layout computations (`maxPayloadBytes`, the field-count
+estimate, the SysV byval thresholds, the 64-bit array length) owed to the node-reading leg; the
+per-part (a)–(e) inventory not measured separately.
 
 **Owed.** `sqrt`, `atan2` and the transcendentals type-check and have no recipe and no witness: a reachable use stops Composer with `[ERROR] No witness handled node N — Kind: Application (...). Type: TNum (Carrier { Name = "float" ...` (loud, never a wrong result); their implementation is library-backed, the platform's libm on the x86_64 leaf. Composer's shift-amount cast stays until CS-10. The `char` conversion admission is CS-11's to close. The width-named conversion spellings are typed here like the rest and deleted in CS-11.
 
@@ -614,3 +679,264 @@ failure are pre-existing on that binary. No `V (…)` outside `SSAAssignment.fs`
 bindings) still spell `NativePtr.*` 448 times and cannot compile under current CCS; the design's
 `CHandle` and `Mmio` replace them (ffi-boundary §1). The CS-11 workflow brief describes a working
 tree that no longer exists and is rewritten before it resumes with slices 1-4.
+
+## CS-11 slices 1, 2(a) and the L-10 half of 2(b), as built (2026-09-05)
+
+Slices 1 and 2(a) landed in CCS; the L-10 half of slice 2(b) landed in Composer; the node-reading
+CPU leg (the rest of 2(b), 2(c)) is not landed and is written up below with the decisions it needs,
+so the §12 CS-11 row stays open; slice 3 leaves CCS8011 at Info on CPU (the residual is not zero).
+The implementer's tree was reviewed and rejected on four blockers and four must-fixes (the
+"Review" paragraph below), which the owner's session fixed by hand; every gate below was then
+re-run on the final binary from the owner's session's transcripts.
+
+Slices 1 and 2(a) landed in CCS; the L-10 half of slice 2(b) landed in Composer; the node-reading
+CPU leg (the rest of 2(b), 2(c)) is not landed and is written up below with the decisions it needs;
+slice 3 leaves CCS8011 at Info on CPU (the residual is not zero). Every gate below was re-run on
+the final binary.
+
+**Slice 1(a), the intrinsic table.** `NativeTypedTree/Expressions/Intrinsics.fs`, one module
+`RangeSources` at the end of the file, read by `RangeAnalysis` and nothing else. `intrinsic ctx
+info args` gives `Fact r`, `ElementOf i` or `Untabled`: the comparisons and `not`/`&&`/`||`
+`[0, 1]`; the `Operators` by the interval rules (moved here from `RangeAnalysis.applicationRange`);
+`Array.length`, `String.length`, `List.length`, `Seq.length` `[0, 2^(Pointer − 1) − 1]` from
+`PlatformContext.Dimensions "Pointer"` (`lengthRange`; Unbounded on a context declaring no Pointer);
+`String.indexOf` `[−1, 2^(Pointer − 1) − 1]`; `Array.get` the element range of its array argument
+(`ElementOf 0`); `Sys.read` and `Sys.write` `[−4095, hi]` with `hi` the buffer argument's length
+range, a string literal's byte length exactly and the platform's length range otherwise (the errno
+convention the x86_64 description's `readBound` and `writeBound` contracts state in prose, cited in
+the table's comment; a later changeset moves the number into the contract); a `Convert` intrinsic
+the meet of its argument's range with the target representation's declared range where that covers
+it (exact) and the declared range otherwise (the wrap's image, interim until CS-12 deletes the
+spellings and the conversions), a conversion to the bare kind the identity, so `int` of a `char` is
+`[0, 1114111]` by the char node's own range; `sign` `[−1, 1]`, `abs`, `min`, `max`, `clamp` their
+images (new `ValueRange.abs`, `minOf`, `maxOf`); the `DateTime` component extractors the ranges
+their definitions state (`hour` `[0, 23]`, `minute`/`second` `[0, 59]`, `millisecond` `[0, 999]`);
+`Math.*`, the rounding intrinsics and every parse stay untabled (CS-13; an input's range is a
+declaration, CS-12). `calls info` says what a higher-order intrinsic supplies to the function it is
+handed: `Array.init n f` calls `f` at `[0, n − 1]` (`Seed.IndexBelow 0`); `List.*`/`Seq.*`/`Option.*`
+hand a value the pass does not model (`Seed.Unknown`, named in the CCS8011 text).
+
+**Slice 1(b), the interim carrier rule.** `RangeSources.declaredRangeOfKind ctx kind`: an integer
+kind with `NTUWidth.Fixed bits` takes the declared range of the representation its spelling names
+(`Types.numericSpellings`, the representation column, through `PlatformContext.tryRepresentationOfSeal`),
+or on a context declaring none the two's-complement or unsigned range of its bits
+(`ValueRange.twosComplement`, `unsignedOf`); a `Resolved Pointer` kind likewise through its dimension;
+the bare kind (`Resolved Register`) never. `RangeAnalysis.boundByCarrier` applies it to a source
+node only (`isSource`: a parameter nothing supplies, a field read, an element read, an unresolved
+reference, an intrinsic's or a boundary call's or a poisoned value call's result) whose transfer is
+unobservable, and gives the whole declared range, the carrier's physical set, never the meet with a
+half-line (the review's carrierloop probe: a wrapping carrier does not respect a half-line, and the
+meet `[0, 2^31 − 1]` excluded the negative half the wrap visits). An arithmetic cycle the program
+never bounds stays unobservable, CCS8011 on every substrate (§1.3), whatever its carrier; a bounded
+transfer is kept. This rule is deleted in CS-12 with the spellings.
+
+**Slice 1(c), element ranges.** `PSGSaturation/SemanticGraph/Types.fs`,
+`SemanticGraph.ElementRanges: Lazy<Map<string, ValueRange>>` keyed by the element type's rendered
+form (`formatType` after `applySubst`), defaulted at every graph construction (`Core.fs`,
+`NodeBuilder.fs`, `NativeService.fs`, `FoldIn.fs`, `ProjectChecker.fs`), written by
+`RangeAnalysis.run`. `Program.ElementStores` collects every store: an `ArrayExpr`'s elements (a
+comprehension's `Yield` values), an `IndexSet` and an `Array.set` into an array, `Array.create`'s
+seed, `Array.init`'s function result (a lambda in place, a named lambda's body, or every candidate's
+body through a value); `Program.ElementSeeds` the constant seeds: `Array.zeroCreate`'s zero, and an
+unbounded store for an array handed to a boundary call (a `Sys` intrinsic, or a call through a
+binding carrying `FidelityExtern.Library`), since a platform endpoint or a C call writes where the
+pass sees no store. `elementRange`: a width-named element carrier is its declared range regardless
+of the stores (the byte view of a buffer is `[0, 255]`; sound because such buffers are filled by
+endpoints); otherwise the join of the stores and seeds; a type nothing reachable stores into is
+Unbounded. Reads: `IndexGet` on an array, `Array.get`. Coarseness, stated: one range per element
+type over the whole program, so two `int array`s with different contents share a range, and an
+array of records is read through `FieldRanges` as before. The rule is closed (the review's arrmap2 probe): an intrinsic that produces an array from
+anything but a same-element operation on an array (`RangeSources.sameElements`: `sub`, `copy`,
+`append`, `filter`, `rev`, the sorts, `take`, `skip`, `truncate`, `concat`, `distinct` and the
+non-producing operations) builds elements the fold does not see (`Seq.toArray`, `List.toArray`,
+`String.toBytes`, any future producer), and its result's element type takes an unbounded seed;
+`Array.init`, `map`, `mapi`, `collect` and `choose` store their function value's bodies
+(`RangeSources.elementsFromFunction`, `functionArgument`), unbounded through a poisoned value. A
+user function's array comes from the literals, stores and intrinsics inside it, which the fold sees.
+
+**Slice 1(d), tuple positions.** `RangeAnalysis.tupleElement` follows `IfThenElse`, `Match`,
+`CaseElimination`, `Sequential`, `Binding` (a mutable one's assignments joined), `VarRef`,
+`PatternBinding` (a parameter's supplies), `TypeAnnotation`, an application's callee body (a named
+lambda's, or every candidate's through a value) and an element read of an array of tuples
+(`IndexGet`, `Array.get`, through `ElementStores`); `TupleGet` reads it. The public
+`RangeAnalysis.tupleElementRange graph nodeId index` is the settled-annotation read of the same
+trace for a witness.
+
+**Slice 1(e), calls through function values.** `escapingOf`: a Lambda anywhere but the value of
+a binding (Baker's eta-expanded lambda for a named function in value position among them), a
+function binding referenced anywhere but a callee position, and a named lambda applied to fewer
+arguments than it has parameters (the open parameters escape, `Candidate.Offset`) are candidates,
+each with the reason it escapes (`passed as a value`, `stored as a value`, `bound as a value`,
+`returned as a value`, `partially applied`). `poisoningOf` (the review's valcall probes): a
+function value that is no lambda, in value position, poisons every value call it may reach: an
+intrinsic named as a value, a partial application whose root is an intrinsic or a non-lambda
+binding, a reference to an extern or platform binding of function type. `resolveCallee`: a
+`VarRef` to a lambda binding or a Lambda in place is `Direct`; an intrinsic is `Intrinsic`; anything
+else (a parameter, a non-lambda binding, a field, a tuple element, an element) is
+`Value (candidates, poisoned)`, reaching every candidate with at least as many open parameters as
+arguments whose parameter types may unify with the argument types (`mayUnify`: a type variable with
+anything, an integer never with a real, functions and applied constructors structurally, an
+unknown shape not excluded), and `poisoned` when a poisoning value's domains unify likewise
+(`poisonReaches`); a named lambda applied to more arguments than it has parameters hands the
+surplus to the value its body returns, a call through a value. Every reaching call joins its
+arguments into the candidate's open parameters (`CallArguments`); a call through a value has the
+join of every candidate's body, or is unobservable when poisoned (`applicationRange`,
+`tupleElement`, and the element stores of `Array.init`/`map`/`mapi`/`collect`/`choose` through a
+poisoned function value, which seed the element type unbounded). Coarseness, stated: two functions
+of the same shape share their arguments wherever either is called through a value (the fnvalue
+probe: `k`'s parameter takes `3` from `h 3` beside `[0, 3]` from `Array.init 4 k`), and one
+poisoning value of a shape makes every value call of that shape unobservable (valcall: `g sq` and
+`g ((+) 100)` are both unobservable once `(+) 100` exists). A parameter nothing supplies keeps
+CCS8011, whose text now names the reason: `: its function is passed as a value and no call through
+a value reaches it`, `: its function is handed to 'List.map', which supplies values the pass does
+not model`, `: its function is a declaration root and the parameter's range is the declared
+boundary's (CS-12)`, or `: no reachable call supplies it`.
+
+**Exact endpoints.** `NativeTypedTree/NativeTypes.fs`, `ValueRange`: `Bounded`, `Above`, `Below`
+carry `bigint`; the arithmetic is exact and nothing saturates (a half-line arises only from the
+widening); `shl` follows a shift amount up to 4096 exactly and reads a larger one as the half-line
+by the operand's sign; `Threshold` and `widen` carry `bigint`, so the declared `uint64` range is a
+real threshold. Consequence: `x * y` with `x`, `y` about `2^40` is a bounded range no declared
+representation covers, CCS8012, where before it saturated to a half-line and was CCS8011. Composer
+reads only `ValueRange.width`, `render`, `isNonNegative`, unchanged.
+
+**Slice 2(a), selection.** `RangeAnalysis`: `selectRange ctx range` picks the offered integer
+representation of the family the sign selects (`uint` for a non-negative range where the context
+offers one) with the fewest bits whose declared range covers the range, else the widest of the
+family with `Covered = false`; `selectNode` gives a width-named carrier its own representation;
+public `selectedRepresentation graph nodeId : NumericRepresentation option`, `selectedWidthOf graph
+range : int option` (fabric: `ValueRange.width`; a core: the selected bits, or the widest declared
+for an uncovered or unobservable range, emission only while CCS8011 is information) and
+`selectedWidth graph nodeId : int option` (a width-named carrier at its representation's bits, or
+its spelling's bits where the context offers none). Derived on read from `graph.Platform` and the
+node's range, never stored (C3). `coverageDiagnostics`: CCS8012, Warning, `Reachability =
+Reachable`, once per enclosing binding, for a bare-kind integer whose bounded range no declared
+representation covers, naming the range and the widest representation
+(`Expressions/Types.fs`, `DiagnosticCodes.CCS8012_RangeNotCovered`); promoted under `--warnaserror`
+by Composer's existing elevation (the overflow probe: warning, and exit 1 under the flag). Nothing
+changes on fabric.
+
+**Slice 2(b), L-10 only.** Composer `Alex/Dialects/Core/Types.fs`: the architecture table
+`platformWordWidth arch` is deleted; `Architecture` is now `{ Isa; Register: Result<int, string>;
+Pointer: Result<int, string> }`, the instruction set (`Isa`, for the OS and syscall selection) beside
+the two width dimensions the platform description declares, read once from the CCS context at
+`PSGElaboration/PlatformConfig.resolveOSArch` (`PlatformContext.tryWidth`, CCS8203's text where a
+dimension is not declared); `declaredWordWidth arch` and `declaredPointerBytes arch` read them and
+fail with that text where a site on an undeclared substrate reads them. One size model:
+`mlirTypeSizeWith pointer ty` sizes every pointer-sized type (an index, a five-word memref
+descriptor, a two-word closure pair) by the declared Pointer width and `mlirTypeSize arch ty` reads
+it through the architecture; `TypeMapping.mlirTypeSizeForArch` is deleted and its call sites
+(`TypeMapping`, `SSAAssignment`, `ClosurePatterns`, `LambdaWitness`, `MemoryPatterns`) read
+`mlirTypeSize arch`; the arch-less `mlirTypeSize` sites (`RecordPatterns.structFieldByteOffset`,
+`MemoryPatterns.pRecordStruct`, `pTupleStruct`, `extractMemRefShape`, `OptionWitness`,
+`MemRefPatterns.pBuildAddressOf`, `PlatformPatterns`' byval sizing) take the architecture from the
+parser state or witness context; `Serialize.typeToString` and every serializer above it take the
+declared pointer width as their first argument (`moduleToString arch.Pointer …` at
+`MLIRGeneration`, `MLIRTransfer`, `MLIRNanopass`; the obligations module passes an `Error`, since it
+carries no pointer-sized type), so a struct serialized as `memref<Nxi8>` is sized by the
+declaration and never by a silent eight. Deleted with the table: the agreement check at
+`MLIRGeneration.generate`, the `X86_64`-defaulting `mapNativeType` and `mapNativeTypeWithGraph`
+and the string-based helpers (`nativeTypeToMLIR`, `mapTypeApp`, `getReturnType`, `getParamTypes`,
+`isPrimitive`, `isInteger`, `isFloat`, `isIndex`, `integerBitWidth`; no caller), the
+`TypeSizing` comment in the project file (the file itself was already gone). `TypeMapping`'s
+`let wordSize = match arch with X86_64 | ARM64 | RISCV64 -> 8 | _ -> 4` reads
+`declaredPointerBytes arch`. The `X86_64` fallback of `resolveOSArch` for an unrecognised platform
+id stands (it selects an ISA, not a width) and is noted as owed.
+
+**Not landed: the node-reading CPU leg (2(b) narrowing, 2(c) meets), by decision.** The surface
+is every place a value meets a slot, and each is a derivation SSAAssignment must hold before a
+witness can read it: binary and comparison operands (`ApplicationPatterns`, the CS-10 logic on
+CPU), the `scf.if` result and match arms (`ControlFlowPatterns`), a call's arguments against the
+parameter nodes and a return against the caller's node (`ApplicationWitness`, `LambdaWitness`),
+a mutable cell's stores and loads (`BindingWitness`, `MutableAssignmentWitness`, `VarRefWitness`),
+record fields and tuples (`RecordPatterns`, `TupleExpr`), array elements at every allocation and
+access site (`MemoryPatterns`, `ArrayExpr`, `IndexSet`), DU payloads (`DUPatterns`), closure
+environments and the closure calling convention (`ClosurePatterns`, `SSAAssignment.mapCaptureType`),
+yields, interpolated strings, the syscall ABI (`PlatformPatterns`), and every C ABI call. Three of
+these need a decision the design does not yet state, and were not decided here: (i) the closure
+calling convention: a lambda called through a value has parameters whose width the call site cannot
+know (any candidate), so the closure ABI must be a declared boundary (the platform word) while a
+direct call meets the parameter node's width; (ii) record layouts: CCS computes
+`TypeLayout.Inline (size, align)` before the range pass, so a field selected narrower than its
+carrier leaves the CCS size as padding unless the layout is recomputed from `FieldRanges` after
+saturation (a CCS change to `TypeConRef.Layout`, which every type carries); (iii) a refined read
+of a wide cell (`VarRef` under a guard) either truncates at the read or keeps the cell's physical
+width with the consumer adapting from the physical type, and the CS-10 fabric rule (an operation
+never narrower than an operand's physical width) means slots must narrow for anything to narrow.
+Landing a partial set of meets produces an MLIR verifier failure at best and a wrong binary at
+worst (a closure ABI mismatch is not caught by the verifier), and RoundTrip's gate is a byte-identical
+transcript, so the leg is owed whole, after (i)–(iii) are ratified, with the derivation table (per
+consumer kind: the operand position, the expected width's source, the SSA the meet takes) written
+into SSAAssignment first. Consequently pBinaryArithOp's CPU branch, the L-8 shift-amount cast and
+L-9 `pTypeConversion` stand as they were, and the RoundTrip hash does not move in this changeset.
+
+**Gates.** Composer build clean. RoundTrip (`rt-cs11.*`): compile 0, run 0, transcript identical
+to `expected.txt`, hash `aefcc865bd4817195ea61b0a676ba6cb00d403b1539ad9062d950a66986d83c9` unchanged
+(the CPU leg does not read the annotation; `07_output.mlir` byte-identical to the pre-changeset
+capture `cs11/roundtrip-before.mlir`); 117 CCS8011 information lines (from 320) and 1 CCS8012
+warning (`Validator.validate`, `3 * n` with `n = Array.length fields` in `[0, 2^63 − 1]`, range
+`[0, 27670116110564327421]`, `uint64` selected; a finding the design intends, and a failure under
+`--warnaserror` until the source bounds `n`). Harness `vet.sh --through 3` (`vet-cs11.txt`): exit
+0, every row identical to `vet-cs10-final.txt` (W-4/reject unchanged, CCS8011 not promoted).
+HelloArty (`cs11/helloarty-cs11.txt`): exit 0, 0 CCS8011, `07_output.mlir` byte-identical to CS-10.
+HelloProof (`cs11/hp-cs11.*`): compile 0 with 0 CCS8011 (was 2: `write`'s result is tabled), run
+prints `Enter your name: Hello, Houston!`, 23 obligations, PASS, anchors unchanged. Drift gate
+clean. SSA: no `V (` or `SSA.V` outside `SSAAssignment.fs`; no counter, pool, budget or spare
+vocabulary in the diff (one pre-existing comment in `RecordPatterns` reworded).
+
+**Inventory (gate 7).** RoundTrip 320 → 117 CCS8011 (all Info); HelloProof 2 → 0; W-1/reject
+1 → 0 (its `int32`/`int64` parameters take their declared ranges); M-3 2 + 2 unchanged (`coerce`, a
+`Ptr` payload); W-7 2 → 0; W-8 4 unchanged (the rounding intrinsics, CS-13). Per part on
+RoundTrip, cumulative in the order (a)–(e): see the report. The residual on RoundTrip by category,
+one example each: 51 bindings or parameters that are cursors no comparison bounds
+(`offset` in `Encoder.writeU8`: guarded by `Cursor.fits data offset 1`, a predicate whose bound
+`count <= Array.length data - offset` is relational and not inlined, §1.2a's owed refinement, or a
+source change in the CS-12 sweep; `pos` in `Fmt.digitsOf`, a digit-extraction loop bounded by the
+magnitude of `v`, which needs a comparison on `pos`), 18 arithmetic on such an operand
+(`the result of '-'` in `digitsOf`), 20 results of user functions whose bodies are those
+(`writeUInt …` in `writeData`), 20 tuple elements whose sources are those (`__tuple_1959.Item2` in
+`readInt`, the returned offset), 8 record fields of types whose constructions the pass does not see
+(`bf.Position` in `Validator.validate`, `w.Bits` in `Check.checkWidth`: records of the platform
+description, declared boundaries at CS-12), 0 parameters of escaping functions and 0 untabled
+intrinsic results. The two W-8 lines are the rounding intrinsics (CS-13); M-3's `coerce` is a `Ptr`
+payload read (step 5).
+
+**Probes (gate 8), under `probe/cs11/` and the review's `probe/cs11r/`, on the final tree.**
+(a) `lenloop`: `n = Array.length arr` `[0, 9223372036854775807]`, the loop cell `i`
+`[0, 9223372036854775807]`; (b) `bytebuf`: `buf.[1]` for `buf: byte array` `[0, 255]`;
+(c) `conv`: `uint32 x` with `x` `[0, 10]` gives `[0, 10]`, with an unobservable argument
+(`truncate 3.7`) `[0, 4294967295]`; (d) `tupleif`: `let a, b = if c then (1, 2) else (3, 400)`
+gives `a` `[1, 3]`, `b` `[2, 400]`; (e) `fnvalue`: `let g h = h 3 in g f` gives `f`'s `x` `[3, 3]`
+through the eta-expanded lambda's `_eta0`, `Array.init 4 k` gives `k`'s `m` `[0, 3]` (joined with
+the `3` every candidate of `h 3` receives), `r = g f` `[0, 6]`; (f) `overflow`: `x * y` with both
+about `2^40` (built by arithmetic, since the lexer still limits a literal to 32-bit signed, CCS1147,
+pre-existing) gives `warning CCS8012: The range [1208925819615728686333952, …] … the widest,
+'uint64' (64 bits, …), is selected` and `error CCS8012`, exit 1, under `--warnaserror`; (g) not
+applicable, the CPU leg is not landed (the counter probe's `i` is `[0, 10]`); (h) `recfree`:
+`let rec run n = run (n + 1)` called from `main` gives one `info CCS8011: The range of 'n' in
+'run' cannot be observed`. The review's: `valcall` and `valcall2` (`g sq` beside `g ((+) 100)` or
+`g abs`): every value call through `g` is unobservable, CCS8011 on `h`, `g …` and the sum (was
+`[0, 1]` for `103`); `arrmap2` (`Seq.toArray` of a comprehension): `b.[0]` unobservable, CCS8011
+(was `[1, 3]` for `1000000`); `carrierloop` (a wrapping `int32` counter with no bound): `i`
+unobservable, CCS8011 (was `[0, 2147483647]`); the probe itself is rejected by the checker with
+CCS8003 (`int32 + int`), as the review noted, so the mechanism shows on the pass's annotations.
+
+**Decisions, for the owner.** (1) `ValueRange` endpoints are `bigint` (the reason above: CCS8012
+needs the bounded range a product leaves 64 bits with). (2) A width-named element carrier's range
+is its declared range regardless of the stores (buffers are filled by endpoints the pass does not
+see), and an array handed to a boundary call takes an unbounded store. (3) The candidate rule joins
+every value call's arguments into every unifiable escaping lambda; a partial application makes the
+open parameters candidates. (4) `Architecture` carries the declared widths as `Result`s rather than
+a module-level setting, so that no mutable and no default exists and an FPGA description, which
+declares neither, fails only at a site that reads one. (5) The CPU leg is owed whole, for the three
+decisions above; `platformWordWidth` is gone but `mapNTUKindToMLIRType` still maps the bare kind to
+the declared word on CPU. (6) CCS8011 stays Info on CPU: the residual is 117 on RoundTrip.
+
+**Owed.** The node-reading CPU leg and its meets (2(b), 2(c)) with the SSAAssignment derivation
+table, after decisions (i)–(iii); the L-8 shift-amount cast and L-9 `pTypeConversion` with it; the
+per-node coverage witness at boundaries (CS-12's declarations); `resolveOSArch`'s `X86_64` fallback
+for an unrecognised platform id (an ISA default, to become a diagnostic); Composer's witnesses for
+`Array.init` and `List.length` on CPU (`No witness handled node`, pre-existing, met by the probes);
+the lexer's 32-bit literal limit (CCS1147) against D10; the relational refinement of §1.2a
+(`count <= length - offset`) or the CS-12 source sweep for BAREWire's cursors; the platform
+description's records as declared boundaries (CS-12).

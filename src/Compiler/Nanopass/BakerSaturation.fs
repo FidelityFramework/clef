@@ -296,9 +296,9 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                     CreationFailed (
                         sprintf "applyIntrinsicRecipe returned None for %s" hofName,
                         Map.ofList [
-                            ("operation", hofName)
-                            ("nodeId", string (NodeId.value node.Id))
-                            ("argCount", string (List.length argNodeIds))
+                            "operation", hofName
+                            "nodeId", string (NodeId.value node.Id)
+                            "argCount", string (List.length argNodeIds)
                         ]
                     )
             | SemanticKind.Intrinsic info ->
@@ -433,9 +433,9 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
             match node.Parent with
             | Some parentId ->
                 isFuncChildOf node.Id parentId ||
-                (match SemanticGraph.tryGetNode parentId graph with
+                match SemanticGraph.tryGetNode parentId graph with
                  | Some { Kind = SemanticKind.TypeAnnotation _; Parent = Some grandId } -> isFuncChildOf parentId grandId
-                 | _ -> false)
+                 | _ -> false
             | None -> true  // no parent: not a use
         // A field of a [<HardwareModule>] binding's Design record (Step = step) is a declaration
         // read structurally by the witness (hw.instance of the named module), not a closure.
@@ -450,7 +450,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
             match ty with
             | NativeType.TVar tv ->
                 match Clef.Compiler.NativeTypedTree.UnionFind.find tv with
-                | (_, Some bound) -> resolved bound
+                | _, Some bound -> resolved bound
                 | _ -> ty
             | _ -> ty
         match definitionArity with

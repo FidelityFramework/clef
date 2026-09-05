@@ -1042,3 +1042,232 @@ let tryResolveConversion (name: string) (range: SourceRange) : (IntrinsicInfo * 
             let info = mkIntrinsic IntrinsicModule.Convert "toChar" IntrinsicCategory.Conversion name
             Some (info, NativeType.TFun(tyParam, Types.charType))
         | _ -> None
+
+//-------------------------------------------------------------------------
+// The declared range sources (Dimensional_Range_Design.md §1.1 last bullet, §3.3, §4.1; CS-11)
+//-------------------------------------------------------------------------
+
+/// The ranges the compiler declares for itself, in one table beside the intrinsic definitions,
+/// read by the range pass (`RangeAnalysis`) and by nothing else. Three sources live here:
+///
+/// 1. The result range of an intrinsic application (`intrinsic`): a length is at most the
+///    largest extent the platform's declared Pointer width addresses, `[0, 2^(Pointer-1) - 1]`;
+///    `Sys.read` and `Sys.write` return a count no larger than the buffer's length or a negative
+///    errno (`-4095 <= errno < 0` on Linux, the kernel's `MAX_ERRNO`; the convention the x86_64
+///    description's `readBound` and `writeBound` contracts state in prose, "returns n with
+///    0 <= n <= count; ... a negative return is an errno" and "returns the number written or a
+///    negative errno"; a later changeset moves the number into the contract); the operators are
+///    interval arithmetic (`ValueRange`); a conversion to a width-named carrier is the meet of the
+///    argument's range with the target representation's declared range where that covers the
+///    argument (exact) and the declared range otherwise, the image of the wrap the description
+///    declares for that representation (an interim rule: CS-12 deletes the width-named spellings
+///    and the conversions with them); a conversion to the bare kind, `int` of a `char` included,
+///    is the identity on the range (a code point is `[0, 1114111]` by the char node's own range);
+///    `sign`, `abs`, `min`, `max` and `clamp` have their images; the `DateTime` component
+///    extractors the ranges their definitions state; `Math.*`, the rounding intrinsics and every
+///    parse of an input are not tabled (the real domain is CS-13's; an input's range is a
+///    declaration, CS-12).
+/// 2. The interim declared boundary of a width-named carrier (`declaredRangeOfKind`): the range
+///    the platform description declares for the representation the carrier's spelling names
+///    (`Types.numericSpellings`, the representation column), or on a context declaring none the
+///    two's-complement or unsigned range of its bits. This rule is deleted in CS-12 with the
+///    spellings; the bare kind (`int`, `uint`) never takes it.
+/// 3. What an intrinsic supplies to a function it is handed (`calls`): `Array.init n f` calls `f`
+///    at every index in `[0, n - 1]`; a sequence intrinsic hands its function a value the pass
+///    does not model.
+module RangeSources =
+
+    /// What the table says of an intrinsic application's integer result.
+    [<RequireQualifiedAccess>]
+    type Result =
+        /// The compiler's own fact.
+        | Fact of ValueRange
+        /// The element range of the array argument at that position (a graph fact the reader holds).
+        | ElementOf of argIndex: int
+        /// No fact here: the result is unobservable unless the carrier declares a boundary.
+        | Untabled
+
+    /// What an intrinsic supplies to one parameter of a function it calls.
+    [<RequireQualifiedAccess>]
+    type Seed =
+        /// `[0, n - 1]` for the integer argument `n` at that position of the intrinsic's own call.
+        | IndexBelow of argIndex: int
+        /// A value the pass does not model (a sequence element).
+        | Unknown
+
+    /// One argument of an intrinsic application as the table reads it: its range (unbounded for
+    /// an argument the pass does not range, a real or a buffer), its type, and its literal if it
+    /// is one (a string literal's byte length bounds a write of it).
+    type Argument = { Range: ValueRange; Type: NativeType; Literal: NativeLiteral option }
+
+    /// The exact range a declared representation states, from its decimal text; `None` when the
+    /// text is not an integer, which is the declaration's defect (CCS8207), never a range.
+    let declaredRange (r: NumericRepresentation) : ValueRange option =
+        match bigint.TryParse r.MinMagnitude, bigint.TryParse r.MaxMagnitude with
+        | (true, lo), (true, hi) when lo <= hi -> Some (ValueRange.Bounded (lo, hi))
+        | _ -> None
+
+    /// The representation a width-named integer kind names on this context, through the one
+    /// spelling table (`Types.numericSpellings`): `None` for the bare kind, whose representation
+    /// is the range's choice, and for a kind the context does not offer.
+    let representationOfKind (ctx: PlatformContext) (kind: NTUKind) : NumericRepresentation option =
+        match kind with
+        | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)
+        | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register) -> None
+        | NTUKind.NTUint _ | NTUKind.NTUuint _ ->
+            Types.numericSpellings
+            |> List.tryPick (fun (_, tc, _, seal) -> if tc.NTUKind = Some kind then Some seal else None)
+            |> Option.bind (fun seal ->
+                match PlatformContext.tryRepresentationOfSeal ctx seal with
+                | Result.Ok r -> Some r
+                | Result.Error _ -> None)
+        | _ -> None
+
+    /// The two's-complement or unsigned range of an integer kind's bits, for a context that
+    /// declares no representation for it: the width the spelling itself states.
+    let private rangeOfBits (kind: NTUKind) (bits: int) : ValueRange =
+        match kind with
+        | NTUKind.NTUuint _ -> ValueRange.unsignedOf bits
+        | _ -> ValueRange.twosComplement bits
+
+    /// The interim declared boundary of a width-named integer carrier (source 2 above): `None`
+    /// for the bare kind (`int`, `uint`: the range is the analysis's own) and for a pointer-width
+    /// carrier on a context that declares no Pointer (CCS8203 at the site that needs it).
+    let declaredRangeOfKind (ctx: PlatformContext option) (kind: NTUKind) : ValueRange option =
+        match kind with
+        | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)
+        | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register) -> None
+        | NTUKind.NTUint (NTUWidth.Fixed bits)
+        | NTUKind.NTUuint (NTUWidth.Fixed bits) ->
+            match ctx |> Option.bind (fun c -> representationOfKind c kind) |> Option.bind declaredRange with
+            | Some r -> Some r
+            | None -> Some (rangeOfBits kind bits)
+        | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer)
+        | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer) ->
+            match ctx |> Option.bind (fun c -> representationOfKind c kind) |> Option.bind declaredRange with
+            | Some r -> Some r
+            | None ->
+                ctx
+                |> Option.bind (fun c -> PlatformContext.tryWidth c (WidthDimension.name WidthDimension.Pointer) |> Result.toOption)
+                |> Option.map (rangeOfBits kind)
+        | _ -> None
+
+    /// The range of a length or an offset: `[0, 2^(Pointer - 1) - 1]`, the largest extent the
+    /// declared Pointer width addresses; unobservable on a context declaring no Pointer.
+    let lengthRange (ctx: PlatformContext option) : ValueRange =
+        match ctx |> Option.bind (fun c -> PlatformContext.tryWidth c (WidthDimension.name WidthDimension.Pointer) |> Result.toOption) with
+        | Some bits -> ValueRange.Bounded (bigint.Zero, bigint.Pow (bigint 2, bits - 1) - bigint.One)
+        | None -> ValueRange.Unbounded
+
+    /// The smallest negative errno on Linux: `-4095` (the kernel's `MAX_ERRNO`), the convention
+    /// the `readBound` and `writeBound` contracts describe in prose.
+    let private errnoFloor = bigint -4095
+
+    /// The length range of a buffer argument: a string literal's byte length exactly, any other
+    /// buffer the platform's length range.
+    let private bufferLength (ctx: PlatformContext option) (buffer: Argument) : ValueRange =
+        match buffer.Literal with
+        | Some (NativeLiteral.String s) -> ValueRange.point (bigint (System.Text.Encoding.UTF8.GetByteCount s))
+        | _ -> lengthRange ctx
+
+    /// The result of a read or a write against a buffer of length range `length`: a count in
+    /// `[0, length.hi]` or an errno in `[-4095, -1]`; unobservable when the length is.
+    let private countOrErrno (length: ValueRange) : ValueRange =
+        match length with
+        | ValueRange.Bounded (_, hi) -> ValueRange.Bounded (errnoFloor, max hi bigint.Zero)
+        | ValueRange.Empty -> ValueRange.Bounded (errnoFloor, bigint.Zero)
+        | _ -> ValueRange.Unbounded
+
+    /// A conversion's image (source 1, the conversion row): the target carrier by the conversion
+    /// operation's name in the spelling table, its declared range on this context; the meet where
+    /// that range covers the argument (exact), otherwise the declared range, the wrap's image. A
+    /// conversion to the bare kind is the identity on the range.
+    let private conversion (ctx: PlatformContext option) (operation: string) (argument: ValueRange) : ValueRange =
+        let target =
+            Types.numericSpellings
+            |> List.tryPick (fun (_, tc, op, _) -> if op = operation then tc.NTUKind else None)
+        match target |> Option.bind (declaredRangeOfKind ctx) with
+        | Some declared -> if ValueRange.contains declared argument then argument else declared
+        | None -> argument
+
+    /// The result range of an intrinsic application (source 1).
+    let intrinsic (ctx: PlatformContext option) (info: IntrinsicInfo) (args: Argument list) : Result =
+        let ranges = args |> List.map (fun a -> a.Range)
+        match info.Category, info.Module, info.Operation, ranges with
+        | IntrinsicCategory.Comparison, _, _, _ -> Result.Fact ValueRange.boolean
+        | _, IntrinsicModule.Operators, "op_Addition", [ x; y ] -> Result.Fact (ValueRange.add x y)
+        | _, IntrinsicModule.Operators, "op_Subtraction", [ x; y ] -> Result.Fact (ValueRange.sub x y)
+        | _, IntrinsicModule.Operators, "op_Multiply", [ x; y ] -> Result.Fact (ValueRange.mul x y)
+        | _, IntrinsicModule.Operators, "op_Division", [ x; y ] -> Result.Fact (ValueRange.div x y)
+        | _, IntrinsicModule.Operators, "op_Modulus", [ x; y ] -> Result.Fact (ValueRange.rem x y)
+        | _, IntrinsicModule.Operators, "op_UnaryNegation", [ x ] -> Result.Fact (ValueRange.neg x)
+        | _, IntrinsicModule.Operators, "op_UnaryPlus", [ x ] -> Result.Fact x
+        | _, IntrinsicModule.Operators, "op_BitwiseAnd", [ x; y ] -> Result.Fact (ValueRange.band x y)
+        | _, IntrinsicModule.Operators, ("op_BitwiseOr" | "op_ExclusiveOr"), [ x; y ] -> Result.Fact (ValueRange.bor x y)
+        | _, IntrinsicModule.Operators, "op_LogicalNot", [ x ] -> Result.Fact (ValueRange.bnot x)
+        | _, IntrinsicModule.Operators, "op_LeftShift", [ x; n ] -> Result.Fact (ValueRange.shl x n)
+        | _, IntrinsicModule.Operators, "op_RightShift", [ x; n ] -> Result.Fact (ValueRange.shr x n)
+        | _, IntrinsicModule.Operators, ("not" | "op_BooleanAnd" | "op_BooleanOr"), _ -> Result.Fact ValueRange.boolean
+        // lengths and offsets
+        | _, (IntrinsicModule.Array | IntrinsicModule.String | IntrinsicModule.Seq | IntrinsicModule.List), "length", _ ->
+            Result.Fact (lengthRange ctx)
+        | _, IntrinsicModule.String, "indexOf", _ ->
+            match lengthRange ctx with
+            | ValueRange.Bounded (_, hi) -> Result.Fact (ValueRange.Bounded (bigint.MinusOne, hi))
+            | _ -> Result.Untabled
+        // element reads
+        | _, IntrinsicModule.Array, "get", _ -> Result.ElementOf 0
+        // the platform's read and write: a count no larger than the buffer, or an errno
+        | _, IntrinsicModule.Sys, ("read" | "write"), _ ->
+            match args with
+            | [ _; buffer ] -> Result.Fact (countOrErrno (bufferLength ctx buffer))
+            | _ -> Result.Fact (countOrErrno (lengthRange ctx))
+        // conversions between numeric carriers
+        | IntrinsicCategory.Conversion, IntrinsicModule.Convert, op, [ x ] -> Result.Fact (conversion ctx op x)
+        // the library schemes with an image (the CS-9 recipes decompose most of these before the pass)
+        | _, IntrinsicModule.Math, "sign", _ -> Result.Fact (ValueRange.Bounded (bigint.MinusOne, bigint.One))
+        | _, IntrinsicModule.Math, "abs", [ x ] -> Result.Fact (ValueRange.abs x)
+        | _, IntrinsicModule.Math, "min", [ x; y ] -> Result.Fact (ValueRange.minOf x y)
+        | _, IntrinsicModule.Math, "max", [ x; y ] -> Result.Fact (ValueRange.maxOf x y)
+        | _, IntrinsicModule.Math, "clamp", [ lo; hi; x ] -> Result.Fact (ValueRange.minOf hi (ValueRange.maxOf lo x))
+        // the date components, the ranges their definitions state
+        | _, IntrinsicModule.DateTime, "hour", _ -> Result.Fact (ValueRange.bounded bigint.Zero (bigint 23))
+        | _, IntrinsicModule.DateTime, ("minute" | "second"), _ -> Result.Fact (ValueRange.bounded bigint.Zero (bigint 59))
+        | _, IntrinsicModule.DateTime, "millisecond", _ -> Result.Fact (ValueRange.bounded bigint.Zero (bigint 999))
+        // Math.* and the rounding intrinsics (CS-13), parses of input (CS-12), everything else
+        | _ -> Result.Untabled
+
+    /// The function-valued arguments an intrinsic calls, by position, with what it supplies to
+    /// each parameter of that function (source 3).
+    /// The array intrinsics whose result elements are elements of the argument array itself
+    /// (the element rule's same-key operations, CS-11): any other array-producing intrinsic builds
+    /// elements the store fold does not see and seeds its element type unbounded.
+    let sameElements (info: IntrinsicInfo) : bool =
+        let sameKeyOperations =
+            [ "sub"; "copy"; "append"; "filter"; "rev"; "sort"; "sortBy"; "sortWith"; "sortDescending"
+              "take"; "skip"; "truncate"; "concat"; "distinct"; "set"; "create"; "zeroCreate"
+              "blit"; "fill"; "get"; "length"; "isEmpty"; "contains"; "exists"; "forall"; "iter"; "iteri"
+              "fold"; "sum"; "max"; "min"; "tryFind"; "find"; "tryFindIndex"; "findIndex"; "head"; "last" ]
+        info.Module = IntrinsicModule.Array && List.contains info.Operation sameKeyOperations
+
+    /// The array intrinsics whose elements are a function value's results, with the position
+    /// of that function among the arguments.
+    let elementsFromFunction (info: IntrinsicInfo) : bool =
+        match info.Module, info.Operation with
+        | IntrinsicModule.Array, ("init" | "map" | "mapi" | "collect" | "choose") -> true
+        | _ -> false
+
+    let functionArgument (info: IntrinsicInfo) (args: NodeId list) : NodeId option =
+        match info.Module, info.Operation with
+        | IntrinsicModule.Array, "init" -> List.tryItem 1 args
+        | IntrinsicModule.Array, ("map" | "mapi" | "collect" | "choose") -> List.tryHead args
+        | _ -> None
+
+    let calls (info: IntrinsicInfo) : (int * Seed list) list =
+        match info.Module, info.Operation with
+        | IntrinsicModule.Array, "init" -> [ (1, [ Seed.IndexBelow 0 ]) ]
+        | IntrinsicModule.Array, "collect" -> [ (0, [ Seed.Unknown ]) ]
+        | (IntrinsicModule.Seq | IntrinsicModule.List), ("iter" | "map" | "filter" | "collect" | "tryPick" | "minBy" | "exists" | "forall" | "tryFind" | "find" | "choose") -> [ (0, [ Seed.Unknown ]) ]
+        | (IntrinsicModule.Seq | IntrinsicModule.List), "fold" -> [ (0, [ Seed.Unknown; Seed.Unknown ]) ]
+        | IntrinsicModule.Option, ("map" | "bind" | "iter" | "defaultWith") -> [ (0, [ Seed.Unknown ]) ]
+        | _ -> []

@@ -917,6 +917,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         SeqSaturation = SemanticGraph.mkSeqSaturation resolvedNodes
         // Per-field record ranges: written by RangeAnalysis at saturation (CS-10)
         FieldRanges = lazy Map.empty
+        ElementRanges = lazy Map.empty
         // F is empty at construction; enrichment mints into it at saturation.
         Edges = []
     }
@@ -2573,7 +2574,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
         // A signature file has no checker yet: the input contributes no graph, and that is an
         // error rather than a warning, because a warning would let the program lose a file silently.
         {
-            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty; FieldRanges = lazy Map.empty; Edges = [] }
+            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty; FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Edges = [] }
             Diagnostics = [{
                 Severity = NativeDiagnosticSeverity.Error
                 Code = DiagnosticCodes.CCS8401_UnsupportedConstruct

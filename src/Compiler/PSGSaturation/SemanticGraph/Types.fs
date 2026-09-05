@@ -755,6 +755,15 @@ type SemanticGraph = {
     /// constructor's name; every integer field of every record type definition has an entry, the
     /// empty range where nothing reachable constructs it. Filled by RangeAnalysis.
     FieldRanges: Lazy<Map<string, Map<string, ValueRange>>>
+    /// Per array element type, the join of every value the program stores into an array of that
+    /// element type (an array literal's elements, an indexer or `Array.set` assignment, the seed of
+    /// `Array.create`, the zero of `Array.zeroCreate`, the result of `Array.init`'s function; a
+    /// width-named element carrier met with its declared range): the range an element read has
+    /// (Dimensional_Range_Design.md §3.3, CS-11). Type-level and sound: one range per element type
+    /// over the whole program, coarse where two arrays of one type hold different ranges. Keyed by
+    /// the element type's rendered form; a type nothing reachable stores into has no entry, and a
+    /// read of it is unobservable. Filled by RangeAnalysis.
+    ElementRanges: Lazy<Map<string, ValueRange>>
     /// F -- the hyperedge set. Phase 0 carries only what enrichment mints
     /// explicitly (obligations, residence); the kind-derived structural and
     /// reference edges are projected on demand by `kindEdges` and are not

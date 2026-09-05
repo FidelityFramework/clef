@@ -133,6 +133,10 @@ module DiagnosticCodes =
     // where the width has no other source; information on every other substrate until CS-12
     // supplies the declared boundary ranges (RangeAnalysis).
     let CCS8011_UnobservableRange = "CCS8011"
+    // CCS8012: a value's analysed range is not covered by a declared representation
+    // (Dimensional_Range_Design.md §4.2, §7): on a substrate with declared representations, a
+    // bounded integer range none of them holds. A warning, promoted by --warnaserror (RangeAnalysis).
+    let CCS8012_RangeNotCovered = "CCS8012"
     // docs/fidelity/phg/Dimensional_Step1_2_Design.md (f); allocation rule in the Plan's D3.
     let CCS8018_UnsupportedLiteralSuffix = "CCS8018"
 
