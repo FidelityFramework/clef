@@ -37,8 +37,20 @@ module SemanticGraph =
                 let mutable moduleInit = []
                 let mutable definitions = []
                 let mutable declRoot = None
+                // A binding whose value is a quotation is a declaration the compiler reads (D9): it
+                // is neither initialised by the module nor a definition to emit, and is in no list.
+                let rec holdsQuotation (id: NodeId) =
+                    match Map.tryFind id nodes with
+                    | Some { Kind = SemanticKind.Quote _ } -> true
+                    | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> holdsQuotation inner
+                    | _ -> false
+                let isDeclaration (memberNode: SemanticNode) =
+                    match memberNode.Kind, memberNode.Children with
+                    | SemanticKind.Binding _, [ valueId ] -> holdsQuotation valueId
+                    | _ -> false
                 for memberId in memberIds do
                     match Map.tryFind memberId nodes with
+                    | Some memberNode when isDeclaration memberNode -> ()
                     | Some memberNode ->
                         match memberNode.Kind with
                         | SemanticKind.Binding(_, _, _, dr) ->

@@ -628,7 +628,14 @@ let checkBinding
 
         // Module-level value bindings need MainPrologue strategy for SSA scoping.
         // These are emitted at the start of main - SSAs flow into main's body.
-        if env.EnclosingFunction.IsNone && declRoot.IsNone then
+        // A quotation is not a value (D9): it is compile-time data the compiler reads, so a
+        // binding that holds one is a declaration, never a module-init slot.
+        let rec holdsQuotation (id: NodeId) =
+            match Map.tryFind id builder.Nodes with
+            | Some { Kind = SemanticKind.Quote _ } -> true
+            | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> holdsQuotation inner
+            | _ -> false
+        if env.EnclosingFunction.IsNone && declRoot.IsNone && not (holdsQuotation finalExprNode.Id) then
             builder.SetEmissionStrategy(node.Id, EmissionStrategy.MainPrologue)
 
         (node, None, isMutable, literalValue)

@@ -143,6 +143,7 @@ the horizons impose are `Horizon_Requirements.md`.
 | L-11 | `NativeService.fs` `parseString` (clef); `Core/CompilationOrchestrator.fs` `requireCleanDiagnostics` (Composer) | the parser reported through the thread-installed logger, which the parse function never installed, so every parse error went to the discarding default logger; the checker then received a damaged tree and the failure surfaced as "No declaration roots found in PSG" or a witness error with no code | the FreeBSD class in the front end: a failure decided by the wrong party and reported by none | done 2026-09-04: the capturing logger and the Parse phase are installed for the parse, every error-severity diagnostic is rendered with its range, Composer prints them and stops with "Compilation failed with N parse error(s)"; the parser family's CCS codes land with the step-4 table |
 | L-12 | `NativeTypes.fs` `NativeLiteral.BigInt`; `MatchRecipes.fs`; Composer `SSAAssignment.fs` | a `BigInt` literal case with no producer, mapped to `int64` "for now" in two places | fabricated representation | done 2026-09-04: case and both arms removed, Composer's arm with them |
 | L-13 | `Project/ProjectChecker.fs` `buildPlatformContext` | the width dimensions are derived from one `WordSize` (`Some 64` or `Some 32`) and otherwise fall back to the x86_64 defaults; the platform description declares no dimension by name and no representation | silent default of a platform fact | done 2026-09-04 (CS-7b, D8): the descriptor's `TargetCore` declares `Widths` by name and `Representations` with capability, exact range and boundary (BAREWire `Platform/Description.fs`, the Contracts twin); `PlatformResolution` reads them structurally and `PlatformDeclaration.fill` writes `PlatformContext.Dimensions`/`Representations` once, at the saturation entry; `word_size`, `PointerAlign`, `defaultLinux_x86_64` and `fromPlatformPath` are deleted (a leftover `word_size` key is CCS8205 information); an undeclared dimension is CCS8203 and an unoffered representation CCS8204 at the first reachable site; Composer's `platformWordBits`/`platformWordType` read the context's `Register` and fail with CCS8203's text when absent. Residual for L-10: Alex's `platformWordWidth arch` table in TypeMapping/SSAAssignment is checked against the declaration at `MLIRGeneration.generate` and stops the build on disagreement; it is retired with step 7. Review fixes: the declaration's own defects are CCS8206 (unreadable element), CCS8207 (tag outside its vocabulary, no bits, duplicate name, Register disagreeing with `WordSizeBits`) and CCS8208 (a second description of one form among the binding's sources) at the declaring node, before any site; a dimension-named seal resolves by (family, bits), never by a synthesised name; the reader follows a quotation and reads only the binding's own sources |
+| L-14 | `Expressions/Types.fs` `resolveSynType` | a type name that resolves to nothing became `TError`, and `Unify.fs` unifies an error type with anything, so an unknown type in an annotation was silently accepted and surfaced, if at all, as a witness error below the graph (`Expr<...>` on every quoted descriptor; `array<byte, 'n, Stack>` on the M rows) | silent failure in the front end | done 2026-09-04 (CS-8): CCS8706 at the annotation, the one report of that failure; the M rows' first printed error is now that located diagnostic |
 
    Items marked "now" have no dependence on the rewrite and were removed first (L-3, L-5, L-11, L-12 on
    2026-09-04, each gated by a Composer build and a byte-identical RoundTrip); the rest are removed by
@@ -367,6 +368,22 @@ Decided 2026-09-04, all five by the user (D1 re-derived from the design corpus a
   inside structurally, by type name and field name, as it does a plain record. The spec's quotation
   sketches in `platform-bindings.md` are the design; the canonical Fidelity.Platform note's "not a
   quoted Expr" sentence is the drift to correct.
+- **D9, quotations are intrinsic (the user, 2026-09-04; built in CS-8).** "I don't want to just make a
+  Fidelity.Quotations as a reflex if it makes more sense to have it become intrinsic ... Since we're
+  basically guaranteed to encounter it at every project I can't imagine it *not* be intrinsic"; the
+  precedent is Alloy folded into the intrinsics and IcedTasks becoming Frosty, the default continuation
+  model. So: `Expr<'T>` is a type constructor the compiler provides (`Types.exprTyCon`, resolvable in
+  type position, the bare `Expr` denoting `Expr<_>`); `<@ e @>` and `<@@ e @@>` elaborate into the graph
+  as a `Quote` node the compiler reads as data and never evaluates; a binding holding a quotation is a
+  declaration, in no module-init or definition list, never entered by reachability from its module,
+  and never witnessed; a reference to a quotation from executed code is CCS8066, a splice CCS8065; a
+  reference from inside another quotation is structure and is legal. Quotation processing is the
+  compiler's own: the structural reader for declarations (PlatformResolution today; binding and
+  peripheral descriptors and predicates on the same reader) and, at step 8, the closed-form evaluator
+  for range laws (`numeric-selection.md` §4). No quotations library, no `ReflectedDefinition`, no
+  runtime tree. The inherited F# text of `expressions.md` "Quoted Expressions" and
+  `type-definitions.md` "Conversion to Quotation Values" is rewritten to this; the two x86_64 leaf
+  files that opened the F# quotations namespace no longer do.
 - **D5, `+` on strings (decided: concatenates).** `+` dispatches on the kind of its operands: on numerics it
   is the unit-unified add with a range obligation; on strings it is the concat recipe with an extent
   obligation. No proof complication follows, because each dispatch emits its own obligation family.
@@ -394,3 +411,11 @@ items are reported, never edited.
 | R-13 | `dts-dmm-paper.md` §2.6 vs `numeric-selection.md` §2.1, §13.2 | warning in the paper, hard error in the spec | the owner's rule: always a warning with `--warnaserror` to make it an error, as the FPGA timing budget does; spec amended, the paper was right |
 | R-14 | `fixed-point-scaffolding.md` §4 | sign-extends an unsigned value; elaborator versus lowering | paper: reported; the same defect as L-7b |
 | R-15 | `numeric-selection.md` §3.4 vs §5 | two severities for one condition | one severity now: warning promoted under the flag |
+
+- **R-16 (`platform-predicates.md` §5.2, resolved 2026-09-04 with D9).** The draft's "dynamic CPU
+  detection" sketched a predicate quotation holding a run-time call, with "Alex may generate runtime
+  check or use compile-time target selection". Alex decides nothing (`CCS_Architecture.md`), a
+  predicate is a declared fact read structurally (D8), and a quotation is never evaluated (D9). The
+  section now says: a predicate's quotation holds a literal; a capability known only at run time is an
+  ordinary function the program calls, on which the compiler makes no selection; a non-literal predicate
+  body is a defect of the declaration (CCS8206).
