@@ -58,6 +58,27 @@ let private isIntrinsicPipeLeft (info: IntrinsicInfo) =
 // Function Application: SynExpr.App
 //-------------------------------------------------------------------------
 
+/// A conversion applied to a `char` (sequence CS-9; a decision recorded for the owner, interim
+/// until CS-11 migrates the corpus). A numeric conversion is `κ<'u> -> Target<'u>` (design (c),
+/// source numeric, else CCS8002), and `char` is not numeric (ntu-types.md). BAREWire's
+/// `Description.fs` (`int (Text.charAt a ia)`) and the platform's `Parse.clef` (`int c`) read a
+/// character's code point through the conversion, and BAREWire is not edited here, so a `Convert`
+/// intrinsic whose argument is already known to be `char` at the application takes the second,
+/// explicit signature `char -> Target<1>`: the code point at the dimensionless measure, witnessed
+/// as the integer widening it already was. Nothing else admits `char` at a numeric position, and a
+/// `char` source not known at the application is CCS8002, loud, not defaulted.
+let private retypeCharConversion (builder: NodeBuilder) (funcNode: SemanticNode) (argNode: SemanticNode) : SemanticNode =
+    match funcNode.Kind with
+    | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Convert
+                                       && Types.tryGetNTUKind (applySubst argNode.Type) = Some NTUKind.NTUchar ->
+        match Types.tryConversionOfName info.FullName with
+        | Some (_, carrier) ->
+            let ty = NativeType.TFun(Types.charType, Types.numericType carrier)
+            builder.SetType(funcNode.Id, ty)
+            { funcNode with Type = ty }
+        | None -> funcNode
+    | _ -> funcNode
+
 /// Check function application.
 /// Handles: inline expansion (escape analysis), pipe operator reduction,
 /// intrinsic saturation, DU constructor detection.
@@ -113,6 +134,7 @@ let checkApp
     // Normal path: no inline expansion (either no InlineBody or multi-arg partial application)
     let funcNode = checkExpr env builder funcExpr
     let argNode = checkExpr env builder argExpr
+    let funcNode = retypeCharConversion builder funcNode argNode
 
     // Determine result type based on function type
     // When function type is already concrete (TFun), use return type directly

@@ -552,14 +552,89 @@ let private resolveSeqEnumeratorOp (op: string) (range: SourceRange) : Intrinsic
     | unknown ->
         UnknownOperation $"Unknown SeqEnumerator intrinsic: SeqEnumerator.{unknown}. Available: moveNext, current"
 
-/// Resolve Math.* operations
-let private resolveMathOp (op: string) (_range: SourceRange) : IntrinsicResolution =
+//-------------------------------------------------------------------------
+// Numeric schemes: the carrier and measure variables, fresh per use
+//-------------------------------------------------------------------------
+
+/// A fresh carrier variable for an operand position of operator `op` (design a.2, c.1): the
+/// variable carries the operator it was minted for, so CCS8000 can name it.
+let private freshCarrierFor (op: string) (range: SourceRange) : CarrierRef =
+    let k = freshTypeParamAuto TypeParamKind.Carrier range
+    k.Constraints <- [ Constraint.OperandOf(op, range) ]
+    CarrierRef.CVar k
+
+/// A fresh measure variable as a dimension.
+let private freshDimension () : Dimension = Dimension.ofVar (freshMeasureVar None)
+
+/// The numeric type at a carrier position and a dimension: `κ<'u>`.
+let private numeric (k: CarrierRef) (d: Dimension) : NativeType = NativeType.TNum(k, d)
+
+/// `ρ<'u>`: the real carrier at a dimension (design (c): `ρ` is the float carrier, D10).
+let private real (d: Dimension) : NativeType = NativeType.TNum(CarrierRef.Carrier Types.floatTyCon, d)
+
+/// `int<'u>`: the integer carrier at a dimension.
+let private integer (d: Dimension) : NativeType = NativeType.TNum(CarrierRef.Carrier Types.intTyCon, d)
+
+/// The library schemes (design (c) table; units-of-measure.md, the measure-aware functions;
+/// Dimensional_Range_Design.md §5), each stated once and instantiated with fresh carrier and
+/// measure variables at every use, as `tryResolveOperator` does for the operators. They are
+/// resolved only after binding lookup fails (Identity.fs), so a user's `abs` is never shadowed.
+///   abs                             κ<'u> -> κ<'u>
+///   sign                            κ<'u> -> int<1>
+///   min, max                        κ<'u> -> κ<'u> -> κ<'u>
+///   clamp lo hi x                   κ<'u> -> κ<'u> -> κ<'u> -> κ<'u>
+///   sqrt                            ρ<'u^2> -> ρ<'u>     (`sqrt 1.0<m>` is CCS8041 through solveDim)
+///   atan2                           ρ<'u> -> ρ<'u> -> ρ<1>
+///   floor, ceiling, round, truncate ρ<'u> -> int<'u>     (a real becomes an integer through these, §5)
+let private librarySchemeType (name: string) (range: SourceRange) : NativeType option =
+    match name with
+    | "abs" ->
+        let k = freshCarrierFor name range
+        let u = freshDimension ()
+        Some (NativeType.TFun(numeric k u, numeric k u))
+    | "sign" ->
+        let k = freshCarrierFor name range
+        let u = freshDimension ()
+        Some (NativeType.TFun(numeric k u, integer Dimension.one))
+    | "min" | "max" ->
+        let k = freshCarrierFor name range
+        let u = freshDimension ()
+        Some (NativeType.TFun(numeric k u, NativeType.TFun(numeric k u, numeric k u)))
+    | "clamp" ->
+        let k = freshCarrierFor name range
+        let u = freshDimension ()
+        Some (NativeType.TFun(numeric k u, NativeType.TFun(numeric k u, NativeType.TFun(numeric k u, numeric k u))))
+    | "sqrt" ->
+        let u = freshDimension ()
+        Some (NativeType.TFun(real (Dimension.pow 2 u), real u))
+    | "atan2" ->
+        let u = freshDimension ()
+        Some (NativeType.TFun(real u, NativeType.TFun(real u, real Dimension.one)))
+    | "floor" | "ceiling" | "round" | "truncate" ->
+        let u = freshDimension ()
+        Some (NativeType.TFun(real u, integer u))
+    | _ -> None
+
+/// Try to resolve a bare library name to its intrinsic and scheme: the step after binding
+/// lookup fails, so a binding of the same name wins (the CS-6 review's shadowing rule).
+let tryResolveLibraryScheme (name: string) (range: SourceRange) : (IntrinsicInfo * NativeType) option =
+    librarySchemeType name range
+    |> Option.map (fun ty -> (mkIntrinsic IntrinsicModule.Math name IntrinsicCategory.Arithmetic name, ty))
+
+/// Resolve Math.* operations. `Math.abs`, `Math.sqrt`, `Math.atan2`, `Math.floor`, `Math.ceiling`
+/// and `Math.round` are the qualified spelling of the library schemes below (one definition, two
+/// spellings; design (c), sequence CS-9); the transcendentals keep their dimensionless typing.
+let private resolveMathOp (op: string) (range: SourceRange) : IntrinsicResolution =
     let fullName = "Math." + op
     match op with
-    | "abs" | "sqrt" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "exp" | "log" | "log10" | "floor" | "ceiling" | "round" ->
+    | "abs" | "sqrt" | "atan2" | "floor" | "ceiling" | "round" ->
+        match librarySchemeType op range with
+        | Some ty -> Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
+        | None -> UnknownOperation $"Unknown Math intrinsic: Math.{op}"
+    | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "exp" | "log" | "log10" ->
         let ty = NativeType.TFun(Types.floatType, Types.floatType)
         Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
-    | "pow" | "atan2" | "min" | "max" ->
+    | "pow" | "min" | "max" ->
         let ty = NativeType.TFun(Types.floatType, NativeType.TFun(Types.floatType, Types.floatType))
         Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
     | unknown ->
@@ -799,19 +874,6 @@ let resolveModuleIntrinsic
 // Operator Intrinsics
 //-------------------------------------------------------------------------
 
-/// A fresh carrier variable for an operand position of operator `op` (design a.2, c.1): the
-/// variable carries the operator it was minted for, so CCS8000 can name it.
-let private freshCarrierFor (op: string) (range: SourceRange) : CarrierRef =
-    let k = freshTypeParamAuto TypeParamKind.Carrier range
-    k.Constraints <- [ Constraint.OperandOf(op, range) ]
-    CarrierRef.CVar k
-
-/// A fresh measure variable as a dimension.
-let private freshDimension () : Dimension = Dimension.ofVar (freshMeasureVar None)
-
-/// The numeric type at a carrier position and a dimension: `κ<'u>`.
-let private numeric (k: CarrierRef) (d: Dimension) : NativeType = NativeType.TNum(k, d)
-
 /// Try to resolve an operator intrinsic (not, op_BooleanAnd, op_Addition, etc.)
 let tryResolveOperator (name: string) (range: SourceRange) : (IntrinsicInfo * NativeType) option =
     match name with
@@ -880,22 +942,28 @@ let tryResolveOperator (name: string) (range: SourceRange) : (IntrinsicInfo * Na
         let ty = NativeType.TFun(numeric k u, numeric k u)
         Some (info, ty)
     | "op_BitwiseAnd" | "op_BitwiseOr" | "op_ExclusiveOr" ->
-        // Polymorphic bitwise: 'T -> 'T -> 'T
-        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+        // Bitwise: `κ<'u> -> κ<'u> -> κ<'u>` (`x &&& mask` keeps x's carrier and dimension,
+        // Dimensional_Range_Design.md §5; sequence CS-9)
+        let k = freshCarrierFor name range
+        let u = freshDimension ()
         let info = mkIntrinsic IntrinsicModule.Operators name IntrinsicCategory.Arithmetic name
-        let ty = NativeType.TFun(tyParam, NativeType.TFun(tyParam, tyParam))
+        let ty = NativeType.TFun(numeric k u, NativeType.TFun(numeric k u, numeric k u))
         Some (info, ty)
     | "op_LogicalNot" ->
-        // Bitwise complement (~~~): 'T -> 'T
-        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+        // Bitwise complement (~~~): `κ<'u> -> κ<'u>`
+        let k = freshCarrierFor name range
+        let u = freshDimension ()
         let info = mkIntrinsic IntrinsicModule.Operators "op_LogicalNot" IntrinsicCategory.Arithmetic name
-        let ty = NativeType.TFun(tyParam, tyParam)
+        let ty = NativeType.TFun(numeric k u, numeric k u)
         Some (info, ty)
     | "op_LeftShift" | "op_RightShift" ->
-        // Shift: 'T -> int -> 'T
-        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+        // Shift: `κ<'u> -> int<1> -> κ<'u>` (plan L-8): the amount is a dimensionless int typed
+        // by the front end; the shifted operand keeps its carrier. Composer still casts the
+        // amount to the operand's width at emission until CS-10 supplies widths from the node.
+        let k = freshCarrierFor name range
+        let u = freshDimension ()
         let info = mkIntrinsic IntrinsicModule.Operators name IntrinsicCategory.Arithmetic name
-        let ty = NativeType.TFun(tyParam, NativeType.TFun(Types.intType, tyParam))
+        let ty = NativeType.TFun(numeric k u, NativeType.TFun(Types.intType, numeric k u))
         Some (info, ty)
     // Pipe operators - these are eta-reduced away in nanopass but need types during checking
     | "op_PipeRight" ->
@@ -950,18 +1018,8 @@ let tryResolveOperator (name: string) (range: SourceRange) : (IntrinsicInfo * Na
         let tupleTy = NativeType.TTuple([tyT1; tyT2], false)
         let ty = NativeType.TFun(tupleTy, tyT2)
         Some (info, ty)
-    | "max" ->
-        // 'T -> 'T -> 'T (polymorphic comparison)
-        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
-        let info = mkIntrinsic IntrinsicModule.Operators "max" IntrinsicCategory.Comparison name
-        let ty = NativeType.TFun(tyParam, NativeType.TFun(tyParam, tyParam))
-        Some (info, ty)
-    | "min" ->
-        // 'T -> 'T -> 'T (polymorphic comparison)
-        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
-        let info = mkIntrinsic IntrinsicModule.Operators "min" IntrinsicCategory.Comparison name
-        let ty = NativeType.TFun(tyParam, NativeType.TFun(tyParam, tyParam))
-        Some (info, ty)
+    // `min` and `max` are library schemes (`tryResolveLibraryScheme`), resolved after binding
+    // lookup with the numeric scheme `κ<'u> -> κ<'u> -> κ<'u>` (sequence CS-9).
     // PRD-13a: List cons operator
     | "op_ColonColon" ->
         // ('T * list<'T>) -> list<'T> (cons: prepend element to list - takes tuple, not curried)
@@ -996,19 +1054,27 @@ let isOperatorName (name: string) : bool =
 // Conversion Intrinsics
 //-------------------------------------------------------------------------
 
-/// Try to resolve a type conversion intrinsic (float, int, int64, byte, etc.)
+/// Try to resolve a type conversion intrinsic (float, int, int64, byte, etc.).
+/// A numeric conversion is `κ<'u> -> Target<'u>` (design (c) last row; plan L-4): the source is
+/// a fresh carrier variable carrying the conversion's name, so a non-numeric source is CCS8002
+/// naming it, and the dimension is preserved (`float (3<m>)` is `float<m>`). There is no
+/// polymorphic `'T -> Target` conversion (width-inference.md §7). The width-named spellings
+/// (int8..uint64, byte, sbyte, uint, nativeint, float32, single, double) stay resolvable here
+/// until CS-11 deletes them (D10); nothing new names a width. `char` is the one non-numeric
+/// conversion intrinsic and keeps its polymorphic source.
 let tryResolveConversion (name: string) (range: SourceRange) : (IntrinsicInfo * NativeType) option =
-    let mkConvIntrinsic op resultType =
-        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
-        let info = mkIntrinsic IntrinsicModule.Convert op IntrinsicCategory.Conversion name
-        let ty = NativeType.TFun(tyParam, resultType)
-        Some (info, ty)
-
-    // A numeric spelling reads the one spelling table (sequence CS-5); `char` is the one
-    // non-numeric conversion intrinsic.
+    // A numeric spelling reads the one spelling table (sequence CS-5).
     match Types.tryConversionOfName name with
-    | Some (op, carrier) -> mkConvIntrinsic op (Types.numericType carrier)
+    | Some (op, carrier) ->
+        let k = freshCarrierFor name range
+        let u = freshDimension ()
+        let info = mkIntrinsic IntrinsicModule.Convert op IntrinsicCategory.Conversion name
+        let ty = NativeType.TFun(numeric k u, NativeType.TNum(CarrierRef.Carrier carrier, u))
+        Some (info, ty)
     | None ->
         match name with
-        | "char" -> mkConvIntrinsic "toChar" Types.charType
+        | "char" ->
+            let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+            let info = mkIntrinsic IntrinsicModule.Convert "toChar" IntrinsicCategory.Conversion name
+            Some (info, NativeType.TFun(tyParam, Types.charType))
         | _ -> None
