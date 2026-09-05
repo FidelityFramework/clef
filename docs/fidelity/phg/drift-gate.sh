@@ -58,6 +58,7 @@ RETIRED=(
   'null pointer|= null :|is a null (pointer )?check'       # map/set/list: the empty collection is the static sentinel; isEmpty is a literal comparison
   'fat pointer|fat ptr|\{ptr: \*|ptr: \*u8|ptr: \*T|\{ptr, len\}'   # strings/arrays are memref views (buffer + dimension); no {ptr, len} header
   'FNCS|F# Native|FSharp\.Native\.|fsnative|FSNAC|FsNative'      # pre-NTU/PSG naming, fully set aside: the product is Clef, the service is CCS, the universe is NTU, the graph is the PSG
+  'FSharp\.Quotations'                                    # plan D9: quotations are intrinsic; Expr<'T> is the compiler's, there is no quotations library to open
   '\bFirefly\b'                                            # the pre-rename Composer; same family
   '\bKeystone\b|\bkeystone/|\.ks\b'                         # the pre-rename language name and its file extension
   '\bwrendit\b|__wrendit_'                                 # the pre-rename WREN stack name; the built sample (WrenHello) uses `wren`
@@ -101,6 +102,7 @@ SCHEDULED=(
   'Composer/src::TyCon'                                         # same
   'BAREWire/docs::FS[0-9]{4}'                               # BAREWire's own FS9xxx analyzer codes retire to CCS with the step-4 table
   'ClefAutoComplete::FS[0-9]{4}'                             # FCS fork: its codes are the F# compiler's; disposition is archive (Lattice_Consumer_Contract.md)
+  'ClefAutoComplete::FSharp\.Quotations'                    # FCS fork: the F# compiler's own quotations surface; disposition is archive (same row)
   'clef-lang-spec/spec/lexical-filtering.md::\bFS[0-9]{4}\b'    # the offside example moves with the step-4 table
   'clef/docs/diagnostics.md::\bFS[0-9]{4}\b'                    # step 4
   'Composer/docs/WebView_Build_Integration.md::\bFS[0-9]{4}\b'  # step 4
@@ -161,7 +163,7 @@ SCHEDULED=(
   'clef/src/Compiler/Baker/Recipes/::ptr<'                                  # same
   'clef/src/Compiler/Baker/Recipes/Decomposition.fs::null'                  # same
 )
-ALLOW_DIRS=( '/archive/' '/history/' '/proof-trace/' '/net10.0/' '/net9.0/' '/net8.0/' '/bin/' '/obj/' '/intermediates/' '/node_modules/' '/.git/' '/build/' '/target/' )
+ALLOW_DIRS=( '/archive/' '/history/' '/proof-trace/' '/net10.0/' '/net9.0/' '/net8.0/' '/bin/' '/obj/' '/intermediates/' '/targets/' '/node_modules/' '/.git/' '/build/' '/target/' )
 
 is_allowed() {
   local f="$1"

@@ -184,7 +184,7 @@ holding them together.
 
 ## 3. The structural change this forces
 
-`computeRecordLayout` runs today during **type checking**, in `NativeService` (now retired),
+`computeRecordLayout` runs today during **type checking**, in `NativeService`,
 before the graph exists and before `PlatformContext` is reachable. Placement
 cannot stay there: it needs the platform, and it needs the constituent *nodes*
 to hang slots on.

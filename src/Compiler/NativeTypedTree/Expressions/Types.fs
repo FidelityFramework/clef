@@ -56,6 +56,13 @@ module DiagnosticCodes =
     let CCS8062_DynamicNotSupported = "CCS8062"
     let CCS8063_QuotePatternNotSupported = "CCS8063"
     let CCS8064_InstanceMemberPatternNotSupported = "CCS8064"
+    // CCS8065: an expression splice (`%e`, `%%e`) inside a quotation. A quotation is compile-time
+    // data read whole; there is no run-time quotation value to splice (D9).
+    let CCS8065_SpliceNotSupported = "CCS8065"
+    // CCS8066: a quotation referenced from executed code. A quotation has no run-time value: it is
+    // compile-time data the compiler reads (D9); a module-level quotation is reported at each
+    // reachable reference, a local or expression-position one at the quotation itself.
+    let CCS8066_QuotationHasNoRuntimeValue = "CCS8066"
     let CCS8080_BclReferenceNotAllowed = "CCS8080"
     let CCS8081_SystemNamespaceNotAllowed = "CCS8081"
     let CCS8082_MicrosoftNamespaceNotAllowed = "CCS8082"
@@ -104,6 +111,10 @@ module DiagnosticCodes =
     let CCS8703_ConflictingFields = "CCS8703"
     let CCS8704_AmbiguousFields = "CCS8704"
     let CCS8705_MissingFields = "CCS8705"
+    // CCS8706: a type name in an annotation that resolves to nothing: no abbreviation, no
+    // definition, no primitive, no built-in constructor. Reported at the annotation; the error
+    // type it leaves behind unifies with anything, so this is the one report of that failure.
+    let CCS8706_UndefinedType = "CCS8706"
     // Constraints (CCS8710-CCS8719)
     let CCS8710_NullConstraint = "CCS8710"
     let CCS8711_UnsupportedConstraint = "CCS8711"
@@ -853,6 +864,9 @@ let private tryResolveBuiltinTypeConstructor (name: string) (args: NativeType li
     | "option",  [elem]      -> Some (NativeType.TApp(optionTycon,  [elem]))
     | "voption", [elem]      -> Some (NativeType.TApp(voptionTycon, [elem]))
     | "Result",  [ok; err]   -> Some (NativeType.TApp(resultTycon,  [ok; err]))
+    // The quotation type is an intrinsic constructor (D9): `Expr<ty>` is the type of `<@ e @>`
+    // where `e : ty`; there is no quotations library.
+    | "Expr", [elem] -> Some (NativeType.TApp(Types.exprTyCon, [elem]))
     // Not a built-in type constructor
     | _ -> None
 
@@ -888,6 +902,8 @@ let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
                 | "string" -> Some NativeTypes.Types.stringType
                 | "unit" -> Some NativeTypes.Types.unitType
                 | "decimal" -> Some NativeTypes.Types.decimalType
+                // The bare quotation type, the type of `<@@ e @@>`: `Expr<ty>` for a fresh `ty` (D9).
+                | "Expr" -> Some (NativeType.TApp(NativeTypes.Types.exprTyCon, [ freshTypeVar dummyRange ]))
                 | _ -> None
 
 //-------------------------------------------------------------------------
@@ -1281,6 +1297,14 @@ let private refuseMeasure (env: TypeEnv) (failure: MeasureFailure) : NativeType 
     let _, message, _ = describeMeasureFailure failure
     NativeType.TError message
 
+/// A type name that resolves to nothing is CCS8706 at the annotation (plan L-14). The error type
+/// returned unifies with anything, so the diagnostic minted here is the one report of the failure;
+/// it is never left to surface as a witness error below the graph.
+let private refuseUnknownType (env: TypeEnv) (name: string) (r: range) : NativeType =
+    let message = $"The type '{name}' is not defined"
+    addNativeError DiagnosticCodes.CCS8706_UndefinedType r message env
+    NativeType.TError message
+
 /// A numeric carrier applied to written arguments, `float<kg m / s^2>`: the arguments are read in
 /// the measure sort through the one translator (design a.4; `float` has arity 0 in the type sort,
 /// D4). A carrier that already carries a measure, an abbreviation such as `type metres = float<m>`,
@@ -1343,7 +1367,7 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
             // never an unknown type; anything else is the unknown-type error as before.
             match MeasureEnv.tryFind path env.Measures with
             | Some _ -> refuseMeasure env (MeasureFailure.SortMismatch(name, synType.Range))
-            | None -> NativeType.TError $"Unknown type: {name}"
+            | None -> refuseUnknownType env name synType.Range
 
     | SynType.App(typeName, _, typeArgs, _, _, _, r) ->
         // Generic type application: nativeptr<byte>, List<int>, Option<string>, float<m>
@@ -1366,7 +1390,7 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
                     match resolved with
                     | Some (NativeType.TApp(tyCon, _)) -> NativeType.TApp(tyCon, argTys)
                     | Some ty -> ty
-                    | None -> NativeType.TError $"Unknown type constructor: {name}"
+                    | None -> refuseUnknownType env name r
         | _ ->
             // Complex type expression - recurse
             apply (resolveSynType env typeName) typeArgs r

@@ -375,14 +375,23 @@ let private isFunctionBindingNode (builder: NodeBuilder) (node: SemanticNode) : 
         | _ -> false
     | _ -> false
 
+/// The parent of every node, read from the children lists, which are complete by construction:
+/// the `Parent` field is set only where a checker arm calls `SetParent`, and an expression node's
+/// is usually still `None` here (the graph's links are completed by a later pass). Every walk up
+/// the tree in this file reads this index.
+let private parentIndex (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, NodeId> =
+    nodes
+    |> Map.fold (fun index _ node ->
+        node.Children |> List.fold (fun index child -> Map.add child node.Id index) index) Map.empty
+
 /// Whether `ancestorId` is an ancestor of `node` in the graph.
-let private hasAncestor (builder: NodeBuilder) (ancestorId: NodeId) (node: SemanticNode) : bool =
+let private hasAncestor (parents: Map<NodeId, NodeId>) (ancestorId: NodeId) (node: SemanticNode) : bool =
     let rec up (id: NodeId option) =
         match id with
         | None -> false
         | Some i when i = ancestorId -> true
-        | Some i -> Map.tryFind i builder.Nodes |> Option.bind (fun n -> n.Parent) |> up
-    up node.Parent
+        | Some i -> up (Map.tryFind i parents)
+    up (Map.tryFind node.Id parents)
 
 /// The ids of the measure variables (in numeric positions) and carrier variables free in a type.
 let private freeMeasureAndCarrierIds (ty: NativeType) : Set<int> =
@@ -395,12 +404,13 @@ let private freeMeasureAndCarrierIds (ty: NativeType) : Set<int> =
 /// generalised, outside the binding's own subtree (its locals are its own). The resolvers are
 /// functions and cannot be enumerated, so the bindings checked so far are read from the graph.
 let private envFreeMeasureAndCarrierIds (builder: NodeBuilder) (binding: SemanticNode) : Set<int> =
+    let parents = parentIndex builder.Nodes
     builder.Nodes
     |> Map.toSeq
     |> Seq.map snd
     |> Seq.filter (fun n ->
         match n.Kind with
-        | SemanticKind.Binding _ -> n.Id <> binding.Id && not (hasAncestor builder binding.Id n)
+        | SemanticKind.Binding _ -> n.Id <> binding.Id && not (hasAncestor parents binding.Id n)
         | _ -> false)
     |> Seq.map (fun n ->
         match applySubst n.Type with
@@ -442,7 +452,7 @@ let private generalizeTopLevelFunction (builder: NodeBuilder) (env: TypeEnv) (no
 /// generalisable by the spec and monomorphic here by this checker's gap). `None` under an
 /// `inline` function: its body is re-checked at every expansion site, so its variables are
 /// quantified by expansion and nothing under it is reported.
-let private quantifiedByEnclosing (builder: NodeBuilder) (node: SemanticNode) : Set<int> option =
+let private quantifiedByEnclosing (builder: NodeBuilder) (parents: Map<NodeId, NodeId>) (node: SemanticNode) : Set<int> option =
     let rec up (id: NodeId option) (acc: Set<int>) : Set<int> option =
         match id |> Option.bind (fun i -> Map.tryFind i builder.Nodes) with
         | None -> Some acc
@@ -455,8 +465,8 @@ let private quantifiedByEnclosing (builder: NodeBuilder) (node: SemanticNode) : 
                 | SemanticKind.Binding _, ty when isFunctionBindingNode builder parent ->
                     Set.union acc (freeMeasureAndCarrierIds ty)
                 | _ -> acc
-            up parent.Parent acc
-    up node.Parent Set.empty
+            up (Map.tryFind parent.Id parents) acc
+    up (Map.tryFind node.Id parents) Set.empty
 
 /// After every constraint of the program is solved: a value binding (a binding whose right-hand
 /// side is not a function expression, the spec's non-generalisable case as this checker draws
@@ -493,39 +503,49 @@ let private residualDiagnostics (builder: NodeBuilder) (reported: Diagnostic lis
           Range = node.Range
           RelatedNodes = []
           Reachability = ReachabilityContext.Unknown }
-    builder.Nodes
-    |> Map.toList
-    |> List.collect (fun (_, node) ->
-        match node.Kind with
-        | SemanticKind.Binding(name, _, _, _)
-            when not (isFunctionBindingNode builder node)
-                 && not (node.Metadata.ContainsKey "FidelityExtern.Library")
-                 && not (alreadyFailed node) ->
-            match applySubst node.Type with
-            | NativeType.TForall _ -> []
-            | ty ->
-                match quantifiedByEnclosing builder node with
-                | None -> []
-                | Some quantified ->
-                    let excused (id: int) = Set.contains id quantified || Set.contains id tainted
-                    let measures = freeMeasureVars ty |> List.filter (fun v -> not (excused v.Id))
-                    let operands =
-                        collectFreeTypeParams ty
-                        |> List.filter (fun tp ->
-                            not (excused tp.Id)
-                            && (tp.Kind = TypeParamKind.Carrier || (operandOf tp).IsSome))
-                    [ match measures with
-                      | _ :: _ ->
-                          yield diagnostic DiagnosticCodes.CCS8047_UnresolvedMeasure
-                                    $"The measure of '{name}' could not be resolved and this binding is not generalisable; annotate it" node
-                      | [] -> ()
-                      match operands with
-                      | tp :: _ ->
-                          let op = operandOf tp |> Option.defaultValue "(unknown)"
-                          yield diagnostic DiagnosticCodes.CCS8001_OperandKindUndetermined
-                                    $"The kind of the operands of '{op}' cannot be determined at this binding; annotate an operand" node
-                      | [] -> () ]
-        | _ -> [])
+    let parents = parentIndex builder.Nodes
+    // A variable is reported once, at the first binding in node order whose type leaves it open;
+    // a later binding that inherits the same open variable (`let _ = v`) is that report's.
+    let (_, diagnostics) =
+        builder.Nodes
+        |> Map.toList
+        |> List.fold (fun (reportedIds: Set<int>, acc: Diagnostic list) (_, node) ->
+            match node.Kind with
+            | SemanticKind.Binding(name, _, _, _)
+                when not (isFunctionBindingNode builder node)
+                     && not (node.Metadata.ContainsKey "FidelityExtern.Library")
+                     && not (alreadyFailed node) ->
+                match applySubst node.Type with
+                | NativeType.TForall _ -> (reportedIds, acc)
+                | ty ->
+                    match quantifiedByEnclosing builder parents node with
+                    | None -> (reportedIds, acc)
+                    | Some quantified ->
+                        let excused (id: int) = Set.contains id quantified || Set.contains id tainted || Set.contains id reportedIds
+                        let measures = freeMeasureVars ty |> List.filter (fun v -> not (excused v.Id))
+                        let operands =
+                            collectFreeTypeParams ty
+                            |> List.filter (fun tp ->
+                                not (excused tp.Id)
+                                && (tp.Kind = TypeParamKind.Carrier || (operandOf tp).IsSome))
+                        let here =
+                            [ match measures with
+                              | _ :: _ ->
+                                  yield diagnostic DiagnosticCodes.CCS8047_UnresolvedMeasure
+                                            $"The measure of '{name}' could not be resolved and this binding is not generalisable; annotate it" node
+                              | [] -> ()
+                              match operands with
+                              | tp :: _ ->
+                                  let op = operandOf tp |> Option.defaultValue "(unknown)"
+                                  yield diagnostic DiagnosticCodes.CCS8001_OperandKindUndetermined
+                                            $"The kind of the operands of '{op}' cannot be determined at this binding; annotate an operand" node
+                              | [] -> () ]
+                        let nowReported =
+                            (measures |> List.map (fun v -> v.Id)) @ (operands |> List.map (fun tp -> tp.Id))
+                            |> List.fold (fun s id -> Set.add id s) reportedIds
+                        (nowReported, List.rev here @ acc)
+            | _ -> (reportedIds, acc)) (Set.empty, [])
+    List.rev diagnostics
 
 //-------------------------------------------------------------------------
 // Entry Point Detection
@@ -697,6 +717,128 @@ let private annotateInstantiations (nodes: Map<NodeId, SemanticNode>) : Map<Node
             | _ -> node
         | _ -> node)
 
+//-------------------------------------------------------------------------
+// The saturation residual (sequence CS-8; design 0.4, b.4, (h) 13; I2)
+//-------------------------------------------------------------------------
+
+/// The one place types leave the stores is `buildResult`, where every node's type is resolved
+/// through the substitution, the measure store and the carrier store (`applySubst`). This is the
+/// assertion at that boundary: a node whose resolved type still mentions a measure or carrier
+/// variable that no enclosing scheme quantifies is CCS8047, at the node, naming the binding that
+/// encloses it, once per binding. Nothing is defaulted to `1`, and the node map that leaves the
+/// boundary is the immutable input to monomorphisation and every nanopass (I2). The binding-level
+/// residual check above reports a value binding's own type; this one reaches the nodes under a
+/// binding whose own type is closed, the `0.0<_> + 1.0<_>` inside a result that is not measured.
+/// A binding already reported, by that check or by a failed unification at its range, is not
+/// reported again; a function binding's own variables are its subtree's to use (the checker's
+/// generalisation gap, as the binding-level check draws it); a node under an `inline` function
+/// is quantified by expansion.
+let private saturationResidual (builder: NodeBuilder) (resolved: Map<NodeId, SemanticNode>) (reported: Diagnostic list) : Diagnostic list =
+    let failedAt (node: SemanticNode) =
+        reported
+        |> List.exists (fun d ->
+            d.Severity = NativeDiagnosticSeverity.Error
+            && d.Range.File = node.Range.File
+            && d.Range.Start.Line >= node.Range.Start.Line
+            && d.Range.Start.Line <= node.Range.End.Line)
+    let parents = parentIndex resolved
+    let rec enclosingBinding (node: SemanticNode) : SemanticNode option =
+        match node.Kind with
+        | SemanticKind.Binding _ -> Some node
+        | _ ->
+            match Map.tryFind node.Id parents |> Option.bind (fun i -> Map.tryFind i resolved) with
+            | Some parent -> enclosingBinding parent
+            | None -> None
+    // The open variables of every binding that already failed are that failure's, not a second one.
+    let tainted =
+        resolved
+        |> Map.toSeq
+        |> Seq.map snd
+        |> Seq.filter (fun n -> match n.Kind with SemanticKind.Binding _ -> failedAt n | _ -> false)
+        |> Seq.map (fun n -> freeMeasureAndCarrierIds n.Type)
+        |> Set.unionMany
+    let (_, diagnostics) =
+        resolved
+        |> Map.toList
+        |> List.map snd
+        |> List.fold (fun (reportedBindings: Set<NodeId>, acc: Diagnostic list) node ->
+            let isFunction = (match node.Kind with SemanticKind.Binding _ -> isFunctionBindingNode builder node | _ -> false)
+            let residual =
+                if isFunction then Set.empty
+                else
+                    match freeMeasureAndCarrierIds node.Type with
+                    | open' when Set.isEmpty open' -> Set.empty
+                    | open' ->
+                        match quantifiedByEnclosing builder parents node with
+                        | None -> Set.empty
+                        | Some quantified -> Set.difference (Set.difference open' quantified) tainted
+            if Set.isEmpty residual then (reportedBindings, acc)
+            else
+                match enclosingBinding node with
+                | Some binding when not (Set.contains binding.Id reportedBindings) && not (failedAt binding) ->
+                    let name = (match binding.Kind with SemanticKind.Binding(n, _, _, _) -> n | _ -> "(binding)")
+                    let diagnostic =
+                        { Severity = NativeDiagnosticSeverity.Error
+                          Code = DiagnosticCodes.CCS8047_UnresolvedMeasure
+                          Message = $"The measure of a value in '{name}' could not be resolved at saturation and no enclosing scheme quantifies it; annotate it"
+                          Range = node.Range
+                          RelatedNodes = [ binding.Id ]
+                          Reachability = ReachabilityContext.Unknown }
+                    (Set.add binding.Id reportedBindings, diagnostic :: acc)
+                | _ -> (reportedBindings, acc)) (Set.empty, [])
+    List.rev diagnostics
+
+//-------------------------------------------------------------------------
+// Quotations have no run-time value (D9)
+//-------------------------------------------------------------------------
+
+/// A quotation is compile-time data: the compiler reads it (a platform description, a binding
+/// descriptor, a predicate) and executed code cannot hold, pass or evaluate it. Every quotation
+/// reachable from the entry point is CCS8066: a module-level one at each reachable reference to
+/// the binding that holds it, a local or expression-position one at the quotation itself. Read
+/// from the saturated graph, after reachability, so that a declaration nothing executes is never
+/// reported.
+let private quotationDiagnostics (graph: SemanticGraph) : Diagnostic list =
+    let nodes = graph.Nodes
+    let parents = parentIndex nodes
+    /// The binding a quotation is the value of, through an annotation, when it is module-level.
+    let moduleLevelOwner (quote: SemanticNode) : NodeId option =
+        let rec up (id: NodeId) =
+            match Map.tryFind id parents |> Option.bind (fun p -> Map.tryFind p nodes) with
+            | Some ({ Kind = SemanticKind.TypeAnnotation _ } : SemanticNode as p) -> up p.Id
+            | Some ({ Kind = SemanticKind.Binding _ } : SemanticNode as b) ->
+                match Map.tryFind b.Id parents |> Option.bind (fun p -> Map.tryFind p nodes) with
+                | Some ({ Kind = SemanticKind.ModuleDef _ } : SemanticNode) -> Some b.Id
+                | _ -> None
+            | _ -> None
+        up quote.Id
+    let diagnostic (node: SemanticNode) : Diagnostic =
+        { Severity = NativeDiagnosticSeverity.Error
+          Code = DiagnosticCodes.CCS8066_QuotationHasNoRuntimeValue
+          Message = "A quotation has no run-time value: it is read by the compiler at compile time and cannot be referenced from executed code"
+          Range = node.Range
+          RelatedNodes = [ node.Id ]
+          Reachability = ReachabilityContext.Reachable }
+    let reachableQuotes =
+        nodes |> Map.toList |> List.map snd |> List.filter (fun n -> n.IsReachable && (match n.Kind with SemanticKind.Quote _ -> true | _ -> false))
+    let owned, standing = reachableQuotes |> List.partition (fun q -> (moduleLevelOwner q).IsSome)
+    let ownedBindings = owned |> List.choose moduleLevelOwner |> Set.ofList
+    /// A reference made from inside another quotation is compile-time structure (a descriptor
+    /// citing a descriptor), not executed code.
+    let rec insideQuotation (id: NodeId) =
+        match Map.tryFind id parents |> Option.bind (fun p -> Map.tryFind p nodes) with
+        | Some ({ Kind = SemanticKind.Quote _ } : SemanticNode) -> true
+        | Some p -> insideQuotation p.Id
+        | None -> false
+    let atReferences =
+        nodes
+        |> Map.toList
+        |> List.choose (fun (_, n) ->
+            match n.Kind with
+            | SemanticKind.VarRef (_, Some bindingId) when n.IsReachable && Set.contains bindingId ownedBindings && not (insideQuotation n.Id) -> Some (diagnostic n)
+            | _ -> None)
+    atReferences @ (standing |> List.map diagnostic)
+
 /// Build a CheckResult from builder state and diagnostics
 /// platformContext: Optional platform context for freestanding builds (enables entry point elaboration)
 let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) (platformContext: PlatformContext option) : CheckResult =
@@ -712,6 +854,11 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             { node with Type = applySubst node.Type })
         // An application of a generalised binding records its instance (design b.4 step 4).
         |> annotateInstantiations
+    // The saturation residual (CS-8): asserted here, where types have left the stores and before
+    // the map is copied per instantiation; from here the node map is immutable (I2).
+    let residual = saturationResidual builder resolvedNodes diagnostics
+    let resolvedNodes =
+        resolvedNodes
         // Generic (TForall) top-level functions are compiled once per instantiation.
         |> Monomorphization.run
 
@@ -810,6 +957,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let platformContext = PlatformDeclaration.fill platformContext finalGraph
     let finalGraph = { finalGraph with Platform = platformContext }
     let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
+    let quotationErrors = quotationDiagnostics finalGraph
 
     // Phase 5: Emit final result
     emitPhaseIfEnabled PhaseTypes.PhaseId.Final finalGraph diagnostics
@@ -841,7 +989,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             else
                 { d with Reachability = ReachabilityContext.Unreachable }
 
-    let taggedDiagnostics = diagnostics |> List.map tagReachability
+    let taggedDiagnostics = (diagnostics @ residual) |> List.map tagReachability
 
     // Layer 1: Combinational depth analysis (FPGA-only structural heuristic)
     // Walks the final PSG bottom-up, counting weighted operation depth.
@@ -850,7 +998,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ declarationDiagnostics @ depthDiagnostics
+        Diagnostics = taggedDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics
         PlatformContext = platformContext
     }
 

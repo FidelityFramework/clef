@@ -248,6 +248,9 @@ let resolveIdentifier
         // Emit appropriate diagnostic
         if isBclReference fullName then
             addBclError fullName synRange env
+        elif fullName = "op_Splice" || fullName = "op_SpliceUntyped" then
+            // `%e` / `%%e`: a quotation is read whole at compile time; nothing splices (D9).
+            addNativeError DiagnosticCodes.CCS8065_SpliceNotSupported synRange "Expression splices are not a Clef construct: a quotation is compile-time data read whole, and there is no run-time quotation value to splice." env
         else
             addNativeError DiagnosticCodes.CCS8009_UndefinedValue synRange msg env
         builder.Create(

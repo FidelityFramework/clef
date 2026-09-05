@@ -134,6 +134,17 @@ let getIntrinsicImplementationRef (node: SemanticNode) (graph: SemanticGraph) : 
 /// Compute the set of reachable nodes from given entry points
 /// Follows structural children, semantic references, type references,
 /// intrinsic implementation functions, AND string-literal symbol references.
+/// A binding whose value, through an annotation, is a quotation.
+let private isQuotationBinding (graph: SemanticGraph) (id: NodeId) : bool =
+    let rec holdsQuotation (id: NodeId) =
+        match SemanticGraph.tryGetNode id graph with
+        | Some { Kind = SemanticKind.Quote _ } -> true
+        | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> holdsQuotation inner
+        | _ -> false
+    match SemanticGraph.tryGetNode id graph with
+    | Some { Kind = SemanticKind.Binding _; Children = [ valueId ] } -> holdsQuotation valueId
+    | _ -> false
+
 let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId> =
     // Build qualified binding index once for string-literal → binding resolution.
     // This enables reachability through dlsym(RTLD_DEFAULT, "Module.function"):
@@ -157,7 +168,16 @@ let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId>
                 let intrinsicRef = getIntrinsicImplementationRef node graph |> Option.toList
                 // Follow string-literal symbol references (dlsym reachability)
                 let symbolRef = getStringLiteralBindingRef node qualifiedIndex |> Option.toList
-                let allRefs = (node.Children @ refs @ typeRefs @ intrinsicRef @ symbolRef) |> List.distinct
+                // A module's quotation bindings are declarations the compiler reads, not values the
+                // module initialises (D9): the walk does not enter them from the module. A reference
+                // from executed code still reaches one, and is CCS8066 there.
+                let allRefs =
+                    (node.Children @ refs @ typeRefs @ intrinsicRef @ symbolRef)
+                    |> List.distinct
+                    |> List.filter (fun r ->
+                        match node.Kind with
+                        | SemanticKind.ModuleDef _ -> not (isQuotationBinding graph r)
+                        | _ -> true)
                 allRefs |> List.fold walk visited
 
     entries |> List.fold walk Set.empty
