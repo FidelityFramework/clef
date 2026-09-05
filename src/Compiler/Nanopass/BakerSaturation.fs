@@ -154,6 +154,7 @@ let private needsSaturationBasic (node: SemanticNode) : bool =
     | SemanticKind.Application _ -> true  // May or may not need decomposition, checked in recipe creation
     | SemanticKind.Lambda(_, _, captures, _, LambdaContext.RegularClosure)
         when List.isEmpty captures -> true  // Zero-capture lambda may need closure pair (checked in recipe)
+    | SemanticKind.VarRef (_, Some _) -> true  // A named function in value position is elaborated (checked in recipe)
     | _ -> false
 
 /// Apply the appropriate recipe for an HOF intrinsic
@@ -405,6 +406,131 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
             RecipeCreated (toRecipe node.Id "Lambda" result)
         else
             NotApplicable "Zero-capture lambda not in value position"
+
+    | SemanticKind.VarRef (name, Some defId) ->
+        // A named, capture-free function in value position (an argument, a binding's value, a
+        // field, a return): the closure the developer wrote by naming the function. Elaborated
+        // here, as the zero-capture lambda above is, into an eta-expanded Lambda that applies
+        // the function to fresh parameters (one application per currying level, as the binding
+        // eta-expansion does), marked for closure pair construction. The pair and the function
+        // are then witnessed by the closure path like any other lambda, and no layer below the
+        // graph synthesises a forwarding function. A VarRef to a capturing local function is
+        // not elaborated: its binding already holds a closure value.
+        // The definition: a Binding whose value is a capture-free Lambda; its arity is the
+        // number of arguments a direct call of it takes
+        let definitionArity =
+            match SemanticGraph.tryGetNode defId graph with
+            | Some { Kind = SemanticKind.Binding _; Children = lambdaId :: _ } ->
+                match SemanticGraph.tryGetNode lambdaId graph with
+                | Some { Kind = SemanticKind.Lambda (params', _, captures, _, _) } when List.isEmpty captures -> Some params'.Length
+                | _ -> None
+            | _ -> None
+        let inCallPosition =
+            let isFuncChildOf (childId: NodeId) (parentId: NodeId) =
+                match SemanticGraph.tryGetNode parentId graph with
+                | Some { Kind = SemanticKind.Application (funcId, _) } -> funcId = childId
+                | _ -> false
+            match node.Parent with
+            | Some parentId ->
+                isFuncChildOf node.Id parentId ||
+                (match SemanticGraph.tryGetNode parentId graph with
+                 | Some { Kind = SemanticKind.TypeAnnotation _; Parent = Some grandId } -> isFuncChildOf parentId grandId
+                 | _ -> false)
+            | None -> true  // no parent: not a use
+        // A field of a [<HardwareModule>] binding's Design record (Step = step) is a declaration
+        // read structurally by the witness (hw.instance of the named module), not a closure.
+        let rec inHardwareModuleDeclaration (nodeId: NodeId) =
+            match SemanticGraph.tryGetNode nodeId graph with
+            | Some { Kind = SemanticKind.Binding (_, _, _, Some DeclRoot.HardwareModule) } -> true
+            | Some { Kind = SemanticKind.Binding _ } -> false
+            | Some { Kind = SemanticKind.Lambda _ } -> false
+            | Some { Parent = Some parentId } -> inHardwareModuleDeclaration parentId
+            | _ -> false
+        let rec resolved (ty: NativeType) =
+            match ty with
+            | NativeType.TVar tv ->
+                match Clef.Compiler.NativeTypedTree.UnionFind.find tv with
+                | (_, Some bound) -> resolved bound
+                | _ -> ty
+            | _ -> ty
+        match definitionArity with
+        | None ->
+            NotApplicable "Reference is not to a capture-free named function"
+        | Some _ when inCallPosition ->
+            NotApplicable "Function reference in call position"
+        | Some _ when node.Parent |> Option.map inHardwareModuleDeclaration |> Option.defaultValue false ->
+            NotApplicable "Declaration field of a hardware module Design"
+        | Some arity ->
+            match resolved node.Type with
+            | NativeType.TFun _ as funcType ->
+                let ctx = mkContext node.Range funcType graph.Platform "FunctionValue" node.Id
+                let mk (kind: SemanticKind) (ty: NativeType) (children: NodeId list) : SemanticNode =
+                    { Id = NodeId.fresh()
+                      Kind = kind
+                      Range = node.Range
+                      Type = ty
+                      SRTPResolution = node.SRTPResolution
+                      ArenaAffinity = node.ArenaAffinity
+                      LayoutHint = node.LayoutHint
+                      Children = children
+                      Parent = None
+                      Metadata = Map.empty
+                      IsReachable = true
+                      EmissionStrategy = node.EmissionStrategy
+                      ValueRange = None }
+                    |> markBaker "FunctionValue" ctx.ExpansionId
+                // One parameter per currying level of the reference's type
+                let rec parameters (ty: NativeType) (acc: (string * NativeType * SemanticNode) list) (i: int) =
+                    match resolved ty with
+                    | NativeType.TFun (domainTy, rangeTy) ->
+                        let paramName = sprintf "_eta%d" i
+                        parameters rangeTy ((paramName, domainTy, mk (SemanticKind.PatternBinding paramName) domainTy []) :: acc) (i + 1)
+                    | _ -> List.rev acc
+                let parameterNodes = parameters funcType [] 0
+                let lambdaParams = parameterNodes |> List.map (fun (paramName, domainTy, param) -> (paramName, domainTy, param.Id))
+                let paramRefs =
+                    parameterNodes |> List.map (fun (paramName, domainTy, param) -> mk (SemanticKind.VarRef (paramName, Some param.Id)) domainTy [])
+                // The type after applying k arguments
+                let rec typeAfter (ty: NativeType) (k: int) =
+                    if k = 0 then resolved ty
+                    else
+                        match resolved ty with
+                        | NativeType.TFun (_, rangeTy) -> typeAfter rangeTy (k - 1)
+                        | other -> other
+                // The body: a direct call saturating the definition's arity (the flat application
+                // every direct call is), then one application per remaining currying level, as
+                // the binding eta-expansion applies a returned closure
+                let funcRef = mk (SemanticKind.VarRef (name, Some defId)) funcType []
+                let direct = min arity paramRefs.Length
+                let directArgs = paramRefs |> List.take direct |> List.map (fun r -> r.Id)
+                let call = mk (SemanticKind.Application (funcRef.Id, directArgs)) (typeAfter funcType direct) (funcRef.Id :: directArgs)
+                let applications =
+                    paramRefs |> List.skip direct
+                    |> List.fold (fun (apps: SemanticNode list) (r: SemanticNode) ->
+                        let prev = List.last apps
+                        apps @ [ mk (SemanticKind.Application (prev.Id, [r.Id])) (typeAfter prev.Type 1) [prev.Id; r.Id] ]) [call]
+                // The outermost application is the lambda's body, its own function
+                let body = { List.last applications with EmissionStrategy = EmissionStrategy.SeparateFunction 0 }
+                let applications = (applications |> List.take (applications.Length - 1)) @ [body]
+                // The enclosing function's name, as the checker records it for a written lambda
+                let rec enclosingName (nodeId: NodeId) =
+                    match SemanticGraph.tryGetNode nodeId graph with
+                    | Some { Kind = SemanticKind.Lambda _; Parent = Some bindingId } ->
+                        match SemanticGraph.tryGetNode bindingId graph with
+                        | Some { Kind = SemanticKind.Binding (bindingName, _, _, _) } -> Some bindingName
+                        | _ -> None
+                    | Some { Kind = SemanticKind.Lambda _ } -> None
+                    | Some { Parent = Some parentId } -> enclosingName parentId
+                    | _ -> None
+                let enclosing = node.Parent |> Option.bind enclosingName
+                let paramIds = lambdaParams |> List.map (fun (_, _, id) -> id)
+                let lambda0 = mk (SemanticKind.Lambda (lambdaParams, body.Id, [], enclosing, LambdaContext.RegularClosure)) funcType (paramIds @ [body.Id])
+                let lambda = { lambda0 with Metadata = lambda0.Metadata |> Map.add ClosureMetadata.RequiresClosurePair (MetadataValue.Bool true) }
+                let paramBindings = parameterNodes |> List.map (fun (_, _, param) -> param)
+                let result = mkResultNoShadow (paramBindings @ paramRefs @ [funcRef] @ applications @ [lambda]) lambda.Id []
+                RecipeCreated (toRecipe node.Id "FunctionValue" result)
+            | _ ->
+                NotApplicable "Function reference without a function type"
 
     | _ ->
         NotApplicable "Node kind does not need saturation"
