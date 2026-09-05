@@ -155,4 +155,8 @@ Specified by `Dimensional_Range_Design.md` (2026-09-04), the one statement of th
 
 **CS-11 rulings received (2026-09-05):** the four rulings the CPU leg needed are in `Dimensional_Range_Design.md`, "Rulings for the CPU leg": the value-call ABI is a boundary at the Register width keyed by escape; record layouts are settled at saturation from `FieldRanges` and the declared Pointer width; a refined read of a wide cell truncates at the read; RoundTrip's `3 * n` stays CCS8012 and `n` is bounded in BAREWire's descriptor vocabulary. The leg proceeds.
 
+**CS-11 CPU leg status (2026-09-05): built by one implementer, gated by the owner's session, one classification fix by hand, gates green** (`Dimensional_Range_Design.md`, "CS-11 as built, the CPU leg"): layouts settled at saturation, the escaping boundary at the word, the leg reading each node with meets derived in SSAAssignment, the size models and the architecture table retired, the BAREWire descriptor bound; RoundTrip transcript identical, hash re-baselined at `96734b15…`; HelloArty identical modulo SSA names; HelloProof PASS; harness rows identical.
+
+**CS-12 rulings received (2026-09-05):** six rulings and the Farscape leg in `Dimensional_Range_Design.md`, "Rulings for CS-12". Order: 1a the readers with 2 and 4 folded in → the Farscape descriptor emission → 5's alias → 3 on its count → 5's sweep and deletion → 6. Step 5 (`Ptr`/`Mmio`) sits between CS-11 and CS-12 as before.
+
 **Order corrected (2026-09-05):** CS-11 is the CPU leg and the declared range sources; CS-12 is the deletion of the width-named types with the corpus migration; the deletion cannot precede the CPU leg's reading of the node (`Dimensional_Range_Design.md` §12). Order: … → CS-10 → CS-11 → step 5 → CS-12 → CS-13.

@@ -830,6 +830,16 @@ type SubstrateKind =
     /// FPGA target (Xilinx, etc.) → MLIR → CIRCT → handshake → hw/comb/seq → SV
     | FPGA
 
+/// The declared return bound of a platform endpoint (Dimensional_Range_Design.md,
+/// ruling 2 of CS-12; BAREWire docs/11): the least value the return takes (`Floor`,
+/// the errno floor on Linux) and the name of the parameter the return is at most
+/// (`AtMost`, `"count"` for read and write). Read from the description's Contract
+/// (`Floor`, `AtMost`) by PlatformResolution; the compiler holds no such number.
+type ReturnBound = {
+    Floor: bigint
+    AtMost: string
+}
+
 /// Platform context for NTU type resolution.
 /// Carries quotation-resolved platform information used to
 /// resolve platform-dependent types (NTUint, NTUptr, etc.) to concrete widths.
@@ -851,6 +861,11 @@ type PlatformContext = {
     /// (plan D8). Filled with `Dimensions`. A sealed value whose representation is
     /// absent here, or declared unavailable, is CCS8204 at its site.
     Representations: Map<string, NumericRepresentation>
+
+    /// The return bounds the platform description's endpoint contracts declare,
+    /// by endpoint name (`read`, `write`). Filled with `Dimensions`. An endpoint
+    /// absent here has an unobservable result (CCS8011), never a number.
+    EndpointReturns: Map<string, ReturnBound>
 
     /// Path to the Fidelity.Platform library
     PlatformLibraryPath: string option

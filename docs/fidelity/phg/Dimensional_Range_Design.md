@@ -145,6 +145,16 @@ and record fields ranged per field; and the §3 formula for the width, which spe
 non-negative range. Any later refinement (a relational domain, congruences for `%` and shifts) is a
 change to this section first.
 
+**Amendment (the owner, 2026-09-05, ruling 3 of CS-12).** Two bounded additions to the precision
+above, for the cursor group: a predicate summary, for a boolean function whose body is a
+conjunction of comparison atoms over its parameters (`Cursor.fits`), the `atoms` extraction runs
+on the body and the result is instantiated at the call site by substituting argument nodes, under
+the same `Compared` restriction the guard rule has; and the backward step through one arithmetic
+node, from the refined range of a subtraction and the Pointer bound on a length, so that under
+`count <= length − offset` the offset takes `[0, hi(length) − count]`. Nothing is inlined to
+achieve it (§1.2: `inline` is semantic, never a width-solving device), and no relational domain
+beyond that one step is introduced here.
+
 ### 1.3 The unobservable range
 
 A loop or recursion the program never bounds has no range: `let rec run n = run (n + 1)`. That is
@@ -1296,3 +1306,232 @@ unrecognised platform id, to become a diagnostic; Composer's witnesses for `Arra
 `List.length` on cores (pre-existing); the lexer's 32-bit literal limit (CCS1147) against D10; the
 scratch copies of the trees the first implementer made under the scratchpad (`head`, `cs11leg`),
 to delete.
+
+## Rulings for CS-12 (the owner, 2026-09-05)
+
+Six rulings were put with recommendations; 1, 2 and 6 stand as recommended, each with one
+sharpening; 3, 4 and 5 contained a move the design forbids or that Farscape's documents contradict,
+and are corrected here. Farscape joins the changeset train as its own leg; its maturation plan
+already names CS-12 as the moment for that.
+
+**Ruling 1, one structural reader for every boundary: stands.** The spec's expressions chapter
+fixes the mechanism: declarations are read structurally by type name and field name and never
+evaluated, and PlatformResolution is that reader for the platform endpoint. Generalizing it to the
+three §4.1 record shapes is the principled move, because the wire field's width is already a
+declaration in a form that survives deletion: BAREWire's `FieldDescriptor` carries its
+representation as a `Repr` string, not a Clef type spelling, so `u32` is untouched by CCS8706, and
+a bit field's `Width` is a bare integer. Two sharpenings. The `Mmio` row's reader reads the
+Hardware descriptor record; the `Mmio` handle type the spec names is designed and unbuilt and
+arrives with step 5, which sits between CS-11 and CS-12 in the order. The C ABI row has no
+declaration to read yet: Farscape today emits the width in the extern signature's Clef spelling,
+exactly what CS-12 deletes, and the descriptor quotation the platform-bindings chapter specifies as
+Layer 2 does not appear anywhere in Farscape's source. That is the Farscape leg below, and step
+three of ruling 5 cannot run before it lands.
+
+**Ruling 2, the errno bound leaves the compiler: stands, and the shape leaves with it.** The
+x86_64 description already declares `readBound` as a Contract with the fact in prose and
+`Logic.Assumed`; `RangeSources` holds the number as a `bigint` literal citing that prose. One
+number, one declaration, in the BAREWire vocabulary that docs/11 owns. The contract has two parts:
+the errno floor is a number; the "at most the count argument" half is a relation between the
+return and a parameter, declared as a named parameter reference, not restated in prose, so that
+`RangeSources` builds the range from the declaration alone. That is the same one-level relational
+fact ruling 3 needs, declared instead of inferred.
+
+**Ruling 3, the cursor residual is precision, not a sweep: corrected in its mechanism.** At every
+cursor the guard is a boolean binding whose definition is a call, `let ok = Cursor.fits data
+offset 4` then `if ok then …`; the comparison `count <= Array.length data - offset` lives inside
+`fits`, not at the site, so one difference constraint never reaches the cursor unless a second
+mechanism carries it there. Two pieces, both bounded: a predicate summary, for a boolean function
+whose body is a conjunction of comparison atoms over its parameters, the existing `atoms`
+extraction runs on the body and the result is instantiated at the call site by substituting
+argument nodes, under the same `Compared` restriction the guard rule already has; then the backward
+step through one arithmetic node, from the refined range of the subtraction and the Pointer bound
+on the length, `offset` takes `[0, hi(length) − count]`. Making `fits` inline would also work and
+is forbidden: §1.2 says `inline` is semantic, never a width-solving device. §1.2a is amended first
+(below), as the section itself requires. The gate is a count stated in advance; the 109 attribution
+could not be verified from a saved transcript, so the brief carries the by-binding inventory before
+the changeset starts. A miss on the count is a stop for analysis, never a license to add guards.
+
+**Ruling 4, description records are declared inputs: corrected in its source.** "`Bits` bounded
+by the widest declared representation" is a bound the compiler invents, the fabricated-width move
+C3 forbids dressed as a limit. The principled source is ruling 1 applied to the vocabulary itself:
+`DeclaredWidth`, `DeclaredCore` and `BitField` are BAREWire schema types, so their integer fields
+are wire-schema fields in the §4.1 sense, and the schema declares each field's representation. The
+reader seeds `InputSeeds` from that declaration through the same path as any wire record: one
+small change in BAREWire's vocabulary and none in the compiler's judgment.
+
+**Ruling 5, stage the deletion: staging right, scope corrected.** Alias first, so swept and
+unswept code compose during the sweep, is sound. Two corrections. The warning code cannot be
+CCS8018: the §7 table fixes it as the error for a literal suffix, and §0.1 item 2 closes that rule
+against reopening; a fresh warning code is allocated in the error-handling table for the interim
+alias, and width suffixes are treated like spellings, warned in step one, errors in step three.
+During the alias period a spelled site whose analysed range leaves the spelled representation is
+CCS8012, a genuine finding, count-gated like the others. The larger correction is Fidelity.Platform:
+its Bindings directories are Farscape output, and Farscape's plan says how they change, "a
+planned, single, corpus-wide regeneration, not a rolling migration," triggered when dimensional
+types and the NTU as numeric substrate land, which is CS-12. A textual sweep of generated code
+violates the design that generates it. The sweep's scope is hand-written source only: BAREWire/src,
+CCS and its samples, and the leaf's own files. Generated outputs no gate compiles are deleted, the
+pilot files stay, and regeneration produces the new form. The x86_64 leaf that RoundTrip compiles
+lists nine hand-written files and none under Bindings, so the critical path is unaffected.
+
+**Ruling 6, promotion is the last line: stands, with one addition the brief must state.**
+Promoting CCS8011 to an error on cores fails every project outside the gates that still carries
+the old spellings or unbounded ranges. That is the design working, not a regression, and the
+regeneration horizon in Farscape's maturation plan §9 is where those projects come back. The
+promotion changeset also deletes the interim arm of `heldWidthOf` and the `registerWidth` fallback,
+and flips W-4/reject's pending marker so the harness judges it.
+
+**The Farscape leg.** Farscape's documents already hold the design; CS-12 makes it executable. Two
+positions in the corpus dissolve together: TypeMapper maps C `int` to the register-width Clef `int`
+deliberately, and docs/14 §2 asks for a fixed-width ABI map beside it; under one kind neither width
+belongs in the Clef type. Every C integer becomes `int` in the signature, and the ABI
+representation goes into the descriptor's `ParameterInfo`, read by ruling 1's C ABI row. Structs
+follow docs/14's own conclusion: a layout module of measured literal offsets plus a
+`StructDescriptor`, never a record. The provenance strata of docs/14 §8 are the same discipline as
+§4.4's three provenances, measured outranking declared outranking inferred. The leg's gate:
+regenerate the smallest binding, Fidelity.Libc, and compile it under the post-deletion CCS with
+zero CCS8706, plus the Layer 3 checks §9 lists.
+
+**The gates.** The RoundTrip gate for every CS-12 changeset is the transcript and the diagnostic
+counts, never the hash or the MLIR, since BAREWire's own source migrates. One MLIR-adjacent check
+is kept: ruling 1's whole claim is that deleting spellings loses nothing at a declared boundary,
+and that is testable: the settled layouts of BAREWire's wire records are captured before the
+migration and diffed after; any width change there is a reader defect. Agents for rulings 3 and 5
+only, with the Farscape regeneration as a third agent-scale item on its own gate.
+
+**Order, as the changesets need it:** 1a, the readers, with 2 and 4 folded in; then the Farscape
+descriptor emission; then 5's alias; then 3 on its count; then 5's sweep and deletion; then 6.
+
+## CS-12, the Farscape leg as built (2026-09-05)
+
+One implementer, no reviewer, Farscape's own build and tests and one pilot regeneration as the
+gate, per the owner ("Make the change, it's well designed, and trust it"; validation is the owner's
+separate effort at the regeneration horizon). Landed in Farscape (29 files): `TypeMapper` is one
+table of C scalar spellings to a family, a width resolved by the platform ABI profile, and a
+stratum (`Measured | Declared | Inferred`); every C integer spells `int` or `uint` in the Clef
+signature, floats `float`, pointers `CHandle<'T>` and function pointers `FnPtr<'F>`, never a
+width-named spelling or `nativeint`; every extern is followed by its Layer 2
+`Expr<FunctionDescriptor>` quotation with the spec's `FunctionDescriptor` and `ParameterInfo`
+fields, `Type` carrying family and bits as data (`Integer (Signed, 32)`, `Pointer 64`, …) and the
+stratum as a trailing comment; every C struct is a layout module of literal offsets plus a
+`StructDescriptor` in BAREWire's Hardware vocabulary with the stratum in each field's
+`Documentation`, never a record; the separate Descriptors.clef writer, the record path for C
+structs and the private width maps are deleted. Gates: `dotnet build Farscape.sln` clean; 559 tests
+pass (the assertions of the old spellings and the record form updated); the pilot
+(`tests/libc_minimal.h`) regenerated to `tests/output/IO.clef` with 0 width-named spellings, 7
+externs and 7 descriptors. Owed, in Farscape's own words: `BAREWire.Descriptors` does not exist yet
+(`FunctionDescriptor`, `ParameterInfo`, `TypeRef`, `PassBy`, `CallConv`, `Transfer` need their home
+per the spec's `open BAREWire.Descriptors`, and CCS's C ABI reader reads them: folded into CS-12
+step 1a); opaque handle typedefs, the C++ class path, the callback listener builders and the
+Wayland dispatch still spell `nativeint` (the regeneration horizon); enum cases still carry literal
+suffixes; the regenerated pilot was not compiled under CCS, by instruction.
+
+## CS-12 step 1a as built (2026-09-05)
+
+One implementer, one pass, rulings 1, 2 and 4 folded in as the order requires; no reviewer.
+
+**What landed, by repository.** BAREWire (src): `Descriptors/Bindings.fs`, new, `namespace
+BAREWire.Descriptors`: `Signedness`, `TypeRef` (`Integer of Signedness * int | Float of int |
+Pointer of int | Bool | Void | Named of string`), `PassBy`, `CallConv`, `Transfer`,
+`ParameterInfo` and `FunctionDescriptor` with the spec's field names exactly, plus the
+`Parameter.value`/`reference` and `Function.cdecl`/`withTransfer` constructors; the closed
+vocabularies are unions, the spec's spelling, since a descriptor is a declaration never lowered.
+`Platform/Description.fs`, `Contract` gains `Floor: int64` and `AtMost: string`
+(`Contract.assumed`/`proven` set none; `Contract.withReturnBound`, `boundsReturn` added).
+`Platform/Schema.fs`, new, `module BAREWire.Platform.Schema`: six literal `StructDescriptor`s
+declaring the representation of each integer field of the vocabulary's own records
+(`Platform.WidthDeclaration.Bits` u16, `Platform.Representation.Bits` u16,
+`Platform.TargetCore.WordSizeBits` u16, `Hardware.BitFieldDescriptor.Position`/`Width` u8,
+`Hardware.FieldDescriptor.Offset`/`Count` u32, `Hardware.PeripheralLayout.Size`/`Alignment`
+u32), names qualified by the namespace's last segment because an FPGA leaf also compiles the
+Contracts twin (`Platform.Contracts.WidthDeclaration`). The three project files list both new
+files. Fidelity.Platform, one edit: `CPU/Linux/x86_64/Description.clef`, `readBound` and
+`writeBound` declare `Floor = -4095L; AtMost = "count"`. Clef (`src/Compiler`):
+`NativeTypedTree/NativeTypes.fs`, `ReturnBound` and `PlatformContext.EndpointReturns`;
+`Project/ProjectChecker.fs`, the empty seed; `NativeTypedTree/Expressions/Types.fs`,
+`DiagnosticCodes.CCS8014_RepresentationWiderThanRange` (the §7 table's code, first minted here);
+`NativeTypedTree/Expressions/Intrinsics.fs` `RangeSources`, `declaredReturn` replaces
+`errnoFloor`/`countOrErrno`; `PSGSaturation/SemanticGraph/PlatformResolution.fs`,
+`DeclaredReturn`, `DeclaredPlatform.Returns`, `readReturns` (Surfaces, Endpoints, Contracts),
+`int64Of` following a unary negation, and the boundary reader (`DeclaredField`,
+`DeclaredLayout`, `DeclaredParameter`, `DeclaredFunction`, `Descriptors`, `readDescriptors`);
+`PlatformDeclaration.fs`, `fill` writes `EndpointReturns`, `check` reports the descriptor
+findings; `RangeAnalysis.fs`, `Program.BoundarySeeds`/`DeclaredFields`/`DeclaredParameters`,
+the seeds in `readProgram`, `fieldRange` letting an observable declaration bind, the seeded node
+in `transfer`, `fieldReason` on CCS8011, `declaredDiagnostics` (CCS8012, CCS8014).
+
+**The reader's three shapes.** One module-level binding whose value, through an annotation or
+a quotation, is a record of type name `StructDescriptor`, `PeripheralDescriptor` (the Mmio
+row, descriptor only; a use through the unbuilt `Mmio` handle stays the stop it is) or
+`FunctionDescriptor`, read by type name and field name and never evaluated; a descriptor built
+by a function is a value, not a declaration, and is not read. A layout descriptor's `Name`
+denotes the record type of the graph with that qualified name, or the one type whose last
+segment it is; each `FieldDescriptor` with an integer `Repr` seeds `InputSeeds[type][field]`
+with the representation's exact range, the path a hardware design's pins already take; a bit
+field's `Position`/`Width` are checked as bare integers. A `FunctionDescriptor` beside an
+extern (`<name>Descriptor` beside `<name>`, one module, `FidelityExtern` metadata) pairs
+`Parameters[i].Type` with the extern's parameter nodes by position and `ReturnType` with its
+body node in `BoundarySeeds`; `Integer (s, bits)` and `Bool` seed, `Float`/`Pointer`/`Void`/
+`Named` seed nothing. The declaration binds (§4.4): a seeded field or parameter takes the
+declared range and every construction or argument is a containment obligation. Diagnostics:
+CCS8206 for a shape the reader cannot follow (a non-literal `Name`, `Repr`, `Floor`; a
+`Parameters` element that is not a `ParameterInfo`; a `Type` that is not a `TypeRef` case;
+a `Layout` that is not a `PeripheralLayout`); CCS8207 for a tag outside the vocabulary, a width
+of no bits, a declared field the named record does not carry as an integer, a parameter
+declared an integer where the extern's is not, a descriptor declaring a different parameter
+count; CCS8208 for a name denoting more than one record type. CCS8012 (warning) at a stored
+value or an argument whose range leaves the declared one; CCS8014 (information) at the
+descriptor's field or parameter where every value that crosses fits a narrower offered
+representation. An extern with no descriptor beside it keeps the CPU leg's rule (owed to the
+regeneration horizon, not a finding). No new code was allocated beyond CCS8014, the §7 code.
+
+**The errno declaration.** `Contract.Floor`/`AtMost` are the two halves as data;
+`PlatformResolution.readReturns` reads every Contract of every Endpoint of every Surface whose
+`AtMost` names a parameter into `DeclaredPlatform.Returns`, `PlatformDeclaration.fill` copies
+them into `PlatformContext.EndpointReturns`, and `RangeSources.declaredReturn` builds
+`Sys.read`/`Sys.write`'s range as `[Floor, hi(count)]`, `count` being the buffer's length (the
+one parameter the intrinsic supplies, its own definition). No contract, or one naming a
+parameter the intrinsic does not supply, is `Untabled` (CCS8011). The `-4095` literal has left
+the compiler; HelloProof's readln result reads `[-4095, …]` from the declaration.
+
+**The description records.** Ruling 4 as stated: `Schema.fs` declares the representations,
+the same reader seeds them, and the eight description-record CCS8011 lines are gone
+(`bf.Position`, `w.Bits` ×2, `r.Bits`, `bits`, `registerBits …`, `c.WordSizeBits` ×2), with
+five more that followed from them (`f.Offset`, `prevStart`, `prevEnd`, `sockaddr.Layout.Size`,
+`v` in `isPowerOfTwo`). A field with no declaration says so: CCS8011's text now ends ": no
+descriptor declares the representation of field 'F' of 'T'".
+
+**Gates.** Composer build clean; BAREWire .NET tests 309 passed, 0 failed. RoundTrip:
+compile 0, run 0, transcript identical to expected.txt; CCS8011 117 before, 104 after (the 13
+above; the remaining 104 are the cursor residual and the arithmetic cycles of the inventory);
+CCS8012 0; CCS8014 2 (`FieldDescriptor.Count` and `PeripheralLayout.Alignment` in Schema.fs,
+correct witnesses: every value stored in RoundTrip fits u8); CCS8206/8207/8208 0. Layouts: the
+graph's `Layouts` are not among the intermediates, so the settled layouts were captured as the
+`func.func` signatures and the memref multiset of `07_output.mlir` before and after
+(`cs12-1a/layouts-before.json`, `layouts-after.json`, `layouts-diff.txt`). No wire record
+changed: every `Envelope`, `Encoder`, `Decoder`, `Cursor`, `Codec` and `Fmt` signature is
+identical. The spans that changed are the description records this changeset declares:
+`Contract` 160 to 208 bytes (two new fields), `PeripheralLayout` 56 to 48 (`Size`/`Alignment`
+now u32), and `Check.isPowerOfTwo`/`registerBits` i64 to i16 (`WordSizeBits`/`Bits` now u16),
+ruling 4 working as designed. HelloProof: compile 0, prints "Enter your name: Hello, Houston!",
+Prover PASS with verdict lines identical to the CS-10 record. HelloArty: compile 0, MLIR
+identical to the CS-10 record modulo `%v<digits>` (the first attempt refused with CCS8208 on the
+Arty's Contracts twin, which is why the schema names are qualified). Harness `vet.sh --through
+3`: rows identical. Drift gate: clean. Probes (`probe/cs12-1a/`, each on the real x86_64 leaf and
+BAREWire): `wirefield`, `Header.Length` read `[0, 65535]` from a u16 `StructDescriptor`, stored
+`[0, 10]`, CCS8014 at the descriptor's field; `extern`, `cabs (n: int)` with `Integer (Signed,
+32)`: parameter `[-2147483648, 2147483647]`, result the same, CCS8012 at the argument
+`[2147483648, 2147483654]`; `declwidth`, `w.Bits` read `[0, 65535]`, no CCS8011.
+
+**Owed.** Composer's CPU leg does not yet hold an extern call's result at the descriptor's
+width: the `extern` probe's `r % 3` stops in emission (`pBinaryArithOp: the left operand of
+'rem' is TInt (IntWidth 0)`) after CCS read the range correctly; Composer is not edited in this
+step and no gate compiles an extern with a descriptor, so this is the regeneration horizon's.
+The `Mmio` handle (step 5): a register read through a handle is still the stop it is; only the
+descriptor is read. `BAREWire.Descriptors` carries no run-time destructuring helper
+(`TypeRef.bits` was refused by Baker's tuple-payload recipe and removed): a descriptor is a
+declaration and the compiler's reader is its check. The Contracts-form `Platform.clef` declares
+no `AtMost` and its endpoints stay unobservable, as ruled. The other 104 CCS8011 lines are
+ruling 3's and the arithmetic residual's. The x86_64 leaf's own `Bindings` are untouched: the
+C ABI row reads a descriptor only where Farscape's regeneration has placed one.

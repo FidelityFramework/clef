@@ -1052,11 +1052,11 @@ let tryResolveConversion (name: string) (range: SourceRange) : (IntrinsicInfo * 
 ///
 /// 1. The result range of an intrinsic application (`intrinsic`): a length is at most the
 ///    largest extent the platform's declared Pointer width addresses, `[0, 2^(Pointer-1) - 1]`;
-///    `Sys.read` and `Sys.write` return a count no larger than the buffer's length or a negative
-///    errno (`-4095 <= errno < 0` on Linux, the kernel's `MAX_ERRNO`; the convention the x86_64
-///    description's `readBound` and `writeBound` contracts state in prose, "returns n with
-///    0 <= n <= count; ... a negative return is an errno" and "returns the number written or a
-///    negative errno"; a later changeset moves the number into the contract); the operators are
+///    `Sys.read` and `Sys.write` return the range the platform's endpoint contract declares as
+///    data, `[Floor, hi(count)]` (the x86_64 description's `readBound` and `writeBound`, their
+///    `Floor` the errno floor and their `AtMost` the `count` parameter; BAREWire docs/11), read
+///    into `PlatformContext.EndpointReturns` by PlatformDeclaration, and are unobservable on a
+///    description that declares no such contract; the operators are
 ///    interval arithmetic (`ValueRange`); a conversion to a width-named carrier is the meet of the
 ///    argument's range with the target representation's declared range where that covers the
 ///    argument (exact) and the declared range otherwise, the image of the wrap the description
@@ -1159,10 +1159,6 @@ module RangeSources =
         | Some bits -> ValueRange.Bounded (bigint.Zero, bigint.Pow (bigint 2, bits - 1) - bigint.One)
         | None -> ValueRange.Unbounded
 
-    /// The smallest negative errno on Linux: `-4095` (the kernel's `MAX_ERRNO`), the convention
-    /// the `readBound` and `writeBound` contracts describe in prose.
-    let private errnoFloor = bigint -4095
-
     /// The length range of a buffer argument: a string literal's byte length exactly, any other
     /// buffer the platform's length range.
     let private bufferLength (ctx: PlatformContext option) (buffer: Argument) : ValueRange =
@@ -1170,13 +1166,22 @@ module RangeSources =
         | Some (NativeLiteral.String s) -> ValueRange.point (bigint (System.Text.Encoding.UTF8.GetByteCount s))
         | _ -> lengthRange ctx
 
-    /// The result of a read or a write against a buffer of length range `length`: a count in
-    /// `[0, length.hi]` or an errno in `[-4095, -1]`; unobservable when the length is.
-    let private countOrErrno (length: ValueRange) : ValueRange =
-        match length with
-        | ValueRange.Bounded (_, hi) -> ValueRange.Bounded (errnoFloor, max hi bigint.Zero)
-        | ValueRange.Empty -> ValueRange.Bounded (errnoFloor, bigint.Zero)
-        | _ -> ValueRange.Unbounded
+    /// The result of the platform's read or write, from the endpoint's declared contract alone
+    /// (Dimensional_Range_Design.md, ruling 2 of CS-12): `[Floor, hi(count)]`, the contract's
+    /// declared floor (the errno floor, since a negative return is an errno) and the parameter the
+    /// return is at most. `count` is the one parameter this intrinsic supplies, as the buffer's
+    /// length (`Sys.read fd buffer` reads at most the buffer's length: the intrinsic's own
+    /// definition above). A description that declares no such contract, or whose contract names a
+    /// parameter the intrinsic does not supply, leaves the result unobservable; no number is held
+    /// here.
+    let private declaredReturn (ctx: PlatformContext option) (endpoint: string) (count: ValueRange) : Result =
+        match ctx |> Option.bind (fun c -> Map.tryFind endpoint c.EndpointReturns) with
+        | Some { AtMost = "count"; Floor = floor } ->
+            match count with
+            | ValueRange.Bounded (_, hi) -> Result.Fact (ValueRange.bounded floor (max hi bigint.Zero))
+            | ValueRange.Empty -> Result.Fact (ValueRange.bounded floor bigint.Zero)
+            | _ -> Result.Untabled
+        | _ -> Result.Untabled
 
     /// A conversion's image (source 1, the conversion row): the target carrier by the conversion
     /// operation's name in the spelling table, its declared range on this context; the meet where
@@ -1217,11 +1222,11 @@ module RangeSources =
             | _ -> Result.Untabled
         // element reads
         | _, IntrinsicModule.Array, "get", _ -> Result.ElementOf 0
-        // the platform's read and write: a count no larger than the buffer, or an errno
-        | _, IntrinsicModule.Sys, ("read" | "write"), _ ->
+        // the platform's read and write: the endpoint's declared return bound over the buffer's length
+        | _, IntrinsicModule.Sys, (("read" | "write") as endpoint), _ ->
             match args with
-            | [ _; buffer ] -> Result.Fact (countOrErrno (bufferLength ctx buffer))
-            | _ -> Result.Fact (countOrErrno (lengthRange ctx))
+            | [ _; buffer ] -> declaredReturn ctx endpoint (bufferLength ctx buffer)
+            | _ -> declaredReturn ctx endpoint (lengthRange ctx)
         // conversions between numeric carriers
         | IntrinsicCategory.Conversion, IntrinsicModule.Convert, op, [ x ] -> Result.Fact (conversion ctx op x)
         // the library schemes with an image (the CS-9 recipes decompose most of these before the pass)
