@@ -58,8 +58,10 @@ type PlatformSection = {
     OS: string option
     /// Architecture (e.g., "x86_64", "arm_cortex_m7").
     Arch: string option
-    /// Word size in bits (e.g., 32, 64).
-    WordSize: int option
+    /// Keys the section carries that the compiler no longer reads (`word_size`,
+    /// retired by CS-7b: width dimensions come from the platform description,
+    /// plan L-13). Reported as CCS8205 information, never an error.
+    UnusedKeys: string list
     /// Substrate type for FPGA (e.g., "fpga").
     Substrate: string option
     /// Hardware vendor (e.g., "xilinx", "amd").
@@ -194,7 +196,7 @@ module FidprojLoader =
                     RuntimeModel = runtimeModel
                     OS = Toml.getString "platform.os" doc
                     Arch = Toml.getString "platform.arch" doc
-                    WordSize = Toml.getInt "platform.word_size" doc |> Option.map int
+                    UnusedKeys = [ "word_size" ] |> List.filter (fun key -> (Toml.getValue ("platform." + key) doc).IsSome)
                     Substrate = Toml.getString "platform.substrate" doc
                     Vendor = Toml.getString "platform.vendor" doc
                     Family = Toml.getString "platform.family" doc

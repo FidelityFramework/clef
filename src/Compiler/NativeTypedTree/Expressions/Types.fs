@@ -71,6 +71,28 @@ module DiagnosticCodes =
     let CCS8200_PlatformBindingError = "CCS8200"
     let CCS8201_UnsupportedPlatformOperation = "CCS8201"
     let CCS8202_PlatformBindingUndefined = "CCS8202"
+    // CCS8203: a site needs a width dimension the platform description does not declare
+    // (plan L-13, D8; ntu-dimensional-architecture.md §7.1). Never a default.
+    let CCS8203_UndeclaredWidthDimension = "CCS8203"
+    // CCS8204: a sealed value's representation is not offered by the platform description,
+    // absent or declared unavailable (plan D8; numeric-selection.md §7).
+    let CCS8204_RepresentationNotOffered = "CCS8204"
+    // CCS8205 (Info): a [platform] key a project file still carries that the compiler no longer
+    // reads (`word_size`, retired with L-13): reported, never an error, so old projects do not
+    // break silently.
+    let CCS8205_UnusedPlatformKey = "CCS8205"
+    // CCS8206: an element of the platform description the reader cannot read (a field that is
+    // not a literal, an element that is not the record its list is declared over, a Core that is
+    // neither `Some core` nor `None`): reported at the declaration, so that no program site is
+    // blamed for a defect of the description.
+    let CCS8206_MalformedPlatformDeclaration = "CCS8206"
+    // CCS8207: an element of the platform description outside its vocabulary (a capability,
+    // family or boundary tag not in its closed set, a width or representation of no bits, a
+    // name declared twice, a Register width disagreeing with the word size). At the declaration.
+    let CCS8207_InvalidPlatformDeclaration = "CCS8207"
+    // CCS8208: more than one platform description of one form compiled into the graph; the
+    // first in node order is read and each other is reported at its declaration.
+    let CCS8208_AmbiguousPlatformDescription = "CCS8208"
     // Effect system (CCS8300-CCS8399)
     let CCS8300_ExceptionPattern = "CCS8300"
     // Code generation (CCS8400-CCS8499)

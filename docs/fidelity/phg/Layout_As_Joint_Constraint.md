@@ -6,7 +6,7 @@
 
 ## 1. The problem, stated as it actually is
 
-Layout is computed in Alex, at emission, by five unrelated pieces of code that
+Layout is computed in Alex, at final witnessing to emission as MLIR, by five unrelated pieces of code that
 disagree with each other.
 
 | Site | What it decides | Model |
@@ -153,7 +153,7 @@ VC-DIS at arity *n* is `n(n-1)/2` pairwise claims asserted **jointly**; it is th
 same shape as HelloProof's `layout_user_strings`, which quantifies over five
 storages and ten pairs and is irreducible to a clique.
 
-### 2.5 Projection onto alpha, and what Alex reads
+### 2.5 Projection onto alpha, and what Alex witnesses via the zipper
 
 Invariant **I4** governs the crossing: a hyperedge is never a query target for
 the emission traversal. Its consequence reaches Alex only as saturated
@@ -184,12 +184,12 @@ holding them together.
 
 ## 3. The structural change this forces
 
-`computeRecordLayout` runs today during **type checking**, in `NativeService`,
+`computeRecordLayout` runs today during **type checking**, in `NativeService` (now retired),
 before the graph exists and before `PlatformContext` is reachable. Placement
 cannot stay there: it needs the platform, and it needs the constituent *nodes*
 to hang slots on.
 
-So the settled placement moves to **saturation**, and `TypeConRef.Layout` becomes
+So the settled placement moves to cross-application via **saturation**, and `TypeConRef.Layout` becomes
 what its neighbours already claim to be — provisional and symbolic, an identity
 fact, not a byte count. `TypeLayout.PlatformWord` and `FatPointer` are already
 written that way; `Inline(size, align)` computed against a hardcoded 8 is the

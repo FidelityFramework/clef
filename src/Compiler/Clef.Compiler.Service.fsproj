@@ -328,6 +328,8 @@
     <Compile Include="Nanopass\ObligationElaboration.fs" />
     <Compile Include="Nanopass\ObligationDischarge.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
+    <!-- The declared platform fills the context at saturation; sealed sites are checked against it (CS-7b) -->
+    <Compile Include="PSGSaturation\SemanticGraph\PlatformDeclaration.fs" />
 
     <Compile Include="NativeTypedTree\NativeService.fs" />
 

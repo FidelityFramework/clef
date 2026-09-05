@@ -24,10 +24,12 @@ type ProjectCheckResult = {
 }
 
 module ProjectChecker =
-    /// Build PlatformContext from project options.
-    /// When binding metadata is available (PlatformMetadata from [platform] section),
-    /// it is the authoritative source. Falls back to path-string inference for
-    /// legacy bindings without [platform].
+    /// Build the PlatformContext from project options: the identity and runtime
+    /// facts of the binding's [platform] section. The width dimensions and the
+    /// numeric representations are not here: they are declared by the platform
+    /// description compiled into the graph and filled in at saturation
+    /// (PlatformDeclaration.fill, plan D8, L-13). No word size is read from a
+    /// project file and no target is assumed when the section is absent.
     let private buildPlatformContext (options: FidprojOptions) : PlatformContext option =
         // Libraries are substrate-neutral — no platform context needed
         match options.TargetPlatform with
@@ -42,67 +44,59 @@ module ProjectChecker =
             | TargetPlatform.MCU  -> SubstrateKind.CPU
             | TargetPlatform.Library -> SubstrateKind.CPU // unreachable
 
+        // The binding's identity: its [platform] arch when the section is present, else
+        // the binding directory's name (an identity, not a platform fact).
+        let platformIdOfPath (path: string) : string =
+            let directory =
+                if Path.HasExtension path then (match Path.GetDirectoryName path with null -> path | d -> d) else path
+            directory.Replace("\\", "/").TrimEnd('/').Split('/') |> Array.tryLast |> Option.defaultValue "unknown"
+
         match options.PlatformPath, options.PlatformMetadata with
-        | Some platformPath, Some metadata ->
-            // Authoritative: build from binding metadata
-            let dimensions =
-                match metadata.WordSize with
-                | Some 64 -> Map.ofList [(WidthDimension.Pointer, 64); (WidthDimension.Register, 64)]
-                | Some 32 -> Map.ofList [(WidthDimension.Pointer, 32); (WidthDimension.Register, 32)]
-                | _ -> PlatformContext.defaultLinux_x86_64.Dimensions
-            let platformId = metadata.Arch |> Option.defaultValue "unknown"
-            let ctx = {
+        | None, None -> None
+        | platformPath, metadata ->
+            let platformId =
+                metadata
+                |> Option.bind (fun m -> m.Arch)
+                |> Option.orElse (platformPath |> Option.map platformIdOfPath)
+                |> Option.defaultValue "unknown"
+            let runtimeModel = metadata |> Option.map (fun m -> m.RuntimeModel)
+            let freestanding =
+                match runtimeModel, options.DeploymentMode with
+                | Some RuntimeModel.Freestanding, _
+                | None, DeploymentMode.Freestanding -> FreestandingStartup.forPlatform platformId
+                | _ -> None
+            Some {
                 PlatformId = platformId
-                Dimensions = dimensions
-                PointerAlign = (metadata.WordSize |> Option.defaultValue 64) / 8
-                PlatformLibraryPath = Some platformPath
+                // Filled from the declaration at saturation; empty until then.
+                Dimensions = Map.empty
+                Representations = Map.empty
+                PlatformLibraryPath = platformPath
                 Predicates = Map.empty
-                FreestandingStartup =
-                    match metadata.RuntimeModel with
-                    | RuntimeModel.Freestanding -> FreestandingStartup.forPlatform platformId
-                    | _ -> None
+                FreestandingStartup = freestanding
                 SubstrateKind = Some substrateKind
-                RuntimeModel = Some metadata.RuntimeModel
+                RuntimeModel = runtimeModel
                 AvailableMemorySpaces = []
                 DefaultMemorySpace = None
                 // Project clock_mhz overrides binding clock_mhz (design may use PLL/divider)
-                ClockFrequencyMhz = options.ClockMhzOverride |> Option.orElse metadata.ClockMhz
-                NsPerWeightUnit = metadata.NsPerWeightUnit
+                ClockFrequencyMhz = options.ClockMhzOverride |> Option.orElse (metadata |> Option.bind (fun m -> m.ClockMhz))
+                NsPerWeightUnit = metadata |> Option.bind (fun m -> m.NsPerWeightUnit)
             }
-            Some ctx
-        | Some platformPath, None ->
-            // Legacy fallback: path-string inference for bindings without [platform]
-            let basePlatformCtx = PlatformContext.fromPlatformPath platformPath
-            let ctx = { basePlatformCtx with SubstrateKind = Some substrateKind }
-            if options.DeploymentMode = DeploymentMode.Freestanding then
-                Some { ctx with FreestandingStartup = FreestandingStartup.forPlatform ctx.PlatformId }
-            else
-                Some ctx
-        | None, Some metadata ->
-            // Standalone project with [platform] section but no platform dependency.
-            // Synthesize a minimal PlatformContext from the project's own metadata.
-            // Common case: kernel fidproj (target=npu) with inline [platform] section.
-            let dimensions =
-                match metadata.WordSize with
-                | Some 64 -> Map.ofList [(WidthDimension.Pointer, 64); (WidthDimension.Register, 64)]
-                | Some 32 -> Map.ofList [(WidthDimension.Pointer, 32); (WidthDimension.Register, 32)]
-                | _ -> PlatformContext.defaultLinux_x86_64.Dimensions
-            let platformId = metadata.Arch |> Option.defaultValue "unknown"
-            Some {
-                PlatformId = platformId
-                Dimensions = dimensions
-                PointerAlign = (metadata.WordSize |> Option.defaultValue 64) / 8
-                PlatformLibraryPath = None
-                Predicates = Map.empty
-                FreestandingStartup = None
-                SubstrateKind = Some substrateKind
-                RuntimeModel = Some metadata.RuntimeModel
-                AvailableMemorySpaces = []
-                DefaultMemorySpace = None
-                ClockFrequencyMhz = options.ClockMhzOverride |> Option.orElse metadata.ClockMhz
-                NsPerWeightUnit = metadata.NsPerWeightUnit
-            }
-        | None, None -> None
+
+    /// One CCS8205 information diagnostic per [platform] key the binding still carries
+    /// but the compiler no longer reads (`word_size`): reported at the binding's
+    /// project file, never an error, so an older project does not break silently.
+    let private unusedPlatformKeyDiagnostics (options: FidprojOptions) : SGDiag.Diagnostic list =
+        let file = options.PlatformPath |> Option.defaultValue options.ProjectPath
+        options.PlatformMetadata
+        |> Option.map (fun m -> m.UnusedKeys)
+        |> Option.defaultValue []
+        |> List.map (fun key ->
+            { SGDiag.Diagnostic.Severity = SGDiag.NativeDiagnosticSeverity.Info
+              Code = Clef.Compiler.NativeTypedTree.Expressions.Types.DiagnosticCodes.CCS8205_UnusedPlatformKey
+              Message = sprintf "The [platform] key '%s' is not read: width dimensions and representations come from the platform description, not the project file" key
+              Range = { File = file; Start = { Line = 0; Column = 0 }; End = { Line = 0; Column = 0 } }
+              RelatedNodes = []
+              Reachability = SGDiag.ReachabilityContext.Unknown })
 
     /// Normalizes a path to use forward slashes and be absolute.
     let private normalizePath (path: string) =
@@ -208,7 +202,8 @@ module ProjectChecker =
 
                             // Check all parsed inputs together with platform context
                             // The platform context is set on the graph BEFORE entry point elaboration
-                            let checkResult = checkParsedInputsWithPlatform parsedInputs platformContext
+                            let checkedInputs = checkParsedInputsWithPlatform parsedInputs platformContext
+                            let checkResult = { checkedInputs with Diagnostics = checkedInputs.Diagnostics @ unusedPlatformKeyDiagnostics options }
 
                             Ok {
                                 Options = options
@@ -283,7 +278,8 @@ module ProjectChecker =
                         let platformContext = buildPlatformContext options
 
                         // Check all parsed inputs together with platform context
-                        let checkResult = checkParsedInputsWithPlatform parsedInputs platformContext
+                        let checkedInputs = checkParsedInputsWithPlatform parsedInputs platformContext
+                        let checkResult = { checkedInputs with Diagnostics = checkedInputs.Diagnostics @ unusedPlatformKeyDiagnostics options }
 
                         Ok {
                             Options = options

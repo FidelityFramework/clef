@@ -22,6 +22,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.NodeBuilder
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 open Clef.Compiler.PSGSaturation.SemanticGraph.Reachability
 module DepthAnalysis = Clef.Compiler.PSGSaturation.SemanticGraph.DepthAnalysis
+module PlatformDeclaration = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformDeclaration
 open Clef.Compiler.NativeTypedTree.NameResolution
 open Clef.Compiler.NativeTypedTree.Expressions.Types
 
@@ -799,6 +800,17 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph = ObligationElaboration.foldIn (ObligationElaboration.elaborate finalGraph) finalGraph
     ObligationDischarge.emit finalGraph  // Artifacts 06a/06b: the design-time dispatch
 
+    //=========================================================================
+    // The declared platform fills the context (plan D8, L-13): the graph is
+    // complete, the description compiled into it is read once, and its width
+    // dimensions and representations become the context Composer reads. Every
+    // reachable sealed site is then checked against that declaration (CCS8203,
+    // CCS8204). This is the one place the context's Dimensions are written.
+    //=========================================================================
+    let platformContext = PlatformDeclaration.fill platformContext finalGraph
+    let finalGraph = { finalGraph with Platform = platformContext }
+    let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
+
     // Phase 5: Emit final result
     emitPhaseIfEnabled PhaseTypes.PhaseId.Final finalGraph diagnostics
 
@@ -838,7 +850,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ depthDiagnostics
+        Diagnostics = taggedDiagnostics @ declarationDiagnostics @ depthDiagnostics
         PlatformContext = platformContext
     }
 
