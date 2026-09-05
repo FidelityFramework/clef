@@ -87,15 +87,27 @@ type DeclaredCore = {
     Representations: DeclaredRepresentation list
 }
 
+/// A declared return bound of an endpoint (Dimensional_Range_Design.md, ruling
+/// 2 of CS-12): read from a Contract whose `AtMost` names a parameter, with its
+/// `Floor`; the endpoint's return lies in `[Floor, hi(AtMost)]`. Mirrors the
+/// two fields of BAREWire.Platform.Contract.
+type DeclaredReturn = {
+    Node: NodeId
+    Endpoint: string
+    Floor: bigint
+    AtMost: string
+}
+
 /// The platform description: its root node, its id (the prefix of every
-/// declaration citation, `<id>:<name>`), its core when it declares one, and
-/// its spaces and buffers.
+/// declaration citation, `<id>:<name>`), its core when it declares one, its
+/// spaces and buffers, and the return bounds its endpoint contracts declare.
 type DeclaredPlatform = {
     Node: NodeId
     Id: string
     Core: DeclaredCore option
     Spaces: DeclaredSpace list
     Buffers: DeclaredBuffer list
+    Returns: DeclaredReturn list
 }
 
 //-------------------------------------------------------------------------
@@ -169,10 +181,15 @@ let private stringOf (graph: SemanticGraph) (id: NodeId) : string option =
     | Some ({ Kind = SemanticKind.Literal (NativeLiteral.String s) } : SemanticNode) -> Some s
     | _ -> None
 
-let private int64Of (graph: SemanticGraph) (id: NodeId) : int64 option =
+/// An integer as declared: a literal, or the negation of one (`-4095L`, a floor).
+let rec private int64Of (graph: SemanticGraph) (id: NodeId) : int64 option =
     match valueOf graph id with
     | Some ({ Kind = SemanticKind.Literal (NativeLiteral.Int (v, _)) } : SemanticNode) -> Some v
     | Some ({ Kind = SemanticKind.Literal (NativeLiteral.UInt (v, _)) } : SemanticNode) -> Some (int64 v)
+    | Some ({ Kind = SemanticKind.Application (funcId, [ arg ]) } : SemanticNode) ->
+        match valueOf graph funcId with
+        | Some ({ Kind = SemanticKind.Intrinsic { Operation = "op_UnaryNegation" } } : SemanticNode) -> int64Of graph arg |> Option.map (fun v -> -v)
+        | _ -> None
     | _ -> None
 
 let private boolOf (graph: SemanticGraph) (id: NodeId) : bool option =
@@ -358,18 +375,56 @@ let private isDescriptionType (node: SemanticNode) : bool =
     | Some "PlatformDescription" | Some "PlatformDescriptor" -> true
     | _ -> false
 
+/// The return bounds the description's surfaces declare: every Contract of every Endpoint of
+/// every BoundarySurface whose `AtMost` names a parameter, with its `Floor`. A Contract that
+/// carries no `AtMost` (the Contracts form declares none) or an empty one declares no bound.
+let private readReturns (graph: SemanticGraph) (fields: (string * NodeId) list) : DeclaredReturn list * DeclarationFinding list =
+    let readContract (endpoint: string) (id: NodeId) : Result<DeclaredReturn option, DeclarationFinding> =
+        match recordOf graph id with
+        | Some (node, cf) when typeName node = Some "Contract" ->
+            match field "AtMost" cf with
+            | None -> Ok None
+            | Some atMostId ->
+                match stringOf graph atMostId with
+                | Some "" -> Ok None
+                | Some atMost ->
+                    match field "Floor" cf |> Option.bind (int64Of graph) with
+                    | Some floor -> Ok (Some { Node = node.Id; Endpoint = endpoint; Floor = bigint floor; AtMost = atMost })
+                    | None -> Error (findingAt node DeclarationDefect.Malformed "a Contract that names an AtMost parameter must declare its Floor as an integer literal")
+                | None -> Error (findingAt node DeclarationDefect.Malformed "a Contract's AtMost must be a string literal")
+        | _ -> Error (findingOn graph id DeclarationDefect.Malformed "an element of Contracts is not a Contract record")
+    let readEndpoint (id: NodeId) : Result<DeclaredReturn list * DeclarationFinding list, DeclarationFinding> =
+        match recordOf graph id with
+        | Some (node, ef) when typeName node = Some "Endpoint" ->
+            match field "Name" ef |> Option.bind (stringOf graph) with
+            | Some name ->
+                let bounds, findings = readList graph ef "Contracts" (readContract name)
+                Ok (List.choose (fun b -> b) bounds, findings)
+            | None -> Error (findingAt node DeclarationDefect.Malformed "an Endpoint's Name must be a string literal")
+        | _ -> Error (findingOn graph id DeclarationDefect.Malformed "an element of Endpoints is not an Endpoint record")
+    let readSurface (id: NodeId) : Result<DeclaredReturn list * DeclarationFinding list, DeclarationFinding> =
+        match recordOf graph id with
+        | Some (node, sf) when typeName node = Some "BoundarySurface" ->
+            let endpoints, findings = readList graph sf "Endpoints" readEndpoint
+            Ok (endpoints |> List.collect fst, findings @ (endpoints |> List.collect snd))
+        | _ -> Error (findingOn graph id DeclarationDefect.Malformed "an element of Surfaces is not a BoundarySurface record")
+    let surfaces, findings = readList graph fields "Surfaces" readSurface
+    let returns = surfaces |> List.collect fst
+    returns, findings @ (surfaces |> List.collect snd) @ duplicates "return bound" (fun r -> r.Endpoint) (fun r -> r.Node) graph returns
+
 let private readPlatform (graph: SemanticGraph) (node: SemanticNode) (fields: (string * NodeId) list) : DeclaredPlatform option * DeclarationFinding list =
     match field "Id" fields |> Option.bind (stringOf graph) with
     | None -> None, [ findingAt node DeclarationDefect.Malformed "a platform description's Id must be a string literal" ]
     | Some id ->
         let spaces, spaceFindings = readList graph fields "Spaces" (readSpace graph)
         let buffers, bufferFindings = readList graph fields "Buffers" (readBuffer graph)
+        let returns, returnFindings = readReturns graph fields
         let core, coreFindings =
             match field "Core" fields with
             | Some coreId -> readCore graph coreId
             | None -> None, []
-        Some { Node = node.Id; Id = id; Core = core; Spaces = spaces; Buffers = buffers },
-        spaceFindings @ bufferFindings @ coreFindings
+        Some { Node = node.Id; Id = id; Core = core; Spaces = spaces; Buffers = buffers; Returns = returns },
+        spaceFindings @ bufferFindings @ returnFindings @ coreFindings
 
 /// The sources the platform binding compiles are the ones that declare the
 /// platform; a description value anywhere else in the program is ordinary data
@@ -442,3 +497,293 @@ let bufferNamed (name: string) (platform: DeclaredPlatform) : DeclaredBuffer opt
 /// form BAREWire's own Platform/Obligations.fs uses.
 let cite (platform: DeclaredPlatform) (declaration: string) : string =
     platform.Id + ":" + declaration
+
+//-------------------------------------------------------------------------
+// The declared boundaries (Dimensional_Range_Design.md §4.1, ruling 1 of CS-12): one reader
+// for the wire-schema field, the MMIO register's descriptor, and the C ABI parameter
+//-------------------------------------------------------------------------
+
+/// One integer field a layout descriptor declares (BAREWire `FieldDescriptor`): the field's
+/// name, its declared representation (`Repr`, `"u16"`), the bits that representation has and
+/// the exact range a value of it holds. A field whose representation is not an integer (a
+/// real, a pointer) is not carried: nothing integer crosses there.
+type DeclaredField = {
+    Node: NodeId
+    Name: string
+    Repr: string
+    Bits: int
+    Range: ValueRange
+}
+
+/// A layout descriptor (a `StructDescriptor` or a `PeripheralDescriptor`): the node that
+/// declares it, its declared name, the record type of this graph it describes when exactly one
+/// record type bears that name (its fields are then seeded from `Fields`), and its integer
+/// fields. A descriptor naming no record type of the graph describes a C struct or a register
+/// block with no Clef record, and seeds nothing.
+type DeclaredLayout = {
+    Node: NodeId
+    Name: string
+    RecordType: string option
+    Fields: DeclaredField list
+}
+
+/// One parameter or the return of a binding descriptor (BAREWire `ParameterInfo`, `TypeRef`)
+/// that carries an integer or a boolean: its name, its declared bits and the exact range.
+type DeclaredParameter = {
+    Node: NodeId
+    Name: string
+    Bits: int
+    Range: ValueRange
+}
+
+/// A binding descriptor (`Expr<FunctionDescriptor>`, the quotation a generator emits beside an
+/// extern; platform-bindings.md "Layer 2"): the node that declares it, the C name, and, when
+/// the extern it describes sits beside it (`<name>Descriptor` beside `<name>`, in one module),
+/// the extern's parameter nodes paired with their declared ranges (None for a parameter that is
+/// not an integer or a boolean on the C side: a pointer, a real, a named type) and the extern's
+/// body node with the declared return. An extern with no descriptor beside it is not described
+/// here and keeps the CPU leg's rule for its parameters.
+type DeclaredFunction = {
+    Node: NodeId
+    CName: string
+    Parameters: (NodeId * DeclaredParameter option) list
+    Body: NodeId option
+    Return: DeclaredParameter option
+}
+
+/// Every boundary declaration in the graph, with every defect found reading them.
+type Descriptors = {
+    Layouts: DeclaredLayout list
+    Functions: DeclaredFunction list
+    Findings: DeclarationFinding list
+}
+
+/// The exact range and bits a BAREWire `Repr` tag declares for an integer or boolean field:
+/// None for a representation that carries no integer (`f32`, `f64`, `pointer`), Error for a tag
+/// outside the vocabulary.
+let private rangeOfRepr (repr: string) : Result<(int * ValueRange) option, string> =
+    match repr with
+    | "u8" -> Ok (Some (8, ValueRange.unsignedOf 8))
+    | "u16" -> Ok (Some (16, ValueRange.unsignedOf 16))
+    | "u32" -> Ok (Some (32, ValueRange.unsignedOf 32))
+    | "u64" -> Ok (Some (64, ValueRange.unsignedOf 64))
+    | "i8" -> Ok (Some (8, ValueRange.twosComplement 8))
+    | "i16" -> Ok (Some (16, ValueRange.twosComplement 16))
+    | "i32" -> Ok (Some (32, ValueRange.twosComplement 32))
+    | "i64" -> Ok (Some (64, ValueRange.twosComplement 64))
+    | "bool" -> Ok (Some (1, ValueRange.boolean))
+    | "f32" | "f64" | "pointer" -> Ok None
+    | other -> Error (sprintf "'%s' is not a representation the BAREWire vocabulary names" other)
+
+/// A union case as declared: its name and its payload node, through a `UnionCase` (before
+/// Baker saturation) or the `DUConstruct` it becomes.
+let private caseOf (graph: SemanticGraph) (id: NodeId) : (SemanticNode * string * NodeId option) option =
+    match valueOf graph id with
+    | Some (({ Kind = SemanticKind.UnionCase (name, _, payload) } : SemanticNode) as node)
+    | Some (({ Kind = SemanticKind.DUConstruct (name, _, payload, _) } : SemanticNode) as node) -> Some (node, name, payload)
+    | _ -> None
+
+/// The two elements of a pair payload (`Integer (Signed, 32)`).
+let private pairOf (graph: SemanticGraph) (id: NodeId) : (NodeId * NodeId) option =
+    match valueOf graph id with
+    | Some ({ Kind = SemanticKind.TupleExpr [ a; b ] } : SemanticNode) -> Some (a, b)
+    | Some ({ Children = [ a; b ] } : SemanticNode) -> Some (a, b)
+    | _ -> None
+
+/// A `TypeRef` as declared: the bits and range of an integer or boolean reference, None for a
+/// reference that carries no integer (`Float`, `Pointer`, `Void`, `Named`), a finding for a
+/// case the vocabulary does not name, a payload the reader cannot read, or a width of no bits.
+let private readTypeRef (graph: SemanticGraph) (id: NodeId) : Result<(int * ValueRange) option, DeclarationFinding> =
+    match caseOf graph id with
+    | Some (node, "Integer", Some payload) ->
+        match pairOf graph payload with
+        | Some (signId, bitsId) ->
+            match caseOf graph signId, int64Of graph bitsId with
+            | Some (_, "Signed", _), Some bits when bits > 0L -> Ok (Some (int bits, ValueRange.twosComplement (int bits)))
+            | Some (_, "Unsigned", _), Some bits when bits > 0L -> Ok (Some (int bits, ValueRange.unsignedOf (int bits)))
+            | Some (_, ("Signed" | "Unsigned"), _), Some bits -> Error (findingAt node DeclarationDefect.Invalid (sprintf "an Integer of %d bits; a width is a positive number of bits" bits))
+            | _ -> Error (findingAt node DeclarationDefect.Malformed "an Integer's payload must be a Signedness case and an integer literal")
+        | None -> Error (findingAt node DeclarationDefect.Malformed "an Integer's payload must be a pair (Signed | Unsigned, bits)")
+    | Some (node, (("Float" | "Pointer") as case), Some payload) ->
+        match int64Of graph payload with
+        | Some bits when bits > 0L -> Ok None
+        | Some bits -> Error (findingAt node DeclarationDefect.Invalid (sprintf "a %s of %d bits; a width is a positive number of bits" case bits))
+        | None -> Error (findingAt node DeclarationDefect.Malformed (sprintf "a %s's bits must be an integer literal" case))
+    | Some (_, "Bool", _) -> Ok (Some (1, ValueRange.boolean))
+    | Some (_, ("Void" | "Named"), _) -> Ok None
+    | Some (node, other, _) -> Error (findingAt node DeclarationDefect.Invalid (sprintf "'%s' is not a TypeRef case the BAREWire vocabulary names" other))
+    | None -> Error (findingOn graph id DeclarationDefect.Malformed "a Type must be a TypeRef case (Integer, Float, Pointer, Bool, Void, Named)")
+
+/// One `ParameterInfo` as declared.
+let private readParameter (graph: SemanticGraph) (id: NodeId) : Result<(string * DeclaredParameter option), DeclarationFinding> =
+    match recordOf graph id with
+    | Some (node, fields) when typeName node = Some "ParameterInfo" ->
+        match field "Name" fields |> Option.bind (stringOf graph), field "Type" fields with
+        | Some name, Some typeId ->
+            readTypeRef graph typeId
+            |> Result.map (Option.map (fun (bits, range) -> { Node = node.Id; Name = name; Bits = bits; Range = range }))
+            |> Result.map (fun declared -> name, declared)
+        | _ -> Error (findingAt node DeclarationDefect.Malformed "a ParameterInfo's Name must be a string literal and it must declare a Type")
+    | _ -> Error (findingOn graph id DeclarationDefect.Malformed "an element of Parameters is not a ParameterInfo record")
+
+/// One `FieldDescriptor` as declared, when it carries an integer.
+let private readField (graph: SemanticGraph) (id: NodeId) : Result<DeclaredField option, DeclarationFinding> =
+    match recordOf graph id with
+    | Some (node, fields) when typeName node = Some "FieldDescriptor" ->
+        match field "Name" fields |> Option.bind (stringOf graph), field "Repr" fields |> Option.bind (stringOf graph) with
+        | Some name, Some repr ->
+            match rangeOfRepr repr with
+            | Ok (Some (bits, range)) -> Ok (Some { Node = node.Id; Name = name; Repr = repr; Bits = bits; Range = range })
+            | Ok None -> Ok None
+            | Error message -> Error (findingAt node DeclarationDefect.Invalid (sprintf "the field '%s': %s" name message))
+        | _ -> Error (findingAt node DeclarationDefect.Malformed "a FieldDescriptor's Name and Repr must be string literals")
+    | _ -> Error (findingOn graph id DeclarationDefect.Malformed "an element of Fields is not a FieldDescriptor record")
+
+/// The bit fields of a field descriptor, each checked: a bare integer width of at least one bit
+/// at a non-negative position.
+let private bitFieldFindings (graph: SemanticGraph) (fieldId: NodeId) : DeclarationFinding list =
+    match recordOf graph fieldId with
+    | Some (_, fields) ->
+        let read (id: NodeId) : Result<unit, DeclarationFinding> =
+            match recordOf graph id with
+            | Some (node, bf) when typeName node = Some "BitFieldDescriptor" ->
+                match field "Position" bf |> Option.bind (int64Of graph), field "Width" bf |> Option.bind (int64Of graph) with
+                | Some position, Some width when position >= 0L && width >= 1L -> Ok ()
+                | Some position, Some width -> Error (findingAt node DeclarationDefect.Invalid (sprintf "a bit field at position %d of width %d; a bit field is at least one bit at a non-negative position" position width))
+                | _ -> Error (findingAt node DeclarationDefect.Malformed "a BitFieldDescriptor's Position and Width must be integer literals")
+            | _ -> Error (findingOn graph id DeclarationDefect.Malformed "an element of BitFields is not a BitFieldDescriptor record")
+        snd (readList graph fields "BitFields" read)
+    | None -> []
+
+/// The last segment of a qualified type name.
+let private shortName (name: string) : string =
+    match name.LastIndexOf '.' with
+    | -1 -> name
+    | i -> name.Substring(i + 1)
+
+/// The record types of the graph a descriptor's name denotes: the one whose qualified name is
+/// the name, or those whose last segment is.
+let private recordTypesNamed (graph: SemanticGraph) (name: string) : string list =
+    let types = graph.Types.Value |> Map.toList |> List.map fst
+    match types |> List.filter (fun t -> t = name) with
+    | [ exact ] -> [ exact ]
+    | _ -> types |> List.filter (fun t -> shortName t = name)
+
+/// A layout descriptor (`StructDescriptor` or `PeripheralDescriptor`) at its declaring node,
+/// with its integer fields and the record type it seeds. A field the descriptor declares that
+/// the record it names does not carry, or carries at a type that is not an integer or a
+/// boolean, is a finding at the field.
+let private readLayout (graph: SemanticGraph) (node: SemanticNode) (fields: (string * NodeId) list) : DeclaredLayout option * DeclarationFinding list =
+    match field "Name" fields |> Option.bind (stringOf graph) with
+    | None -> None, [ findingAt node DeclarationDefect.Malformed "a descriptor's Name must be a string literal" ]
+    | Some name ->
+        let layoutFields, layoutFindings =
+            match field "Layout" fields |> Option.bind (recordOf graph) with
+            | Some (layoutNode, layoutFields) when typeName layoutNode = Some "PeripheralLayout" ->
+                let declared, findings = readList graph layoutFields "Fields" (readField graph)
+                let bitFindings =
+                    match field "Fields" layoutFields |> Option.bind (elementsOf graph) with
+                    | Some elements -> elements |> List.collect (bitFieldFindings graph)
+                    | None -> []
+                List.choose id declared, findings @ bitFindings
+            | _ -> [], [ findingAt node DeclarationDefect.Malformed "a descriptor's Layout must be a PeripheralLayout record" ]
+        let recordType, typeFindings =
+            match recordTypesNamed graph name with
+            | [] -> None, []
+            | [ one ] ->
+                let recordFields = SemanticGraph.tryGetRecordFields one graph |> Option.defaultValue []
+                let absent =
+                    layoutFields
+                    |> List.filter (fun f ->
+                        match recordFields |> List.tryFind (fun (n, _) -> n = f.Name) with
+                        | Some (_, ty) -> not (Types.isIntegerType ty || Types.tryGetNTUKind ty = Some NTUKind.NTUbool)
+                        | None -> true)
+                    |> List.map (fun f -> findingAt (SemanticGraph.tryGetNode f.Node graph |> Option.defaultValue node) DeclarationDefect.Invalid (sprintf "the field '%s' is declared '%s' but the record '%s' carries no integer or boolean field of that name" f.Name f.Repr one))
+                Some one, absent
+            | many -> None, [ findingAt node DeclarationDefect.Ambiguous (sprintf "the descriptor '%s' names more than one record type of the program (%s); qualify the name" name (String.concat ", " many)) ]
+        Some { Node = node.Id; Name = name; RecordType = recordType; Fields = layoutFields }, layoutFindings @ typeFindings
+
+/// The lambda a binding's value is, through an annotation.
+let private lambdaOfBinding (graph: SemanticGraph) (bindingId: NodeId) : ((string * NativeType * NodeId) list * NodeId) option =
+    let rec ofValue (id: NodeId) (depth: int) =
+        if depth > 4 then None
+        else
+            match SemanticGraph.tryGetNode id graph with
+            | Some { Kind = SemanticKind.Lambda (parameters, body, _, _, _) } -> Some (parameters, body)
+            | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> ofValue inner (depth + 1)
+            | _ -> None
+    match SemanticGraph.tryGetNode bindingId graph with
+    | Some { Children = children } when not (List.isEmpty children) -> ofValue (List.last children) 0
+    | _ -> None
+
+/// The extern `<name>` beside the descriptor `<name>Descriptor`: a binding of that name with
+/// the same parent carrying `FidelityExtern.Library`.
+let private externBeside (graph: SemanticGraph) (descriptor: SemanticNode) (bindingName: string) : SemanticNode option =
+    if not (bindingName.EndsWith "Descriptor") then None
+    else
+        let name = bindingName.Substring(0, bindingName.Length - "Descriptor".Length)
+        graph.Nodes
+        |> Map.toList
+        |> List.tryPick (fun (_, node) ->
+            match node.Kind with
+            | SemanticKind.Binding (n, _, _, _) when n = name && node.Parent = descriptor.Parent && Map.containsKey "FidelityExtern.Library" node.Metadata -> Some node
+            | _ -> None)
+
+/// A binding descriptor at its declaring node, paired with the extern beside it.
+let private readFunction (graph: SemanticGraph) (binding: SemanticNode) (bindingName: string) (node: SemanticNode) (fields: (string * NodeId) list) : DeclaredFunction option * DeclarationFinding list =
+    match field "CName" fields |> Option.bind (stringOf graph), field "ReturnType" fields with
+    | Some cname, Some returnId ->
+        let parameters, parameterFindings = readList graph fields "Parameters" (readParameter graph)
+        let returned, returnFindings =
+            match readTypeRef graph returnId with
+            | Ok (Some (bits, range)) -> Some { Node = returnId; Name = "ReturnType"; Bits = bits; Range = range }, []
+            | Ok None -> None, []
+            | Error f -> None, [ f ]
+        let paired, externFindings =
+            match externBeside graph binding bindingName |> Option.bind (fun e -> lambdaOfBinding graph e.Id) with
+            | None -> [], None, []
+            | Some (lambdaParameters, body) ->
+                if List.length lambdaParameters <> List.length parameters then
+                    [], None, [ findingAt node DeclarationDefect.Invalid (sprintf "the descriptor of '%s' declares %d parameters; the extern beside it takes %d" cname (List.length parameters) (List.length lambdaParameters)) ]
+                else
+                    let pairs =
+                        List.zip lambdaParameters parameters
+                        |> List.map (fun ((_, ty, paramId), (declaredName, declared)) ->
+                            let ranged = Types.isIntegerType ty || Types.tryGetNTUKind ty = Some NTUKind.NTUbool
+                            match declared with
+                            | Some d when not ranged -> (paramId, None), Some (findingAt (SemanticGraph.tryGetNode d.Node graph |> Option.defaultValue node) DeclarationDefect.Invalid (sprintf "the parameter '%s' of '%s' is declared an integer of %d bits, but the extern's parameter is not an integer" declaredName cname d.Bits))
+                            | _ -> (paramId, (if ranged then declared else None)), None)
+                    pairs |> List.map fst, Some body, pairs |> List.choose snd
+            |> fun (pairs, body, findings) -> (pairs, body), findings
+        let (pairs, body) = paired
+        Some { Node = node.Id; CName = cname; Parameters = pairs; Body = body; Return = returned },
+        parameterFindings @ returnFindings @ externFindings
+    | _ -> None, [ findingAt node DeclarationDefect.Malformed "a FunctionDescriptor's CName must be a string literal and it must declare a ReturnType" ]
+
+/// Every boundary declaration in the graph: a module-level binding whose value, through an
+/// annotation or a quotation, is a `StructDescriptor`, a `PeripheralDescriptor` or a
+/// `FunctionDescriptor` record. Read whether or not reachable (a declaration never is). A
+/// descriptor built by a function is a value, not a declaration, and is not read.
+let readDescriptors (graph: SemanticGraph) : Descriptors =
+    let isModuleLevel (node: SemanticNode) =
+        match node.Parent |> Option.bind (fun p -> SemanticGraph.tryGetNode p graph) with
+        | Some { Kind = SemanticKind.ModuleDef _ } -> true
+        | _ -> false
+    graph.Nodes
+    |> Map.toList
+    |> List.fold (fun (layouts, functions, findings) (_, node) ->
+        match node.Kind with
+        | SemanticKind.Binding (name, _, _, _) when isModuleLevel node && not (List.isEmpty node.Children) ->
+            match recordOf graph (List.last node.Children) with
+            | Some (record, fields) ->
+                match typeName record with
+                | Some "StructDescriptor" | Some "PeripheralDescriptor" ->
+                    let layout, more = readLayout graph record fields
+                    (Option.toList layout @ layouts, functions, findings @ more)
+                | Some "FunctionDescriptor" ->
+                    let f, more = readFunction graph node name record fields
+                    (layouts, Option.toList f @ functions, findings @ more)
+                | _ -> (layouts, functions, findings)
+            | None -> (layouts, functions, findings)
+        | _ -> (layouts, functions, findings)) ([], [], [])
+    |> fun (layouts, functions, findings) -> { Layouts = List.rev layouts; Functions = List.rev functions; Findings = findings }

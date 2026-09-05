@@ -42,11 +42,19 @@ let fill (context: PlatformContext option) (graph: SemanticGraph) : PlatformCont
     context
     |> Option.map (fun ctx ->
         match (PlatformResolution.read graph).Platform with
-        | Some { Core = Some core } ->
-            { ctx with
-                Dimensions = core.Widths |> List.map (fun w -> w.Name, w.Bits) |> Map.ofList
-                Representations = core.Representations |> List.map (fun r -> r.Representation.Name, r.Representation) |> Map.ofList }
-        | _ -> { ctx with Dimensions = Map.empty; Representations = Map.empty })
+        | Some platform ->
+            let returns =
+                platform.Returns
+                |> List.map (fun r -> r.Endpoint, ({ Floor = r.Floor; AtMost = r.AtMost } : ReturnBound))
+                |> Map.ofList
+            match platform.Core with
+            | Some core ->
+                { ctx with
+                    Dimensions = core.Widths |> List.map (fun w -> w.Name, w.Bits) |> Map.ofList
+                    Representations = core.Representations |> List.map (fun r -> r.Representation.Name, r.Representation) |> Map.ofList
+                    EndpointReturns = returns }
+            | None -> { ctx with Dimensions = Map.empty; Representations = Map.empty; EndpointReturns = returns }
+        | None -> { ctx with Dimensions = Map.empty; Representations = Map.empty; EndpointReturns = Map.empty })
 
 //-------------------------------------------------------------------------
 // The sites: every numeric carrier a reachable node's type carries
@@ -157,8 +165,10 @@ let check (context: PlatformContext option) (graph: SemanticGraph) : Diagnostic 
     match context with
     | None -> []
     | Some ctx ->
+        // the description's defects, then the boundary descriptors' (ruling 1 of CS-12: the wire
+        // layouts and binding descriptors the same reader follows)
         let declaration =
-            (PlatformResolution.read graph).Findings
+            (PlatformResolution.read graph).Findings @ (PlatformResolution.readDescriptors graph).Findings
             |> List.map (declarationDiagnostic ctx)
         let sites =
             if PlatformContext.substrateKind ctx = SubstrateKind.FPGA then []

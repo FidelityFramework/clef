@@ -137,6 +137,11 @@ module DiagnosticCodes =
     // (Dimensional_Range_Design.md §4.2, §7): on a substrate with declared representations, a
     // bounded integer range none of them holds. A warning, promoted by --warnaserror (RangeAnalysis).
     let CCS8012_RangeNotCovered = "CCS8012"
+    // CCS8014 (Info): a declared boundary representation wider than the range requires
+    // (Dimensional_Range_Design.md §4.2, §7): a wire field's or a C ABI parameter's descriptor
+    // declares more bits than every value that crosses needs; the developer can tighten the
+    // declaration (RangeAnalysis). Never at the closure boundary, which has no declaration.
+    let CCS8014_RepresentationWiderThanRange = "CCS8014"
     // docs/fidelity/phg/Dimensional_Step1_2_Design.md (f); allocation rule in the Plan's D3.
     let CCS8018_UnsupportedLiteralSuffix = "CCS8018"
 

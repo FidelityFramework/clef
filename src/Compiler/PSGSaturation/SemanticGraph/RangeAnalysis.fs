@@ -45,6 +45,7 @@ open Clef.Compiler.NativeTypedTree.Expressions.Intrinsics
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+module PlatformResolution = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 
 //-------------------------------------------------------------------------
 // The program as the pass reads it
@@ -139,6 +140,16 @@ type private Program = {
     /// the record type of a `[<HardwareModule>]` design's Step inputs parameter, each pin field at
     /// its declared range, a boolean pin `[0, 1]`. No program constructs this record; the pins do.
     InputSeeds: Map<string, Map<string, ValueRange>>
+    /// A node whose value a binding descriptor declares (§4.1, the C ABI row; ruling 1 of
+    /// CS-12): an extern's parameter node at its declared range, the extern's body at the
+    /// declared return. The declaration binds (§4.4); the arguments are checked against it.
+    BoundarySeeds: Map<NodeId, ValueRange>
+    /// The declared wire fields seeded into `InputSeeds`, for the boundary check (§4.2): the
+    /// record type and the field's declaration.
+    DeclaredFields: (string * PlatformResolution.DeclaredField) list
+    /// The declared extern parameters seeded into `BoundarySeeds`: the parameter node and its
+    /// declaration.
+    DeclaredParameters: (NodeId * PlatformResolution.DeclaredParameter) list
     /// An array element type (rendered) -> every value stored into an array of that type, as
     /// (the storing node, the value node): an array literal's elements, an indexer or `Array.set`
     /// assignment, `Array.create`'s seed, `Array.init`'s function result.
@@ -690,6 +701,9 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Constructions = Map.empty
         IntegerFields = Map.empty
         InputSeeds = Map.empty
+        BoundarySeeds = Map.empty
+        DeclaredFields = []
+        DeclaredParameters = []
         ElementStores = Map.empty
         ElementSeeds = Map.empty
         Thresholds = thresholdsOf context
@@ -827,7 +841,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     // A hardware design's inputs: the Step function's second parameter is the pin record. Each
     // boolean pin is `[0, 1]`; a pin of any other numeric type has no declared range in this
     // changeset (CS-12 supplies boundary ranges) and so is unobservable.
-    let inputSeeds =
+    let hardwareSeeds =
         graph.DeclarationRoots
         |> List.choose (fun (rootId, root) ->
             match root with
@@ -860,6 +874,36 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                     | _ -> None)
             | _ -> None)
         |> Map.ofList
+    // The declared boundaries (§1.1 last bullet, §4.1; ruling 1 of CS-12), read by the one
+    // structural reader: a wire-schema field or an MMIO register at its layout descriptor's
+    // declared representation seeds the record type's field, through the same path as a hardware
+    // design's pins; an extern's parameters and result at its binding descriptor's declared bits
+    // and signedness seed the nodes that cross. A record or field no descriptor declares takes no
+    // seed and stays unobservable (CCS8011 names the missing declaration); nothing is invented.
+    let descriptors = PlatformResolution.readDescriptors graph
+    let inputSeeds =
+        descriptors.Layouts
+        |> List.fold (fun (acc: Map<string, Map<string, ValueRange>>) layout ->
+            match layout.RecordType with
+            | Some typeName ->
+                let existing = Map.tryFind typeName acc |> Option.defaultValue Map.empty
+                Map.add typeName (layout.Fields |> List.fold (fun m f -> Map.add f.Name f.Range m) existing) acc
+            | None -> acc) hardwareSeeds
+    let declaredFields =
+        descriptors.Layouts
+        |> List.collect (fun layout ->
+            match layout.RecordType with
+            | Some typeName -> layout.Fields |> List.map (fun f -> typeName, f)
+            | None -> [])
+    let (boundarySeeds, declaredParameters) =
+        descriptors.Functions
+        |> List.fold (fun (seeds: Map<NodeId, ValueRange>, declared: (NodeId * PlatformResolution.DeclaredParameter) list) f ->
+            let seeds = f.Parameters |> List.fold (fun s (paramId, d) -> match d with Some d -> Map.add paramId d.Range s | None -> s) seeds
+            let seeds =
+                match f.Body, f.Return with
+                | Some body, Some r -> Map.add body r.Range seeds
+                | _ -> seeds
+            (seeds, declared @ (f.Parameters |> List.choose (fun (paramId, d) -> d |> Option.map (fun d -> paramId, d))))) (Map.empty, [])
     // Every value stored into an array, by element type (§3.3): an array literal's elements (a
     // comprehension's yields), an indexer or `Array.set` assignment, `Array.create`'s seed,
     // `Array.init`'s function result (a named lambda's body, or every candidate's through a value),
@@ -972,6 +1016,9 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             Constructions = constructions
             IntegerFields = integerFields
             InputSeeds = inputSeeds
+            BoundarySeeds = boundarySeeds
+            DeclaredFields = declaredFields
+            DeclaredParameters = declaredParameters
             ElementStores = elementStores
             ElementSeeds = elementSeeds }
     { program with Refinements = refinementsOf program }
@@ -997,19 +1044,24 @@ let private read (program: Program) (state: State) (consumer: NodeId) (operand: 
     | Some refs -> refineBy state refs (current state operand)
     | None -> current state operand
 
-/// The join of a record field over the type's reachable constructions (`FieldRanges` in the
-/// making): the empty range where nothing constructs it.
+/// The range of a record field (`FieldRanges` in the making): the declared range where a
+/// descriptor declares one that is observable (the declaration binds, §4.4; a construction whose
+/// value leaves it is witnessed by CCS8012, never merged), else the join of the field over the
+/// type's reachable constructions and the seed a hardware design's pin carries; the empty range
+/// where nothing constructs it and nothing declares it.
 let private fieldRange (program: Program) (state: State) (typeName: string) (field: string) : ValueRange =
     let declared =
         Map.tryFind typeName program.InputSeeds
         |> Option.bind (Map.tryFind field)
-        |> Option.defaultValue ValueRange.Empty
-    Map.tryFind typeName program.Constructions
-    |> Option.defaultValue []
-    |> List.fold (fun acc (recordId, fields) ->
-        fields
-        |> List.filter (fun (name, _) -> name = field)
-        |> List.fold (fun acc (_, valueId) -> ValueRange.join acc (read program state recordId valueId)) acc) declared
+    match declared with
+    | Some d when ValueRange.isObservable d -> d
+    | _ ->
+        Map.tryFind typeName program.Constructions
+        |> Option.defaultValue []
+        |> List.fold (fun acc (recordId, fields) ->
+            fields
+            |> List.filter (fun (name, _) -> name = field)
+            |> List.fold (fun acc (_, valueId) -> ValueRange.join acc (read program state recordId valueId)) acc) (declared |> Option.defaultValue ValueRange.Empty)
 
 /// The interim declared boundary of a width-named carrier (§1.1 last bullet; `RangeSources`
 /// source 2): a source node whose carrier names a declared representation (a parameter nothing
@@ -1185,6 +1237,8 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
                 | _ -> 0
             Some (ValueRange.Bounded (bigint.Zero, bigint (max 0 (cases - 1))))
         | _ when not ranged -> None
+        // a node a binding descriptor declares (an extern's parameter, its result): the declaration binds
+        | _ when Map.containsKey node.Id program.BoundarySeeds -> Map.tryFind node.Id program.BoundarySeeds
         | SemanticKind.Literal (NativeLiteral.Int (v, _)) -> Some (ValueRange.point (bigint v))
         | SemanticKind.Literal (NativeLiteral.UInt (v, _)) -> Some (ValueRange.point (bigint v))
         | SemanticKind.Literal (NativeLiteral.Bool _) -> Some ValueRange.boolean
@@ -1572,6 +1626,19 @@ let private parameterReason (program: Program) (node: SemanticNode) : string opt
             | None, None -> Some ": no reachable call supplies it"
     | _ -> None
 
+/// Why a field read is unobservable, when the pass can say: no descriptor declares the field's
+/// representation (ruling 4 of CS-12: the declaration is owed, never invented).
+let private fieldReason (program: Program) (node: SemanticNode) : string option =
+    match node.Kind with
+    | SemanticKind.FieldGet (exprId, field) ->
+        match Map.tryFind exprId program.Reachable with
+        | Some { Type = NativeType.TApp (tycon, _) } ->
+            let declared = Map.tryFind tycon.Name program.InputSeeds |> Option.exists (Map.containsKey field)
+            if declared then None
+            else Some (sprintf ": no descriptor declares the representation of field '%s' of '%s'" field tycon.Name)
+        | _ -> None
+    | _ -> None
+
 /// CCS8011 for every reachable integer whose range has no width: once per enclosing binding, at
 /// the first such node in node order, naming the value. A reference whose own binding is
 /// unobservable is that binding's finding, not a second one, and so is a binding that merely
@@ -1597,7 +1664,7 @@ let private unobservableDiagnostics (program: Program) (state: State) : Diagnost
             | _ -> true))
     |> fun nodes ->
         oncePerBinding program nodes (fun node name where ->
-            let reason = parameterReason program node |> Option.defaultValue ""
+            let reason = parameterReason program node |> Option.orElse (fieldReason program node) |> Option.defaultValue ""
             { Severity = severity
               Code = DiagnosticCodes.CCS8011_UnobservableRange
               Message = sprintf "The range of '%s'%s cannot be observed%s; bound it with a comparison, a modulus or a clamp" name where reason
@@ -1687,6 +1754,83 @@ let private boundaryDiagnostics (program: Program) (state: State) : Diagnostic l
                   Reachability = ReachabilityContext.Reachable })
     | _ -> []
 
+/// CCS8012 and CCS8014 at a declared boundary (§4.2; ruling 1 of CS-12): a value stored into a
+/// wire field whose layout descriptor declares its representation, or passed to an extern
+/// parameter whose binding descriptor declares it, lies within the declared range or is CCS8012
+/// at the value, naming the range, the declaration and the two remedies; and where every value
+/// that crosses lies within a narrower offered representation than the declared one, CCS8014
+/// information at the declaration, since here, unlike the closure boundary, the developer can
+/// tighten it. An unobservable value stays CCS8011.
+let private declaredDiagnostics (program: Program) (state: State) : Diagnostic list =
+    match program.Context with
+    | Some ctx when not program.Fabric ->
+        let short (name: string) = match name.LastIndexOf '.' with -1 -> name | i -> name.Substring(i + 1)
+        let ranged (values: (NodeId * NodeId) list) = values |> List.map (fun (consumer, v) -> v, read program state consumer v)
+        let leaving (declared: ValueRange) (values: (NodeId * ValueRange) list) =
+            values |> List.filter (fun (_, r) -> ValueRange.isObservable r && not (ValueRange.contains declared r))
+        let tightening (declared: ValueRange) (bits: int) (values: (NodeId * ValueRange) list) : (ValueRange * NumericRepresentation) option =
+            let joined = values |> List.fold (fun acc (_, r) -> ValueRange.join acc r) ValueRange.Empty
+            match joined with
+            | ValueRange.Empty -> None
+            | _ when not (ValueRange.isObservable joined) || not (ValueRange.contains declared joined) -> None
+            | _ ->
+                match (selectRange ctx joined).Representation with
+                | Some r when r.Bits < bits -> Some (joined, r)
+                | _ -> None
+        let at (nodeId: NodeId) (severity: NativeDiagnosticSeverity) (code: string) (message: string) : Diagnostic option =
+            SemanticGraph.tryGetNode nodeId program.Graph
+            |> Option.map (fun node ->
+                { Severity = severity; Code = code; Message = message; Range = node.Range; RelatedNodes = [ node.Id ]
+                  Reachability = (if node.IsReachable then ReachabilityContext.Reachable else ReachabilityContext.Unknown) })
+        let fields =
+            program.DeclaredFields
+            |> List.collect (fun (typeName, f) ->
+                let values =
+                    Map.tryFind typeName program.Constructions
+                    |> Option.defaultValue []
+                    |> List.collect (fun (recordId, fs) -> fs |> List.filter (fun (n, _) -> n = f.Name) |> List.map (fun (_, v) -> recordId, v))
+                    |> ranged
+                let uncovered =
+                    leaving f.Range values
+                    |> List.choose (fun (v, r) ->
+                        at v NativeDiagnosticSeverity.Warning DiagnosticCodes.CCS8012_RangeNotCovered
+                            (sprintf "The range %s of the value stored into field '%s' of '%s' is not covered by its declared representation '%s' (%d bits, %s); bound the value with a comparison, a modulus or a clamp, or change the declaration"
+                                (ValueRange.render r) f.Name (short typeName) f.Repr f.Bits (ValueRange.render f.Range)))
+                let wider =
+                    tightening f.Range f.Bits values
+                    |> Option.bind (fun (joined, r) ->
+                        at f.Node NativeDiagnosticSeverity.Info DiagnosticCodes.CCS8014_RepresentationWiderThanRange
+                            (sprintf "The field '%s' of '%s' is declared '%s' (%d bits, %s); every value stored lies within %s, which '%s' (%d bits) holds; the declaration can be tightened"
+                                f.Name (short typeName) f.Repr f.Bits (ValueRange.render f.Range) (ValueRange.render joined) r.Name r.Bits))
+                uncovered @ Option.toList wider)
+        let parameters =
+            program.DeclaredParameters
+            |> List.collect (fun (paramId, d) ->
+                let values = Map.tryFind paramId program.CallArguments |> Option.defaultValue [] |> ranged
+                let owner =
+                    Map.tryFind paramId program.Reachable
+                    |> Option.bind (fun p -> p.Parent)
+                    |> Option.bind (fun l -> Map.tryFind l program.Reachable)
+                    |> Option.bind (fun l -> l.Parent)
+                    |> Option.bind (fun b -> Map.tryFind b program.Reachable)
+                    |> Option.bind (spelling program)
+                    |> Option.defaultValue "the extern"
+                let uncovered =
+                    leaving d.Range values
+                    |> List.choose (fun (v, r) ->
+                        at v NativeDiagnosticSeverity.Warning DiagnosticCodes.CCS8012_RangeNotCovered
+                            (sprintf "The range %s of the argument passed to parameter '%s' of '%s' is not covered by its declared representation (%d bits, %s) in the binding descriptor; bound the value with a comparison, a modulus or a clamp, or change the declaration"
+                                (ValueRange.render r) d.Name owner d.Bits (ValueRange.render d.Range)))
+                let wider =
+                    tightening d.Range d.Bits values
+                    |> Option.bind (fun (joined, r) ->
+                        at d.Node NativeDiagnosticSeverity.Info DiagnosticCodes.CCS8014_RepresentationWiderThanRange
+                            (sprintf "The parameter '%s' of '%s' is declared at %d bits (%s); every argument lies within %s, which '%s' (%d bits) holds; the declaration can be tightened"
+                                d.Name owner d.Bits (ValueRange.render d.Range) (ValueRange.render joined) r.Name r.Bits))
+                uncovered @ Option.toList wider)
+        fields @ parameters
+    | _ -> []
+
 //-------------------------------------------------------------------------
 // Entry
 //-------------------------------------------------------------------------
@@ -1743,7 +1887,7 @@ let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph
         |> Set.toList
         |> List.choose (fun key -> typeOfKey key |> Option.map (fun elem -> key, elementRange program state elem))
         |> Map.ofList
-    let diagnostics = unobservableDiagnostics program state @ coverageDiagnostics program state @ boundaryDiagnostics program state
+    let diagnostics = unobservableDiagnostics program state @ coverageDiagnostics program state @ boundaryDiagnostics program state @ declaredDiagnostics program state
     ({ graph with Nodes = nodes; FieldRanges = lazy fieldRanges; ElementRanges = lazy elementRanges; Escaping = lazy program.EscapingLambdas }, diagnostics)
 
 //-------------------------------------------------------------------------

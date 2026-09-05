@@ -70,6 +70,7 @@ module ProjectChecker =
                 // Filled from the declaration at saturation; empty until then.
                 Dimensions = Map.empty
                 Representations = Map.empty
+                EndpointReturns = Map.empty
                 PlatformLibraryPath = platformPath
                 Predicates = Map.empty
                 FreestandingStartup = freestanding
