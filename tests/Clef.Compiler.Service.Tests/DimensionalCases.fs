@@ -333,6 +333,12 @@ let tests = [
         noErrors result
         same (measured metre) (bindingType "value" result)
 
+    "shared record labels preserve measure parameter kinds", fun () ->
+        let result = check "type Earlier<[<Measure>] 'u> = { Value: float<'u> }\ntype Later<[<Measure>] 'u> = { Value: float<'u> }\nlet distance = { Value = 1.0<m> }\nlet duration = { Value = 2.0<s> }\nlet length = distance.Value\nlet time = duration.Value\n"
+        noErrors result
+        same (measured metre) (bindingType "length" result)
+        same (measured second) (bindingType "time" result)
+
     "record updates preserve dimensions", fun () ->
         let valid = check "type Quantity<[<Measure>] 'u> = { mutable Value: float<'u> }\nlet distance: Quantity<m> = { Value = 1.0<m> }\ndistance.Value <- 2.0<m>\nlet copy = { distance with Value = 3.0<m> }\nlet value = copy.Value\n"
         noErrors valid
