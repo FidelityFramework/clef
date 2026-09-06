@@ -43,6 +43,89 @@ let different expected actual =
     | other -> failwithf "Expected dimensional mismatch, got %A" other
 
 let tests = [
+    "layout preserves unresolved fields in any position", fun () ->
+        let unknowns = [
+            TypeLayout.Opaque
+            TypeLayout.Inline(-1, -1)
+            TypeLayout.Inline(4, -1)
+        ]
+        for layout in unknowns do
+            let unknown = NativeType.TApp({ Types.boolTyCon with Layout = layout }, [])
+            for fields in [ [unknown; Types.boolType]; [Types.boolType; unknown]; [Types.boolType; unknown; Types.charType] ] do
+                let actual = computeRecordLayout (fields |> List.mapi (fun i ty -> string i, ty))
+                if actual <> TypeLayout.Opaque then
+                    failwithf "A later field fabricated a layout after %A: %A" layout actual
+
+    "layout defers target-dependent record fields", fun () ->
+        let fields = [
+            Types.intType
+            Types.stringType
+            NativeType.TApp(Types.arrayTyCon, [Types.boolType])
+            NativeType.TNativePtr Types.boolType
+            NativeType.TApp(Types.voidptrTyCon, [])
+            NativeType.TByref(Types.boolType, ByrefKind.InOut)
+            NativeType.TTuple([Types.boolType], false)
+            NativeType.TFun(Types.boolType, Types.boolType)
+            NativeType.TApp({ Types.boolTyCon with Layout = TypeLayout.NTUCompound 3 }, [])
+        ]
+        for field in fields do
+            let actual = computeRecordLayout ["value", field; "marker", Types.boolType]
+            if actual <> TypeLayout.Opaque then
+                failwithf "Target-independent checking selected a machine layout for %s: %A" (formatType field) actual
+
+    "layout defers target-dependent option and result payloads", fun () ->
+        let resultTyCon = mkTypeConRef "result" 2 (TypeLayout.Inline(-1, -1))
+        for payload in [Types.intType; Types.stringType; NativeType.TNativePtr Types.boolType] do
+            let types = [
+                NativeType.TApp(Types.optionTyCon, [payload])
+                NativeType.TApp(resultTyCon, [payload; Types.boolType])
+                NativeType.TApp(resultTyCon, [Types.boolType; payload])
+                NativeType.TApp(resultTyCon, [payload; freshTypeVar dummyRange])
+            ]
+            for ty in types do
+                match layoutOf ty with
+                | TypeLayout.Inline(size, align) when size >= 0 && align > 0 ->
+                    failwithf "A payload with unresolved layout acquired concrete storage: %s -> %d/%d" (formatType ty) size align
+                | _ -> ()
+
+    "layout defers union carrier policy even for known payloads", fun () ->
+        // option-operations-representation.md §2: tag width is platform policy;
+        // §2.1: JSIR may erase a carrier after proving its payload excludes undefined.
+        let resultTyCon = mkTypeConRef "result" 2 (TypeLayout.Inline(-1, -1))
+        for payload in [Types.boolType; Types.charType; measured metre] do
+            for ty in [ NativeType.TApp(Types.optionTyCon, [payload]); NativeType.TApp(resultTyCon, [payload; Types.boolType]) ] do
+                match layoutOf ty with
+                | TypeLayout.Inline(size, align) when size >= 0 && align > 0 ->
+                    failwithf "Source type selected a union carrier before its target policy: %s -> %d/%d" (formatType ty) size align
+                | _ -> ()
+
+    "layout still computes known field padding", fun () ->
+        let cases = [
+            [], TypeLayout.Inline(0, 1)
+            ["flag", Types.boolType], TypeLayout.Inline(1, 1)
+            ["first", Types.boolType; "character", Types.charType; "last", Types.boolType], TypeLayout.Inline(12, 4)
+            ["dimension", NativeType.TMeasure metre; "flag", Types.boolType], TypeLayout.Inline(1, 1)
+        ]
+        for fields, expected in cases do
+            let actual = computeRecordLayout fields
+            if actual <> expected then failwithf "Expected %A, got %A" expected actual
+
+    "layout cannot wrap large field extents into a concrete size", fun () ->
+        let large = NativeType.TApp({ Types.boolTyCon with Layout = TypeLayout.Inline(System.Int32.MaxValue, 1) }, [])
+        let actual = computeRecordLayout ["first", large; "second", large; "third", large]
+        if actual <> TypeLayout.Opaque then failwithf "Aggregate layout overflow produced fabricated storage: %A" actual
+
+    "layout deferral keeps generic measured code usable", fun () ->
+        let result = check "type Reading<[<Measure>] 'u, 'a> = { Context: 'a; Quantity: float<'u>; Valid: bool }\nlet reading = { Context = true; Quantity = 1.0<m>; Valid = true }\nlet length = reading.Quantity\n"
+        noErrors result
+        same (measured metre) (bindingType "length" result)
+        let declarationLayout = result.Graph.Nodes.Values |> Seq.pick (fun node ->
+            match node.Kind, node.Type with
+            | SemanticKind.TypeDef(name = "Reading"), NativeType.TApp(tc, _) -> Some tc.Layout
+            | _ -> None)
+        if declarationLayout <> TypeLayout.Opaque then
+            failwithf "Generic declaration fixed storage before its context type was known: %A" declarationLayout
+
     "power survives elaboration", fun () ->
         let result = check "let keep (x: float<m^2>) = x\n"
         noErrors result

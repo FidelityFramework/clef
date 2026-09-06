@@ -420,7 +420,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // CRITICAL: Apply type substitutions to resolve type variables after constraint solving.
     // During type checking, nodes are created with fresh type variables that get unified
     // with concrete types. The substitutions are stored in UnionFind but not automatically
-    // applied to node types. We must apply them here to get concrete types in the output.
+    // applied to node types. Apply them here without choosing representations or
+    // retiring type structure: later stages still consume those facts and obligations.
     let resolvedNodes =
         builder.Nodes
         |> Map.map (fun _id node -> SemanticGraph.mapNodeTypes applySubst node)
@@ -1548,8 +1549,9 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                             else Some (name, pins))
                         |> Map.ofList
 
-                    // Compute memory layout from fields
-                    // Per spec Step 4: "Initialize offset = 0, max_align = 1..."
+                    // Compute only what these field types establish. Generic and
+                    // target-dependent layouts remain open for saturation; the
+                    // TypeDef below preserves their field structure for that consumer.
                     let layout = computeRecordLayout fieldInfos
 
                     // Create TypeConRef with computed layout and pin attributes
