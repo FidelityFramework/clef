@@ -18,7 +18,7 @@ open Clef.Compiler.NativeTypedTree.Expressions.Types
 //-------------------------------------------------------------------------
 
 /// Get the NativeType of a SynConst
-let rec typeOfConst (c: SynConst) : NativeType =
+let rec typeOfConst (env: TypeEnv) (c: SynConst) : NativeType =
     match c with
     | SynConst.Unit -> Types.unitType
     | SynConst.Bool _ -> Types.boolType
@@ -40,10 +40,14 @@ let rec typeOfConst (c: SynConst) : NativeType =
     | SynConst.Bytes _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint8Type])
     | SynConst.UInt16s _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint16Type])
     | SynConst.Measure(innerConst, _, synMeasure, _) ->
-        // For now, just use the base type; measure annotation is tracked separately
-        let baseType = typeOfConst innerConst
-        let _ = synMeasure  // Suppress warning
-        baseType
+        match resolveSynMeasure env synMeasure with
+        | NativeType.TMeasure measure ->
+            let ty = withMeasure (typeOfConst env innerConst) measure
+            match ty with
+            | NativeType.TError message -> addError synMeasure.Range message env
+            | _ -> ()
+            ty
+        | ty -> ty
     | SynConst.UserNum(_, suffix) ->
         // UserNum with suffix - "I" is bigint, others are user-defined
         match suffix with

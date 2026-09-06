@@ -829,6 +829,87 @@ let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
             | "decimal" -> Some NativeTypes.Types.decimalType
             | _ -> None
 
+/// Resolve measure syntax in its own kind. Unknown atoms must be diagnosed here;
+/// a recovery type alone would silently unify with anything later.
+let resolveSynMeasure (env: TypeEnv) (syntax: SynMeasure) : NativeType =
+    let error range message =
+        addError range message env
+        NativeType.TError message
+    let product left right =
+        match left, right with
+        | NativeType.TMeasure a, NativeType.TMeasure b -> NativeType.TMeasure(MProd(a, b))
+        | NativeType.TError _, _ -> left
+        | _ -> right
+    let inverse = function
+        | NativeType.TMeasure measure -> NativeType.TMeasure(MInv measure)
+        | ty -> ty
+    let rec integer = function
+        | SynRationalConst.Integer(value, _) -> Some (bigint value)
+        | SynRationalConst.Negate(value, _) -> integer value |> Option.map (~-)
+        | SynRationalConst.Paren(value, _) -> integer value
+        | SynRationalConst.Rational _ -> None
+    let rec resolve = function
+        | SynMeasure.Named(idents, range) ->
+            let name = idents |> List.map (fun ident -> ident.idText) |> String.concat "."
+            match tryLookupTypeAbbrev name env with
+            | Some (NativeType.TMeasure _ as ty) -> ty
+            | _ -> error range $"Unknown measure: {name}"
+        | SynMeasure.One _ -> NativeType.TMeasure MOne
+        | SynMeasure.Anon range -> NativeType.TMeasure(MVar(freshMeasureVar (rangeToSourceRange range)))
+        | SynMeasure.Var(SynTypar(ident, _, _), range) ->
+            // A fresh variable per annotation would give repeated 'u occurrences
+            // different identities. Diagnose until binding-scoped parameters exist.
+            error range $"Named measure parameter '{ident.idText}' requires measure-parameter scope support"
+        | SynMeasure.Product(left, _, right, _) -> product (resolve left) (resolve right)
+        | SynMeasure.Seq(measures, _) -> measures |> List.map resolve |> List.fold product (NativeType.TMeasure MOne)
+        | SynMeasure.Divide(left, _, right, _) ->
+            product (left |> Option.map resolve |> Option.defaultValue (NativeType.TMeasure MOne)) (inverse (resolve right))
+        | SynMeasure.Power(inner, _, exponent, range) ->
+            match resolve inner, integer exponent with
+            | NativeType.TMeasure measure, Some power -> NativeType.TMeasure(measurePower measure power)
+            | NativeType.TError message, _ -> NativeType.TError message
+            | _ -> error range "Measure powers must be integers"
+        | SynMeasure.Paren(inner, _) -> resolve inner
+    match resolve syntax with
+    | NativeType.TMeasure measure -> NativeType.TMeasure(normalizeMeasure measure)
+    | ty -> ty
+
+/// Type annotations encode products, quotients and juxtaposition as SynType.
+/// Convert them to the same measure syntax used by literals before resolving.
+let resolveSynMeasureType (env: TypeEnv) (syntax: SynType) : NativeType =
+    let rec convert = function
+        | SynType.LongIdent(SynLongIdent(idents, _, _)) as ty -> Some (SynMeasure.Named(idents, ty.Range))
+        | SynType.Var(typar, range) -> Some (SynMeasure.Var(typar, range))
+        | SynType.Anon range -> Some (SynMeasure.Anon range)
+        | SynType.StaticConstant(SynConst.Int32 1, range) -> Some (SynMeasure.One range)
+        | SynType.Paren(inner, range) -> convert inner |> Option.map (fun measure -> SynMeasure.Paren(measure, range))
+        | SynType.MeasurePower(inner, power, range) ->
+            convert inner |> Option.map (fun measure -> SynMeasure.Power(measure, range, power, range))
+        | SynType.App(right, None, [left], _, None, true, range) ->
+            match convert left, convert right with
+            | Some left, Some right -> Some (SynMeasure.Product(left, range, right, range))
+            | _ -> None
+        | SynType.Tuple(false, segments, range) ->
+            let folder state segment =
+                match state, segment with
+                | Some (measure, _), SynTupleTypeSegment.Star _ -> Some(measure, false)
+                | Some (measure, _), SynTupleTypeSegment.Slash _ -> Some(measure, true)
+                | Some (measure, divide), SynTupleTypeSegment.Type ty ->
+                    convert ty |> Option.map (fun next ->
+                        let result =
+                            if divide then SynMeasure.Divide(Some measure, range, next, range)
+                            else SynMeasure.Product(measure, range, next, range)
+                        result, false)
+                | _ -> None
+            segments |> List.fold folder (Some(SynMeasure.One range, false)) |> Option.map fst
+        | _ -> None
+    match convert syntax with
+    | Some measure -> resolveSynMeasure env measure
+    | None ->
+        let message = "Expected a unit of measure"
+        addError syntax.Range message env
+        NativeType.TError message
+
 /// Convert SynType to NativeType at the parser/checker boundary.
 /// This function is called directly at conversion sites - no callback threading.
 /// SynType dies here; only NativeType propagates into type checking.
@@ -845,7 +926,18 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
 
     | SynType.App(typeName, _, typeArgs, _, _, _, _) ->
         // Generic type application: nativeptr<byte>, List<int>, Option<string>
-        let argTys = typeArgs |> List.map (resolveSynType env)
+        let argTys =
+            let kinds =
+                match typeName with
+                | SynType.LongIdent(SynLongIdent(idents, _, _)) ->
+                    let name = idents |> List.map (fun ident -> ident.idText) |> String.concat "."
+                    if name = "int" || name = "float" then [TypeParamKind.Measure]
+                    else tryLookupTypeDef name env |> Option.map (fun tc -> tc.ParamKinds) |> Option.defaultValue []
+                | _ -> []
+            typeArgs |> List.mapi (fun index arg ->
+                match List.tryItem index kinds with
+                | Some TypeParamKind.Measure -> resolveSynMeasureType env arg
+                | _ -> resolveSynType env arg)
         // Extract base type name for built-in type constructor check
         match typeName with
         | SynType.LongIdent(SynLongIdent(idents, _, _)) ->
@@ -856,7 +948,10 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
             | None ->
                 // Fall back to regular type resolution (user-defined generics)
                 match resolveTypeName name env with
-                | Some (NativeType.TApp(tyCon, _)) -> NativeType.TApp(tyCon, argTys)
+                | Some (NativeType.TApp(tyCon, _) as ty) ->
+                    match argTys with
+                    | [NativeType.TMeasure measure] when name = "int" || name = "float" -> withMeasure ty measure
+                    | _ -> NativeType.TApp(tyCon, argTys)
                 | Some ty -> ty
                 | None -> NativeType.TError $"Unknown type constructor: {name}"
         | _ ->
@@ -931,9 +1026,7 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
         // Nullable annotation - ignored in Clef (null-free)
         resolveSynType env innerType
 
-    | SynType.MeasurePower(baseType, _, _) ->
-        // Measure power - resolve base type
-        resolveSynType env baseType
+    | SynType.MeasurePower _ -> resolveSynMeasureType env synType
 
     | SynType.StaticConstant(_, _)
     | SynType.StaticConstantNull _
