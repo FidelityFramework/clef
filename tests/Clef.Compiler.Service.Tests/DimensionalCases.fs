@@ -374,6 +374,23 @@ let tests = [
         same (measured metre) (bindingType "length" result)
         same (measured second) (bindingType "time" result)
 
+    "mutable option assignments retain payload types", fun () ->
+        // BAREWire's layout validator clears an optional endpoint on failure.
+        // None still needs the cell's payload type before union layout settles.
+        for value, expected in [ "1", Types.intType; "1.0<m>", measured metre ] do
+            let result = check (sprintf "let mutable endpoint = Some %s\nendpoint <- None\n" value)
+            noErrors result
+            let mutable options = 0
+            for node in result.Graph.Nodes.Values do
+                match node.Type with
+                | NativeType.TApp(tycon, [payload]) when tycon.Name = "option" ->
+                    options <- options + 1
+                    if hasUnboundVars payload then
+                        failwithf "Unresolved option payload reached the graph: %A" node.Kind
+                    same expected payload
+                | _ -> ()
+            if options = 0 then failwith "The option assignment was not checked"
+
     "lambda metadata carries resolved dimensions", fun () ->
         let result = check "let advance x = x + 1.0<m>\n"
         noErrors result
