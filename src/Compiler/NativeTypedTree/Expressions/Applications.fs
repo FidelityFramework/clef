@@ -118,7 +118,7 @@ let checkApp
     // When function type is already concrete (TFun), use return type directly
     // This provides immediate type information without deferring to constraint solving
     let resultTy =
-        match funcNode.Type with
+        match applySubst funcNode.Type with
         | NativeType.TFun(domainTy, rangeTy) ->
             // Function type is known - add domain constraint and use return type directly
             addConstraint (Constraint.Equals(domainTy, argNode.Type, range)) env
@@ -137,7 +137,7 @@ let checkApp
             //
             // This is the implicit counterpart to explicit TypeApp handling.
             // See memory: typeapp_preserves_kind_principle
-            let freshVars = typeParams |> List.map (fun _ -> freshTypeVar range)
+            let freshVars = typeParams |> List.map (fun tp -> NativeType.TVar(freshTypeParamAuto tp.Kind range))
             let instantiatedType = NativeTypes.instantiate typeParams freshVars bodyType
             // Now handle the instantiated type
             match instantiatedType with
@@ -469,13 +469,23 @@ let checkTypeApp
 
     // Check the function expression
     let funcNode = checkExpr env builder funcExpr
+    // Identifier checking implicitly instantiates a scheme. Explicit type
+    // application needs the declaration's scheme and its parameter kinds.
+    let funcType =
+        match tryGetFunctionName funcExpr |> Option.bind (fun name -> tryLookupBinding name env) with
+        | Some binding -> binding.Type
+        | None -> funcNode.Type
     // Convert type arguments - these are the concrete types being applied
-    let typeArgTypes = typeArgs |> List.map (resolveSynType env)
+    let parameters = match funcType with NativeType.TForall(parameters, _) -> parameters | _ -> []
+    let typeArgTypes = typeArgs |> List.mapi (fun index syntax ->
+        match List.tryItem index parameters with
+        | Some parameter when parameter.Kind = TypeParamKind.Measure -> resolveSynMeasureType env syntax
+        | _ -> resolveSynType env syntax)
 
     // The result type depends on the function being instantiated.
     // If funcNode.Type is a forall type, we should instantiate it with typeArgTypes.
     let resultType =
-        match funcNode.Type with
+        match funcType with
         | NativeType.TForall(typeParams, bodyType) ->
             // Check arity match
             if List.length typeParams <> List.length typeArgTypes then

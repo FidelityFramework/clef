@@ -7,6 +7,7 @@ open Clef.Compiler.Syntax
 open Clef.Compiler.Text
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
+open Clef.Compiler.NativeTypedTree.Unify
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Builder
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
@@ -103,6 +104,10 @@ type TypeEnv = {
     TypeDefs: Map<string, TypeConRef>
     /// Type abbreviations (name -> NativeType it expands to)
     TypeAbbrevs: Map<string, NativeType>
+    /// Named parameters share identity within a binding, including its result annotation.
+    TypeParameters: Map<string, TypeParam> ref
+    /// Types in lexical scope, used to exclude captured variables from generalization.
+    BindingTypes: Map<string, NativeType>
     /// Record type definitions with full field information
     /// Per spec: "Field order determines memory layout"
     RecordDefs: Map<string, RecordTypeInfo>
@@ -188,6 +193,8 @@ let createTypeEnv () : TypeEnv =
         Resolution = NR.createContext ()
         TypeDefs = Map.empty
         TypeAbbrevs = Map.empty
+        TypeParameters = ref Map.empty
+        BindingTypes = Map.empty
         RecordDefs = Map.empty
         FieldLabels = Map.empty
         Constraints = ref []
@@ -256,6 +263,40 @@ let addNativeError (code: string) (r: range) (message: string) (env: TypeEnv) : 
 let addError (r: range) (message: string) (env: TypeEnv) : unit =
     addNativeError DiagnosticCodes.FS0001_GenericError r message env
 
+let resolveTypeParameter kind (ident: Ident) (env: TypeEnv) =
+    match Map.tryFind ident.idText !(env.TypeParameters) with
+    | Some parameter ->
+        if parameter.Kind <> kind then
+            addError ident.idRange $"Parameter '{ident.idText}' is used as both a type and a measure" env
+        parameter
+    | None ->
+        let parameter = freshTypeParam ("'" + ident.idText) kind (rangeToSourceRange ident.idRange)
+        env.TypeParameters := Map.add ident.idText parameter !(env.TypeParameters)
+        parameter
+
+let declareTypeParameters (declarations: SynTyparDecls option) (env: TypeEnv) =
+    declarations |> Option.map (fun declarations ->
+        declarations.TyparDecls |> List.map (fun (SynTyparDecl(attributes, SynTypar(ident, _, _), _, _)) ->
+            let isMeasure = attributes |> List.exists (fun group -> group.Attributes |> List.exists (fun attribute ->
+                attribute.TypeName.LongIdent |> List.tryLast |> Option.exists (fun name -> name.idText = "Measure" || name.idText = "MeasureAttribute")))
+            let kind = if isMeasure then TypeParamKind.Measure else TypeParamKind.Type
+            let parameter = freshTypeParam ("'" + ident.idText) kind (rangeToSourceRange ident.idRange)
+            env.TypeParameters := Map.add ident.idText parameter !(env.TypeParameters)
+            parameter)) |> Option.defaultValue []
+
+let typeParameterArgument (parameter: TypeParam) =
+    match parameter.Kind with
+    | TypeParamKind.Type -> NativeType.TVar parameter
+    | TypeParamKind.Measure -> NativeType.TMeasure(MVar parameter)
+
+/// Generalize only variables not free in the surrounding environment. Solved
+/// equalities are already applied, so constraints cannot escape their binding.
+let generalizeInEnv (env: TypeEnv) ty =
+    let excluded = env.BindingTypes |> Map.toSeq |> Seq.map (snd >> freeTypeVars) |> Set.unionMany
+    let ty = applySubst ty
+    let parameters = collectFreeTypeParams ty |> List.distinctBy (fun tp -> tp.Id) |> List.filter (fun tp -> not (Set.contains tp.Id excluded))
+    if parameters.IsEmpty then ty else NativeType.TForall(parameters, ty)
+
 /// Create and add a warning diagnostic with specific code
 let addNativeWarning (code: string) (r: range) (message: string) (env: TypeEnv) : unit =
     addDiagnostic {
@@ -316,7 +357,7 @@ let addBinding (name: string) (ty: NativeType) (isMutable: bool) (nodeId: NodeId
         NativeLiteral = None
         IsModuleLevel = isModuleLevel
     }
-    { env with Resolution = NR.registerBinding name binding env.Resolution }
+    { env with Resolution = NR.registerBinding name binding env.Resolution; BindingTypes = Map.add name ty env.BindingTypes }
 
 /// Add a binding with inline body for transparent function expansion
 /// Only functions explicitly marked `inline` get their bodies captured
@@ -331,7 +372,7 @@ let addInlineBinding (name: string) (ty: NativeType) (nodeId: NodeId option) (in
         NativeLiteral = None
         IsModuleLevel = env.EnclosingFunction.IsNone
     }
-    { env with Resolution = NR.registerBinding name binding env.Resolution }
+    { env with Resolution = NR.registerBinding name binding env.Resolution; BindingTypes = Map.add name ty env.BindingTypes }
 
 /// Add a DU constructor binding with case info for proper UnionCase node creation
 /// DU types are always defined at module scope, so constructors are module-level
@@ -346,7 +387,7 @@ let addUnionCaseBinding (name: string) (ty: NativeType) (caseInfo: NR.UnionCaseI
         NativeLiteral = None
         IsModuleLevel = true  // DU constructors are always module-level
     }
-    { env with Resolution = NR.registerBinding name binding env.Resolution }
+    { env with Resolution = NR.registerBinding name binding env.Resolution; BindingTypes = Map.add name ty env.BindingTypes }
 
 /// Add a [<Literal>] binding with compile-time constant value for substitution
 /// Literal values are substituted at use sites during name resolution
@@ -361,7 +402,7 @@ let addLiteralBinding (name: string) (ty: NativeType) (nodeId: NodeId option) (l
         NativeLiteral = Some litValue
         IsModuleLevel = env.EnclosingFunction.IsNone
     }
-    { env with Resolution = NR.registerBinding name binding env.Resolution }
+    { env with Resolution = NR.registerBinding name binding env.Resolution; BindingTypes = Map.add name ty env.BindingTypes }
 
 /// Look up a binding using compositional resolver
 /// BCL is structurally impossible - only source-defined bindings exist
@@ -437,14 +478,14 @@ let tryLookupRecordDef (name: string) (env: TypeEnv) : RecordTypeInfo option =
 /// This is the canonical way to resolve record field types - no SRTP constraints needed.
 let tryResolveRecordFieldType (ty: NativeType) (fieldName: string) (env: TypeEnv) : NativeType option =
     match applySubst ty with
-    | NativeType.TApp(tycon, _typeArgs) ->
+    | NativeType.TApp(tycon, typeArgs) ->
         // Try to find this type in RecordDefs
         match tryLookupRecordDef tycon.Name env with
         | Some recordInfo ->
             // Look up the field in the record's field list
             recordInfo.Fields
             |> List.tryFind (fun (name, _) -> name = fieldName)
-            |> Option.map snd
+            |> Option.map (fun (_, fieldType) -> instantiate recordInfo.TypeParameters typeArgs fieldType)
         | None -> None
     | _ -> None
 
@@ -527,7 +568,7 @@ let resolveRecordTypeFromFields
                 | Some recordInfo ->
                     // Spec Section 4.2: Use TApp for records (single representation invariant)
                     // ParamKinds is the single source of truth — fresh vars for generic records
-                    let freshArgs = recordInfo.TypeCon.ParamKinds |> List.map (fun _kind -> freshTypeVar _range)
+                    let freshArgs = recordInfo.TypeCon.ParamKinds |> List.map (fun kind -> freshTypeParamAuto kind _range |> typeParameterArgument)
                     Result.Ok (NativeType.TApp(recordInfo.TypeCon, freshArgs))
                 | None ->
                     // INTERNAL ERROR: Field label resolution found this type name,
@@ -559,7 +600,18 @@ let resolveRecordTypeFromFields
 
 /// Add a constraint to the environment
 let addConstraint (c: Constraint) (env: TypeEnv) : unit =
-    env.Constraints := c :: !(env.Constraints)
+    match c with
+    | Constraint.Equals(left, right, range) ->
+        match tryUnify left right range with
+        | Result.Ok () -> ()
+        | Result.Error error ->
+            let code =
+                match error with
+                | TypeMismatch(NativeType.TMeasure _, NativeType.TMeasure _, _) -> "CCS8040"
+                | _ -> "FS0001"
+            addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = code; Message = formatError error
+                            Range = range; RelatedNodes = []; Reachability = ReachabilityContext.Unknown } env
+    | _ -> env.Constraints := c :: !(env.Constraints)
 
 
 /// Resolve a field's type, handling records directly and falling back to SRTP constraints.
@@ -803,7 +855,7 @@ let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
         // 2. Check type definitions — ParamKinds is the single source of truth for arity
         match tryLookupTypeDef name env with
         | Some tyCon ->
-            let args = tyCon.ParamKinds |> List.map (fun _kind -> freshTypeVar dummyRange)
+            let args = tyCon.ParamKinds |> List.map (fun kind -> freshTypeParamAuto kind dummyRange |> typeParameterArgument)
             Some (NativeType.TApp(tyCon, args))
         | None ->
             // 3. Check NTU primitives
@@ -856,10 +908,10 @@ let resolveSynMeasure (env: TypeEnv) (syntax: SynMeasure) : NativeType =
             | _ -> error range $"Unknown measure: {name}"
         | SynMeasure.One _ -> NativeType.TMeasure MOne
         | SynMeasure.Anon range -> NativeType.TMeasure(MVar(freshMeasureVar (rangeToSourceRange range)))
-        | SynMeasure.Var(SynTypar(ident, _, _), range) ->
-            // A fresh variable per annotation would give repeated 'u occurrences
-            // different identities. Diagnose until binding-scoped parameters exist.
-            error range $"Named measure parameter '{ident.idText}' requires measure-parameter scope support"
+        | SynMeasure.Var(SynTypar(ident, _, _), _) ->
+            let parameter = resolveTypeParameter TypeParamKind.Measure ident env
+            if parameter.Kind = TypeParamKind.Measure then NativeType.TMeasure(MVar parameter)
+            else NativeType.TError "Expected a measure parameter"
         | SynMeasure.Product(left, _, right, _) -> product (resolve left) (resolve right)
         | SynMeasure.Seq(measures, _) -> measures |> List.map resolve |> List.fold product (NativeType.TMeasure MOne)
         | SynMeasure.Divide(left, _, right, _) ->
@@ -932,7 +984,10 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
                 | SynType.LongIdent(SynLongIdent(idents, _, _)) ->
                     let name = idents |> List.map (fun ident -> ident.idText) |> String.concat "."
                     if name = "int" || name = "float" then [TypeParamKind.Measure]
-                    else tryLookupTypeDef name env |> Option.map (fun tc -> tc.ParamKinds) |> Option.defaultValue []
+                    else
+                        match tryLookupTypeAbbrev name env with
+                        | Some (NativeType.TForall(parameters, _)) -> parameters |> List.map (fun parameter -> parameter.Kind)
+                        | _ -> tryLookupTypeDef name env |> Option.map (fun tc -> tc.ParamKinds) |> Option.defaultValue []
                 | _ -> []
             typeArgs |> List.mapi (fun index arg ->
                 match List.tryItem index kinds with
@@ -948,6 +1003,11 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
             | None ->
                 // Fall back to regular type resolution (user-defined generics)
                 match resolveTypeName name env with
+                | Some (NativeType.TForall(parameters, body)) ->
+                    if parameters.Length = argTys.Length then instantiate parameters argTys body
+                    else
+                        addError synType.Range $"Type '{name}' expects {parameters.Length} arguments" env
+                        NativeType.TError "Type argument arity mismatch"
                 | Some (NativeType.TApp(tyCon, _) as ty) ->
                     match argTys with
                     | [NativeType.TMeasure measure] when name = "int" || name = "float" -> withMeasure ty measure
@@ -992,10 +1052,10 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
         NativeType.TFun(argTy, retTy)
 
     | SynType.Var(SynTypar(ident, _, _), _) ->
-        // Type variable: 'a, 'T
-        let name = "'" + ident.idText
-        let range = rangeToSourceRange ident.idRange
-        NativeType.TVar(freshTypeParam name TypeParamKind.Type range)
+        let parameter = resolveTypeParameter TypeParamKind.Type ident env
+        match parameter.Kind with
+        | TypeParamKind.Type -> NativeType.TVar parameter
+        | TypeParamKind.Measure -> NativeType.TMeasure(MVar parameter)
 
     | SynType.Array(rank, elemType, _) ->
         // Array type: int[], int[,]

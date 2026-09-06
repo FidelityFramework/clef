@@ -1111,6 +1111,8 @@ type FieldRef = {
 type RecordTypeInfo = {
     /// The type constructor (with computed layout)
     TypeCon: TypeConRef
+    /// Declaration parameters, in source order, for substituting field types.
+    TypeParameters: TypeParam list
     /// Fields in declaration order (= memory order)
     Fields: (string * NativeType) list
     /// Module path where this record type is defined
@@ -1323,12 +1325,29 @@ let measureFromFactors factors =
 
 let normalizeMeasure measure = measure |> measureFactors |> measureFromFactors
 
+/// Inference-only carrier for a numeric kind that is not known yet. Its arguments
+/// are the kind variable and the measure; no representation choice lives here.
+let numericInferenceTyCon = mkTypeConRefWithMeasures "$numeric" [TypeParamKind.Type; TypeParamKind.Measure] TypeLayout.Opaque
+
+let isNumericInferenceTyCon (tc: TypeConRef) =
+    tc.Name = numericInferenceTyCon.Name && tc.Module = numericInferenceTyCon.Module
+
+let tryNumericComponents = function
+    | NativeType.TApp(tc, [kind; NativeType.TMeasure measure]) when isNumericInferenceTyCon tc -> Some(kind, measure)
+    | NativeType.TApp(tc, args) when tc.Name = "int" || tc.Name = "float" ->
+        match args with
+        | [] -> Some(NativeType.TApp(tc, []), MOne)
+        | [NativeType.TMeasure measure] -> Some(NativeType.TApp(tc, []), measure)
+        | _ -> None
+    | _ -> None
+
 /// Numeric kind identity is unchanged when a measure is attached. Representation
 /// selection is separate; no width or representation is introduced by this operation.
 let withMeasure (ty: NativeType) (measure: Measure) =
     match ty with
     | NativeType.TApp(tc, []) when tc.Name = "int" || tc.Name = "float" ->
         NativeType.TApp({ tc with ParamKinds = [TypeParamKind.Measure] }, [NativeType.TMeasure(normalizeMeasure measure)])
+    | NativeType.TVar _ -> NativeType.TApp(numericInferenceTyCon, [ty; NativeType.TMeasure(normalizeMeasure measure)])
     | _ -> NativeType.TError "Expected an integer or real kind for a measured value"
 
 /// Substitute type arguments into a forall type
@@ -1384,6 +1403,8 @@ let instantiate (typars: TypeParam list) (args: NativeType list) (body: NativeTy
 let rec formatType (ty: NativeType) : string =
     match ty with
     | NativeType.TVar tp -> tp.Name
+    | NativeType.TApp(tc, [kind; NativeType.TMeasure measure]) when isNumericInferenceTyCon tc ->
+        $"{formatType kind}<{formatMeasure measure}>"
     | NativeType.TApp(tc, []) -> tc.Name
     | NativeType.TApp(tc, [NativeType.TMeasure measure]) -> $"{tc.Name}<{formatMeasure measure}>"
     | NativeType.TApp(tc, [arg]) -> $"{formatType arg} {tc.Name}"

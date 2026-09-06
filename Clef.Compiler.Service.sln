@@ -9,6 +9,8 @@ Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "fslex", "buildtools\fslex\f
 EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "fsyacc", "buildtools\fsyacc\fsyacc.fsproj", "{D63BBEE6-DA15-44B6-95DC-CCC50737A441}"
 EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Clef.Compiler.Service.Tests", "tests\Clef.Compiler.Service.Tests\Clef.Compiler.Service.Tests.fsproj", "{3AE897E1-2B1E-4B2F-A735-1B96CEDB4968}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -27,6 +29,10 @@ Global
 		{D63BBEE6-DA15-44B6-95DC-CCC50737A441}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D63BBEE6-DA15-44B6-95DC-CCC50737A441}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D63BBEE6-DA15-44B6-95DC-CCC50737A441}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3AE897E1-2B1E-4B2F-A735-1B96CEDB4968}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3AE897E1-2B1E-4B2F-A735-1B96CEDB4968}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3AE897E1-2B1E-4B2F-A735-1B96CEDB4968}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3AE897E1-2B1E-4B2F-A735-1B96CEDB4968}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

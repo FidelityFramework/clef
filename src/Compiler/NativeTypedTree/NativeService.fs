@@ -1254,17 +1254,19 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         ) accEnv
                     ) env
 
-                // Check all bodies - VarRefs now resolve to pre-created NodeIds
-                let (updatedEnv, checkedBindings) =
+                // Check the whole group against monomorphic placeholders before
+                // exposing any generalized scheme to later declarations.
+                let checkedBindings =
                     preCreatedBindings
-                    |> List.fold (fun (accEnv, accResults) (binding, simpleName, placeholderTy, preCreatedNode) ->
-                        let (node, inlineBodyOpt, isMutable, literalValueOpt) =
+                    |> List.map (fun (binding, simpleName, _, preCreatedNode) ->
+                        let result =
                             Bindings.checkBinding checkExpr envWithAllNames builder binding (Some preCreatedNode)
+                        simpleName, result)
 
-                        // Unify placeholder type with inferred type
-                        addConstraint (Constraint.Equals(placeholderTy, node.Type, range)) accEnv
-
-                        // Update environment with actual types and inline bodies
+                let (updatedEnv, nodes) =
+                    checkedBindings
+                    |> List.fold (fun (accEnv, accNodes) (simpleName, (node, inlineBodyOpt, isMutable, literalValueOpt)) ->
+                        let node = Bindings.generalizeRecursiveBinding env builder node
                         let envWithNode =
                             bindingNameSuffixes simpleName
                             |> List.fold (fun env qname ->
@@ -1274,11 +1276,9 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                 | None, None -> addBinding qname node.Type isMutable (Some node.Id) true env  // Module-level bindings
                             ) accEnv
 
-                        (envWithNode, (node, inlineBodyOpt, simpleName) :: accResults)
-                    ) (envWithAllNames, [])
-
-                let nodes = checkedBindings |> List.map (fun (node, _, _) -> node) |> List.rev
-                (updatedEnv, nodes)
+                        (envWithNode, node :: accNodes)
+                    ) (env, [])
+                (updatedEnv, List.rev nodes)
             | false ->
                 // NON-RECURSIVE BINDINGS: Sequential processing (existing behavior)
                 // Each binding can only reference bindings that came before it
@@ -1354,7 +1354,9 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 // Primary name for semantic graph node (use most qualified)
                 let typeName = List.head typeNameSuffixes
 
-                let (SynComponentInfo(attributes, _, _, _, _, _, _, _)) = typeInfo
+                let (SynComponentInfo(attributes, typeParameterDeclarations, _, _, _, _, _, _)) = typeInfo
+                let declarationEnv: TypeEnv = { accEnv with TypeParameters = ref !(accEnv.TypeParameters) }
+                let declaredParameters = declareTypeParameters typeParameterDeclarations declarationEnv
                 let isMeasure = attributes |> List.exists (fun list ->
                     list.Attributes |> List.exists (fun attribute ->
                         match attribute.TypeName.LongIdent |> List.tryLast with
@@ -1367,7 +1369,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     let measureTy =
                         match typeRepr with
                         | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.TypeAbbrev(_, rhsType, _), _) ->
-                            resolveSynMeasureType accEnv rhsType
+                            resolveSynMeasureType declarationEnv rhsType
                         | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.None _, _) ->
                             NativeType.TMeasure(MCon(simpleTypeName, ctx.Path))
                         | _ ->
@@ -1382,7 +1384,8 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.TypeAbbrev(_detail, rhsType, _), _) ->
                     // Type abbreviation like `type I32 = int32`
                     // Resolve the target type using the current environment
-                    let targetTy = resolveSynType accEnv rhsType
+                    let body = resolveSynType declarationEnv rhsType
+                    let targetTy = if declaredParameters.IsEmpty then body else NativeType.TForall(declaredParameters, body)
                     // Register under all name suffixes (handles AutoOpen modules)
                     let updatedEnv = 
                         typeNameSuffixes 
@@ -1428,12 +1431,12 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                             match synField with
                                             | SynField(_, _, idOpt, fieldType, _, _, _, _, _) ->
                                                 let fieldName = idOpt |> Option.map (fun id -> id.idText)
-                                                let fieldTy = resolveSynType accEnv fieldType
+                                                let fieldTy = resolveSynType declarationEnv fieldType
                                                 (fieldName, fieldTy)
                                         )
                                     | SynUnionCaseKind.FullType(synType, _) ->
                                         // Full type annotation: Case: T1 * T2 -> UnionType
-                                        [(None, resolveSynType accEnv synType)]
+                                        [(None, resolveSynType declarationEnv synType)]
                                 (caseName, fields)
                         )
 
@@ -1450,8 +1453,8 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
 
                     // Create TypeConRef for the union type
                     let caseCount = List.length caseInfos
-                    let tyCon = mkUnionTypeConRef typeName arity layout caseCount
-                    let unionType = mkSimpleType tyCon
+                    let tyCon = { mkUnionTypeConRef typeName arity layout caseCount with ParamKinds = declaredParameters |> List.map (fun parameter -> parameter.Kind) }
+                    let unionType = NativeType.TApp(tyCon, declaredParameters |> List.map typeParameterArgument)
 
                     // Register type definition under all name suffixes
                     let envWithType =
@@ -1480,6 +1483,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                     // Multiple fields (e.g., Ok of int * string): tuple -> union
                                     let tupleType = NativeType.TTuple(multipleFields, false)
                                     NativeType.TFun(tupleType, unionType)
+                            let constructorType = if declaredParameters.IsEmpty then constructorType else NativeType.TForall(declaredParameters, constructorType)
                             // Add constructor binding with case info for proper UnionCase node creation
                             let caseInfo: Clef.Compiler.NativeTypedTree.NameResolution.UnionCaseInfo = {
                                 CaseName = caseName
@@ -1529,7 +1533,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                 match idOpt with
                                 | Some ident ->
                                     let fieldName = ident.idText
-                                    let nativeType = resolveSynType accEnv fieldType
+                                    let nativeType = resolveSynType declarationEnv fieldType
                                     let pinNames = extractFieldPinNames fieldAttrs
                                     Some (fieldName, nativeType, pinNames)
                                 | None ->
@@ -1559,6 +1563,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                             mkRecordTypeConRef typeName ctx.Path typeArity layout (List.length fieldInfos)
                         else
                             mkRecordTypeConRefWithPins typeName ctx.Path typeArity layout (List.length fieldInfos) pinAttrs
+                    let tyCon = { tyCon with ParamKinds = declaredParameters |> List.map (fun parameter -> parameter.Kind) }
                     
                     // Register under all name suffixes (handles AutoOpen modules)
                     let updatedEnv = 
@@ -1569,6 +1574,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // This populates RecordDefs and (unless RequireQualifiedAccess) FieldLabels
                     let recordInfo: RecordTypeInfo = {
                         TypeCon = tyCon
+                        TypeParameters = declaredParameters
                         Fields = fieldInfos
                         Module = ctx.Path
                         RequireQualifiedAccess = requireQualifiedAccess
@@ -1579,8 +1585,9 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // Record constructor takes field values and returns the record type
                     // Use TApp - field information is carried in the TypeDef node (SemanticGraph.Types lookup)
                     // This follows the FCS pattern: TyconRef.Deref for metadata, not embedded in type refs
-                    let recordType = mkSimpleType tyCon
-                    let updatedEnv = addBinding typeName recordType false None true updatedEnv  // Type constructors are module-level
+                    let recordType = NativeType.TApp(tyCon, declaredParameters |> List.map typeParameterArgument)
+                    let recordScheme = if declaredParameters.IsEmpty then recordType else NativeType.TForall(declaredParameters, recordType)
+                    let updatedEnv = addBinding typeName recordScheme false None true updatedEnv
                     
                     // Create semantic node with field information for downstream consumers
                     let fieldDefs = fieldInfos |> List.map (fun (name, ty) -> (name, ty))

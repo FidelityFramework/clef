@@ -81,9 +81,11 @@ let rec applySubst (ty: NativeType) : NativeType =
     match ty with
     | NativeType.TVar typar ->
         match find typar with
-        | (_, None) -> ty  // Still unbound
+        | (root, None) -> NativeType.TVar root
         | (_, Some boundTy) -> applySubst boundTy  // Follow binding
     
+    | NativeType.TApp(tc, [kind; NativeType.TMeasure measure]) when isNumericInferenceTyCon tc ->
+        withMeasure (applySubst kind) measure
     | NativeType.TApp(tc, args) ->
         NativeType.TApp(tc, List.map applySubst args)
     

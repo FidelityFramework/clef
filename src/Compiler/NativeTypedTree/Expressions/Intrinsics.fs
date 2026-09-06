@@ -619,13 +619,24 @@ let private resolveSeqEnumeratorOp (op: string) (range: SourceRange) : Intrinsic
         UnknownOperation $"Unknown SeqEnumerator intrinsic: SeqEnumerator.{unknown}. Available: moveNext, current"
 
 /// Resolve Math.* operations
-let private resolveMathOp (op: string) (_range: SourceRange) : IntrinsicResolution =
+let private resolveMathOp (op: string) (range: SourceRange) : IntrinsicResolution =
     let fullName = "Math." + op
     match op with
-    | "abs" | "sqrt" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "exp" | "log" | "log10" | "floor" | "ceiling" | "round" ->
+    | "sqrt" ->
+        let measure = MVar(freshMeasureVar range)
+        let ty = NativeType.TFun(withMeasure Types.floatType (MProd(measure, measure)), withMeasure Types.floatType measure)
+        Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
+    | "abs" ->
+        let number = withMeasure (freshTypeVar range) (MVar(freshMeasureVar range))
+        Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, NativeType.TFun(number, number))
+    | "atan2" ->
+        let number = withMeasure Types.floatType (MVar(freshMeasureVar range))
+        let ty = NativeType.TFun(number, NativeType.TFun(number, Types.floatType))
+        Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
+    | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "exp" | "log" | "log10" | "floor" | "ceiling" | "round" ->
         let ty = NativeType.TFun(Types.floatType, Types.floatType)
         Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
-    | "pow" | "atan2" | "min" | "max" ->
+    | "pow" | "min" | "max" ->
         let ty = NativeType.TFun(Types.floatType, NativeType.TFun(Types.floatType, Types.floatType))
         Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
     | unknown ->
@@ -881,7 +892,13 @@ let tryResolveOperator (name: string) (range: SourceRange) : (IntrinsicInfo * Na
         let info = mkIntrinsic IntrinsicModule.Operators "op_BooleanOr" IntrinsicCategory.Comparison name
         let ty = NativeType.TFun(Types.boolType, NativeType.TFun(Types.boolType, Types.boolType))
         Some (info, ty)
-    | "op_Addition" | "op_Subtraction" | "op_Multiply" | "op_Division" | "op_Modulus" ->
+    | "op_Multiply" | "op_Division" ->
+        let kind = freshTypeVar range
+        let left, right = MVar(freshMeasureVar range), MVar(freshMeasureVar range)
+        let result = if name = "op_Multiply" then MProd(left, right) else MProd(left, MInv right)
+        let ty = NativeType.TFun(withMeasure kind left, NativeType.TFun(withMeasure kind right, withMeasure kind result))
+        Some (mkIntrinsic IntrinsicModule.Operators name IntrinsicCategory.Arithmetic name, ty)
+    | "op_Addition" | "op_Subtraction" | "op_Modulus" ->
         // Polymorphic arithmetic: 'T -> 'T -> 'T
         let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
         let info = mkIntrinsic IntrinsicModule.Operators name IntrinsicCategory.Arithmetic name

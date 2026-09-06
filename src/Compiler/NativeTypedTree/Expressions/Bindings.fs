@@ -215,6 +215,13 @@ let checkBinding
     : SemanticNode * InlineBody option * bool * NativeLiteral option =
 
     let (SynBinding(_, _, isInline, isMutable, attrs, _, _, headPat, returnInfo, expr, bindingRange, _, _)) = binding
+    // Extend parameter scope for this binding without leaking newly introduced
+    // names into sibling bindings. Enclosing parameters keep their identities.
+    let env = { env with TypeParameters = ref !(env.TypeParameters) }
+    let explicitParameters =
+        match headPat with
+        | SynPat.LongIdent(typarDecls = Some(SynValTyparDecls(declarations, _))) -> declareTypeParameters declarations env
+        | _ -> []
     let range = rangeToSourceRange bindingRange
     let name = getBindingName binding
     let declRoot =
@@ -394,9 +401,15 @@ let checkBinding
             else
                 mkFunctionType paramTypes bodyNode.Type
 
-        // NOTE: Generalization disabled - it was causing type mismatches.
-        // The proper fix requires smarter generalization (only top-level, not nested).
-        // For now, rely on primitive operators having TForall in Intrinsics.
+        let bindingType =
+            if preCreatedBinding.IsSome || isMutable then applySubst funcType
+            else
+                let scheme = generalizeInEnv env funcType
+                if explicitParameters.IsEmpty then scheme
+                else
+                    let parameters, body = match scheme with NativeType.TForall(parameters, body) -> parameters, body | _ -> [], scheme
+                    let additional = parameters |> List.filter (fun parameter -> explicitParameters |> List.forall (fun explicit -> explicit.Id <> parameter.Id))
+                    NativeType.TForall(explicitParameters @ additional, body)
 
         // Create Lambda node with parameter NodeIds for SSA assignment
         // Children includes parameter PatternBindings + body for proper traversal
@@ -437,12 +450,16 @@ let checkBinding
             match preCreatedBinding with
             | Some preCreated ->
                 // Link pre-created Binding to the Lambda we just created
+                addConstraint (Constraint.Equals(preCreated.Type, funcType, range)) env
                 builder.SetChildren(preCreated.Id, [lambdaNode.Id])
-                preCreated
+                let declaredType =
+                    if explicitParameters.IsEmpty then funcType
+                    else NativeType.TForall(explicitParameters, funcType)
+                builder.SetType(preCreated.Id, declaredType)
             | None ->
                 builder.Create(
                     SemanticKind.Binding(name, isMutable, false, declRoot),
-                    funcType,
+                    bindingType,
                     range,
                     children = [lambdaNode.Id])
 
@@ -475,6 +492,14 @@ let checkBinding
     | None ->
         // Regular value binding (not a function - no inline body)
         let exprNode = checkExpr env builder expr
+        let rec nonExpansive = function
+            | SynExpr.Const _ | SynExpr.Ident _ | SynExpr.LongIdent _ | SynExpr.Lambda _ -> true
+            | SynExpr.Paren(inner, _, _, _) | SynExpr.Typed(inner, _, _) -> nonExpansive inner
+            | SynExpr.Tuple(_, items, _, _) -> List.forall nonExpansive items
+            | _ -> false
+        let bindingType =
+            if not isMutable && preCreatedBinding.IsNone && nonExpansive expr then generalizeInEnv env exprNode.Type
+            else applySubst exprNode.Type
 
         // ETA-EXPANSION for partial applications:
         // When a binding's value has function type (TFun), it's a partial application
@@ -581,12 +606,13 @@ let checkBinding
         let node =
             match preCreatedBinding with
             | Some preCreated ->
+                addConstraint (Constraint.Equals(preCreated.Type, finalExprNode.Type, range)) env
                 builder.SetChildren(preCreated.Id, [finalExprNode.Id])
                 preCreated
             | None ->
                 builder.Create(
                     SemanticKind.Binding(name, isMutable, false, declRoot),
-                    finalExprNode.Type,
+                    bindingType,
                     range,
                     children = [finalExprNode.Id])
         // Establish bidirectional parent-child link
@@ -609,6 +635,25 @@ let checkBinding
 //-------------------------------------------------------------------------
 // Let/LetRec Handling
 //-------------------------------------------------------------------------
+
+/// Recursive references stay monomorphic while checking the entire group.
+/// Only then quantify variables that are not captured from the outer scope.
+let generalizeRecursiveBinding (env: TypeEnv) (builder: NodeBuilder) (node: SemanticNode) =
+    match node.Kind, node.Children with
+    | SemanticKind.Binding(isMutable = false), [child] ->
+        match builder.Nodes.[child].Kind with
+        | SemanticKind.Lambda _ ->
+            let declared, body =
+                match node.Type with NativeType.TForall(parameters, body) -> parameters, body | ty -> [], ty
+            let inferred = generalizeInEnv env body
+            let parameters, body =
+                match inferred with NativeType.TForall(parameters, body) -> parameters, body | ty -> [], ty
+            let additional = parameters |> List.filter (fun tp -> declared |> List.forall (fun explicit -> explicit.Id <> tp.Id))
+            let parameters = declared @ additional
+            let scheme = if parameters.IsEmpty then body else NativeType.TForall(parameters, body)
+            builder.SetType(node.Id, scheme)
+        | _ -> node
+    | _ -> node
 
 /// Check a let-or-use binding
 /// PRD-13: For recursive bindings (let rec), pre-create Binding nodes to get NodeIds
@@ -711,6 +756,9 @@ let checkLetOrUse
             preCreatedBindings
             |> List.map (fun (binding, _, _, preCreatedNode) ->
                 checkBinding checkExpr envWithBindings builder binding (Some preCreatedNode))
+
+        let bindingResults = bindingResults |> List.map (fun (node, inlineBody, isMutable, literal) ->
+            generalizeRecursiveBinding env builder node, inlineBody, isMutable, literal)
 
         let bindingNodes = bindingResults |> List.map (fun (node, _, _, _) -> node)
         let bodyEnv = extendEnvWithResults envWithBindings bindings bindingResults
@@ -910,6 +958,9 @@ let checkDotSet
     let objNode = checkExpr env builder objExpr
     let valueNode = checkExpr env builder valueExpr
     let fieldName = longId |> List.map (fun id -> id.idText) |> String.concat "."
+    match tryResolveRecordFieldType objNode.Type fieldName env with
+    | Some fieldType -> addConstraint (Constraint.Equals(fieldType, valueNode.Type, range)) env
+    | None -> addError objExpr.Range $"Cannot resolve field '{fieldName}' on '{formatType objNode.Type}'" env
     builder.Create(
         SemanticKind.FieldSet(objNode.Id, fieldName, valueNode.Id),
         Types.unitType,
@@ -925,10 +976,11 @@ let checkLongIdentSet
     (valueExpr: SynExpr)
     (range: SourceRange)
     : SemanticNode =
-    let valueNode = checkExpr env builder valueExpr
     let targetName = longId |> List.map (fun id -> id.idText) |> String.concat "."
     match tryLookupBinding targetName env with
     | Some binding when binding.IsMutable ->
+        let valueNode = checkExpr env builder valueExpr
+        addConstraint (Constraint.Equals(binding.Type, valueNode.Type, range)) env
         let targetNode = builder.Create(
             SemanticKind.VarRef(targetName, binding.NodeId),
             binding.Type,
@@ -938,7 +990,14 @@ let checkLongIdentSet
             Types.unitType,
             range,
             children = [targetNode.Id; valueNode.Id])
+    | None when longId.Length > 1 ->
+        // The parser also uses LongIdentSet for record.field assignment.
+        // Resolve the receiver so its instantiated field dimension is checked.
+        let receiverIds = longId |> List.take (longId.Length - 1)
+        let receiver = SynExpr.LongIdent(false, SynLongIdent(receiverIds, [], []), None, valueExpr.Range)
+        checkDotSet checkExpr env builder receiver [List.last longId] valueExpr range
     | _ ->
+        addError valueExpr.Range $"Cannot assign to '{targetName}' (not found or not mutable)" env
         builder.Create(
             SemanticKind.Error $"Cannot assign to '{targetName}' (not found or not mutable)",
             NativeType.TError "assignment error",
