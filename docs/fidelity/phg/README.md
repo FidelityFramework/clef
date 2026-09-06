@@ -8,7 +8,6 @@ two.
 | File | What it is |
 |---|---|
 | [Dimensional_Handoff.md](./Dimensional_Handoff.md) | **Start here for the dimensional range wave.** The reading order and authority, the placement rule, the working model, the state, the gates with exact commands, what is next, what is owed, the code map, the as-built template. Written for an agent with no prior context. |
-| [Opus_Extension_Sweep.md](./Opus_Extension_Sweep.md) | A mechanical brief for a limited agent: rename the compiler sources `.fs` to `.clef`, rewrite the project files, re-run every gate. Gated on the owner naming the build mechanism that admits the extension (stock `fsc` refuses it, FS0226). |
 | [PSG_to_PHG_Plan.md](./PSG_to_PHG_Plan.md) | The plan. The PHG writ large, the four integrity invariants, the two dispatches, the verified state of the code, Track A + Phases 0–5, the *Draining Alex* inventory, verification. |
 | [Increment_1_HelloProof_Obligations.md](./Increment_1_HelloProof_Obligations.md) | The first built increment: DMM layout invariants from the cross-compiled platform, as hyperedges. What it required, what was cobbled, what was built, measured results, decisions, next steps. |
 | [Closure_Retooling_Plan.md](./Closure_Retooling_Plan.md) | Increment 2, the microcosm: the flat closure moves from an MLIR plugin into PSG elaboration and saturation. The measured 24-sample baseline (17 pass; 5 of 7 failures are the closure family), the target form (C-01 §14.3, no casts, no plugin), the one open design decision, eight gated steps, and the CI drift gates including the dialect register. |
