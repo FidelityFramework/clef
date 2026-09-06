@@ -587,7 +587,7 @@ let resolveRecordTypeFromFields
                     |> fun fr -> fr.RecordType.Name
                 match Map.tryFind lastTypeName env.RecordDefs with
                 | Some recordInfo ->
-                    let freshArgs = recordInfo.TypeCon.ParamKinds |> List.map (fun _kind -> freshTypeVar _range)
+                    let freshArgs = recordInfo.TypeCon.ParamKinds |> List.map (fun kind -> freshTypeParamAuto kind _range |> typeParameterArgument)
                     Result.Ok (NativeType.TApp(recordInfo.TypeCon, freshArgs))
                 | None ->
                     let typeNames = intersection |> Set.toList |> String.concat ", "
