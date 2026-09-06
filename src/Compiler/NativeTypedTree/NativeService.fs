@@ -250,10 +250,7 @@ let private errorsToDiagnostics (errors: UnificationError list) : Diagnostic lis
             | ByrefKindMismatch(_, _, r) -> r
         {
             Severity = NativeDiagnosticSeverity.Error
-            Code =
-                match e with
-                | TypeMismatch(NativeType.TMeasure _, NativeType.TMeasure _, _) -> "CCS8040"
-                | _ -> "FS0001"
+            Code = diagnosticCode e
             Message = formatError e
             Range = range
             RelatedNodes = []
@@ -426,8 +423,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // applied to node types. We must apply them here to get concrete types in the output.
     let resolvedNodes =
         builder.Nodes
-        |> Map.map (fun _id node ->
-            { node with Type = applySubst node.Type })
+        |> Map.map (fun _id node -> SemanticGraph.mapNodeTypes applySubst node)
 
     let graph = {
         Nodes = resolvedNodes
@@ -577,7 +573,7 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // Literals
     //---------------------------------------------------------------------
     | SynExpr.Const(constant, _) ->
-        let ty = Literals.typeOfConst env constant
+        let ty = Literals.typeOfConst env constant syn.Range
         let litVal = Literals.constToLiteral constant
         builder.Create(SemanticKind.Literal litVal, ty, range)
 

@@ -605,10 +605,7 @@ let addConstraint (c: Constraint) (env: TypeEnv) : unit =
         match tryUnify left right range with
         | Result.Ok () -> ()
         | Result.Error error ->
-            let code =
-                match error with
-                | TypeMismatch(NativeType.TMeasure _, NativeType.TMeasure _, _) -> "CCS8040"
-                | _ -> "FS0001"
+            let code = diagnosticCode error
             addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = code; Message = formatError error
                             Range = range; RelatedNodes = []; Reachability = ReachabilityContext.Unknown } env
     | _ -> env.Constraints := c :: !(env.Constraints)
@@ -822,6 +819,19 @@ let addBclError (name: string) (r: range) (env: TypeEnv) : unit =
 // After conversion here, only NativeType propagates through type checking.
 //-------------------------------------------------------------------------
 
+/// NTU Types §2: widths and representation families are not source type names.
+let isWidthNamedNumericType = function
+    | "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64"
+    | "byte" | "sbyte" | "uint" | "nativeint" | "unativeint"
+    | "float32" | "single" | "double" | "float64"
+    | "Posit8" | "Posit16" | "Posit32" | "Posit64"
+    | "posit8" | "posit16" | "posit32" | "posit64" -> true
+    | _ -> false
+
+let private rejectWidthNamedType name range env =
+    addNativeError "CCS8706" range $"'{name}' is not a Clef source type; use int or float with a dimension. Width and representation follow from range analysis and platform declarations." env
+    NativeType.TError "Width-named numeric type"
+
 /// Resolve a built-in type constructor to its NativeType factory.
 /// These are NTU types with dedicated NativeType constructors (not TApp).
 /// Returns None if not a built-in type constructor.
@@ -861,19 +871,7 @@ let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
             // 3. Check NTU primitives
             match name with
             | "int" -> Some NativeTypes.Types.intType
-            | "int8" -> Some NativeTypes.Types.int8Type
-            | "int16" -> Some NativeTypes.Types.int16Type
-            | "int32" -> Some NativeTypes.Types.int32Type
-            | "int64" -> Some NativeTypes.Types.int64Type
-            | "uint" -> Some NativeTypes.Types.uintType
-            | "uint8" | "byte" -> Some NativeTypes.Types.uint8Type
-            | "uint16" -> Some NativeTypes.Types.uint16Type
-            | "uint32" -> Some NativeTypes.Types.uint32Type
-            | "uint64" -> Some NativeTypes.Types.uint64Type
-            | "nativeint" -> Some NativeTypes.Types.nintType
-            | "unativeint" -> Some NativeTypes.Types.unintType
-            | "float" | "double" -> Some NativeTypes.Types.floatType
-            | "float32" | "single" -> Some NativeTypes.Types.float32Type
+            | "float" -> Some NativeTypes.Types.floatType
             | "bool" -> Some NativeTypes.Types.boolType
             | "char" -> Some NativeTypes.Types.charType
             | "string" -> Some NativeTypes.Types.stringType
@@ -970,11 +968,21 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
     | SynType.LongIdent(SynLongIdent(idents, _, _)) ->
         // Simple type name: int, string, MyType, Module.Type
         let name = idents |> List.map (fun id -> id.idText) |> String.concat "."
+        if isWidthNamedNumericType name then rejectWidthNamedType name synType.Range env else
         match resolveTypeName name env with
+        | Some (NativeType.TMeasure _) ->
+            addError synType.Range $"Measure '{name}' cannot be used as a value type" env
+            NativeType.TError "Expected a value type"
         | Some ty -> ty
         | None ->
-            // Unknown type - create error type with name for diagnostics
+            addError synType.Range $"Unknown type: {name}" env
             NativeType.TError $"Unknown type: {name}"
+
+    | SynType.App(SynType.LongIdent(SynLongIdent([ident], _, _)), _, _, _, _, _, _) when isWidthNamedNumericType ident.idText ->
+        rejectWidthNamedType ident.idText synType.Range env
+
+    | SynType.App(SynType.Paren(inner, _), less, args, commas, greater, postfix, range) ->
+        resolveSynType env (SynType.App(inner, less, args, commas, greater, postfix, range))
 
     | SynType.App(typeName, _, typeArgs, _, _, _, _) ->
         // Generic type application: nativeptr<byte>, List<int>, Option<string>
@@ -994,9 +1002,13 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
                 | Some TypeParamKind.Measure -> resolveSynMeasureType env arg
                 | _ -> resolveSynType env arg)
         // Extract base type name for built-in type constructor check
+        match argTys |> List.tryPick (function NativeType.TError message -> Some message | _ -> None) with
+        | Some message -> NativeType.TError message
+        | None ->
         match typeName with
         | SynType.LongIdent(SynLongIdent(idents, _, _)) ->
             let name = idents |> List.map (fun id -> id.idText) |> String.concat "."
+            if isWidthNamedNumericType name then rejectWidthNamedType name synType.Range env else
             // Try built-in type constructor first (nativeptr, byref, list, etc.)
             match tryResolveBuiltinTypeConstructor name argTys with
             | Some ty -> ty
@@ -1009,31 +1021,32 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
                         addError synType.Range $"Type '{name}' expects {parameters.Length} arguments" env
                         NativeType.TError "Type argument arity mismatch"
                 | Some (NativeType.TApp(tyCon, _) as ty) ->
-                    match argTys with
-                    | [NativeType.TMeasure measure] when name = "int" || name = "float" -> withMeasure ty measure
-                    | _ -> NativeType.TApp(tyCon, argTys)
-                | Some ty -> ty
-                | None -> NativeType.TError $"Unknown type constructor: {name}"
+                    let arity = if name = "int" || name = "float" then 1 else tyCon.ParamKinds.Length
+                    if argTys.Length <> arity then
+                        addError synType.Range $"Type '{name}' expects {arity} arguments, got {argTys.Length}" env
+                        NativeType.TError "Type argument arity mismatch"
+                    else
+                        match argTys with
+                        | [NativeType.TMeasure measure] when name = "int" || name = "float" -> withMeasure ty measure
+                        | _ -> NativeType.TApp(tyCon, argTys)
+                | Some _ ->
+                    addError synType.Range $"Type '{name}' does not accept type arguments" env
+                    NativeType.TError "Unexpected type arguments"
+                | None ->
+                    addError synType.Range $"Unknown type constructor: {name}" env
+                    NativeType.TError $"Unknown type constructor: {name}"
         | _ ->
-            // Complex type expression - recurse
-            let baseTy = resolveSynType env typeName
-            match baseTy with
-            | NativeType.TApp(tyCon, _) -> NativeType.TApp(tyCon, argTys)
-            | _ -> baseTy
+            addError synType.Range "Type arguments require a named type constructor" env
+            NativeType.TError "Type constructor is not established"
 
-    | SynType.LongIdentApp(typeName, SynLongIdent(idents, _, _), _, typeArgs, _, _, _) ->
-        // Qualified generic: Module.List<int>
-        let argTys = typeArgs |> List.map (resolveSynType env)
-        let name = idents |> List.map (fun id -> id.idText) |> String.concat "."
-        // Try built-in type constructor first
-        match tryResolveBuiltinTypeConstructor name argTys with
-        | Some ty -> ty
-        | None ->
-            // Fall back to regular type resolution
-            let baseTy = resolveSynType env typeName
-            match baseTy with
-            | NativeType.TApp(tyCon, _) -> NativeType.TApp(tyCon, argTys)
-            | _ -> baseTy
+    | SynType.LongIdentApp(typeName, SynLongIdent(idents, _, _), less, typeArgs, commas, greater, range) ->
+        match typeName with
+        | SynType.LongIdent(SynLongIdent(prefix, _, _)) ->
+            let qualified = SynType.LongIdent(SynLongIdent(prefix @ idents, [], []))
+            resolveSynType env (SynType.App(qualified, less, typeArgs, commas, greater, false, range))
+        | _ ->
+            addError range "A qualified generic type requires an established named constructor" env
+            NativeType.TError "Qualified type constructor is not established"
 
     | SynType.Tuple(isStruct, segments, _) ->
         // Tuple type: int * string * bool
@@ -1055,7 +1068,7 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
         let parameter = resolveTypeParameter TypeParamKind.Type ident env
         match parameter.Kind with
         | TypeParamKind.Type -> NativeType.TVar parameter
-        | TypeParamKind.Measure -> NativeType.TMeasure(MVar parameter)
+        | TypeParamKind.Measure -> NativeType.TError "Expected a value type"
 
     | SynType.Array(rank, elemType, _) ->
         // Array type: int[], int[,]
@@ -1086,7 +1099,9 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
         // Nullable annotation - ignored in Clef (null-free)
         resolveSynType env innerType
 
-    | SynType.MeasurePower _ -> resolveSynMeasureType env synType
+    | SynType.MeasurePower _ ->
+        addError synType.Range "A measure power must be used as a measure argument" env
+        NativeType.TError "Expected a value type"
 
     | SynType.StaticConstant(_, _)
     | SynType.StaticConstantNull _

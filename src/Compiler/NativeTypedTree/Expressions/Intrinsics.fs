@@ -633,10 +633,18 @@ let private resolveMathOp (op: string) (range: SourceRange) : IntrinsicResolutio
         let number = withMeasure Types.floatType (MVar(freshMeasureVar range))
         let ty = NativeType.TFun(number, NativeType.TFun(number, Types.floatType))
         Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
-    | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "exp" | "log" | "log10" | "floor" | "ceiling" | "round" ->
+    | "floor" | "ceiling" | "round" | "truncate" ->
+        let measure = MVar(freshMeasureVar range)
+        let ty = NativeType.TFun(withMeasure Types.floatType measure, withMeasure Types.intType measure)
+        Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
+    | "min" | "max" ->
+        let number = withMeasure (freshTypeVar range) (MVar(freshMeasureVar range))
+        let ty = NativeType.TFun(number, NativeType.TFun(number, number))
+        Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
+    | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "exp" | "log" | "log10" ->
         let ty = NativeType.TFun(Types.floatType, Types.floatType)
         Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
-    | "pow" | "min" | "max" ->
+    | "pow" ->
         let ty = NativeType.TFun(Types.floatType, NativeType.TFun(Types.floatType, Types.floatType))
         Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
     | unknown ->
@@ -1033,28 +1041,15 @@ let isOperatorName (name: string) : bool =
 // Conversion Intrinsics
 //-------------------------------------------------------------------------
 
-/// Try to resolve a type conversion intrinsic (float, int, int64, byte, etc.)
+/// Kind-changing arithmetic, with dimensions preserved (Width Inference §7).
+/// Representation conversion names are deliberately absent from Clef's intrinsics.
 let tryResolveConversion (name: string) (range: SourceRange) : (IntrinsicInfo * NativeType) option =
-    let mkConvIntrinsic op resultType =
-        let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
-        let info = mkIntrinsic IntrinsicModule.Convert op IntrinsicCategory.Conversion name
-        let ty = NativeType.TFun(tyParam, resultType)
-        Some (info, ty)
-
     match name with
-    | "float" | "float64" | "double" -> mkConvIntrinsic "toFloat" Types.floatType
-    | "int" -> mkConvIntrinsic "toInt" Types.intType           // Platform word (NTUint)
-    | "int32" -> mkConvIntrinsic "toInt32" Types.int32Type       // Fixed 32-bit (NTUint32)
-    | "int64" -> mkConvIntrinsic "toInt64" Types.int64Type
-    | "uint" -> mkConvIntrinsic "toUInt" Types.uintType           // Platform word unsigned (NTUuint)
-    | "byte" | "uint8" -> mkConvIntrinsic "toByte" Types.uint8Type
-    | "sbyte" | "int8" -> mkConvIntrinsic "toSByte" Types.int8Type
-    | "int16" -> mkConvIntrinsic "toInt16" Types.int16Type
-    | "uint16" -> mkConvIntrinsic "toUInt16" Types.uint16Type
-    | "uint32" -> mkConvIntrinsic "toUInt32" Types.uint32Type
-    | "uint64" -> mkConvIntrinsic "toUInt64" Types.uint64Type
-    | "float32" | "single" -> mkConvIntrinsic "toFloat32" Types.float32Type
-    | "char" -> mkConvIntrinsic "toChar" Types.charType
-    | "nativeint" -> mkConvIntrinsic "toNativeInt" Types.nintType
-    | "unativeint" -> mkConvIntrinsic "toUNativeInt" Types.unintType
+    | "float" ->
+        let measure = MVar(freshMeasureVar range)
+        let ty = NativeType.TFun(withMeasure Types.intType measure, withMeasure Types.floatType measure)
+        Some(mkIntrinsic IntrinsicModule.Convert "toFloat" IntrinsicCategory.Arithmetic name, ty)
+    | "char" ->
+        let ty = NativeType.TFun(Types.intType, Types.charType)
+        Some(mkIntrinsic IntrinsicModule.Convert "toChar" IntrinsicCategory.Conversion name, ty)
     | _ -> None

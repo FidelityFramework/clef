@@ -30,6 +30,7 @@ let rec checkPattern
 
     match pat with
     | SynPat.Const(constant, _) ->
+        addConstraint (Constraint.Equals(expectedTy, typeOfConst env constant pat.Range, range)) env
         (Pattern.Const(constToLiteral constant), [])
 
     | SynPat.Wild _ ->

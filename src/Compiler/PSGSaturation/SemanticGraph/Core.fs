@@ -13,6 +13,54 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.SeqSaturation
 //-------------------------------------------------------------------------
 
 module SemanticGraph =
+    /// Map every type carried by a node, including metadata consumed by lowering.
+    /// Updating only node.Type leaves closures, patterns and witnesses unresolved.
+    let mapNodeTypes (transform: NativeType -> NativeType) (node: SemanticNode) =
+        let rec pattern = function
+            | Pattern.Var(name, ty) -> Pattern.Var(name, transform ty)
+            | Pattern.Tuple elements -> Pattern.Tuple(List.map pattern elements)
+            | Pattern.Union(name, tag, payload, ty) -> Pattern.Union(name, tag, Option.map pattern payload, transform ty)
+            | Pattern.Record(fields, ty) -> Pattern.Record(fields |> List.map (fun (name, p) -> name, pattern p), transform ty)
+            | Pattern.Array elements -> Pattern.Array(List.map pattern elements)
+            | Pattern.Or(left, right) -> Pattern.Or(pattern left, pattern right)
+            | Pattern.And(left, right) -> Pattern.And(pattern left, pattern right)
+            | Pattern.As(inner, name) -> Pattern.As(pattern inner, name)
+            | Pattern.IsType ty -> Pattern.IsType(transform ty)
+            | Pattern.Exception(ty, name) -> Pattern.Exception(transform ty, name)
+            | (Pattern.Const _ | Pattern.Wildcard | Pattern.Null) as p -> p
+        let captures items = items |> List.map (fun (capture: CaptureInfo) -> { capture with Type = transform capture.Type })
+        let definition = function
+            | RecordDef fields -> RecordDef(fields |> List.map (fun (name, ty) -> name, transform ty))
+            | UnionDef cases -> UnionDef(cases |> List.map (fun (name, fields) -> name, fields |> List.map (fun (name, ty) -> name, transform ty)))
+            | AbbreviationDef ty -> AbbreviationDef(transform ty)
+            | (ClassDef | InterfaceDef | StructDef | EnumDef _) as kind -> kind
+        let kind =
+            match node.Kind with
+            | SemanticKind.Lambda(parameters, body, captured, enclosing, context) ->
+                SemanticKind.Lambda(parameters |> List.map (fun (name, ty, id) -> name, transform ty, id), body, captures captured, enclosing, context)
+            | SemanticKind.Match(scrutinee, cases) ->
+                SemanticKind.Match(scrutinee, cases |> List.map (fun case -> { case with Pattern = pattern case.Pattern }))
+            | SemanticKind.CaseElimination(scrutinee, arms) ->
+                SemanticKind.CaseElimination(scrutinee, arms |> List.map (fun arm -> { arm with Pattern = pattern arm.Pattern }))
+            | SemanticKind.DUGetTag(value, ty) -> SemanticKind.DUGetTag(value, transform ty)
+            | SemanticKind.DUEliminate(value, index, name, ty) -> SemanticKind.DUEliminate(value, index, name, transform ty)
+            | SemanticKind.TypeAnnotation(value, ty) -> SemanticKind.TypeAnnotation(value, transform ty)
+            | SemanticKind.Upcast(value, ty) -> SemanticKind.Upcast(value, transform ty)
+            | SemanticKind.Downcast(value, ty) -> SemanticKind.Downcast(value, transform ty)
+            | SemanticKind.TypeTest(value, ty) -> SemanticKind.TypeTest(value, transform ty)
+            | SemanticKind.TraitCall(name, types, arg) -> SemanticKind.TraitCall(name, List.map transform types, arg)
+            | SemanticKind.ObjectExpr(ty, members) -> SemanticKind.ObjectExpr(transform ty, members)
+            | SemanticKind.TypeDef(name, kind, members) -> SemanticKind.TypeDef(name, definition kind, members)
+            | SemanticKind.LazyExpr(body, captured) -> SemanticKind.LazyExpr(body, captures captured)
+            | SemanticKind.SeqExpr(body, captured) -> SemanticKind.SeqExpr(body, captures captured)
+            | kind -> kind
+        { node with
+            Type = transform node.Type
+            Kind = kind
+            SRTPResolution = node.SRTPResolution |> Option.map (fun witness -> { witness with ArgType = transform witness.ArgType })
+            Metadata = node.Metadata |> Map.map (fun _ value ->
+                match value with MetadataValue.Type ty -> MetadataValue.Type(transform ty) | value -> value) }
+
     /// Extract types index from witnessed TypeDef nodes (lazy computation)
     let private extractTypesIndex (nodes: Map<NodeId, SemanticNode>) : Map<string, NodeId> =
         nodes
