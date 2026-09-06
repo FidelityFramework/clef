@@ -1283,7 +1283,54 @@ let rec mkFunctionType args result =
     | arg :: rest -> NativeType.TFun(arg, mkFunctionType rest result)
 
 
-/// Construct array<'T> type
+/// Integer powers use a shared product tree, avoiding expansion proportional to the exponent.
+let rec measurePower (measure: Measure) (exponent: bigint) : Measure =
+    if exponent < 0I then MInv(measurePower measure -exponent)
+    elif exponent = 0I then MOne
+    elif exponent = 1I then measure
+    else
+        let half = measurePower measure (exponent / 2I)
+        let square = MProd(half, half)
+        if exponent % 2I = 0I then square else MProd(measure, square)
+
+/// Abelian-group normal form: named atoms (including their module) and variables
+/// have signed integer exponents. Substitutions are followed before cancellation.
+let measureFactors (measure: Measure) =
+    let rec collect exponent factors measure =
+        let add key atom =
+            let previous = Map.tryFind key factors |> Option.map snd |> Option.defaultValue 0I
+            let total = previous + exponent
+            if total = 0I then Map.remove key factors else Map.add key (atom, total) factors
+        match measure with
+        | MOne -> factors
+        | MCon(name, path) -> add (Choice1Of2(path, name)) measure
+        | MVar tp ->
+            match tp.Parent with
+            | TypeParamState.Unbound -> add (Choice2Of2 tp.Id) measure
+            | TypeParamState.Bound(NativeType.TMeasure bound) -> collect exponent factors bound
+            | TypeParamState.Bound(NativeType.TVar other) -> collect exponent factors (MVar other)
+            | _ -> invalidOp "A measure parameter is bound to an ordinary type"
+        | MInv inner -> collect -exponent factors inner
+        | MProd(left, right) ->
+            if obj.ReferenceEquals(left, right) then collect (2I * exponent) factors left
+            else collect exponent (collect exponent factors left) right
+    collect 1I Map.empty measure
+
+let measureFromFactors factors =
+    factors |> Map.fold (fun product _ (atom, exponent) ->
+        let factor = measurePower atom exponent
+        match product with MOne -> factor | _ -> MProd(product, factor)) MOne
+
+let normalizeMeasure measure = measure |> measureFactors |> measureFromFactors
+
+/// Numeric kind identity is unchanged when a measure is attached. Representation
+/// selection is separate; no width or representation is introduced by this operation.
+let withMeasure (ty: NativeType) (measure: Measure) =
+    match ty with
+    | NativeType.TApp(tc, []) when tc.Name = "int" || tc.Name = "float" ->
+        NativeType.TApp({ tc with ParamKinds = [TypeParamKind.Measure] }, [NativeType.TMeasure(normalizeMeasure measure)])
+    | _ -> NativeType.TError "Expected an integer or real kind for a measured value"
+
 /// Substitute type arguments into a forall type
 let instantiate (typars: TypeParam list) (args: NativeType list) (body: NativeType) : NativeType =
     if List.length typars <> List.length args then
@@ -1312,8 +1359,20 @@ let instantiate (typars: TypeParam list) (args: NativeType list) (body: NativeTy
         | NativeType.TList elem -> NativeType.TList(go elem)  // PRD-13a
         | NativeType.TMap(k, v) -> NativeType.TMap(go k, go v)  // PRD-13a
         | NativeType.TSet elem -> NativeType.TSet(go elem)  // PRD-13a
-        | NativeType.TMeasure _ -> ty
+        | NativeType.TMeasure measure -> NativeType.TMeasure(goMeasure measure)
         | NativeType.TError _ -> ty
+
+    and goMeasure measure =
+        measureFactors measure |> Map.fold (fun product _ (atom, exponent) ->
+            let replacement =
+                match atom with
+                | MVar tp when subst.ContainsKey tp ->
+                    match subst.[tp] with
+                    | NativeType.TMeasure replacement -> replacement
+                    | NativeType.TVar replacement when replacement.Kind = TypeParamKind.Measure -> MVar replacement
+                    | _ -> invalidArg "args" "Expected a measure argument"
+                | _ -> atom
+            MProd(product, measurePower replacement exponent)) MOne |> normalizeMeasure
     
     go body
 
@@ -1326,6 +1385,7 @@ let rec formatType (ty: NativeType) : string =
     match ty with
     | NativeType.TVar tp -> tp.Name
     | NativeType.TApp(tc, []) -> tc.Name
+    | NativeType.TApp(tc, [NativeType.TMeasure measure]) -> $"{tc.Name}<{formatMeasure measure}>"
     | NativeType.TApp(tc, [arg]) -> $"{formatType arg} {tc.Name}"
     | NativeType.TApp(tc, args) -> 
         let argsStr = args |> List.map formatType |> String.concat ", "
@@ -1359,12 +1419,20 @@ let rec formatType (ty: NativeType) : string =
     | NativeType.TError msg -> $"<error: {msg}>"
 
 and formatMeasure (m: Measure) : string =
-    match m with
-    | MOne -> "1"
-    | MVar tp -> tp.Name
-    | MProd(m1, m2) -> $"{formatMeasure m1}*{formatMeasure m2}"
-    | MInv m -> $"1/{formatMeasure m}"
-    | MCon(name, _) -> name
+    let factors = measureFactors m |> Map.toList |> List.map (fun (_, (atom, exponent)) ->
+        let order, name =
+            match atom with
+            | MVar tp -> 0, tp.Name
+            | MCon(name, path) -> 1, String.concat "." (path @ [name])
+            | _ -> invalidOp "Expected an atomic measure in normal form"
+        order, name, exponent) |> List.sortBy (fun (order, name, _) -> order, name)
+    let render factors =
+        factors |> List.map (fun (_, name, exponent) ->
+            let power = abs exponent
+            if power = 1I then name else $"{name}^{power}") |> String.concat " "
+    let positive, negative = factors |> List.partition (fun (_, _, exponent) -> exponent > 0I)
+    let numerator = if positive.IsEmpty then "1" else render positive
+    if negative.IsEmpty then numerator else $"{numerator}/({render negative})"
 
 //-------------------------------------------------------------------------
 // Standard Types Module (NTU-based type definitions)

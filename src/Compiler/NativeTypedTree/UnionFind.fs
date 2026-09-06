@@ -133,7 +133,7 @@ let rec applySubst (ty: NativeType) : NativeType =
 
     // Note: option<'T> is handled via TUnion - it's a discriminated union
 
-    | NativeType.TMeasure _ -> ty
+    | NativeType.TMeasure measure -> NativeType.TMeasure(normalizeMeasure measure)
     | NativeType.TError _ -> ty
 
 //-------------------------------------------------------------------------
@@ -209,15 +209,8 @@ let rec occursIn (typar: TypeParam) (ty: NativeType) : bool =
     | NativeType.TError _ -> false
 
 and occursInMeasure (typar: TypeParam) (m: Measure) : bool =
-    match m with
-    | MOne -> false
-    | MVar tp -> 
-        let (root1, _) = find typar
-        let (root2, _) = find tp
-        root1.Id = root2.Id
-    | MProd(m1, m2) -> occursInMeasure typar m1 || occursInMeasure typar m2
-    | MInv m -> occursInMeasure typar m
-    | MCon _ -> false
+    let root, _ = find typar
+    measureFactors m |> Map.containsKey (Choice2Of2 root.Id)
 
 //-------------------------------------------------------------------------
 // Free Type Variables
@@ -286,15 +279,8 @@ let rec freeTypeVars (ty: NativeType) : Set<TypeParamId> =
     | NativeType.TError _ -> Set.empty
 
 and freeTypeVarsInMeasure (m: Measure) : Set<TypeParamId> =
-    match m with
-    | MOne -> Set.empty
-    | MVar tp -> 
-        match find tp with
-        | (root, None) -> Set.singleton root.Id
-        | _ -> Set.empty
-    | MProd(m1, m2) -> Set.union (freeTypeVarsInMeasure m1) (freeTypeVarsInMeasure m2)
-    | MInv m -> freeTypeVarsInMeasure m
-    | MCon _ -> Set.empty
+    measureFactors m |> Map.toList |> List.choose (fun (key, _) ->
+        match key with Choice2Of2 id -> Some id | _ -> None) |> Set.ofList
 
 /// Check if a type contains any unbound type variables
 let hasUnboundVars (ty: NativeType) : bool =
@@ -364,7 +350,9 @@ let rec collectFreeTypeParams (ty: NativeType) : TypeParam list =
 
     // Note: option<'T> is handled via TUnion - it's a discriminated union
 
-    | NativeType.TMeasure _ -> []  // Measure type params handled separately
+    | NativeType.TMeasure measure ->
+        measureFactors measure |> Map.toList |> List.choose (fun (_, (atom, _)) ->
+            match atom with MVar tp -> Some tp | _ -> None)
     | NativeType.TError _ -> []
 
 /// Generalize a type by wrapping free type variables in TForall

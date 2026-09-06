@@ -238,8 +238,6 @@ let defaultCheckOptions = {
 //-------------------------------------------------------------------------
 
 /// Convert unification errors to diagnostics
-/// NOTE: Temporarily using Warning instead of Error to allow compilation to proceed
-/// while type issues in Alloy are resolved. These should become errors again.
 let private errorsToDiagnostics (errors: UnificationError list) : Diagnostic list =
     errors |> List.map (fun e ->
         let range =
@@ -252,7 +250,10 @@ let private errorsToDiagnostics (errors: UnificationError list) : Diagnostic lis
             | ByrefKindMismatch(_, _, r) -> r
         {
             Severity = NativeDiagnosticSeverity.Error
-            Code = "FS0001"
+            Code =
+                match e with
+                | TypeMismatch(NativeType.TMeasure _, NativeType.TMeasure _, _) -> "CCS8040"
+                | _ -> "FS0001"
             Message = formatError e
             Range = range
             RelatedNodes = []
@@ -261,11 +262,13 @@ let private errorsToDiagnostics (errors: UnificationError list) : Diagnostic lis
     )
 
 /// Solve constraints and return diagnostics
-let private solveAndGetDiagnostics (constraints: Constraint list) : Diagnostic list =
-    match solveConstraints constraints with
-    | Solved -> []
-    | Deferred _ -> []  // Deferred SRTP constraints handled later
-    | Failed errors -> errorsToDiagnostics errors
+let private solveAndGetDiagnostics (env: TypeEnv) : Diagnostic list =
+    let constraintDiagnostics =
+        match solveConstraints !(env.Constraints) with
+        | Solved -> []
+        | Deferred _ -> []  // Deferred SRTP constraints handled later
+        | Failed errors -> errorsToDiagnostics errors
+    constraintDiagnostics @ List.rev !(env.Diagnostics)
 
 //-------------------------------------------------------------------------
 // Entry Point Detection
@@ -574,7 +577,7 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // Literals
     //---------------------------------------------------------------------
     | SynExpr.Const(constant, _) ->
-        let ty = Literals.typeOfConst constant
+        let ty = Literals.typeOfConst env constant
         let litVal = Literals.constToLiteral constant
         builder.Create(SemanticKind.Literal litVal, ty, range)
 
@@ -1129,7 +1132,7 @@ let checkExpression (expr: SynExpr) : CheckResult =
     NodeId.reset()
 
     let node = checkExpr env builder expr
-    let diagnostics = solveAndGetDiagnostics !(env.Constraints)
+    let diagnostics = solveAndGetDiagnostics env
 
     buildResult builder [node] Map.empty diagnostics None
 
@@ -1149,7 +1152,7 @@ let checkLetBinding (binding: SynBinding) : CheckResult =
 
     // InlineBody, isMutable and literalValue discarded - see function doc comment for rationale
     let (node, _inlineBody, _isMutable, _literalValue) = Bindings.checkBinding checkExpr env builder binding None
-    let diagnostics = solveAndGetDiagnostics !(env.Constraints)
+    let diagnostics = solveAndGetDiagnostics env
 
     buildResult builder [node] Map.empty diagnostics None
 
@@ -1351,8 +1354,31 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 // Primary name for semantic graph node (use most qualified)
                 let typeName = List.head typeNameSuffixes
 
-                // Check if this is a type abbreviation
+                let (SynComponentInfo(attributes, _, _, _, _, _, _, _)) = typeInfo
+                let isMeasure = attributes |> List.exists (fun list ->
+                    list.Attributes |> List.exists (fun attribute ->
+                        match attribute.TypeName.LongIdent |> List.tryLast with
+                        | Some ident -> ident.idText = "Measure" || ident.idText = "MeasureAttribute"
+                        | None -> false))
+
+                // Measures and their abbreviations live in the measure kind.
                 match typeRepr with
+                | _ when isMeasure ->
+                    let measureTy =
+                        match typeRepr with
+                        | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.TypeAbbrev(_, rhsType, _), _) ->
+                            resolveSynMeasureType accEnv rhsType
+                        | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.None _, _) ->
+                            NativeType.TMeasure(MCon(simpleTypeName, ctx.Path))
+                        | _ ->
+                            let message = "Invalid measure definition"
+                            addError typeRange message accEnv
+                            NativeType.TError message
+                    let qualifiedName = String.concat "." (ctx.Path @ [simpleTypeName])
+                    let updatedEnv = (qualifiedName :: typeNameSuffixes) |> List.fold (fun env name -> addTypeAbbrev name measureTy env) accEnv
+                    let node = builder.Create(SemanticKind.TypeDef(typeName, TypeDefKind.AbbreviationDef measureTy, []), measureTy, range)
+                    (updatedEnv, node :: accNodes)
+
                 | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.TypeAbbrev(_detail, rhsType, _), _) ->
                     // Type abbreviation like `type I32 = int32`
                     // Resolve the target type using the current environment
@@ -1719,7 +1745,7 @@ let checkModuleDeclarations (decls: SynModuleDecl list) : CheckResult =
 
     let ctx = { Path = []; IsRecursive = false }
     let (_finalEnv, nodes) = checkModuleDecls env builder ctx decls
-    let diagnostics = solveAndGetDiagnostics !(env.Constraints)
+    let diagnostics = solveAndGetDiagnostics env
 
     buildResult builder nodes Map.empty diagnostics None
 
@@ -1797,7 +1823,7 @@ let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
         |> List.map (fun (path, nodes) -> (path, nodes |> List.map (fun n -> n.Id)))
         |> Map.ofList
 
-    let diagnostics = solveAndGetDiagnostics !(initialEnv.Constraints)
+    let diagnostics = solveAndGetDiagnostics initialEnv
 
     buildResult builder allNodes modulePaths diagnostics None
 
@@ -1840,8 +1866,7 @@ let checkParsedInputsWithPlatform (inputs: ParsedInput list) (platformContext: P
         |> Map.ofList
 
     // Solve constraints - now using ref cells, all environment copies share same constraints
-    let constraintDiags = solveAndGetDiagnostics !(initialEnv.Constraints)
-    let allDiagnostics = constraintDiags @ (List.rev !(initialEnv.Diagnostics))
+    let allDiagnostics = solveAndGetDiagnostics initialEnv
 
     buildResult builder allNodes modulePaths allDiagnostics platformContext
 

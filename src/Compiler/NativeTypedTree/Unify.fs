@@ -88,6 +88,12 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
     | NativeType.TApp(tc1, args1), NativeType.TApp(tc2, args2) ->
         if tc1.Name <> tc2.Name || tc1.Module <> tc2.Module then
             raise (UnificationException(TypeMismatch(t1, t2, range)))
+        // A bare numeric kind denotes the dimensionless measure, not a wildcard.
+        let dimensions args =
+            if List.isEmpty args && (tc1.Name = "int" || tc1.Name = "float") then
+                [NativeType.TMeasure MOne]
+            else args
+        let args1, args2 = dimensions args1, dimensions args2
         if List.length args1 <> List.length args2 then
             raise (UnificationException(ArityMismatch(List.length args1, List.length args2, range)))
         List.iter2 (fun a1 a2 -> unify a1 a2 range) args1 args2
@@ -254,35 +260,21 @@ let rec unify (t1: NativeType) (t2: NativeType) (range: SourceRange) : unit =
 
 /// Unify two measures
 and unifyMeasure (m1: Measure) (m2: Measure) (range: SourceRange) : unit =
-    match (m1, m2) with
-    | MOne, MOne -> ()
-    | MVar v1, MVar v2 ->
-        let (root1, _) = find v1
-        let (root2, _) = find v2
-        if root1.Id <> root2.Id then
-            union v1 v2
-    | MVar v, m | m, MVar v ->
-        let (root, bound) = find v
-        match bound with
+    let difference = measureFactors (MProd(m1, MInv m2))
+    if not difference.IsEmpty then
+        // Isolate a variable when all remaining exponents are divisible by its
+        // coefficient (including roots such as 'u^2 = m^2/s^2).
+        let variable = difference |> Map.toList |> List.tryPick (fun (key, (atom, exponent)) ->
+            match atom with
+            | MVar tp when difference |> Map.forall (fun other (_, power) -> other = key || power % exponent = 0I) ->
+                Some(key, tp, exponent)
+            | _ -> None)
+        match variable with
+        | Some(key, tp, exponent) ->
+            let solution = difference |> Map.remove key |> Map.map (fun _ (atom, power) -> atom, -power / exponent) |> measureFromFactors
+            bind tp (NativeType.TMeasure solution)
         | None ->
-            // Bind measure variable to measure
-            // For measures, we'd need a proper measure representation, not NativeType
-            // For now, we mark the measure variable as used
-            ignore (root, m)
-            ()
-        | Some existingTy ->
-            // Already bound - would need to unify existing with m
-            ignore (existingTy, m)
-            ()
-    | MCon(n1, mod1), MCon(n2, mod2) when n1 = n2 && mod1 = mod2 -> ()
-    | MProd(a1, b1), MProd(a2, b2) ->
-        unifyMeasure a1 a2 range
-        unifyMeasure b1 b2 range
-    | MInv m1, MInv m2 ->
-        unifyMeasure m1 m2 range
-    | _ ->
-        // Measure mismatch - would need proper measure algebra
-        ()
+            raise (UnificationException(TypeMismatch(NativeType.TMeasure m1, NativeType.TMeasure m2, range)))
 
 //-------------------------------------------------------------------------
 // Try Unification (non-throwing)
