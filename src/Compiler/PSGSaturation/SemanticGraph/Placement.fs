@@ -129,11 +129,15 @@ let private integerSlot (p: Placer) (range: ValueRange) : SettledSlot =
     | Some bits -> SettledSlot.Integer (bits, RangeAnalysis.selectedRepresentationOf p.Graph range |> Option.map (fun r -> r.Name))
     | None -> SettledSlot.Opaque (sprintf "an integer of the unobservable range %s" (ValueRange.render range))
 
-/// The slot of a width-named integer carrier: its own representation (interim, CS-12).
-let private carrierSlot (p: Placer) (kind: NTUKind) (bits: int) : SettledSlot =
-    match p.Context |> Option.bind (fun ctx -> RangeSources.representationOfKind ctx kind) with
-    | Some r -> SettledSlot.Integer (r.Bits, Some r.Name)
-    | None -> SettledSlot.Integer (bits, None)
+/// The slot of a spelled field: the representation its declaration names
+/// (`RangeSources.declarationOfKind`, the interim declared boundary of CS-12 step 5a), with the
+/// platform's name for it where the description offers it.
+let private carrierSlot (p: Placer) (kind: NTUKind) : SettledSlot =
+    match RangeSources.declarationOfKind p.Context kind with
+    | Some d ->
+        let offered = p.Context |> Option.bind (fun ctx -> RangeSources.representationOfKind ctx kind) |> Option.map (fun r -> r.Name)
+        SettledSlot.Integer (d.Bits, offered)
+    | None -> SettledSlot.Opaque (sprintf "an integer of the kind %s with no declared representation" (NTUKind.name kind))
 
 /// The slot of a value of the given kind; `range` is the settled range of the field or position
 /// for an integer of the bare kind.
@@ -141,7 +145,7 @@ let private slotOfKind (p: Placer) (range: ValueRange) (kind: NTUKind) : Settled
     match kind with
     | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)
     | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register) -> integerSlot p range
-    | NTUKind.NTUint (NTUWidth.Fixed bits) | NTUKind.NTUuint (NTUWidth.Fixed bits) -> carrierSlot p kind bits
+    | NTUKind.NTUint (NTUWidth.Fixed _) | NTUKind.NTUuint (NTUWidth.Fixed _) -> carrierSlot p kind
     | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer)
     | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer)
     | NTUKind.NTUsize | NTUKind.NTUdiff | NTUKind.NTUptr | NTUKind.NTUfnptr -> SettledSlot.Pointer HandleWords
@@ -311,3 +315,154 @@ let settle (context: PlatformContext option) (graph: SemanticGraph) : SemanticGr
             | _ -> acc) Map.empty
     let layouts = aggregates |> Map.map (fun _ a -> place placer a)
     { graph with Layouts = lazy layouts }
+
+//-------------------------------------------------------------------------
+// Closures (Layout_As_Joint_Constraint.md §2.1: the closure aggregate)
+//-------------------------------------------------------------------------
+//
+// A closure's environment is an aggregate the CPU leg realises (no Clef type names it): a
+// prefix, then one slot per capture, each at the next byte offset. Its placement is settled here
+// from the captures' types and widths and the declared Pointer width, and carried as
+// `Codata.Closures`; the lambda witness reads offsets and sizes and computes none. A nested named
+// function (a binding inside a function) passes its captures as parameters and has no environment;
+// a lambda with no captures has none unless Baker marked it for a closure pair.
+
+let [<Literal>] private Int32Bytes = 4
+let [<Literal>] private FlagBytes = 1
+
+let private pointerBytes (p: Placer) : int =
+    match p.PointerBytes with
+    | Some b -> b
+    | None -> failwith "Placement: a closure environment is placed on a core, which declares its Pointer width"
+
+/// The bytes the leg holds a value of the given type in: an integer at its held width, a record
+/// or tuple at its settled size, a buffer-backed value as its five-word view, a handle or a
+/// pointer-sized kind as one word.
+let private valueBytes (p: Placer) (range: ValueRange) (ty: NativeType) : SettledSlot * int =
+    let ptr = pointerBytes p
+    let ty = applySubst ty
+    match aggregateOf p.Graph ty with
+    | Some (Aggregate.Record (name, _)) ->
+        match Map.tryFind name p.Graph.Layouts.Value with
+        | Some (SettledLayout.Record (_, Some size, _)) -> SettledSlot.Pointer ViewWords, size
+        | _ -> failwithf "Placement: the record %s has no settled size to hold a lazy value in" name
+    | Some (Aggregate.Tuple (key, _)) ->
+        match Map.tryFind key p.Graph.Layouts.Value with
+        | Some (SettledLayout.Record (_, Some size, _)) -> SettledSlot.Pointer ViewWords, size
+        | _ -> failwithf "Placement: the tuple %s has no settled size to hold a lazy value in" key
+    | Some _ -> SettledSlot.Pointer ViewWords, ViewWords * ptr
+    | None ->
+        match slotOf p range ty with
+        | SettledSlot.Opaque what -> failwithf "Placement: a closure holds %s, which the leg cannot place" what
+        | slot ->
+            match extentOf p slot with
+            | Some (bytes, _) -> slot, bytes
+            | None -> failwithf "Placement: the slot %A has no extent on this context" slot
+
+/// The slot a capture is held in, and its bytes: a mutable capture the address of its cell; a
+/// string decomposed into address and extent; a buffer-backed value (an array, a union, an
+/// option, a Result, a lazy, a seq, a function value's pair) its base address, extracted at
+/// construction; a record or tuple its base index as it arrives; a pointer-sized kind one word;
+/// a scalar at its held width, an integer of the bare kind at the width its source node is held.
+let private captureSlot (p: Placer) (capture: CaptureInfo) : CaptureSlotKind * int =
+    let ptr = pointerBytes p
+    if capture.IsMutable then CaptureSlotKind.Address, ptr
+    else
+        let ty = applySubst capture.Type
+        let scalar (slot: SettledSlot) =
+            match extentOf p slot with
+            | Some (bytes, _) -> CaptureSlotKind.Scalar slot, bytes
+            | None -> failwithf "Placement: the capture '%s' has a slot %A with no extent" capture.Name slot
+        match ty with
+        | NativeType.TFun _ | NativeType.TLazy _ | NativeType.TSeq _ | NativeType.TSeqEnumerator _ | NativeType.TUnion _ -> CaptureSlotKind.Address, ptr
+        | NativeType.TTuple _ | NativeType.TAnon _ | NativeType.TVar _ | NativeType.TForall _
+        | NativeType.TList _ | NativeType.TMap _ | NativeType.TSet _ | NativeType.TNativePtr _ | NativeType.TByref _ -> CaptureSlotKind.Handle, ptr
+        | _ ->
+            match Types.tryGetNTUKind ty with
+            | Some NTUKind.NTUstring -> CaptureSlotKind.Decomposed, 2 * ptr
+            | Some (NTUKind.NTUarray | NTUKind.NTUlazy | NTUKind.NTUseq) -> CaptureSlotKind.Address, ptr
+            | Some (NTUKind.NTUlist | NTUKind.NTUmap | NTUKind.NTUset | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff)
+            | Some (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer)) | Some (NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer)) -> CaptureSlotKind.Handle, ptr
+            | Some (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)) | Some (NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register)) ->
+                match capture.SourceNodeId |> Option.bind (RangeAnalysis.heldWidth p.Graph) with
+                | Some bits ->
+                    let range = capture.SourceNodeId |> Option.bind (fun id -> SemanticGraph.tryGetNode id p.Graph) |> Option.bind (fun n -> n.ValueRange) |> Option.defaultValue ValueRange.Unbounded
+                    scalar (SettledSlot.Integer (bits, RangeAnalysis.selectedRepresentationOf p.Graph range |> Option.map (fun r -> r.Name)))
+                | None -> failwithf "Placement: the capture '%s' of the bare integer kind has no source node whose held width the slot can read" capture.Name
+            | Some kind -> scalar (slotOfKind p ValueRange.Unbounded kind)
+            | None ->
+                match aggregateOf p.Graph ty with
+                | Some (Aggregate.Record _ | Aggregate.Tuple _) -> CaptureSlotKind.Handle, ptr
+                | Some _ -> CaptureSlotKind.Address, ptr
+                | None -> CaptureSlotKind.Handle, ptr
+
+let private requiresClosurePair (node: SemanticNode) : bool =
+    node.Metadata
+    |> Map.tryFind ClosureMetadata.RequiresClosurePair
+    |> Option.map (function MetadataValue.Bool b -> b | _ -> false)
+    |> Option.defaultValue false
+
+/// A named function nested in another passes its captures as parameters: no environment.
+let private isNestedNamedFunction (graph: SemanticGraph) (node: SemanticNode) (enclosing: string option) : bool =
+    Option.isSome enclosing &&
+    (match node.Parent |> Option.bind (fun p -> SemanticGraph.tryGetNode p graph) with
+     | Some { Kind = SemanticKind.Binding _ } -> true
+     | _ -> false)
+
+let private placeClosure (p: Placer) (node: SemanticNode) (bodyId: NodeId) (captures: CaptureInfo list) (context: LambdaContext) : ClosurePlacement =
+    let ptr = pointerBytes p
+    let prefix, prefixBytes =
+        match context with
+        | LambdaContext.RegularClosure -> ClosurePrefix.RegularClosure, ptr
+        | LambdaContext.SeqGenerator -> ClosurePrefix.SeqGenerator, Int32Bytes + 2 * ptr
+        | LambdaContext.LazyThunk ->
+            match SemanticGraph.tryGetNode bodyId p.Graph with
+            | Some body ->
+                let slot, bytes = valueBytes p (body.ValueRange |> Option.defaultValue ValueRange.Unbounded) body.Type
+                ClosurePrefix.LazyThunk (slot, bytes), FlagBytes + bytes + ptr
+            | None -> failwithf "Placement: the lazy body %d of lambda %d is not in the graph" (NodeId.value bodyId) (NodeId.value node.Id)
+    let slots, capturesBytes =
+        captures
+        |> List.mapi (fun i c -> i, c)
+        |> List.fold (fun (acc, cursor) (i, capture) ->
+            let kind, bytes = captureSlot p capture
+            let slot : CaptureSlot = { Capture = capture.Name; Index = i; Holds = kind; ByteOffset = cursor; Bytes = bytes; Mutable = capture.IsMutable; SourceNode = capture.SourceNodeId }
+            (slot :: acc, cursor + bytes)) ([], 0)
+    { Lambda = node.Id
+      Prefix = prefix
+      PrefixBytes = prefixBytes
+      Captures = List.rev slots
+      CapturesBytes = capturesBytes
+      WithCodePointerBytes = ptr + capturesBytes
+      WithPrefixBytes = prefixBytes + capturesBytes }
+
+/// The environment placement of every reachable closure on a core; none on fabric, which holds
+/// no closure (a function is an hw.module, a value its instance).
+let closures (context: PlatformContext option) (graph: SemanticGraph) : Map<NodeId, ClosurePlacement> =
+    let onFabric = context |> Option.exists (fun ctx -> PlatformContext.substrateKind ctx = SubstrateKind.FPGA)
+    if onFabric then Map.empty
+    else
+        let placer = {
+            Graph = graph
+            Context = context
+            PointerBytes = context |> Option.bind (fun ctx -> PlatformContext.pointerSize ctx |> Result.toOption)
+            TupleRanges = Map.empty
+        }
+        graph.Nodes
+        |> Map.toList
+        |> List.choose (fun (_, node) ->
+            match node.Kind with
+            | SemanticKind.Lambda (_, bodyId, captures, enclosing, context) when node.IsReachable ->
+                if isNestedNamedFunction graph node enclosing then None
+                elif List.isEmpty captures && not (requiresClosurePair node) then None
+                else Some (node.Id, placeClosure placer node bodyId captures context)
+            | _ -> None)
+        |> Map.ofList
+
+/// Where a union's values live on a core. The rule is the leg's current one: `result` is the
+/// heterogeneous union placed in the arena, every other union inline. A structural criterion
+/// (payload slots that differ across cases) is owed with the union's own layout hyperedge.
+let unionResidence (ty: NativeType) : UnionResidence =
+    match applySubst ty with
+    | NativeType.TApp (tycon, _) when tycon.Name = "result" -> UnionResidence.Arena
+    | _ -> UnionResidence.Inline

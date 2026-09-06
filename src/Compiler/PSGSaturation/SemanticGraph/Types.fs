@@ -794,6 +794,173 @@ type SettledLayout =
 // Semantic Graph
 //-------------------------------------------------------------------------
 
+//-------------------------------------------------------------------------
+// Codata read by emission (CCS_Architecture.md, "Coeffects Computed During Elaboration")
+//-------------------------------------------------------------------------
+//
+// Facts about the saturated graph that Composer's witnesses read and never compute. Each row
+// below was once computed in Composer's PSGElaboration layer; that layer is gone, and the graph
+// is the one authority (Alex observes, it does not compute, infer or decide). The values these
+// facts give rise to at emission are emission's own to name.
+
+/// How a constructed value escapes its defining scope: the four-point lifetime lattice
+/// (closure-representation.md §3.3). Read by the allocation site's witness to place the value on
+/// the stack, in static storage, or in the arena.
+[<RequireQualifiedAccess>]
+type EscapeKind =
+    | StackScoped
+    | EscapesViaClosure of target: NodeId
+    | EscapesViaReturn
+    | EscapesViaByRef
+    | StaticLifetime
+
+/// How a meet adapts its operand (Dimensional_Range_Design.md §3.1, §8.3; rulings 1 and 3).
+[<RequireQualifiedAccess>]
+type MeetKind =
+    | ExtendUnsigned
+    | ExtendSigned
+    | Truncate
+
+/// One meet: the consumer node, the operand node (the consumer itself for a read of a slot), and
+/// the bit widths it adapts between.
+type Meet = { Consumer: NodeId; Operand: NodeId; From: int; To: int; Adapt: MeetKind }
+
+/// A partial application of a flattened curried function.
+type PartialApplication = { TargetBindingId: NodeId; SuppliedArgNodes: NodeId list; TotalParams: int }
+
+/// A call that saturates a partial application: the target and every argument in order.
+type SaturatedCall = { TargetBindingId: NodeId; AllArgNodes: NodeId list }
+
+/// The curried structure of the graph once nested lambdas are flattened (Curry.fs).
+type CurryInfo = {
+    PartialApplications: Map<NodeId, PartialApplication>
+    SaturatedCalls: Map<NodeId, SaturatedCall>
+    /// Bindings that hold a partial application (their witnesses emit nothing).
+    PartialAppBindings: Set<NodeId>
+    /// Lambdas absorbed by flattening (unreachable now).
+    AbsorbedLambdas: Set<NodeId>
+    /// Arguments of partial applications whose emission is deferred to the saturating call.
+    DeferredArgNodes: Set<NodeId>
+}
+
+/// What a closure environment slot holds.
+[<RequireQualifiedAccess>]
+type CaptureSlotKind =
+    /// One word: the base address of a buffer-backed value (an array, a union, a lazy, a seq, a
+    /// function value's pair) or of a mutable cell; construction extracts the base pointer first.
+    | Address
+    /// One word held as it arrives: a record or tuple's base index, a handle.
+    | Handle
+    /// A string, decomposed into its base address and its extent: two words.
+    | Decomposed
+    /// A scalar at its settled slot.
+    | Scalar of SettledSlot
+
+/// One settled slot of a closure environment.
+type CaptureSlot = {
+    Capture: string
+    Index: int
+    Holds: CaptureSlotKind
+    /// The byte offset after the environment's prefix.
+    ByteOffset: int
+    Bytes: int
+    Mutable: bool
+    SourceNode: NodeId option
+}
+
+/// The prefix an environment carries before its capture slots.
+[<RequireQualifiedAccess>]
+type ClosurePrefix =
+    /// The code pointer.
+    | RegularClosure
+    /// A lazy thunk: the computed flag, the value at its slot, the code pointer.
+    | LazyThunk of value: SettledSlot * valueBytes: int
+    /// A seq generator: the state, the current value's address, the code pointer.
+    | SeqGenerator
+
+/// The settled placement of a closure's environment (Layout_As_Joint_Constraint.md §2.1, the
+/// closure aggregate). Composer reads offsets and sizes here and computes none.
+type ClosurePlacement = {
+    Lambda: NodeId
+    Prefix: ClosurePrefix
+    PrefixBytes: int
+    Captures: CaptureSlot list
+    /// The captures alone.
+    CapturesBytes: int
+    /// One word for the code pointer, then the captures.
+    WithCodePointerBytes: int
+    /// The prefix, then the captures.
+    WithPrefixBytes: int
+}
+
+/// Where a union's values live on a core: a heterogeneous union in the arena, a homogeneous one
+/// inline.
+[<RequireQualifiedAccess>]
+type UnionResidence = Arena | Inline
+
+/// The runtime a program is compiled against.
+[<RequireQualifiedAccess>]
+type RuntimeMode = Freestanding | Console
+
+/// How a platform operation is resolved. A syscall names the operation; its number is the
+/// description's (`Syscalls`), read by the freestanding leg.
+[<RequireQualifiedAccess>]
+type ResolvedBinding =
+    | Syscall of operation: string
+    | LibcCall of name: string
+    | ExternCall of library: string * symbol: string
+
+type BindingResolution = { Node: NodeId; EntryPoint: string; Resolved: ResolvedBinding }
+
+type PlatformBindings = {
+    RuntimeMode: RuntimeMode
+    /// Keyed by the call site (the Application node).
+    Bindings: Map<NodeId, BindingResolution>
+    /// Statically linked libraries; a dynamic extern is resolved at run time and is not here.
+    ExternLibraries: Set<string>
+}
+
+type PinConstraint = { PortName: string; PackagePin: string; IOStandard: string; Direction: string }
+type ClockConstraint = { PortName: string; PackagePin: string; IOStandard: string; FrequencyHz: int64 }
+type ResetConstraint = { PortName: string; IsExternal: bool; PackagePin: string; IOStandard: string; ActiveHigh: bool }
+
+/// The pin facts of a hardware design: the description's endpoints joined with the design's
+/// `[<Pin>]` attributes. Read by the hardware module witness and the XDC writer.
+type PinMapping = {
+    Pins: PinConstraint list
+    Clock: ClockConstraint
+    Reset: ResetConstraint option
+    DevicePart: string
+    FieldPinAttrs: Map<string, string list>
+}
+
+/// The codata the graph carries for emission, settled once at the end of saturation.
+type Codata = {
+    Escapes: Map<NodeId, EscapeKind>
+    Curry: CurryInfo
+    /// Per consumer node, its meets in operand order.
+    Meets: Map<NodeId, Meet list>
+    /// Per lambda, the meet of its body's last value to the body's width.
+    ReturnMeets: Map<NodeId, Meet>
+    Closures: Map<NodeId, ClosurePlacement>
+    Bindings: PlatformBindings
+    Pins: PinMapping option
+    /// The lambda of each declaration root, with the root's flavour.
+    DeclarationRootLambdas: Map<NodeId, DeclRoot>
+}
+
+module Codata =
+    let empty : Codata = {
+        Escapes = Map.empty
+        Curry = { PartialApplications = Map.empty; SaturatedCalls = Map.empty; PartialAppBindings = Set.empty; AbsorbedLambdas = Set.empty; DeferredArgNodes = Set.empty }
+        Meets = Map.empty
+        ReturnMeets = Map.empty
+        Closures = Map.empty
+        Bindings = { RuntimeMode = RuntimeMode.Console; Bindings = Map.empty; ExternLibraries = Set.empty }
+        Pins = None
+        DeclarationRootLambdas = Map.empty
+    }
+
 /// The complete semantic graph output
 [<NoComparison; NoEquality>]
 type SemanticGraph = {
@@ -831,6 +998,9 @@ type SemanticGraph = {
     /// result at the declared Register width, the value-call boundary (§4.1's second row);
     /// `RangeAnalysis.escapes` reads it. Filled by RangeAnalysis.run; defaulted empty.
     Escaping: Lazy<Map<NodeId, string>>
+    /// The codata emission reads (Codata): settled at the end of saturation, after the range
+    /// pass and placement; defaulted empty at every construction.
+    Codata: Lazy<Codata>
     /// F -- the hyperedge set. Phase 0 carries only what enrichment mints
     /// explicitly (obligations, residence); the kind-derived structural and
     /// reference edges are projected on demand by `kindEdges` and are not

@@ -246,6 +246,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         ElementRanges = lazy Map.empty
         Layouts = lazy Map.empty
         Escaping = lazy Map.empty
+        Codata = lazy Codata.empty
         // F survives fold-in with its references repointed at replacements.
         Edges =
             graph.Edges |> List.map (fun e ->

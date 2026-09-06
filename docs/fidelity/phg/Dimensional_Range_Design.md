@@ -8,6 +8,26 @@
 > the white papers, then the spec, then the docs; the owner's rulings quoted in §0 are the position
 > where the spec drafts disagreed with them, and those drafts are corrected here, not argued with.
 
+## Where code lives (the owner, 2026-09-05; closed, not to be re-opened)
+
+This section exists because the rule it states was violated on 2026-09-05, at cost. An agent working the CS-11 and CS-12 changesets kept building graph analyses inside Composer, in a folder named `PSGElaboration`, until that folder held a second semantic-graph layer of its own: escape analysis, curried-lambda normalisation, partial-application analysis, closure and union layout, platform binding resolution, pin resolution, and a 2,283-line pass numbering SSA values from tables of how Alex's own patterns emit. The owner removed the folder whole. Every fact it computed that is a fact about the program has been lifted into CCS; what was emission bookkeeping is derived at emission with no pass; the rest was dead. The as-built is at the end of this note.
+
+**The rule.** A fact about the program is computed in CCS, once, at saturation, and carried on the graph as codata. Composer reads. Composer's zipper observes what the graph settled and writes MLIR; it does not compute, infer, or decide (`Composer/docs/CCS_Architecture.md`, "The Zipper traversal in Alex is purely navigational"). There is no third place.
+
+**Where, exactly.**
+
+| The thing | Lives in | Never in |
+|---|---|---|
+| A type, a range, a width selection, a layout, an escape, a placement, a call-site resolution, a pin fact, a partial application, a meet, the declaration roots: any fact about the program | `clef/src/Compiler/PSGSaturation/SemanticGraph/` as a pass run in `NativeService.buildResult`, written to the graph (`SemanticGraph.Codata`, `Layouts`, `FieldRanges`, `ElementRanges`, `Escaping`, `ValueRange` on the node) | Composer |
+| A change to the graph's node structure (flattening a curried chain, a Baker recipe) | `clef/src/Compiler/Nanopass/` or a saturation pass in `SemanticGraph/`; never after the graph leaves CCS | Composer |
+| The MLIR a node becomes: types, ops, dialect choice, the names of the values emitted | `Composer/src/MiddleEnd/Alex/` (TypeMapping, Elements, Patterns, Witnesses, Serialize) | CCS |
+| The name of a value emission emits | `Composer/src/MiddleEnd/Alex/Traversal/Values.fs`: a pure derivation from the node's identity, `V (node, k)`. No pass assigns names, no witness holds a counter, and no table of emission costs exists anywhere | CCS, and any Composer pass |
+| The declared platform: widths, representations, contracts, endpoints, boundary descriptors | The description (`Fidelity.Platform`, BAREWire vocabulary), read by `PlatformResolution.fs` and `PlatformDeclaration.fs` in CCS into `PlatformContext` and the graph | A table in either compiler |
+
+**The checks.** Composer has no folder named for the graph, and no file in `Composer/src` opens a namespace that computes over it. `grep -rn "V (" Composer/src --include=*.fs` finds constructions only in `Values.fs`. `TransferCoeffects` carries the target and the platform reads and nothing computed. A witness that needs a fact the graph does not carry stops with a message naming the fact; it does not compute it, and no one adds a pass in Composer to compute it. The fact is added to CCS.
+
+**Why it was missed.** The folder predated the wave and was documented as interim ("scheduled to move into CCS"). An interim layer with a plausible name is where drift accumulates: each changeset added to it because it was there. The lesson recorded here is that an interim placement is a violation with a schedule, and the schedule was never the agents' to extend.
+
 ## 0. The underscore
 
 **There is one integer kind, `int`, and one real kind, `float`, each with a dimension. A value is a
@@ -1535,3 +1555,167 @@ declaration and the compiler's reader is its check. The Contracts-form `Platform
 no `AtMost` and its endpoints stay unobservable, as ruled. The other 104 CCS8011 lines are
 ruling 3's and the arithmetic residual's. The x86_64 leaf's own `Bindings` are untouched: the
 C ABI row reads a descriptor only where Farscape's regeneration has placed one.
+
+## CS-12 step 5a, the alias, as built (2026-09-05)
+
+One implementer, one pass, ruling 5's first step: alias first, so swept and unswept code compose
+during the sweep. No spelling is deleted and no width-named type is added (D10); BAREWire and
+Fidelity.Platform are not edited, and what they write still compiles.
+
+**What a spelling now denotes.** `NativeTypes.fs`, `Types.sameCarrierIdentity`: two numeric
+carriers agree when they are the same kind, every integer kind the one integer kind `int` and every
+real kind the one real kind `float`, whatever width the spelling names; a non-numeric constructor
+agrees by name and module as before. `Unify.fs`, `unifyCarrier` and the pure `check`, read that one
+identity, so `uint32` unifies with `int` and with every other spelling and the carrier distinction
+is gone from unification (the carrierloop probe's CCS8003 between `int32` and `int` no longer
+exists). The per-width constructors stay defined and a spelled type still prints as written: the
+spelling is what the checker resolves the annotation to, and that is where its declaration lives.
+
+**The declaration the checker writes, and who reads it.** `Intrinsics.fs`, `RangeSources`:
+`Declaration = { Repr; Bits; Range }`, the shape the 1a reader produces for a wire field or a C
+parameter, and `declarationOfKind ctx kind`: for a width-named integer kind the platform
+description's representation of the spelling's name and its exact range, or, on a description that
+offers none, the spelling's own name and bits; `None` for the bare kind. `declaredRangeOfKind` is
+now that declaration's range. The annotated site carries the declaration in the type the annotation
+resolved to (the binding, the parameter, the record field, the return, the conversion target), and
+every read of the spelled representation comes through `declarationOfKind`: `RangeAnalysis.fs`
+`boundByCarrier` (the source range when the transfer is unobservable, at sources only, as ruled),
+`selectNode` and `selectedRepresentation` (the selected representation), `selectedWidth` (the held
+width; the `NTUWidth.Fixed` arm is gone), `declaredWidthOfKind` (new, the read Composer makes for a
+type with no node), and `Placement.fs` `carrierSlot`, which places a spelled field at its
+declaration's bits (its `Fixed bits` parameter is gone). `declaredKindOf`: a reference to a binding
+or a parameter reads its definition's declaration, since the declaration is the annotated site's
+and a reference is the value of its binding; under the alias the checker may type a reference by
+the context it unifies with, and the SSA derivation reads the definition; and the value stored at
+a spelled binding (the binding's last child, of the bare kind) takes the binding's declaration
+(§4.2: covered, the value takes the boundary's representation). Both rules are no-ops on every gate
+(at HEAD a reference or a stored value of another spelling was CCS8003, so the corpus never holds
+one) and neither yet clears the probe's stop below.
+
+**Coverage at a spelled site (§4.2).** `RangeAnalysis.fs` `spelledDiagnostics`: CCS8012 (Warning)
+at a value whose settled range leaves the representation its spelling declares, once per enclosing
+binding, naming the range, the declaration and the two remedies (bound the value, or write `int` and
+declare the representation at the boundary); CCS8014 (Info) at a binding or a parameter whose
+declared representation is wider than every value it holds needs, naming the representation the
+open selection would take. A reference is not a second finding; a conversion's image lies within
+its target by construction; an unobservable value stays CCS8011.
+
+**The new code and its switch.** `Expressions/Types.fs` `DiagnosticCodes.CCS8019_WidthSpellingAlias`
+(Warning), in the error-handling table as Warning: "the width-named spelling `uint32` is an interim
+alias of `int`; write `int` and declare the representation at the boundary (a descriptor, a schema
+field, a contract)", reported once per spelled site by `warnWidthSpellingAt` from the two
+type-position resolver arms (`resolveSynType`, a bare name and a name applied to a measure) and
+from `Identity.fs` for a conversion target; `addNativeWarningOnce` keeps a site the resolver reads
+twice at one report. The same code, not a sibling, once per width-suffixed literal from
+`Literals.fs` `warnSuffix` at the two constant sites (`NativeService.fs`, `Patterns.fs`), naming the
+suffix (`y`, `uy`, `s`, `us`, `u`, `L`, `UL`, `n`, `un`, `f`; a measured constant reports its inner
+constant's). The spellings warned are every row of `Types.numericSpellings` but `int`, `uint`,
+`float` and `double` (`Types.isWidthSpelling`; `single` is warned as `float32`'s alias). The
+promotion switch is Composer's `CLI/Output.fs` `interimWarnings`, the set `--warnaserror` does not
+promote, holding CCS8019 alone; step three of ruling 5 deletes the set with the alias, and a
+spelling is CCS8706, a suffix CCS8018.
+
+**Composer, the reads changed.** `MiddleEnd/Alex/CodeGeneration/TypeMapping.fs`,
+`mapNativeTypeForTarget`: a `TNum` of a width-named kind on a core maps to
+`RangeAnalysis.declaredWidthOfKind graph kind`, the declaration's bits, never the spelling's, a stop
+where the platform declares none; this is the read `SSAAssignment.captureSlotType` makes for a
+capture's type and every signature read through the graph makes. `nodeWidth` already read
+`RangeAnalysis.heldWidth`, which now reads the declaration. `mapNTUKindToMLIRType`, with no graph
+and no node, keeps a spelled literal's kind at the spelling's own bits, the value the declaration
+takes on a description offering no representation of that name; its comment says so, and it is
+owed to the promotion step. `CLI/Output.fs`: `interimWarnings` and `promoted`, above.
+
+**Gates.** Composer build clean. Layouts: `07_output.mlir` of RoundTrip captured before and after
+(`cs12-5a/rt-before.mlir`, `rt-after.mlir`, `layouts-before.json`, `layouts-after.json`,
+`layouts-diff.txt`): 147 function signatures, none changed, every wire-record signature
+(`Envelope`, `Encoder`, `Decoder`, `Cursor`, `Codec`, `Fmt`) identical; the memref multiset
+identical. RoundTrip: compile 0, run 0, transcript identical to expected.txt. Counts before/after:
+CCS8011 104/104 (the same 104 lines: Envelope 21, Decoder 18, Main 15, Validator 11, Encoder 10,
+Obligations 8, Fmt 7, Format.clef 5, Cursor 4, Description 3, Abi 1, Codec 1, ruling 3's cursor
+residual and the arithmetic cycles); CCS8003 1/1 (the unreachable `Syscalls.clef:190` tuple
+mismatch, unrelated); CCS8012 0/1, a genuine finding: `src/Encoding/Fmt.fs:31`, `ofInt64`, the result
+of `-` has range `[1, 9223372036854775808]` and leaves `int64` `[-2^63, 2^63 - 1]`, the negation of
+the minimum; CCS8014 2/20, the two Schema.fs descriptor witnesses of 1a plus 18 spelled bindings
+that hold less than their spelling declares (`Fmt.digit`, `Decoder.b0..b3`, `Envelope.correlation`,
+`Envelope.epoch`, `Description.capacity` ×2, `Check.baseValue`/`ab`/`bb`, `Obligations.a`/
+`spaceCapacity`/`b`, `Encoder.value`, `Fmt.v`/`x`); CCS8019 468, the spelled-site inventory:
+339 spellings (`byte` 123, `uint32` 69, `int64` 55, `uint64` 36, `nativeint` 15, `int32` 13,
+`uint16` 9, `int16` 8, `float32` 6, `sbyte` 5) and 129 suffixes (`L` 55, `uy` 44, `UL` 16, `u` 5,
+`us` 4, `s` 4, `n` 1); by file, Decoder 77, Encoder 71, Btf 49, Envelope 40, Obligations 39,
+Description 33, Fmt 22, View 18, Check 15, x86_64 `Description.clef` 15, `WebView.clef` 14,
+`Format.clef` 12. HelloProof: compile 0, prints "Enter your name: Hello, Houston!", Prover PASS with
+every verdict line identical to the CS-10 record; the `at 07:NNN` anchors read 110/113/34/38 as
+they did at step 1a (`cs12-1a/hp-prover.txt`), against 107/110/32/36 in the CS-10 record, a shift
+that landed with 1a and not here. HelloArty: compile 0, MLIR identical to the CS-10 record modulo
+`%v<digits>`. Harness `vet.sh --through 3`: every judged row identical and ok; three rows carry the
+new warning: `W-1/reject` (step 7, pending) is now `accept -; warn CCS8019` where it was `reject
+CCS8003`, the alias composing the spelled site it holds until step three makes it CCS8706 as its
+expectation says; `NS-4/accept` and `M-4/accept` show `warn CCS8019` beside an unchanged verdict
+and code. Drift gate clean.
+
+**The probe** (`probe/cs12-5a/alias`, the real x86_64 leaf and BAREWire): `let x: uint32 = 5u`
+passed to `let f (y: int) = y + 1` passes the checker and the range pass, no CCS8003; CCS8019 once
+for the spelling and once for the suffix at line 8; `x` is `[5, 5]` in the PSG (`05_psg2.json`, the
+Binding node's `valueRange`), and its selection is read, not stored (C3): `selectedWidth` reads
+`declarationOfKind` of the binding's `uint32`, the description's `uint32` at 32 bits (the
+`heldWidth` rule, no width in the PSG). `let big: uint32 = 2147483647 * 4 + 5` is CCS8012 at line 9
+naming `[8589934588, 8589934588]` (the `*` inside the binding, the first node of the binding in node
+order; `oncePerBinding` folds `big`'s own `[8589934593, 8589934593]` into it) against `uint32` (32
+bits, `[0, 4294967295]`); CCS8014 at `x`. Composer then stops in emission: `adaptOperand: the meet
+derived for node 27472's operand 27471 adapts TInt (IntWidth 32), but the operand arrives as TInt
+(IntWidth 8)`: the derivation holds the argument `x` at its binding's declaration (32) while the
+immutable binding forwards its value's SSA, the `5u` literal at i8; the binding-value rule above
+did not reach that literal (owed below). No gate compiles such a site; the alias's promise on the
+gates, that spelled and unspelled code compose, is kept where the corpus has it.
+
+**Owed.** The probe's stop: Composer's CPU leg must bring a bare value into a spelled binding at
+the binding's declaration (the derived meet at an immutable binding, or `declaredKindOf` reaching
+the value through the annotation node the checker wraps it in), and the same shape at a spelled
+return annotation over a bare body and a spelled record field constructed from a bare value; none
+of these exist in the gated corpus (each was CCS8003 at HEAD). The declaration rides on the type the
+annotation resolved to, so a value that inherits a
+spelled type through inference (an operator's result beside a spelled operand) is held at the
+spelling's representation as it was before this step; the promotion step deletes the spellings and
+with them this inheritance, and `mapNTUKindToMLIRType`'s graph-less arm. `uint` is neither warned
+nor deleted here (§2 retires it with the widths; it is not a width spelling). A pointer-width
+spelling (`nativeint`) now unifies with `int`; mixing one with a word integer in arithmetic reaches
+Composer's `index` mapping untested by any gate. CCS8014 at a spelled site is Info at the binding
+or the parameter only; an interior spelled value reports nothing. The CCS8012 at `Fmt.ofInt64` is
+BAREWire's to bound (the sweep). The `W-1/reject` row reads `accept` until step three.
+
+**Fixed by hand after the run (the owner's session, 2026-09-05).** The probe's stop (`adaptOperand:
+the meet derived for node N's operand adapts TInt (IntWidth 32), but the operand arrives as TInt
+(IntWidth 8)`) was a gap in the derivation table, not in the alias: `SSAAssignment.nodeMeets`
+derived a binding's meet only for a mutable cell, so an immutable binding held by a declaration
+(a spelled annotation, a descriptor) at a representation its value does not arrive at forwarded
+the value's SSA at the value's width. The `Binding` arm now derives the meet for every binding
+whose declared width differs from its value's (none where they agree), and `BindingWitness`'s
+immutable path brings the value through `adaptOperand` like the mutable path does. Re-gated on
+that binary: RoundTrip transcript identical, 104 CCS8011, 1 CCS8012, 468 CCS8019; HelloProof PASS;
+HelloArty identical modulo SSA names; the probe compiles and runs.
+
+## The PSGElaboration lift as built (2026-09-05)
+
+Composer's `src/MiddleEnd/PSGElaboration/` (fourteen files, 6,044 lines) is gone, and Composer builds and passes every gate without it. Each removed module, and where its content went:
+
+| Removed | Disposition |
+|---|---|
+| `CurryFlattening.fs` | `SemanticGraph/Curry.fs`: the chain flattening and the partial-application record, run at the end of saturation after placement (the order Composer kept), carried as `Codata.Curry` |
+| `EscapeAnalysis.fs` | `SemanticGraph/Escape.fs`: the four-point lifetime of every allocating site, `Codata.Escapes`; `EscapeKind` is a CCS type |
+| `PlatformBindingResolution.fs`, `PlatformConfig.fs` | `SemanticGraph/PlatformBindings.fs`: the runtime mode from the description's `RuntimeModel` (or its startup), every `Sys` and `[<FidelityExtern>]` call site resolved, the statically linked libraries; `Codata.Bindings`. The syscall arm names the operation and carries no number and no inline-asm string (the number is the description's; the freestanding leg's asm is owed). The instruction set and the declared widths are read by `MLIRGeneration.architectureOf` from the context |
+| `PlatformPinResolution.fs` | `PlatformBindings.pins`: the design's `[<Pin>]` attributes joined with the description's endpoints; `Codata.Pins`, read by the hardware module witness and the XDC writer |
+| The meet derivation table of `SSAAssignment.fs` | `SemanticGraph/Meets.fs`: every consumer's meets and every lambda's return meet, from the graph's own widths; `Codata.Meets`, `Codata.ReturnMeets`. A meet names no value |
+| The closure layout of `SSAAssignment.fs` and `Coeffects.fs` | `Placement.closures`: each capture's slot (an address, a handle, a decomposed string, a scalar at its held width), its offset, the prefix, the environment's bytes; `Codata.Closures`. Fabric places none |
+| The union arena rule of `SSAAssignment.fs` | `Placement.unionResidence` (the leg's current rule, `result` in the arena; a structural criterion is owed with the union's layout hyperedge); no Composer reader today |
+| The declaration-root lambdas of `SSAAssignment.fs` | `SemanticGraph/Roots.fs`; `Codata.DeclarationRootLambdas` |
+| The SSA numbering of `SSAAssignment.fs` (the expansion-cost table, the per-function counter, the aliasing) | Not ported. The cost table was a description of Alex's own emission and belongs in no pass. A value is named at emission from its node: `Values.value node k`, with disjoint families for meets, return meets, unit returns, closure prologues and hardware module bodies; a lambda parameter is its `Arg`, a pattern binding over a field read or an immutable non-slot binding aliases its value. `SSA` is `V of node * ordinal`, printed `%v<node>_<k>` |
+| `HardwareModuleLayout` derivation | `HardwareModulePatterns.deriveLayout`: the roles' values named from the binding, the counts from the Design's shapes the witness already holds |
+| `MutabilityAnalysis.fs`, `PatternBindingAnalysis.fs`, `StringCollection.fs`, `YieldStateIndices.fs` | Computed and never read by any witness (the seq machine reads `SeqSaturation` on the graph). Deleted |
+| `ProofObligations.fs` | Superseded by `Nanopass/ObligationElaboration.fs` before this; unreferenced. Deleted |
+| `CoeffectValidation.fs`, `PreprocessingSerializer.fs` | Unreferenced; debug output of the deleted layer. Deleted |
+
+`TransferCoeffects` is now `{ Platform: PlatformReads; TargetPlatform }`, where `PlatformReads` is the architecture read from the context and `Codata.Bindings`. MLIRGeneration's pass block is deleted; it reads `graph.Codata` and hands the witnesses the graph.
+
+**Gates (this session, the final binaries).** CCS build clean; Composer build clean. RoundTrip: compile 0, run 0, transcript identical to `expected.txt`; 104 CCS8011 information lines, 1 CCS8012 (`Fmt.ofInt64`, as before). HelloArty: compile 0, 0 CCS8011, Verilog and XDC generated, 25 ports verified, state registers `Counter` i30, `StepTick` i19, `Phase` i10, `PeriodMs` i12 (the CS-10 figures). HelloProof: compile 0, 0 CCS8011, prints `Enter your name: Hello, Houston!`, 23 obligations, 23 unsat. BAREWire 309 of 309. MLIR is not byte-identical to the previous capture and will not be again: value names changed form. The transcript gates stand in its place, and the settled layouts of BAREWire's wire records are unchanged (RoundTrip reads and writes them identically).
+
+**Owed.** The union residence criterion; the freestanding leg's syscall emission; a per-lambda check that a nested named function's captures arrive as parameters (the placement skips it as before). Harness `vet.sh --through 3`: exit 0, 30 of 49 rows match, 23 of 23 judged, every row identical to CS-11.

@@ -1958,6 +1958,27 @@ module Types =
         |> List.tryPick (fun (_, tc, _, representation) -> if tc.Name = carrier.Name then Some representation else None)
         |> Option.defaultValue (SealRepresentation.Named carrier.Name)
 
+    /// The one identity of numeric carriers (Dimensional_Range_Design.md §0, §2; CS-12 step 5a,
+    /// the alias, ruling 5): every integer kind is the one integer kind `int` and every real kind
+    /// the one real kind `float`, whatever width its spelling names; two carriers agree when they
+    /// are the same kind. The width a spelling names is not a type identity: it is the interim
+    /// declared boundary of the annotated node (`RangeSources.declarationOfKind`), read by
+    /// RangeAnalysis exactly as a descriptor's declaration. A non-numeric constructor agrees by
+    /// name and module as before. `Unify` is the reader.
+    let sameCarrierIdentity (tc1: TypeConRef) (tc2: TypeConRef) : bool =
+        let real k = NTUKind.isFloatingPoint k || NTUKind.isPosit k
+        match tc1.NTUKind, tc2.NTUKind with
+        | Some k1, Some k2 when NTUKind.isInteger k1 && NTUKind.isInteger k2 -> true
+        | Some k1, Some k2 when real k1 && real k2 -> true
+        | _ -> tc1.Name = tc2.Name && tc1.Module = tc2.Module
+
+    /// The width-named spellings the alias period keeps compiling (CS-12 ruling 5), CCS8019 at
+    /// every site that writes one: every spelling of the table but the bare kinds `int`, `uint`
+    /// and `float`, and `double`, which names no width.
+    let isWidthSpelling (name: string) : bool =
+        name <> "int" && name <> "uint" && name <> "float" && name <> "double"
+        && numericSpellings |> List.exists (fun (spelling, _, _, _) -> spelling = name)
+
     // Standard type values
     let intType = numType intTyCon
     let int8Type = numType int8TyCon

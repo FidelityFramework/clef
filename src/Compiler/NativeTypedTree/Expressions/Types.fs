@@ -144,6 +144,15 @@ module DiagnosticCodes =
     let CCS8014_RepresentationWiderThanRange = "CCS8014"
     // docs/fidelity/phg/Dimensional_Step1_2_Design.md (f); allocation rule in the Plan's D3.
     let CCS8018_UnsupportedLiteralSuffix = "CCS8018"
+    // CCS8019 (Warning): a width-named spelling (`uint32`, `byte`, `float32`, ...) in an
+    // annotation, a signature, a record field or a conversion, or a width suffix on a literal
+    // (`0L`, `5u`, `1.0f`, ...), during the alias period of CS-12 (Dimensional_Range_Design.md,
+    // ruling 5): the spelling denotes the one kind and the representation it names is the
+    // interim declared boundary of the site. The promotion switch: Composer's
+    // `Output.interimWarnings` keeps this code out of `--warnaserror` while the corpus carries the
+    // spellings; step three of ruling 5 deletes the alias and the switch, and a spelling is
+    // CCS8706, a suffix CCS8018.
+    let CCS8019_WidthSpellingAlias = "CCS8019"
 
     // CCS series, units of measure (CCS8040-CCS8050): design (f). CCS8040 and CCS8041 are minted
     // by the unifier when `solveDim` fails (CS-4); the rest by the measure environment and the
@@ -347,6 +356,36 @@ let addNativeWarning (code: string) (r: range) (message: string) (env: TypeEnv) 
         RelatedNodes = []
         Reachability = ReachabilityContext.Unknown
     } env
+
+/// A warning reported once per site: a site the checker reads twice (an annotation collected for
+/// generalisation and read again at its pattern) carries one diagnostic.
+let addNativeWarningOnce (code: string) (sr: SourceRange) (message: string) (env: TypeEnv) : unit =
+    let already = !(env.Diagnostics) |> List.exists (fun d -> d.Code = code && d.Range = sr)
+    if not already then
+        addDiagnostic {
+            Severity = NativeDiagnosticSeverity.Warning
+            Code = code
+            Message = message
+            Range = sr
+            RelatedNodes = []
+            Reachability = ReachabilityContext.Unknown
+        } env
+
+/// CCS8019 once per spelled site (CS-12 step 5a, the alias): the width-named spelling read at
+/// `sr` denotes the one kind (`int`, or `float` for a real spelling); the representation it names
+/// is the interim declared boundary of the annotated node, read by RangeAnalysis through
+/// `RangeSources.declarationOfKind`. The bare kinds report nothing.
+let warnWidthSpellingAt (name: string) (sr: SourceRange) (env: TypeEnv) : unit =
+    if NativeTypes.Types.isWidthSpelling name then
+        let bare =
+            match NativeTypes.Types.tryNumericTyConOfName name |> Option.bind (fun tc -> tc.NTUKind) with
+            | Some k when NativeTypes.NTUKind.isInteger k -> "int"
+            | _ -> "float"
+        addNativeWarningOnce DiagnosticCodes.CCS8019_WidthSpellingAlias sr
+            (sprintf "the width-named spelling `%s` is an interim alias of `%s`; write `%s` and declare the representation at the boundary (a descriptor, a schema field, a contract)" name bare bare) env
+
+let warnWidthSpelling (name: string) (r: range) (env: TypeEnv) : unit =
+    warnWidthSpellingAt name (rangeToSourceRange r) env
 
 
 //-------------------------------------------------------------------------
@@ -1378,7 +1417,9 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
         let path = idents |> List.map (fun id -> id.idText)
         let name = String.concat "." path
         match resolveTypeName name env with
-        | Some ty -> ty
+        | Some ty ->
+            warnWidthSpelling name synType.Range env
+            ty
         | None ->
             // A measure name where a type is required is a sort mismatch (design a.4, CCS8045),
             // never an unknown type; anything else is the unknown-type error as before.
@@ -1395,7 +1436,9 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
             // A numeric carrier or a measure-parameterised constructor reads its arguments in
             // their own sorts, before any built-in constructor is tried, so that no measure
             // argument is ever read as a type.
-            | Some (NativeType.TNum _ as head) -> apply head typeArgs r
+            | Some (NativeType.TNum _ as head) ->
+                warnWidthSpelling name r env
+                apply head typeArgs r
             | Some (NativeType.TApp(tyCon, _) as head) when hasMeasureParameter tyCon -> apply head typeArgs r
             | resolved ->
                 let argTys = typeArgs |> List.map (resolveSynType env)

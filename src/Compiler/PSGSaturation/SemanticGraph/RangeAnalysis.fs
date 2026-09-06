@@ -1418,15 +1418,29 @@ let private selectRange (ctx: PlatformContext) (range: ValueRange) : Selection =
             | Some r -> { Representation = Some r; Covered = false }
             | None -> { Representation = None; Covered = false }
 
-/// The selection for a node: a width-named carrier selects its own representation (interim, CS-12
-/// deletes the spellings); the bare kind selects by its range.
-let private selectNode (ctx: PlatformContext) (node: SemanticNode) (range: ValueRange) : Selection =
-    match Types.tryGetNTUKind node.Type |> Option.bind (RangeSources.representationOfKind ctx) with
-    | Some r -> { Representation = Some r; Covered = true }
-    | None ->
-        match Types.tryGetNTUKind node.Type |> Option.bind (RangeSources.declaredRangeOfKind (Some ctx)) with
-        | Some _ -> { Representation = None; Covered = true }   // a width-named carrier the context does not offer: its own bits
-        | None -> selectRange ctx range
+/// The kind a node's declaration is read from (CS-12 step 5a): its own type's, except that a
+/// reference to a binding or a parameter reads its definition's, since the declaration is the
+/// annotated site's and a reference is the value of its binding; under the alias the checker
+/// may type the reference by the context it unifies with, and the derivation (the SSA meet)
+/// reads the definition. A value stored at a spelled binding keeps its own kind: the binding's
+/// meet (SSAAssignment) brings it to the binding's representation, so a value and its binding
+/// never claim the same width by fiat.
+let private declaredKindOf (nodes: Map<NodeId, SemanticNode>) (node: SemanticNode) : NTUKind option =
+    match node.Kind with
+    | SemanticKind.VarRef (_, Some defId) ->
+        match Map.tryFind defId nodes with
+        | Some def when isIntegerNode def -> Types.tryGetNTUKind def.Type
+        | _ -> Types.tryGetNTUKind node.Type
+    | _ -> Types.tryGetNTUKind node.Type
+
+/// The selection for a node: a spelled site selects the representation its declaration names
+/// (`RangeSources.declarationOfKind`, the interim declared boundary of CS-12 step 5a; its
+/// coverage is `spelledDiagnostics`, CCS8012); the bare kind selects by its range.
+let private selectNode (ctx: PlatformContext) (nodes: Map<NodeId, SemanticNode>) (node: SemanticNode) (range: ValueRange) : Selection =
+    match declaredKindOf nodes node with
+    | Some kind when (RangeSources.declarationOfKind (Some ctx) kind).IsSome ->
+        { Representation = RangeSources.representationOfKind ctx kind; Covered = true }
+    | _ -> selectRange ctx range
 
 //-------------------------------------------------------------------------
 // The value-call boundary (Dimensional_Range_Design.md, ruling 1; §4.1 second row; CS-11 slice 1)
@@ -1682,7 +1696,7 @@ let private coverageDiagnostics (program: Program) (state: State) : Diagnostic l
         let uncovered (node: SemanticNode) =
             match Map.tryFind node.Id state with
             | Some r when ValueRange.isObservable r ->
-                let s = selectNode ctx node r
+                let s = selectNode ctx program.Reachable node r
                 if s.Covered then None else s.Representation |> Option.map (fun rep -> (r, rep))
             | _ -> None
         let reported =
@@ -1831,6 +1845,63 @@ let private declaredDiagnostics (program: Program) (state: State) : Diagnostic l
         fields @ parameters
     | _ -> []
 
+/// CCS8012 and CCS8014 at a spelled site (CS-12 step 5a; ruling 5: during the alias period a
+/// width-named spelling is an interim declared boundary of the same shape as a descriptor's,
+/// `RangeSources.declarationOfKind`): a value whose settled range leaves the representation its
+/// spelling declares is CCS8012 at the value, once per enclosing binding, naming the range, the
+/// declaration and the two remedies; a binding or a parameter whose declared representation is
+/// wider than every value it holds needs is CCS8014 information at the declaration. An
+/// unobservable value stays CCS8011; a conversion's image lies within its target by construction.
+let private spelledDiagnostics (program: Program) (state: State) : Diagnostic list =
+    match program.Context with
+    | Some ctx when not program.Fabric ->
+        // a reference is its binding's value: the binding's finding is the finding
+        let declarationOf (node: SemanticNode) =
+            match node.Kind with
+            | SemanticKind.VarRef (_, Some _) -> None
+            | _ when isIntegerNode node -> Types.tryGetNTUKind node.Type |> Option.bind (RangeSources.declarationOfKind (Some ctx))
+            | _ -> None
+        let leaving =
+            program.Ordered
+            |> List.choose (fun node ->
+                match declarationOf node, Map.tryFind node.Id state with
+                | Some d, Some r when ValueRange.isObservable r && not (ValueRange.contains d.Range r) -> Some (node, (d, r))
+                | _ -> None)
+        let byNode = leaving |> List.map (fun (n, f) -> n.Id, f) |> Map.ofList
+        let uncovered =
+            oncePerBinding program (leaving |> List.map fst) (fun node name where ->
+                let (d, r) = Map.find node.Id byNode
+                { Severity = NativeDiagnosticSeverity.Warning
+                  Code = DiagnosticCodes.CCS8012_RangeNotCovered
+                  Message =
+                    sprintf "The range %s of '%s'%s is not covered by '%s' (%d bits, %s), the representation its width-named spelling declares; bound the value with a comparison, a modulus or a clamp, or write `int` and declare the representation at the boundary"
+                        (ValueRange.render r) name where d.Repr d.Bits (ValueRange.render d.Range)
+                  Range = node.Range
+                  RelatedNodes = [ node.Id ]
+                  Reachability = ReachabilityContext.Reachable })
+        let wider =
+            program.Ordered
+            |> List.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.Binding _ | SemanticKind.PatternBinding _ ->
+                    match declarationOf node, Map.tryFind node.Id state with
+                    | Some d, Some r when ValueRange.isObservable r && r <> ValueRange.Empty && ValueRange.contains d.Range r ->
+                        match (selectRange ctx r).Representation with
+                        | Some rep when rep.Bits < d.Bits ->
+                            Some { Severity = NativeDiagnosticSeverity.Info
+                                   Code = DiagnosticCodes.CCS8014_RepresentationWiderThanRange
+                                   Message =
+                                    sprintf "'%s' is declared '%s' (%d bits, %s) by its width-named spelling; every value it holds lies within %s, which '%s' (%d bits) holds; write `int` and declare the representation at the boundary"
+                                        (spelling program node |> Option.defaultValue "the value") d.Repr d.Bits (ValueRange.render d.Range) (ValueRange.render r) rep.Name rep.Bits
+                                   Range = node.Range
+                                   RelatedNodes = [ node.Id ]
+                                   Reachability = ReachabilityContext.Reachable }
+                        | _ -> None
+                    | _ -> None
+                | _ -> None)
+        uncovered @ wider
+    | _ -> []
+
 //-------------------------------------------------------------------------
 // Entry
 //-------------------------------------------------------------------------
@@ -1887,7 +1958,7 @@ let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph
         |> Set.toList
         |> List.choose (fun key -> typeOfKey key |> Option.map (fun elem -> key, elementRange program state elem))
         |> Map.ofList
-    let diagnostics = unobservableDiagnostics program state @ coverageDiagnostics program state @ boundaryDiagnostics program state @ declaredDiagnostics program state
+    let diagnostics = unobservableDiagnostics program state @ coverageDiagnostics program state @ boundaryDiagnostics program state @ declaredDiagnostics program state @ spelledDiagnostics program state
     ({ graph with Nodes = nodes; FieldRanges = lazy fieldRanges; ElementRanges = lazy elementRanges; Escaping = lazy program.EscapingLambdas }, diagnostics)
 
 //-------------------------------------------------------------------------
@@ -1992,7 +2063,7 @@ let selectedRepresentation (graph: SemanticGraph) (nodeId: NodeId) : NumericRepr
     | Some ctx, Some node when isIntegerNode node && selectsFromDeclared ctx ->
         match node.ValueRange, boundaryOfNode graph node with
         | Some r, Some _ -> registerRepresentation ctx r
-        | Some r, None -> (selectNode ctx node r).Representation
+        | Some r, None -> (selectNode ctx graph.Nodes node r).Representation
         | None, _ -> None
     | _ -> None
 
@@ -2042,14 +2113,18 @@ let selectedWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
         match boundaryOfNode graph node with
         | Some _ -> registerWidth ctx
         | None ->
-            match Types.tryGetNTUKind node.Type |> Option.bind (RangeSources.representationOfKind ctx) with
-            | Some r -> Some r.Bits
-            | None ->
-                match Types.tryGetNTUKind node.Type with
-                | Some (NTUKind.NTUint (NTUWidth.Fixed bits)) | Some (NTUKind.NTUuint (NTUWidth.Fixed bits)) -> Some bits
-                | _ -> node.ValueRange |> Option.bind (selectedWidthOf graph)
+            // a spelled site is held at the representation its declaration names (CS-12 step 5a)
+            match declaredKindOf graph.Nodes node |> Option.bind (RangeSources.declarationOfKind (Some ctx)) with
+            | Some d -> Some d.Bits
+            | None -> node.ValueRange |> Option.bind (selectedWidthOf graph)
     | _, Some node -> node.ValueRange |> Option.bind (selectedWidthOf graph)
     | _ -> None
+
+/// The bits a spelled kind's declaration names on the graph's platform (CS-12 step 5a): the read
+/// Composer's type mapping makes for a value of a width-named spelling where no node is at hand
+/// (a signature, a capture's type); None for the bare kind, whose width is the node's selection.
+let declaredWidthOfKind (graph: SemanticGraph) (kind: NTUKind) : int option =
+    RangeSources.declarationOfKind graph.Platform kind |> Option.map (fun d -> d.Bits)
 
 /// The width a node's value is held at: `selectedWidth`, or, for an unobservable range on a core,
 /// the interim word of `heldWidthOf`. The read Composer's CPU leg makes for every integer node;
