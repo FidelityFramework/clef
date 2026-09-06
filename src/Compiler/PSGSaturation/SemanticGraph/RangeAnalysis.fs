@@ -61,8 +61,17 @@ type private Relation =
     | Eq
     | Ne
 
+/// What a bound is read from: one node's range, or the difference or sum of two nodes' ranges,
+/// the one-level backward refinement through `-` and `+` of §1.2a (ruling 3: `count <= length -
+/// offset` bounds `offset` by `length - count`).
+[<RequireQualifiedAccess>]
+type private Bound =
+    | Of of NodeId
+    | Diff of NodeId * NodeId
+    | Sum of NodeId * NodeId
+
 /// A bound in force on a read: the value read stands in `Relation` to `Bound`'s range.
-type private Refinement = { Bound: NodeId; Relation: Relation }
+type private Refinement = { Bound: Bound; Relation: Relation }
 
 /// What a guard compares: a binding (through any reference to it) or one particular node (an
 /// expression Baker's recipes share between the guard and a branch, `min hi (max lo x)`).
@@ -465,14 +474,66 @@ let rec private atoms (program: Program) (depth: int) (guardId: NodeId) (polarit
                 | None -> []
                 | Some relation ->
                     let relation = if polarity then relation else complement relation
+                    let ofDefinition (side: NodeId) (bound: Bound) (r: Relation) =
+                        match Map.tryFind side program.Reachable with
+                        | Some { Kind = SemanticKind.VarRef (_, Some defId) } when isImmutableDefinition program defId || isMutableDefinition program defId ->
+                            [ (Compared.Definition defId, { Bound = bound; Relation = r }) ]
+                        | _ -> []
                     let ofSide (side: NodeId) (other: NodeId) (r: Relation) =
                         match Map.tryFind side program.Reachable with
                         | Some { Kind = SemanticKind.VarRef (_, Some defId) } when isImmutableDefinition program defId || isMutableDefinition program defId ->
-                            [ (Compared.Definition defId, { Bound = other; Relation = r }) ]
+                            [ (Compared.Definition defId, { Bound = Bound.Of other; Relation = r }) ]
                         | Some { Kind = SemanticKind.Literal _ } -> []
-                        | Some _ -> [ (Compared.Node side, { Bound = other; Relation = r }) ]
+                        | Some { Kind = SemanticKind.Application (f, [ a; b ]) } ->
+                            // one level back through `-` and `+` (§1.2a): `a - b r K` gives `a r K + b`
+                            // and `b (flip r) a - K`; `a + b r K` gives `a r K - b` and `b r K - a`
+                            let pushed =
+                                match intrinsicOf program f with
+                                | Some { Module = IntrinsicModule.Operators; Operation = "op_Subtraction" } ->
+                                    ofDefinition a (Bound.Sum (other, b)) r @ ofDefinition b (Bound.Diff (a, other)) (flip r)
+                                | Some { Module = IntrinsicModule.Operators; Operation = "op_Addition" } ->
+                                    ofDefinition a (Bound.Diff (other, b)) r @ ofDefinition b (Bound.Diff (other, a)) r
+                                | _ -> []
+                            (Compared.Node side, { Bound = Bound.Of other; Relation = r }) :: pushed
+                        | Some _ -> [ (Compared.Node side, { Bound = Bound.Of other; Relation = r }) ]
                         | None -> []
                     ofSide x y relation @ ofSide y x (flip relation)
+            | None, _ ->
+                // A call of a boolean function whose body is comparison atoms over its parameters
+                // (`Cursor.fits data offset count`, ruling 3): the body's atoms, with each parameter
+                // read as the argument the call supplies. A bound stays the callee's own node, whose
+                // range is the join over every call and so contains this call's, which is sound; a
+                // literal argument learns nothing; the callee's own interior nodes are not at the
+                // call site and are dropped, as is a bound on a mutable the callee reads but does not
+                // own.
+                match Map.tryFind guardId program.Callees with
+                | Some (Callee.Direct (parameters, body), allArgs) ->
+                    let argOf = parameters |> List.mapi (fun i (_, _, id) -> id, List.tryItem i allArgs) |> Map.ofList
+                    // a bound that reads a parameter reads this call's argument instead: the
+                    // argument's range is exactly the parameter's value here, where the parameter
+                    // node's is the join over every call
+                    let substitute (id: NodeId) =
+                        match Map.tryFind id program.Reachable with
+                        | Some { Kind = SemanticKind.VarRef (_, Some p) } when Map.containsKey p argOf -> Map.find p argOf |> Option.defaultValue id
+                        | _ -> id
+                    let substituteBound (bound: Bound) =
+                        match bound with
+                        | Bound.Of a -> Bound.Of (substitute a)
+                        | Bound.Diff (a, c) -> Bound.Diff (substitute a, substitute c)
+                        | Bound.Sum (a, c) -> Bound.Sum (substitute a, substitute c)
+                    atoms program (depth + 1) body polarity
+                    |> List.map (fun (compared, refinement) -> compared, { refinement with Bound = substituteBound refinement.Bound })
+                    |> List.choose (fun (compared, refinement) ->
+                        match compared with
+                        | Compared.Definition d when Map.containsKey d argOf ->
+                            match Map.find d argOf |> Option.bind (fun argId -> Map.tryFind argId program.Reachable) with
+                            | Some { Kind = SemanticKind.VarRef (_, Some defId) } when isImmutableDefinition program defId || isMutableDefinition program defId ->
+                                Some (Compared.Definition defId, refinement)
+                            | Some { Kind = SemanticKind.Literal _ } | None -> None
+                            | Some arg -> Some (Compared.Node arg.Id, refinement)
+                        | Compared.Definition d when isImmutableDefinition program d -> Some (compared, refinement)
+                        | _ -> None)
+                | _ -> []
             | _ -> []
         | Some { Kind = SemanticKind.IfThenElse (g, t, Some e) } ->
             // `g && t` is `if g then t else false`; `g || e` is `if g then true else e`
@@ -489,6 +550,11 @@ let rec private atoms (program: Program) (depth: int) (guardId: NodeId) (polarit
                 | None -> []
             | _ -> []
         | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> atoms program (depth + 1) inner polarity
+        | Some { Kind = SemanticKind.Sequential ids } ->
+            // a block's value is its last expression; its bounds hold once the block has run
+            match List.tryLast ids with
+            | Some last -> atoms program (depth + 1) last polarity
+            | None -> []
         | _ -> []
 
 /// The descendants of a node through its children, the node included.
@@ -1033,9 +1099,16 @@ type private State = Map<NodeId, ValueRange>
 let private current (state: State) (id: NodeId) : ValueRange =
     Map.tryFind id state |> Option.defaultValue ValueRange.Empty
 
+/// The range a bound reads: one node's, or the interval difference or sum of two nodes'.
+let private currentBound (state: State) (bound: Bound) : ValueRange =
+    match bound with
+    | Bound.Of id -> current state id
+    | Bound.Diff (a, b) -> ValueRange.sub (current state a) (current state b)
+    | Bound.Sum (a, b) -> ValueRange.add (current state a) (current state b)
+
 /// A range met with every bound of a use edge.
 let private refineBy (state: State) (refs: Refinement list) (r: ValueRange) : ValueRange =
-    refs |> List.fold (fun acc x -> refine acc x.Relation (current state x.Bound)) r
+    refs |> List.fold (fun acc x -> refine acc x.Relation (currentBound state x.Bound)) r
 
 /// What `consumer` reads of `operand`: the operand's range met with the bounds in force on that
 /// use edge (a read inside a guarded branch).
