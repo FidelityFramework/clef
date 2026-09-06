@@ -108,8 +108,3 @@ From the as-builts, still open: a per-construction tuple fact on the graph (the 
 
 **Owed.** <What this changeset leaves open, and to which step.>
 ```
-
-## 10. A separate, mechanical task for a limited agent
-
-`Opus_Extension_Sweep.md` renames the compiler sources from `.fs` to `.clef` and re-runs every gate. It is not part of the wave and touches no content. It is gated on one owner decision it cannot make: the stock F# compiler refuses the `.clef` extension (FS0226), and the brief's §0 must name the build mechanism that admits it before the agent may pass its probe.
-
