@@ -1,7 +1,7 @@
 ﻿// Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 %{
-open FSharp.Native.Compiler.DiagnosticsLogger
+open Clef.Compiler.DiagnosticsLogger
 
 #nowarn "3261"  // the generated code would need to properly annotate nulls, e.g. changing System.Object to `obj|null`
 

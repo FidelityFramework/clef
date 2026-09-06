@@ -224,7 +224,7 @@ let evalFloat args lexbuf =
         fail args lexbuf (FSComp.SR.lexInvalidFloat()) 0.0f
 
 
-# 227 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 227 "net10.0/lex.fs"
 let trans : uint16[] array = 
     [| 
     (* State 0 *)
@@ -1945,37 +1945,37 @@ and token (args: LexArgs) (skip: bool) lexbuf =
   | 0 -> ( 
 # 340 "lex.fsl"
                       Keywords.KeywordOrIdentifierToken args lexbuf (lexeme lexbuf) 
-# 1948 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 1948 "net10.0/lex.fs"
           )
   | 1 -> ( 
 # 343 "lex.fsl"
                       DO_BANG 
-# 1953 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 1953 "net10.0/lex.fs"
           )
   | 2 -> ( 
 # 346 "lex.fsl"
                       YIELD_BANG(true)  
-# 1958 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 1958 "net10.0/lex.fs"
           )
   | 3 -> ( 
 # 349 "lex.fsl"
                       YIELD_BANG(false) 
-# 1963 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 1963 "net10.0/lex.fs"
           )
   | 4 -> ( 
 # 352 "lex.fsl"
                       MATCH_BANG 
-# 1968 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 1968 "net10.0/lex.fs"
           )
   | 5 -> ( 
 # 355 "lex.fsl"
                       AND_BANG(false) 
-# 1973 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 1973 "net10.0/lex.fs"
           )
   | 6 -> ( 
 # 358 "lex.fsl"
                       WHILE_BANG 
-# 1978 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 1978 "net10.0/lex.fs"
           )
   | 7 -> ( 
 # 361 "lex.fsl"
@@ -1983,12 +1983,12 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       match tok with
                       | LET _ -> BINDER (lexemeTrimRight lexbuf 1)
                       | _ -> fail args lexbuf (FSComp.SR.lexIdentEndInMarkReserved("!")) (Keywords.KeywordOrIdentifierToken args lexbuf (lexeme lexbuf)) 
-# 1986 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 1986 "net10.0/lex.fs"
           )
   | 8 -> ( 
 # 367 "lex.fsl"
                       fail args lexbuf (FSComp.SR.lexIdentEndInMarkReserved("#")) (Keywords.KeywordOrIdentifierToken args lexbuf (lexeme lexbuf)) 
-# 1991 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 1991 "net10.0/lex.fs"
           )
   | 9 -> ( 
 # 370 "lex.fsl"
@@ -1997,21 +1997,21 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       if Ranges.isInt8BadMax n then INT8(SByte.MinValue, true (* 'true' = 'bad'*) )
                       else if n > int SByte.MaxValue || n < int SByte.MinValue then fail args lexbuf (FSComp.SR.lexOutsideEightBitSigned()) (INT8(0y, false))
                       else INT8(sbyte n, false)  
-# 2000 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2000 "net10.0/lex.fs"
           )
   | 10 -> ( 
 # 377 "lex.fsl"
                       let n = lexemeTrimRightToInt32 args lexbuf 1
                       if n > int Byte.MaxValue || n < 0 then fail args lexbuf (FSComp.SR.lexOutsideEightBitSignedHex()) (INT8(0y, false))
                       else INT8(sbyte(byte(n)), false) 
-# 2007 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2007 "net10.0/lex.fs"
           )
   | 11 -> ( 
 # 382 "lex.fsl"
                       let n = lexemeTrimRightToInt32 args lexbuf 2
                       if n > int Byte.MaxValue || n < 0 then fail args lexbuf (FSComp.SR.lexOutsideEightBitUnsigned()) (UINT8(0uy))
                       else UINT8(byte n)  
-# 2014 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2014 "net10.0/lex.fs"
           )
   | 12 -> ( 
 # 387 "lex.fsl"
@@ -2020,21 +2020,21 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       if Ranges.isInt16BadMax n then INT16(Int16.MinValue, true (* 'true' = 'bad'*) )
                       else if n > int Int16.MaxValue || n < int Int16.MinValue then fail args lexbuf (FSComp.SR.lexOutsideSixteenBitSigned()) (INT16(0s, false))
                       else INT16(int16 n, false)  
-# 2023 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2023 "net10.0/lex.fs"
           )
   | 13 -> ( 
 # 394 "lex.fsl"
                       let n = lexemeTrimRightToInt32 args lexbuf 1
                       if n > int UInt16.MaxValue || n < 0 then fail args lexbuf (FSComp.SR.lexOutsideSixteenBitSigned()) (INT16(0s,false))
                       else INT16(int16(uint16(n)), false) 
-# 2030 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2030 "net10.0/lex.fs"
           )
   | 14 -> ( 
 # 399 "lex.fsl"
                       let n = lexemeTrimRightToInt32 args lexbuf 2
                       if n > int UInt16.MaxValue || n < 0 then fail args lexbuf (FSComp.SR.lexOutsideSixteenBitUnsigned()) (UINT16(0us))
                       else UINT16(uint16 n) 
-# 2037 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2037 "net10.0/lex.fs"
           )
   | 15 -> ( 
 # 404 "lex.fsl"
@@ -2044,7 +2044,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       let n = try int32 s with _ ->  fail args lexbuf (FSComp.SR.lexOutsideThirtyTwoBitSigned()) 0
                       INT32_DOT_DOT(n, false)
                     
-# 2047 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2047 "net10.0/lex.fs"
           )
   | 16 -> ( 
 # 413 "lex.fsl"
@@ -2055,7 +2055,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           try int32 s with _ ->  fail args lexbuf (FSComp.SR.lexOutsideThirtyTwoBitSigned()) 0
                       INT32(n, false)
                     
-# 2058 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2058 "net10.0/lex.fs"
           )
   | 17 -> ( 
 # 423 "lex.fsl"
@@ -2066,7 +2066,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           try int32 s with _ ->  fail args lexbuf (FSComp.SR.lexOutsideThirtyTwoBitSigned()) 0
                       INT32(n, false)
                     
-# 2069 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2069 "net10.0/lex.fs"
           )
   | 18 -> ( 
 # 432 "lex.fsl"
@@ -2076,7 +2076,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           try int64 s with _ ->  fail args lexbuf (FSComp.SR.lexOutsideThirtyTwoBitUnsigned()) 0L
                       if n > int64 UInt32.MaxValue || n < 0L then fail args lexbuf (FSComp.SR.lexOutsideThirtyTwoBitUnsigned()) (UINT32(0u)) else
                       UINT32(uint32 (uint64 n)) 
-# 2079 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2079 "net10.0/lex.fs"
           )
   | 19 -> ( 
 # 440 "lex.fsl"
@@ -2086,7 +2086,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           try int64 s with _ ->  fail args lexbuf (FSComp.SR.lexOutsideThirtyTwoBitUnsigned()) 0L
                       if n > int64 UInt32.MaxValue || n < 0L then fail args lexbuf (FSComp.SR.lexOutsideThirtyTwoBitUnsigned()) (UINT32(0u)) else
                       UINT32(uint32 (uint64 n)) 
-# 2089 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2089 "net10.0/lex.fs"
           )
   | 20 -> ( 
 # 448 "lex.fsl"
@@ -2097,7 +2097,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           try int64 s with _ ->  fail args lexbuf (FSComp.SR.lexOutsideSixtyFourBitSigned()) 0L
                       INT64(n,false)
                     
-# 2100 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2100 "net10.0/lex.fs"
           )
   | 21 -> ( 
 # 457 "lex.fsl"
@@ -2105,7 +2105,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       let n =
                         try uint64 s with _ -> fail args lexbuf (FSComp.SR.lexOutsideSixtyFourBitUnsigned()) 0UL
                       UINT64(n) 
-# 2108 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2108 "net10.0/lex.fs"
           )
   | 22 -> ( 
 # 463 "lex.fsl"
@@ -2116,19 +2116,19 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           try int64 s with _ ->  fail args lexbuf (FSComp.SR.lexOutsideNativeSigned()) 0L
                       NATIVEINT(n,false)
                     
-# 2119 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2119 "net10.0/lex.fs"
           )
   | 23 -> ( 
 # 472 "lex.fsl"
                       try
                           UNATIVEINT(uint64 (removeUnderscores (lexemeTrimRight lexbuf 2)))
                       with _ ->  fail args lexbuf (FSComp.SR.lexOutsideNativeUnsigned())  (UNATIVEINT(0UL)) 
-# 2126 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2126 "net10.0/lex.fs"
           )
   | 24 -> ( 
 # 477 "lex.fsl"
                       IEEE32 (evalFloat args lexbuf) 
-# 2131 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2131 "net10.0/lex.fs"
           )
   | 25 -> ( 
 # 480 "lex.fsl"
@@ -2137,12 +2137,12 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       else
                          fail args lexbuf (FSComp.SR.lexInvalidFloat()) (IEEE32 0.0f)
                     
-# 2140 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2140 "net10.0/lex.fs"
           )
   | 26 -> ( 
 # 487 "lex.fsl"
                       IEEE64 (try float(lexeme lexbuf) with _ -> fail args lexbuf (FSComp.SR.lexInvalidFloat()) 0.0) 
-# 2145 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2145 "net10.0/lex.fs"
           )
   | 27 -> ( 
 # 490 "lex.fsl"
@@ -2154,7 +2154,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       with
                          e -> fail args lexbuf (FSComp.SR.lexOutsideDecimal()) (DECIMAL (decimal 0))
                     
-# 2157 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2157 "net10.0/lex.fs"
           )
   | 28 -> ( 
 # 499 "lex.fsl"
@@ -2164,31 +2164,31 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       let n64 = (try (int64 s) with _ -> fail args lexbuf (FSComp.SR.lexInvalidFloat()) 0L)
                       if n64 > 0xFFFFFFFFL || n64 < 0L then fail args lexbuf (FSComp.SR.lexOutsideThirtyTwoBitFloat()) (IEEE32 0.0f) else
                       IEEE32 (System.BitConverter.ToSingle(System.BitConverter.GetBytes(int32 (uint32 (uint64 n64))),0)) 
-# 2167 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2167 "net10.0/lex.fs"
           )
   | 29 -> ( 
 # 507 "lex.fsl"
                      
                       let n64 = (try int64 (removeUnderscores (lexemeTrimRight lexbuf 2)) with _ -> fail args lexbuf (FSComp.SR.lexInvalidFloat()) 0L)
                       IEEE64 (System.BitConverter.Int64BitsToDouble(n64)) 
-# 2174 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2174 "net10.0/lex.fs"
           )
   | 30 -> ( 
 # 512 "lex.fsl"
                         let s = lexeme lexbuf
                         BIGNUM (removeUnderscores (lexemeTrimRight lexbuf 1), s.[s.Length-1..s.Length-1]) 
-# 2180 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2180 "net10.0/lex.fs"
           )
   | 31 -> ( 
 # 516 "lex.fsl"
                         fail args lexbuf (FSComp.SR.lexInvalidNumericLiteral()) (INT32(0,false)) 
-# 2185 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2185 "net10.0/lex.fs"
           )
   | 32 -> ( 
 # 519 "lex.fsl"
                       let s = lexeme lexbuf
                       CHAR (if s.[1] = '\\' then escape s.[2] else s.[1])  
-# 2191 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2191 "net10.0/lex.fs"
           )
   | 33 -> ( 
 # 523 "lex.fsl"
@@ -2198,7 +2198,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           fail args lexbuf (FSComp.SR.lexInvalidAsciiByteLiteral()) (UINT8(byte 0))
                       else
                           UINT8 (byte(x))  
-# 2201 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2201 "net10.0/lex.fs"
           )
   | 34 -> ( 
 # 531 "lex.fsl"
@@ -2209,7 +2209,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           fail args lexbuf (FSComp.SR.lexInvalidCharLiteral()) (CHAR c)
                       else
                           CHAR c 
-# 2212 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2212 "net10.0/lex.fs"
           )
   | 35 -> ( 
 # 540 "lex.fsl"
@@ -2226,12 +2226,12 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           UINT8 (byte(x))
                       else
                           UINT8 (byte(x))  
-# 2229 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2229 "net10.0/lex.fs"
           )
   | 36 -> ( 
 # 554 "lex.fsl"
                                                 CHAR (char (int32 (unicodeGraphShort (lexemeTrimBoth lexbuf 3 1)))) 
-# 2234 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2234 "net10.0/lex.fs"
           )
   | 37 -> ( 
 # 557 "lex.fsl"
@@ -2240,12 +2240,12 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           fail args lexbuf (FSComp.SR.lexInvalidAsciiByteLiteral()) (UINT8(byte 0))
                       else
                           UINT8 (byte(x))  
-# 2243 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2243 "net10.0/lex.fs"
           )
   | 38 -> ( 
 # 563 "lex.fsl"
                                             CHAR (char (int32 (hexGraphShort (lexemeTrimBoth lexbuf 3 1)))) 
-# 2248 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2248 "net10.0/lex.fs"
           )
   | 39 -> ( 
 # 566 "lex.fsl"
@@ -2254,14 +2254,14 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           fail args lexbuf (FSComp.SR.lexInvalidAsciiByteLiteral()) (UINT8(byte 0))
                      else
                           UINT8 (byte(x))  
-# 2257 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2257 "net10.0/lex.fs"
           )
   | 40 -> ( 
 # 573 "lex.fsl"
                       match unicodeGraphLong (lexemeTrimBoth lexbuf 3 1) with
                       | SingleChar(c) -> CHAR (char c)
                       | _ -> fail args lexbuf  (FSComp.SR.lexThisUnicodeOnlyInStringLiterals()) (CHAR (char 0)) 
-# 2264 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2264 "net10.0/lex.fs"
           )
   | 41 -> ( 
 # 578 "lex.fsl"
@@ -2273,7 +2273,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                            else
                                UINT8 (byte(x))
                       | _ -> fail args lexbuf  (FSComp.SR.lexInvalidAsciiByteLiteral()) (UINT8(byte 0)) 
-# 2276 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2276 "net10.0/lex.fs"
           )
   | 42 -> ( 
 # 588 "lex.fsl"
@@ -2281,44 +2281,44 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                          mlCompatWarning (FSComp.SR.lexIndentOffForML()) lexbuf.LexemeRange
                       if not skip then COMMENT (LexCont.Token (args.ifdefStack, args.stringNest))
                       else token args skip lexbuf 
-# 2284 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2284 "net10.0/lex.fs"
           )
   | 43 -> ( 
 # 594 "lex.fsl"
                       if not skip then COMMENT (LexCont.Token (args.ifdefStack, args.stringNest))
                       else token args skip lexbuf 
-# 2290 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2290 "net10.0/lex.fs"
           )
   | 44 -> ( 
 # 598 "lex.fsl"
                       if not skip then COMMENT (LexCont.Token (args.ifdefStack, args.stringNest))
                       else token args skip lexbuf  
-# 2296 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2296 "net10.0/lex.fs"
           )
   | 45 -> ( 
 # 602 "lex.fsl"
                       if not skip then COMMENT (LexCont.Token (args.ifdefStack, args.stringNest))
                       else token args skip lexbuf 
-# 2302 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2302 "net10.0/lex.fs"
           )
   | 46 -> ( 
 # 606 "lex.fsl"
                       LPAREN_STAR_RPAREN 
-# 2307 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2307 "net10.0/lex.fs"
           )
   | 47 -> ( 
 # 609 "lex.fsl"
                       let m = lexbuf.LexemeRange
                       if not skip then COMMENT (LexCont.Comment(args.ifdefStack, args.stringNest, 1, m))
                       else comment (1,m,args) skip lexbuf 
-# 2314 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2314 "net10.0/lex.fs"
           )
   | 48 -> ( 
 # 614 "lex.fsl"
                       let m = lexbuf.LexemeRange
                       if not skip then COMMENT (LexCont.MLOnly(args.ifdefStack, args.stringNest, m))
                       else mlOnly m args skip lexbuf 
-# 2321 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2321 "net10.0/lex.fs"
           )
   | 49 -> ( 
 # 619 "lex.fsl"
@@ -2331,7 +2331,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       | [] -> ()
                       if not skip then STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, LexerStringKind.String, args.interpolationDelimiterLength, m))
                       else singleQuoteString (buf, fin, m, LexerStringKind.String, args) skip lexbuf 
-# 2334 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2334 "net10.0/lex.fs"
           )
   | 50 -> ( 
 # 632 "lex.fsl"
@@ -2343,7 +2343,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       args.interpolationDelimiterLength <- 1
                       if not skip then STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, LexerStringKind.InterpolatedStringFirst, 1, m))
                       else tripleQuoteString (buf, fin, m, LexerStringKind.InterpolatedStringFirst, args) skip lexbuf 
-# 2346 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2346 "net10.0/lex.fs"
           )
   | 51 -> ( 
 # 644 "lex.fsl"
@@ -2366,7 +2366,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                                 tripleQuoteString (buf, fin, m, LexerStringKind.InterpolatedStringFirst, args) skip lexbuf
                           fail args lexbuf (FSComp.SR.lexExtendedStringInterpolationNotSupported()) result
                     
-# 2369 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2369 "net10.0/lex.fs"
           )
   | 52 -> ( 
 # 667 "lex.fsl"
@@ -2380,7 +2380,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, LexerStringKind.InterpolatedStringFirst, args.interpolationDelimiterLength, m))
                       else
                           singleQuoteString (buf, fin, m, LexerStringKind.InterpolatedStringFirst, args) skip lexbuf 
-# 2383 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2383 "net10.0/lex.fs"
           )
   | 53 -> ( 
 # 681 "lex.fsl"
@@ -2394,7 +2394,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, LexerStringKind.String, args.interpolationDelimiterLength, m))
                       else
                           tripleQuoteString (buf, fin, m, LexerStringKind.String, args) skip lexbuf 
-# 2397 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2397 "net10.0/lex.fs"
           )
   | 54 -> ( 
 # 696 "lex.fsl"
@@ -2409,7 +2409,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, LexerStringKind.String, args.interpolationDelimiterLength, m))
                       else
                           verbatimString (buf, fin, m, LexerStringKind.String, args) skip lexbuf 
-# 2412 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2412 "net10.0/lex.fs"
           )
   | 55 -> ( 
 # 711 "lex.fsl"
@@ -2423,20 +2423,20 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, LexerStringKind.InterpolatedStringFirst, args.interpolationDelimiterLength, m))
                       else
                           verbatimString (buf, fin, m, LexerStringKind.InterpolatedStringFirst, args) skip lexbuf 
-# 2426 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2426 "net10.0/lex.fs"
           )
   | 56 -> ( 
 # 725 "lex.fsl"
                       if skip then token args skip lexbuf
                       else WHITESPACE (LexCont.Token(args.ifdefStack, args.stringNest)) 
-# 2432 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2432 "net10.0/lex.fs"
           )
   | 57 -> ( 
 # 729 "lex.fsl"
                       if args.indentationSyntaxStatus.Status then errorR(Error(FSComp.SR.lexTabsNotAllowed(), lexbuf.LexemeRange))
                       if not skip then WHITESPACE (LexCont.Token(args.ifdefStack, args.stringNest))
                       else token args skip lexbuf 
-# 2439 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2439 "net10.0/lex.fs"
           )
   | 58 -> ( 
 # 734 "lex.fsl"
@@ -2445,7 +2445,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       XmlDocStore.AddGrabPointDelayed(lexbuf)
                       if not skip then LINE_COMMENT (LexCont.SingleLineComment(args.ifdefStack, args.stringNest, 1, m))
                       else singleLineComment (None,1,m,m,args) skip lexbuf 
-# 2448 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2448 "net10.0/lex.fs"
           )
   | 59 -> ( 
 # 741 "lex.fsl"
@@ -2455,7 +2455,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       let sb = (new StringBuilder(100)).Append(doc)
                       if not skip then LINE_COMMENT (LexCont.SingleLineComment(args.ifdefStack, args.stringNest, 1, m))
                       else singleLineComment (Some (m, sb),1,m,m,args) skip lexbuf 
-# 2458 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2458 "net10.0/lex.fs"
           )
   | 60 -> ( 
 # 749 "lex.fsl"
@@ -2464,37 +2464,37 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       XmlDocStore.AddGrabPointDelayed(lexbuf)
                       if not skip then LINE_COMMENT (LexCont.SingleLineComment(args.ifdefStack, args.stringNest, 1, m))
                       else singleLineComment (None,1,m,m,args) skip lexbuf 
-# 2467 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2467 "net10.0/lex.fs"
           )
   | 61 -> ( 
 # 756 "lex.fsl"
                       incrLine lexbuf
                       if not skip then WHITESPACE (LexCont.Token(args.ifdefStack, args.stringNest))
                       else token args skip lexbuf 
-# 2474 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2474 "net10.0/lex.fs"
           )
   | 62 -> ( 
 # 761 "lex.fsl"
                       Keywords.IdentifierToken args lexbuf (lexemeTrimBoth lexbuf 2 2) 
-# 2479 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2479 "net10.0/lex.fs"
           )
   | 63 -> ( 
 # 764 "lex.fsl"
                       errorR(Error(FSComp.SR.lexInvalidIdentifier(), lexbuf.LexemeRange))
                       Keywords.IdentifierToken args lexbuf (lexemeTrimBoth lexbuf 2 1) 
-# 2485 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2485 "net10.0/lex.fs"
           )
   | 64 -> ( 
 # 768 "lex.fsl"
                       errorR(Error(FSComp.SR.lexInvalidIdentifier(), lexbuf.LexemeRange))
                       Keywords.IdentifierToken args lexbuf (lexemeTrimLeft lexbuf 2) 
-# 2491 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2491 "net10.0/lex.fs"
           )
   | 65 -> ( 
 # 772 "lex.fsl"
                       errorR(Error(FSComp.SR.lexInvalidIdentifier(), lexbuf.LexemeRange))
                       Keywords.IdentifierToken args lexbuf "" 
-# 2497 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2497 "net10.0/lex.fs"
           )
   | 66 -> ( 
 # 776 "lex.fsl"
@@ -2542,232 +2542,232 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                            incrLine lexbuf
                            HASH_LINE (LexCont.Token (args.ifdefStack, args.stringNest))
                     
-# 2545 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2545 "net10.0/lex.fs"
           )
   | 67 -> ( 
 # 831 "lex.fsl"
                          checkExprOp lexbuf; LQUOTE ("<@ @>", false) 
-# 2550 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2550 "net10.0/lex.fs"
           )
   | 68 -> ( 
 # 833 "lex.fsl"
                           checkExprOp lexbuf; LQUOTE ("<@@ @@>", true) 
-# 2555 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2555 "net10.0/lex.fs"
           )
   | 69 -> ( 
 # 835 "lex.fsl"
                          checkExprOp lexbuf; RQUOTE ("<@ @>", false) 
-# 2560 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2560 "net10.0/lex.fs"
           )
   | 70 -> ( 
 # 837 "lex.fsl"
                           checkExprOp lexbuf; RQUOTE ("<@@ @@>", true) 
-# 2565 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2565 "net10.0/lex.fs"
           )
   | 71 -> ( 
 # 839 "lex.fsl"
                            RQUOTE_BAR_RBRACE ("<@ @>", false) 
-# 2570 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2570 "net10.0/lex.fs"
           )
   | 72 -> ( 
 # 841 "lex.fsl"
                             RQUOTE_BAR_RBRACE ("<@@ @@>", true) 
-# 2575 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2575 "net10.0/lex.fs"
           )
   | 73 -> ( 
 # 843 "lex.fsl"
                         HASH 
-# 2580 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2580 "net10.0/lex.fs"
           )
   | 74 -> ( 
 # 845 "lex.fsl"
                         AMP 
-# 2585 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2585 "net10.0/lex.fs"
           )
   | 75 -> ( 
 # 847 "lex.fsl"
                          AMP_AMP 
-# 2590 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2590 "net10.0/lex.fs"
           )
   | 76 -> ( 
 # 849 "lex.fsl"
                          BAR_BAR 
-# 2595 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2595 "net10.0/lex.fs"
           )
   | 77 -> ( 
 # 851 "lex.fsl"
                          QUOTE 
-# 2600 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2600 "net10.0/lex.fs"
           )
   | 78 -> ( 
 # 853 "lex.fsl"
                         LPAREN 
-# 2605 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2605 "net10.0/lex.fs"
           )
   | 79 -> ( 
 # 855 "lex.fsl"
                         RPAREN 
-# 2610 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2610 "net10.0/lex.fs"
           )
   | 80 -> ( 
 # 857 "lex.fsl"
                         STAR 
-# 2615 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2615 "net10.0/lex.fs"
           )
   | 81 -> ( 
 # 859 "lex.fsl"
                         COMMA 
-# 2620 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2620 "net10.0/lex.fs"
           )
   | 82 -> ( 
 # 861 "lex.fsl"
                          RARROW 
-# 2625 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2625 "net10.0/lex.fs"
           )
   | 83 -> ( 
 # 863 "lex.fsl"
                         QMARK 
-# 2630 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2630 "net10.0/lex.fs"
           )
   | 84 -> ( 
 # 865 "lex.fsl"
                          QMARK_QMARK 
-# 2635 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2635 "net10.0/lex.fs"
           )
   | 85 -> ( 
 # 867 "lex.fsl"
                          DOT_DOT 
-# 2640 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2640 "net10.0/lex.fs"
           )
   | 86 -> ( 
 # 869 "lex.fsl"
                           DOT_DOT_HAT 
-# 2645 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2645 "net10.0/lex.fs"
           )
   | 87 -> ( 
 # 871 "lex.fsl"
                         DOT 
-# 2650 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2650 "net10.0/lex.fs"
           )
   | 88 -> ( 
 # 873 "lex.fsl"
                         COLON 
-# 2655 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2655 "net10.0/lex.fs"
           )
   | 89 -> ( 
 # 875 "lex.fsl"
                          COLON_COLON 
-# 2660 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2660 "net10.0/lex.fs"
           )
   | 90 -> ( 
 # 877 "lex.fsl"
                          COLON_GREATER 
-# 2665 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2665 "net10.0/lex.fs"
           )
   | 91 -> ( 
 # 879 "lex.fsl"
                           RQUOTE_DOT ("<@ @>",false) 
-# 2670 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2670 "net10.0/lex.fs"
           )
   | 92 -> ( 
 # 881 "lex.fsl"
                            RQUOTE_DOT ("<@@ @@>",true) 
-# 2675 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2675 "net10.0/lex.fs"
           )
   | 93 -> ( 
 # 883 "lex.fsl"
                           GREATER_BAR_RBRACK 
-# 2680 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2680 "net10.0/lex.fs"
           )
   | 94 -> ( 
 # 885 "lex.fsl"
                           COLON_QMARK_GREATER 
-# 2685 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2685 "net10.0/lex.fs"
           )
   | 95 -> ( 
 # 887 "lex.fsl"
                          COLON_QMARK 
-# 2690 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2690 "net10.0/lex.fs"
           )
   | 96 -> ( 
 # 889 "lex.fsl"
                          COLON_EQUALS 
-# 2695 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2695 "net10.0/lex.fs"
           )
   | 97 -> ( 
 # 891 "lex.fsl"
                          SEMICOLON_SEMICOLON 
-# 2700 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2700 "net10.0/lex.fs"
           )
   | 98 -> ( 
 # 893 "lex.fsl"
                         SEMICOLON 
-# 2705 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2705 "net10.0/lex.fs"
           )
   | 99 -> ( 
 # 895 "lex.fsl"
                          LARROW 
-# 2710 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2710 "net10.0/lex.fs"
           )
   | 100 -> ( 
 # 897 "lex.fsl"
                         EQUALS 
-# 2715 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2715 "net10.0/lex.fs"
           )
   | 101 -> ( 
 # 899 "lex.fsl"
                         LBRACK 
-# 2720 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2720 "net10.0/lex.fs"
           )
   | 102 -> ( 
 # 901 "lex.fsl"
                          LBRACK_BAR 
-# 2725 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2725 "net10.0/lex.fs"
           )
   | 103 -> ( 
 # 903 "lex.fsl"
                          LBRACE_BAR 
-# 2730 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2730 "net10.0/lex.fs"
           )
   | 104 -> ( 
 # 905 "lex.fsl"
                         LESS false 
-# 2735 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2735 "net10.0/lex.fs"
           )
   | 105 -> ( 
 # 907 "lex.fsl"
                         GREATER false 
-# 2740 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2740 "net10.0/lex.fs"
           )
   | 106 -> ( 
 # 909 "lex.fsl"
                           GREATER_BAR_RBRACE 
-# 2745 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2745 "net10.0/lex.fs"
           )
   | 107 -> ( 
 # 911 "lex.fsl"
                          LBRACK_LESS 
-# 2750 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2750 "net10.0/lex.fs"
           )
   | 108 -> ( 
 # 913 "lex.fsl"
                         RBRACK 
-# 2755 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2755 "net10.0/lex.fs"
           )
   | 109 -> ( 
 # 915 "lex.fsl"
                          BAR_RBRACK 
-# 2760 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2760 "net10.0/lex.fs"
           )
   | 110 -> ( 
 # 917 "lex.fsl"
                          BAR_RBRACE 
-# 2765 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2765 "net10.0/lex.fs"
           )
   | 111 -> ( 
 # 919 "lex.fsl"
                          GREATER_RBRACK 
-# 2770 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2770 "net10.0/lex.fs"
           )
   | 112 -> ( 
 # 922 "lex.fsl"
@@ -2782,12 +2782,12 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       let cont = LexCont.Token(args.ifdefStack, args.stringNest)
                       LBRACE cont
                     
-# 2785 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2785 "net10.0/lex.fs"
           )
   | 113 -> ( 
 # 934 "lex.fsl"
                         BAR 
-# 2790 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2790 "net10.0/lex.fs"
           )
   | 114 -> ( 
 # 937 "lex.fsl"
@@ -2828,83 +2828,83 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                           let cont = LexCont.Token(args.ifdefStack, args.stringNest)
                           RBRACE cont
                     
-# 2831 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2831 "net10.0/lex.fs"
           )
   | 115 -> ( 
 # 976 "lex.fsl"
                         DOLLAR 
-# 2836 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2836 "net10.0/lex.fs"
           )
   | 116 -> ( 
 # 978 "lex.fsl"
                         PERCENT_OP("%") 
-# 2841 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2841 "net10.0/lex.fs"
           )
   | 117 -> ( 
 # 980 "lex.fsl"
                          PERCENT_OP("%%") 
-# 2846 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2846 "net10.0/lex.fs"
           )
   | 118 -> ( 
 # 982 "lex.fsl"
                         MINUS 
-# 2851 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2851 "net10.0/lex.fs"
           )
   | 119 -> ( 
 # 985 "lex.fsl"
                       errorR (Error(FSComp.SR.lexInvalidIdentifier(), lexbuf.LexemeRange))
                       RESERVED 
-# 2857 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2857 "net10.0/lex.fs"
           )
   | 120 -> ( 
 # 988 "lex.fsl"
                                                                          checkExprOp lexbuf; INFIX_STAR_STAR_OP(lexeme lexbuf) 
-# 2862 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2862 "net10.0/lex.fs"
           )
   | 121 -> ( 
 # 990 "lex.fsl"
                                                                          checkExprOp lexbuf; INFIX_STAR_DIV_MOD_OP(lexeme lexbuf) 
-# 2867 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2867 "net10.0/lex.fs"
           )
   | 122 -> ( 
 # 992 "lex.fsl"
                                                                          checkExprOp lexbuf; PLUS_MINUS_OP(lexeme lexbuf) 
-# 2872 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2872 "net10.0/lex.fs"
           )
   | 123 -> ( 
 # 994 "lex.fsl"
                                                                          checkExprOp lexbuf; INFIX_AT_HAT_OP(lexeme lexbuf) 
-# 2877 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2877 "net10.0/lex.fs"
           )
   | 124 -> ( 
 # 996 "lex.fsl"
                                                                         checkExprOp lexbuf; INFIX_COMPARE_OP(lexeme lexbuf) 
-# 2882 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2882 "net10.0/lex.fs"
           )
   | 125 -> ( 
 # 998 "lex.fsl"
                                                      checkExprGreaterColonOp lexbuf; INFIX_COMPARE_OP(lexeme lexbuf) 
-# 2887 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2887 "net10.0/lex.fs"
           )
   | 126 -> ( 
 # 1000 "lex.fsl"
                                                                          checkExprOp lexbuf; INFIX_AMP_OP(lexeme lexbuf) 
-# 2892 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2892 "net10.0/lex.fs"
           )
   | 127 -> ( 
 # 1002 "lex.fsl"
                                                                          checkExprOp lexbuf; INFIX_BAR_OP(lexeme lexbuf) 
-# 2897 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2897 "net10.0/lex.fs"
           )
   | 128 -> ( 
 # 1004 "lex.fsl"
                                                                          checkExprOp lexbuf; PREFIX_OP(lexeme lexbuf) 
-# 2902 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2902 "net10.0/lex.fs"
           )
   | 129 -> ( 
 # 1008 "lex.fsl"
                                       FUNKY_OPERATOR_NAME(lexeme lexbuf) 
-# 2907 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2907 "net10.0/lex.fs"
           )
   | 130 -> ( 
 # 1011 "lex.fsl"
@@ -2913,7 +2913,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       let tok = LINE_COMMENT (LexCont.SingleLineComment(args.ifdefStack, args.stringNest, 1, m))
                       let tok = shouldStartFile args lexbuf m (0,FSComp.SR.lexHashBangMustBeFirstInFile()) tok
                       if not skip then tok else singleLineComment (None,1,m,m,args) skip lexbuf 
-# 2916 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2916 "net10.0/lex.fs"
           )
   | 131 -> ( 
 # 1019 "lex.fsl"
@@ -2925,7 +2925,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                     args.indentationSyntaxStatus.Status <- true
                     if not skip then HASH_LIGHT (LexCont.Token(args.ifdefStack, args.stringNest))
                     else token args skip lexbuf 
-# 2928 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2928 "net10.0/lex.fs"
           )
   | 132 -> ( 
 # 1029 "lex.fsl"
@@ -2936,7 +2936,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                         mlCompatWarning (FSComp.SR.lexIndentOffForML()) lexbuf.LexemeRange
                     if not skip then HASH_LIGHT (LexCont.Token (args.ifdefStack, args.stringNest))
                     else token args skip lexbuf 
-# 2939 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2939 "net10.0/lex.fs"
           )
   | 133 -> ( 
 # 1038 "lex.fsl"
@@ -2950,7 +2950,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                     let contCase = if isTrue then LexerEndlineContinuation.Token else LexerEndlineContinuation.IfdefSkip(0, m)
                     let tok = HASH_IF(m, lexed, LexCont.EndLine(args.ifdefStack, args.stringNest, contCase))
                     if skip then endline contCase args skip lexbuf else tok 
-# 2953 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2953 "net10.0/lex.fs"
           )
   | 134 -> ( 
 # 1050 "lex.fsl"
@@ -2965,7 +2965,7 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                       IfdefStore.SaveElseHash(lexbuf, lexed, m)
                       let tok = HASH_ELSE(m, lexed, LexCont.EndLine(args.ifdefStack, args.stringNest, LexerEndlineContinuation.IfdefSkip(0, m)))
                       if skip then endline (LexerEndlineContinuation.IfdefSkip(0, m)) args skip lexbuf else tok 
-# 2968 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2968 "net10.0/lex.fs"
           )
   | 135 -> ( 
 # 1063 "lex.fsl"
@@ -2979,21 +2979,21 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                        IfdefStore.SaveEndIfHash(lexbuf, lexed, m)
                        let tok = HASH_ENDIF(m,lexed,LexCont.EndLine(args.ifdefStack, args.stringNest, LexerEndlineContinuation.Token))
                        if not skip then tok else endline LexerEndlineContinuation.Token args skip lexbuf 
-# 2982 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2982 "net10.0/lex.fs"
           )
   | 136 -> ( 
 # 1075 "lex.fsl"
                     let tok = WHITESPACE (LexCont.Token (args.ifdefStack, args.stringNest))
                     let tok = fail args lexbuf (FSComp.SR.lexHashIfMustHaveIdent()) tok
                     if skip then token args skip lexbuf else tok 
-# 2989 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2989 "net10.0/lex.fs"
           )
   | 137 -> ( 
 # 1084 "lex.fsl"
                     let n = (lexeme lexbuf).IndexOf('#')
                     lexbuf.StartPos <- lexbuf.StartPos.ShiftColumnBy(n)
                     HASH_IDENT(lexemeTrimLeft lexbuf (n+1)) 
-# 2996 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 2996 "net10.0/lex.fs"
           )
   | 138 -> ( 
 # 1089 "lex.fsl"
@@ -3002,17 +3002,17 @@ and token (args: LexArgs) (skip: bool) lexbuf =
                     WarnScopes.ParseAndRegisterWarnDirective lexbuf
                     let tok = WARN_DIRECTIVE(m, lexeme lexbuf, LexCont.EndLine(args.ifdefStack, args.stringNest, LexerEndlineContinuation.Token))
                     if skip then endline LexerEndlineContinuation.Token args skip lexbuf else tok 
-# 3005 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3005 "net10.0/lex.fs"
           )
   | 139 -> ( 
 # 1098 "lex.fsl"
                     unexpectedChar lexbuf 
-# 3010 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3010 "net10.0/lex.fs"
           )
   | 140 -> ( 
 # 1101 "lex.fsl"
                     EOF (LexCont.Token(args.ifdefStack, args.stringNest)) 
-# 3015 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3015 "net10.0/lex.fs"
           )
   | _ -> failwith "token"
 // Rule ifdefSkip
@@ -3032,7 +3032,7 @@ and ifdefSkip (n: int) (m: range) (args: LexArgs) (skip: bool) lexbuf =
                       IfdefStore.SaveIfHash(lexbuf, lexed, expr, m)
                       let tok = INACTIVECODE(LexCont.EndLine(args.ifdefStack, args.stringNest, LexerEndlineContinuation.IfdefSkip(n+1, m)))
                       if skip then endline (LexerEndlineContinuation.IfdefSkip(n+1, m)) args skip lexbuf else tok 
-# 3035 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3035 "net10.0/lex.fs"
           )
   | 1 -> ( 
 # 1122 "lex.fsl"
@@ -3056,7 +3056,7 @@ and ifdefSkip (n: int) (m: range) (args: LexArgs) (skip: bool) lexbuf =
                         IfdefStore.SaveElseHash(lexbuf, lexed, m)
                         if not skip then INACTIVECODE(LexCont.EndLine(args.ifdefStack, args.stringNest, LexerEndlineContinuation.IfdefSkip(n, m)))
                         else endline (LexerEndlineContinuation.IfdefSkip(n, m)) args skip lexbuf 
-# 3059 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3059 "net10.0/lex.fs"
           )
   | 2 -> ( 
 # 1145 "lex.fsl"
@@ -3079,24 +3079,24 @@ and ifdefSkip (n: int) (m: range) (args: LexArgs) (skip: bool) lexbuf =
                           IfdefStore.SaveEndIfHash(lexbuf, lexed, m)
                           let tok = INACTIVECODE(LexCont.EndLine(args.ifdefStack, args.stringNest, LexerEndlineContinuation.IfdefSkip(n-1, m)))
                           if not skip then tok else endline (LexerEndlineContinuation.IfdefSkip(n-1, m)) args skip lexbuf 
-# 3082 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3082 "net10.0/lex.fs"
           )
   | 3 -> ( 
 # 1167 "lex.fsl"
                      incrLine lexbuf; ifdefSkip n m args skip lexbuf 
-# 3087 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3087 "net10.0/lex.fs"
           )
   | 4 -> ( 
 # 1176 "lex.fsl"
                      // This tries to be nice and get tokens as 'words' because VS uses this when selecting stuff
                      if not skip then INACTIVECODE (LexCont.IfDefSkip(args.ifdefStack, args.stringNest, n, m))
                      else ifdefSkip n m args skip lexbuf 
-# 3094 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3094 "net10.0/lex.fs"
           )
   | 5 -> ( 
 # 1181 "lex.fsl"
                      EOF (LexCont.IfDefSkip(args.ifdefStack, args.stringNest, n, m)) 
-# 3099 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3099 "net10.0/lex.fs"
           )
   | _ -> failwith "ifdefSkip"
 // Rule endline
@@ -3113,7 +3113,7 @@ and endline (cont: LexerEndlineContinuation) (args: LexArgs) (skip: bool) lexbuf
                         if not skip then INACTIVECODE (LexCont.IfDefSkip(args.ifdefStack, args.stringNest, n, m))
                         else ifdefSkip n m args skip lexbuf
                   
-# 3116 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3116 "net10.0/lex.fs"
           )
   | 1 -> ( 
 # 1199 "lex.fsl"
@@ -3123,14 +3123,14 @@ and endline (cont: LexerEndlineContinuation) (args: LexArgs) (skip: bool) lexbuf
                     | LexerEndlineContinuation.IfdefSkip(n, m) ->
                         EOF(LexCont.IfDefSkip(args.ifdefStack, args.stringNest, n, m))
                   
-# 3126 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3126 "net10.0/lex.fs"
           )
   | 2 -> ( 
 # 1209 "lex.fsl"
                     let tok = WHITESPACE (LexCont.Token (args.ifdefStack, args.stringNest))
                     let tok = fail args lexbuf (FSComp.SR.pplexExpectedSingleLineComment()) tok
                     if not skip then tok else token args skip lexbuf 
-# 3133 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3133 "net10.0/lex.fs"
           )
   | _ -> failwith "endline"
 // Rule singleQuoteString
@@ -3147,7 +3147,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          singleQuoteString sargs skip lexbuf 
-# 3150 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3150 "net10.0/lex.fs"
           )
   | 1 -> ( 
 # 1226 "lex.fsl"
@@ -3157,7 +3157,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          singleQuoteString sargs skip lexbuf 
-# 3160 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3160 "net10.0/lex.fs"
           )
   | 2 -> ( 
 # 1234 "lex.fsl"
@@ -3183,7 +3183,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                      else
                          addByteChar buf c
                          result() 
-# 3186 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3186 "net10.0/lex.fs"
           )
   | 3 -> ( 
 # 1258 "lex.fsl"
@@ -3193,7 +3193,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          singleQuoteString sargs skip lexbuf  
-# 3196 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3196 "net10.0/lex.fs"
           )
   | 4 -> ( 
 # 1266 "lex.fsl"
@@ -3203,7 +3203,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          singleQuoteString sargs skip lexbuf  
-# 3206 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3206 "net10.0/lex.fs"
           )
   | 5 -> ( 
 # 1274 "lex.fsl"
@@ -3225,7 +3225,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          addUnicodeChar buf (int hi)
                          addUnicodeChar buf (int lo)
                          result() 
-# 3228 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3228 "net10.0/lex.fs"
           )
   | 6 -> ( 
 # 1294 "lex.fsl"
@@ -3233,7 +3233,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                      let cont = LexCont.Token(args.ifdefStack, args.stringNest)
                      fin.Finish buf kind (LexerStringFinisherContext()) cont
                    
-# 3236 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3236 "net10.0/lex.fs"
           )
   | 7 -> ( 
 # 1300 "lex.fsl"
@@ -3241,7 +3241,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                      let cont = LexCont.Token(args.ifdefStack, args.stringNest)
                      fin.Finish buf { kind with IsByteString = true } (LexerStringFinisherContext()) cont
                    
-# 3244 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3244 "net10.0/lex.fs"
           )
   | 8 -> ( 
 # 1306 "lex.fsl"
@@ -3252,7 +3252,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          singleQuoteString sargs skip lexbuf 
-# 3255 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3255 "net10.0/lex.fs"
           )
   | 9 -> ( 
 # 1315 "lex.fsl"
@@ -3270,7 +3270,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          else
                              singleQuoteString sargs skip lexbuf
                    
-# 3273 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3273 "net10.0/lex.fs"
           )
   | 10 -> ( 
 # 1331 "lex.fsl"
@@ -3285,7 +3285,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                      else
                          addUnicodeString buf (lexeme lexbuf)
                          (result()) 
-# 3288 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3288 "net10.0/lex.fs"
           )
   | 11 -> ( 
 # 1344 "lex.fsl"
@@ -3296,7 +3296,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          singleQuoteString sargs skip lexbuf 
-# 3299 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3299 "net10.0/lex.fs"
           )
   | 12 -> ( 
 # 1353 "lex.fsl"
@@ -3306,7 +3306,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          singleQuoteString sargs skip lexbuf 
-# 3309 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3309 "net10.0/lex.fs"
           )
   | 13 -> ( 
 # 1362 "lex.fsl"
@@ -3316,7 +3316,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          singleQuoteString sargs skip lexbuf 
-# 3319 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3319 "net10.0/lex.fs"
           )
   | 14 -> ( 
 # 1370 "lex.fsl"
@@ -3326,13 +3326,13 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          singleQuoteString sargs skip lexbuf 
-# 3329 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3329 "net10.0/lex.fs"
           )
   | 15 -> ( 
 # 1378 "lex.fsl"
                      let (_buf, _fin, m, kind, args) = sargs
                      EOF (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, kind, args.interpolationDelimiterLength, m)) 
-# 3335 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3335 "net10.0/lex.fs"
           )
   | 16 -> ( 
 # 1384 "lex.fsl"
@@ -3342,7 +3342,7 @@ and singleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          singleQuoteString sargs skip lexbuf 
-# 3345 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3345 "net10.0/lex.fs"
           )
   | _ -> failwith "singleQuoteString"
 // Rule verbatimString
@@ -3356,7 +3356,7 @@ and verbatimString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                         STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, kind, args.interpolationDelimiterLength, m))
                     else
                         verbatimString sargs skip lexbuf 
-# 3359 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3359 "net10.0/lex.fs"
           )
   | 1 -> ( 
 # 1401 "lex.fsl"
@@ -3364,7 +3364,7 @@ and verbatimString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                      let cont = LexCont.Token(args.ifdefStack, args.stringNest)
                      fin.Finish buf kind LexerStringFinisherContext.Verbatim cont
                    
-# 3367 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3367 "net10.0/lex.fs"
           )
   | 2 -> ( 
 # 1407 "lex.fsl"
@@ -3372,7 +3372,7 @@ and verbatimString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                      let cont = LexCont.Token(args.ifdefStack, args.stringNest)
                      fin.Finish buf { kind with IsByteString = true } LexerStringFinisherContext.Verbatim cont
                    
-# 3375 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3375 "net10.0/lex.fs"
           )
   | 3 -> ( 
 # 1413 "lex.fsl"
@@ -3383,7 +3383,7 @@ and verbatimString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, kind, args.interpolationDelimiterLength, m))
                      else
                          verbatimString sargs skip lexbuf 
-# 3386 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3386 "net10.0/lex.fs"
           )
   | 4 -> ( 
 # 1422 "lex.fsl"
@@ -3394,7 +3394,7 @@ and verbatimString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, kind, args.interpolationDelimiterLength, m))
                      else
                          verbatimString sargs skip lexbuf 
-# 3397 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3397 "net10.0/lex.fs"
           )
   | 5 -> ( 
 # 1431 "lex.fsl"
@@ -3412,7 +3412,7 @@ and verbatimString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          else
                              verbatimString sargs skip lexbuf
                    
-# 3415 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3415 "net10.0/lex.fs"
           )
   | 6 -> ( 
 # 1447 "lex.fsl"
@@ -3428,7 +3428,7 @@ and verbatimString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          addUnicodeString buf (lexeme lexbuf)
                          (result())
                    
-# 3431 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3431 "net10.0/lex.fs"
           )
   | 7 -> ( 
 # 1461 "lex.fsl"
@@ -3438,7 +3438,7 @@ and verbatimString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, kind, args.interpolationDelimiterLength, m))
                      else
                          verbatimString sargs skip lexbuf 
-# 3441 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3441 "net10.0/lex.fs"
           )
   | 8 -> ( 
 # 1470 "lex.fsl"
@@ -3448,7 +3448,7 @@ and verbatimString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, kind, args.interpolationDelimiterLength, m))
                      else
                          verbatimString sargs skip lexbuf 
-# 3451 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3451 "net10.0/lex.fs"
           )
   | 9 -> ( 
 # 1478 "lex.fsl"
@@ -3458,13 +3458,13 @@ and verbatimString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, kind, args.interpolationDelimiterLength, m))
                      else
                          verbatimString sargs skip lexbuf 
-# 3461 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3461 "net10.0/lex.fs"
           )
   | 10 -> ( 
 # 1486 "lex.fsl"
                      let (_buf, _fin, m, kind, args) = sargs
                      EOF (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, kind, args.interpolationDelimiterLength, m)) 
-# 3467 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3467 "net10.0/lex.fs"
           )
   | 11 -> ( 
 # 1491 "lex.fsl"
@@ -3474,7 +3474,7 @@ and verbatimString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, kind, args.interpolationDelimiterLength, m))
                      else
                          verbatimString sargs skip lexbuf 
-# 3477 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3477 "net10.0/lex.fs"
           )
   | _ -> failwith "verbatimString"
 // Rule tripleQuoteString
@@ -3486,7 +3486,7 @@ and tripleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                      args.interpolationDelimiterLength <- 0
                      let cont = LexCont.Token(args.ifdefStack, args.stringNest)
                      fin.Finish buf kind LexerStringFinisherContext.TripleQuote cont 
-# 3489 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3489 "net10.0/lex.fs"
           )
   | 1 -> ( 
 # 1506 "lex.fsl"
@@ -3497,7 +3497,7 @@ and tripleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          tripleQuoteString sargs skip lexbuf 
-# 3500 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3500 "net10.0/lex.fs"
           )
   | 2 -> ( 
 # 1516 "lex.fsl"
@@ -3507,7 +3507,7 @@ and tripleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          tripleQuoteString sargs skip lexbuf 
-# 3510 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3510 "net10.0/lex.fs"
           )
   | 3 -> ( 
 # 1525 "lex.fsl"
@@ -3517,7 +3517,7 @@ and tripleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          tripleQuoteString sargs skip lexbuf 
-# 3520 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3520 "net10.0/lex.fs"
           )
   | 4 -> ( 
 # 1533 "lex.fsl"
@@ -3527,7 +3527,7 @@ and tripleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          tripleQuoteString sargs skip lexbuf 
-# 3530 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3530 "net10.0/lex.fs"
           )
   | 5 -> ( 
 # 1541 "lex.fsl"
@@ -3538,7 +3538,7 @@ and tripleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          tripleQuoteString sargs skip lexbuf 
-# 3541 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3541 "net10.0/lex.fs"
           )
   | 6 -> ( 
 # 1550 "lex.fsl"
@@ -3556,7 +3556,7 @@ and tripleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          else
                              tripleQuoteString sargs skip lexbuf
                    
-# 3559 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3559 "net10.0/lex.fs"
           )
   | 7 -> ( 
 # 1566 "lex.fsl"
@@ -3572,13 +3572,13 @@ and tripleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          addUnicodeString buf (lexeme lexbuf)
                          (result())
                    
-# 3575 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3575 "net10.0/lex.fs"
           )
   | 8 -> ( 
 # 1580 "lex.fsl"
                      let (_buf, _fin, m, kind, args) = sargs
                      EOF (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, kind, args.interpolationDelimiterLength, m)) 
-# 3581 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3581 "net10.0/lex.fs"
           )
   | 9 -> ( 
 # 1585 "lex.fsl"
@@ -3588,7 +3588,7 @@ and tripleQuoteString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, kind, args.interpolationDelimiterLength, m))
                      else
                          tripleQuoteString sargs skip lexbuf 
-# 3591 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3591 "net10.0/lex.fs"
           )
   | _ -> failwith "tripleQuoteString"
 // Rule extendedInterpolatedString
@@ -3600,7 +3600,7 @@ and extendedInterpolatedString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                      args.interpolationDelimiterLength <- 0
                      let cont = LexCont.Token(args.ifdefStack, args.stringNest)
                      fin.Finish buf kind LexerStringFinisherContext.TripleQuote cont 
-# 3603 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3603 "net10.0/lex.fs"
           )
   | 1 -> ( 
 # 1600 "lex.fsl"
@@ -3611,7 +3611,7 @@ and extendedInterpolatedString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.ExtendedInterpolated, kind, args.interpolationDelimiterLength, m))
                      else
                          extendedInterpolatedString sargs skip lexbuf 
-# 3614 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3614 "net10.0/lex.fs"
           )
   | 2 -> ( 
 # 1613 "lex.fsl"
@@ -3621,7 +3621,7 @@ and extendedInterpolatedString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.ExtendedInterpolated, kind, args.interpolationDelimiterLength, m))
                      else
                          extendedInterpolatedString sargs skip lexbuf 
-# 3624 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3624 "net10.0/lex.fs"
           )
   | 3 -> ( 
 # 1621 "lex.fsl"
@@ -3653,7 +3653,7 @@ and extendedInterpolatedString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          let s = String.replicate percentsToEmit "%"
                          addUnicodeString buf s
                          result() 
-# 3656 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3656 "net10.0/lex.fs"
           )
   | 4 -> ( 
 # 1651 "lex.fsl"
@@ -3690,7 +3690,7 @@ and extendedInterpolatedString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          let cont = LexCont.Token(args.ifdefStack, args.stringNest)
                          fin.Finish buf kind (LexerStringFinisherContext.InterpolatedPart ||| LexerStringFinisherContext.TripleQuote) cont
                    
-# 3693 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3693 "net10.0/lex.fs"
           )
   | 5 -> ( 
 # 1686 "lex.fsl"
@@ -3707,13 +3707,13 @@ and extendedInterpolatedString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                      else
                          fail args lexbuf (FSComp.SR.lexUnmatchedRBracesInTripleQuote()) (result())
                    
-# 3710 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3710 "net10.0/lex.fs"
           )
   | 6 -> ( 
 # 1701 "lex.fsl"
                      let (_buf, _fin, m, kind, args) = sargs
                      EOF (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.ExtendedInterpolated, kind, args.interpolationDelimiterLength, m)) 
-# 3716 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3716 "net10.0/lex.fs"
           )
   | 7 -> ( 
 # 1706 "lex.fsl"
@@ -3723,7 +3723,7 @@ and extendedInterpolatedString (sargs: LexerStringArgs) (skip: bool) lexbuf =
                          STRING_TEXT (LexCont.String(args.ifdefStack, args.stringNest, LexerStringStyle.ExtendedInterpolated, kind, args.interpolationDelimiterLength, m))
                      else
                          extendedInterpolatedString sargs skip lexbuf 
-# 3726 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3726 "net10.0/lex.fs"
           )
   | _ -> failwith "extendedInterpolatedString"
 // Rule singleLineComment
@@ -3739,7 +3739,7 @@ and singleLineComment (cargs: SingleLineCommentArgs) (skip: bool) lexbuf =
                       else
                           if Option.isNone buff then CommentStore.SaveSingleLineComment(lexbuf, mStart, mEnd)
                           token args skip lexbuf 
-# 3742 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3742 "net10.0/lex.fs"
           )
   | 1 -> ( 
 # 1726 "lex.fsl"
@@ -3748,7 +3748,7 @@ and singleLineComment (cargs: SingleLineCommentArgs) (skip: bool) lexbuf =
                       CommentStore.SaveSingleLineComment(lexbuf, mStart, mEnd)
                       // NOTE: it is legal to end a file with this comment, so we'll return EOF as a token
                       EOF (LexCont.Token(args.ifdefStack, args.stringNest)) 
-# 3751 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3751 "net10.0/lex.fs"
           )
   | 2 -> ( 
 # 1734 "lex.fsl"
@@ -3757,14 +3757,14 @@ and singleLineComment (cargs: SingleLineCommentArgs) (skip: bool) lexbuf =
                       tryAppendXmlDoc buff (lexeme lexbuf)
                       if not skip then LINE_COMMENT (LexCont.SingleLineComment(args.ifdefStack, args.stringNest, n, m))
                       else singleLineComment (buff, n, m, lexbuf.LexemeRange, args) skip lexbuf  
-# 3760 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3760 "net10.0/lex.fs"
           )
   | 3 -> ( 
 # 1741 "lex.fsl"
                       let _, _n, _mStart, _mEnd, args = cargs
                       if not skip then LINE_COMMENT (LexCont.Token(args.ifdefStack, args.stringNest))
                       else token args skip lexbuf 
-# 3767 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3767 "net10.0/lex.fs"
           )
   | _ -> failwith "singleLineComment"
 // Rule comment
@@ -3775,28 +3775,28 @@ and comment (cargs: BlockCommentArgs) (skip: bool) lexbuf =
                      let n, m, args = cargs
                      if not skip then COMMENT (LexCont.Comment(args.ifdefStack, args.stringNest, n, m))
                      else comment (n, m, args) skip lexbuf  
-# 3778 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3778 "net10.0/lex.fs"
           )
   | 1 -> ( 
 # 1753 "lex.fsl"
                      let n, m, args = cargs
                      if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, n, m))
                      else stringInComment n m args skip lexbuf 
-# 3785 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3785 "net10.0/lex.fs"
           )
   | 2 -> ( 
 # 1758 "lex.fsl"
                      let n, m, args = cargs
                      if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, n, m))
                      else tripleQuoteStringInComment n m args skip lexbuf 
-# 3792 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3792 "net10.0/lex.fs"
           )
   | 3 -> ( 
 # 1763 "lex.fsl"
                      let n, m, args = cargs
                      if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, n, m))
                      else verbatimStringInComment n m args skip lexbuf 
-# 3799 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3799 "net10.0/lex.fs"
           )
   | 4 -> ( 
 # 1768 "lex.fsl"
@@ -3804,14 +3804,14 @@ and comment (cargs: BlockCommentArgs) (skip: bool) lexbuf =
                      XmlDocStore.AddGrabPoint(lexbuf)
                      if not skip then COMMENT (LexCont.Comment(args.ifdefStack, args.stringNest, n, m))
                      else comment cargs skip lexbuf 
-# 3807 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3807 "net10.0/lex.fs"
           )
   | 5 -> ( 
 # 1774 "lex.fsl"
                      let n, m, args = cargs
                      if not skip then COMMENT (LexCont.Comment(args.ifdefStack, args.stringNest, n+1, m))
                      else comment (n+1,m,args) skip lexbuf 
-# 3814 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3814 "net10.0/lex.fs"
           )
   | 6 -> ( 
 # 1779 "lex.fsl"
@@ -3819,7 +3819,7 @@ and comment (cargs: BlockCommentArgs) (skip: bool) lexbuf =
                      incrLine lexbuf
                      if not skip then COMMENT (LexCont.Comment(args.ifdefStack, args.stringNest, n, m))
                      else comment cargs skip lexbuf 
-# 3822 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3822 "net10.0/lex.fs"
           )
   | 7 -> ( 
 # 1784 "lex.fsl"
@@ -3834,27 +3834,27 @@ and comment (cargs: BlockCommentArgs) (skip: bool) lexbuf =
                          else
                              CommentStore.SaveBlockComment(lexbuf, m, lexbuf.LexemeRange) 
                              token args skip lexbuf 
-# 3837 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3837 "net10.0/lex.fs"
           )
   | 8 -> ( 
 # 1798 "lex.fsl"
                      let n, m, args = cargs
                      if not skip then COMMENT (LexCont.Comment(args.ifdefStack, args.stringNest, n, m))
                      else comment cargs skip lexbuf 
-# 3844 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3844 "net10.0/lex.fs"
           )
   | 9 -> ( 
 # 1803 "lex.fsl"
                       let n, m, args = cargs
                       EOF (LexCont.Comment(args.ifdefStack, args.stringNest, n, m)) 
-# 3850 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3850 "net10.0/lex.fs"
           )
   | 10 -> ( 
 # 1807 "lex.fsl"
                       let n, m, args = cargs
                       if not skip then COMMENT (LexCont.Comment(args.ifdefStack, args.stringNest, n, m))
                       else comment (n, m, args) skip lexbuf 
-# 3857 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3857 "net10.0/lex.fs"
           )
   | _ -> failwith "comment"
 // Rule stringInComment
@@ -3865,37 +3865,37 @@ and stringInComment (n: int) (m: range) (args: LexArgs) (skip: bool) lexbuf =
                       incrLine lexbuf
                       if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, n, m))
                       else stringInComment n m args skip lexbuf 
-# 3868 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3868 "net10.0/lex.fs"
           )
   | 1 -> ( 
 # 1827 "lex.fsl"
                       if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, n, m))
                       else stringInComment n m args skip lexbuf 
-# 3874 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3874 "net10.0/lex.fs"
           )
   | 2 -> ( 
 # 1832 "lex.fsl"
                       if not skip then COMMENT (LexCont.Comment(args.ifdefStack, args.stringNest, n, m))
                       else comment (n, m, args) skip lexbuf 
-# 3880 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3880 "net10.0/lex.fs"
           )
   | 3 -> ( 
 # 1836 "lex.fsl"
                       incrLine lexbuf
                       if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, n, m))
                       else stringInComment n m args skip lexbuf 
-# 3887 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3887 "net10.0/lex.fs"
           )
   | 4 -> ( 
 # 1841 "lex.fsl"
                       EOF (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, n, m)) 
-# 3892 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3892 "net10.0/lex.fs"
           )
   | 5 -> ( 
 # 1845 "lex.fsl"
                       if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.SingleQuote, n, m))
                       else stringInComment n m args skip lexbuf 
-# 3898 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3898 "net10.0/lex.fs"
           )
   | _ -> failwith "stringInComment"
 // Rule verbatimStringInComment
@@ -3905,37 +3905,37 @@ and verbatimStringInComment (n: int) (m: range) (args: LexArgs) (skip: bool) lex
 # 1851 "lex.fsl"
                       if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, n, m))
                       else verbatimStringInComment n m args skip lexbuf 
-# 3908 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3908 "net10.0/lex.fs"
           )
   | 1 -> ( 
 # 1855 "lex.fsl"
                       if not skip then COMMENT (LexCont.Comment(args.ifdefStack, args.stringNest, n, m))
                       else comment (n, m, args) skip lexbuf 
-# 3914 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3914 "net10.0/lex.fs"
           )
   | 2 -> ( 
 # 1862 "lex.fsl"
                       if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, n, m))
                       else verbatimStringInComment n m args skip lexbuf 
-# 3920 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3920 "net10.0/lex.fs"
           )
   | 3 -> ( 
 # 1866 "lex.fsl"
                       incrLine lexbuf
                       if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, n, m))
                       else verbatimStringInComment n m args skip lexbuf 
-# 3927 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3927 "net10.0/lex.fs"
           )
   | 4 -> ( 
 # 1871 "lex.fsl"
                       EOF (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, n, m)) 
-# 3932 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3932 "net10.0/lex.fs"
           )
   | 5 -> ( 
 # 1875 "lex.fsl"
                       if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.Verbatim, n, m))
                       else verbatimStringInComment n m args skip lexbuf 
-# 3938 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3938 "net10.0/lex.fs"
           )
   | _ -> failwith "verbatimStringInComment"
 // Rule tripleQuoteStringInComment
@@ -3945,31 +3945,31 @@ and tripleQuoteStringInComment (n: int) (m: range) (args: LexArgs) (skip: bool) 
 # 1881 "lex.fsl"
                       if not skip then COMMENT (LexCont.Comment(args.ifdefStack, args.stringNest, n, m))
                       else comment (n, m, args) skip lexbuf 
-# 3948 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3948 "net10.0/lex.fs"
           )
   | 1 -> ( 
 # 1888 "lex.fsl"
                       if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, n, m))
                       else tripleQuoteStringInComment n m args skip lexbuf 
-# 3954 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3954 "net10.0/lex.fs"
           )
   | 2 -> ( 
 # 1892 "lex.fsl"
                       incrLine lexbuf
                       if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, n, m))
                       else tripleQuoteStringInComment n m args skip lexbuf 
-# 3961 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3961 "net10.0/lex.fs"
           )
   | 3 -> ( 
 # 1897 "lex.fsl"
                       EOF (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, n, m)) 
-# 3966 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3966 "net10.0/lex.fs"
           )
   | 4 -> ( 
 # 1901 "lex.fsl"
                       if not skip then COMMENT (LexCont.StringInComment(args.ifdefStack, args.stringNest, LexerStringStyle.TripleQuote, n, m))
                       else tripleQuoteStringInComment n m args skip lexbuf 
-# 3972 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3972 "net10.0/lex.fs"
           )
   | _ -> failwith "tripleQuoteStringInComment"
 // Rule mlOnly
@@ -3982,44 +3982,44 @@ and mlOnly (m: range) (args: LexArgs) (skip: bool) lexbuf =
                       let _ = singleQuoteString (buf, LexerStringFinisher.Default, m2, LexerStringKind.String, args) skip lexbuf
                       if not skip then COMMENT (LexCont.MLOnly(args.ifdefStack, args.stringNest, m))
                       else mlOnly m args skip lexbuf 
-# 3985 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3985 "net10.0/lex.fs"
           )
   | 1 -> ( 
 # 1914 "lex.fsl"
                       incrLine lexbuf
                       if not skip then COMMENT (LexCont.MLOnly(args.ifdefStack, args.stringNest, m))
                       else mlOnly m args skip lexbuf 
-# 3992 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3992 "net10.0/lex.fs"
           )
   | 2 -> ( 
 # 1919 "lex.fsl"
                       if not skip then COMMENT (LexCont.Token(args.ifdefStack, args.stringNest))
                       else token args skip lexbuf 
-# 3998 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3998 "net10.0/lex.fs"
           )
   | 3 -> ( 
 # 1923 "lex.fsl"
                       if not skip then COMMENT (LexCont.Token(args.ifdefStack, args.stringNest))
                       else token args skip lexbuf 
-# 4004 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 4004 "net10.0/lex.fs"
           )
   | 4 -> ( 
 # 1927 "lex.fsl"
                       if not skip then COMMENT (LexCont.MLOnly(args.ifdefStack, args.stringNest, m))
                       else mlOnly m args skip lexbuf 
-# 4010 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 4010 "net10.0/lex.fs"
           )
   | 5 -> ( 
 # 1931 "lex.fsl"
                       EOF (LexCont.MLOnly(args.ifdefStack, args.stringNest, m)) 
-# 4015 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 4015 "net10.0/lex.fs"
           )
   | 6 -> ( 
 # 1935 "lex.fsl"
                       if not skip then COMMENT (LexCont.MLOnly(args.ifdefStack, args.stringNest, m))
                       else mlOnly m args skip lexbuf 
-# 4021 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 4021 "net10.0/lex.fs"
           )
   | _ -> failwith "mlOnly"
 
-# 3000000 "/home/hhh/repos/fsnative/src/Compiler/net10.0/lex.fs"
+# 3000000 "net10.0/lex.fs"

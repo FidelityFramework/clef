@@ -41,7 +41,7 @@ let parse_error_rich = Some(fun (ctxt: ParseErrorContext<_>) ->
     errorR(SyntaxError(box ctxt, ctxt.ParseState.LexBuffer.LexemeRange)))
 
 
-# 44 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 44 "net10.0/pars.fs"
 // This type is the type of tokens accepted by the parser
 type token = 
   | HASH_IF of (range * string * ParseHelpers.LexerContinuation)
@@ -2907,7 +2907,7 @@ let _fsyacc_reductionSymbolCounts = [|1us;1us;1us;1us;1us;1us;1us;1us;1us;1us;1u
 let _fsyacc_productionToNonTerminalTable = [|0us;1us;2us;3us;4us;5us;5us;5us;6us;6us;7us;7us;7us;7us;7us;7us;7us;8us;8us;9us;10us;11us;11us;12us;12us;13us;14us;14us;15us;15us;15us;15us;15us;16us;16us;16us;17us;17us;17us;18us;18us;19us;19us;20us;20us;21us;22us;22us;23us;23us;23us;23us;24us;24us;24us;25us;25us;25us;26us;26us;26us;26us;26us;26us;26us;26us;27us;28us;28us;28us;29us;29us;29us;30us;30us;31us;31us;32us;32us;33us;33us;33us;34us;34us;34us;34us;35us;35us;35us;35us;36us;36us;36us;37us;37us;38us;39us;39us;39us;39us;39us;39us;39us;39us;40us;40us;40us;40us;41us;41us;41us;41us;42us;42us;43us;44us;44us;45us;45us;45us;46us;46us;47us;47us;48us;49us;49us;50us;50us;50us;50us;51us;51us;52us;52us;52us;52us;52us;53us;53us;53us;53us;53us;53us;54us;54us;55us;55us;55us;55us;55us;55us;55us;55us;55us;56us;56us;56us;56us;57us;57us;58us;58us;58us;58us;58us;58us;58us;59us;59us;59us;60us;61us;61us;62us;62us;63us;63us;63us;63us;64us;64us;65us;65us;65us;66us;66us;66us;66us;67us;67us;67us;67us;67us;68us;69us;69us;70us;70us;70us;70us;71us;71us;71us;71us;72us;72us;72us;73us;73us;73us;73us;74us;74us;75us;75us;75us;76us;76us;76us;77us;78us;78us;78us;79us;79us;80us;81us;81us;81us;81us;82us;82us;82us;82us;83us;83us;83us;83us;83us;83us;83us;83us;83us;83us;83us;83us;83us;83us;83us;83us;84us;84us;84us;84us;85us;85us;85us;85us;86us;86us;86us;87us;87us;87us;87us;87us;88us;88us;89us;89us;89us;90us;90us;90us;91us;91us;92us;92us;92us;93us;93us;94us;94us;95us;95us;96us;96us;97us;97us;97us;98us;98us;99us;99us;99us;99us;100us;100us;100us;101us;101us;101us;101us;101us;102us;102us;102us;102us;103us;103us;104us;104us;104us;105us;105us;105us;106us;106us;107us;107us;107us;107us;108us;108us;109us;109us;110us;110us;111us;112us;112us;112us;113us;114us;114us;115us;116us;116us;117us;117us;118us;118us;118us;118us;119us;119us;119us;119us;119us;119us;119us;119us;119us;119us;119us;119us;120us;120us;121us;121us;121us;122us;123us;123us;124us;124us;124us;124us;124us;124us;124us;124us;124us;124us;125us;125us;125us;126us;126us;126us;126us;127us;127us;127us;127us;127us;127us;128us;128us;128us;128us;129us;129us;129us;129us;129us;130us;130us;131us;131us;132us;133us;133us;133us;133us;134us;135us;135us;136us;136us;136us;137us;137us;138us;138us;139us;140us;141us;141us;142us;142us;142us;142us;143us;143us;144us;145us;145us;145us;146us;146us;147us;147us;148us;148us;148us;148us;148us;148us;149us;149us;150us;151us;151us;152us;152us;153us;153us;153us;154us;154us;154us;155us;156us;156us;157us;158us;158us;159us;159us;160us;160us;160us;160us;160us;160us;160us;160us;160us;160us;160us;160us;160us;160us;160us;160us;160us;160us;161us;161us;161us;161us;162us;162us;163us;163us;164us;164us;165us;166us;167us;167us;168us;168us;169us;169us;170us;170us;170us;170us;170us;170us;170us;170us;170us;170us;171us;171us;171us;171us;171us;171us;172us;172us;173us;173us;173us;174us;174us;174us;175us;175us;175us;175us;175us;175us;175us;175us;175us;175us;175us;176us;176us;177us;177us;177us;177us;178us;178us;178us;178us;178us;178us;178us;178us;178us;178us;178us;178us;178us;178us;178us;178us;178us;178us;178us;178us;179us;179us;180us;180us;180us;180us;180us;180us;180us;180us;180us;180us;180us;180us;180us;181us;181us;181us;181us;181us;181us;182us;182us;183us;183us;183us;184us;184us;184us;185us;185us;185us;186us;186us;186us;186us;187us;187us;187us;188us;188us;188us;189us;189us;189us;190us;191us;191us;191us;191us;191us;191us;192us;192us;193us;193us;193us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;194us;195us;195us;195us;195us;195us;195us;196us;196us;197us;197us;197us;197us;198us;198us;198us;198us;198us;199us;200us;200us;200us;200us;200us;200us;200us;201us;201us;202us;203us;204us;204us;204us;204us;205us;205us;205us;205us;205us;206us;206us;206us;206us;206us;206us;206us;206us;207us;207us;207us;207us;207us;207us;207us;207us;207us;207us;207us;207us;207us;207us;208us;208us;209us;209us;210us;210us;210us;210us;210us;210us;210us;210us;210us;210us;210us;210us;210us;210us;210us;210us;210us;210us;210us;210us;210us;210us;211us;211us;211us;211us;211us;211us;211us;211us;211us;211us;212us;212us;212us;212us;212us;212us;212us;212us;212us;212us;212us;213us;213us;213us;213us;214us;214us;214us;214us;215us;215us;215us;215us;216us;216us;216us;216us;216us;216us;216us;216us;216us;216us;217us;217us;217us;218us;218us;219us;219us;220us;220us;220us;220us;220us;221us;221us;221us;222us;222us;223us;223us;224us;225us;226us;226us;226us;227us;228us;228us;229us;230us;230us;231us;231us;232us;232us;233us;233us;233us;234us;234us;235us;235us;235us;235us;235us;235us;235us;235us;235us;236us;236us;237us;237us;237us;237us;238us;238us;239us;239us;240us;240us;240us;240us;240us;241us;241us;241us;242us;242us;242us;243us;243us;244us;244us;244us;245us;246us;246us;246us;247us;248us;248us;249us;249us;249us;249us;249us;250us;250us;250us;250us;250us;250us;250us;250us;251us;251us;252us;252us;253us;253us;254us;254us;254us;255us;255us;255us;256us;256us;256us;256us;257us;257us;257us;257us;258us;258us;258us;258us;258us;258us;258us;258us;258us;258us;259us;259us;259us;259us;260us;260us;260us;260us;261us;262us;262us;262us;262us;262us;262us;262us;262us;263us;263us;263us;263us;263us;263us;263us;264us;264us;265us;265us;266us;266us;267us;267us;268us;268us;269us;269us;269us;269us;269us;269us;269us;269us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;270us;271us;272us;272us;272us;273us;273us;274us;274us;275us;275us;276us;276us;276us;276us;276us;276us;276us;276us;276us;276us;276us;276us;276us;276us;276us;276us;276us;276us;276us;276us;277us;277us;278us;278us;278us;278us;278us;278us;278us;279us;279us;279us;280us;280us;281us;282us;282us;283us;283us;283us;284us;284us;284us;285us;285us;286us;286us;286us;286us;287us;287us;288us;289us;289us;289us;289us;290us;290us;290us;290us;290us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;291us;292us;293us;293us;294us;294us;295us;295us;295us;295us;296us;297us;297us;298us;298us;298us;299us;299us;300us;300us;301us;301us;301us;301us;302us;302us;302us;303us;303us;303us;303us;304us;304us;305us;305us;306us;306us;307us;307us;308us;308us;309us;309us;310us;310us;311us;311us;312us;312us;313us;313us;314us;314us;315us;315us;316us;317us;318us;318us;319us;319us;319us;320us;320us;320us;321us;321us;321us;322us;322us;323us;323us;323us;324us;324us;324us;325us;325us;325us;326us;327us;327us;327us;328us;328us;328us;329us;329us;329us;329us;329us;330us;330us;330us;330us;330us;330us;|]
 let _fsyacc_immediateActions = [|65535us;49152us;65535us;49152us;65535us;49152us;65535us;49152us;65535us;49152us;16389us;16390us;16391us;16392us;16393us;16394us;65535us;16395us;65535us;16396us;65535us;16397us;65535us;16398us;65535us;16399us;65535us;16400us;65535us;16402us;65535us;65535us;65535us;16404us;65535us;16406us;16407us;16408us;65535us;65535us;65535us;16411us;16412us;16413us;65535us;16415us;16416us;65535us;16417us;65535us;16418us;65535us;16419us;65535us;65535us;65535us;65535us;65535us;16421us;16422us;65535us;65535us;65535us;16424us;65535us;16426us;65535us;16427us;65535us;65535us;16429us;65535us;65535us;65535us;16430us;16431us;16432us;65535us;65535us;65535us;16433us;16434us;65535us;16435us;16436us;65535us;65535us;65535us;65535us;16439us;65535us;65535us;16440us;16442us;16443us;65535us;65535us;65535us;65535us;16444us;16445us;16446us;65535us;65535us;16447us;16448us;16449us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;16450us;65535us;65535us;65535us;65535us;65535us;16453us;65535us;65535us;16454us;65535us;65535us;65535us;16455us;65535us;65535us;16456us;65535us;65535us;16457us;65535us;65535us;16459us;16460us;65535us;65535us;65535us;65535us;65535us;65535us;16461us;65535us;16462us;16463us;16464us;65535us;65535us;16465us;16466us;65535us;65535us;16467us;16468us;65535us;16469us;65535us;65535us;16470us;16471us;65535us;65535us;16472us;16473us;65535us;65535us;16474us;16475us;16476us;16477us;65535us;65535us;16479us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;16480us;65535us;65535us;65535us;65535us;16483us;65535us;16484us;65535us;65535us;16485us;65535us;16486us;65535us;65535us;16487us;65535us;16489us;65535us;65535us;16490us;16491us;65535us;65535us;65535us;65535us;16493us;16494us;65535us;65535us;16495us;16496us;16497us;65535us;16498us;65535us;65535us;16499us;65535us;16501us;65535us;16502us;65535us;16503us;65535us;16505us;65535us;16506us;65535us;65535us;16508us;65535us;65535us;65535us;16509us;16510us;65535us;65535us;65535us;16511us;16512us;65535us;16513us;16514us;16515us;65535us;65535us;65535us;65535us;16517us;16520us;16521us;65535us;65535us;16523us;65535us;16524us;65535us;65535us;65535us;65535us;65535us;16527us;16528us;16529us;65535us;65535us;16530us;65535us;16531us;65535us;16532us;65535us;65535us;16533us;16534us;65535us;65535us;16535us;16536us;65535us;16537us;16538us;65535us;65535us;16540us;65535us;65535us;16542us;65535us;16543us;65535us;65535us;65535us;16545us;16546us;65535us;16547us;16548us;16549us;16550us;65535us;65535us;65535us;16552us;16553us;16554us;65535us;65535us;16555us;16556us;65535us;16559us;65535us;65535us;65535us;65535us;16560us;65535us;65535us;16561us;16562us;16563us;16564us;65535us;16565us;65535us;65535us;16566us;65535us;65535us;65535us;16567us;65535us;65535us;65535us;65535us;16568us;65535us;16569us;65535us;16570us;65535us;16571us;65535us;16572us;65535us;16573us;16575us;16576us;16577us;65535us;65535us;16578us;65535us;65535us;16579us;65535us;16582us;65535us;65535us;65535us;65535us;65535us;65535us;16583us;16584us;65535us;65535us;65535us;65535us;65535us;65535us;16585us;16586us;16587us;65535us;16588us;16589us;16590us;65535us;65535us;16591us;16592us;65535us;65535us;16593us;16594us;65535us;16595us;65535us;65535us;16596us;16597us;65535us;65535us;16598us;16599us;16600us;16601us;65535us;16602us;65535us;65535us;16604us;65535us;16605us;65535us;65535us;16606us;16607us;65535us;65535us;16609us;65535us;65535us;65535us;65535us;65535us;16610us;65535us;65535us;65535us;65535us;16611us;16612us;16613us;16614us;65535us;16616us;65535us;16618us;65535us;65535us;65535us;65535us;16619us;16620us;65535us;65535us;16621us;16622us;65535us;65535us;16623us;16624us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;16625us;16626us;65535us;16627us;65535us;16628us;65535us;16629us;65535us;65535us;65535us;65535us;65535us;16630us;16631us;16632us;65535us;16633us;65535us;16634us;65535us;65535us;65535us;65535us;65535us;16635us;16636us;16637us;16638us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;16639us;16640us;16641us;16642us;65535us;16644us;16645us;65535us;65535us;16646us;65535us;65535us;16647us;16648us;65535us;65535us;65535us;16649us;16650us;16652us;16653us;16654us;16655us;65535us;65535us;16656us;65535us;65535us;16659us;65535us;65535us;16661us;65535us;65535us;16662us;16663us;16664us;65535us;16666us;16667us;16668us;65535us;16670us;16671us;65535us;65535us;16672us;16673us;16674us;65535us;65535us;16675us;65535us;65535us;65535us;65535us;16677us;65535us;16678us;16679us;65535us;65535us;16680us;65535us;16681us;16682us;16683us;65535us;65535us;65535us;65535us;65535us;16684us;16685us;16686us;16687us;65535us;65535us;65535us;65535us;16688us;65535us;65535us;16689us;16690us;65535us;16691us;16692us;65535us;16693us;16694us;65535us;65535us;16695us;16696us;65535us;16697us;16698us;16699us;16700us;16701us;16702us;65535us;65535us;65535us;65535us;16705us;16706us;16707us;65535us;65535us;16708us;65535us;65535us;65535us;65535us;16709us;16710us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;16713us;16714us;65535us;65535us;65535us;65535us;16717us;16718us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;16723us;16724us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;16729us;65535us;65535us;65535us;65535us;16731us;65535us;16732us;16733us;16734us;65535us;65535us;16735us;65535us;65535us;65535us;65535us;65535us;65535us;16736us;65535us;16737us;16738us;65535us;65535us;65535us;65535us;65535us;16743us;65535us;65535us;16744us;65535us;16746us;65535us;65535us;16747us;65535us;65535us;65535us;16750us;65535us;16751us;16752us;65535us;16753us;16754us;16755us;65535us;16756us;65535us;65535us;16758us;16759us;65535us;65535us;16760us;65535us;65535us;16761us;65535us;16762us;65535us;65535us;65535us;65535us;65535us;16765us;65535us;16766us;65535us;65535us;16767us;16768us;65535us;16769us;65535us;65535us;16772us;16773us;65535us;16774us;65535us;65535us;16776us;16777us;16778us;16779us;16780us;16781us;16782us;65535us;65535us;16783us;16784us;65535us;16785us;65535us;65535us;65535us;65535us;16786us;16787us;16788us;16789us;65535us;16790us;65535us;65535us;65535us;65535us;16791us;16792us;65535us;65535us;16794us;16795us;65535us;65535us;65535us;65535us;16798us;16799us;65535us;16800us;65535us;65535us;65535us;16801us;65535us;65535us;16802us;16803us;16804us;16805us;16806us;16807us;16808us;16809us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;16810us;65535us;65535us;65535us;16814us;65535us;16815us;65535us;65535us;16817us;65535us;65535us;65535us;65535us;16819us;16820us;65535us;16821us;16822us;65535us;65535us;16823us;65535us;65535us;16826us;65535us;65535us;16827us;65535us;16829us;16830us;65535us;65535us;65535us;65535us;65535us;16831us;16832us;16833us;65535us;65535us;16834us;16835us;16836us;65535us;65535us;16838us;65535us;65535us;65535us;16840us;65535us;16841us;16842us;65535us;65535us;16843us;16844us;16845us;16846us;16847us;16848us;16849us;16850us;16851us;16852us;16853us;16854us;16855us;16856us;16857us;16858us;16859us;16860us;16861us;16862us;65535us;65535us;16863us;65535us;65535us;65535us;16864us;16867us;65535us;65535us;16868us;16869us;65535us;16870us;65535us;65535us;16872us;65535us;65535us;65535us;65535us;16874us;16875us;65535us;65535us;16877us;16878us;16879us;65535us;65535us;16880us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;16881us;16882us;65535us;65535us;16886us;65535us;65535us;16890us;65535us;65535us;16893us;16894us;65535us;16896us;65535us;65535us;65535us;16899us;65535us;16900us;65535us;16901us;65535us;65535us;65535us;65535us;16903us;16904us;65535us;65535us;16906us;65535us;16907us;65535us;16908us;16909us;65535us;16910us;65535us;16911us;65535us;16912us;16913us;16915us;65535us;65535us;16916us;16917us;65535us;16918us;65535us;16919us;65535us;16920us;16922us;65535us;65535us;16923us;65535us;16924us;65535us;65535us;16925us;65535us;65535us;16926us;65535us;65535us;16928us;16929us;16930us;16931us;16932us;16933us;65535us;65535us;16934us;16935us;65535us;65535us;16937us;65535us;65535us;65535us;16938us;16939us;65535us;16940us;16941us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;16944us;16945us;65535us;65535us;65535us;65535us;16950us;16951us;65535us;65535us;16954us;16956us;65535us;65535us;16959us;16960us;65535us;16962us;65535us;65535us;65535us;16965us;65535us;16966us;65535us;16967us;65535us;65535us;16969us;16970us;16972us;65535us;16973us;65535us;65535us;16974us;16975us;16976us;16977us;65535us;65535us;16978us;16979us;65535us;65535us;16981us;16983us;65535us;65535us;65535us;16984us;16985us;65535us;16987us;65535us;65535us;16988us;65535us;16991us;65535us;65535us;65535us;16992us;65535us;16994us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;16995us;65535us;65535us;65535us;65535us;65535us;16996us;65535us;65535us;65535us;65535us;65535us;65535us;16997us;65535us;65535us;16999us;17000us;65535us;17001us;17002us;65535us;17003us;17004us;17005us;17006us;17007us;65535us;65535us;17008us;17009us;65535us;65535us;17010us;17011us;65535us;65535us;17012us;17013us;65535us;17015us;65535us;17016us;65535us;65535us;17017us;17018us;17019us;65535us;65535us;65535us;65535us;65535us;17023us;65535us;17024us;65535us;17026us;65535us;17027us;65535us;65535us;65535us;65535us;17028us;17029us;17030us;17031us;17032us;65535us;17033us;65535us;65535us;65535us;17034us;17035us;17036us;17037us;17038us;65535us;65535us;17039us;17040us;17041us;65535us;65535us;65535us;65535us;17043us;17044us;17045us;65535us;17046us;65535us;65535us;17047us;17048us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;17049us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;17050us;17051us;65535us;65535us;65535us;65535us;17052us;65535us;65535us;17053us;65535us;65535us;65535us;17055us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;17056us;17057us;65535us;17058us;17059us;65535us;17060us;17061us;65535us;65535us;65535us;17063us;65535us;65535us;65535us;17066us;65535us;17068us;65535us;17070us;65535us;17072us;65535us;17074us;65535us;17076us;65535us;17078us;65535us;17080us;65535us;17082us;65535us;17084us;65535us;17086us;65535us;17088us;65535us;17090us;65535us;17092us;65535us;17094us;65535us;17096us;65535us;17098us;65535us;17100us;65535us;17102us;65535us;17104us;65535us;65535us;65535us;65535us;17108us;65535us;65535us;65535us;17110us;17111us;65535us;17112us;17113us;17114us;17115us;17116us;65535us;65535us;17117us;65535us;17118us;65535us;65535us;17119us;17120us;17121us;17122us;65535us;17123us;65535us;17124us;17125us;17126us;17127us;65535us;65535us;65535us;17129us;65535us;17130us;65535us;17131us;17132us;17133us;17134us;65535us;65535us;17137us;65535us;17138us;65535us;17140us;65535us;17141us;17142us;65535us;65535us;17145us;65535us;17146us;17147us;65535us;17149us;65535us;17151us;65535us;17152us;65535us;17154us;65535us;65535us;65535us;65535us;17156us;65535us;65535us;17157us;65535us;65535us;17158us;65535us;65535us;17159us;65535us;65535us;17160us;65535us;65535us;17161us;65535us;65535us;17162us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;17163us;17165us;17166us;65535us;17167us;65535us;17168us;65535us;65535us;65535us;17170us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;17175us;17176us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;17179us;65535us;65535us;65535us;65535us;17181us;65535us;17182us;65535us;17183us;65535us;65535us;17184us;65535us;65535us;17185us;65535us;17186us;17187us;17188us;65535us;65535us;17189us;17190us;17191us;17192us;65535us;65535us;17193us;17194us;17195us;17196us;17197us;17199us;65535us;65535us;65535us;65535us;17200us;65535us;17201us;65535us;65535us;17202us;17203us;17204us;17205us;17206us;17207us;17208us;17209us;17210us;17211us;17212us;17213us;17214us;17215us;17216us;65535us;65535us;17217us;17218us;65535us;17219us;17220us;65535us;65535us;65535us;17221us;17222us;17223us;17224us;65535us;65535us;17225us;17226us;17227us;17228us;65535us;65535us;65535us;17229us;65535us;17230us;17231us;17232us;65535us;17233us;17234us;17235us;17236us;17237us;65535us;17238us;65535us;65535us;65535us;65535us;65535us;17239us;17240us;17241us;17242us;65535us;65535us;17243us;65535us;17244us;65535us;65535us;17246us;17247us;17248us;17249us;17250us;17251us;17252us;17253us;17254us;17256us;17258us;65535us;17259us;65535us;17261us;17262us;65535us;65535us;17264us;17265us;65535us;65535us;65535us;65535us;65535us;17266us;17267us;17270us;65535us;65535us;65535us;17272us;65535us;17274us;65535us;17275us;65535us;65535us;65535us;65535us;65535us;17276us;17277us;65535us;65535us;65535us;17278us;17279us;65535us;65535us;65535us;17283us;65535us;65535us;65535us;17284us;65535us;65535us;17285us;65535us;65535us;65535us;17286us;17287us;65535us;65535us;65535us;17291us;17292us;65535us;17294us;17295us;65535us;65535us;17297us;17299us;17301us;65535us;65535us;65535us;17302us;65535us;17303us;17305us;17308us;65535us;17310us;65535us;65535us;17311us;65535us;17312us;65535us;17313us;65535us;17315us;65535us;17316us;65535us;65535us;65535us;65535us;17317us;65535us;17318us;17319us;65535us;65535us;17320us;17321us;17322us;17323us;17324us;65535us;65535us;65535us;17325us;17326us;65535us;65535us;65535us;65535us;17327us;17328us;65535us;17329us;65535us;17331us;65535us;17332us;65535us;17333us;65535us;65535us;17334us;65535us;65535us;65535us;65535us;65535us;17340us;17341us;65535us;65535us;17342us;17343us;65535us;65535us;17345us;17346us;65535us;65535us;17347us;65535us;65535us;17349us;17350us;65535us;65535us;17351us;65535us;65535us;65535us;17353us;17354us;65535us;65535us;65535us;17355us;17356us;65535us;65535us;65535us;65535us;17358us;17359us;65535us;65535us;65535us;17360us;17361us;65535us;65535us;65535us;65535us;17363us;17364us;65535us;17365us;65535us;65535us;17367us;17368us;65535us;17369us;65535us;17371us;65535us;65535us;65535us;17372us;17373us;65535us;65535us;17374us;65535us;65535us;17375us;17376us;65535us;17377us;17378us;65535us;65535us;17380us;17381us;65535us;17382us;65535us;17383us;17384us;65535us;17385us;65535us;65535us;65535us;65535us;65535us;17390us;65535us;65535us;65535us;17391us;65535us;65535us;17393us;65535us;17396us;17397us;65535us;17398us;17399us;65535us;65535us;65535us;17400us;17401us;17402us;65535us;17403us;65535us;65535us;17404us;65535us;17405us;65535us;17406us;65535us;17407us;65535us;17408us;65535us;17409us;65535us;17410us;65535us;17411us;65535us;17412us;65535us;17413us;65535us;17414us;65535us;17415us;65535us;17416us;65535us;17417us;65535us;17418us;65535us;17419us;65535us;17420us;65535us;17421us;65535us;17422us;65535us;17423us;65535us;17424us;65535us;17425us;65535us;17426us;65535us;17427us;65535us;17428us;65535us;17429us;65535us;17430us;65535us;17431us;65535us;17432us;65535us;17433us;65535us;17434us;65535us;17435us;65535us;17436us;65535us;65535us;65535us;65535us;65535us;65535us;17438us;17439us;65535us;65535us;17442us;65535us;65535us;65535us;17443us;65535us;65535us;17446us;17447us;17448us;17449us;65535us;65535us;65535us;17450us;17451us;65535us;65535us;65535us;65535us;65535us;17452us;17453us;17454us;17455us;17456us;17457us;17458us;65535us;17460us;17461us;65535us;65535us;17462us;65535us;17463us;65535us;65535us;17465us;65535us;17466us;17467us;65535us;17468us;65535us;65535us;65535us;65535us;17469us;17470us;17471us;65535us;17472us;17473us;17474us;17475us;65535us;65535us;17477us;17479us;17480us;65535us;65535us;17482us;65535us;17483us;65535us;17485us;65535us;65535us;17486us;65535us;65535us;17488us;17489us;65535us;17491us;17492us;65535us;65535us;65535us;65535us;65535us;65535us;65535us;17496us;65535us;65535us;17497us;65535us;17498us;17499us;17500us;65535us;17501us;17502us;65535us;65535us;17503us;65535us;17504us;17505us;65535us;65535us;17506us;65535us;65535us;17507us;17508us;17509us;17510us;17511us;17512us;17513us;17514us;17515us;17516us;17517us;17518us;17519us;17520us;17521us;17522us;17523us;17524us;17525us;17526us;17527us;17528us;17529us;17530us;65535us;17532us;65535us;17533us;17534us;65535us;17535us;17536us;17537us;17538us;65535us;17540us;65535us;17541us;17542us;17543us;17544us;17545us;17546us;17547us;17548us;65535us;17550us;65535us;17551us;65535us;65535us;17555us;17556us;17557us;17558us;17559us;17560us;17561us;17562us;17564us;17566us;17568us;17570us;17572us;17574us;17576us;17578us;17579us;17580us;17581us;17582us;17583us;17584us;17585us;17586us;17587us;17588us;17589us;65535us;17591us;17592us;65535us;65535us;17593us;17594us;65535us;65535us;17595us;17596us;17597us;17598us;17599us;17601us;65535us;65535us;17603us;17604us;17605us;65535us;65535us;17606us;17607us;17608us;65535us;17609us;17610us;17611us;17612us;65535us;17613us;17614us;17615us;65535us;17616us;17617us;17618us;17619us;17620us;17621us;17622us;17623us;17624us;17625us;17626us;17627us;17628us;17629us;|]
 let _fsyacc_reductions = lazy [|
-# 2910 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 2910 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParsedSigFile in
             Microsoft.FSharp.Core.Operators.box
@@ -2916,7 +2916,7 @@ let _fsyacc_reductions = lazy [|
                       raise (Internal.Utilities.Text.Parsing.Accept(Microsoft.FSharp.Core.Operators.box _1))
                    )
                  : 'gentype__startsignatureFile));
-# 2919 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 2919 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParsedImplFile in
             Microsoft.FSharp.Core.Operators.box
@@ -2925,7 +2925,7 @@ let _fsyacc_reductions = lazy [|
                       raise (Internal.Utilities.Text.Parsing.Accept(Microsoft.FSharp.Core.Operators.box _1))
                    )
                  : 'gentype__startimplementationFile));
-# 2928 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 2928 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParsedScriptInteraction in
             Microsoft.FSharp.Core.Operators.box
@@ -2934,7 +2934,7 @@ let _fsyacc_reductions = lazy [|
                       raise (Internal.Utilities.Text.Parsing.Accept(Microsoft.FSharp.Core.Operators.box _1))
                    )
                  : 'gentype__startinteraction));
-# 2937 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 2937 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -2943,7 +2943,7 @@ let _fsyacc_reductions = lazy [|
                       raise (Internal.Utilities.Text.Parsing.Accept(Microsoft.FSharp.Core.Operators.box _1))
                    )
                  : 'gentype__starttypedSequentialExprEOF));
-# 2946 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 2946 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
@@ -2952,7 +2952,7 @@ let _fsyacc_reductions = lazy [|
                       raise (Internal.Utilities.Text.Parsing.Accept(Microsoft.FSharp.Core.Operators.box _1))
                    )
                  : 'gentype__starttypEOF));
-# 2955 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 2955 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interactiveItemsTerminator in
             Microsoft.FSharp.Core.Operators.box
@@ -2963,7 +2963,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 395 "pars.fsy"
                  : ParsedScriptInteraction));
-# 2966 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 2966 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -2974,7 +2974,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 398 "pars.fsy"
                  : ParsedScriptInteraction));
-# 2977 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 2977 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -2984,7 +2984,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 402 "pars.fsy"
                  : ParsedScriptInteraction));
-# 2987 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 2987 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -2994,7 +2994,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 406 "pars.fsy"
                  : 'gentype_interactiveTerminator));
-# 2997 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 2997 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
@@ -3005,7 +3005,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 407 "pars.fsy"
                  : 'gentype_interactiveTerminator));
-# 3008 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3008 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interactiveTerminator in
             Microsoft.FSharp.Core.Operators.box
@@ -3016,7 +3016,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 421 "pars.fsy"
                  : 'gentype_interactiveItemsTerminator));
-# 3019 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3019 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interactiveDefns in
             let _2 = parseState.GetInput(2) :?> 'gentype_interactiveTerminator in
@@ -3028,7 +3028,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 424 "pars.fsy"
                  : 'gentype_interactiveItemsTerminator));
-# 3031 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3031 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interactiveExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_interactiveTerminator in
@@ -3040,7 +3040,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 427 "pars.fsy"
                  : 'gentype_interactiveItemsTerminator));
-# 3043 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3043 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interactiveHash in
             let _2 = parseState.GetInput(2) :?> 'gentype_interactiveTerminator in
@@ -3052,7 +3052,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 430 "pars.fsy"
                  : 'gentype_interactiveItemsTerminator));
-# 3055 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3055 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interactiveDefns in
             let _2 = parseState.GetInput(2) :?> 'gentype_interactiveSeparators in
@@ -3065,7 +3065,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 433 "pars.fsy"
                  : 'gentype_interactiveItemsTerminator));
-# 3068 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3068 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interactiveExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_interactiveSeparators in
@@ -3078,7 +3078,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 436 "pars.fsy"
                  : 'gentype_interactiveItemsTerminator));
-# 3081 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3081 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interactiveHash in
             let _2 = parseState.GetInput(2) :?> 'gentype_interactiveSeparators in
@@ -3091,7 +3091,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 439 "pars.fsy"
                  : 'gentype_interactiveItemsTerminator));
-# 3094 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3094 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleDefn in
             Microsoft.FSharp.Core.Operators.box
@@ -3102,7 +3102,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 445 "pars.fsy"
                  : 'gentype_interactiveDefns));
-# 3105 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3105 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleDefn in
             let _2 = parseState.GetInput(2) :?> 'gentype_interactiveDefns in
@@ -3114,7 +3114,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 448 "pars.fsy"
                  : 'gentype_interactiveDefns));
-# 3117 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3117 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -3131,7 +3131,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 454 "pars.fsy"
                  : 'gentype_interactiveExpr));
-# 3134 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3134 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hashDirective in
             Microsoft.FSharp.Core.Operators.box
@@ -3142,7 +3142,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 463 "pars.fsy"
                  : 'gentype_interactiveHash));
-# 3145 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3145 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interactiveSeparator in
             Microsoft.FSharp.Core.Operators.box
@@ -3153,7 +3153,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 467 "pars.fsy"
                  : 'gentype_interactiveSeparators));
-# 3156 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3156 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interactiveSeparator in
             let _2 = parseState.GetInput(2) :?> 'gentype_interactiveSeparators in
@@ -3165,7 +3165,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 469 "pars.fsy"
                  : 'gentype_interactiveSeparators));
-# 3168 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3168 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -3175,7 +3175,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 473 "pars.fsy"
                  : 'gentype_interactiveSeparator));
-# 3178 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3178 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -3185,7 +3185,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 474 "pars.fsy"
                  : 'gentype_interactiveSeparator));
-# 3188 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3188 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> string in
             let _3 = parseState.GetInput(3) :?> 'gentype_hashDirectiveArgs in
@@ -3198,7 +3198,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 483 "pars.fsy"
                  : 'gentype_hashDirective));
-# 3201 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3201 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -3208,7 +3208,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 490 "pars.fsy"
                  : 'gentype_hashDirectiveArgs));
-# 3211 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3211 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hashDirectiveArgs in
             let _2 = parseState.GetInput(2) :?> 'gentype_hashDirectiveArg in
@@ -3220,7 +3220,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 493 "pars.fsy"
                  : 'gentype_hashDirectiveArgs));
-# 3223 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3223 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_string in
             Microsoft.FSharp.Core.Operators.box
@@ -3232,7 +3232,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 499 "pars.fsy"
                  : 'gentype_hashDirectiveArg));
-# 3235 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3235 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int32 * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -3244,7 +3244,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 502 "pars.fsy"
                  : 'gentype_hashDirectiveArg));
-# 3247 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3247 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -3256,7 +3256,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 505 "pars.fsy"
                  : 'gentype_hashDirectiveArg));
-# 3259 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3259 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
@@ -3268,7 +3268,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 508 "pars.fsy"
                  : 'gentype_hashDirectiveArg));
-# 3271 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3271 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sourceIdentifier in
             Microsoft.FSharp.Core.Operators.box
@@ -3280,7 +3280,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 511 "pars.fsy"
                  : 'gentype_hashDirectiveArg));
-# 3283 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3283 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_fileNamespaceSpecs in
             let _2 = parseState.GetInput(2) :?> ParseHelpers.LexerContinuation in
@@ -3292,7 +3292,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 521 "pars.fsy"
                  : ParsedSigFile));
-# 3295 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3295 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_fileNamespaceSpecs in
             let _3 = parseState.GetInput(3) :?> ParseHelpers.LexerContinuation in
@@ -3304,7 +3304,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 524 "pars.fsy"
                  : ParsedSigFile));
-# 3307 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3307 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
@@ -3316,7 +3316,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 530 "pars.fsy"
                  : ParsedSigFile));
-# 3319 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3319 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleKeyword in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_attributes in
@@ -3334,7 +3334,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 537 "pars.fsy"
                  : 'gentype_moduleIntro));
-# 3337 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3337 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleKeyword in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_attributes in
@@ -3351,7 +3351,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 543 "pars.fsy"
                  : 'gentype_moduleIntro));
-# 3354 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3354 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleKeyword in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_attributes in
@@ -3369,7 +3369,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 549 "pars.fsy"
                  : 'gentype_moduleIntro));
-# 3372 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3372 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_rec in
             let _3 = parseState.GetInput(3) :?> SynLongIdent in
@@ -3382,7 +3382,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 557 "pars.fsy"
                  : 'gentype_namespaceIntro));
-# 3385 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3385 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_rec in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -3395,7 +3395,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 561 "pars.fsy"
                  : 'gentype_namespaceIntro));
-# 3398 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3398 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_fileModuleSpec in
             Microsoft.FSharp.Core.Operators.box
@@ -3406,7 +3406,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 568 "pars.fsy"
                  : 'gentype_fileNamespaceSpecs));
-# 3409 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3409 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_fileModuleSpec in
             let _2 = parseState.GetInput(2) :?> 'gentype_fileNamespaceSpecList in
@@ -3431,7 +3431,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 571 "pars.fsy"
                  : 'gentype_fileNamespaceSpecs));
-# 3434 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3434 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_fileNamespaceSpec in
             let _2 = parseState.GetInput(2) :?> 'gentype_fileNamespaceSpecList in
@@ -3443,7 +3443,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 589 "pars.fsy"
                  : 'gentype_fileNamespaceSpecList));
-# 3446 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3446 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_fileNamespaceSpec in
             Microsoft.FSharp.Core.Operators.box
@@ -3454,7 +3454,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 592 "pars.fsy"
                  : 'gentype_fileNamespaceSpecList));
-# 3457 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3457 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_namespaceIntro in
             let _2 = parseState.GetInput(2) :?> 'gentype_deprecated_opt_equals in
@@ -3468,7 +3468,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 596 "pars.fsy"
                  : 'gentype_fileNamespaceSpec));
-# 3471 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3471 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -3492,7 +3492,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 603 "pars.fsy"
                  : 'gentype_fileModuleSpec));
-# 3495 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3495 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleSpfnsPossiblyEmptyBlock in
             Microsoft.FSharp.Core.Operators.box
@@ -3515,7 +3515,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 616 "pars.fsy"
                  : 'gentype_fileModuleSpec));
-# 3518 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3518 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleSpfnsPossiblyEmpty in
             Microsoft.FSharp.Core.Operators.box
@@ -3526,7 +3526,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 633 "pars.fsy"
                  : 'gentype_moduleSpfnsPossiblyEmptyBlock));
-# 3529 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3529 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleSpfnsPossiblyEmpty in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -3539,7 +3539,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 636 "pars.fsy"
                  : 'gentype_moduleSpfnsPossiblyEmptyBlock));
-# 3542 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3542 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleSpfnsPossiblyEmpty in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -3554,7 +3554,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 639 "pars.fsy"
                  : 'gentype_moduleSpfnsPossiblyEmptyBlock));
-# 3557 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3557 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
             Microsoft.FSharp.Core.Operators.box
@@ -3565,7 +3565,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 645 "pars.fsy"
                  : 'gentype_moduleSpfnsPossiblyEmptyBlock));
-# 3568 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3568 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleSpfns in
             Microsoft.FSharp.Core.Operators.box
@@ -3576,7 +3576,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 650 "pars.fsy"
                  : 'gentype_moduleSpfnsPossiblyEmpty));
-# 3579 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3579 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -3586,7 +3586,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 653 "pars.fsy"
                  : 'gentype_moduleSpfnsPossiblyEmpty));
-# 3589 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3589 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -3596,7 +3596,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 656 "pars.fsy"
                  : 'gentype_moduleSpfnsPossiblyEmpty));
-# 3599 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3599 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleSpfn in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_topSeparators in
@@ -3609,7 +3609,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 661 "pars.fsy"
                  : 'gentype_moduleSpfns));
-# 3612 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3612 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_topSeparators in
             let _3 = parseState.GetInput(3) :?> 'gentype_moduleSpfns in
@@ -3621,7 +3621,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 664 "pars.fsy"
                  : 'gentype_moduleSpfns));
-# 3624 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3624 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleSpfn in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_topSeparators in
@@ -3633,7 +3633,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 667 "pars.fsy"
                  : 'gentype_moduleSpfns));
-# 3636 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3636 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hashDirective in
             Microsoft.FSharp.Core.Operators.box
@@ -3644,7 +3644,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 672 "pars.fsy"
                  : 'gentype_moduleSpfn));
-# 3647 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3647 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_valSpfn in
             Microsoft.FSharp.Core.Operators.box
@@ -3655,7 +3655,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 675 "pars.fsy"
                  : 'gentype_moduleSpfn));
-# 3658 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3658 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -3681,7 +3681,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 678 "pars.fsy"
                  : 'gentype_moduleSpfn));
-# 3684 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3684 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -3708,7 +3708,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 692 "pars.fsy"
                  : 'gentype_moduleSpfn));
-# 3711 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3711 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -3729,7 +3729,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 707 "pars.fsy"
                  : 'gentype_moduleSpfn));
-# 3732 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3732 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -3756,7 +3756,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 718 "pars.fsy"
                  : 'gentype_moduleSpfn));
-# 3759 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3759 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -3775,7 +3775,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 733 "pars.fsy"
                  : 'gentype_moduleSpfn));
-# 3778 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3778 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_openDecl in
             Microsoft.FSharp.Core.Operators.box
@@ -3786,7 +3786,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 742 "pars.fsy"
                  : 'gentype_moduleSpfn));
-# 3789 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3789 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -3821,7 +3821,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 746 "pars.fsy"
                  : 'gentype_valSpfn));
-# 3824 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3824 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -3831,7 +3831,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 766 "pars.fsy"
                  : 'gentype_optLiteralValueSpfn));
-# 3834 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3834 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -3843,7 +3843,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 769 "pars.fsy"
                  : 'gentype_optLiteralValueSpfn));
-# 3846 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3846 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynExpr in
             let _4 = parseState.GetInput(4) :?> 'gentype_oblockend in
@@ -3857,7 +3857,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 773 "pars.fsy"
                  : 'gentype_optLiteralValueSpfn));
-# 3860 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3860 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleSpfns in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -3869,7 +3869,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 782 "pars.fsy"
                  : 'gentype_moduleSpecBlock));
-# 3872 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3872 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_sigOrBegin in
             let _3 = parseState.GetInput(3) :?> 'gentype_moduleSpfnsPossiblyEmpty in
@@ -3883,7 +3883,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 786 "pars.fsy"
                  : 'gentype_moduleSpecBlock));
-# 3886 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3886 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sigOrBegin in
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleSpfnsPossiblyEmpty in
@@ -3896,7 +3896,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 791 "pars.fsy"
                  : 'gentype_moduleSpecBlock));
-# 3899 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3899 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_tyconSpfn in
             let _3 = parseState.GetInput(3) :?> SynTypeDefnSig list in
@@ -3922,7 +3922,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 797 "pars.fsy"
                  : SynTypeDefnSig list));
-# 3925 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3925 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -3932,7 +3932,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 815 "pars.fsy"
                  : SynTypeDefnSig list));
-# 3935 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3935 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeNameInfo in
             let _3 = parseState.GetInput(3) :?> 'gentype_tyconSpfnRhsBlock in
@@ -3946,7 +3946,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 821 "pars.fsy"
                  : 'gentype_tyconSpfn));
-# 3949 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3949 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeNameInfo in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_classSpfn in
@@ -3970,7 +3970,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 825 "pars.fsy"
                  : 'gentype_tyconSpfn));
-# 3973 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3973 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_tyconSpfnRhs in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_OBLOCKSEP in
@@ -3989,7 +3989,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 851 "pars.fsy"
                  : 'gentype_tyconSpfnRhsBlock));
-# 3992 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 3992 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tyconSpfnRhs in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_classSpfn in
@@ -4004,7 +4004,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 857 "pars.fsy"
                  : 'gentype_tyconSpfnRhsBlock));
-# 4007 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4007 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypeDefnSimpleRepr in
             Microsoft.FSharp.Core.Operators.box
@@ -4019,7 +4019,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 866 "pars.fsy"
                  : 'gentype_tyconSpfnRhs));
-# 4022 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4022 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tyconClassSpfn in
             Microsoft.FSharp.Core.Operators.box
@@ -4043,7 +4043,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 873 "pars.fsy"
                  : 'gentype_tyconSpfnRhs));
-# 4046 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4046 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_topType in
             Microsoft.FSharp.Core.Operators.box
@@ -4064,7 +4064,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 891 "pars.fsy"
                  : 'gentype_tyconSpfnRhs));
-# 4067 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4067 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classSpfnBlockKindUnspecified in
             Microsoft.FSharp.Core.Operators.box
@@ -4076,7 +4076,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 908 "pars.fsy"
                  : 'gentype_tyconClassSpfn));
-# 4079 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4079 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classOrInterfaceOrStruct in
             let _2 = parseState.GetInput(2) :?> 'gentype_classSpfnBlock in
@@ -4088,7 +4088,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 912 "pars.fsy"
                  : 'gentype_tyconClassSpfn));
-# 4091 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4091 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classOrInterfaceOrStruct in
             let _2 = parseState.GetInput(2) :?> 'gentype_classSpfnBlock in
@@ -4102,7 +4102,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 915 "pars.fsy"
                  : 'gentype_tyconClassSpfn));
-# 4105 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4105 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classOrInterfaceOrStruct in
             Microsoft.FSharp.Core.Operators.box
@@ -4114,7 +4114,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 919 "pars.fsy"
                  : 'gentype_tyconClassSpfn));
-# 4117 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4117 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classSpfnMembers in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -4126,7 +4126,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 926 "pars.fsy"
                  : 'gentype_classSpfnBlockKindUnspecified));
-# 4129 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4129 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classSpfnMembers in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -4139,7 +4139,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 929 "pars.fsy"
                  : 'gentype_classSpfnBlockKindUnspecified));
-# 4142 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4142 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classSpfnBlock in
             Microsoft.FSharp.Core.Operators.box
@@ -4150,7 +4150,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 934 "pars.fsy"
                  : 'gentype_classSpfnBlockKindUnspecified));
-# 4153 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4153 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classSpfnBlock in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -4162,7 +4162,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 937 "pars.fsy"
                  : 'gentype_classSpfnBlockKindUnspecified));
-# 4165 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4165 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classSpfnMembers in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -4174,7 +4174,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 943 "pars.fsy"
                  : 'gentype_classSpfnBlock));
-# 4177 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4177 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classSpfnMembers in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -4187,7 +4187,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 946 "pars.fsy"
                  : 'gentype_classSpfnBlock));
-# 4190 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4190 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classSpfnMembers in
             Microsoft.FSharp.Core.Operators.box
@@ -4198,7 +4198,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 949 "pars.fsy"
                  : 'gentype_classSpfnBlock));
-# 4201 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4201 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classSpfnMembersAtLeastOne in
             Microsoft.FSharp.Core.Operators.box
@@ -4209,7 +4209,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 954 "pars.fsy"
                  : 'gentype_classSpfnMembers));
-# 4212 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4212 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -4219,7 +4219,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 957 "pars.fsy"
                  : 'gentype_classSpfnMembers));
-# 4222 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4222 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classMemberSpfn in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_seps in
@@ -4232,7 +4232,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 963 "pars.fsy"
                  : 'gentype_classSpfnMembersAtLeastOne));
-# 4235 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4235 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -4280,7 +4280,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 969 "pars.fsy"
                  : 'gentype_classMemberSpfn));
-# 4283 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4283 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -4295,7 +4295,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1002 "pars.fsy"
                  : 'gentype_classMemberSpfn));
-# 4298 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4298 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -4309,7 +4309,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1006 "pars.fsy"
                  : 'gentype_classMemberSpfn));
-# 4312 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4312 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -4325,7 +4325,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1010 "pars.fsy"
                  : 'gentype_classMemberSpfn));
-# 4328 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4328 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -4344,7 +4344,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1016 "pars.fsy"
                  : 'gentype_classMemberSpfn));
-# 4347 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4347 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -4364,7 +4364,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1025 "pars.fsy"
                  : 'gentype_classMemberSpfn));
-# 4367 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4367 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -4380,7 +4380,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1035 "pars.fsy"
                  : 'gentype_classMemberSpfn));
-# 4383 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4383 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -4400,7 +4400,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1040 "pars.fsy"
                  : 'gentype_classMemberSpfn));
-# 4403 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4403 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -4410,7 +4410,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1053 "pars.fsy"
                  : 'gentype_classMemberSpfnGetSet));
-# 4413 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4413 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classMemberSpfnGetSetElements in
             Microsoft.FSharp.Core.Operators.box
@@ -4422,7 +4422,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1056 "pars.fsy"
                  : 'gentype_classMemberSpfnGetSet));
-# 4425 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4425 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classMemberSpfnGetSetElements in
             Microsoft.FSharp.Core.Operators.box
@@ -4434,7 +4434,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1060 "pars.fsy"
                  : 'gentype_classMemberSpfnGetSet));
-# 4437 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4437 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classMemberSpfnGetSetElements in
             Microsoft.FSharp.Core.Operators.box
@@ -4447,7 +4447,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1064 "pars.fsy"
                  : 'gentype_classMemberSpfnGetSet));
-# 4450 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4450 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_access in
             let _2 = parseState.GetInput(2) :?> 'gentype_nameop in
@@ -4465,7 +4465,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1072 "pars.fsy"
                  : 'gentype_classMemberSpfnGetSetElements));
-# 4468 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4468 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_access in
             let _2 = parseState.GetInput(2) :?> 'gentype_nameop in
@@ -4487,7 +4487,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1081 "pars.fsy"
                  : 'gentype_classMemberSpfnGetSetElements));
-# 4490 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4490 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_access in
             let _2 = parseState.GetInput(2) :?> 'gentype_nameop in
@@ -4506,7 +4506,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1093 "pars.fsy"
                  : 'gentype_classMemberSpfnGetSetElements));
-# 4509 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4509 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_oblockend in
             let _3 = parseState.GetInput(3) :?> range * bool in
@@ -4519,7 +4519,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1102 "pars.fsy"
                  : 'gentype_classMemberSpfnGetSetElements));
-# 4522 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4522 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_memberFlags in
             Microsoft.FSharp.Core.Operators.box
@@ -4530,7 +4530,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1106 "pars.fsy"
                  : 'gentype_memberSpecFlags));
-# 4533 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4533 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_abstractMemberFlags in
             Microsoft.FSharp.Core.Operators.box
@@ -4541,7 +4541,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1107 "pars.fsy"
                  : 'gentype_memberSpecFlags));
-# 4544 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4544 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExceptionDefnRepr in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_classSpfn in
@@ -4554,7 +4554,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1113 "pars.fsy"
                  : 'gentype_exconSpfn));
-# 4557 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4557 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classSpfnBlock in
             let _3 = parseState.GetInput(3) :?> 'gentype_declEnd in
@@ -4567,7 +4567,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1120 "pars.fsy"
                  : 'gentype_opt_classSpfn));
-# 4570 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4570 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -4577,7 +4577,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1124 "pars.fsy"
                  : 'gentype_opt_classSpfn));
-# 4580 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4580 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_fileNamespaceImpls in
             let _2 = parseState.GetInput(2) :?> ParseHelpers.LexerContinuation in
@@ -4589,7 +4589,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1133 "pars.fsy"
                  : ParsedImplFile));
-# 4592 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4592 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_fileNamespaceImpls in
             let _3 = parseState.GetInput(3) :?> ParseHelpers.LexerContinuation in
@@ -4601,7 +4601,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1136 "pars.fsy"
                  : ParsedImplFile));
-# 4604 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4604 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
@@ -4613,7 +4613,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1142 "pars.fsy"
                  : ParsedImplFile));
-# 4616 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4616 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_fileModuleImpl in
             Microsoft.FSharp.Core.Operators.box
@@ -4624,7 +4624,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1149 "pars.fsy"
                  : 'gentype_fileNamespaceImpls));
-# 4627 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4627 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_fileModuleImpl in
             let _2 = parseState.GetInput(2) :?> 'gentype_fileNamespaceImplList in
@@ -4649,7 +4649,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1152 "pars.fsy"
                  : 'gentype_fileNamespaceImpls));
-# 4652 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4652 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_fileNamespaceImpl in
             let _2 = parseState.GetInput(2) :?> 'gentype_fileNamespaceImplList in
@@ -4661,7 +4661,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1171 "pars.fsy"
                  : 'gentype_fileNamespaceImplList));
-# 4664 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4664 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_fileNamespaceImpl in
             Microsoft.FSharp.Core.Operators.box
@@ -4672,7 +4672,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1174 "pars.fsy"
                  : 'gentype_fileNamespaceImplList));
-# 4675 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4675 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_namespaceIntro in
             let _2 = parseState.GetInput(2) :?> 'gentype_deprecated_opt_equals in
@@ -4686,7 +4686,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1180 "pars.fsy"
                  : 'gentype_fileNamespaceImpl));
-# 4689 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4689 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -4710,7 +4710,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1187 "pars.fsy"
                  : 'gentype_fileModuleImpl));
-# 4713 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4713 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynModuleDecl list in
             Microsoft.FSharp.Core.Operators.box
@@ -4733,7 +4733,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1200 "pars.fsy"
                  : 'gentype_fileModuleImpl));
-# 4736 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4736 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleDefnsOrExprPossiblyEmpty in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -4746,7 +4746,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1218 "pars.fsy"
                  : SynModuleDecl list));
-# 4749 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4749 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleDefnsOrExprPossiblyEmpty in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -4760,7 +4760,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1221 "pars.fsy"
                  : SynModuleDecl list));
-# 4763 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4763 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
             Microsoft.FSharp.Core.Operators.box
@@ -4771,7 +4771,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1226 "pars.fsy"
                  : SynModuleDecl list));
-# 4774 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4774 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleDefnsOrExprPossiblyEmpty in
             Microsoft.FSharp.Core.Operators.box
@@ -4782,7 +4782,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1229 "pars.fsy"
                  : SynModuleDecl list));
-# 4785 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4785 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleDefnsOrExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -4793,7 +4793,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1235 "pars.fsy"
                  : 'gentype_moduleDefnsOrExprPossiblyEmpty));
-# 4796 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4796 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -4803,7 +4803,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1238 "pars.fsy"
                  : 'gentype_moduleDefnsOrExprPossiblyEmpty));
-# 4806 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4806 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -4822,7 +4822,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1245 "pars.fsy"
                  : 'gentype_moduleDefnsOrExpr));
-# 4825 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4825 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -4840,7 +4840,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1252 "pars.fsy"
                  : 'gentype_moduleDefnsOrExpr));
-# 4843 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4843 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -4857,7 +4857,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1259 "pars.fsy"
                  : 'gentype_moduleDefnsOrExpr));
-# 4860 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4860 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleDefns in
             Microsoft.FSharp.Core.Operators.box
@@ -4868,7 +4868,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1266 "pars.fsy"
                  : 'gentype_moduleDefnsOrExpr));
-# 4871 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4871 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             Microsoft.FSharp.Core.Operators.box
@@ -4879,7 +4879,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1269 "pars.fsy"
                  : 'gentype_moduleDefnsOrExpr));
-# 4882 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4882 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleDefnOrDirective in
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleDefnOrDirective in
@@ -4891,7 +4891,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1275 "pars.fsy"
                  : 'gentype_moduleDefns));
-# 4894 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4894 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleDefnOrDirective in
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleDefns in
@@ -4903,7 +4903,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1278 "pars.fsy"
                  : 'gentype_moduleDefns));
-# 4906 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4906 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleDefnOrDirective in
             let _2 = parseState.GetInput(2) :?> 'gentype_topSeparators in
@@ -4916,7 +4916,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1281 "pars.fsy"
                  : 'gentype_moduleDefns));
-# 4919 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4919 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleDefnOrDirective in
             Microsoft.FSharp.Core.Operators.box
@@ -4927,7 +4927,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1284 "pars.fsy"
                  : 'gentype_moduleDefns));
-# 4930 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4930 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleDefnOrDirective in
             let _2 = parseState.GetInput(2) :?> 'gentype_topSeparators in
@@ -4939,7 +4939,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1287 "pars.fsy"
                  : 'gentype_moduleDefns));
-# 4942 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4942 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_topSeparators in
             let _3 = parseState.GetInput(3) :?> 'gentype_moduleDefnsOrExpr in
@@ -4951,7 +4951,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1290 "pars.fsy"
                  : 'gentype_moduleDefns));
-# 4954 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4954 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleDefn in
             Microsoft.FSharp.Core.Operators.box
@@ -4962,7 +4962,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1296 "pars.fsy"
                  : 'gentype_moduleDefnOrDirective));
-# 4965 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4965 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hashDirective in
             Microsoft.FSharp.Core.Operators.box
@@ -4973,7 +4973,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1299 "pars.fsy"
                  : 'gentype_moduleDefnOrDirective));
-# 4976 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4976 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -4989,7 +4989,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1308 "pars.fsy"
                  : 'gentype_moduleDefn));
-# 4992 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 4992 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -5005,7 +5005,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1315 "pars.fsy"
                  : 'gentype_moduleDefn));
-# 5008 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5008 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -5020,7 +5020,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1322 "pars.fsy"
                  : 'gentype_moduleDefn));
-# 5023 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5023 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -5044,7 +5044,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1328 "pars.fsy"
                  : 'gentype_moduleDefn));
-# 5047 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5047 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -5063,7 +5063,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1341 "pars.fsy"
                  : 'gentype_moduleDefn));
-# 5066 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5066 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -5101,7 +5101,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1351 "pars.fsy"
                  : 'gentype_moduleDefn));
-# 5104 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5104 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -5119,7 +5119,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1379 "pars.fsy"
                  : 'gentype_moduleDefn));
-# 5122 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5122 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
@@ -5132,7 +5132,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1388 "pars.fsy"
                  : 'gentype_moduleDefn));
-# 5135 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5135 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_openDecl in
             Microsoft.FSharp.Core.Operators.box
@@ -5143,7 +5143,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1393 "pars.fsy"
                  : 'gentype_moduleDefn));
-# 5146 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5146 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
@@ -5156,7 +5156,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1397 "pars.fsy"
                  : 'gentype_openDecl));
-# 5159 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5159 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -5168,7 +5168,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1402 "pars.fsy"
                  : 'gentype_openDecl));
-# 5171 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5171 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typeKeyword in
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeWithoutNull in
@@ -5182,7 +5182,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1406 "pars.fsy"
                  : 'gentype_openDecl));
-# 5185 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5185 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typeKeyword in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -5195,7 +5195,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1411 "pars.fsy"
                  : 'gentype_openDecl));
-# 5198 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5198 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynLongIdent in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -5207,7 +5207,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1419 "pars.fsy"
                  : 'gentype_namedModuleAbbrevBlock));
-# 5210 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5210 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
@@ -5218,7 +5218,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1422 "pars.fsy"
                  : 'gentype_namedModuleAbbrevBlock));
-# 5221 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5221 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_wrappedNamedModuleDefn in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -5230,7 +5230,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1428 "pars.fsy"
                  : 'gentype_namedModuleDefnBlock));
-# 5233 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5233 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_wrappedNamedModuleDefn in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -5243,7 +5243,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1431 "pars.fsy"
                  : 'gentype_namedModuleDefnBlock));
-# 5246 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5246 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleDefnsOrExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -5277,7 +5277,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1435 "pars.fsy"
                  : 'gentype_namedModuleDefnBlock));
-# 5280 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5280 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleDefnsOrExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -5291,7 +5291,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1461 "pars.fsy"
                  : 'gentype_namedModuleDefnBlock));
-# 5294 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5294 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
             Microsoft.FSharp.Core.Operators.box
@@ -5303,7 +5303,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1466 "pars.fsy"
                  : 'gentype_namedModuleDefnBlock));
-# 5306 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5306 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_wrappedNamedModuleDefn in
             Microsoft.FSharp.Core.Operators.box
@@ -5314,7 +5314,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1470 "pars.fsy"
                  : 'gentype_namedModuleDefnBlock));
-# 5317 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5317 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
@@ -5325,7 +5325,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1473 "pars.fsy"
                  : 'gentype_namedModuleDefnBlock));
-# 5328 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5328 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_structOrBegin in
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleDefnsOrExprPossiblyEmpty in
@@ -5338,7 +5338,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1479 "pars.fsy"
                  : 'gentype_wrappedNamedModuleDefn));
-# 5341 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5341 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_structOrBegin in
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleDefnsOrExprPossiblyEmpty in
@@ -5352,7 +5352,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1483 "pars.fsy"
                  : 'gentype_wrappedNamedModuleDefn));
-# 5355 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5355 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_structOrBegin in
             Microsoft.FSharp.Core.Operators.box
@@ -5364,7 +5364,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1487 "pars.fsy"
                  : 'gentype_wrappedNamedModuleDefn));
-# 5367 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5367 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classDefnBlock in
             let _3 = parseState.GetInput(3) :?> 'gentype_declEnd in
@@ -5377,7 +5377,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1493 "pars.fsy"
                  : range * SynMemberDefns));
-# 5380 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5380 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             Microsoft.FSharp.Core.Operators.box
@@ -5388,7 +5388,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1500 "pars.fsy"
                  : 'gentype_opt_attributes));
-# 5391 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5391 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -5398,7 +5398,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1503 "pars.fsy"
                  : 'gentype_opt_attributes));
-# 5401 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5401 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributeList in
             Microsoft.FSharp.Core.Operators.box
@@ -5409,7 +5409,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1508 "pars.fsy"
                  : 'gentype_attributes));
-# 5412 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5412 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributeList in
             let _2 = parseState.GetInput(2) :?> 'gentype_attributes in
@@ -5421,7 +5421,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1511 "pars.fsy"
                  : 'gentype_attributes));
-# 5424 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5424 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_attributeListElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_seps in
@@ -5434,7 +5434,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1517 "pars.fsy"
                  : 'gentype_attributeList));
-# 5437 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5437 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _4 = parseState.GetInput(4) :?> 'gentype_opt_OBLOCKSEP in
             Microsoft.FSharp.Core.Operators.box
@@ -5445,7 +5445,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1520 "pars.fsy"
                  : 'gentype_attributeList));
-# 5448 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5448 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_attributeListElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_seps in
@@ -5459,7 +5459,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1523 "pars.fsy"
                  : 'gentype_attributeList));
-# 5462 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5462 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -5471,7 +5471,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1527 "pars.fsy"
                  : 'gentype_attributeList));
-# 5474 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5474 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attribute in
             Microsoft.FSharp.Core.Operators.box
@@ -5482,7 +5482,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1534 "pars.fsy"
                  : 'gentype_attributeListElements));
-# 5485 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5485 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributeListElements in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps in
@@ -5495,7 +5495,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1537 "pars.fsy"
                  : 'gentype_attributeListElements));
-# 5498 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5498 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -5510,7 +5510,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1544 "pars.fsy"
                  : 'gentype_attribute));
-# 5513 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5513 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributeTarget in
             let _2 = parseState.GetInput(2) :?> SynLongIdent in
@@ -5527,7 +5527,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1550 "pars.fsy"
                  : 'gentype_attribute));
-# 5530 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5530 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributeTarget in
             let _3 = parseState.GetInput(3) :?> SynLongIdent in
@@ -5545,7 +5545,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1557 "pars.fsy"
                  : 'gentype_attribute));
-# 5548 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5548 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_moduleKeyword in
             Microsoft.FSharp.Core.Operators.box
@@ -5556,7 +5556,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1566 "pars.fsy"
                  : 'gentype_attributeTarget));
-# 5559 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5559 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeKeyword in
             Microsoft.FSharp.Core.Operators.box
@@ -5567,7 +5567,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1569 "pars.fsy"
                  : 'gentype_attributeTarget));
-# 5570 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5570 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
@@ -5578,7 +5578,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1571 "pars.fsy"
                  : 'gentype_attributeTarget));
-# 5581 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5581 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             Microsoft.FSharp.Core.Operators.box
@@ -5590,7 +5590,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1575 "pars.fsy"
                  : 'gentype_attributeTarget));
-# 5593 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5593 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -5602,7 +5602,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1581 "pars.fsy"
                  : 'gentype_memberFlags));
-# 5605 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5605 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -5614,7 +5614,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1586 "pars.fsy"
                  : 'gentype_memberFlags));
-# 5617 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5617 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -5625,7 +5625,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1591 "pars.fsy"
                  : 'gentype_memberFlags));
-# 5628 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5628 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -5636,7 +5636,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1595 "pars.fsy"
                  : 'gentype_memberFlags));
-# 5639 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5639 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -5647,7 +5647,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1599 "pars.fsy"
                  : 'gentype_memberFlags));
-# 5650 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5650 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_tyconNameAndTyparDecls in
@@ -5663,7 +5663,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1605 "pars.fsy"
                  : 'gentype_typeNameInfo));
-# 5666 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5666 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_tyconDefn in
             let _3 = parseState.GetInput(3) :?> 'gentype_tyconDefnList in
@@ -5689,7 +5689,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1613 "pars.fsy"
                  : 'gentype_tyconDefnList));
-# 5692 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5692 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -5699,7 +5699,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1630 "pars.fsy"
                  : 'gentype_tyconDefnList));
-# 5702 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5702 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeNameInfo in
             Microsoft.FSharp.Core.Operators.box
@@ -5712,7 +5712,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1635 "pars.fsy"
                  : 'gentype_tyconDefn));
-# 5715 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5715 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeNameInfo in
             let _2 = parseState.GetInput(2) :?> range * SynMemberDefns in
@@ -5728,7 +5728,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1640 "pars.fsy"
                  : 'gentype_tyconDefn));
-# 5731 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5731 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeNameInfo in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_attributes in
@@ -5782,7 +5782,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1647 "pars.fsy"
                  : 'gentype_tyconDefn));
-# 5785 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5785 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeNameInfo in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_attributes in
@@ -5824,7 +5824,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1692 "pars.fsy"
                  : 'gentype_tyconDefn));
-# 5827 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5827 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_tyconDefnRhs in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_OBLOCKSEP in
@@ -5846,7 +5846,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1731 "pars.fsy"
                  : 'gentype_tyconDefnRhsBlock));
-# 5849 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5849 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_tyconDefnRhs in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_OBLOCKSEP in
@@ -5866,7 +5866,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1740 "pars.fsy"
                  : 'gentype_tyconDefnRhsBlock));
-# 5869 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5869 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_oblockend in
             Microsoft.FSharp.Core.Operators.box
@@ -5878,7 +5878,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1748 "pars.fsy"
                  : 'gentype_tyconDefnRhsBlock));
-# 5881 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5881 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tyconDefnRhs in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_classDefn in
@@ -5894,7 +5894,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1752 "pars.fsy"
                  : 'gentype_tyconDefnRhsBlock));
-# 5897 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5897 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypeDefnSimpleRepr in
             Microsoft.FSharp.Core.Operators.box
@@ -5906,7 +5906,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1764 "pars.fsy"
                  : 'gentype_tyconDefnRhs));
-# 5909 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5909 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tyconClassDefn in
             Microsoft.FSharp.Core.Operators.box
@@ -5924,7 +5924,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1769 "pars.fsy"
                  : 'gentype_tyconDefnRhs));
-# 5927 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5927 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_topType in
             Microsoft.FSharp.Core.Operators.box
@@ -5943,7 +5943,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1780 "pars.fsy"
                  : 'gentype_tyconDefnRhs));
-# 5946 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5946 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classDefnBlockKindUnspecified in
             Microsoft.FSharp.Core.Operators.box
@@ -5955,7 +5955,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1794 "pars.fsy"
                  : 'gentype_tyconClassDefn));
-# 5958 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5958 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classOrInterfaceOrStruct in
             let _2 = parseState.GetInput(2) :?> 'gentype_classDefnBlock in
@@ -5967,7 +5967,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1798 "pars.fsy"
                  : 'gentype_tyconClassDefn));
-# 5970 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5970 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classOrInterfaceOrStruct in
             let _2 = parseState.GetInput(2) :?> 'gentype_classDefnBlock in
@@ -5982,7 +5982,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1801 "pars.fsy"
                  : 'gentype_tyconClassDefn));
-# 5985 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5985 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classOrInterfaceOrStruct in
             Microsoft.FSharp.Core.Operators.box
@@ -5994,7 +5994,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1806 "pars.fsy"
                  : 'gentype_tyconClassDefn));
-# 5997 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 5997 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classDefnMembersAtLeastOne in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -6011,7 +6011,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1813 "pars.fsy"
                  : 'gentype_classDefnBlockKindUnspecified));
-# 6014 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6014 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classDefnMembersAtLeastOne in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -6027,7 +6027,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1821 "pars.fsy"
                  : 'gentype_classDefnBlockKindUnspecified));
-# 6030 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6030 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classDefnMembers in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -6040,7 +6040,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1831 "pars.fsy"
                  : 'gentype_classDefnBlock));
-# 6043 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6043 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classDefnMembers in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -6052,7 +6052,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1835 "pars.fsy"
                  : 'gentype_classDefnBlock));
-# 6055 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6055 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classDefnMembers in
             Microsoft.FSharp.Core.Operators.box
@@ -6063,7 +6063,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1838 "pars.fsy"
                  : 'gentype_classDefnBlock));
-# 6066 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6066 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classDefnMembersAtLeastOne in
             Microsoft.FSharp.Core.Operators.box
@@ -6074,7 +6074,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1844 "pars.fsy"
                  : 'gentype_classDefnMembers));
-# 6077 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6077 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classDefnMembers in
             Microsoft.FSharp.Core.Operators.box
@@ -6085,7 +6085,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1848 "pars.fsy"
                  : 'gentype_classDefnMembers));
-# 6088 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6088 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -6095,7 +6095,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1851 "pars.fsy"
                  : 'gentype_classDefnMembers));
-# 6098 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6098 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classDefnMember in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_seps in
@@ -6114,7 +6114,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1857 "pars.fsy"
                  : 'gentype_classDefnMembersAtLeastOne));
-# 6117 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6117 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classDefnMemberGetSetElements in
             Microsoft.FSharp.Core.Operators.box
@@ -6126,7 +6126,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1869 "pars.fsy"
                  : 'gentype_classDefnMemberGetSet));
-# 6129 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6129 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classDefnMemberGetSetElements in
             Microsoft.FSharp.Core.Operators.box
@@ -6138,7 +6138,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1873 "pars.fsy"
                  : 'gentype_classDefnMemberGetSet));
-# 6141 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6141 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classDefnMemberGetSetElements in
             Microsoft.FSharp.Core.Operators.box
@@ -6151,7 +6151,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1877 "pars.fsy"
                  : 'gentype_classDefnMemberGetSet));
-# 6154 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6154 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classDefnMemberGetSetElement in
             Microsoft.FSharp.Core.Operators.box
@@ -6162,7 +6162,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1884 "pars.fsy"
                  : 'gentype_classDefnMemberGetSetElements));
-# 6165 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6165 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_classDefnMemberGetSetElement in
             let _3 = parseState.GetInput(3) :?> 'gentype_classDefnMemberGetSetElement in
@@ -6175,7 +6175,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1887 "pars.fsy"
                  : 'gentype_classDefnMemberGetSetElements));
-# 6178 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6178 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_inline in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_attributes in
@@ -6192,7 +6192,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1892 "pars.fsy"
                  : 'gentype_classDefnMemberGetSetElement));
-# 6195 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6195 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_inline in
             let _2 = parseState.GetInput(2) :?> 'gentype_bindingPattern in
@@ -6218,7 +6218,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1901 "pars.fsy"
                  : 'gentype_memberCore));
-# 6221 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6221 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_inline in
             let _2 = parseState.GetInput(2) :?> 'gentype_bindingPattern in
@@ -6247,7 +6247,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1916 "pars.fsy"
                  : 'gentype_memberCore));
-# 6250 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6250 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_inline in
             let _2 = parseState.GetInput(2) :?> 'gentype_bindingPattern in
@@ -6277,7 +6277,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1936 "pars.fsy"
                  : 'gentype_memberCore));
-# 6280 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6280 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_inline in
             let _2 = parseState.GetInput(2) :?> 'gentype_bindingPattern in
@@ -6303,7 +6303,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1957 "pars.fsy"
                  : 'gentype_memberCore));
-# 6306 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6306 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -6314,7 +6314,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1974 "pars.fsy"
                  : 'gentype_abstractMemberFlags));
-# 6317 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6317 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -6326,7 +6326,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1978 "pars.fsy"
                  : 'gentype_abstractMemberFlags));
-# 6329 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6329 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -6342,7 +6342,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1983 "pars.fsy"
                  : 'gentype_abstractMemberFlags));
-# 6345 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6345 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -6359,7 +6359,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 1992 "pars.fsy"
                  : 'gentype_abstractMemberFlags));
-# 6362 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6362 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6374,7 +6374,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2004 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6377 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6377 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6389,7 +6389,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2009 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6392 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6392 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6411,7 +6411,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2014 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6414 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6414 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6441,7 +6441,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2024 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6444 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6444 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6462,7 +6462,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2044 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6465 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6465 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6480,7 +6480,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2053 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6483 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6483 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6518,7 +6518,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2060 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6521 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6521 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6533,7 +6533,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2083 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6536 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6536 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6549,7 +6549,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2088 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6552 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6552 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6566,7 +6566,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2093 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6569 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6569 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6585,7 +6585,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2099 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6588 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6588 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6613,7 +6613,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2106 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6616 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6616 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6639,7 +6639,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2121 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6642 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6642 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6664,7 +6664,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2135 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6667 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6667 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6687,7 +6687,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2149 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6690 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6690 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -6703,7 +6703,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2161 "pars.fsy"
                  : 'gentype_classDefnMember));
-# 6706 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6706 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -6719,7 +6719,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2169 "pars.fsy"
                  : 'gentype_valDefnDecl));
-# 6722 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6722 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -6737,7 +6737,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2174 "pars.fsy"
                  : 'gentype_valDefnDecl));
-# 6740 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6740 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -6754,7 +6754,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2181 "pars.fsy"
                  : 'gentype_valDefnDecl));
-# 6757 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6757 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -6769,7 +6769,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2187 "pars.fsy"
                  : 'gentype_valDefnDecl));
-# 6772 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6772 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -6791,7 +6791,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2195 "pars.fsy"
                  : 'gentype_autoPropsDefnDecl));
-# 6794 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6794 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -6816,7 +6816,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2204 "pars.fsy"
                  : 'gentype_autoPropsDefnDecl));
-# 6819 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6819 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -6840,7 +6840,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2217 "pars.fsy"
                  : 'gentype_autoPropsDefnDecl));
-# 6843 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6843 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -6860,7 +6860,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2230 "pars.fsy"
                  : 'gentype_autoPropsDefnDecl));
-# 6863 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6863 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -6870,7 +6870,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2242 "pars.fsy"
                  : 'gentype_opt_typ));
-# 6873 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6873 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
@@ -6881,7 +6881,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2245 "pars.fsy"
                  : 'gentype_opt_typ));
-# 6884 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6884 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -6894,7 +6894,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2248 "pars.fsy"
                  : 'gentype_opt_typ));
-# 6897 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6897 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
@@ -6909,7 +6909,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2255 "pars.fsy"
                  : 'gentype_atomicPatternLongIdent));
-# 6912 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6912 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
@@ -6922,7 +6922,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2263 "pars.fsy"
                  : 'gentype_atomicPatternLongIdent));
-# 6925 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6925 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
@@ -6933,7 +6933,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2268 "pars.fsy"
                  : 'gentype_atomicPatternLongIdent));
-# 6936 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6936 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_access in
             let _4 = parseState.GetInput(4) :?> SynLongIdent in
@@ -6949,7 +6949,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2271 "pars.fsy"
                  : 'gentype_atomicPatternLongIdent));
-# 6952 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6952 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_access in
             let _2 = parseState.GetInput(2) :?> SynLongIdent in
@@ -6961,7 +6961,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2279 "pars.fsy"
                  : 'gentype_atomicPatternLongIdent));
-# 6964 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6964 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -6971,7 +6971,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2284 "pars.fsy"
                  : 'gentype_opt_access));
-# 6974 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6974 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_access in
             Microsoft.FSharp.Core.Operators.box
@@ -6982,7 +6982,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2287 "pars.fsy"
                  : 'gentype_opt_access));
-# 6985 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6985 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -6993,7 +6993,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2292 "pars.fsy"
                  : 'gentype_access));
-# 6996 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 6996 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7004,7 +7004,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2296 "pars.fsy"
                  : 'gentype_access));
-# 7007 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7007 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7015,7 +7015,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2300 "pars.fsy"
                  : 'gentype_access));
-# 7018 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7018 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_objectImplementationBlock in
             let _3 = parseState.GetInput(3) :?> 'gentype_declEnd in
@@ -7030,7 +7030,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2306 "pars.fsy"
                  : 'gentype_opt_interfaceImplDefn));
-# 7033 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7033 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7041,7 +7041,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2312 "pars.fsy"
                  : 'gentype_opt_interfaceImplDefn));
-# 7044 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7044 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7051,7 +7051,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2316 "pars.fsy"
                  : 'gentype_opt_interfaceImplDefn));
-# 7054 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7054 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_classDefnBlock in
             let _3 = parseState.GetInput(3) :?> 'gentype_declEnd in
@@ -7064,7 +7064,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2321 "pars.fsy"
                  : 'gentype_opt_classDefn));
-# 7067 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7067 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7074,7 +7074,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2325 "pars.fsy"
                  : 'gentype_opt_classDefn));
-# 7077 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7077 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_optBaseSpec in
@@ -7088,7 +7088,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2331 "pars.fsy"
                  : 'gentype_inheritsDefn));
-# 7091 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7091 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -7104,7 +7104,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2336 "pars.fsy"
                  : 'gentype_inheritsDefn));
-# 7107 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7107 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -7118,7 +7118,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2341 "pars.fsy"
                  : 'gentype_inheritsDefn));
-# 7121 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7121 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_asSpec in
             Microsoft.FSharp.Core.Operators.box
@@ -7129,7 +7129,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2348 "pars.fsy"
                  : 'gentype_optAsSpec));
-# 7132 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7132 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7139,7 +7139,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2351 "pars.fsy"
                  : 'gentype_optAsSpec));
-# 7142 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7142 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
@@ -7150,7 +7150,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2355 "pars.fsy"
                  : 'gentype_asSpec));
-# 7153 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7153 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -7161,7 +7161,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2358 "pars.fsy"
                  : 'gentype_asSpec));
-# 7164 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7164 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_baseSpec in
             Microsoft.FSharp.Core.Operators.box
@@ -7172,7 +7172,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2362 "pars.fsy"
                  : 'gentype_optBaseSpec));
-# 7175 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7175 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7182,7 +7182,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2365 "pars.fsy"
                  : 'gentype_optBaseSpec));
-# 7185 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7185 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
@@ -7195,7 +7195,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2369 "pars.fsy"
                  : 'gentype_baseSpec));
-# 7198 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7198 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7206,7 +7206,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2374 "pars.fsy"
                  : 'gentype_baseSpec));
-# 7209 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7209 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_objectImplementationMembers in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -7218,7 +7218,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2381 "pars.fsy"
                  : 'gentype_objectImplementationBlock));
-# 7221 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7221 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_objectImplementationMembers in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -7231,7 +7231,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2384 "pars.fsy"
                  : 'gentype_objectImplementationBlock));
-# 7234 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7234 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objectImplementationMembers in
             Microsoft.FSharp.Core.Operators.box
@@ -7242,7 +7242,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2388 "pars.fsy"
                  : 'gentype_objectImplementationBlock));
-# 7245 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7245 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objectImplementationMember in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_seps in
@@ -7255,7 +7255,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2394 "pars.fsy"
                  : 'gentype_objectImplementationMembers));
-# 7258 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7258 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objectImplementationMember in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_seps in
@@ -7267,7 +7267,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2397 "pars.fsy"
                  : 'gentype_objectImplementationMembers));
-# 7270 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7270 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_staticMemberOrMemberOrOverride in
@@ -7282,7 +7282,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2403 "pars.fsy"
                  : 'gentype_objectImplementationMember));
-# 7285 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7285 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_staticMemberOrMemberOrOverride in
@@ -7297,7 +7297,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2407 "pars.fsy"
                  : 'gentype_objectImplementationMember));
-# 7300 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7300 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_staticMemberOrMemberOrOverride in
@@ -7324,7 +7324,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2411 "pars.fsy"
                  : 'gentype_objectImplementationMember));
-# 7327 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7327 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _3 = parseState.GetInput(3) :?> 'gentype_memberCore in
@@ -7337,7 +7337,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2429 "pars.fsy"
                  : 'gentype_objectImplementationMember));
-# 7340 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7340 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7349,7 +7349,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2434 "pars.fsy"
                  : 'gentype_staticMemberOrMemberOrOverride));
-# 7352 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7352 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7360,7 +7360,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2438 "pars.fsy"
                  : 'gentype_staticMemberOrMemberOrOverride));
-# 7363 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7363 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7371,7 +7371,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2441 "pars.fsy"
                  : 'gentype_staticMemberOrMemberOrOverride));
-# 7374 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7374 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -7388,7 +7388,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2450 "pars.fsy"
                  : SynTypeDefnSimpleRepr));
-# 7391 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7391 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -7403,7 +7403,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2455 "pars.fsy"
                  : SynTypeDefnSimpleRepr));
-# 7406 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7406 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -7430,7 +7430,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2461 "pars.fsy"
                  : SynTypeDefnSimpleRepr));
-# 7433 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7433 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -7444,7 +7444,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2479 "pars.fsy"
                  : SynTypeDefnSimpleRepr));
-# 7447 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7447 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -7461,7 +7461,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2484 "pars.fsy"
                  : SynTypeDefnSimpleRepr));
-# 7464 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7464 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_recdFieldDeclList in
@@ -7474,7 +7474,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2493 "pars.fsy"
                  : 'gentype_braceFieldDeclList));
-# 7477 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7477 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_recdFieldDeclList in
@@ -7488,7 +7488,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2496 "pars.fsy"
                  : 'gentype_braceFieldDeclList));
-# 7491 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7491 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _3 = parseState.GetInput(3) :?> 'gentype_rbrace in
@@ -7500,7 +7500,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2500 "pars.fsy"
                  : 'gentype_braceFieldDeclList));
-# 7503 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7503 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_rbrace in
@@ -7513,7 +7513,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2503 "pars.fsy"
                  : 'gentype_braceFieldDeclList));
-# 7516 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7516 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_braceBarFieldDeclListCore in
             Microsoft.FSharp.Core.Operators.box
@@ -7524,7 +7524,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2508 "pars.fsy"
                  : 'gentype_anonRecdType));
-# 7527 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7527 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_braceBarFieldDeclListCore in
             Microsoft.FSharp.Core.Operators.box
@@ -7535,7 +7535,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2510 "pars.fsy"
                  : 'gentype_anonRecdType));
-# 7538 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7538 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recdFieldDeclList in
             let _3 = parseState.GetInput(3) :?> 'gentype_bar_rbrace in
@@ -7547,7 +7547,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2515 "pars.fsy"
                  : 'gentype_braceBarFieldDeclListCore));
-# 7550 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7550 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recdFieldDeclList in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -7560,7 +7560,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2518 "pars.fsy"
                  : 'gentype_braceBarFieldDeclListCore));
-# 7563 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7563 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_bar_rbrace in
             Microsoft.FSharp.Core.Operators.box
@@ -7571,7 +7571,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2522 "pars.fsy"
                  : 'gentype_braceBarFieldDeclListCore));
-# 7574 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7574 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7581,7 +7581,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2526 "pars.fsy"
                  : 'gentype_classOrInterfaceOrStruct));
-# 7584 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7584 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7591,7 +7591,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2529 "pars.fsy"
                  : 'gentype_classOrInterfaceOrStruct));
-# 7594 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7594 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7601,7 +7601,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2532 "pars.fsy"
                  : 'gentype_classOrInterfaceOrStruct));
-# 7604 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7604 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7611,7 +7611,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2535 "pars.fsy"
                  : 'gentype_interfaceMember));
-# 7614 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7614 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7621,7 +7621,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2536 "pars.fsy"
                  : 'gentype_interfaceMember));
-# 7624 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7624 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_access in
             let _2 = parseState.GetInput(2) :?> SynLongIdent in
@@ -7633,7 +7633,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2540 "pars.fsy"
                  : 'gentype_tyconNameAndTyparDecls));
-# 7636 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7636 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_access in
             let _2 = parseState.GetInput(2) :?> 'gentype_prefixTyparDecls in
@@ -7646,7 +7646,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2543 "pars.fsy"
                  : 'gentype_tyconNameAndTyparDecls));
-# 7649 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7649 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_access in
             let _2 = parseState.GetInput(2) :?> SynLongIdent in
@@ -7659,7 +7659,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2546 "pars.fsy"
                  : 'gentype_tyconNameAndTyparDecls));
-# 7662 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7662 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_access in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
@@ -7671,7 +7671,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2549 "pars.fsy"
                  : 'gentype_tyconNameAndTyparDecls));
-# 7674 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7674 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
@@ -7682,7 +7682,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2553 "pars.fsy"
                  : 'gentype_prefixTyparDecls));
-# 7685 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7685 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typarDeclList in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -7694,7 +7694,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2556 "pars.fsy"
                  : 'gentype_prefixTyparDecls));
-# 7697 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7697 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typarDeclList in
             let _3 = parseState.GetInput(3) :?> 'gentype_typarDecl in
@@ -7706,7 +7706,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2559 "pars.fsy"
                  : 'gentype_typarDeclList));
-# 7709 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7709 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typarDecl in
             Microsoft.FSharp.Core.Operators.box
@@ -7717,7 +7717,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2560 "pars.fsy"
                  : 'gentype_typarDeclList));
-# 7720 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7720 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> SynTypar in
@@ -7729,7 +7729,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2564 "pars.fsy"
                  : 'gentype_typarDecl));
-# 7732 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7732 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> SynTypar in
@@ -7744,7 +7744,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2567 "pars.fsy"
                  : 'gentype_typarDecl));
-# 7747 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7747 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_HIGH_PRECEDENCE_TYAPP in
             let _2 = parseState.GetInput(2) :?> bool in
@@ -7761,7 +7761,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2575 "pars.fsy"
                  : 'gentype_postfixTyparDecls));
-# 7764 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7764 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typarDeclList in
             Microsoft.FSharp.Core.Operators.box
@@ -7772,7 +7772,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2583 "pars.fsy"
                  : 'gentype_explicitValTyparDeclsCore));
-# 7775 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7775 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typarDeclList in
             Microsoft.FSharp.Core.Operators.box
@@ -7783,7 +7783,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2586 "pars.fsy"
                  : 'gentype_explicitValTyparDeclsCore));
-# 7786 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7786 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7793,7 +7793,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2589 "pars.fsy"
                  : 'gentype_explicitValTyparDeclsCore));
-# 7796 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7796 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_HIGH_PRECEDENCE_TYAPP in
             let _2 = parseState.GetInput(2) :?> bool in
@@ -7812,7 +7812,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2593 "pars.fsy"
                  : 'gentype_explicitValTyparDecls));
-# 7815 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7815 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_explicitValTyparDecls in
             Microsoft.FSharp.Core.Operators.box
@@ -7823,7 +7823,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2601 "pars.fsy"
                  : 'gentype_opt_explicitValTyparDecls));
-# 7826 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7826 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7833,7 +7833,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2603 "pars.fsy"
                  : 'gentype_opt_explicitValTyparDecls));
-# 7836 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7836 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_atomType in
             Microsoft.FSharp.Core.Operators.box
@@ -7844,7 +7844,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2607 "pars.fsy"
                  : 'gentype_hashConstraint));
-# 7847 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7847 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -7854,7 +7854,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2613 "pars.fsy"
                  : 'gentype_opt_typeConstraints));
-# 7857 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7857 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typeConstraints in
             Microsoft.FSharp.Core.Operators.box
@@ -7865,7 +7865,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2616 "pars.fsy"
                  : 'gentype_opt_typeConstraints));
-# 7868 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7868 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeConstraints in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeConstraint in
@@ -7877,7 +7877,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2622 "pars.fsy"
                  : 'gentype_typeConstraints));
-# 7880 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7880 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeConstraint in
             Microsoft.FSharp.Core.Operators.box
@@ -7888,7 +7888,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2625 "pars.fsy"
                  : 'gentype_typeConstraints));
-# 7891 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7891 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_intersectionConstraints in
             let _3 = parseState.GetInput(3) :?> 'gentype_hashConstraint in
@@ -7901,7 +7901,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2631 "pars.fsy"
                  : 'gentype_intersectionConstraints));
-# 7904 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7904 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_intersectionConstraints in
             let _3 = parseState.GetInput(3) :?> 'gentype_atomType in
@@ -7915,7 +7915,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2635 "pars.fsy"
                  : 'gentype_intersectionConstraints));
-# 7918 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7918 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hashConstraint in
             Microsoft.FSharp.Core.Operators.box
@@ -7926,7 +7926,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2640 "pars.fsy"
                  : 'gentype_intersectionConstraints));
-# 7929 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7929 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomType in
             Microsoft.FSharp.Core.Operators.box
@@ -7938,7 +7938,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2643 "pars.fsy"
                  : 'gentype_intersectionConstraints));
-# 7941 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7941 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynTypar in
             let _4 = parseState.GetInput(4) :?> SynType in
@@ -7951,7 +7951,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2650 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 7954 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7954 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> SynType in
@@ -7963,7 +7963,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2654 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 7966 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7966 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
@@ -7974,7 +7974,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2657 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 7977 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7977 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> string in
@@ -7987,7 +7987,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2660 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 7990 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 7990 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
@@ -7998,7 +7998,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2664 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8001 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8001 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> string in
@@ -8012,7 +8012,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2667 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8015 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8015 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _4 = parseState.GetInput(4) :?> 'gentype_classMemberSpfn in
@@ -8026,7 +8026,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2672 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8029 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8029 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typeAlts in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -8042,7 +8042,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2676 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8045 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8045 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _4 = parseState.GetInput(4) :?> range * range option * SynType list * range list * range in
@@ -8055,7 +8055,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2681 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8058 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8058 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> string in
@@ -8072,7 +8072,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2685 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8075 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8075 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> string in
@@ -8088,7 +8088,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2692 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8091 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8091 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             Microsoft.FSharp.Core.Operators.box
@@ -8099,7 +8099,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2699 "pars.fsy"
                  : 'gentype_typeConstraint));
-# 8102 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8102 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeAlts in
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeWithoutNull in
@@ -8113,7 +8113,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2703 "pars.fsy"
                  : 'gentype_typeAlts));
-# 8116 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8116 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             Microsoft.FSharp.Core.Operators.box
@@ -8124,7 +8124,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2708 "pars.fsy"
                  : 'gentype_typeAlts));
-# 8127 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8127 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_barAndgrabXmlDoc in
             let _2 = parseState.GetInput(2) :?> 'gentype_attrUnionCaseDecls in
@@ -8136,7 +8136,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2715 "pars.fsy"
                  : Choice<SynEnumCase, SynUnionCase> list));
-# 8139 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8139 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_firstUnionCaseDeclOfMany in
             let _2 = parseState.GetInput(2) :?> 'gentype_barAndgrabXmlDoc in
@@ -8149,7 +8149,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2718 "pars.fsy"
                  : Choice<SynEnumCase, SynUnionCase> list));
-# 8152 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8152 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_firstUnionCaseDecl in
             Microsoft.FSharp.Core.Operators.box
@@ -8160,7 +8160,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2721 "pars.fsy"
                  : Choice<SynEnumCase, SynUnionCase> list));
-# 8163 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8163 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -8171,7 +8171,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2725 "pars.fsy"
                  : 'gentype_barAndgrabXmlDoc));
-# 8174 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8174 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attrUnionCaseDecl in
             let _2 = parseState.GetInput(2) :?> 'gentype_barAndgrabXmlDoc in
@@ -8184,7 +8184,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2730 "pars.fsy"
                  : 'gentype_attrUnionCaseDecls));
-# 8187 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8187 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attrUnionCaseDecl in
             Microsoft.FSharp.Core.Operators.box
@@ -8195,7 +8195,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2733 "pars.fsy"
                  : 'gentype_attrUnionCaseDecls));
-# 8198 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8198 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8208,7 +8208,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2738 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8211 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8211 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8221,7 +8221,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2741 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8224 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8224 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8238,7 +8238,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2744 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8241 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8241 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8256,7 +8256,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2750 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8259 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8259 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8275,7 +8275,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2757 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8278 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8278 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8291,7 +8291,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2766 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8294 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8294 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8305,7 +8305,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2772 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8308 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8308 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8323,7 +8323,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2775 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8326 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8326 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8345,7 +8345,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2782 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8348 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8348 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8366,7 +8366,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2793 "pars.fsy"
                  : 'gentype_attrUnionCaseDecl));
-# 8369 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8369 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_nameop in
             Microsoft.FSharp.Core.Operators.box
@@ -8377,7 +8377,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2805 "pars.fsy"
                  : 'gentype_unionCaseName));
-# 8380 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8380 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
@@ -8390,7 +8390,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2808 "pars.fsy"
                  : 'gentype_unionCaseName));
-# 8393 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8393 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _4 = parseState.GetInput(4) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
@@ -8403,7 +8403,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2813 "pars.fsy"
                  : 'gentype_unionCaseName));
-# 8406 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8406 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_OBLOCKSEP in
@@ -8418,7 +8418,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2819 "pars.fsy"
                  : 'gentype_firstUnionCaseDeclOfMany));
-# 8421 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8421 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> SynExpr * bool in
@@ -8435,7 +8435,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2825 "pars.fsy"
                  : 'gentype_firstUnionCaseDeclOfMany));
-# 8438 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8438 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -8453,7 +8453,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2832 "pars.fsy"
                  : 'gentype_firstUnionCaseDeclOfMany));
-# 8456 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8456 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_firstUnionCaseDecl in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_OBLOCKSEP in
@@ -8465,7 +8465,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2840 "pars.fsy"
                  : 'gentype_firstUnionCaseDeclOfMany));
-# 8468 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8468 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_unionCaseRepr in
@@ -8482,7 +8482,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2844 "pars.fsy"
                  : 'gentype_firstUnionCaseDecl));
-# 8485 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8485 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_unionCaseName in
             let _3 = parseState.GetInput(3) :?> 'gentype_topType in
@@ -8500,7 +8500,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2852 "pars.fsy"
                  : 'gentype_firstUnionCaseDecl));
-# 8503 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8503 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -8515,7 +8515,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2861 "pars.fsy"
                  : 'gentype_firstUnionCaseDecl));
-# 8518 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8518 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_unionCaseRepr in
             Microsoft.FSharp.Core.Operators.box
@@ -8534,7 +8534,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2867 "pars.fsy"
                  : 'gentype_firstUnionCaseDecl));
-# 8537 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8537 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> SynExpr * bool in
@@ -8553,7 +8553,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2878 "pars.fsy"
                  : 'gentype_firstUnionCaseDecl));
-# 8556 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8556 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -8571,7 +8571,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2887 "pars.fsy"
                  : 'gentype_firstUnionCaseDecl));
-# 8574 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8574 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_unionCaseReprElement in
             let _3 = parseState.GetInput(3) :?> 'gentype_unionCaseReprElements in
@@ -8585,7 +8585,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2897 "pars.fsy"
                  : 'gentype_unionCaseReprElements));
-# 8588 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8588 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_unionCaseReprElement in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -8600,7 +8600,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2902 "pars.fsy"
                  : 'gentype_unionCaseReprElements));
-# 8603 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8603 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_unionCaseReprElements in
             Microsoft.FSharp.Core.Operators.box
@@ -8616,7 +8616,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2908 "pars.fsy"
                  : 'gentype_unionCaseReprElements));
-# 8619 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8619 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_unionCaseReprElement in
             Microsoft.FSharp.Core.Operators.box
@@ -8627,7 +8627,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2916 "pars.fsy"
                  : 'gentype_unionCaseReprElements));
-# 8630 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8630 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> SynType in
@@ -8642,7 +8642,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2920 "pars.fsy"
                  : 'gentype_unionCaseReprElement));
-# 8645 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8645 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -8658,7 +8658,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2926 "pars.fsy"
                  : 'gentype_unionCaseReprElement));
-# 8661 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8661 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
@@ -8670,7 +8670,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2933 "pars.fsy"
                  : 'gentype_unionCaseReprElement));
-# 8673 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8673 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_invalidUseOfAppTypeFunction in
@@ -8685,7 +8685,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2937 "pars.fsy"
                  : 'gentype_unionCaseReprElement));
-# 8688 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8688 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_invalidUseOfAppTypeFunction in
             Microsoft.FSharp.Core.Operators.box
@@ -8698,7 +8698,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2943 "pars.fsy"
                  : 'gentype_unionCaseReprElement));
-# 8701 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8701 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_braceFieldDeclList in
             Microsoft.FSharp.Core.Operators.box
@@ -8710,7 +8710,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2949 "pars.fsy"
                  : 'gentype_unionCaseRepr));
-# 8713 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8713 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_unionCaseReprElements in
             Microsoft.FSharp.Core.Operators.box
@@ -8721,7 +8721,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2953 "pars.fsy"
                  : 'gentype_unionCaseRepr));
-# 8724 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8724 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recdFieldDecl in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps in
@@ -8734,7 +8734,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2958 "pars.fsy"
                  : 'gentype_recdFieldDeclList));
-# 8737 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8737 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recdFieldDecl in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_seps in
@@ -8746,7 +8746,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2961 "pars.fsy"
                  : 'gentype_recdFieldDeclList));
-# 8749 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8749 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_fieldDecl in
@@ -8763,7 +8763,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2966 "pars.fsy"
                  : 'gentype_recdFieldDecl));
-# 8766 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8766 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_mutable in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8777,7 +8777,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2976 "pars.fsy"
                  : 'gentype_fieldDecl));
-# 8780 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8780 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_mutable in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8793,7 +8793,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2979 "pars.fsy"
                  : 'gentype_fieldDecl));
-# 8796 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8796 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_mutable in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8808,7 +8808,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2984 "pars.fsy"
                  : 'gentype_fieldDecl));
-# 8811 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8811 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_mutable in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_access in
@@ -8821,7 +8821,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2988 "pars.fsy"
                  : 'gentype_fieldDecl));
-# 8824 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8824 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExceptionDefnRepr in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_classDefn in
@@ -8834,7 +8834,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2993 "pars.fsy"
                  : SynExceptionDefn));
-# 8837 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8837 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_attributes in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -8852,7 +8852,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 2999 "pars.fsy"
                  : SynExceptionDefnRepr));
-# 8855 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8855 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_attributes in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -8874,7 +8874,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3006 "pars.fsy"
                  : SynExceptionDefnRepr));
-# 8877 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8877 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
@@ -8885,7 +8885,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3023 "pars.fsy"
                  : 'gentype_exconIntro));
-# 8888 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8888 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_unionCaseRepr in
@@ -8898,7 +8898,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3026 "pars.fsy"
                  : 'gentype_exconIntro));
-# 8901 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8901 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -8910,7 +8910,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3030 "pars.fsy"
                  : 'gentype_exconIntro));
-# 8913 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8913 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -8920,7 +8920,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3034 "pars.fsy"
                  : 'gentype_exconRepr));
-# 8923 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8923 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
@@ -8931,7 +8931,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3037 "pars.fsy"
                  : 'gentype_exconRepr));
-# 8934 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8934 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_rec in
@@ -8967,7 +8967,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3045 "pars.fsy"
                  : 'gentype_defnBindings));
-# 8970 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8970 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_cPrototype in
             Microsoft.FSharp.Core.Operators.box
@@ -8979,7 +8979,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3074 "pars.fsy"
                  : 'gentype_defnBindings));
-# 8982 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8982 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -8994,7 +8994,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3081 "pars.fsy"
                  : 'gentype_doBinding));
-# 8997 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 8997 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_rec in
@@ -9038,7 +9038,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3091 "pars.fsy"
                  : 'gentype_hardwhiteLetBindings));
-# 9041 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9041 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_hardwhiteDefnBindingsTerminator in
@@ -9056,7 +9056,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3131 "pars.fsy"
                  : 'gentype_hardwhiteDoBinding));
-# 9059 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9059 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> range * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -9072,7 +9072,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3140 "pars.fsy"
                  : 'gentype_hardwhiteDoBinding));
-# 9075 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9075 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_defnBindings in
             Microsoft.FSharp.Core.Operators.box
@@ -9083,7 +9083,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3150 "pars.fsy"
                  : 'gentype_classDefnBindings));
-# 9086 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9086 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_doBinding in
             Microsoft.FSharp.Core.Operators.box
@@ -9094,7 +9094,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3153 "pars.fsy"
                  : 'gentype_classDefnBindings));
-# 9097 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9097 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteLetBindings in
             Microsoft.FSharp.Core.Operators.box
@@ -9106,7 +9106,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3156 "pars.fsy"
                  : 'gentype_classDefnBindings));
-# 9109 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9109 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteDoBinding in
             Microsoft.FSharp.Core.Operators.box
@@ -9117,7 +9117,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3160 "pars.fsy"
                  : 'gentype_classDefnBindings));
-# 9120 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9120 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> range * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -9132,7 +9132,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3166 "pars.fsy"
                  : 'gentype_hardwhiteDefnBindingsTerminator));
-# 9135 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9135 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -9150,7 +9150,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3173 "pars.fsy"
                  : 'gentype_hardwhiteDefnBindingsTerminator));
-# 9153 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9153 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_cRetType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_access in
@@ -9189,7 +9189,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3185 "pars.fsy"
                  : 'gentype_cPrototype));
-# 9192 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9192 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_externMoreArgs in
             Microsoft.FSharp.Core.Operators.box
@@ -9201,7 +9201,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3213 "pars.fsy"
                  : 'gentype_externArgs));
-# 9204 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9204 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_externArg in
             Microsoft.FSharp.Core.Operators.box
@@ -9212,7 +9212,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3217 "pars.fsy"
                  : 'gentype_externArgs));
-# 9215 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9215 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -9222,7 +9222,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3219 "pars.fsy"
                  : 'gentype_externArgs));
-# 9225 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9225 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_externMoreArgs in
             let _3 = parseState.GetInput(3) :?> 'gentype_externArg in
@@ -9236,7 +9236,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3225 "pars.fsy"
                  : 'gentype_externMoreArgs));
-# 9239 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9239 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_externArg in
             let _3 = parseState.GetInput(3) :?> 'gentype_externArg in
@@ -9249,7 +9249,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3230 "pars.fsy"
                  : 'gentype_externMoreArgs));
-# 9252 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9252 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_cType in
@@ -9262,7 +9262,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3237 "pars.fsy"
                  : 'gentype_externArg));
-# 9265 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9265 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_cType in
@@ -9276,7 +9276,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3241 "pars.fsy"
                  : 'gentype_externArg));
-# 9279 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9279 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
@@ -9288,7 +9288,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3247 "pars.fsy"
                  : 'gentype_cType));
-# 9291 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9291 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_cType in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -9301,7 +9301,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3251 "pars.fsy"
                  : 'gentype_cType));
-# 9304 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9304 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_cType in
             Microsoft.FSharp.Core.Operators.box
@@ -9313,7 +9313,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3255 "pars.fsy"
                  : 'gentype_cType));
-# 9316 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9316 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_cType in
             Microsoft.FSharp.Core.Operators.box
@@ -9324,7 +9324,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3259 "pars.fsy"
                  : 'gentype_cType));
-# 9327 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9327 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_cType in
             Microsoft.FSharp.Core.Operators.box
@@ -9336,7 +9336,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3262 "pars.fsy"
                  : 'gentype_cType));
-# 9339 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9339 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -9347,7 +9347,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3266 "pars.fsy"
                  : 'gentype_cType));
-# 9350 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9350 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_cType in
@@ -9359,7 +9359,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3273 "pars.fsy"
                  : 'gentype_cRetType));
-# 9362 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9362 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             Microsoft.FSharp.Core.Operators.box
@@ -9371,7 +9371,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3276 "pars.fsy"
                  : 'gentype_cRetType));
-# 9374 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9374 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attr_localBinding in
             let _2 = parseState.GetInput(2) :?> 'gentype_moreLocalBindings in
@@ -9393,7 +9393,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3282 "pars.fsy"
                  : 'gentype_localBindings));
-# 9396 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9396 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_attr_localBinding in
             let _3 = parseState.GetInput(3) :?> 'gentype_moreLocalBindings in
@@ -9411,7 +9411,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3297 "pars.fsy"
                  : 'gentype_moreLocalBindings));
-# 9414 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9414 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -9421,7 +9421,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3306 "pars.fsy"
                  : 'gentype_moreLocalBindings));
-# 9424 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9424 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_localBinding in
@@ -9436,7 +9436,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3312 "pars.fsy"
                  : 'gentype_attr_localBinding));
-# 9439 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9439 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -9446,7 +9446,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3318 "pars.fsy"
                  : 'gentype_attr_localBinding));
-# 9449 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9449 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_inline in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
@@ -9474,7 +9474,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3324 "pars.fsy"
                  : 'gentype_localBinding));
-# 9477 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9477 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_inline in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
@@ -9500,7 +9500,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3340 "pars.fsy"
                  : 'gentype_localBinding));
-# 9503 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9503 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_inline in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
@@ -9532,7 +9532,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3355 "pars.fsy"
                  : 'gentype_localBinding));
-# 9535 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9535 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedExprWithStaticOptimizations in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -9544,7 +9544,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3377 "pars.fsy"
                  : 'gentype_typedExprWithStaticOptimizationsBlock));
-# 9547 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9547 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedExprWithStaticOptimizations in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -9558,7 +9558,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3380 "pars.fsy"
                  : 'gentype_typedExprWithStaticOptimizationsBlock));
-# 9561 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9561 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedExprWithStaticOptimizations in
             Microsoft.FSharp.Core.Operators.box
@@ -9569,7 +9569,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3385 "pars.fsy"
                  : 'gentype_typedExprWithStaticOptimizationsBlock));
-# 9572 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9572 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedSequentialExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_staticOptimizations in
@@ -9581,7 +9581,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3389 "pars.fsy"
                  : 'gentype_typedExprWithStaticOptimizations));
-# 9584 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9584 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_staticOptimizations in
             let _2 = parseState.GetInput(2) :?> 'gentype_staticOptimization in
@@ -9593,7 +9593,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3393 "pars.fsy"
                  : 'gentype_opt_staticOptimizations));
-# 9596 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9596 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -9603,7 +9603,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3396 "pars.fsy"
                  : 'gentype_opt_staticOptimizations));
-# 9606 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9606 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_staticOptimizationConditions in
             let _4 = parseState.GetInput(4) :?> SynExpr in
@@ -9615,7 +9615,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3400 "pars.fsy"
                  : 'gentype_staticOptimization));
-# 9618 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9618 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_staticOptimizationConditions in
             let _3 = parseState.GetInput(3) :?> 'gentype_staticOptimizationCondition in
@@ -9627,7 +9627,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3404 "pars.fsy"
                  : 'gentype_staticOptimizationConditions));
-# 9630 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9630 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_staticOptimizationCondition in
             Microsoft.FSharp.Core.Operators.box
@@ -9638,7 +9638,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3407 "pars.fsy"
                  : 'gentype_staticOptimizationConditions));
-# 9641 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9641 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> SynType in
@@ -9650,7 +9650,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3411 "pars.fsy"
                  : 'gentype_staticOptimizationCondition));
-# 9653 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9653 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
@@ -9661,7 +9661,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3414 "pars.fsy"
                  : 'gentype_staticOptimizationCondition));
-# 9664 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9664 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> sbyte * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -9673,7 +9673,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3418 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9676 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9676 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> byte in
             Microsoft.FSharp.Core.Operators.box
@@ -9684,7 +9684,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3422 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9687 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9687 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int16 * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -9696,7 +9696,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3425 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9699 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9699 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> uint16 in
             Microsoft.FSharp.Core.Operators.box
@@ -9707,7 +9707,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3429 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9710 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9710 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int32 * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -9719,7 +9719,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3432 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9722 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9722 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> uint32 in
             Microsoft.FSharp.Core.Operators.box
@@ -9730,7 +9730,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3436 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9733 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9733 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int64 * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -9742,7 +9742,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3439 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9745 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9745 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> uint64 in
             Microsoft.FSharp.Core.Operators.box
@@ -9753,7 +9753,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3443 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9756 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9756 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int64 * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -9765,7 +9765,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3446 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9768 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9768 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> uint64 in
             Microsoft.FSharp.Core.Operators.box
@@ -9776,7 +9776,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3450 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9779 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9779 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> single in
             Microsoft.FSharp.Core.Operators.box
@@ -9787,7 +9787,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3453 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9790 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9790 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> double in
             Microsoft.FSharp.Core.Operators.box
@@ -9798,7 +9798,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3456 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9801 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9801 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> char in
             Microsoft.FSharp.Core.Operators.box
@@ -9809,7 +9809,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3459 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9812 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9812 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> System.Decimal in
             Microsoft.FSharp.Core.Operators.box
@@ -9820,7 +9820,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3462 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9823 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9823 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> (string * string) in
             Microsoft.FSharp.Core.Operators.box
@@ -9831,7 +9831,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3465 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9834 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9834 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_string in
             Microsoft.FSharp.Core.Operators.box
@@ -9843,7 +9843,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3468 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9846 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9846 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sourceIdentifier in
             Microsoft.FSharp.Core.Operators.box
@@ -9855,7 +9855,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3472 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9858 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9858 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> byte[] * SynByteStringKind * ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
@@ -9867,7 +9867,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3476 "pars.fsy"
                  : 'gentype_rawConstant));
-# 9870 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9870 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int32 * bool in
             let _2 = parseState.GetInput(2) :?> string in
@@ -9883,7 +9883,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3481 "pars.fsy"
                  : 'gentype_rationalConstant));
-# 9886 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9886 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> int32 * bool in
             let _3 = parseState.GetInput(3) :?> string in
@@ -9899,7 +9899,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3487 "pars.fsy"
                  : 'gentype_rationalConstant));
-# 9902 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9902 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int32 * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -9911,7 +9911,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3493 "pars.fsy"
                  : 'gentype_rationalConstant));
-# 9914 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9914 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> int32 * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -9923,7 +9923,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3497 "pars.fsy"
                  : 'gentype_rationalConstant));
-# 9926 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9926 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int32 * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -9935,7 +9935,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3501 "pars.fsy"
                  : 'gentype_atomicUnsignedRationalConstant));
-# 9938 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9938 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_rationalConstant in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -9947,7 +9947,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3505 "pars.fsy"
                  : 'gentype_atomicUnsignedRationalConstant));
-# 9950 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9950 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicUnsignedRationalConstant in
             Microsoft.FSharp.Core.Operators.box
@@ -9958,7 +9958,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3508 "pars.fsy"
                  : 'gentype_atomicRationalConstant));
-# 9961 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9961 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_atomicUnsignedRationalConstant in
             Microsoft.FSharp.Core.Operators.box
@@ -9969,7 +9969,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3511 "pars.fsy"
                  : 'gentype_atomicRationalConstant));
-# 9972 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9972 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_rawConstant in
             Microsoft.FSharp.Core.Operators.box
@@ -9980,7 +9980,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3515 "pars.fsy"
                  : 'gentype_constant));
-# 9983 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9983 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_rawConstant in
             let _3 = parseState.GetInput(3) :?> 'gentype_measureTypeArg in
@@ -9995,7 +9995,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3518 "pars.fsy"
                  : 'gentype_constant));
-# 9998 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 9998 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             Microsoft.FSharp.Core.Operators.box
@@ -10006,7 +10006,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3525 "pars.fsy"
                  : 'gentype_bindingPattern));
-# 10009 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10009 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opt_inline in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_mutable in
@@ -10031,7 +10031,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3530 "pars.fsy"
                  : 'gentype_ceBindingCore));
-# 10034 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10034 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_simplePatterns in
             Microsoft.FSharp.Core.Operators.box
@@ -10042,7 +10042,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3547 "pars.fsy"
                  : 'gentype_opt_simplePatterns));
-# 10045 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10045 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -10052,7 +10052,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3549 "pars.fsy"
                  : 'gentype_opt_simplePatterns));
-# 10055 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10055 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -10064,7 +10064,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3553 "pars.fsy"
                  : 'gentype_simplePatterns));
-# 10067 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10067 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
@@ -10075,7 +10075,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3556 "pars.fsy"
                  : 'gentype_simplePatterns));
-# 10078 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10078 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -10085,7 +10085,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3560 "pars.fsy"
                  : 'gentype_barCanBeRightBeforeNull));
-# 10088 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10088 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -10095,7 +10095,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3562 "pars.fsy"
                  : 'gentype_barCanBeRightBeforeNull));
-# 10098 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10098 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> 'gentype_constrPattern in
@@ -10107,7 +10107,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3567 "pars.fsy"
                  : SynPat));
-# 10110 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10110 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -10121,7 +10121,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3570 "pars.fsy"
                  : SynPat));
-# 10124 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10124 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             Microsoft.FSharp.Core.Operators.box
@@ -10135,7 +10135,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3575 "pars.fsy"
                  : SynPat));
-# 10138 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10138 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _2 = parseState.GetInput(2) :?> 'gentype_barCanBeRightBeforeNull in
@@ -10149,7 +10149,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3581 "pars.fsy"
                  : SynPat));
-# 10152 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10152 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> SynPat in
@@ -10162,7 +10162,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3585 "pars.fsy"
                  : SynPat));
-# 10165 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10165 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -10176,7 +10176,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3589 "pars.fsy"
                  : SynPat));
-# 10179 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10179 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             Microsoft.FSharp.Core.Operators.box
@@ -10190,7 +10190,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3594 "pars.fsy"
                  : SynPat));
-# 10193 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10193 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tuplePatternElements in
             Microsoft.FSharp.Core.Operators.box
@@ -10204,7 +10204,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3600 "pars.fsy"
                  : SynPat));
-# 10207 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10207 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_conjPatternElements in
             Microsoft.FSharp.Core.Operators.box
@@ -10215,7 +10215,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3606 "pars.fsy"
                  : SynPat));
-# 10218 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10218 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_constrPattern in
             Microsoft.FSharp.Core.Operators.box
@@ -10226,7 +10226,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3609 "pars.fsy"
                  : SynPat));
-# 10229 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10229 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tuplePatternElements in
             let _3 = parseState.GetInput(3) :?> SynPat in
@@ -10239,7 +10239,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3613 "pars.fsy"
                  : 'gentype_tuplePatternElements));
-# 10242 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10242 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> SynPat in
@@ -10251,7 +10251,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3617 "pars.fsy"
                  : 'gentype_tuplePatternElements));
-# 10254 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10254 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tuplePatternElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -10267,7 +10267,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3620 "pars.fsy"
                  : 'gentype_tuplePatternElements));
-# 10270 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10270 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -10282,7 +10282,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3627 "pars.fsy"
                  : 'gentype_tuplePatternElements));
-# 10285 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10285 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat in
             Microsoft.FSharp.Core.Operators.box
@@ -10296,7 +10296,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3633 "pars.fsy"
                  : 'gentype_tuplePatternElements));
-# 10299 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10299 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -10311,7 +10311,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3639 "pars.fsy"
                  : 'gentype_tuplePatternElements));
-# 10314 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10314 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_conjPatternElements in
             let _3 = parseState.GetInput(3) :?> SynPat in
@@ -10323,7 +10323,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3647 "pars.fsy"
                  : 'gentype_conjPatternElements));
-# 10326 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10326 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat in
             let _3 = parseState.GetInput(3) :?> SynPat in
@@ -10335,7 +10335,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3650 "pars.fsy"
                  : 'gentype_conjPatternElements));
-# 10338 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10338 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_namePatPair in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_seps_block in
@@ -10350,7 +10350,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3654 "pars.fsy"
                  : 'gentype_namePatPairs));
-# 10353 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10353 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_namePatPair in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps_block in
@@ -10366,7 +10366,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3660 "pars.fsy"
                  : 'gentype_namePatPairs));
-# 10369 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10369 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_namePatPair in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps_block in
@@ -10384,7 +10384,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3666 "pars.fsy"
                  : 'gentype_namePatPairs));
-# 10387 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10387 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
@@ -10397,7 +10397,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3674 "pars.fsy"
                  : 'gentype_namePatPair));
-# 10400 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10400 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -10410,7 +10410,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3678 "pars.fsy"
                  : 'gentype_namePatPair));
-# 10413 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10413 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
@@ -10422,7 +10422,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3682 "pars.fsy"
                  : 'gentype_namePatPair));
-# 10425 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10425 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _2 = parseState.GetInput(2) :?> 'gentype_explicitValTyparDecls in
@@ -10435,7 +10435,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3686 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10438 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10438 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _2 = parseState.GetInput(2) :?> 'gentype_explicitValTyparDecls in
@@ -10451,7 +10451,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3690 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10454 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10454 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _2 = parseState.GetInput(2) :?> 'gentype_explicitValTyparDecls in
@@ -10467,7 +10467,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3696 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10470 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10470 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _2 = parseState.GetInput(2) :?> 'gentype_explicitValTyparDecls in
@@ -10483,7 +10483,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3702 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10486 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10486 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _2 = parseState.GetInput(2) :?> SynArgPats * Range in
@@ -10498,7 +10498,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3708 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10501 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10501 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _3 = parseState.GetInput(3) :?> SynArgPats * Range in
@@ -10513,7 +10513,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3714 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10516 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10516 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             let _3 = parseState.GetInput(3) :?> SynArgPats * Range in
@@ -10528,7 +10528,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3720 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10531 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10531 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
@@ -10540,7 +10540,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3726 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10543 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10543 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -10555,7 +10555,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3730 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10558 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10558 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -10568,7 +10568,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3737 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10571 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10571 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPattern in
             Microsoft.FSharp.Core.Operators.box
@@ -10579,7 +10579,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3743 "pars.fsy"
                  : 'gentype_constrPattern));
-# 10582 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10582 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_namePatPairs in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -10593,7 +10593,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3747 "pars.fsy"
                  : SynArgPats * Range));
-# 10596 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10596 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynPat list in
             Microsoft.FSharp.Core.Operators.box
@@ -10606,7 +10606,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3752 "pars.fsy"
                  : SynArgPats * Range));
-# 10609 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10609 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPattern in
             let _2 = parseState.GetInput(2) :?> SynPat list in
@@ -10618,7 +10618,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3758 "pars.fsy"
                  : SynPat list));
-# 10621 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10621 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPattern in
             let _3 = parseState.GetInput(3) :?> SynPat list in
@@ -10631,7 +10631,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3761 "pars.fsy"
                  : SynPat list));
-# 10634 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10634 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPattern in
             let _3 = parseState.GetInput(3) :?> SynPat list in
@@ -10644,7 +10644,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3765 "pars.fsy"
                  : SynPat list));
-# 10647 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10647 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPattern in
             Microsoft.FSharp.Core.Operators.box
@@ -10655,7 +10655,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3769 "pars.fsy"
                  : SynPat list));
-# 10658 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10658 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_quoteExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -10666,7 +10666,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3774 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10669 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10669 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_recordPatternElementsAux in
@@ -10679,7 +10679,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3777 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10682 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10682 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _3 = parseState.GetInput(3) :?> 'gentype_rbrace in
@@ -10691,7 +10691,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3780 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10694 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10694 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_listPatternElements in
             Microsoft.FSharp.Core.Operators.box
@@ -10702,7 +10702,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3783 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10705 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10705 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_listPatternElements in
             Microsoft.FSharp.Core.Operators.box
@@ -10713,7 +10713,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3786 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10716 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10716 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -10730,7 +10730,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3789 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10733 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10733 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
@@ -10741,7 +10741,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3799 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10744 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10744 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomicPatternLongIdent in
             Microsoft.FSharp.Core.Operators.box
@@ -10764,7 +10764,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3802 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10767 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10767 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_constant in
             Microsoft.FSharp.Core.Operators.box
@@ -10775,7 +10775,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3817 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10778 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10778 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -10785,7 +10785,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3820 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10788 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10788 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -10795,7 +10795,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3823 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10798 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10798 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -10805,7 +10805,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3826 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10808 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10808 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPatternBody in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -10818,7 +10818,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3829 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10821 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10821 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPatternBody in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -10833,7 +10833,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3833 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10836 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10836 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
@@ -10845,7 +10845,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3839 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10848 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10848 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -10860,7 +10860,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3843 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10863 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10863 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_tupleParenPatternElements in
             let _4 = parseState.GetInput(4) :?> 'gentype_rparen in
@@ -10873,7 +10873,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3850 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10876 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10876 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_tupleParenPatternElements in
             let _4 = parseState.GetInput(4) :?> 'gentype_recover in
@@ -10887,7 +10887,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3854 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10890 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10890 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _4 = parseState.GetInput(4) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
@@ -10898,7 +10898,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3859 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10901 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10901 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -10910,7 +10910,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3862 "pars.fsy"
                  : 'gentype_atomicPattern));
-# 10913 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10913 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
@@ -10921,7 +10921,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3867 "pars.fsy"
                  : 'gentype_parenPatternBody));
-# 10924 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10924 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -10931,7 +10931,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3870 "pars.fsy"
                  : 'gentype_parenPatternBody));
-# 10934 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10934 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_constrPattern in
@@ -10943,7 +10943,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3899 "pars.fsy"
                  : 'gentype_parenPattern));
-# 10946 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10946 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -10957,7 +10957,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3902 "pars.fsy"
                  : 'gentype_parenPattern));
-# 10960 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10960 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
@@ -10971,7 +10971,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3907 "pars.fsy"
                  : 'gentype_parenPattern));
-# 10974 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10974 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _2 = parseState.GetInput(2) :?> 'gentype_barCanBeRightBeforeNull in
@@ -10985,7 +10985,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3913 "pars.fsy"
                  : 'gentype_parenPattern));
-# 10988 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 10988 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleParenPatternElements in
             Microsoft.FSharp.Core.Operators.box
@@ -10999,7 +10999,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3917 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11002 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11002 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_conjParenPatternElements in
             Microsoft.FSharp.Core.Operators.box
@@ -11010,7 +11010,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3923 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11013 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11013 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeWithTypeConstraints in
@@ -11023,7 +11023,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3926 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11026 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11026 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -11039,7 +11039,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3930 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11042 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11042 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPattern in
@@ -11052,7 +11052,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3937 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11055 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11055 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
@@ -11065,7 +11065,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3941 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11068 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11068 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -11081,7 +11081,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3945 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11084 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11084 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
@@ -11095,7 +11095,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3952 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11098 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11098 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_constrPattern in
             Microsoft.FSharp.Core.Operators.box
@@ -11106,7 +11106,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3957 "pars.fsy"
                  : 'gentype_parenPattern));
-# 11109 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11109 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleParenPatternElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
@@ -11120,7 +11120,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3961 "pars.fsy"
                  : 'gentype_tupleParenPatternElements));
-# 11123 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11123 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
@@ -11133,7 +11133,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3966 "pars.fsy"
                  : 'gentype_tupleParenPatternElements));
-# 11136 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11136 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleParenPatternElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -11149,7 +11149,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3970 "pars.fsy"
                  : 'gentype_tupleParenPatternElements));
-# 11152 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11152 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -11164,7 +11164,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3977 "pars.fsy"
                  : 'gentype_tupleParenPatternElements));
-# 11167 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11167 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPattern in
             Microsoft.FSharp.Core.Operators.box
@@ -11178,7 +11178,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3983 "pars.fsy"
                  : 'gentype_tupleParenPatternElements));
-# 11181 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11181 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -11193,7 +11193,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3989 "pars.fsy"
                  : 'gentype_tupleParenPatternElements));
-# 11196 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11196 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_conjParenPatternElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
@@ -11205,7 +11205,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 3997 "pars.fsy"
                  : 'gentype_conjParenPatternElements));
-# 11208 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11208 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
@@ -11217,7 +11217,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4000 "pars.fsy"
                  : 'gentype_conjParenPatternElements));
-# 11220 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11220 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recordPatternElement in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_seps_block in
@@ -11231,7 +11231,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4004 "pars.fsy"
                  : 'gentype_recordPatternElementsAux));
-# 11234 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11234 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recordPatternElement in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps_block in
@@ -11246,7 +11246,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4009 "pars.fsy"
                  : 'gentype_recordPatternElementsAux));
-# 11249 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11249 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recordPatternElement in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps_block in
@@ -11263,7 +11263,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4014 "pars.fsy"
                  : 'gentype_recordPatternElementsAux));
-# 11266 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11266 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             let _3 = parseState.GetInput(3) :?> 'gentype_parenPattern in
@@ -11276,7 +11276,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4021 "pars.fsy"
                  : 'gentype_recordPatternElement));
-# 11279 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11279 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -11289,7 +11289,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4025 "pars.fsy"
                  : 'gentype_recordPatternElement));
-# 11292 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11292 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
@@ -11301,7 +11301,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4029 "pars.fsy"
                  : 'gentype_recordPatternElement));
-# 11304 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11304 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -11311,7 +11311,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4033 "pars.fsy"
                  : 'gentype_listPatternElements));
-# 11314 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11314 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_seps in
@@ -11323,7 +11323,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4036 "pars.fsy"
                  : 'gentype_listPatternElements));
-# 11326 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11326 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps in
@@ -11336,7 +11336,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4039 "pars.fsy"
                  : 'gentype_listPatternElements));
-# 11339 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11339 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -11348,7 +11348,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4044 "pars.fsy"
                  : SynExpr));
-# 11351 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11351 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -11361,7 +11361,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4047 "pars.fsy"
                  : SynExpr));
-# 11364 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11364 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_oblockend in
             Microsoft.FSharp.Core.Operators.box
@@ -11374,7 +11374,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4051 "pars.fsy"
                  : SynExpr));
-# 11377 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11377 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedSequentialExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -11385,7 +11385,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4056 "pars.fsy"
                  : SynExpr));
-# 11388 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11388 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_oblockend in
@@ -11397,7 +11397,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4061 "pars.fsy"
                  : SynExpr));
-# 11400 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11400 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_oblockend in
             Microsoft.FSharp.Core.Operators.box
@@ -11410,7 +11410,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4064 "pars.fsy"
                  : SynExpr));
-# 11413 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11413 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -11421,7 +11421,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4069 "pars.fsy"
                  : SynExpr));
-# 11424 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11424 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedSequentialExpr in
             let _2 = parseState.GetInput(2) :?> range in
@@ -11433,7 +11433,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4075 "pars.fsy"
                  : 'gentype_typedSequentialExprBlockR));
-# 11436 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11436 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedSequentialExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -11444,7 +11444,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4078 "pars.fsy"
                  : 'gentype_typedSequentialExprBlockR));
-# 11447 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11447 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -11455,7 +11455,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4081 "pars.fsy"
                  : 'gentype_typedSequentialExprBlockR));
-# 11458 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11458 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeWithTypeConstraints in
@@ -11467,7 +11467,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4085 "pars.fsy"
                  : 'gentype_typedSequentialExpr));
-# 11470 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11470 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -11481,7 +11481,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4088 "pars.fsy"
                  : 'gentype_typedSequentialExpr));
-# 11484 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11484 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sequentialExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -11492,7 +11492,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4093 "pars.fsy"
                  : 'gentype_typedSequentialExpr));
-# 11495 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11495 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedSequentialExpr in
             let _2 = parseState.GetInput(2) :?> ParseHelpers.LexerContinuation in
@@ -11504,7 +11504,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4097 "pars.fsy"
                  : SynExpr));
-# 11507 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11507 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps in
@@ -11518,7 +11518,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4101 "pars.fsy"
                  : 'gentype_sequentialExpr));
-# 11521 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11521 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps in
@@ -11530,7 +11530,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4105 "pars.fsy"
                  : 'gentype_sequentialExpr));
-# 11533 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11533 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -11541,7 +11541,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4108 "pars.fsy"
                  : 'gentype_sequentialExpr));
-# 11544 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11544 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_sequentialExpr in
@@ -11554,7 +11554,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4111 "pars.fsy"
                  : 'gentype_sequentialExpr));
-# 11557 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11557 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _4 = parseState.GetInput(4) :?> 'gentype_typedSequentialExpr in
@@ -11568,7 +11568,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4115 "pars.fsy"
                  : 'gentype_sequentialExpr));
-# 11571 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11571 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteLetBindings in
             Microsoft.FSharp.Core.Operators.box
@@ -11584,7 +11584,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4119 "pars.fsy"
                  : 'gentype_sequentialExpr));
-# 11587 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11587 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -11594,7 +11594,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4132 "pars.fsy"
                  : 'gentype_recover));
-# 11597 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11597 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
@@ -11605,7 +11605,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4135 "pars.fsy"
                  : 'gentype_recover));
-# 11608 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11608 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_ceBindingCore in
@@ -11629,7 +11629,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4139 "pars.fsy"
                  : 'gentype_moreBinders));
-# 11632 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11632 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_ceBindingCore in
@@ -11658,7 +11658,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4152 "pars.fsy"
                  : 'gentype_moreBinders));
-# 11661 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11661 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -11668,7 +11668,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4168 "pars.fsy"
                  : 'gentype_moreBinders));
-# 11671 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11671 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_defnBindings in
             let _3 = parseState.GetInput(3) :?> 'gentype_typedSequentialExpr in
@@ -11683,7 +11683,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4172 "pars.fsy"
                  : SynExpr));
-# 11686 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11686 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_defnBindings in
             Microsoft.FSharp.Core.Operators.box
@@ -11697,7 +11697,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4178 "pars.fsy"
                  : SynExpr));
-# 11700 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11700 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteLetBindings in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -11711,7 +11711,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4187 "pars.fsy"
                  : SynExpr));
-# 11714 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11714 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteLetBindings in
             Microsoft.FSharp.Core.Operators.box
@@ -11724,7 +11724,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4192 "pars.fsy"
                  : SynExpr));
-# 11727 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11727 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteLetBindings in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -11738,7 +11738,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4197 "pars.fsy"
                  : SynExpr));
-# 11741 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11741 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteLetBindings in
             Microsoft.FSharp.Core.Operators.box
@@ -11752,7 +11752,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4202 "pars.fsy"
                  : SynExpr));
-# 11755 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11755 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hardwhiteDoBinding in
             Microsoft.FSharp.Core.Operators.box
@@ -11764,7 +11764,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4208 "pars.fsy"
                  : SynExpr));
-# 11767 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11767 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_anonMatchingExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -11775,7 +11775,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4212 "pars.fsy"
                  : SynExpr));
-# 11778 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11778 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_anonLambdaExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -11786,7 +11786,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4215 "pars.fsy"
                  : SynExpr));
-# 11789 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11789 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_withClauses in
@@ -11802,7 +11802,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4218 "pars.fsy"
                  : SynExpr));
-# 11805 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11805 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -11816,7 +11816,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4225 "pars.fsy"
                  : SynExpr));
-# 11819 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11819 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_withClauses in
@@ -11832,7 +11832,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4230 "pars.fsy"
                  : SynExpr));
-# 11835 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11835 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -11846,7 +11846,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4237 "pars.fsy"
                  : SynExpr));
-# 11849 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11849 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExprBlockR in
             let _3 = parseState.GetInput(3) :?> 'gentype_withClauses in
@@ -11871,7 +11871,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4242 "pars.fsy"
                  : SynExpr));
-# 11874 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11874 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExprBlockR in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -11896,7 +11896,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4258 "pars.fsy"
                  : SynExpr));
-# 11899 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11899 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> range in
             Microsoft.FSharp.Core.Operators.box
@@ -11922,7 +11922,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4274 "pars.fsy"
                  : SynExpr));
-# 11925 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11925 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> range in
             let _3 = parseState.GetInput(3) :?> 'gentype_withClauses in
@@ -11949,7 +11949,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4292 "pars.fsy"
                  : SynExpr));
-# 11952 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11952 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExprBlockR in
             let _4 = parseState.GetInput(4) :?> SynExpr in
@@ -11969,7 +11969,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4310 "pars.fsy"
                  : SynExpr));
-# 11972 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11972 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ifExprCases in
@@ -11982,7 +11982,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4321 "pars.fsy"
                  : SynExpr));
-# 11985 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 11985 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -12001,7 +12001,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4325 "pars.fsy"
                  : SynExpr));
-# 12004 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12004 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -12017,7 +12017,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4335 "pars.fsy"
                  : SynExpr));
-# 12020 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12020 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -12028,7 +12028,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4343 "pars.fsy"
                  : SynExpr));
-# 12031 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12031 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -12039,7 +12039,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4346 "pars.fsy"
                  : SynExpr));
-# 12042 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12042 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -12049,7 +12049,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4349 "pars.fsy"
                  : SynExpr));
-# 12052 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12052 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -12060,7 +12060,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4352 "pars.fsy"
                  : SynExpr));
-# 12063 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12063 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -12071,7 +12071,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4355 "pars.fsy"
                  : SynExpr));
-# 12074 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12074 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -12081,7 +12081,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4358 "pars.fsy"
                  : SynExpr));
-# 12084 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12084 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_whileExprCore in
             Microsoft.FSharp.Core.Operators.box
@@ -12092,7 +12092,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4361 "pars.fsy"
                  : SynExpr));
-# 12095 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12095 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_whileExprCore in
             Microsoft.FSharp.Core.Operators.box
@@ -12105,7 +12105,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4364 "pars.fsy"
                  : SynExpr));
-# 12108 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12108 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopBinder in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12123,7 +12123,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4369 "pars.fsy"
                  : SynExpr));
-# 12126 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12126 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopBinder in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12141,7 +12141,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4376 "pars.fsy"
                  : SynExpr));
-# 12144 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12144 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopBinder in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12158,7 +12158,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4383 "pars.fsy"
                  : SynExpr));
-# 12161 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12161 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopBinder in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12177,7 +12177,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4390 "pars.fsy"
                  : SynExpr));
-# 12180 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12180 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopBinder in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -12196,7 +12196,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4399 "pars.fsy"
                  : SynExpr));
-# 12199 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12199 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopBinder in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_OBLOCKSEP in
@@ -12212,7 +12212,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4409 "pars.fsy"
                  : SynExpr));
-# 12215 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12215 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopRange in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12229,7 +12229,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4415 "pars.fsy"
                  : SynExpr));
-# 12232 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12232 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopRange in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12247,7 +12247,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4421 "pars.fsy"
                  : SynExpr));
-# 12250 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12250 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopRange in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12265,7 +12265,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4428 "pars.fsy"
                  : SynExpr));
-# 12268 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12268 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopRange in
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
@@ -12284,7 +12284,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4436 "pars.fsy"
                  : SynExpr));
-# 12287 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12287 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_forLoopRange in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -12302,7 +12302,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4445 "pars.fsy"
                  : SynExpr));
-# 12305 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12305 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_doToken in
             let _4 = parseState.GetInput(4) :?> SynExpr in
@@ -12320,7 +12320,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4454 "pars.fsy"
                  : SynExpr));
-# 12323 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12323 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_ends_coming_soon_or_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -12332,7 +12332,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4462 "pars.fsy"
                  : SynExpr));
-# 12335 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12335 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPattern in
             let _4 = parseState.GetInput(4) :?> 'gentype_doneDeclEnd in
@@ -12350,7 +12350,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4466 "pars.fsy"
                  : SynExpr));
-# 12353 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12353 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -12369,7 +12369,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4475 "pars.fsy"
                  : SynExpr));
-# 12372 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12372 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -12385,7 +12385,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4485 "pars.fsy"
                  : SynExpr));
-# 12388 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12388 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -12406,7 +12406,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4491 "pars.fsy"
                  : SynExpr));
-# 12409 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12409 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
@@ -12420,7 +12420,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4502 "pars.fsy"
                  : SynExpr));
-# 12423 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12423 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
@@ -12434,7 +12434,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4507 "pars.fsy"
                  : SynExpr));
-# 12437 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12437 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -12450,7 +12450,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4512 "pars.fsy"
                  : SynExpr));
-# 12453 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12453 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -12471,7 +12471,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4518 "pars.fsy"
                  : SynExpr));
-# 12474 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12474 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_ceBindingCore in
@@ -12502,7 +12502,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4529 "pars.fsy"
                  : SynExpr));
-# 12505 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12505 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_ceBindingCore in
@@ -12535,7 +12535,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4548 "pars.fsy"
                  : SynExpr));
-# 12538 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12538 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_ceBindingCore in
@@ -12568,7 +12568,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4567 "pars.fsy"
                  : SynExpr));
-# 12571 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12571 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _4 = parseState.GetInput(4) :?> 'gentype_opt_OBLOCKSEP in
@@ -12584,7 +12584,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4588 "pars.fsy"
                  : SynExpr));
-# 12587 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12587 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_hardwhiteDefnBindingsTerminator in
@@ -12598,7 +12598,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4594 "pars.fsy"
                  : SynExpr));
-# 12601 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12601 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -12609,7 +12609,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4599 "pars.fsy"
                  : SynExpr));
-# 12612 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12612 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExprBlockR in
             Microsoft.FSharp.Core.Operators.box
@@ -12624,7 +12624,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4602 "pars.fsy"
                  : SynExpr));
-# 12627 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12627 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynType in
@@ -12636,7 +12636,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4609 "pars.fsy"
                  : SynExpr));
-# 12639 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12639 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -12650,7 +12650,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4612 "pars.fsy"
                  : SynExpr));
-# 12653 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12653 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynType in
@@ -12662,7 +12662,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4617 "pars.fsy"
                  : SynExpr));
-# 12665 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12665 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -12676,7 +12676,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4620 "pars.fsy"
                  : SynExpr));
-# 12679 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12679 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynType in
@@ -12688,7 +12688,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4625 "pars.fsy"
                  : SynExpr));
-# 12691 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12691 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -12702,7 +12702,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4628 "pars.fsy"
                  : SynExpr));
-# 12705 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12705 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -12714,7 +12714,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4633 "pars.fsy"
                  : SynExpr));
-# 12717 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12717 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -12726,7 +12726,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4636 "pars.fsy"
                  : SynExpr));
-# 12729 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12729 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr list * range list in
             Microsoft.FSharp.Core.Operators.box
@@ -12739,7 +12739,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4639 "pars.fsy"
                  : SynExpr));
-# 12742 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12742 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -12751,7 +12751,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4644 "pars.fsy"
                  : SynExpr));
-# 12754 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12754 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -12765,7 +12765,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4647 "pars.fsy"
                  : SynExpr));
-# 12768 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12768 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -12777,7 +12777,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4652 "pars.fsy"
                  : SynExpr));
-# 12780 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12780 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -12791,7 +12791,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4655 "pars.fsy"
                  : SynExpr));
-# 12794 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12794 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -12804,7 +12804,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4660 "pars.fsy"
                  : SynExpr));
-# 12807 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12807 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -12819,7 +12819,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4663 "pars.fsy"
                  : SynExpr));
-# 12822 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12822 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -12831,7 +12831,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4668 "pars.fsy"
                  : SynExpr));
-# 12834 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12834 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -12844,7 +12844,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4671 "pars.fsy"
                  : SynExpr));
-# 12847 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12847 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -12856,7 +12856,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4675 "pars.fsy"
                  : SynExpr));
-# 12859 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12859 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -12870,7 +12870,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4678 "pars.fsy"
                  : SynExpr));
-# 12873 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12873 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -12882,7 +12882,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4683 "pars.fsy"
                  : SynExpr));
-# 12885 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12885 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -12896,7 +12896,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4686 "pars.fsy"
                  : SynExpr));
-# 12899 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12899 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -12909,7 +12909,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4691 "pars.fsy"
                  : SynExpr));
-# 12912 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12912 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -12924,7 +12924,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4694 "pars.fsy"
                  : SynExpr));
-# 12927 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12927 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -12936,7 +12936,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4699 "pars.fsy"
                  : SynExpr));
-# 12939 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12939 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -12950,7 +12950,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4702 "pars.fsy"
                  : SynExpr));
-# 12953 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12953 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -12963,7 +12963,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4707 "pars.fsy"
                  : SynExpr));
-# 12966 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12966 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -12978,7 +12978,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4710 "pars.fsy"
                  : SynExpr));
-# 12981 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12981 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -12990,7 +12990,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4715 "pars.fsy"
                  : SynExpr));
-# 12993 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 12993 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -13004,7 +13004,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4718 "pars.fsy"
                  : SynExpr));
-# 13007 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13007 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> bool in
@@ -13017,7 +13017,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4723 "pars.fsy"
                  : SynExpr));
-# 13020 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13020 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> bool in
@@ -13032,7 +13032,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4726 "pars.fsy"
                  : SynExpr));
-# 13035 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13035 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> bool in
@@ -13045,7 +13045,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4731 "pars.fsy"
                  : SynExpr));
-# 13048 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13048 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> bool in
@@ -13060,7 +13060,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4734 "pars.fsy"
                  : SynExpr));
-# 13063 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13063 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13073,7 +13073,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4739 "pars.fsy"
                  : SynExpr));
-# 13076 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13076 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13088,7 +13088,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4742 "pars.fsy"
                  : SynExpr));
-# 13091 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13091 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13101,7 +13101,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4747 "pars.fsy"
                  : SynExpr));
-# 13104 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13104 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13116,7 +13116,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4750 "pars.fsy"
                  : SynExpr));
-# 13119 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13119 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -13132,7 +13132,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4755 "pars.fsy"
                  : SynExpr));
-# 13135 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13135 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -13149,7 +13149,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4762 "pars.fsy"
                  : SynExpr));
-# 13152 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13152 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13162,7 +13162,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4770 "pars.fsy"
                  : SynExpr));
-# 13165 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13165 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13177,7 +13177,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4773 "pars.fsy"
                  : SynExpr));
-# 13180 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13180 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -13189,7 +13189,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4778 "pars.fsy"
                  : SynExpr));
-# 13192 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13192 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -13203,7 +13203,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4781 "pars.fsy"
                  : SynExpr));
-# 13206 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13206 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -13215,7 +13215,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4786 "pars.fsy"
                  : SynExpr));
-# 13218 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13218 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -13229,7 +13229,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4789 "pars.fsy"
                  : SynExpr));
-# 13232 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13232 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13242,7 +13242,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4794 "pars.fsy"
                  : SynExpr));
-# 13245 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13245 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13257,7 +13257,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4797 "pars.fsy"
                  : SynExpr));
-# 13260 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13260 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13270,7 +13270,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4802 "pars.fsy"
                  : SynExpr));
-# 13273 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13273 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -13285,7 +13285,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4805 "pars.fsy"
                  : SynExpr));
-# 13288 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13288 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -13299,7 +13299,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4810 "pars.fsy"
                  : SynExpr));
-# 13302 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13302 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -13312,7 +13312,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4815 "pars.fsy"
                  : SynExpr));
-# 13315 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13315 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -13325,7 +13325,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4820 "pars.fsy"
                  : SynExpr));
-# 13328 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13328 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -13336,7 +13336,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4825 "pars.fsy"
                  : SynExpr));
-# 13339 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13339 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -13347,7 +13347,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4828 "pars.fsy"
                  : SynExpr));
-# 13350 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13350 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_doToken in
@@ -13365,7 +13365,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4832 "pars.fsy"
                  : 'gentype_whileExprCore));
-# 13368 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13368 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_doToken in
@@ -13384,7 +13384,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4840 "pars.fsy"
                  : 'gentype_whileExprCore));
-# 13387 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13387 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_doToken in
@@ -13404,7 +13404,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4849 "pars.fsy"
                  : 'gentype_whileExprCore));
-# 13407 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13407 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
@@ -13422,7 +13422,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4860 "pars.fsy"
                  : 'gentype_whileExprCore));
-# 13425 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13425 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -13439,7 +13439,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4870 "pars.fsy"
                  : 'gentype_whileExprCore));
-# 13442 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13442 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_doneDeclEnd in
             Microsoft.FSharp.Core.Operators.box
@@ -13458,7 +13458,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4879 "pars.fsy"
                  : 'gentype_whileExprCore));
-# 13461 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13461 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -13470,7 +13470,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4891 "pars.fsy"
                  : 'gentype_dynamicArg));
-# 13473 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13473 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -13485,7 +13485,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4895 "pars.fsy"
                  : 'gentype_dynamicArg));
-# 13488 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13488 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_withPatternClauses in
             Microsoft.FSharp.Core.Operators.box
@@ -13496,7 +13496,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4902 "pars.fsy"
                  : 'gentype_withClauses));
-# 13499 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13499 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_withPatternClauses in
             Microsoft.FSharp.Core.Operators.box
@@ -13507,7 +13507,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4905 "pars.fsy"
                  : 'gentype_withClauses));
-# 13510 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13510 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_withPatternClauses in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -13520,7 +13520,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4908 "pars.fsy"
                  : 'gentype_withClauses));
-# 13523 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13523 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -13533,7 +13533,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4912 "pars.fsy"
                  : 'gentype_withClauses));
-# 13536 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13536 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternClauses in
             Microsoft.FSharp.Core.Operators.box
@@ -13544,7 +13544,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4918 "pars.fsy"
                  : 'gentype_withPatternClauses));
-# 13547 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13547 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_barCanBeRightBeforeNull in
             let _2 = parseState.GetInput(2) :?> 'gentype_patternClauses in
@@ -13557,7 +13557,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4921 "pars.fsy"
                  : 'gentype_withPatternClauses));
-# 13560 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13560 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_barCanBeRightBeforeNull in
             let _3 = parseState.GetInput(3) :?> 'gentype_patternClauses in
@@ -13574,7 +13574,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4925 "pars.fsy"
                  : 'gentype_withPatternClauses));
-# 13577 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13577 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_barCanBeRightBeforeNull in
             Microsoft.FSharp.Core.Operators.box
@@ -13587,7 +13587,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4933 "pars.fsy"
                  : 'gentype_withPatternClauses));
-# 13590 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13590 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -13599,7 +13599,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4938 "pars.fsy"
                  : 'gentype_withPatternClauses));
-# 13602 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13602 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _2 = parseState.GetInput(2) :?> 'gentype_patternGuard in
@@ -13611,7 +13611,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4945 "pars.fsy"
                  : 'gentype_patternAndGuard));
-# 13614 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13614 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _2 = parseState.GetInput(2) :?> Range * SynExpr in
@@ -13628,7 +13628,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4949 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13631 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13631 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _2 = parseState.GetInput(2) :?> Range * SynExpr in
@@ -13648,7 +13648,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4957 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13651 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13651 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _2 = parseState.GetInput(2) :?> Range * SynExpr in
@@ -13672,7 +13672,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4966 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13675 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13675 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _3 = parseState.GetInput(3) :?> 'gentype_barCanBeRightBeforeNull in
@@ -13691,7 +13691,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4980 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13694 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13694 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _2 = parseState.GetInput(2) :?> Range * SynExpr in
@@ -13710,7 +13710,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4989 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13713 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13713 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _2 = parseState.GetInput(2) :?> Range * SynExpr in
@@ -13727,7 +13727,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 4997 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13730 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13730 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_patternAndGuard in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
@@ -13743,7 +13743,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5004 "pars.fsy"
                  : 'gentype_patternClauses));
-# 13746 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13746 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -13754,7 +13754,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5012 "pars.fsy"
                  : 'gentype_patternGuard));
-# 13757 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13757 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -13764,7 +13764,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5015 "pars.fsy"
                  : 'gentype_patternGuard));
-# 13767 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13767 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExprBlockR in
             Microsoft.FSharp.Core.Operators.box
@@ -13777,7 +13777,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5019 "pars.fsy"
                  : Range * SynExpr));
-# 13780 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13780 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_ifExprThen in
             let _2 = parseState.GetInput(2) :?> 'gentype_ifExprElifs in
@@ -13797,7 +13797,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5025 "pars.fsy"
                  : 'gentype_ifExprCases));
-# 13800 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13800 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -13808,7 +13808,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5037 "pars.fsy"
                  : 'gentype_ifExprThen));
-# 13811 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13811 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -13820,7 +13820,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5040 "pars.fsy"
                  : 'gentype_ifExprThen));
-# 13823 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13823 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -13831,7 +13831,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5044 "pars.fsy"
                  : 'gentype_ifExprThen));
-# 13834 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13834 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -13843,7 +13843,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5047 "pars.fsy"
                  : 'gentype_ifExprThen));
-# 13846 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13846 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -13853,7 +13853,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5052 "pars.fsy"
                  : 'gentype_ifExprElifs));
-# 13856 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13856 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -13865,7 +13865,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5055 "pars.fsy"
                  : 'gentype_ifExprElifs));
-# 13868 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13868 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -13877,7 +13877,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5059 "pars.fsy"
                  : 'gentype_ifExprElifs));
-# 13880 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13880 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ifExprCases in
@@ -13897,7 +13897,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5063 "pars.fsy"
                  : 'gentype_ifExprElifs));
-# 13900 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13900 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -13910,7 +13910,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5074 "pars.fsy"
                  : 'gentype_ifExprElifs));
-# 13913 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13913 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr list * range list in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -13923,7 +13923,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5079 "pars.fsy"
                  : SynExpr list * range list));
-# 13926 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13926 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr list * range list in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -13938,7 +13938,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5083 "pars.fsy"
                  : SynExpr list * range list));
-# 13941 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13941 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr list * range list in
             let _4 = parseState.GetInput(4) :?> SynExpr in
@@ -13955,7 +13955,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5089 "pars.fsy"
                  : SynExpr list * range list));
-# 13958 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13958 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr list * range list in
             let _4 = parseState.GetInput(4) :?> 'gentype_ends_coming_soon_or_recover in
@@ -13974,7 +13974,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5097 "pars.fsy"
                  : SynExpr list * range list));
-# 13977 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13977 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -13988,7 +13988,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5107 "pars.fsy"
                  : SynExpr list * range list));
-# 13991 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 13991 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -14000,7 +14000,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5112 "pars.fsy"
                  : SynExpr list * range list));
-# 14003 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14003 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _4 = parseState.GetInput(4) :?> 'gentype_ends_coming_soon_or_recover in
@@ -14018,7 +14018,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5115 "pars.fsy"
                  : SynExpr list * range list));
-# 14021 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14021 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _4 = parseState.GetInput(4) :?> SynExpr in
@@ -14034,7 +14034,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5124 "pars.fsy"
                  : SynExpr list * range list));
-# 14037 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14037 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -14048,7 +14048,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5132 "pars.fsy"
                  : SynExpr));
-# 14051 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14051 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14059,7 +14059,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5137 "pars.fsy"
                  : SynExpr));
-# 14062 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14062 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -14072,7 +14072,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5140 "pars.fsy"
                  : SynExpr));
-# 14075 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14075 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -14085,7 +14085,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5144 "pars.fsy"
                  : SynExpr));
-# 14088 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14088 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -14098,7 +14098,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5148 "pars.fsy"
                  : SynExpr));
-# 14101 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14101 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14109,7 +14109,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5152 "pars.fsy"
                  : SynExpr));
-# 14112 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14112 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14120,7 +14120,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5155 "pars.fsy"
                  : SynExpr));
-# 14123 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14123 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -14136,7 +14136,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5158 "pars.fsy"
                  : SynExpr));
-# 14139 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14139 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -14149,7 +14149,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5163 "pars.fsy"
                  : SynExpr));
-# 14152 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14152 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -14161,7 +14161,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5166 "pars.fsy"
                  : SynExpr));
-# 14164 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14164 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -14171,7 +14171,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5169 "pars.fsy"
                  : SynExpr));
-# 14174 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14174 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14182,7 +14182,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5172 "pars.fsy"
                  : SynExpr));
-# 14185 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14185 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14193,7 +14193,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5175 "pars.fsy"
                  : SynExpr));
-# 14196 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14196 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14204,7 +14204,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5178 "pars.fsy"
                  : SynExpr));
-# 14207 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14207 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -14216,7 +14216,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5182 "pars.fsy"
                  : SynExpr));
-# 14219 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14219 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -14228,7 +14228,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5185 "pars.fsy"
                  : SynExpr));
-# 14231 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14231 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> SynExpr * bool in
@@ -14243,7 +14243,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5190 "pars.fsy"
                  : SynExpr));
-# 14246 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14246 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -14256,7 +14256,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5196 "pars.fsy"
                  : SynExpr));
-# 14259 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14259 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynExpr * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -14272,7 +14272,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5202 "pars.fsy"
                  : SynExpr * bool));
-# 14275 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14275 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -14291,7 +14291,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5211 "pars.fsy"
                  : SynExpr * bool));
-# 14294 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14294 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -14305,7 +14305,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5224 "pars.fsy"
                  : SynExpr * bool));
-# 14308 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14308 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             let _3 = parseState.GetInput(3) :?> SynExpr * bool in
@@ -14319,7 +14319,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5232 "pars.fsy"
                  : SynExpr * bool));
-# 14322 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14322 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             let _3 = parseState.GetInput(3) :?> SynExpr * bool in
@@ -14333,7 +14333,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5237 "pars.fsy"
                  : SynExpr * bool));
-# 14336 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14336 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             let _3 = parseState.GetInput(3) :?> range * range option * bool     * SynType list * range list * range in
@@ -14348,7 +14348,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5242 "pars.fsy"
                  : SynExpr * bool));
-# 14351 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14351 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> SynExpr * bool in
@@ -14362,7 +14362,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5248 "pars.fsy"
                  : SynExpr * bool));
-# 14365 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14365 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
@@ -14376,7 +14376,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5253 "pars.fsy"
                  : SynExpr * bool));
-# 14379 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14379 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -14386,7 +14386,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5259 "pars.fsy"
                  : SynExpr * bool));
-# 14389 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14389 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             let _3 = parseState.GetInput(3) :?> 'gentype_atomicExprQualification in
@@ -14399,7 +14399,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5262 "pars.fsy"
                  : SynExpr * bool));
-# 14402 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14402 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_atomicExprQualification in
             Microsoft.FSharp.Core.Operators.box
@@ -14411,7 +14411,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5266 "pars.fsy"
                  : SynExpr * bool));
-# 14414 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14414 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_nameop in
             Microsoft.FSharp.Core.Operators.box
@@ -14423,7 +14423,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5270 "pars.fsy"
                  : SynExpr * bool));
-# 14426 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14426 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr * bool in
             let _3 = parseState.GetInput(3) :?> 'gentype_dynamicArg in
@@ -14438,7 +14438,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5274 "pars.fsy"
                  : SynExpr * bool));
-# 14441 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14441 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -14450,7 +14450,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5280 "pars.fsy"
                  : SynExpr * bool));
-# 14453 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14453 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_identExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14461,7 +14461,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5285 "pars.fsy"
                  : SynExpr * bool));
-# 14464 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14464 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_listExprElements in
             Microsoft.FSharp.Core.Operators.box
@@ -14472,7 +14472,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5288 "pars.fsy"
                  : SynExpr * bool));
-# 14475 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14475 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_listExprElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -14485,7 +14485,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5291 "pars.fsy"
                  : SynExpr * bool));
-# 14488 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14488 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -14496,7 +14496,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5295 "pars.fsy"
                  : SynExpr * bool));
-# 14499 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14499 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -14509,7 +14509,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5299 "pars.fsy"
                  : SynExpr * bool));
-# 14512 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14512 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynExpr list * range list in
             let _4 = parseState.GetInput(4) :?> 'gentype_rparen in
@@ -14523,7 +14523,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5304 "pars.fsy"
                  : SynExpr * bool));
-# 14526 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14526 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynExpr list * range list in
             let _4 = parseState.GetInput(4) :?> 'gentype_recover in
@@ -14538,7 +14538,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5309 "pars.fsy"
                  : SynExpr * bool));
-# 14541 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14541 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14549,7 +14549,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5315 "pars.fsy"
                  : SynExpr * bool));
-# 14552 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14552 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_identOrOp in
             Microsoft.FSharp.Core.Operators.box
@@ -14561,7 +14561,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5319 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14564 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14564 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -14574,7 +14574,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5323 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14577 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14577 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -14587,7 +14587,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5329 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14590 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14590 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -14602,7 +14602,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5334 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14605 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14605 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             let _5 = parseState.GetInput(5) :?> int32 * bool in
@@ -14616,7 +14616,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5340 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14619 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14619 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -14641,7 +14641,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5345 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14644 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14644 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14652,7 +14652,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5361 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14655 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14655 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -14665,7 +14665,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5364 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14668 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14668 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -14676,7 +14676,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5368 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14679 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14679 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -14689,7 +14689,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5372 "pars.fsy"
                  : 'gentype_atomicExprQualification));
-# 14692 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14692 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_constant in
             Microsoft.FSharp.Core.Operators.box
@@ -14700,7 +14700,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5379 "pars.fsy"
                  : SynExpr));
-# 14703 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14703 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14711,7 +14711,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5382 "pars.fsy"
                  : SynExpr));
-# 14714 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14714 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_braceExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14722,7 +14722,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5385 "pars.fsy"
                  : SynExpr));
-# 14725 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14725 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_braceBarExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14733,7 +14733,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5388 "pars.fsy"
                  : SynExpr));
-# 14736 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14736 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interpolatedString in
             Microsoft.FSharp.Core.Operators.box
@@ -14745,7 +14745,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5391 "pars.fsy"
                  : SynExpr));
-# 14748 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14748 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -14755,7 +14755,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5395 "pars.fsy"
                  : SynExpr));
-# 14758 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14758 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -14765,7 +14765,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5398 "pars.fsy"
                  : SynExpr));
-# 14768 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14768 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -14775,7 +14775,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5401 "pars.fsy"
                  : SynExpr));
-# 14778 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14778 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_quoteExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14786,7 +14786,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5404 "pars.fsy"
                  : SynExpr));
-# 14789 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14789 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_arrayExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14797,7 +14797,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5407 "pars.fsy"
                  : SynExpr));
-# 14800 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14800 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_beginEndExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14808,7 +14808,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5410 "pars.fsy"
                  : SynExpr));
-# 14811 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14811 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -14819,7 +14819,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5414 "pars.fsy"
                  : 'gentype_beginEndExpr));
-# 14822 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14822 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -14831,7 +14831,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5417 "pars.fsy"
                  : 'gentype_beginEndExpr));
-# 14834 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14834 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -14841,7 +14841,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5420 "pars.fsy"
                  : 'gentype_beginEndExpr));
-# 14844 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14844 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -14851,7 +14851,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5423 "pars.fsy"
                  : 'gentype_beginEndExpr));
-# 14854 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14854 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
@@ -14865,7 +14865,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5427 "pars.fsy"
                  : 'gentype_quoteExpr));
-# 14868 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14868 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExpr in
@@ -14880,7 +14880,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5431 "pars.fsy"
                  : 'gentype_quoteExpr));
-# 14883 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14883 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * bool in
             let _3 = parseState.GetInput(3) :?> string * bool in
@@ -14892,7 +14892,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5436 "pars.fsy"
                  : 'gentype_quoteExpr));
-# 14895 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14895 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
@@ -14905,7 +14905,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5439 "pars.fsy"
                  : 'gentype_quoteExpr));
-# 14908 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14908 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_arrayExprElements in
             Microsoft.FSharp.Core.Operators.box
@@ -14916,7 +14916,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5444 "pars.fsy"
                  : 'gentype_arrayExpr));
-# 14919 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14919 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_arrayExprElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -14929,7 +14929,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5447 "pars.fsy"
                  : 'gentype_arrayExpr));
-# 14932 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14932 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -14939,7 +14939,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5451 "pars.fsy"
                  : 'gentype_arrayExpr));
-# 14942 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14942 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -14952,7 +14952,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5454 "pars.fsy"
                  : 'gentype_arrayExpr));
-# 14955 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14955 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
@@ -14963,7 +14963,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5460 "pars.fsy"
                  : 'gentype_parenExpr));
-# 14966 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14966 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenExprBody in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -14976,7 +14976,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5463 "pars.fsy"
                  : 'gentype_parenExpr));
-# 14979 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14979 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_parenExprBody in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_other_than_rparen_coming_soon_or_recover in
@@ -14990,7 +14990,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5467 "pars.fsy"
                  : 'gentype_parenExpr));
-# 14993 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 14993 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
@@ -15002,7 +15002,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5472 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15005 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15005 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15014,7 +15014,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5476 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15017 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15017 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15026,7 +15026,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5481 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15029 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15029 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15038,7 +15038,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5486 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15041 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15041 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15050,7 +15050,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5491 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15053 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15053 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -15062,7 +15062,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5496 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15065 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15065 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynExpr in
             let _4 = parseState.GetInput(4) :?> 'gentype_rparen in
@@ -15085,7 +15085,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5507 "pars.fsy"
                  : 'gentype_parenExpr));
-# 15088 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15088 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typars in
             let _4 = parseState.GetInput(4) :?> 'gentype_classMemberSpfn in
@@ -15099,7 +15099,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5522 "pars.fsy"
                  : 'gentype_parenExprBody));
-# 15102 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15102 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typedSequentialExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -15110,7 +15110,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5525 "pars.fsy"
                  : 'gentype_parenExprBody));
-# 15113 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15113 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_inlineAssemblyExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -15121,7 +15121,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5528 "pars.fsy"
                  : 'gentype_parenExprBody));
-# 15124 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15124 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
@@ -15132,7 +15132,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5532 "pars.fsy"
                  : 'gentype_typars));
-# 15135 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15135 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typarAlts in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -15145,7 +15145,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5535 "pars.fsy"
                  : 'gentype_typars));
-# 15148 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15148 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typarAlts in
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeCanBeNullable in
@@ -15160,7 +15160,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5540 "pars.fsy"
                  : 'gentype_typarAlts));
-# 15163 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15163 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
@@ -15171,7 +15171,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5546 "pars.fsy"
                  : 'gentype_typarAlts));
-# 15174 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15174 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_braceExprBody in
@@ -15185,7 +15185,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5550 "pars.fsy"
                  : 'gentype_braceExpr));
-# 15188 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15188 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_braceExprBody in
@@ -15201,7 +15201,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5554 "pars.fsy"
                  : 'gentype_braceExpr));
-# 15204 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15204 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _3 = parseState.GetInput(3) :?> 'gentype_rbrace in
@@ -15214,7 +15214,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5560 "pars.fsy"
                  : 'gentype_braceExpr));
-# 15217 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15217 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
@@ -15228,7 +15228,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5564 "pars.fsy"
                  : 'gentype_braceExpr));
-# 15231 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15231 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_rbrace in
@@ -15241,7 +15241,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5569 "pars.fsy"
                  : 'gentype_braceExpr));
-# 15244 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15244 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recdExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -15252,7 +15252,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5574 "pars.fsy"
                  : 'gentype_braceExprBody));
-# 15255 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15255 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -15263,7 +15263,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5577 "pars.fsy"
                  : 'gentype_braceExprBody));
-# 15266 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15266 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_computationExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -15274,7 +15274,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5580 "pars.fsy"
                  : 'gentype_braceExprBody));
-# 15277 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15277 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sequentialExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -15285,7 +15285,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5584 "pars.fsy"
                  : 'gentype_listExprElements));
-# 15288 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15288 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15295,7 +15295,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5587 "pars.fsy"
                  : 'gentype_listExprElements));
-# 15298 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15298 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sequentialExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -15306,7 +15306,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5591 "pars.fsy"
                  : 'gentype_arrayExprElements));
-# 15309 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15309 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15316,7 +15316,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5594 "pars.fsy"
                  : 'gentype_arrayExprElements));
-# 15319 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15319 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_sequentialExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -15327,7 +15327,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5598 "pars.fsy"
                  : 'gentype_computationExpr));
-# 15330 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15330 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typedSequentialExprBlockR in
             Microsoft.FSharp.Core.Operators.box
@@ -15341,7 +15341,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5602 "pars.fsy"
                  : 'gentype_arrowThenExprR));
-# 15344 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15344 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -15353,7 +15353,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5609 "pars.fsy"
                  : 'gentype_forLoopBinder));
-# 15356 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15356 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -15367,7 +15367,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5612 "pars.fsy"
                  : 'gentype_forLoopBinder));
-# 15370 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15370 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _2 = parseState.GetInput(2) :?> 'gentype_ends_coming_soon_or_recover in
@@ -15381,7 +15381,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5617 "pars.fsy"
                  : 'gentype_forLoopBinder));
-# 15384 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15384 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_parenPattern in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -15397,7 +15397,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5623 "pars.fsy"
                  : 'gentype_forLoopRange));
-# 15400 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15400 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15407,7 +15407,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5628 "pars.fsy"
                  : 'gentype_forLoopDirection));
-# 15410 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15410 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15417,7 +15417,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5630 "pars.fsy"
                  : 'gentype_forLoopDirection));
-# 15420 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15420 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_string in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_inlineAssemblyTypeArg in
@@ -15434,7 +15434,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5635 "pars.fsy"
                  : 'gentype_inlineAssemblyExpr));
-# 15437 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15437 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_optCurriedArgExprs in
             let _2 = parseState.GetInput(2) :?> SynExpr in
@@ -15446,7 +15446,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5642 "pars.fsy"
                  : 'gentype_optCurriedArgExprs));
-# 15449 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15449 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15456,7 +15456,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5645 "pars.fsy"
                  : 'gentype_optCurriedArgExprs));
-# 15459 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15459 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15466,7 +15466,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5649 "pars.fsy"
                  : 'gentype_opt_atomicExprAfterType));
-# 15469 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15469 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -15477,7 +15477,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5652 "pars.fsy"
                  : 'gentype_opt_atomicExprAfterType));
-# 15480 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15480 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15487,7 +15487,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5656 "pars.fsy"
                  : 'gentype_opt_inlineAssemblyTypeArg));
-# 15490 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15490 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeKeyword in
             let _3 = parseState.GetInput(3) :?> SynType in
@@ -15500,7 +15500,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5659 "pars.fsy"
                  : 'gentype_opt_inlineAssemblyTypeArg));
-# 15503 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15503 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15510,7 +15510,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5663 "pars.fsy"
                  : 'gentype_optInlineAssemblyReturnTypes));
-# 15513 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15513 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
@@ -15521,7 +15521,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5666 "pars.fsy"
                  : 'gentype_optInlineAssemblyReturnTypes));
-# 15524 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15524 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
@@ -15532,7 +15532,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5669 "pars.fsy"
                  : 'gentype_optInlineAssemblyReturnTypes));
-# 15535 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15535 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -15553,7 +15553,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5673 "pars.fsy"
                  : 'gentype_recdExpr));
-# 15556 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15556 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recdExprCore in
             Microsoft.FSharp.Core.Operators.box
@@ -15565,7 +15565,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5682 "pars.fsy"
                  : 'gentype_recdExpr));
-# 15568 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15568 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -15586,7 +15586,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5687 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15589 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15589 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -15604,7 +15604,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5697 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15607 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15607 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -15617,7 +15617,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5706 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15620 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15620 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15631,7 +15631,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5715 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15634 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15634 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15646,7 +15646,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5722 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15649 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15649 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynExpr in
             let _4 = parseState.GetInput(4) :?> 'gentype_recdExprBindings in
@@ -15664,7 +15664,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5731 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15667 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15667 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recdBinding in
@@ -15680,7 +15680,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5740 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15683 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15683 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_seps_block in
@@ -15692,7 +15692,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5745 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15695 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15695 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_recdBinding in
@@ -15708,7 +15708,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5748 "pars.fsy"
                  : 'gentype_recdExprCore));
-# 15711 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15711 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_seps_block in
             Microsoft.FSharp.Core.Operators.box
@@ -15719,7 +15719,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5754 "pars.fsy"
                  : 'gentype_opt_seps_block));
-# 15722 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15722 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15729,7 +15729,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5757 "pars.fsy"
                  : 'gentype_opt_seps_block));
-# 15732 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15732 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15739,7 +15739,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5761 "pars.fsy"
                  : 'gentype_seps_block));
-# 15742 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15742 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15750,7 +15750,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5764 "pars.fsy"
                  : 'gentype_seps_block));
-# 15753 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15753 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15760,7 +15760,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5768 "pars.fsy"
                  : 'gentype_seps_block));
-# 15763 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15763 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15770,7 +15770,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5771 "pars.fsy"
                  : 'gentype_seps_block));
-# 15773 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15773 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
@@ -15781,7 +15781,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5777 "pars.fsy"
                  : 'gentype_pathOrUnderscore));
-# 15784 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15784 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15793,7 +15793,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5780 "pars.fsy"
                  : 'gentype_pathOrUnderscore));
-# 15796 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15796 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recdExprBindings in
             let _2 = parseState.GetInput(2) :?> 'gentype_seps_block in
@@ -15806,7 +15806,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5786 "pars.fsy"
                  : 'gentype_recdExprBindings));
-# 15809 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15809 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15816,7 +15816,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5789 "pars.fsy"
                  : 'gentype_recdExprBindings));
-# 15819 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15819 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_pathOrUnderscore in
             let _3 = parseState.GetInput(3) :?> SynExpr in
@@ -15829,7 +15829,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5793 "pars.fsy"
                  : 'gentype_recdBinding));
-# 15832 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15832 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_pathOrUnderscore in
             Microsoft.FSharp.Core.Operators.box
@@ -15842,7 +15842,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5797 "pars.fsy"
                  : 'gentype_recdBinding));
-# 15845 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15845 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_pathOrUnderscore in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -15856,7 +15856,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5802 "pars.fsy"
                  : 'gentype_recdBinding));
-# 15859 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15859 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_pathOrUnderscore in
             Microsoft.FSharp.Core.Operators.box
@@ -15868,7 +15868,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5807 "pars.fsy"
                  : 'gentype_recdBinding));
-# 15871 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15871 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_pathOrUnderscore in
             let _2 = parseState.GetInput(2) :?> 'gentype_ends_coming_soon_or_recover in
@@ -15881,7 +15881,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5811 "pars.fsy"
                  : 'gentype_recdBinding));
-# 15884 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15884 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objExprBaseCall in
             let _2 = parseState.GetInput(2) :?> 'gentype_objExprBindings in
@@ -15898,7 +15898,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5822 "pars.fsy"
                  : 'gentype_objExpr));
-# 15901 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15901 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objExprBaseCall in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_OBLOCKSEP in
@@ -15913,7 +15913,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5828 "pars.fsy"
                  : 'gentype_objExpr));
-# 15916 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15916 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
@@ -15925,7 +15925,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5833 "pars.fsy"
                  : 'gentype_objExpr));
-# 15928 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15928 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -15939,7 +15939,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5838 "pars.fsy"
                  : 'gentype_objExprBaseCall));
-# 15942 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15942 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_HIGH_PRECEDENCE_APP in
@@ -15952,7 +15952,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5841 "pars.fsy"
                  : 'gentype_objExprBaseCall));
-# 15955 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15955 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
@@ -15963,7 +15963,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5844 "pars.fsy"
                  : 'gentype_objExprBaseCall));
-# 15966 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15966 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objExprBindings in
             Microsoft.FSharp.Core.Operators.box
@@ -15975,7 +15975,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5849 "pars.fsy"
                  : 'gentype_opt_objExprBindings));
-# 15978 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15978 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -15985,7 +15985,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5853 "pars.fsy"
                  : 'gentype_opt_objExprBindings));
-# 15988 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 15988 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_localBindings in
             Microsoft.FSharp.Core.Operators.box
@@ -15998,7 +15998,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5857 "pars.fsy"
                  : 'gentype_objExprBindings));
-# 16001 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16001 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_localBindings in
             Microsoft.FSharp.Core.Operators.box
@@ -16011,7 +16011,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5862 "pars.fsy"
                  : 'gentype_objExprBindings));
-# 16014 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16014 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_objectImplementationBlock in
             let _3 = parseState.GetInput(3) :?> 'gentype_opt_declEnd in
@@ -16030,7 +16030,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5867 "pars.fsy"
                  : 'gentype_objExprBindings));
-# 16033 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16033 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objExprInterface in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_objExprInterfaces in
@@ -16042,7 +16042,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5877 "pars.fsy"
                  : 'gentype_objExprInterfaces));
-# 16045 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16045 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -16052,7 +16052,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5881 "pars.fsy"
                  : 'gentype_opt_objExprInterfaces));
-# 16055 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16055 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_objExprInterface in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_objExprInterfaces in
@@ -16064,7 +16064,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5884 "pars.fsy"
                  : 'gentype_opt_objExprInterfaces));
-# 16067 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16067 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_objExprInterfaces in
             Microsoft.FSharp.Core.Operators.box
@@ -16075,7 +16075,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5887 "pars.fsy"
                  : 'gentype_opt_objExprInterfaces));
-# 16078 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16078 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_interfaceMember in
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypeWithoutNull in
@@ -16097,7 +16097,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5891 "pars.fsy"
                  : 'gentype_objExprInterface));
-# 16100 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16100 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_braceBarExprCore in
             Microsoft.FSharp.Core.Operators.box
@@ -16109,7 +16109,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5902 "pars.fsy"
                  : 'gentype_braceBarExpr));
-# 16112 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16112 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_braceBarExprCore in
             Microsoft.FSharp.Core.Operators.box
@@ -16120,7 +16120,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5906 "pars.fsy"
                  : 'gentype_braceBarExpr));
-# 16123 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16123 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recdExprCore in
             let _3 = parseState.GetInput(3) :?> 'gentype_bar_rbrace in
@@ -16143,7 +16143,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5910 "pars.fsy"
                  : 'gentype_braceBarExprCore));
-# 16146 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16146 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recdExprCore in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -16165,7 +16165,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5924 "pars.fsy"
                  : 'gentype_braceBarExprCore));
-# 16168 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16168 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_bar_rbrace in
             Microsoft.FSharp.Core.Operators.box
@@ -16181,7 +16181,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5937 "pars.fsy"
                  : 'gentype_braceBarExprCore));
-# 16184 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16184 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -16196,7 +16196,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5945 "pars.fsy"
                  : 'gentype_braceBarExprCore));
-# 16199 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16199 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_bar_rbrace in
             Microsoft.FSharp.Core.Operators.box
@@ -16211,7 +16211,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5952 "pars.fsy"
                  : 'gentype_braceBarExprCore));
-# 16214 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16214 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             let _4 = parseState.GetInput(4) :?> SynExpr in
@@ -16225,7 +16225,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5960 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16228 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16228 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             Microsoft.FSharp.Core.Operators.box
@@ -16238,7 +16238,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5965 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16241 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16241 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             let _4 = parseState.GetInput(4) :?> 'gentype_typedSequentialExprBlockR in
@@ -16253,7 +16253,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5970 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16256 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16256 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             let _4 = parseState.GetInput(4) :?> 'gentype_typedSequentialExprBlockR in
@@ -16270,7 +16270,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5976 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16273 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16273 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             let _4 = parseState.GetInput(4) :?> range in
@@ -16285,7 +16285,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5983 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16288 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16288 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             let _4 = parseState.GetInput(4) :?> 'gentype_recover in
@@ -16300,7 +16300,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5989 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16303 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16303 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynPat list in
             Microsoft.FSharp.Core.Operators.box
@@ -16312,7 +16312,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5995 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16315 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16315 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -16322,7 +16322,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 5999 "pars.fsy"
                  : 'gentype_anonLambdaExpr));
-# 16325 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16325 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_withPatternClauses in
             Microsoft.FSharp.Core.Operators.box
@@ -16335,7 +16335,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6003 "pars.fsy"
                  : 'gentype_anonMatchingExpr));
-# 16338 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16338 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_withPatternClauses in
             Microsoft.FSharp.Core.Operators.box
@@ -16348,7 +16348,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6008 "pars.fsy"
                  : 'gentype_anonMatchingExpr));
-# 16351 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16351 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
@@ -16359,7 +16359,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6017 "pars.fsy"
                  : 'gentype_typeWithTypeConstraints));
-# 16362 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16362 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeConstraints in
@@ -16371,7 +16371,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6020 "pars.fsy"
                  : 'gentype_typeWithTypeConstraints));
-# 16374 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16374 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topType in
             Microsoft.FSharp.Core.Operators.box
@@ -16382,7 +16382,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6024 "pars.fsy"
                  : 'gentype_topTypeWithTypeConstraints));
-# 16385 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16385 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topType in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeConstraints in
@@ -16396,7 +16396,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6027 "pars.fsy"
                  : 'gentype_topTypeWithTypeConstraints));
-# 16399 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16399 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -16406,7 +16406,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6033 "pars.fsy"
                  : 'gentype_opt_topReturnTypeWithTypeConstraints));
-# 16409 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16409 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_topTypeWithTypeConstraints in
             Microsoft.FSharp.Core.Operators.box
@@ -16420,7 +16420,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6036 "pars.fsy"
                  : 'gentype_opt_topReturnTypeWithTypeConstraints));
-# 16423 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16423 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -16434,7 +16434,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6042 "pars.fsy"
                  : 'gentype_opt_topReturnTypeWithTypeConstraints));
-# 16437 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16437 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topTupleType in
             let _3 = parseState.GetInput(3) :?> 'gentype_topType in
@@ -16449,7 +16449,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6049 "pars.fsy"
                  : 'gentype_topType));
-# 16452 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16452 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topTupleType in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -16464,7 +16464,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6055 "pars.fsy"
                  : 'gentype_topType));
-# 16467 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16467 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topTupleType in
             Microsoft.FSharp.Core.Operators.box
@@ -16476,7 +16476,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6061 "pars.fsy"
                  : 'gentype_topType));
-# 16479 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16479 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topAppType in
             let _3 = parseState.GetInput(3) :?> 'gentype_topTupleTypeElements in
@@ -16492,7 +16492,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6066 "pars.fsy"
                  : 'gentype_topTupleType));
-# 16495 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16495 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topAppType in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -16508,7 +16508,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6073 "pars.fsy"
                  : 'gentype_topTupleType));
-# 16511 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16511 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_topTupleTypeElements in
             Microsoft.FSharp.Core.Operators.box
@@ -16523,7 +16523,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6080 "pars.fsy"
                  : 'gentype_topTupleType));
-# 16526 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16526 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topAppType in
             Microsoft.FSharp.Core.Operators.box
@@ -16535,7 +16535,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6087 "pars.fsy"
                  : 'gentype_topTupleType));
-# 16538 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16538 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topAppType in
             let _3 = parseState.GetInput(3) :?> 'gentype_topTupleTypeElements in
@@ -16549,7 +16549,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6092 "pars.fsy"
                  : 'gentype_topTupleTypeElements));
-# 16552 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16552 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topAppType in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -16564,7 +16564,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6097 "pars.fsy"
                  : 'gentype_topTupleTypeElements));
-# 16567 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16567 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_topTupleTypeElements in
             Microsoft.FSharp.Core.Operators.box
@@ -16578,7 +16578,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6103 "pars.fsy"
                  : 'gentype_topTupleTypeElements));
-# 16581 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16581 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topAppType in
             Microsoft.FSharp.Core.Operators.box
@@ -16590,7 +16590,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6109 "pars.fsy"
                  : 'gentype_topTupleTypeElements));
-# 16593 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16593 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypeCanBeNullable in
@@ -16607,7 +16607,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6114 "pars.fsy"
                  : 'gentype_topAppType));
-# 16610 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16610 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypeCanBeNullable in
@@ -16626,7 +16626,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6121 "pars.fsy"
                  : 'gentype_topAppType));
-# 16629 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16629 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             let _3 = parseState.GetInput(3) :?> Ident in
@@ -16640,7 +16640,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6130 "pars.fsy"
                  : 'gentype_topAppType));
-# 16643 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16643 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             let _3 = parseState.GetInput(3) :?> Ident in
@@ -16656,7 +16656,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6134 "pars.fsy"
                  : 'gentype_topAppType));
-# 16659 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16659 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_attributes in
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypeCanBeNullable in
@@ -16669,7 +16669,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6140 "pars.fsy"
                  : 'gentype_topAppType));
-# 16672 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16672 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeCanBeNullable in
@@ -16685,7 +16685,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6144 "pars.fsy"
                  : 'gentype_topAppType));
-# 16688 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16688 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -16703,7 +16703,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6151 "pars.fsy"
                  : 'gentype_topAppType));
-# 16706 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16706 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> Ident in
             let _4 = parseState.GetInput(4) :?> 'gentype_appTypeCanBeNullable in
@@ -16716,7 +16716,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6160 "pars.fsy"
                  : 'gentype_topAppType));
-# 16719 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16719 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> Ident in
             let _4 = parseState.GetInput(4) :?> 'gentype_recover in
@@ -16731,7 +16731,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6164 "pars.fsy"
                  : 'gentype_topAppType));
-# 16734 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16734 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             Microsoft.FSharp.Core.Operators.box
@@ -16742,7 +16742,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6170 "pars.fsy"
                  : 'gentype_topAppType));
-# 16745 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16745 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _3 = parseState.GetInput(3) :?> 'gentype_invalidUseOfAppTypeFunction in
@@ -16756,7 +16756,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6176 "pars.fsy"
                  : 'gentype_invalidUseOfAppTypeFunction));
-# 16759 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16759 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -16771,7 +16771,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6181 "pars.fsy"
                  : 'gentype_invalidUseOfAppTypeFunction));
-# 16774 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16774 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _4 = parseState.GetInput(4) :?> 'gentype_invalidUseOfAppTypeFunction in
@@ -16789,7 +16789,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6187 "pars.fsy"
                  : 'gentype_invalidUseOfAppTypeFunction));
-# 16792 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16792 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeWithoutNull in
@@ -16803,7 +16803,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6196 "pars.fsy"
                  : 'gentype_invalidUseOfAppTypeFunction));
-# 16806 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16806 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleType in
             let _3 = parseState.GetInput(3) :?> SynType in
@@ -16817,7 +16817,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6204 "pars.fsy"
                  : SynType));
-# 16820 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16820 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleType in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -16832,7 +16832,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6209 "pars.fsy"
                  : SynType));
-# 16835 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16835 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleType in
             let _4 = parseState.GetInput(4) :?> SynType in
@@ -16850,7 +16850,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6215 "pars.fsy"
                  : SynType));
-# 16853 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16853 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_tupleType in
             Microsoft.FSharp.Core.Operators.box
@@ -16861,7 +16861,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6224 "pars.fsy"
                  : SynType));
-# 16864 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16864 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             let _2 = parseState.GetInput(2) :?> ParseHelpers.LexerContinuation in
@@ -16873,7 +16873,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6227 "pars.fsy"
                  : SynType));
-# 16876 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16876 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_tupleOrQuotTypeElements in
@@ -16887,7 +16887,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6232 "pars.fsy"
                  : 'gentype_tupleType));
-# 16890 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16890 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -16902,7 +16902,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6237 "pars.fsy"
                  : 'gentype_tupleType));
-# 16905 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16905 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_tupleOrQuotTypeElements in
             Microsoft.FSharp.Core.Operators.box
@@ -16917,7 +16917,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6243 "pars.fsy"
                  : 'gentype_tupleType));
-# 16920 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16920 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_tupleOrQuotTypeElements in
@@ -16932,7 +16932,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6250 "pars.fsy"
                  : 'gentype_tupleType));
-# 16935 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16935 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
@@ -16948,7 +16948,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6256 "pars.fsy"
                  : 'gentype_tupleType));
-# 16951 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16951 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _2 = parseState.GetInput(2) :?> string in
@@ -16964,7 +16964,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6263 "pars.fsy"
                  : 'gentype_tupleType));
-# 16967 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16967 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _2 = parseState.GetInput(2) :?> string in
@@ -16981,7 +16981,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6269 "pars.fsy"
                  : 'gentype_tupleType));
-# 16984 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16984 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             Microsoft.FSharp.Core.Operators.box
@@ -16992,7 +16992,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6276 "pars.fsy"
                  : 'gentype_tupleType));
-# 16995 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 16995 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_tupleOrQuotTypeElements in
@@ -17005,7 +17005,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6280 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17008 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17008 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -17019,7 +17019,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6284 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17022 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17022 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_tupleOrQuotTypeElements in
             Microsoft.FSharp.Core.Operators.box
@@ -17033,7 +17033,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6289 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17036 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17036 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _2 = parseState.GetInput(2) :?> string in
@@ -17048,7 +17048,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6295 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17051 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17051 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             let _2 = parseState.GetInput(2) :?> string in
@@ -17064,7 +17064,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6300 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17067 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17067 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_tupleOrQuotTypeElements in
@@ -17080,7 +17080,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6306 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17083 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17083 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCanBeNullable in
             Microsoft.FSharp.Core.Operators.box
@@ -17091,7 +17091,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6313 "pars.fsy"
                  : 'gentype_tupleOrQuotTypeElements));
-# 17094 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17094 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> 'gentype_intersectionConstraints in
@@ -17104,7 +17104,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6317 "pars.fsy"
                  : 'gentype_intersectionType));
-# 17107 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17107 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hashConstraint in
             let _3 = parseState.GetInput(3) :?> 'gentype_intersectionConstraints in
@@ -17117,7 +17117,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6321 "pars.fsy"
                  : 'gentype_intersectionType));
-# 17120 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17120 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
@@ -17128,7 +17128,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6326 "pars.fsy"
                  : 'gentype_appTypeCon));
-# 17131 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17131 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
@@ -17139,7 +17139,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6329 "pars.fsy"
                  : 'gentype_appTypeCon));
-# 17142 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17142 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCon in
             let _2 = parseState.GetInput(2) :?> string in
@@ -17158,7 +17158,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6333 "pars.fsy"
                  : 'gentype_appTypeConPower));
-# 17161 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17161 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCon in
             Microsoft.FSharp.Core.Operators.box
@@ -17169,7 +17169,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6342 "pars.fsy"
                  : 'gentype_appTypeConPower));
-# 17172 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17172 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             Microsoft.FSharp.Core.Operators.box
@@ -17180,7 +17180,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6346 "pars.fsy"
                  : 'gentype_appTypeCanBeNullable));
-# 17183 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17183 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             Microsoft.FSharp.Core.Operators.box
@@ -17191,7 +17191,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6349 "pars.fsy"
                  : 'gentype_appTypeCanBeNullable));
-# 17194 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17194 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             Microsoft.FSharp.Core.Operators.box
@@ -17202,7 +17202,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6353 "pars.fsy"
                  : SynType));
-# 17205 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17205 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypeCanBeNullable in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -17214,7 +17214,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6356 "pars.fsy"
                  : SynType));
-# 17217 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17217 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _2 = parseState.GetInput(2) :?> 'gentype_arrayTypeSuffix in
@@ -17226,7 +17226,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6360 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17229 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17229 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _3 = parseState.GetInput(3) :?> 'gentype_arrayTypeSuffix in
@@ -17238,7 +17238,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6363 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17241 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17241 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeWithoutNull in
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypeConPower in
@@ -17250,7 +17250,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6367 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17253 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17253 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypePrefixArguments in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -17268,7 +17268,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6370 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17271 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17271 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_powerType in
             Microsoft.FSharp.Core.Operators.box
@@ -17279,7 +17279,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6378 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17282 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17282 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_intersectionType in
             Microsoft.FSharp.Core.Operators.box
@@ -17291,7 +17291,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6381 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17294 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17294 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             let _3 = parseState.GetInput(3) :?> SynType in
@@ -17305,7 +17305,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6385 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17308 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17308 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
@@ -17316,7 +17316,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6390 "pars.fsy"
                  : 'gentype_appTypeWithoutNull));
-# 17319 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17319 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17326,7 +17326,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6394 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17329 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17329 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17336,7 +17336,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6397 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17339 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17339 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17346,7 +17346,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6400 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17349 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17349 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17356,7 +17356,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6403 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17359 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17359 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17366,7 +17366,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6406 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17369 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17369 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17376,7 +17376,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6409 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17379 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17379 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17386,7 +17386,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6412 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17389 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17389 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17396,7 +17396,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6415 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17399 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17399 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17406,7 +17406,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6418 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17409 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17409 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17416,7 +17416,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6421 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17419 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17419 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17426,7 +17426,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6424 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17429 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17429 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17436,7 +17436,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6427 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17439 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17439 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17446,7 +17446,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6430 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17449 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17449 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17456,7 +17456,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6433 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17459 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17459 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17466,7 +17466,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6436 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17469 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17469 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17476,7 +17476,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6439 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17479 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17479 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17486,7 +17486,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6442 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17489 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17489 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17496,7 +17496,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6445 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17499 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17499 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17506,7 +17506,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6448 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17509 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17509 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17516,7 +17516,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6451 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17519 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17519 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17526,7 +17526,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6454 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17529 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17529 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17536,7 +17536,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6457 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17539 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17539 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17546,7 +17546,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6460 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17549 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17549 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17556,7 +17556,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6463 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17559 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17559 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17566,7 +17566,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6466 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17569 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17569 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17576,7 +17576,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6469 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17579 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17579 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17586,7 +17586,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6472 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17589 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17589 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17596,7 +17596,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6475 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17599 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17599 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17606,7 +17606,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6478 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17609 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17609 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17616,7 +17616,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6481 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17619 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17619 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17626,7 +17626,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6484 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17629 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17629 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17636,7 +17636,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6487 "pars.fsy"
                  : 'gentype_arrayTypeSuffix));
-# 17639 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17639 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeArgActual in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeArgActual in
@@ -17650,7 +17650,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6491 "pars.fsy"
                  : 'gentype_appTypePrefixArguments));
-# 17653 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17653 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeArgListElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_typeArgActual in
@@ -17663,7 +17663,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6496 "pars.fsy"
                  : 'gentype_typeArgListElements));
-# 17666 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17666 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeArgListElements in
             let _3 = parseState.GetInput(3) :?> 'gentype_dummyTypeArg in
@@ -17677,7 +17677,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6500 "pars.fsy"
                  : 'gentype_typeArgListElements));
-# 17680 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17680 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17687,7 +17687,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6505 "pars.fsy"
                  : 'gentype_typeArgListElements));
-# 17690 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17690 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
@@ -17698,7 +17698,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6509 "pars.fsy"
                  : 'gentype_powerType));
-# 17701 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17701 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             let _2 = parseState.GetInput(2) :?> string in
@@ -17717,7 +17717,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6512 "pars.fsy"
                  : 'gentype_powerType));
-# 17720 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17720 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_appTypePrefixArguments in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -17735,7 +17735,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6525 "pars.fsy"
                  : SynType));
-# 17738 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17738 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomType in
             Microsoft.FSharp.Core.Operators.box
@@ -17746,7 +17746,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6533 "pars.fsy"
                  : SynType));
-# 17749 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17749 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomType in
             Microsoft.FSharp.Core.Operators.box
@@ -17757,7 +17757,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6537 "pars.fsy"
                  : SynType));
-# 17760 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17760 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_anonRecdType in
             Microsoft.FSharp.Core.Operators.box
@@ -17773,7 +17773,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6540 "pars.fsy"
                  : SynType));
-# 17776 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17776 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_hashConstraint in
             Microsoft.FSharp.Core.Operators.box
@@ -17784,7 +17784,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6551 "pars.fsy"
                  : 'gentype_atomType));
-# 17787 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17787 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeConPower in
             Microsoft.FSharp.Core.Operators.box
@@ -17795,7 +17795,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6554 "pars.fsy"
                  : 'gentype_atomType));
-# 17798 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17798 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17805,7 +17805,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6557 "pars.fsy"
                  : 'gentype_atomType));
-# 17808 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17808 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -17817,7 +17817,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6560 "pars.fsy"
                  : 'gentype_atomType));
-# 17820 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17820 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynType in
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
@@ -17830,7 +17830,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6563 "pars.fsy"
                  : 'gentype_atomType));
-# 17833 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17833 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeCanBeNullable in
             let _5 = parseState.GetInput(5) :?> 'gentype_tupleOrQuotTypeElements in
@@ -17846,7 +17846,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6567 "pars.fsy"
                  : 'gentype_atomType));
-# 17849 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17849 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeCanBeNullable in
             let _5 = parseState.GetInput(5) :?> 'gentype_tupleOrQuotTypeElements in
@@ -17863,7 +17863,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6573 "pars.fsy"
                  : 'gentype_atomType));
-# 17866 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17866 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeCanBeNullable in
             let _5 = parseState.GetInput(5) :?> 'gentype_recover in
@@ -17876,7 +17876,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6580 "pars.fsy"
                  : 'gentype_atomType));
-# 17879 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17879 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_appTypeCanBeNullable in
             let _4 = parseState.GetInput(4) :?> 'gentype_recover in
@@ -17889,7 +17889,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6584 "pars.fsy"
                  : 'gentype_atomType));
-# 17892 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17892 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -17901,7 +17901,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6588 "pars.fsy"
                  : 'gentype_atomType));
-# 17904 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17904 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_rawConstant in
             Microsoft.FSharp.Core.Operators.box
@@ -17912,7 +17912,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6592 "pars.fsy"
                  : 'gentype_atomType));
-# 17915 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17915 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17923,7 +17923,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6595 "pars.fsy"
                  : 'gentype_atomType));
-# 17926 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17926 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> SynExpr * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -17935,7 +17935,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6599 "pars.fsy"
                  : 'gentype_atomType));
-# 17938 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17938 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17945,7 +17945,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6603 "pars.fsy"
                  : 'gentype_atomType));
-# 17948 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17948 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -17955,7 +17955,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6606 "pars.fsy"
                  : 'gentype_atomType));
-# 17958 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17958 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
@@ -17966,7 +17966,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6609 "pars.fsy"
                  : 'gentype_atomType));
-# 17969 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17969 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCon in
             let _2 = parseState.GetInput(2) :?> range * range option * SynType list * range list * range in
@@ -17979,7 +17979,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6612 "pars.fsy"
                  : 'gentype_atomType));
-# 17982 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17982 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomType in
             let _3 = parseState.GetInput(3) :?> SynLongIdent in
@@ -17991,7 +17991,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6616 "pars.fsy"
                  : 'gentype_atomType));
-# 17994 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 17994 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_atomType in
             let _3 = parseState.GetInput(3) :?> SynLongIdent in
@@ -18005,7 +18005,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6619 "pars.fsy"
                  : 'gentype_atomType));
-# 18008 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18008 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_appTypeCon in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -18018,7 +18018,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6623 "pars.fsy"
                  : 'gentype_atomType));
-# 18021 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18021 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> range * range option * bool     * SynType list * range list * range in
             Microsoft.FSharp.Core.Operators.box
@@ -18032,7 +18032,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6628 "pars.fsy"
                  : range * range option * SynType list * range list * range));
-# 18035 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18035 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> range * range option * bool     * SynType list * range list * range in
             Microsoft.FSharp.Core.Operators.box
@@ -18044,7 +18044,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6634 "pars.fsy"
                  : range * range option * SynType list * range list * range));
-# 18047 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18047 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typeArgActualOrDummyIfEmpty in
@@ -18060,7 +18060,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6639 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18063 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18063 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typeArgActualOrDummyIfEmpty in
@@ -18082,7 +18082,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6643 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18085 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18085 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typeArgActualOrDummyIfEmpty in
@@ -18098,7 +18098,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6653 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18101 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18101 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typeArgActual in
@@ -18111,7 +18111,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6659 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18114 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18114 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_typeArgActual in
@@ -18127,7 +18127,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6662 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18130 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18130 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> bool in
@@ -18139,7 +18139,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6668 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18142 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18142 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_recover in
@@ -18157,7 +18157,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6671 "pars.fsy"
                  : range * range option * bool     * SynType list * range list * range));
-# 18160 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18160 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
@@ -18168,7 +18168,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6681 "pars.fsy"
                  : 'gentype_typeArgActual));
-# 18171 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18171 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             let _3 = parseState.GetInput(3) :?> SynType in
@@ -18180,7 +18180,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6684 "pars.fsy"
                  : 'gentype_typeArgActual));
-# 18183 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18183 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynType in
             Microsoft.FSharp.Core.Operators.box
@@ -18194,7 +18194,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6687 "pars.fsy"
                  : 'gentype_typeArgActual));
-# 18197 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18197 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_typeArgActual in
             Microsoft.FSharp.Core.Operators.box
@@ -18205,7 +18205,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6694 "pars.fsy"
                  : 'gentype_typeArgActualOrDummyIfEmpty));
-# 18208 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18208 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_dummyTypeArg in
             Microsoft.FSharp.Core.Operators.box
@@ -18217,7 +18217,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6697 "pars.fsy"
                  : 'gentype_typeArgActualOrDummyIfEmpty));
-# 18220 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18220 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18231,7 +18231,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6702 "pars.fsy"
                  : 'gentype_dummyTypeArg));
-# 18234 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18234 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _2 = parseState.GetInput(2) :?> 'gentype_measureTypeExpr in
@@ -18247,7 +18247,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6710 "pars.fsy"
                  : 'gentype_measureTypeArg));
-# 18250 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18250 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             let _3 = parseState.GetInput(3) :?> bool in
@@ -18262,7 +18262,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6716 "pars.fsy"
                  : 'gentype_measureTypeArg));
-# 18265 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18265 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             Microsoft.FSharp.Core.Operators.box
@@ -18273,7 +18273,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6723 "pars.fsy"
                  : 'gentype_measureTypeAtom));
-# 18276 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18276 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynTypar in
             Microsoft.FSharp.Core.Operators.box
@@ -18284,7 +18284,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6726 "pars.fsy"
                  : 'gentype_measureTypeAtom));
-# 18287 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18287 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_measureTypeExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -18297,7 +18297,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6729 "pars.fsy"
                  : 'gentype_measureTypeAtom));
-# 18300 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18300 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypeAtom in
             Microsoft.FSharp.Core.Operators.box
@@ -18308,7 +18308,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6734 "pars.fsy"
                  : 'gentype_measureTypePower));
-# 18311 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18311 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypeAtom in
             let _2 = parseState.GetInput(2) :?> string in
@@ -18329,7 +18329,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6737 "pars.fsy"
                  : 'gentype_measureTypePower));
-# 18332 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18332 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> int32 * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -18342,7 +18342,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6748 "pars.fsy"
                  : 'gentype_measureTypePower));
-# 18345 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18345 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypePower in
             Microsoft.FSharp.Core.Operators.box
@@ -18353,7 +18353,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6754 "pars.fsy"
                  : 'gentype_measureTypeSeq));
-# 18356 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18356 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypePower in
             let _2 = parseState.GetInput(2) :?> 'gentype_measureTypeSeq in
@@ -18365,7 +18365,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6757 "pars.fsy"
                  : 'gentype_measureTypeSeq));
-# 18368 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18368 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypeSeq in
             Microsoft.FSharp.Core.Operators.box
@@ -18376,7 +18376,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6761 "pars.fsy"
                  : 'gentype_measureTypeExpr));
-# 18379 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18379 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypeExpr in
             let _3 = parseState.GetInput(3) :?> 'gentype_measureTypeExpr in
@@ -18388,7 +18388,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6764 "pars.fsy"
                  : 'gentype_measureTypeExpr));
-# 18391 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18391 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_measureTypeExpr in
             let _2 = parseState.GetInput(2) :?> string in
@@ -18403,7 +18403,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6767 "pars.fsy"
                  : 'gentype_measureTypeExpr));
-# 18406 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18406 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> 'gentype_measureTypeExpr in
@@ -18416,7 +18416,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6772 "pars.fsy"
                  : 'gentype_measureTypeExpr));
-# 18419 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18419 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
@@ -18428,7 +18428,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6777 "pars.fsy"
                  : SynTypar));
-# 18431 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18431 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             let _2 = parseState.GetInput(2) :?> Ident in
@@ -18442,7 +18442,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6781 "pars.fsy"
                  : SynTypar));
-# 18445 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18445 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18453,7 +18453,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6787 "pars.fsy"
                  : Ident));
-# 18456 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18456 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18463,7 +18463,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6792 "pars.fsy"
                  : SynLongIdent));
-# 18466 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18466 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
@@ -18474,7 +18474,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6795 "pars.fsy"
                  : SynLongIdent));
-# 18477 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18477 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             let _3 = parseState.GetInput(3) :?> Ident in
@@ -18487,7 +18487,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6798 "pars.fsy"
                  : SynLongIdent));
-# 18490 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18490 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynLongIdent in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -18501,7 +18501,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6802 "pars.fsy"
                  : SynLongIdent));
-# 18504 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18504 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_operatorName in
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
@@ -18515,7 +18515,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6810 "pars.fsy"
                  : 'gentype_opName));
-# 18518 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18518 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _3 = parseState.GetInput(3) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
@@ -18529,7 +18529,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6815 "pars.fsy"
                  : 'gentype_opName));
-# 18532 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18532 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18542,7 +18542,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6821 "pars.fsy"
                  : 'gentype_opName));
-# 18545 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18545 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_activePatternCaseNames in
             let _4 = parseState.GetInput(4) :?> 'gentype_rparen in
@@ -18557,7 +18557,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6828 "pars.fsy"
                  : 'gentype_opName));
-# 18560 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18560 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_activePatternCaseNames in
             let _6 = parseState.GetInput(6) :?> 'gentype_rparen in
@@ -18572,7 +18572,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6835 "pars.fsy"
                  : 'gentype_opName));
-# 18575 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18575 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18585,7 +18585,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6843 "pars.fsy"
                  : 'gentype_operatorName));
-# 18588 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18588 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18596,7 +18596,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6848 "pars.fsy"
                  : 'gentype_operatorName));
-# 18599 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18599 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18607,7 +18607,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6851 "pars.fsy"
                  : 'gentype_operatorName));
-# 18610 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18610 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18618,7 +18618,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6854 "pars.fsy"
                  : 'gentype_operatorName));
-# 18621 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18621 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18629,7 +18629,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6857 "pars.fsy"
                  : 'gentype_operatorName));
-# 18632 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18632 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18640,7 +18640,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6860 "pars.fsy"
                  : 'gentype_operatorName));
-# 18643 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18643 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18651,7 +18651,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6863 "pars.fsy"
                  : 'gentype_operatorName));
-# 18654 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18654 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18662,7 +18662,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6866 "pars.fsy"
                  : 'gentype_operatorName));
-# 18665 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18665 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18672,7 +18672,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6869 "pars.fsy"
                  : 'gentype_operatorName));
-# 18675 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18675 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18683,7 +18683,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6872 "pars.fsy"
                  : 'gentype_operatorName));
-# 18686 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18686 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18693,7 +18693,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6875 "pars.fsy"
                  : 'gentype_operatorName));
-# 18696 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18696 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18703,7 +18703,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6878 "pars.fsy"
                  : 'gentype_operatorName));
-# 18706 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18706 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18713,7 +18713,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6881 "pars.fsy"
                  : 'gentype_operatorName));
-# 18716 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18716 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18723,7 +18723,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6884 "pars.fsy"
                  : 'gentype_operatorName));
-# 18726 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18726 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             Microsoft.FSharp.Core.Operators.box
@@ -18734,7 +18734,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6887 "pars.fsy"
                  : 'gentype_operatorName));
-# 18737 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18737 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> bool in
             Microsoft.FSharp.Core.Operators.box
@@ -18745,7 +18745,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6890 "pars.fsy"
                  : 'gentype_operatorName));
-# 18748 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18748 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18755,7 +18755,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6893 "pars.fsy"
                  : 'gentype_operatorName));
-# 18758 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18758 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18765,7 +18765,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6896 "pars.fsy"
                  : 'gentype_operatorName));
-# 18768 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18768 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18775,7 +18775,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6899 "pars.fsy"
                  : 'gentype_operatorName));
-# 18778 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18778 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18785,7 +18785,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6902 "pars.fsy"
                  : 'gentype_operatorName));
-# 18788 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18788 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18795,7 +18795,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6905 "pars.fsy"
                  : 'gentype_operatorName));
-# 18798 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18798 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18808,7 +18808,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6908 "pars.fsy"
                  : 'gentype_operatorName));
-# 18811 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18811 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18819,7 +18819,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6913 "pars.fsy"
                  : 'gentype_operatorName));
-# 18822 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18822 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18829,7 +18829,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6916 "pars.fsy"
                  : 'gentype_operatorName));
-# 18832 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18832 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -18839,7 +18839,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6919 "pars.fsy"
                  : 'gentype_operatorName));
-# 18842 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18842 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * bool in
             let _2 = parseState.GetInput(2) :?> string * bool in
@@ -18852,7 +18852,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6922 "pars.fsy"
                  : 'gentype_operatorName));
-# 18855 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18855 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string in
             Microsoft.FSharp.Core.Operators.box
@@ -18865,7 +18865,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6928 "pars.fsy"
                  : 'gentype_activePatternCaseName));
-# 18868 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18868 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_activePatternCaseName in
             Microsoft.FSharp.Core.Operators.box
@@ -18876,7 +18876,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6935 "pars.fsy"
                  : 'gentype_activePatternCaseNames));
-# 18879 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18879 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_activePatternCaseNames in
             let _3 = parseState.GetInput(3) :?> 'gentype_activePatternCaseName in
@@ -18888,7 +18888,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6938 "pars.fsy"
                  : 'gentype_activePatternCaseNames));
-# 18891 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18891 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
@@ -18899,7 +18899,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6943 "pars.fsy"
                  : 'gentype_identOrOp));
-# 18902 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18902 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opName in
             Microsoft.FSharp.Core.Operators.box
@@ -18911,7 +18911,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6946 "pars.fsy"
                  : 'gentype_identOrOp));
-# 18914 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18914 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
@@ -18922,7 +18922,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6953 "pars.fsy"
                  : SynLongIdent));
-# 18925 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18925 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opName in
             Microsoft.FSharp.Core.Operators.box
@@ -18934,7 +18934,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6956 "pars.fsy"
                  : SynLongIdent));
-# 18937 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18937 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> SynLongIdent in
@@ -18946,7 +18946,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6960 "pars.fsy"
                  : SynLongIdent));
-# 18949 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18949 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             let _3 = parseState.GetInput(3) :?> 'gentype_ends_coming_soon_or_recover in
@@ -18959,7 +18959,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6963 "pars.fsy"
                  : SynLongIdent));
-# 18962 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18962 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_identOrOp in
             Microsoft.FSharp.Core.Operators.box
@@ -18970,7 +18970,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6969 "pars.fsy"
                  : 'gentype_nameop));
-# 18973 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18973 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> Ident in
             Microsoft.FSharp.Core.Operators.box
@@ -18984,7 +18984,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6973 "pars.fsy"
                  : 'gentype_identExpr));
-# 18987 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 18987 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_opName in
             Microsoft.FSharp.Core.Operators.box
@@ -18997,7 +18997,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6979 "pars.fsy"
                  : 'gentype_identExpr));
-# 19000 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19000 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19007,7 +19007,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6984 "pars.fsy"
                  : 'gentype_topSeparator));
-# 19010 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19010 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19017,7 +19017,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6985 "pars.fsy"
                  : 'gentype_topSeparator));
-# 19020 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19020 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19027,7 +19027,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6986 "pars.fsy"
                  : 'gentype_topSeparator));
-# 19030 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19030 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topSeparator in
             Microsoft.FSharp.Core.Operators.box
@@ -19038,7 +19038,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6989 "pars.fsy"
                  : 'gentype_topSeparators));
-# 19041 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19041 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topSeparator in
             let _2 = parseState.GetInput(2) :?> 'gentype_topSeparators in
@@ -19050,7 +19050,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6990 "pars.fsy"
                  : 'gentype_topSeparators));
-# 19053 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19053 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_topSeparator in
             let _2 = parseState.GetInput(2) :?> 'gentype_opt_topSeparators in
@@ -19062,7 +19062,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6993 "pars.fsy"
                  : 'gentype_opt_topSeparators));
-# 19065 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19065 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19072,7 +19072,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6994 "pars.fsy"
                  : 'gentype_opt_topSeparators));
-# 19075 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19075 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19082,7 +19082,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6998 "pars.fsy"
                  : 'gentype_seps));
-# 19085 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19085 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19092,7 +19092,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 6999 "pars.fsy"
                  : 'gentype_seps));
-# 19095 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19095 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19102,7 +19102,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7000 "pars.fsy"
                  : 'gentype_seps));
-# 19105 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19105 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19112,7 +19112,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7001 "pars.fsy"
                  : 'gentype_seps));
-# 19115 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19115 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> range * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -19123,7 +19123,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7006 "pars.fsy"
                  : 'gentype_declEnd));
-# 19126 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19126 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19133,7 +19133,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7008 "pars.fsy"
                  : 'gentype_declEnd));
-# 19136 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19136 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19143,7 +19143,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7010 "pars.fsy"
                  : 'gentype_declEnd));
-# 19146 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19146 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> range * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -19154,7 +19154,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7015 "pars.fsy"
                  : 'gentype_opt_declEnd));
-# 19157 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19157 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19164,7 +19164,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7017 "pars.fsy"
                  : 'gentype_opt_declEnd));
-# 19167 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19167 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19174,7 +19174,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7019 "pars.fsy"
                  : 'gentype_opt_declEnd));
-# 19177 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19177 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19184,7 +19184,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7021 "pars.fsy"
                  : 'gentype_opt_declEnd));
-# 19187 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19187 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> range * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -19195,7 +19195,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7024 "pars.fsy"
                  : 'gentype_opt_ODECLEND));
-# 19198 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19198 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19205,7 +19205,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7025 "pars.fsy"
                  : 'gentype_opt_ODECLEND));
-# 19208 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19208 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19215,7 +19215,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7028 "pars.fsy"
                  : 'gentype_deprecated_opt_equals));
-# 19218 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19218 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19225,7 +19225,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7029 "pars.fsy"
                  : 'gentype_deprecated_opt_equals));
-# 19228 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19228 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19235,7 +19235,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7032 "pars.fsy"
                  : 'gentype_opt_OBLOCKSEP));
-# 19238 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19238 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19245,7 +19245,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7033 "pars.fsy"
                  : 'gentype_opt_OBLOCKSEP));
-# 19248 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19248 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_seps in
             Microsoft.FSharp.Core.Operators.box
@@ -19256,7 +19256,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7036 "pars.fsy"
                  : 'gentype_opt_seps));
-# 19259 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19259 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19266,7 +19266,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7037 "pars.fsy"
                  : 'gentype_opt_seps));
-# 19269 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19269 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19276,7 +19276,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7040 "pars.fsy"
                  : 'gentype_opt_rec));
-# 19279 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19279 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19286,7 +19286,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7041 "pars.fsy"
                  : 'gentype_opt_rec));
-# 19289 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19289 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19296,7 +19296,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7044 "pars.fsy"
                  : 'gentype_opt_inline));
-# 19299 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19299 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19306,7 +19306,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7045 "pars.fsy"
                  : 'gentype_opt_inline));
-# 19309 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19309 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19316,7 +19316,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7048 "pars.fsy"
                  : 'gentype_opt_mutable));
-# 19319 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19319 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19326,7 +19326,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7049 "pars.fsy"
                  : 'gentype_opt_mutable));
-# 19329 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19329 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19336,7 +19336,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7053 "pars.fsy"
                  : 'gentype_doToken));
-# 19339 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19339 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19346,7 +19346,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7054 "pars.fsy"
                  : 'gentype_doToken));
-# 19349 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19349 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19356,7 +19356,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7058 "pars.fsy"
                  : 'gentype_doneDeclEnd));
-# 19359 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19359 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> range * bool in
             Microsoft.FSharp.Core.Operators.box
@@ -19367,7 +19367,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7060 "pars.fsy"
                  : 'gentype_doneDeclEnd));
-# 19370 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19370 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19381,7 +19381,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7064 "pars.fsy"
                  : 'gentype_structOrBegin));
-# 19384 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19384 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19391,7 +19391,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7069 "pars.fsy"
                  : 'gentype_structOrBegin));
-# 19394 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19394 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19405,7 +19405,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7073 "pars.fsy"
                  : 'gentype_sigOrBegin));
-# 19408 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19408 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19415,7 +19415,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7078 "pars.fsy"
                  : 'gentype_sigOrBegin));
-# 19418 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19418 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19430,7 +19430,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7082 "pars.fsy"
                  : 'gentype_colonOrEquals));
-# 19433 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19433 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19441,7 +19441,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7089 "pars.fsy"
                  : 'gentype_colonOrEquals));
-# 19444 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19444 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * SynStringKind * ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
@@ -19453,7 +19453,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7095 "pars.fsy"
                  : 'gentype_string));
-# 19456 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19456 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * string in
             Microsoft.FSharp.Core.Operators.box
@@ -19464,7 +19464,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7099 "pars.fsy"
                  : 'gentype_sourceIdentifier));
-# 19467 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19467 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             Microsoft.FSharp.Core.Operators.box
@@ -19475,7 +19475,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7103 "pars.fsy"
                  : 'gentype_interpolatedStringFill));
-# 19478 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19478 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> SynExpr in
             let _3 = parseState.GetInput(3) :?> Ident in
@@ -19487,7 +19487,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7106 "pars.fsy"
                  : 'gentype_interpolatedStringFill));
-# 19490 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19490 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
@@ -19498,7 +19498,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7110 "pars.fsy"
                  : 'gentype_interpolatedStringParts));
-# 19501 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19501 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_interpolatedStringFill in
@@ -19511,7 +19511,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7113 "pars.fsy"
                  : 'gentype_interpolatedStringParts));
-# 19514 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19514 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_interpolatedStringParts in
@@ -19526,7 +19526,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7116 "pars.fsy"
                  : 'gentype_interpolatedStringParts));
-# 19529 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19529 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * SynStringKind * ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_interpolatedStringFill in
@@ -19540,7 +19540,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7126 "pars.fsy"
                  : 'gentype_interpolatedString));
-# 19543 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19543 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * SynStringKind * ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
@@ -19552,7 +19552,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7130 "pars.fsy"
                  : 'gentype_interpolatedString));
-# 19555 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19555 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> string * SynStringKind * ParseHelpers.LexerContinuation in
             let _2 = parseState.GetInput(2) :?> 'gentype_interpolatedStringParts in
@@ -19568,7 +19568,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7134 "pars.fsy"
                  : 'gentype_interpolatedString));
-# 19571 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19571 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19578,7 +19578,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7141 "pars.fsy"
                  : 'gentype_opt_HIGH_PRECEDENCE_APP));
-# 19581 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19581 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19588,7 +19588,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7142 "pars.fsy"
                  : 'gentype_opt_HIGH_PRECEDENCE_APP));
-# 19591 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19591 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19598,7 +19598,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7143 "pars.fsy"
                  : 'gentype_opt_HIGH_PRECEDENCE_APP));
-# 19601 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19601 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19608,7 +19608,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7146 "pars.fsy"
                  : 'gentype_opt_HIGH_PRECEDENCE_TYAPP));
-# 19611 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19611 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19618,7 +19618,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7147 "pars.fsy"
                  : 'gentype_opt_HIGH_PRECEDENCE_TYAPP));
-# 19621 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19621 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_typeKeyword in
             Microsoft.FSharp.Core.Operators.box
@@ -19629,7 +19629,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7151 "pars.fsy"
                  : 'gentype_typeKeyword));
-# 19632 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19632 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19639,7 +19639,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7152 "pars.fsy"
                  : 'gentype_typeKeyword));
-# 19642 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19642 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19649,7 +19649,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7153 "pars.fsy"
                  : 'gentype_typeKeyword));
-# 19652 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19652 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_moduleKeyword in
             Microsoft.FSharp.Core.Operators.box
@@ -19660,7 +19660,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7157 "pars.fsy"
                  : 'gentype_moduleKeyword));
-# 19663 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19663 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19670,7 +19670,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7158 "pars.fsy"
                  : 'gentype_moduleKeyword));
-# 19673 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19673 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19680,7 +19680,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7159 "pars.fsy"
                  : 'gentype_moduleKeyword));
-# 19683 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19683 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_rbrace in
             Microsoft.FSharp.Core.Operators.box
@@ -19691,7 +19691,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7162 "pars.fsy"
                  : 'gentype_rbrace));
-# 19694 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19694 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19701,7 +19701,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7163 "pars.fsy"
                  : 'gentype_rbrace));
-# 19704 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19704 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> ParseHelpers.LexerContinuation in
             Microsoft.FSharp.Core.Operators.box
@@ -19712,7 +19712,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7164 "pars.fsy"
                  : 'gentype_rbrace));
-# 19715 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19715 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19722,7 +19722,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7167 "pars.fsy"
                  : 'gentype_bar_rbrace));
-# 19725 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19725 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_rparen in
             Microsoft.FSharp.Core.Operators.box
@@ -19733,7 +19733,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7170 "pars.fsy"
                  : 'gentype_rparen));
-# 19736 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19736 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19743,7 +19743,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7171 "pars.fsy"
                  : 'gentype_rparen));
-# 19746 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19746 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19753,7 +19753,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7172 "pars.fsy"
                  : 'gentype_rparen));
-# 19756 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19756 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _2 = parseState.GetInput(2) :?> 'gentype_oblockend in
             Microsoft.FSharp.Core.Operators.box
@@ -19764,7 +19764,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7175 "pars.fsy"
                  : 'gentype_oblockend));
-# 19767 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19767 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19774,7 +19774,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7176 "pars.fsy"
                  : 'gentype_oblockend));
-# 19777 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19777 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> range in
             Microsoft.FSharp.Core.Operators.box
@@ -19785,7 +19785,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7177 "pars.fsy"
                  : 'gentype_oblockend));
-# 19788 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19788 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19795,7 +19795,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7180 "pars.fsy"
                  : 'gentype_ends_other_than_rparen_coming_soon_or_recover));
-# 19798 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19798 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19805,7 +19805,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7181 "pars.fsy"
                  : 'gentype_ends_other_than_rparen_coming_soon_or_recover));
-# 19808 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19808 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19815,7 +19815,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7182 "pars.fsy"
                  : 'gentype_ends_other_than_rparen_coming_soon_or_recover));
-# 19818 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19818 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19825,7 +19825,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7183 "pars.fsy"
                  : 'gentype_ends_other_than_rparen_coming_soon_or_recover));
-# 19828 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19828 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -19836,7 +19836,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7184 "pars.fsy"
                  : 'gentype_ends_other_than_rparen_coming_soon_or_recover));
-# 19839 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19839 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19846,7 +19846,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7187 "pars.fsy"
                  : 'gentype_ends_coming_soon_or_recover));
-# 19849 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19849 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19856,7 +19856,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7188 "pars.fsy"
                  : 'gentype_ends_coming_soon_or_recover));
-# 19859 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19859 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19866,7 +19866,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7189 "pars.fsy"
                  : 'gentype_ends_coming_soon_or_recover));
-# 19869 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19869 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19876,7 +19876,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7190 "pars.fsy"
                  : 'gentype_ends_coming_soon_or_recover));
-# 19879 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19879 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             Microsoft.FSharp.Core.Operators.box
                 (
@@ -19886,7 +19886,7 @@ let _fsyacc_reductions = lazy [|
                    )
 # 7191 "pars.fsy"
                  : 'gentype_ends_coming_soon_or_recover));
-# 19889 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19889 "net10.0/pars.fs"
         (fun (parseState : Internal.Utilities.Text.Parsing.IParseState) ->
             let _1 = parseState.GetInput(1) :?> 'gentype_recover in
             Microsoft.FSharp.Core.Operators.box
@@ -19898,7 +19898,7 @@ let _fsyacc_reductions = lazy [|
 # 7192 "pars.fsy"
                  : 'gentype_ends_coming_soon_or_recover));
 |]
-# 19901 "/home/hhh/repos/clef/src/Compiler/net10.0/pars.fs"
+# 19901 "net10.0/pars.fs"
 let tables : Internal.Utilities.Text.Parsing.Tables<_> = 
   { reductions = _fsyacc_reductions.Value;
     endOfInputTag = _fsyacc_endOfInputTag;

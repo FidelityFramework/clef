@@ -16,7 +16,7 @@ let fail (args : LexArgs) (lexbuf:UnicodeLexing.Lexbuf) e =
      args.diagnosticsLogger.ErrorR(Error(e,m))
      PPParser.EOF
 
-# 19 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 19 "net10.0/pplex.fs"
 let trans : uint16[] array = 
     [| 
     (* State 0 *)
@@ -85,57 +85,57 @@ and tokenstream (args: LexArgs) lexbuf =
   | 0 -> ( 
 # 39 "pplex.fsl"
                                  PPParser.PRELUDE                                              
-# 88 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 88 "net10.0/pplex.fs"
           )
   | 1 -> ( 
 # 40 "pplex.fsl"
                                  PPParser.PRELUDE                                              
-# 93 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 93 "net10.0/pplex.fs"
           )
   | 2 -> ( 
 # 41 "pplex.fsl"
                                  PPParser.ID(lexeme lexbuf)                                    
-# 98 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 98 "net10.0/pplex.fs"
           )
   | 3 -> ( 
 # 43 "pplex.fsl"
                                  PPParser.OP_NOT                                               
-# 103 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 103 "net10.0/pplex.fs"
           )
   | 4 -> ( 
 # 44 "pplex.fsl"
                                  PPParser.OP_AND                                               
-# 108 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 108 "net10.0/pplex.fs"
           )
   | 5 -> ( 
 # 45 "pplex.fsl"
                                  PPParser.OP_OR                                                
-# 113 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 113 "net10.0/pplex.fs"
           )
   | 6 -> ( 
 # 46 "pplex.fsl"
                                  PPParser.LPAREN                                               
-# 118 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 118 "net10.0/pplex.fs"
           )
   | 7 -> ( 
 # 47 "pplex.fsl"
                                  PPParser.RPAREN                                               
-# 123 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 123 "net10.0/pplex.fs"
           )
   | 8 -> ( 
 # 49 "pplex.fsl"
                                  tokenstream args lexbuf                                       
-# 128 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 128 "net10.0/pplex.fs"
           )
   | 9 -> ( 
 # 51 "pplex.fsl"
                                  PPParser.EOF                                                  
-# 133 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 133 "net10.0/pplex.fs"
           )
   | 10 -> ( 
 # 52 "pplex.fsl"
                                  fail args lexbuf (FSComp.SR.pplexExpectedSingleLineComment()) 
-# 138 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 138 "net10.0/pplex.fs"
           )
   | 11 -> ( 
 # 53 "pplex.fsl"
@@ -144,12 +144,12 @@ and tokenstream (args: LexArgs) lexbuf =
                                    let _   = rest lexbuf
                                    fail args lexbuf (FSComp.SR.pplexUnexpectedChar(lex))
                                
-# 147 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 147 "net10.0/pplex.fs"
           )
   | 12 -> ( 
 # 58 "pplex.fsl"
                                  PPParser.EOF                                                  
-# 152 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 152 "net10.0/pplex.fs"
           )
   | _ -> failwith "tokenstream"
 // Rule rest
@@ -158,13 +158,13 @@ and rest  lexbuf =
   | 0 -> ( 
 # 61 "pplex.fsl"
                                  rest lexbuf   
-# 161 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 161 "net10.0/pplex.fs"
           )
   | 1 -> ( 
 # 62 "pplex.fsl"
                                  PPParser.EOF  
-# 166 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 166 "net10.0/pplex.fs"
           )
   | _ -> failwith "rest"
 
-# 3000000 "/home/hhh/repos/clef/src/Compiler/net10.0/pplex.fs"
+# 3000000 "net10.0/pplex.fs"
