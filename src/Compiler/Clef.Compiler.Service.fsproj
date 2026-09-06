@@ -41,8 +41,8 @@
 
     <!-- FsLex/FsYacc output folders -->
     <!-- Pre-generated parser files are in source tree per target framework -->
-    <FsYaccOutputFolder>$(MSBuildProjectDirectory)/$(TargetFramework)/</FsYaccOutputFolder>
-    <FsLexOutputFolder>$(MSBuildProjectDirectory)/$(TargetFramework)/</FsLexOutputFolder>
+    <FsYaccOutputFolder>$(TargetFramework)/</FsYaccOutputFolder>
+    <FsLexOutputFolder>$(TargetFramework)/</FsLexOutputFolder>
     <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
   </PropertyGroup>
 
@@ -418,8 +418,13 @@
   </ItemGroup>
 
   <!-- Fidelity.Data - TOML/XML/YAML/JSON/CSV parser for .fidproj loading -->
+  <PropertyGroup>
+    <!-- Accept both sibling checkouts and clef.worktrees/name checkouts. -->
+    <FidelityDataProjectPath Condition="'$(FidelityDataProjectPath)' == '' and Exists('$(MSBuildProjectDirectory)/../../../Fidelity.Data/src/Fidelity.Data/Fidelity.Data.fsproj')">$(MSBuildProjectDirectory)/../../../Fidelity.Data/src/Fidelity.Data/Fidelity.Data.fsproj</FidelityDataProjectPath>
+    <FidelityDataProjectPath Condition="'$(FidelityDataProjectPath)' == ''">$(MSBuildProjectDirectory)/../../../../Fidelity.Data/src/Fidelity.Data/Fidelity.Data.fsproj</FidelityDataProjectPath>
+  </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../../Fidelity.Data/src/Fidelity.Data/Fidelity.Data.fsproj" />
+    <ProjectReference Include="$(FidelityDataProjectPath)" />
   </ItemGroup>
 
 </Project>
