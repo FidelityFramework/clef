@@ -290,4 +290,100 @@ let tests = [
         noErrors result
         same (measured metre) (bindingType "length" result)
         same (measured second) (bindingType "time" result)
+
+    "lambda metadata carries resolved dimensions", fun () ->
+        let result = check "let advance x = x + 1.0<m>\n"
+        noErrors result
+        let parameterType = result.Graph.Nodes.Values |> Seq.pick (fun node ->
+            match node.Kind with
+            | SemanticKind.Lambda([("x", ty, _)], _, _, _, _) -> Some ty
+            | _ -> None)
+        match parameterType with
+        | NativeType.TApp(_, [NativeType.TMeasure measure]) -> same (measured metre) (measured measure)
+        | ty -> failwithf "Unresolved lambda metadata crossed the checker boundary: %s" (formatType ty)
+
+    "match metadata carries resolved dimensions", fun () ->
+        let result = check "type Quantity<[<Measure>] 'u> = Quantity of float<'u>\nlet length = match Quantity 1.0<m> with Quantity value -> value\n"
+        noErrors result
+        let payloadType = result.Graph.Nodes.Values |> Seq.pick (fun node ->
+            match node.Kind with
+            | SemanticKind.Match(_, [{ Pattern = Pattern.Union(_, _, Some(Pattern.Tuple [Pattern.Var(_, ty)]), _) }]) -> Some ty
+            | SemanticKind.CaseElimination(_, [{ Pattern = Pattern.Union(_, _, Some(Pattern.Tuple [Pattern.Var(_, ty)]), _) }]) -> Some ty
+            | _ -> None)
+        match payloadType with
+        | NativeType.TApp(_, [NativeType.TMeasure measure]) ->
+            if measure <> metre then failwith "Pattern metadata retained an unresolved measure variable"
+        | _ -> failwith "Pattern payload type lost its dimension"
+
+    "invalid generic dimensions produce diagnostics without crashing", fun () ->
+        for body in [
+            "type Scalar<[<Measure>] 'u> = float<'u>\nlet keep (x: Scalar<missing>) = x\n"
+            "type Quantity<[<Measure>] 'u> = { Value: float<'u> }\nlet keep (x: Quantity<m, s>) = x.Value\n"
+            "let keep (x: float<m, s>) = x\n"
+            "let keep (x: missing<m>) = x\n"
+            "let keep (x: m) = x\n"
+        ] do
+            let result = check body
+            if not (result.Diagnostics |> List.exists (fun d -> d.Severity = NativeDiagnosticSeverity.Error && d.Range.File = "dimensions.clef")) then
+                failwithf "Invalid type accepted without a located diagnostic: %s" body
+
+    "measure constraints are enforced", fun () ->
+        match solveConstraint (Constraint.HasMeasure(measured metre, second, dummyRange)) with
+        | Result.Error(TypeMismatch _) -> ()
+        | _ -> failwith "Measure constraint silently ignored"
+        match solveConstraint (Constraint.HasMeasure(Types.stringType, metre, dummyRange)) with
+        | Result.Error(TypeMismatch _) -> ()
+        | _ -> failwith "Measure constraint accepted a nonnumeric type"
+
+    "source numeric names do not select representations", fun () ->
+        for name in ["int8"; "int16"; "int32"; "int64"; "uint8"; "uint16"; "uint32"; "uint64"; "byte"; "sbyte"; "uint"; "nativeint"; "unativeint"; "float32"; "single"; "double"; "float64"; "Posit8"; "Posit16"; "Posit32"; "Posit64"] do
+            let result = check $"let keep (x: {name}) = x\n"
+            if not (result.Diagnostics |> List.exists (fun d -> d.Code = "CCS8706" && d.Range.File = "dimensions.clef")) then
+                failwithf "Width-named source type was not diagnosed: %s" name
+            let measured = check $"let keep (x: {name}<m>) = x\n"
+            if not (measured.Diagnostics |> List.exists (fun d -> d.Code = "CCS8706")) then
+                failwithf "Measured width-named source type was not diagnosed: %s" name
+
+    "width-bearing literal suffixes are diagnosed", fun () ->
+        for literal in ["1L"; "1u"; "1uy"; "1s"; "1n"; "1.0f"; "1L<m>"; "1.0f<m>"] do
+            let result = check $"let value = {literal}\n"
+            if not (result.Diagnostics |> List.exists (fun d -> d.Code = "CCS8018" && d.Range.File = "dimensions.clef")) then
+                failwithf "Width-bearing suffix was not diagnosed: %s" literal
+
+    "numeric kind mismatch has its specified diagnostic", fun () ->
+        let result = check "let value: float<m> = 1<m>\n"
+        if not (result.Diagnostics |> List.exists (fun d -> d.Code = "CCS8003")) then
+            failwith "Numeric kind mismatch did not produce CCS8003"
+
+    "rounding and integer to real arithmetic preserve dimensions", fun () ->
+        for operation in ["floor"; "ceiling"; "round"; "truncate"] do
+            let result = check $"let value = Math.{operation} 2.5<m>\n"
+            noErrors result
+            same (withMeasure Types.intType metre) (bindingType "value" result)
+        let result = check "let value = float 2<m>\nlet minimum = Math.min 1.0<m> 2.0<m>\n"
+        noErrors result
+        same (measured metre) (bindingType "value" result)
+        same (measured metre) (bindingType "minimum" result)
+
+    "conversion names cannot discard dimensional identity", fun () ->
+        for expression in ["int 1.5<m>"; "int64 1<m>"; "float32 1.0<m>"; "byte 1<m>"; "float true"] do
+            let result = check $"let value = {expression}\n"
+            if not (result.Diagnostics |> List.exists (fun d -> d.Severity = NativeDiagnosticSeverity.Error)) then
+                failwithf "Conversion discarded dimensions: %s" expression
+
+    "explicit type application requires established parameters", fun () ->
+        let result = check "let apply f = f<float<m>> 1.0<m>\n"
+        if not (result.Diagnostics |> List.exists (fun d -> d.Severity = NativeDiagnosticSeverity.Error)) then
+            failwith "Explicit application silently fabricated a generic signature"
+
+    "constant patterns enforce dimensions", fun () ->
+        let result = check "let bad = match 1.0<m> with 2.0<s> -> true | _ -> false\n"
+        if not (result.Diagnostics |> List.exists (fun d -> d.Code = "CCS8040")) then
+            failwith "Constant pattern ignored its measure"
+
+    "qualified measured types retain their argument kinds", fun () ->
+        let result = check "module Quantities =\n    type Scalar<[<Measure>] 'u> = float<'u>\n    type Quantity<[<Measure>] 'u> = { Value: float<'u> }\nlet distance: Quantities.Scalar<m> = 1.0<m>\nlet duration: Quantities.Quantity<s> = { Value = 2.0<s> }\nlet time = duration.Value\n"
+        noErrors result
+        same (measured metre) (bindingType "distance" result)
+        same (measured second) (bindingType "time" result)
 ]

@@ -18,41 +18,36 @@ open Clef.Compiler.NativeTypedTree.Expressions.Types
 //-------------------------------------------------------------------------
 
 /// Get the NativeType of a SynConst
-let rec typeOfConst (env: TypeEnv) (c: SynConst) : NativeType =
+let rec typeOfConst (env: TypeEnv) (c: SynConst) (range: range) : NativeType =
     match c with
     | SynConst.Unit -> Types.unitType
     | SynConst.Bool _ -> Types.boolType
-    | SynConst.SByte _ -> Types.int8Type
-    | SynConst.Byte _ -> Types.uint8Type
-    | SynConst.Int16 _ -> Types.int16Type
-    | SynConst.UInt16 _ -> Types.uint16Type
+    | SynConst.SByte _ | SynConst.Byte _ | SynConst.Int16 _ | SynConst.UInt16 _
+    | SynConst.UInt32 _ | SynConst.Int64 _ | SynConst.UInt64 _
+    | SynConst.IntPtr _ | SynConst.UIntPtr _ | SynConst.Single _ | SynConst.Decimal _ ->
+        addNativeError "CCS8018" range "Numeric literal suffixes cannot select a width or representation in Clef; use an unsuffixed int or float literal." env
+        NativeType.TError "Width-bearing numeric literal suffix"
     | SynConst.Int32 _ -> Types.intType
-    | SynConst.UInt32 _ -> Types.uintType
-    | SynConst.Int64 _ -> Types.int64Type
-    | SynConst.UInt64 _ -> Types.uint64Type
-    | SynConst.IntPtr _ -> Types.nintType
-    | SynConst.UIntPtr _ -> Types.unintType
-    | SynConst.Single _ -> Types.float32Type
     | SynConst.Double _ -> Types.floatType
     | SynConst.Char _ -> Types.charType
-    | SynConst.Decimal _ -> Types.decimalType
     | SynConst.String _ -> Types.stringType
     | SynConst.Bytes _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint8Type])
     | SynConst.UInt16s _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint16Type])
     | SynConst.Measure(innerConst, _, synMeasure, _) ->
         match resolveSynMeasure env synMeasure with
         | NativeType.TMeasure measure ->
-            let ty = withMeasure (typeOfConst env innerConst) measure
+            let ty =
+                match typeOfConst env innerConst range with
+                | NativeType.TError _ as error -> error
+                | kind -> withMeasure kind measure
             match ty with
             | NativeType.TError message -> addError synMeasure.Range message env
             | _ -> ()
             ty
         | ty -> ty
     | SynConst.UserNum(_, suffix) ->
-        // UserNum with suffix - "I" is bigint, others are user-defined
-        match suffix with
-        | "I" -> Types.intType  // Treat bigint as int for now
-        | _ -> Types.intType  // Fallback
+        addNativeError "CCS8018" range $"Numeric suffix '{suffix}' is not supported in Clef; use an unsuffixed int or float literal." env
+        NativeType.TError "Unsupported numeric suffix"
     | SynConst.SourceIdentifier _ -> Types.stringType
 
 //-------------------------------------------------------------------------

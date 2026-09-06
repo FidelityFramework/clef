@@ -56,6 +56,12 @@ let formatError (err: UnificationError) : string =
     | ByrefKindMismatch(expected, actual, range) ->
         $"Byref kind mismatch at {formatRange range}: expected {expected}, got {actual}"
 
+/// Keep eager and deferred constraint diagnostics consistent.
+let diagnosticCode = function
+    | TypeMismatch(NativeType.TMeasure _, NativeType.TMeasure _, _) -> "CCS8040"
+    | TypeMismatch(left, right, _) when (tryNumericComponents left).IsSome && (tryNumericComponents right).IsSome -> "CCS8003"
+    | _ -> "FS0001"
+
 //-------------------------------------------------------------------------
 // Unification Algorithm
 //-------------------------------------------------------------------------
@@ -381,9 +387,14 @@ let solveConstraint (c: Constraint) : Result<unit, UnificationError> =
         Ok ()
 
     | Constraint.HasMeasure(ty, measure, range) ->
-        // Measure constraint - verify ty supports the measure
-        ignore (ty, measure, range)
-        Ok ()
+        let ty = applySubst ty
+        match tryNumericComponents ty with
+        | Some(_, actual) -> tryUnify (NativeType.TMeasure actual) (NativeType.TMeasure measure) range
+        | None ->
+            match ty with
+            | NativeType.TVar _ -> tryUnify ty (withMeasure (freshTypeVar range) measure) range
+            | NativeType.TError _ -> Ok ()
+            | _ -> Error(TypeMismatch(ty, NativeType.TMeasure measure, range))
 
     | Constraint.Subtype(sub, super, range) ->
         // Subtype constraint - for now, treat as equality

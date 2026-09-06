@@ -498,43 +498,15 @@ let checkTypeApp
                 // Perform immediate substitution of type parameters with concrete types
                 // This is the correct approach - NativeTypes.instantiate replaces TVar
                 // occurrences with their corresponding type arguments
-                NativeTypes.instantiate typeParams typeArgTypes bodyType
+                match typeArgTypes |> List.tryPick (function NativeType.TError message -> Some message | _ -> None) with
+                | Some message -> NativeType.TError message
+                | None -> NativeTypes.instantiate typeParams typeArgTypes bodyType
 
-        | NativeType.TVar _ ->
-            // Function type is a type variable - not yet resolved
-            // Add constraint that it must be a forall type with these arguments
-            // For now, create fresh result type; constraint solving will refine
-            freshTypeVar range
-
-        | NativeType.TError msg ->
-            // Propagate error
-            NativeType.TError msg
-
-        | NativeType.TFun _ ->
-            // Function type receiving type arguments
-            // This typically means a polymorphic function being instantiated
-            // Add deferred constraint that function must be generic
-            let resultTy = freshTypeVar range
-            addConstraint (Constraint.HasTypeArgs(funcNode.Type, typeArgTypes, resultTy, range)) env
-            resultTy
-
-        | NativeType.TApp _ ->
-            // Type application - possibly a partially applied generic
-            // Add deferred constraint for type application
-            let resultTy = freshTypeVar range
-            addConstraint (Constraint.HasTypeArgs(funcNode.Type, typeArgTypes, resultTy, range)) env
-            resultTy
-
+        | NativeType.TError msg -> NativeType.TError msg
         | other ->
-            // Unexpected type receiving type arguments
-            // This is likely a bug or unresolved type - add warning but continue
-            addWarning synRange
-                (sprintf "Type application on unexpected type form: %s"
-                    (NativeTypes.formatType other)) env
-            // Still add constraint for later resolution
-            let resultTy = freshTypeVar range
-            addConstraint (Constraint.HasTypeArgs(funcNode.Type, typeArgTypes, resultTy, range)) env
-            resultTy
+            addError synRange
+                $"Explicit type arguments require an established generic signature; got '{formatType other}'" env
+            NativeType.TError "Generic parameters are not established"
 
     // Create TypeAnnotation node to record the type application
     // This preserves the type argument information for monomorphization
