@@ -134,6 +134,7 @@ type NodeBuilder() =
           ElementRanges = lazy Map.empty
           Layouts = lazy Map.empty
           Escaping = lazy Map.empty
+          Codata = lazy Codata.empty
           Edges = [] }
 
     /// Build the semantic graph with platform context
@@ -149,6 +150,7 @@ type NodeBuilder() =
           ElementRanges = lazy Map.empty
           Layouts = lazy Map.empty
           Escaping = lazy Map.empty
+          Codata = lazy Codata.empty
           Edges = [] }
 
     /// Reset the builder

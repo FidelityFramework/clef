@@ -30,6 +30,7 @@ let rec checkPattern
 
     match pat with
     | SynPat.Const(constant, constRange) ->
+        warnSuffix constRange constant env
         match checkConst env constant with
         | Result.Ok (_, literal) -> (Pattern.Const literal, [])
         | Result.Error failure ->

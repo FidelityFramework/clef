@@ -66,7 +66,10 @@ let rec private resolveIdentifierCore
 
         // 2b. Try conversion intrinsics (float, int, etc.)
         match tryResolveConversion name range with
-        | Some (info, ty) -> IntrinsicNode (info, ty)
+        | Some (info, ty) ->
+            // a width-named conversion target is a spelled site (CS-12 step 5a)
+            Types.warnWidthSpellingAt name range env
+            IntrinsicNode (info, ty)
         | None ->
 
         // 2c. Check for unhandled operators - HARD FAIL

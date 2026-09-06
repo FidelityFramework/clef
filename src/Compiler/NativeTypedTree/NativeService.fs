@@ -25,6 +25,11 @@ module DepthAnalysis = Clef.Compiler.PSGSaturation.SemanticGraph.DepthAnalysis
 module PlatformDeclaration = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformDeclaration
 module RangeAnalysis = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis
 module Placement = Clef.Compiler.PSGSaturation.SemanticGraph.Placement
+module Curry = Clef.Compiler.PSGSaturation.SemanticGraph.Curry
+module Escape = Clef.Compiler.PSGSaturation.SemanticGraph.Escape
+module Meets = Clef.Compiler.PSGSaturation.SemanticGraph.Meets
+module PlatformBindings = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformBindings
+module Roots = Clef.Compiler.PSGSaturation.SemanticGraph.Roots
 open Clef.Compiler.NativeTypedTree.NameResolution
 open Clef.Compiler.NativeTypedTree.Expressions.Types
 
@@ -921,6 +926,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         ElementRanges = lazy Map.empty
         Layouts = lazy Map.empty
         Escaping = lazy Map.empty
+        Codata = lazy Codata.empty
         // F is empty at construction; enrichment mints into it at saturation.
         Edges = []
     }
@@ -1021,6 +1027,27 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     //=========================================================================
     let finalGraph = Placement.settle platformContext finalGraph
 
+    //=========================================================================
+    // Emission codata (CCS_Architecture.md, the coeffect table): the curried
+    // chains normalised, and every fact Composer's witnesses read settled on the
+    // graph: the escape of each allocating site, the partial applications, the
+    // meets, the closure environments, the platform call sites and the pins, the
+    // declaration roots' lambdas. Composer reads Codata and computes none of it.
+    //=========================================================================
+    let finalGraph, curry = Curry.normalize finalGraph
+    let finalGraph =
+        let settled = finalGraph
+        { finalGraph with
+            Codata = lazy {
+                Escapes = Escape.analyze settled
+                Curry = curry
+                Meets = Meets.derive platformContext settled curry
+                ReturnMeets = Meets.returns platformContext settled
+                Closures = Placement.closures platformContext settled
+                Bindings = PlatformBindings.resolve platformContext settled
+                Pins = PlatformBindings.pins settled
+                DeclarationRootLambdas = Roots.declarationRootLambdas settled } }
+
     let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
     let quotationErrors = quotationDiagnostics finalGraph
 
@@ -1101,6 +1128,7 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // Literals
     //---------------------------------------------------------------------
     | SynExpr.Const(constant, _) ->
+        Literals.warnSuffix syn.Range constant env
         match Literals.checkConst env constant with
         | Result.Ok (ty, litVal) ->
             builder.Create(SemanticKind.Literal litVal, ty, range)
@@ -2551,7 +2579,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
         // A signature file has no checker yet: the input contributes no graph, and that is an
         // error rather than a warning, because a warning would let the program lose a file silently.
         {
-            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty; FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Layouts = lazy Map.empty; Escaping = lazy Map.empty; Edges = [] }
+            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty; FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Layouts = lazy Map.empty; Escaping = lazy Map.empty; Codata = lazy Codata.empty; Edges = [] }
             Diagnostics = [{
                 Severity = NativeDiagnosticSeverity.Error
                 Code = DiagnosticCodes.CCS8401_UnsupportedConstruct

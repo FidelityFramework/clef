@@ -371,7 +371,9 @@ and private checkOperandKinds (t1: NativeType) (t2: NativeType) (range: SourceRa
 and private unifyCarrier (t1: NativeType) (t2: NativeType) (c1: CarrierRef) (c2: CarrierRef) (range: SourceRange) : unit =
     match CarrierRef.resolve c1, CarrierRef.resolve c2 with
     | CarrierRef.Carrier tc1, CarrierRef.Carrier tc2 ->
-        if tc1.Name <> tc2.Name || tc1.Module <> tc2.Module then
+        // One integer kind, one real kind (CS-12 step 5a): a width-named spelling is the bare
+        // kind at a declared representation, so `uint32` and `int` are one type here.
+        if not (Types.sameCarrierIdentity tc1 tc2) then
             raise (UnificationException(TypeMismatch(t1, t2, range)))
     | CarrierRef.CVar v, CarrierRef.Carrier tc
     | CarrierRef.Carrier tc, CarrierRef.CVar v -> bindCarrier v tc
@@ -431,7 +433,7 @@ let canUnify (t1: NativeType) (t2: NativeType) : bool =
             // solver against the store without binding.
             let carriersAgree =
                 match CarrierRef.resolve c1, CarrierRef.resolve c2 with
-                | CarrierRef.Carrier tc1, CarrierRef.Carrier tc2 -> tc1.Name = tc2.Name && tc1.Module = tc2.Module
+                | CarrierRef.Carrier tc1, CarrierRef.Carrier tc2 -> Types.sameCarrierIdentity tc1 tc2
                 | _ -> true
             carriersAgree
             && (match solveDim lookupMeasure (freshMeasureSupply ()) d1 d2 with Ok _ -> true | Error _ -> false)

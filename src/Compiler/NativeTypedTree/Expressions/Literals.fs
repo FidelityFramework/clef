@@ -71,6 +71,30 @@ let rec checkConst (env: TypeEnv) (c: SynConst) : Result<NativeType * NativeLite
         Error (ConstFailure.UnsupportedSuffix $"Literal suffix '{suffix}' is not a representation Clef supports")
     | SynConst.SourceIdentifier(_, value, _) -> Ok (Types.stringType, NativeLiteral.String value)
 
+/// CCS8019 at a width-suffixed literal (CS-12 ruling 5: a suffix is treated like a spelling,
+/// warned in the alias period and CCS8018 at step three), naming the suffix; a measured constant
+/// reports its inner constant's suffix. A bare literal reports nothing.
+let warnSuffix (r: range) (c: SynConst) (env: TypeEnv) : unit =
+    let rec suffixOf (c: SynConst) : string option =
+        match c with
+        | SynConst.SByte _ -> Some "y"
+        | SynConst.Byte _ -> Some "uy"
+        | SynConst.Int16 _ -> Some "s"
+        | SynConst.UInt16 _ -> Some "us"
+        | SynConst.UInt32 _ -> Some "u"
+        | SynConst.Int64 _ -> Some "L"
+        | SynConst.UInt64 _ -> Some "UL"
+        | SynConst.IntPtr _ -> Some "n"
+        | SynConst.UIntPtr _ -> Some "un"
+        | SynConst.Single _ -> Some "f"
+        | SynConst.Measure(inner, _, _, _) -> suffixOf inner
+        | _ -> None
+    match suffixOf c with
+    | Some suffix ->
+        addNativeWarningOnce DiagnosticCodes.CCS8019_WidthSpellingAlias (rangeToSourceRange r)
+            (sprintf "the literal suffix `%s` is an interim alias of the bare literal; drop the suffix and declare the representation at the boundary (a descriptor, a schema field, a contract)" suffix) env
+    | None -> ()
+
 /// Record the diagnostic a refused constant carries: CCS8018 at the constant's own range for a
 /// suffix; the measure failure's own code and range for a measure annotation.
 let addConstFailure (r: range) (failure: ConstFailure) (env: TypeEnv) : unit =

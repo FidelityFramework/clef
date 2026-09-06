@@ -1130,27 +1130,45 @@ module RangeSources =
         | NTUKind.NTUuint _ -> ValueRange.unsignedOf bits
         | _ -> ValueRange.twosComplement bits
 
-    /// The interim declared boundary of a width-named integer carrier (source 2 above): `None`
-    /// for the bare kind (`int`, `uint`: the range is the analysis's own) and for a pointer-width
-    /// carrier on a context that declares no Pointer (CCS8203 at the site that needs it).
-    let declaredRangeOfKind (ctx: PlatformContext option) (kind: NTUKind) : ValueRange option =
+    /// The interim declared boundary a width-named spelling writes (CS-12 step 5a, the alias;
+    /// ruling 5): the shape the descriptor reader produces for a wire field or a C parameter, a
+    /// declared representation and its exact range. `Repr` and `Bits` are the platform
+    /// description's representation of the spelling's name, or, on a context declaring none, the
+    /// spelling's own name and bits; `Range` is that representation's declared range.
+    type Declaration = { Repr: string; Bits: int; Range: ValueRange }
+
+    /// The declaration of a width-named integer kind (source 2 above): `None` for the bare kind
+    /// (`int`, `uint`: the range is the analysis's own) and for a pointer-width spelling on a
+    /// context that declares no Pointer (CCS8203 at the site that needs it). Every read of the
+    /// spelled representation, `RangeAnalysis.selectedWidth`, `selectedRepresentation`,
+    /// `boundByCarrier`, `Placement`'s slot and Composer's type mapping, comes through here.
+    let declarationOfKind (ctx: PlatformContext option) (kind: NTUKind) : Declaration option =
+        let declared () =
+            ctx
+            |> Option.bind (fun c -> representationOfKind c kind)
+            |> Option.bind (fun r -> declaredRange r |> Option.map (fun d -> { Repr = r.Name; Bits = r.Bits; Range = d }))
+        let spelled (bits: int) = { Repr = NTUKind.name kind; Bits = bits; Range = rangeOfBits kind bits }
         match kind with
         | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)
         | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register) -> None
         | NTUKind.NTUint (NTUWidth.Fixed bits)
         | NTUKind.NTUuint (NTUWidth.Fixed bits) ->
-            match ctx |> Option.bind (fun c -> representationOfKind c kind) |> Option.bind declaredRange with
-            | Some r -> Some r
-            | None -> Some (rangeOfBits kind bits)
+            match declared () with
+            | Some d -> Some d
+            | None -> Some (spelled bits)
         | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer)
         | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer) ->
-            match ctx |> Option.bind (fun c -> representationOfKind c kind) |> Option.bind declaredRange with
-            | Some r -> Some r
+            match declared () with
+            | Some d -> Some d
             | None ->
                 ctx
                 |> Option.bind (fun c -> PlatformContext.tryWidth c (WidthDimension.name WidthDimension.Pointer) |> Result.toOption)
-                |> Option.map (rangeOfBits kind)
+                |> Option.map spelled
         | _ -> None
+
+    /// The declared range of a width-named integer kind: its declaration's.
+    let declaredRangeOfKind (ctx: PlatformContext option) (kind: NTUKind) : ValueRange option =
+        declarationOfKind ctx kind |> Option.map (fun d -> d.Range)
 
     /// The range of a length or an offset: `[0, 2^(Pointer - 1) - 1]`, the largest extent the
     /// declared Pointer width addresses; unobservable on a context declaring no Pointer.

@@ -194,6 +194,7 @@ module ProjectChecker =
                                 ElementRanges = lazy Map.empty
                                 Layouts = lazy Map.empty
                                 Escaping = lazy Map.empty
+                                Codata = lazy Codata.empty
                                 Edges = []
                             }
                             Ok {
