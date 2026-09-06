@@ -150,6 +150,13 @@ type NodeBuilder() =
             nodes <- Map.add nodeId updated nodes
         | None -> ()
 
+    /// Publish a recursive binding's scheme after the whole group is checked.
+    member _.SetType(nodeId: NodeId, ty: NativeType) : SemanticNode =
+        let node = nodes.[nodeId]
+        let updated = { node with Type = ty }
+        nodes <- Map.add nodeId updated nodes
+        updated
+
     /// Set emission strategy on an existing node
     /// Used to mark Lambda/SeqExpr bodies as SeparateFunction after creation.
     member _.SetEmissionStrategy(nodeId: NodeId, strategy: EmissionStrategy) =

@@ -150,6 +150,10 @@ let checkRecord
         | Some copyExpr ->
             // Copy-update expression: { existingRecord with Field = value }
             // The type comes from the copied record
+            for fieldName, _, exprNode in fieldNodes do
+                match tryResolveRecordFieldType copyExpr.Type fieldName env with
+                | Some expected -> addConstraint (Constraint.Equals(expected, exprNode.Type, range)) env
+                | None -> addError recordRange $"Unknown record field: {fieldName}" env
             copyExpr.Type
         | None ->
             // Fresh record expression: { Field1 = v1; Field2 = v2 }
@@ -162,11 +166,11 @@ let checkRecord
                 | NativeType.TApp(tyCon, _) ->
                     // Expected case: nominal record type like `Person` or `Record<'a>`
                     match Map.tryFind tyCon.Name env.RecordDefs with
-                    | Some recordInfo ->
+                    | Some _ ->
                         // Add constraints: each field expression must match field type
                         for (fieldName, _, exprNode) in fieldNodes do
-                            match recordInfo.Fields |> List.tryFind (fun (n, _) -> n = fieldName) with
-                            | Some (_, expectedTy) ->
+                            match tryResolveRecordFieldType resolvedTy fieldName env with
+                            | Some expectedTy ->
                                 addConstraint (Constraint.Equals(exprNode.Type, expectedTy, range)) env
                             | None ->
                                 // Field not found in record definition - this is an error
