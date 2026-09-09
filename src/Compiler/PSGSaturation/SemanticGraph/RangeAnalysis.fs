@@ -988,7 +988,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             (seeds, declared @ (f.Parameters |> List.choose (fun (paramId, d) -> d |> Option.map (fun d -> paramId, d))))) (Map.empty, [])
     let boundarySeeds =
         ordered |> List.fold (fun seeds node ->
-            match CallbackDeclarations.invocationResult graph node.Id |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph node.Id) |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph node.Id) with
+            match CallbackDeclarations.invocationResult graph node.Id |> Option.orElseWith (fun () -> Mmio.numericBoundary graph node.Id) |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph node.Id) |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph node.Id) with
             | Some result -> Map.add node.Id result.Range seeds
             | None -> seeds) boundarySeeds
     // Every value stored into an array, by element type (§3.3): an array literal's elements (a
@@ -2165,7 +2165,7 @@ let selectedRepresentationOf (graph: SemanticGraph) (range: ValueRange) : Numeri
 let selectedRepresentation (graph: SemanticGraph) (nodeId: NodeId) : NumericRepresentation option =
     match graph.Platform, SemanticGraph.tryGetNode nodeId graph with
     | Some ctx, Some node when isIntegerNode node && selectsFromDeclared ctx ->
-        match CallbackDeclarations.numericBoundary graph nodeId |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph nodeId) |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph nodeId) with
+        match CallbackDeclarations.numericBoundary graph nodeId |> Option.orElseWith (fun () -> Mmio.numericBoundary graph nodeId) |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph nodeId) |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph nodeId) with
         | Some declared -> (selectRange ctx declared.Range).Representation
         | None ->
         match node.ValueRange, boundaryOfNode graph node with
@@ -2217,7 +2217,7 @@ let heldWidthOf (graph: SemanticGraph) (range: ValueRange) : int option =
 let selectedWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
     match graph.Platform, SemanticGraph.tryGetNode nodeId graph with
     | Some ctx, Some node when isIntegerNode node && PlatformContext.substrateKind ctx <> SubstrateKind.FPGA ->
-        match CallbackDeclarations.numericBoundary graph nodeId |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph nodeId) |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph nodeId) with
+        match CallbackDeclarations.numericBoundary graph nodeId |> Option.orElseWith (fun () -> Mmio.numericBoundary graph nodeId) |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph nodeId) |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph nodeId) with
         | Some declared -> Some declared.Bits
         | None ->
         match boundaryOfNode graph node with

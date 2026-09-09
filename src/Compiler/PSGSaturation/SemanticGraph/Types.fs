@@ -70,6 +70,7 @@ type IntrinsicModule =
     | DateTime      // DateTime operations (now, utcNow, today, toString, components)
     | TimeSpan      // TimeSpan operations (fromMilliseconds, fromSeconds, components)
     | FnPtr         // Function pointer operations (fromSymbol, invoke, ofFunction)
+    | Mmio          // Opaque exact-width volatile register access
     | BorrowedView  // Declared mapped-storage access; no address constructors
     | Lazy          // Lazy values (create, force, isValueCreated)
     | Seq           // Sequence generation (seq { }, toArray, toList, etc.)

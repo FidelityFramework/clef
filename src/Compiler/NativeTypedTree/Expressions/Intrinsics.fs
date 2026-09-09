@@ -54,6 +54,7 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         | "Crypto" -> Some (IntrinsicModule.Crypto, opPart)
         | "Bits" -> Some (IntrinsicModule.Bits, opPart)
         | "FnPtr" -> Some (IntrinsicModule.FnPtr, opPart)
+        | "Mmio" -> Some (IntrinsicModule.Mmio, opPart)
         | "BorrowedView" -> Some (IntrinsicModule.BorrowedView, opPart)
         | "Lazy" -> Some (IntrinsicModule.Lazy, opPart)
         | "Seq" -> Some (IntrinsicModule.Seq, opPart)
@@ -346,6 +347,20 @@ let private resolveBitsOp (op: string) (_range: SourceRange) : IntrinsicResoluti
         UnknownOperation $"Unknown Bits intrinsic: Bits.{unknown}. Available: htons, ntohs, htonl, ntohl, float32ToInt32Bits, int32BitsToFloat32, float64ToInt64Bits, int64BitsToFloat64"
 
 /// Resolve FnPtr.* operations
+let private resolveMmioOp (op: string) (_range: SourceRange) : IntrinsicResolution =
+    let integer = Types.intType
+    let signature =
+        [8, Types.mmio8TyCon; 16, Types.mmio16TyCon; 32, Types.mmio32TyCon]
+        |> List.tryPick (fun (bits, tc) ->
+            let handle = NativeType.TApp(tc, [])
+            if op = "reg" + string bits then Some (NativeType.TFun(integer, handle))
+            elif op = "read" + string bits then Some (NativeType.TFun(handle, integer))
+            elif op = "write" + string bits then Some (NativeType.TFun(handle, NativeType.TFun(integer, Types.unitType)))
+            else None)
+    match signature with
+    | Some ty -> Resolved (mkIntrinsic IntrinsicModule.Mmio op IntrinsicCategory.Memory ("Mmio." + op), ty)
+    | None -> UnknownOperation ("Unknown Mmio operation: " + op)
+
 let private resolveBorrowedViewOp (op: string) (range: SourceRange) : IntrinsicResolution =
     let schema = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
     let view = NativeType.TApp (Types.borrowedViewTyCon, [schema])
@@ -833,6 +848,7 @@ let resolveModuleIntrinsic
     | IntrinsicModule.Crypto -> resolveCryptoOp op range
     | IntrinsicModule.Bits -> resolveBitsOp op range
     | IntrinsicModule.FnPtr -> resolveFnPtrOp op range
+    | IntrinsicModule.Mmio -> resolveMmioOp op range
     | IntrinsicModule.BorrowedView -> resolveBorrowedViewOp op range
     | IntrinsicModule.Lazy -> resolveLazyOp op range
     | IntrinsicModule.Seq -> resolveSeqOp op range

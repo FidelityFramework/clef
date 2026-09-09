@@ -1028,6 +1028,9 @@ let private tryResolveBuiltinTypeConstructor (name: string) (args: NativeType li
     // Native callback signatures use the same constructor as FnPtr intrinsics.
     | "FnPtr", [signature] -> Some (NativeType.TApp(Types.fnPtrTyCon, [signature]))
     | "CHandle", [pointee] -> Some (NativeType.TApp(Types.cHandleTyCon, [pointee]))
+    | "Mmio8", [] -> Some (NativeType.TApp(Types.mmio8TyCon, []))
+    | "Mmio16", [] -> Some (NativeType.TApp(Types.mmio16TyCon, []))
+    | "Mmio32", [] -> Some (NativeType.TApp(Types.mmio32TyCon, []))
     | "BorrowedView", [schema] -> Some (NativeType.TApp(Types.borrowedViewTyCon, [schema]))
     // Built-in discriminated union type constructors
     | "option",  [elem]      -> Some (NativeType.TApp(optionTycon,  [elem]))
@@ -1069,6 +1072,9 @@ let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
         | Some carrier -> Some (NativeTypes.Types.numericType carrier)
         | None ->
             match name with
+            | "Mmio8" -> Some (NativeType.TApp(Types.mmio8TyCon, []))
+            | "Mmio16" -> Some (NativeType.TApp(Types.mmio16TyCon, []))
+            | "Mmio32" -> Some (NativeType.TApp(Types.mmio32TyCon, []))
             | "bool" -> Some NativeTypes.Types.boolType
             | "char" -> Some NativeTypes.Types.charType
             | "string" -> Some NativeTypes.Types.stringType

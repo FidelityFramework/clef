@@ -270,6 +270,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\PlatformResolution.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\MappedBindings.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallbackDeclarations.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\Mmio.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\BorrowedViews.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\MappedSpans.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ScopedCallbacks.fs" />
@@ -413,7 +414,7 @@
   <!-- Package Dependencies -->
   <ItemGroup>
     <!-- Core F# runtime -->
-    <PackageReference Include="FSharp.Core" Version="10.1.400" />
+    <PackageReference Include="FSharp.Core" Version="10.1.401" />
 
     <!-- XParsec - Parser combinators for Baker saturation (Phase 4.0: XParsec migration) -->
     <PackageReference Include="XParsec" Version="0.3.0" />
