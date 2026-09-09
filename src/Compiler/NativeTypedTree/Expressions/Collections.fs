@@ -58,6 +58,43 @@ let checkTuple
 // Array/List Expressions
 //-------------------------------------------------------------------------
 
+/// Recover explicit elements from the body of ArrayOrListComputed. The parser
+/// uses this case for nonempty literals as well as comprehensions.
+let rec tryLiteralCollectionElements (expr: SynExpr) : SynExpr list option =
+    match expr with
+    | SynExpr.Sequential(_, true, first, rest, _, _) ->
+        match tryLiteralCollectionElements first, tryLiteralCollectionElements rest with
+        | Some firstElements, Some restElements -> Some (firstElements @ restElements)
+        | _ -> None
+    | SynExpr.Paren(inner, _, _, _)
+    | SynExpr.Typed(inner, _, _)
+    | SynExpr.DebugPoint(_, _, inner) ->
+        // Parentheses retain one element even when its expression is sequential.
+        tryLiteralCollectionElements inner |> Option.map (fun _ -> [expr])
+    | SynExpr.For _
+    | SynExpr.ForEach _
+    | SynExpr.While _
+    | SynExpr.WhileBang _
+    | SynExpr.IfThenElse _
+    | SynExpr.Match _
+    | SynExpr.MatchBang _
+    | SynExpr.TryWith _
+    | SynExpr.TryFinally _
+    | SynExpr.LetOrUse _
+    | SynExpr.Do _
+    | SynExpr.DoBang _
+    | SynExpr.ComputationExpr _
+    | SynExpr.YieldOrReturn _
+    | SynExpr.YieldOrReturnFrom _
+    | SynExpr.ImplicitZero _
+    | SynExpr.IndexRange _
+    | SynExpr.Sequential _
+    | SynExpr.SequentialOrImplicitYield _ ->
+        // These bodies can yield zero, one, or many elements. Their result
+        // requires comprehension elaboration, including any nested yields.
+        None
+    | _ -> Some [expr]
+
 let checkArrayOrList
     (checkExpr: CheckExprFn)
     (env: TypeEnv)
@@ -87,7 +124,7 @@ let checkArrayOrList
     builder.Create(kind, collectionTy, range, children = childIds)
 
 //-------------------------------------------------------------------------
-// ArrayOrListComputed: [| for x in xs -> f x |] or [ for x in xs -> f x ]
+// ArrayOrListComputed: nonempty literals and collection comprehensions
 //-------------------------------------------------------------------------
 
 let checkArrayOrListComputed
@@ -99,14 +136,12 @@ let checkArrayOrListComputed
     (range: SourceRange)
     : SemanticNode =
 
-    let compNode = checkExpr env builder compExpr
-    let elemType = freshTypeVar range
-    let resultType = if isArray then NativeType.TApp(Types.arrayTyCon, [elemType]) else NativeType.TList elemType
-    builder.Create(
-        SemanticKind.ArrayExpr [compNode.Id],
-        resultType,
-        range,
-        children = [compNode.Id])
+    match tryLiteralCollectionElements compExpr with
+    | Some elements -> checkArrayOrList checkExpr env builder isArray elements range
+    | None ->
+        let message = "Computed list and array expressions are not yet supported; use explicit collection elements"
+        addNativeError DiagnosticCodes.FS8401_UnsupportedConstruct compExpr.Range message env
+        builder.Create(SemanticKind.Error message, NativeType.TError message, range)
 
 //-------------------------------------------------------------------------
 // Record Expressions

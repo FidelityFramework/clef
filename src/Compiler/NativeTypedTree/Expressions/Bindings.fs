@@ -199,6 +199,58 @@ let tryGetFunctionParams
 // Binding Checking
 //-------------------------------------------------------------------------
 
+/// Check construction before inline expansion can hide an allocating call, then
+/// check the elaborated value's storage. generalizeInEnv separately excludes
+/// variables belonging to existing storage and captures.
+let private isGeneralizableValue (env: TypeEnv) (builder: NodeBuilder) source (node: SemanticNode) =
+    let rec sourceValue = function
+        | SynExpr.Const _ | SynExpr.Ident _ | SynExpr.LongIdent _ | SynExpr.Lambda _ -> true
+        | SynExpr.Paren(inner, _, _, _) | SynExpr.Typed(inner, _, _) | SynExpr.Lazy(inner, _) -> sourceValue inner
+        | SynExpr.Tuple(_, items, _, _) | SynExpr.ArrayOrList(false, items, _) -> List.forall sourceValue items
+        | SynExpr.ArrayOrListComputed(false, body, _) ->
+            Clef.Compiler.NativeTypedTree.Expressions.Collections.tryLiteralCollectionElements body
+            |> Option.exists (List.forall sourceValue)
+        | SynExpr.Record(_, copied, fields, _) ->
+            (copied |> Option.forall (fst >> sourceValue))
+            && (fields |> List.forall (fun (SynExprRecordField(_, _, value, _, _)) -> value |> Option.exists sourceValue))
+        | SynExpr.AnonRecd(_, copied, fields, _, _) ->
+            (copied |> Option.forall (fst >> sourceValue))
+            && (fields |> List.forall (fun (_, _, value) -> sourceValue value))
+        | SynExpr.App(_, _, constructor, argument, _) -> unionConstructor constructor && sourceValue argument
+        | _ -> false
+    and unionConstructor = function
+        | SynExpr.Ident ident ->
+            tryLookupBinding ident.idText env |> Option.exists (fun binding -> binding.UnionCaseInfo.IsSome)
+        | SynExpr.LongIdent(_, SynLongIdent(idents, _, _), _, _) ->
+            let name = idents |> List.map (fun ident -> ident.idText) |> String.concat "."
+            tryLookupBinding name env |> Option.exists (fun binding -> binding.UnionCaseInfo.IsSome)
+        | SynExpr.Paren(inner, _, _, _) | SynExpr.TypeApp(inner, _, _, _, _, _, _) -> unionConstructor inner
+        | SynExpr.App(_, _, constructor, argument, _) -> unionConstructor constructor && sourceValue argument
+        | _ -> false
+    let rec safe id =
+        let node = builder.Nodes.[id]
+        match node.Kind with
+        | SemanticKind.Literal _ | SemanticKind.VarRef _ | SemanticKind.Lambda _ -> true
+        | SemanticKind.Intrinsic _ when node.Children.IsEmpty -> true
+        | SemanticKind.TypeAnnotation(inner, _) -> safe inner
+        | SemanticKind.TupleExpr items | SemanticKind.ListExpr items -> List.forall safe items
+        | SemanticKind.UnionCase(_, _, payload) -> payload |> Option.forall safe
+        | SemanticKind.RecordExpr(fields, copied) ->
+            let immutable =
+                match applySubst node.Type with
+                | NativeType.TApp(tycon, _) ->
+                    tryLookupRecordDef tycon.Name env
+                    |> Option.exists (fun record -> record.TypeCon.Module = tycon.Module && record.MutableFields.IsEmpty)
+                | NativeType.TAnon _ -> true
+                | _ -> false
+            immutable && (fields |> List.forall (snd >> safe)) && (copied |> Option.forall safe)
+        | SemanticKind.LazyExpr(thunk, _) ->
+            match builder.Nodes.[thunk].Kind with
+            | SemanticKind.Lambda(_, body, _, _, _) -> safe body
+            | _ -> false
+        | _ -> false
+    sourceValue source && safe node.Id
+
 /// Check a single binding
 /// Returns the semantic node, optionally an InlineBody for transparent function expansion,
 /// the isMutable flag, and optionally a NativeLiteral for [<Literal>] bindings.
@@ -492,13 +544,8 @@ let checkBinding
     | None ->
         // Regular value binding (not a function - no inline body)
         let exprNode = checkExpr env builder expr
-        let rec nonExpansive = function
-            | SynExpr.Const _ | SynExpr.Ident _ | SynExpr.LongIdent _ | SynExpr.Lambda _ -> true
-            | SynExpr.Paren(inner, _, _, _) | SynExpr.Typed(inner, _, _) -> nonExpansive inner
-            | SynExpr.Tuple(_, items, _, _) -> List.forall nonExpansive items
-            | _ -> false
         let bindingType =
-            if not isMutable && preCreatedBinding.IsNone && nonExpansive expr then generalizeInEnv env exprNode.Type
+            if not isMutable && preCreatedBinding.IsNone && isGeneralizableValue env builder expr exprNode then generalizeInEnv env exprNode.Type
             else applySubst exprNode.Type
 
         // ETA-EXPANSION for partial applications:

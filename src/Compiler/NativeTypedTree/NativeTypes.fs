@@ -1116,6 +1116,8 @@ type RecordTypeInfo = {
     TypeParameters: TypeParam list
     /// Fields in declaration order (= memory order)
     Fields: (string * NativeType) list
+    /// Writable fields prevent fresh record storage from being generalized.
+    MutableFields: Set<string>
     /// Module path where this record type is defined
     Module: ModulePath
     /// Whether type has [<RequireQualifiedAccess>] attribute
