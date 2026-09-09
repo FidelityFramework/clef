@@ -54,6 +54,7 @@ let tryParseModuleQualified (name: string) : (IntrinsicModule * string) option =
         | "Crypto" -> Some (IntrinsicModule.Crypto, opPart)
         | "Bits" -> Some (IntrinsicModule.Bits, opPart)
         | "FnPtr" -> Some (IntrinsicModule.FnPtr, opPart)
+        | "BorrowedView" -> Some (IntrinsicModule.BorrowedView, opPart)
         | "Lazy" -> Some (IntrinsicModule.Lazy, opPart)
         | "Seq" -> Some (IntrinsicModule.Seq, opPart)
         | "NativeDefault" -> Some (IntrinsicModule.NativeDefault, opPart)
@@ -345,6 +346,20 @@ let private resolveBitsOp (op: string) (_range: SourceRange) : IntrinsicResoluti
         UnknownOperation $"Unknown Bits intrinsic: Bits.{unknown}. Available: htons, ntohs, htonl, ntohl, float32ToInt32Bits, int32BitsToFloat32, float64ToInt64Bits, int64BitsToFloat64"
 
 /// Resolve FnPtr.* operations
+let private resolveBorrowedViewOp (op: string) (range: SourceRange) : IntrinsicResolution =
+    let schema = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
+    let view = NativeType.TApp (Types.borrowedViewTyCon, [schema])
+    let integer = Types.intType
+    let signature =
+        match op with
+        | "length" | "stride" -> Some (NativeType.TFun (view, integer))
+        | "get" -> Some (NativeType.TFun (view, NativeType.TFun (integer, integer)))
+        | "set" -> Some (NativeType.TFun (view, NativeType.TFun (integer, NativeType.TFun (integer, Types.unitType))))
+        | _ -> None
+    match signature with
+    | Some ty -> Resolved (mkIntrinsic IntrinsicModule.BorrowedView op IntrinsicCategory.Memory ("BorrowedView." + op), ty)
+    | None -> UnknownOperation ("Unknown BorrowedView operation: " + op + ". Available: length, stride, get, set. Views are supplied only by declared mapping scopes.")
+
 let private resolveFnPtrOp (op: string) (range: SourceRange) : IntrinsicResolution =
     let fullName = "FnPtr." + op
     let freshF = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
@@ -358,7 +373,8 @@ let private resolveFnPtrOp (op: string) (range: SourceRange) : IntrinsicResoluti
         // FnPtr<'F> -> 'F
         let fnPtrType = NativeType.TApp(Types.fnPtrTyCon, [freshF])
         let ty = NativeType.TFun(fnPtrType, freshF)
-        Resolved (mkIntrinsic IntrinsicModule.FnPtr op IntrinsicCategory.Pure fullName, ty)
+        // The callback signature supplies no guarantee about external effects.
+        Resolved (mkIntrinsic IntrinsicModule.FnPtr op IntrinsicCategory.Platform fullName, ty)
     | "ofFunction" ->
         // 'F -> FnPtr<'F>
         let fnPtrType = NativeType.TApp(Types.fnPtrTyCon, [freshF])
@@ -592,26 +608,27 @@ let tryResolveLibraryScheme (name: string) (range: SourceRange) : (IntrinsicInfo
 let private resolveMathOp (op: string) (range: SourceRange) : IntrinsicResolution =
     let fullName = "Math." + op
     match op with
-    | "abs" | "sqrt" | "atan2" | "floor" | "ceiling" | "round" ->
+    | "abs" | "sqrt" | "atan2" | "floor" | "ceiling" | "round" | "truncate" | "min" | "max" ->
         match librarySchemeType op range with
         | Some ty -> Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
         | None -> UnknownOperation $"Unknown Math intrinsic: Math.{op}"
     | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "exp" | "log" | "log10" ->
         let ty = NativeType.TFun(Types.floatType, Types.floatType)
         Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
-    | "pow" | "min" | "max" ->
+    | "pow" ->
         let ty = NativeType.TFun(Types.floatType, NativeType.TFun(Types.floatType, Types.floatType))
         Resolved (mkIntrinsic IntrinsicModule.Math op IntrinsicCategory.Arithmetic fullName, ty)
     | unknown ->
         UnknownOperation $"Unknown Math intrinsic: Math.{unknown}"
 
 /// Resolve Arena.* operations (deterministic memory allocation)
-let private resolveArenaOp (op: string) (range: SourceRange) : IntrinsicResolution =
+let private resolveArenaOp (op: string) (_range: SourceRange) : IntrinsicResolution =
     let fullName = "Arena." + op
     // Create fresh measure parameter for lifetime tracking
-    let lifetimeParam = freshTypeParam "'lifetime" TypeParamKind.Measure range
+    let lifetime = freshMeasureVar (Some "lifetime")
+    let lifetimeParam = measureCellOf lifetime
     // The lifetime is a measure variable in a measure-sorted position (design a.2, sequence CS-4).
-    let lifetimeMeasure = NativeType.TMeasure (Dimension.ofVar (freshMeasureVar (Some "lifetime")))
+    let lifetimeMeasure = NativeType.TMeasure (Dimension.ofVar lifetime)
     let arenaType = NativeType.TApp(Types.arenaTyCon, [lifetimeMeasure])
     let arenaByrefType = NativeType.TByref(arenaType, ByrefKind.InOut)
     match op with
@@ -816,6 +833,7 @@ let resolveModuleIntrinsic
     | IntrinsicModule.Crypto -> resolveCryptoOp op range
     | IntrinsicModule.Bits -> resolveBitsOp op range
     | IntrinsicModule.FnPtr -> resolveFnPtrOp op range
+    | IntrinsicModule.BorrowedView -> resolveBorrowedViewOp op range
     | IntrinsicModule.Lazy -> resolveLazyOp op range
     | IntrinsicModule.Seq -> resolveSeqOp op range
     | IntrinsicModule.SeqEnumerator -> resolveSeqEnumeratorOp op range
@@ -1018,30 +1036,18 @@ let isOperatorName (name: string) : bool =
 // Conversion Intrinsics
 //-------------------------------------------------------------------------
 
-/// Try to resolve a type conversion intrinsic (float, int, int64, byte, etc.).
-/// A numeric conversion is `κ<'u> -> Target<'u>` (design (c) last row; plan L-4): the source is
-/// a fresh carrier variable carrying the conversion's name, so a non-numeric source is CCS8002
-/// naming it, and the dimension is preserved (`float (3<m>)` is `float<m>`). There is no
-/// polymorphic `'T -> Target` conversion (width-inference.md §7). The width-named spellings
-/// (int8..uint64, byte, sbyte, uint, nativeint, float32, single, double) stay resolvable here
-/// until CS-11 deletes them (D10); nothing new names a width. `char` is the one non-numeric
-/// conversion intrinsic and keeps its polymorphic source.
-let tryResolveConversion (name: string) (range: SourceRange) : (IntrinsicInfo * NativeType) option =
-    // A numeric spelling reads the one spelling table (sequence CS-5).
-    match Types.tryConversionOfName name with
-    | Some (op, carrier) ->
-        let k = freshCarrierFor name range
+/// Kind-changing arithmetic preserves dimensions. Width/representation conversion
+/// spellings are not Clef source intrinsics; rounding operations select the integer kind.
+let tryResolveConversion (name: string) (_range: SourceRange) : (IntrinsicInfo * NativeType) option =
+    match name with
+    | "float" ->
         let u = freshDimension ()
-        let info = mkIntrinsic IntrinsicModule.Convert op IntrinsicCategory.Conversion name
-        let ty = NativeType.TFun(numeric k u, NativeType.TNum(CarrierRef.Carrier carrier, u))
-        Some (info, ty)
-    | None ->
-        match name with
-        | "char" ->
-            let tyParam = NativeType.TVar (freshTypeParamAuto TypeParamKind.Type range)
-            let info = mkIntrinsic IntrinsicModule.Convert "toChar" IntrinsicCategory.Conversion name
-            Some (info, NativeType.TFun(tyParam, Types.charType))
-        | _ -> None
+        let info = mkIntrinsic IntrinsicModule.Convert "toFloat" IntrinsicCategory.Arithmetic name
+        Some (info, NativeType.TFun(integer u, real u))
+    | "char" ->
+        let info = mkIntrinsic IntrinsicModule.Convert "toChar" IntrinsicCategory.Conversion name
+        Some (info, NativeType.TFun(Types.intType, Types.charType))
+    | _ -> None
 
 //-------------------------------------------------------------------------
 // The declared range sources (Dimensional_Range_Design.md §1.1 last bullet, §3.3, §4.1; CS-11)

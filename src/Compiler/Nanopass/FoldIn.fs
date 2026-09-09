@@ -245,6 +245,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         FieldRanges = lazy Map.empty
         ElementRanges = lazy Map.empty
         Layouts = lazy Map.empty
+        StaticStringPool = None
         Escaping = lazy Map.empty
         Codata = lazy Codata.empty
         // F survives fold-in with its references repointed at replacements.

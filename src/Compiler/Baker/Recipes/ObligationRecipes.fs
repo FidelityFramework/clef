@@ -25,9 +25,105 @@
 module Clef.Compiler.Baker.Recipes.ObligationRecipes
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.DimensionAlgebra
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 open Clef.Compiler.Baker.Ingredients.Obligations
+
+/// This conditional arithmetic theorem starts after the native guards. It does
+/// not establish the driver's allocation extent, multiplication correctness,
+/// callback retirement, or disjointness between workers.
+let mappedElementSpan enrichId (site: SemanticNode) (sources: NodeId list) (model: MappedSpanModel) : Enrichment =
+    let node = obligationNode site enrichId
+                   { Id = (let (NodeId value) = site.Id in sprintf "mapped_element_span_%d" value); Kind = "mapped-element-span"; Logic = "QF_LIA"
+                     Statement = sprintf "After native mapping guards establish a positive byte extent <= %A, divisible by %d, and an aligned nonwrapping base, every checked element index denotes a complete %d-byte span inside that extent with %d-byte element alignment. Native extent provenance, stride*rows checks, scoped retirement and worker disjointness are separate contracts; this theorem proves only the additive/index span step."
+                                         model.MaximumExtent model.ElementBytes model.ElementBytes model.ElementAlignment
+                     Source = fmtRange site.Range; Refs = ["CWE-125"; "CWE-787"; "CWE-190"]
+                     Body = ObligationBody.MappedElementSpan model }
+    { NewNodes = [node]; NewEdges = [constrains (site.Id :: sources |> List.distinct) node]; Annotated = [] }
+
+/// Retain the analysed enclosure as evidence; do not replace it with a point
+/// computed here, which would conceal a broken range-analysis result.
+let integerLiteral (enrichId: int) (name: string) (site: SemanticNode) (value: bigint) (lower: bigint) (upper: bigint) : Enrichment =
+    let node = obligationNode site enrichId
+                   { Id = name; Kind = "integer-literal-range"; Logic = "QF_LIA"
+                     Statement = sprintf "integer literal %A lies within its analysed range [%A, %A]" value lower upper
+                     Source = fmtRange site.Range; Refs = []
+                     Body = ObligationBody.IntegerLiteralRange(value, lower, upper) }
+    { NewNodes = [node]; NewEdges = [constrains [site.Id] node]; Annotated = [] }
+
+/// Cross-apply the selected representation's declaration to the actual range.
+let integerCoverage (enrichId: int) (name: string) (site: SemanticNode) (lower: bigint) (upper: bigint)
+                    (declared: DeclaredRepresentation) (minimum: bigint) (maximum: bigint) : Enrichment =
+    let representation = declared.Representation
+    let node = obligationNode site enrichId
+                   { Id = name; Kind = "integer-representation-coverage"; Logic = "QF_LIA"
+                     Statement = sprintf "analysed integer range [%A, %A] fits the declared bounds of selected representation %s (%d bits)" lower upper representation.Name representation.Bits
+                     Source = fmtRange site.Range; Refs = []
+                     Body = ObligationBody.IntegerRepresentationCoverage(lower, upper, minimum, maximum) }
+    { NewNodes = [node]; NewEdges = [constrains [site.Id; declared.Node] node]; Annotated = [] }
+
+/// Compatibility at an ordinary application, separately from laws proved in
+/// the callee body. The occurrence carries its instantiated signature; the
+/// definition, when resolved, supplies an explicit provenance edge.
+let application (enrichId: int) (name: string, (site: SemanticNode, callee: SemanticNode, arguments: SemanticNode list, definition: NodeId option, comparisons: (string * Dimension option * Dimension option) list)) : Enrichment =
+    let calleeName = match callee.Kind with SemanticKind.VarRef(name, _) -> name | _ -> "function value"
+    let describe = function Some dim -> "<" + Dimension.render dim + ">" | None -> "missing dimensional position"
+    let positions = comparisons |> List.map (fun (path, expected, actual) ->
+        sprintf "%s: expected %s, actual %s" path (describe expected) (describe actual))
+    let node =
+        obligationNode site enrichId
+            { Id = name; Kind = "dimension-application"; Logic = "QF_LIA"
+              Statement = sprintf "dimensional compatibility of this call to %s: %s" calleeName (String.concat "; " positions)
+              Source = fmtRange site.Range; Refs = []
+              Body = ObligationBody.ApplicationDimensions comparisons }
+    { NewNodes = [ node ]
+      NewEdges = [ constrains (site.Id :: callee.Id :: (arguments |> List.map (fun argument -> argument.Id)) @ Option.toList definition |> List.distinct) node ]
+      Annotated = [] }
+
+/// A source decimal seeds an exact singleton range. Its hosted approximation
+/// stays separate; it is never used to reconstruct the source value.
+let realLiteral (enrichId: int) (name: string, (site: SemanticNode, source: string, value: ExactRational)) : Enrichment =
+    let node = obligationNode site enrichId
+                   { Id = name; Kind = "real-literal-range"; Logic = "QF_LRA"
+                     Statement = sprintf "source real literal %s has exact singleton range [%s, %s]" source source source
+                     Source = fmtRange site.Range; Refs = []
+                     Body = ObligationBody.RealLiteralRange(value, value, value) }
+    { NewNodes = [node]; NewEdges = [constrains [site.Id] node]; Annotated = [] }
+
+/// Cross-apply the exact source point with the declaration of the current
+/// concrete literal representation. The declaration supplies capacity, not
+/// evidence about the value, and this claim supplies no rounding guarantee.
+let realCoverage (enrichId: int) (site: SemanticNode) (name: string) (source: string) (value: ExactRational)
+                 (declared: DeclaredRepresentation) (minimum: ExactRational) (maximum: ExactRational) : Enrichment =
+    let representation = declared.Representation
+    let node = obligationNode site enrichId
+                   { Id = name; Kind = "real-representation-coverage"; Logic = "QF_LRA"
+                     Statement = sprintf "source real literal %s lies within the declared finite bounds of %s (%d bits)" source representation.Name representation.Bits
+                     Source = fmtRange site.Range; Refs = []
+                     Body = ObligationBody.RealRepresentationCoverage(value, value, minimum, maximum) }
+    { NewNodes = [node]; NewEdges = [constrains [site.Id; declared.Node] node]; Annotated = [] }
+
+/// A measured operation constrains its two actual operands and result. The
+/// rule stays separate from the inferred vectors so discharge checks the
+/// operation's relation rather than repeating a precomputed equality.
+let dimensional (enrichId: int) (name: string, (site: SemanticNode, left: SemanticNode, right: SemanticNode, rule: DimensionalRule, leftDim: Dimension, rightDim: Dimension, resultDim: Dimension option)) : Enrichment =
+    let kind, relation =
+        match rule with
+        | DimensionalRule.Product -> "product", "(multiplication) adds operand exponents"
+        | DimensionalRule.Quotient -> "quotient", "(division) subtracts right operand exponents from left operand exponents"
+        | DimensionalRule.SameDimension -> "equality", "preserves the common operand dimension"
+        | DimensionalRule.Comparison -> "comparison", "requires equal operand dimensions"
+    let resultText = resultDim |> Option.map (fun d -> sprintf ", result <%s>" (Dimension.render d)) |> Option.defaultValue ""
+    let node =
+        obligationNode site enrichId
+            { Id = name; Kind = "dimension-" + kind; Logic = "QF_LIA"
+              Statement = sprintf "dimensional %s %s: left <%s>, right <%s>%s" kind relation (Dimension.render leftDim) (Dimension.render rightDim) resultText
+              Source = fmtRange site.Range; Refs = []
+              Body = ObligationBody.DimensionalRelation (rule, leftDim, rightDim, resultDim) }
+    { NewNodes = [ node ]
+      NewEdges = [ constrains [ site.Id; left.Id; right.Id ] node ]
+      Annotated = [] }
 
 /// storage-reservation, view-containment, terminator-sentinel: one triple per
 /// literal, S_f = {literal}. Where `rodata` is declared the literal also
@@ -57,29 +153,20 @@ let literal (rodata: DeclaredSpace option) (enrichId: int) (name: string, (conte
             constrains [ subject.Id ] sentinelN ]
       Annotated = [] }
 
-/// memory-map-disjointness over all reachable literals: consecutive placement
-/// from a symbolic base, pairwise disjoint, exact span -- and, where `rodata`
-/// is declared, the span within its capacity. Arity |L| + 1: a clique of
-/// pairwise claims does not entail the span.
-let layout (platform: DeclaredPlatform option) (rodata: DeclaredSpace option) (enrichId: int) (literals: (string * SemanticNode) list) : Enrichment =
-    match literals with
-    | [] | [ _ ] -> Enrichment.empty
-    | (_, subject) :: _ ->
-        let storages = literals |> List.map (fun (c, _) -> byteLength c + 1)
-        let span = List.sum storages
-        let cited, capacity, source =
-            match platform, rodata with
-            | Some p, Some r ->
-                sprintf ", within the %d-byte capacity of the declared space %s" r.Capacity r.Name, Some r.Capacity, cite p r.Name
-            | _ -> "", None, "all reachable string literals, entry unit and platform library"
-        let node =
-            obligationNode subject enrichId
-                { Id = "layout_user_strings"; Kind = "memory-map-disjointness"; Logic = "QF_LIA"
-                  Statement = sprintf "the %d reachable string storages, laid out consecutively, occupy pairwise-disjoint ranges spanning exactly %d bytes%s" storages.Length span cited
-                  Source = source; Refs = [ "CWE-787"; "CWE-125" ]
-                  Body = ObligationBody.ConsecutiveLayout (storages, span, capacity) }
-        let sources = (literals |> List.map (fun (_, n) -> n.Id)) @ (rodata |> Option.map (fun r -> r.Node) |> Option.toList)
-        { NewNodes = [ node ]; NewEdges = [ constrains sources node ]; Annotated = [] }
+/// Check the actual BAREWire pool that emission consumes. No placement premise
+/// is invented: the concrete offsets, extents and declared bounds are evidence.
+let staticStorageLayout (enrichId: int) (entry: SemanticNode option) (subject: SemanticNode) (pool: StaticStringPool) : Enrichment =
+    let subject = entry |> Option.defaultValue subject
+    let slots = pool.Entries |> List.map (fun item -> item.Offset, item.StorageLength, 1)
+    let node =
+        obligationNode subject enrichId
+            { Id = "layout_user_strings"; Kind = "static-storage-layout"; Logic = "QF_LIA"
+              Statement = sprintf "BAREWire static string pool: %d settled storages occupy disjoint aligned ranges using %d bytes in the emitted %d-byte allocation (alignment %d, granularity %d), within declared %s capacity %d"
+                                  slots.Length pool.UsedSize pool.Size pool.Alignment pool.Granularity pool.SpaceName pool.Capacity
+              Source = fmtRange subject.Range; Refs = ["CWE-787"; "CWE-125"; "CWE-131"]
+              Body = ObligationBody.StaticStorageLayout(slots, pool.UsedSize, pool.Size, pool.Alignment, pool.Capacity, pool.SpaceAlignment, pool.Granularity) }
+    let sources = (entry |> Option.map (fun n -> n.Id) |> Option.toList) @ [pool.DeclarationNode] @ (pool.Entries |> List.collect (fun item -> item.NodeIds))
+    { NewNodes = [node]; NewEdges = [constrains (List.distinct sources) node]; Annotated = [] }
 
 /// concat-copy-bound for one String.concat2 site, S_f = {site; left; right}.
 /// Operand lengths are pinned where the operand is a literal; the window shape

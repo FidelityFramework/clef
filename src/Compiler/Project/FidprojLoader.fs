@@ -122,6 +122,9 @@ type FidprojOptions = {
 
     /// Project dependencies.
     Dependencies: FidprojDependency list
+    /// Explicit native library identities from [link] libraries.
+    /// Project checking includes the declarations of resolved dependencies.
+    LinkedLibraries: string list
     /// Resolved absolute path to Alloy library (if specified).
     AlloyPath: string option
     /// Resolved absolute path to platform binding library (if specified).
@@ -141,6 +144,16 @@ module FidprojLoader =
     /// Normalizes a path to use forward slashes and be absolute.
     let private normalizePath (path: string) =
         Path.GetFullPath(path).Replace('\\', '/')
+
+    let private parseLinkedLibraries (doc: TomlDocument) : Result<string list, string> =
+        match Toml.getValue "link.libraries" doc with
+        | None -> Ok []
+        | Some (TomlValue.Array values) ->
+            let names = values |> List.choose (function TomlValue.String name -> Some name | _ -> None)
+            if names.Length <> values.Length || (names |> List.exists System.String.IsNullOrWhiteSpace) then
+                Error "Expected [link] libraries to be an array of non-empty strings"
+            else Ok (List.distinct names)
+        | Some _ -> Error "Expected [link] libraries to be an array of non-empty strings"
 
     /// Parses a memory model string.
     let private parseMemoryModel (s: string) =
@@ -310,6 +323,10 @@ module FidprojLoader =
                 | Error msg -> Error msg
                 | Ok targetPlatform ->
 
+                match parseLinkedLibraries doc with
+                | Error msg -> Error msg
+                | Ok linkedLibraries ->
+
                 // Dependencies section
                 let dependencies =
                     match Toml.getTable "dependencies" doc with
@@ -363,6 +380,7 @@ module FidprojLoader =
                     OutputName = outputName
                     DeploymentMode = deploymentMode
                     Dependencies = dependencies
+                    LinkedLibraries = linkedLibraries
                     AlloyPath = alloyPath
                     PlatformPath = platformPath
                     PlatformMetadata = platformMetadata

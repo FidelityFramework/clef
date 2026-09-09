@@ -67,13 +67,17 @@ let private sites (graph: SemanticGraph) : (NodeId * SiteKind) list =
         | SemanticKind.DUConstruct _ -> Some (kvp.Key, SiteKind.Union)
         | SemanticKind.RecordExpr _ -> Some (kvp.Key, SiteKind.Record)
         | SemanticKind.Application _ when isString kvp.Value.Type -> Some (kvp.Key, SiteKind.StringCall)
-        | SemanticKind.Lambda (_, _, captures, _, _) when not captures.IsEmpty -> Some (kvp.Key, SiteKind.Closure)
+        | SemanticKind.Lambda (_, _, captures, _, _)
+            when not captures.IsEmpty ||
+                 (kvp.Value.Metadata |> Map.tryFind ClosureMetadata.RequiresClosurePair = Some (MetadataValue.Bool true)) ->
+            Some (kvp.Key, SiteKind.Closure)
         | _ -> None)
     |> Seq.toList
 
 let private escapeOf (graph: SemanticGraph) (siteId: NodeId) (kind: SiteKind) : EscapeKind =
     match kind with
     // a closure's environment is part of the pair it returns: structurally escaping
+    | SiteKind.Closure when ScopedCallbacks.isStackLambda graph siteId -> EscapeKind.StackScoped
     | SiteKind.Closure -> EscapeKind.EscapesViaReturn
     | _ ->
         // a union or record construction is the value; a string-returning call is traced through

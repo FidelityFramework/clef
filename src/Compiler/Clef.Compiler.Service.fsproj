@@ -41,8 +41,8 @@
 
     <!-- FsLex/FsYacc output folders -->
     <!-- Pre-generated parser files are in source tree per target framework -->
-    <FsYaccOutputFolder>$(MSBuildProjectDirectory)/$(TargetFramework)/</FsYaccOutputFolder>
-    <FsLexOutputFolder>$(MSBuildProjectDirectory)/$(TargetFramework)/</FsLexOutputFolder>
+    <FsYaccOutputFolder>$(TargetFramework)/</FsYaccOutputFolder>
+    <FsLexOutputFolder>$(TargetFramework)/</FsLexOutputFolder>
     <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
   </PropertyGroup>
 
@@ -266,7 +266,13 @@
     <Compile Include="PSGSaturation\SemanticGraph\Types.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Elaboration.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Core.fs" />
+    <Compile Include="NativeTypedTree\UnionFind.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\PlatformResolution.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\MappedBindings.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\CallbackDeclarations.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\BorrowedViews.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\MappedSpans.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\ScopedCallbacks.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\NodeBuilder.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Reachability.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Traversal.fs" />
@@ -274,7 +280,6 @@
 
     <!-- NativeTypedTree - Native Type Checker (BCL-free, unified representation) -->
     <!-- NativeTypes.fs moved earlier - foundational types needed by TypedTree -->
-    <Compile Include="NativeTypedTree\UnionFind.fs" />
     <Compile Include="NativeTypedTree\Unify.fs" />
     <Compile Include="NativeTypedTree\NameResolution.fs" />
     <!-- Expressions - Modular expression checking -->
@@ -325,18 +330,20 @@
     <!-- Nanopass passes - must come after Baker -->
     <Compile Include="Nanopass\IntrinsicElaboration.fs" />
     <Compile Include="Nanopass\BakerSaturation.fs" />
-    <!-- Pass 5 - obligations minted into V and F at saturation; design-time discharge -->
-    <Compile Include="Nanopass\ObligationElaboration.fs" />
     <Compile Include="Nanopass\ObligationDischarge.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
     <!-- The declared platform fills the context at saturation; sealed sites are checked against it (CS-7b) -->
     <Compile Include="PSGSaturation\SemanticGraph\PlatformDeclaration.fs" />
     <!-- The range pass: every integer's analysed range as a coeffect on the node, CCS8011 (CS-10) -->
     <Compile Include="PSGSaturation\SemanticGraph\RangeAnalysis.fs" />
+    <!-- Obligation recipes observe the range pass's selection; they do not select again. -->
+    <Compile Include="Nanopass\ObligationElaboration.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Placement.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\StaticStringLayout.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Roots.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Escape.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Curry.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\FunctionPointers.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Meets.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\PlatformBindings.fs" />
 
@@ -416,9 +423,19 @@
 
   </ItemGroup>
 
+  <PropertyGroup>
+    <BAREWireProjectPath Condition="'$(BAREWireProjectPath)' == '' and Exists('$(MSBuildProjectDirectory)/../../../BAREWire/src/BAREWire.fsproj')">$(MSBuildProjectDirectory)/../../../BAREWire/src/BAREWire.fsproj</BAREWireProjectPath>
+    <BAREWireProjectPath Condition="'$(BAREWireProjectPath)' == ''">$(MSBuildProjectDirectory)/../../../../BAREWire/src/BAREWire.fsproj</BAREWireProjectPath>
+  </PropertyGroup>
   <!-- Fidelity.Data - TOML/XML/YAML/JSON/CSV parser for .fidproj loading -->
+  <PropertyGroup>
+    <!-- Accept both sibling checkouts and clef.worktrees/name checkouts. -->
+    <FidelityDataProjectPath Condition="'$(FidelityDataProjectPath)' == '' and Exists('$(MSBuildProjectDirectory)/../../../Fidelity.Data/src/Fidelity.Data/Fidelity.Data.fsproj')">$(MSBuildProjectDirectory)/../../../Fidelity.Data/src/Fidelity.Data/Fidelity.Data.fsproj</FidelityDataProjectPath>
+    <FidelityDataProjectPath Condition="'$(FidelityDataProjectPath)' == ''">$(MSBuildProjectDirectory)/../../../../Fidelity.Data/src/Fidelity.Data/Fidelity.Data.fsproj</FidelityDataProjectPath>
+  </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../../Fidelity.Data/src/Fidelity.Data/Fidelity.Data.fsproj" />
+    <ProjectReference Include="$(FidelityDataProjectPath)" />
+    <ProjectReference Include="$(BAREWireProjectPath)" />
   </ItemGroup>
 
 </Project>

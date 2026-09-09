@@ -103,6 +103,13 @@ module ProjectChecker =
     let private normalizePath (path: string) =
         Path.GetFullPath(path).Replace('\\', '/')
 
+    /// Only declarations owned by this executable can be reported as unused helpers.
+    /// Dependency/platform sources remain public library surface, even when compiled together.
+    let private ownedApplicationSources (options: FidprojOptions) =
+        match options.TargetPlatform, options.DeploymentMode with
+        | TargetPlatform.Library, _ | _, DeploymentMode.Library -> Set.empty
+        | _ -> options.SourceFiles |> List.map (fun file -> normalizePath (Path.Combine(options.ProjectDirectory, file))) |> Set.ofList
+
     /// Reads a source file, returning (path, content).
     let private readSourceFile (path: string): Result<string * string, string> =
         let normalizedPath = normalizePath path
@@ -133,11 +140,13 @@ module ProjectChecker =
         | Error msg -> Error msg
         | Ok options ->
             // Resolve all source files in order - MUST succeed, no silent fallbacks
-            match SourceResolver.getAllSourcesInOrder options with
+            match SourceResolver.getSourcesAndLibraries options with
             | Error srcError ->
                 // Source resolution failed - this is a hard error, not a warning
                 Error (SourceResolutionError.format srcError)
-            | Ok allSourcePaths ->
+            | Ok resolved ->
+                let options = { options with LinkedLibraries = resolved.LinkedLibraries }
+                let allSourcePaths = resolved.SourcePaths
                 if List.isEmpty allSourcePaths then
                     Error $"No source files found for project {options.Name}"
                 else
@@ -193,6 +202,7 @@ module ProjectChecker =
                                 FieldRanges = lazy Map.empty
                                 ElementRanges = lazy Map.empty
                                 Layouts = lazy Map.empty
+                                StaticStringPool = None
                                 Escaping = lazy Map.empty
                                 Codata = lazy Codata.empty
                                 Edges = []
@@ -208,7 +218,7 @@ module ProjectChecker =
 
                             // Check all parsed inputs together with platform context
                             // The platform context is set on the graph BEFORE entry point elaboration
-                            let checkedInputs = checkParsedInputsWithPlatform parsedInputs platformContext
+                            let checkedInputs = checkParsedInputsWithPlatformAndSources parsedInputs platformContext (ownedApplicationSources options)
                             let checkResult = { checkedInputs with Diagnostics = checkedInputs.Diagnostics @ unusedPlatformKeyDiagnostics options }
 
                             Ok {
@@ -231,11 +241,13 @@ module ProjectChecker =
         | Error msg -> Error msg
         | Ok options ->
             // Resolve all source files in order - MUST succeed, no silent fallbacks
-            match SourceResolver.getAllSourcesInOrder options with
+            match SourceResolver.getSourcesAndLibraries options with
             | Error srcError ->
                 // Source resolution failed - this is a hard error, not a warning
                 Error (SourceResolutionError.format srcError)
-            | Ok allSourcePaths ->
+            | Ok resolved ->
+                let options = { options with LinkedLibraries = resolved.LinkedLibraries }
+                let allSourcePaths = resolved.SourcePaths
                 if List.isEmpty allSourcePaths then
                     Error $"No source files found for project {options.Name}"
                 else
@@ -284,7 +296,7 @@ module ProjectChecker =
                         let platformContext = buildPlatformContext options
 
                         // Check all parsed inputs together with platform context
-                        let checkedInputs = checkParsedInputsWithPlatform parsedInputs platformContext
+                        let checkedInputs = checkParsedInputsWithPlatformAndSources parsedInputs platformContext (ownedApplicationSources options)
                         let checkResult = { checkedInputs with Diagnostics = checkedInputs.Diagnostics @ unusedPlatformKeyDiagnostics options }
 
                         Ok {

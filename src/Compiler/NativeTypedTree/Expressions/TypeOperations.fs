@@ -34,8 +34,14 @@ let checkTyped
     (range: SourceRange)
     : SemanticNode =
 
-    let innerNode = checkExpr env builder innerExpr
     let annotatedTy = resolveSynType env synType
+    let rec isRecordLiteral = function
+        | SynExpr.Record _ -> true
+        | SynExpr.Paren(inner, _, _, _) | SynExpr.DebugPoint(_, _, inner) -> isRecordLiteral inner
+        | _ -> false
+    let innerEnv =
+        { env with ExpectedRecordType = if isRecordLiteral innerExpr then Some annotatedTy else None }
+    let innerNode = checkExpr innerEnv builder innerExpr
     // Add equality constraint
     addConstraint (Constraint.Equals(innerNode.Type, annotatedTy, range)) env
     let node = builder.Create(

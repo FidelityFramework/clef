@@ -36,6 +36,11 @@ module SourceResolutionError =
             $"Circular dependency detected: {chainStr}"
 
 module SourceResolver =
+    type ResolvedSources = {
+        SourcePaths: string list
+        LinkedLibraries: string list
+    }
+
     /// Normalizes a path to use forward slashes and be absolute.
     let private normalizePath (path: string) =
         Path.GetFullPath(path).Replace('\\', '/')
@@ -53,14 +58,14 @@ module SourceResolver =
         (depPath: string)
         (visitedPaths: Set<string>)
         (visitChain: string list)
-        : Result<string list * Set<string>, SourceResolutionError> =
+        : Result<string list * string list * Set<string>, SourceResolutionError> =
 
         let normalizedPath = normalizePath depPath
 
         // Already processed (diamond dependency) — skip without error.
         // True circular deps (mutual module imports) will surface as type-check errors.
         if Set.contains normalizedPath visitedPaths then
-            Ok ([], visitedPaths)
+            Ok ([], [], visitedPaths)
         else
             if not (File.Exists normalizedPath) then
                 Error (DependencyFidprojNotFound (depName, normalizedPath))
@@ -82,16 +87,16 @@ module SourceResolver =
                         |> List.fold (fun acc dep ->
                             match acc with
                             | Error e -> Error e
-                            | Ok (accSources, accVisited) ->
+                            | Ok (accSources, accLibraries, accVisited) ->
                                 match getDependencySourcesRec dep.Name dep.Path.Value accVisited newChain with
                                 | Error e -> Error e
-                                | Ok (depSources, depVisited) ->
-                                    Ok (accSources @ depSources, depVisited)
-                        ) (Ok ([], newVisited))
+                                | Ok (depSources, depLibraries, depVisited) ->
+                                    Ok (accSources @ depSources, accLibraries @ depLibraries, depVisited)
+                        ) (Ok ([], [], newVisited))
 
                     match transitiveDepsResult with
                     | Error e -> Error e
-                    | Ok (transitiveSources, finalVisited) ->
+                    | Ok (transitiveSources, transitiveLibraries, finalVisited) ->
                         // THEN: Add this dependency's own sources
                         // depOptions.ProjectDirectory is the fidproj's parent directory,
                         // set by FidprojLoader.load — the authoritative source base.
@@ -105,7 +110,8 @@ module SourceResolver =
                             |> List.filter (fun p -> not (File.Exists p))
 
                         match missingFiles with
-                        | [] -> Ok (transitiveSources @ resolvedPaths, finalVisited)
+                        | [] -> Ok (transitiveSources @ resolvedPaths,
+                                    depOptions.LinkedLibraries @ transitiveLibraries, finalVisited)
                         | missing :: _ ->
                             Error (DependencySourceFileNotFound (depName, missing))
 
@@ -134,7 +140,7 @@ module SourceResolver =
     /// Dependencies with paths are resolved; dependencies without paths are skipped
     /// (they may be package references resolved elsewhere).
     /// Handles transitive dependencies and avoids duplicates from shared dependencies.
-    let getAllSourcesInOrder (options: FidprojOptions): Result<string list, SourceResolutionError> =
+    let getSourcesAndLibraries (options: FidprojOptions): Result<ResolvedSources, SourceResolutionError> =
         // Resolve all dependency sources in order, tracking visited paths across all dependencies
         // This ensures shared transitive dependencies aren't duplicated
         let dependencySourcesResult =
@@ -143,20 +149,27 @@ module SourceResolver =
             |> List.fold (fun acc dep ->
                 match acc with
                 | Error e -> Error e  // Short-circuit on first error
-                | Ok (accSources, visited) ->
+                | Ok (accSources, accLibraries, visited) ->
                     match getDependencySourcesRec dep.Name dep.Path.Value visited [] with
                     | Error e -> Error e
-                    | Ok (depSources, newVisited) -> Ok (accSources @ depSources, newVisited)
-            ) (Ok ([], Set.empty))
+                    | Ok (depSources, depLibraries, newVisited) ->
+                        Ok (accSources @ depSources, accLibraries @ depLibraries, newVisited)
+            ) (Ok ([], [], Set.empty))
 
         match dependencySourcesResult with
         | Error e -> Error e
-        | Ok (dependencySources, _) ->
+        | Ok (dependencySources, dependencyLibraries, _) ->
             // Then resolve project sources
             match resolveProjectSources options.ProjectDirectory options.SourceFiles with
             | Error e -> Error e
             | Ok projectSources ->
-                Ok (dependencySources @ projectSources)
+                Ok { SourcePaths = dependencySources @ projectSources
+                     LinkedLibraries = List.distinct (options.LinkedLibraries @ dependencyLibraries) }
+
+    /// Source-only compatibility API. Dependency and link metadata share one
+    /// traversal so a malformed transitive declaration cannot be dropped.
+    let getAllSourcesInOrder (options: FidprojOptions): Result<string list, SourceResolutionError> =
+        getSourcesAndLibraries options |> Result.map (fun resolved -> resolved.SourcePaths)
 
     /// Checks if a source file belongs to a project.
     /// Compares normalized absolute paths.
@@ -171,4 +184,3 @@ module SourceResolver =
     /// Returns None if no project contains the file or if source resolution fails.
     let findProjectForSourceFile (sourceFile: string) (projects: FidprojOptions list): FidprojOptions option =
         projects |> List.tryFind (fun p -> containsSourceFile sourceFile p)
-

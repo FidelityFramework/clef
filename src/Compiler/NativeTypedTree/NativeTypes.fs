@@ -7,6 +7,48 @@ module Clef.Compiler.NativeTypedTree.NativeTypes
 open System.Collections.Generic
 open Clef.Compiler.NativeTypedTree.DimensionAlgebra
 
+/// Exact source-real value, independent of the hosted floating-point approximation.
+/// Construct through ExactRational.create to reduce the fraction and keep its denominator positive.
+type ExactRational = {
+    Numerator: bigint
+    Denominator: bigint
+}
+
+module ExactRational =
+    let create (numerator: bigint) (denominator: bigint) : ExactRational =
+        if denominator.IsZero then invalidArg "denominator" "A rational denominator cannot be zero."
+        let sign = if denominator.Sign < 0 then -bigint.One else bigint.One
+        let divisor = System.Numerics.BigInteger.GreatestCommonDivisor(numerator, denominator)
+        { Numerator = sign * numerator / divisor
+          Denominator = sign * denominator / divisor }
+
+    /// Bounded exact parsing of the source spelling, including exponent and digit separators.
+    /// The limit is an implementation limit, not a rounding rule or a source representation choice.
+    let tryParseDecimal (source: string) : Result<ExactRational, string> =
+        let limit = 4096
+        let limitMessage = "This real literal exceeds the current exact-source limit of 4096 characters or decimal scale; shorten the literal or reduce its exponent."
+        if source.Length = 0 then Error "A real literal requires a decimal value."
+        elif source.Length > limit then Error limitMessage
+        else
+            let text = source.Replace("_", "")
+            let matched = System.Text.RegularExpressions.Regex.Match(text, @"\A([+-]?)([0-9]+)(?:\.([0-9]*))?(?:[eE]([+-]?[0-9]+))?\z")
+            if not matched.Success then Error "The source real literal is not a supported decimal value."
+            else
+                let exponentText = matched.Groups[4].Value
+                let exponentOk, exponent =
+                    if exponentText = "" then true, 0
+                    else System.Int32.TryParse(exponentText, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture)
+                if not exponentOk || exponent < -limit || exponent > limit then Error limitMessage
+                else
+                    let fractional = matched.Groups[3].Value
+                    let scale = fractional.Length - exponent
+                    if scale < -limit || scale > limit then Error limitMessage
+                    else
+                        let coefficient = System.Numerics.BigInteger.Parse(matched.Groups[2].Value + fractional, System.Globalization.CultureInfo.InvariantCulture)
+                        let coefficient = if matched.Groups[1].Value = "-" then -coefficient else coefficient
+                        if scale >= 0 then Ok (create coefficient (System.Numerics.BigInteger.Pow(bigint 10, scale)))
+                        else Ok (create (coefficient * System.Numerics.BigInteger.Pow(bigint 10, -scale)) bigint.One)
+
 //-------------------------------------------------------------------------
 // Source Location
 //-------------------------------------------------------------------------
@@ -564,6 +606,10 @@ type NTUKind =
     /// C-04: Type constructor arity = 1
     | NTUarray
 
+    /// Bounded foreign storage, valid only during its declared mapping scope.
+    /// The nominal schema selects its physical elements; it is not an array.
+    | NTUborrowedview
+
     /// Immutable singly-linked list
     /// PRD-13a: Core Collections
     | NTUlist
@@ -1001,6 +1047,7 @@ module PlatformContext =
         | NTUKind.NTUlazy -> Ok -1  // Size depends on element type (PRD-14)
         | NTUKind.NTUseq -> Ok -1  // Size depends on element type (PRD-15)
         | NTUKind.NTUarray -> Ok 16  // Fat pointer: ptr + length (C-04)
+        | NTUKind.NTUborrowedview -> pointerSize ctx |> Result.map (fun bytes -> 5 * bytes)
         | NTUKind.NTUlist -> pointerSize ctx  // Pointer to cons cell (PRD-13a)
         | NTUKind.NTUmap -> pointerSize ctx  // Pointer to tree root (PRD-13a)
         | NTUKind.NTUset -> pointerSize ctx  // Pointer to tree root (PRD-13a)
@@ -1029,6 +1076,7 @@ module PlatformContext =
         | NTUKind.NTUlazy -> Ok 8  // Pointer-aligned (PRD-14)
         | NTUKind.NTUseq -> Ok 8  // Pointer-aligned (PRD-15)
         | NTUKind.NTUarray -> Ok 8  // Pointer-aligned (C-04)
+        | NTUKind.NTUborrowedview -> pointerSize ctx
         | NTUKind.NTUlist -> pointerSize ctx  // Pointer-aligned (PRD-13a)
         | NTUKind.NTUmap -> pointerSize ctx  // Pointer-aligned (PRD-13a)
         | NTUKind.NTUset -> pointerSize ctx  // Pointer-aligned (PRD-13a)
@@ -1125,6 +1173,7 @@ module NTUKind =
         | NTUKind.NTUlazy -> "Lazy"
         | NTUKind.NTUseq -> "Seq"
         | NTUKind.NTUarray -> "array"
+        | NTUKind.NTUborrowedview -> "BorrowedView"
         | NTUKind.NTUlist -> "List"
         | NTUKind.NTUmap -> "Map"
         | NTUKind.NTUset -> "Set"
@@ -1653,6 +1702,10 @@ type FieldRef = {
 /// Per spec: "Fidelity makes ALL memory layout decisions - MLIR/LLVM never determine layout."
 [<NoComparison; NoEquality>]
 type RecordTypeInfo = {
+    /// Declared parameters used to instantiate each field at a use site.
+    TypeParameters: TypeParam list
+    /// Mutable fields forbid generalizing shared record storage.
+    MutableFields: Set<string>
     /// The type constructor (with computed layout)
     TypeCon: TypeConRef
     /// Fields in declaration order (= memory order)
@@ -2012,6 +2065,13 @@ module Types =
     // Usage: NativeType.TApp(Types.fnPtrTyCon, [funcType])
     let fnPtrTyCon = mkNTUTypeConRefWithArity "FnPtr" NTUKind.NTUfnptr 1 (TypeLayout.Inline(8, 8))
 
+    // Opaque foreign handle. NTUptr supplies its target-dependent representation;
+    // it does not introduce pointer arithmetic, dereference or integer conversions.
+    let cHandleTyCon = mkNTUTypeConRefWithArity "CHandle" NTUKind.NTUptr 1 TypeLayout.PlatformWord
+
+    /// The schema is a nominal source type named by ViewLayoutDescriptor.
+    let borrowedViewTyCon = mkNTUTypeConRefWithArity "BorrowedView" NTUKind.NTUborrowedview 1 TypeLayout.FatPointer
+
     // Arena type constructor (arity 1 - lifetime measure parameter, design a.2:
     // `Arena<[<Measure>] 'lifetime>`; the position is measure-sorted and holds a TMeasure)
     // Usage: NativeType.TApp(Types.arenaTyCon, [lifetimeMeasure])
@@ -2071,4 +2131,3 @@ module Types =
         match tryGetNTUKind ty with
         | Some NTUKind.NTUstring -> true
         | _ -> false
-

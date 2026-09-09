@@ -19,7 +19,7 @@
 ///   Application, the syscall ABI             the descriptor -> the Register width; Array.blit's
 ///     (Sys.write, read, readline)              indices likewise
 ///   Application, Array.set / Array.create    the value -> the element's settled width
-///   Set / mutable Binding                    the value -> the cell's width (the Binding node's)
+///   Set / Binding                            the value -> the binding or cell's held width
 ///   RecordExpr / TupleExpr                   each field value -> the field's settled representation
 ///   IfThenElse / CaseElimination / Match     each arm's value -> the join's width (the node's)
 ///   Lambda (the return, `returns`)           the body's last value -> the body node's width
@@ -161,6 +161,31 @@ let private applicationMeets (ctx: Ctx) (node: SemanticNode) (funcId: NodeId) (a
     match functionNodeOf graph funcId with
     | Some { Kind = SemanticKind.Intrinsic info } ->
         match info.Module, info.Operation, args with
+        | IntrinsicModule.FnPtr, "invoke", pointer :: values ->
+            let rec parameters ty =
+                match applySubst ty with
+                | NativeType.TFun (arg, rest) -> arg :: parameters rest
+                | _ -> []
+            match SemanticGraph.tryGetNode pointer graph |> Option.map (fun p -> applySubst p.Type) with
+            | Some (NativeType.TApp (tc, [signature])) when tc.NTUKind = Some NTUKind.NTUfnptr ->
+                let slots = parameters signature
+                if slots.Length <> values.Length then [] // FunctionPointers reports incomplete calls.
+                else
+                    let callback = CallbackDeclarations.forPointer graph pointer
+                    List.zip slots values
+                    |> List.mapi (fun index (slot, value) ->
+                        let declared = callback |> Option.bind (fun c -> List.tryItem index c.Function.Parameters) |> Option.bind snd
+                        match declared with
+                        | Some parameter -> meetInto graph node.Id value (Some parameter.Bits)
+                        | None ->
+                            match Types.tryGetNTUKind slot with
+                            | Some (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register))
+                            | Some (NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register)) -> toWord value
+                            | Some (NTUKind.NTUint (NTUWidth.Fixed bits))
+                            | Some (NTUKind.NTUuint (NTUWidth.Fixed bits)) -> meetInto graph node.Id value (Some bits)
+                            | _ -> None)
+                    |> List.choose id
+            | _ -> []
         | IntrinsicModule.Sys, ("write" | "read" | "readline"), fd :: _ -> Option.toList (toWord fd)
         | IntrinsicModule.Array, "set", [ arr; _; value ] -> Option.toList (meetInto graph node.Id value (elementSlotWidth graph arr))
         | IntrinsicModule.Array, "create", [ _; seed ] -> Option.toList (meetInto graph node.Id seed (elementSlotWidth graph node.Id))
@@ -190,6 +215,26 @@ let private readMeet (graph: SemanticGraph) (node: SemanticNode) (slot: int opti
     | Some from, Some target -> Option.toList (meet graph node.Id node.Id from target)
     | _ -> []
 
+/// Floating fields at a foreign representation boundary retain their declared
+/// storage precision; source float values convert at construction and readback.
+let private realWidth (graph: SemanticGraph) (node: SemanticNode) =
+    match Types.tryGetNTUKind node.Type with
+    | Some (NTUKind.NTUfloat (NTUWidth.Fixed bits)) -> Some bits
+    | Some (NTUKind.NTUfloat (NTUWidth.Resolved dim)) ->
+        graph.Platform |> Option.bind (fun p -> PlatformContext.tryWidth p (WidthDimension.name dim) |> Result.toOption)
+    | _ -> None
+
+let private realFieldWidth graph recordTy field =
+    match settledLayout graph recordTy with
+    | Some (SettledLayout.Record (fields, _, _)) -> fields |> List.tryPick (fun f ->
+        match f.Name = field, f.Slot with true, SettledSlot.Real bits -> Some bits | _ -> None)
+    | _ -> None
+
+let private realMeet consumer operand fromWidth toWidth =
+    match fromWidth, toWidth with
+    | Some a, Some b when a <> b -> Some { Consumer = consumer; Operand = operand; From = a; To = b; Adapt = if a < b then MeetKind.ExtendFloat else MeetKind.TruncateFloat }
+    | _ -> None
+
 let private nodeMeets (ctx: Ctx) (node: SemanticNode) : Meet list =
     let graph = ctx.Graph
     let into valueId slot = meetInto graph node.Id valueId slot
@@ -209,12 +254,22 @@ let private nodeMeets (ctx: Ctx) (node: SemanticNode) : Meet list =
         match SemanticGraph.tryGetNode targetId graph with
         | Some { Kind = SemanticKind.VarRef (_, Some defId) } -> Option.toList (into valueId (nodeWidth graph defId))
         | _ -> []
-    | SemanticKind.Binding (_, true, _, _) ->
+    | SemanticKind.Binding _ ->
+        // An immutable alias can select a narrower range than its value's ABI
+        // carrier (for example a closure call returns a Register-sized zero).
+        // BindingWitness consumes this meet before later references read the
+        // binding's held width, just as a mutable initializer meets its cell.
         match node.Children with
         | [ valueId ] -> Option.toList (into valueId (nodeWidth graph node.Id))
         | _ -> []
     | SemanticKind.RecordExpr (fields, _) ->
-        fields |> List.choose (fun (field, valueId) -> into valueId (fieldSlotWidth graph node.Type field))
+        fields |> List.choose (fun (field, valueId) ->
+            match into valueId (fieldSlotWidth graph node.Type field) with
+            | Some m -> Some m
+            | None ->
+                let value = lastValueOf graph valueId
+                let fromWidth = SemanticGraph.tryGetNode value graph |> Option.bind (realWidth graph)
+                realMeet node.Id value fromWidth (realFieldWidth graph node.Type field))
     | SemanticKind.TupleExpr elements ->
         elements |> List.mapi (fun i e -> into e (fieldSlotWidth graph node.Type (sprintf "Item%d" (i + 1)))) |> List.choose id
     | SemanticKind.IfThenElse (_, thenId, elseId) ->
@@ -233,7 +288,9 @@ let private nodeMeets (ctx: Ctx) (node: SemanticNode) : Meet list =
         | _ -> []
     | SemanticKind.FieldGet (exprId, field) ->
         match SemanticGraph.tryGetNode exprId graph with
-        | Some expr -> readMeet graph node (fieldSlotWidth graph expr.Type field)
+        | Some expr ->
+            readMeet graph node (fieldSlotWidth graph expr.Type field)
+            @ (realMeet node.Id node.Id (realFieldWidth graph expr.Type field) (realWidth graph node) |> Option.toList)
         | None -> []
     | SemanticKind.TupleGet (tupleId, index) ->
         match SemanticGraph.tryGetNode tupleId graph with

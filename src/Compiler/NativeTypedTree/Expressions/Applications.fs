@@ -140,7 +140,7 @@ let checkApp
     // When function type is already concrete (TFun), use return type directly
     // This provides immediate type information without deferring to constraint solving
     let resultTy =
-        match funcNode.Type with
+        match applySubst funcNode.Type with
         | NativeType.TFun(domainTy, rangeTy) ->
             // Function type is known - add domain constraint and use return type directly
             addConstraint (Constraint.Equals(domainTy, argNode.Type, range)) env
@@ -492,13 +492,27 @@ let checkTypeApp
 
     // Check the function expression
     let funcNode = checkExpr env builder funcExpr
-    // Convert type arguments - these are the concrete types being applied
-    let typeArgTypes = typeArgs |> List.map (resolveSynType env)
+    // Expression lookup instantiates implicitly; explicit arguments target the declaration's scheme.
+    let funcType =
+        match tryGetFunctionName funcExpr |> Option.bind (fun name -> tryLookupBinding name env) with
+        | Some binding -> binding.Type
+        | None -> funcNode.Type
+    let parameters = match funcType with NativeType.TForall(parameters, _) -> parameters | _ -> []
+    let typeArgTypes = typeArgs |> List.mapi (fun index syntax ->
+        match List.tryItem index parameters with
+        | Some parameter when parameter.Kind = TypeParamKind.Measure ->
+            match translateDimension env (MeasureSyntax.Type syntax) with
+            | Result.Ok dimension -> NativeType.TMeasure dimension
+            | Result.Error failure ->
+                addMeasureFailure failure env
+                let _, message, _ = describeMeasureFailure failure
+                NativeType.TError message
+        | _ -> resolveSynType env syntax)
 
     // The result type depends on the function being instantiated.
     // If funcNode.Type is a forall type, we should instantiate it with typeArgTypes.
     let resultType =
-        match funcNode.Type with
+        match funcType with
         | NativeType.TForall(typeParams, bodyType) ->
             // Check arity match
             if List.length typeParams <> List.length typeArgTypes then
@@ -511,43 +525,18 @@ let checkTypeApp
                 // Perform immediate substitution of type parameters with concrete types
                 // This is the correct approach - NativeTypes.instantiate replaces TVar
                 // occurrences with their corresponding type arguments
-                NativeTypes.instantiate typeParams typeArgTypes bodyType
-
-        | NativeType.TVar _ ->
-            // Function type is a type variable - not yet resolved
-            // Add constraint that it must be a forall type with these arguments
-            // For now, create fresh result type; constraint solving will refine
-            freshTypeVar range
-
-        | NativeType.TError msg ->
-            // Propagate error
-            NativeType.TError msg
-
-        | NativeType.TFun _ ->
-            // Function type receiving type arguments
-            // This typically means a polymorphic function being instantiated
-            // Add deferred constraint that function must be generic
-            let resultTy = freshTypeVar range
-            addConstraint (Constraint.HasTypeArgs(funcNode.Type, typeArgTypes, resultTy, range)) env
-            resultTy
-
-        | NativeType.TApp _ ->
-            // Type application - possibly a partially applied generic
-            // Add deferred constraint for type application
-            let resultTy = freshTypeVar range
-            addConstraint (Constraint.HasTypeArgs(funcNode.Type, typeArgTypes, resultTy, range)) env
-            resultTy
-
+                match typeArgTypes |> List.tryPick (function NativeType.TError message -> Some message | _ -> None) with
+                | Some message -> NativeType.TError message
+                | None -> NativeTypes.instantiate typeParams typeArgTypes bodyType
+        | NativeType.TError message -> NativeType.TError message
         | other ->
-            // Unexpected type receiving type arguments
-            // This is likely a bug or unresolved type - add warning but continue
-            addNativeWarning DiagnosticCodes.CCS8092_TypeArgumentsOnNonScheme synRange
-                (sprintf "Type application on unexpected type form: %s"
-                    (NativeTypes.formatType other)) env
-            // Still add constraint for later resolution
-            let resultTy = freshTypeVar range
-            addConstraint (Constraint.HasTypeArgs(funcNode.Type, typeArgTypes, resultTy, range)) env
-            resultTy
+            addNativeError DiagnosticCodes.CCS8092_TypeArgumentsOnNonScheme synRange
+                $"Explicit type arguments require an established generic signature; got '{formatType other}'" env
+            NativeType.TError "Generic parameters are not established"
+
+    // The earlier implicit lookup and explicit application are the same use site.
+    // Tie their instances before graph metadata is finalized.
+    addConstraint (Constraint.Equals(funcNode.Type, resultType, range)) env
 
     // Create TypeAnnotation node to record the type application
     // This preserves the type argument information for monomorphization
@@ -668,7 +657,7 @@ let checkLambda
     // Pass capture count so SSA assignment starts body SSAs after capture extraction
     builder.SetEmissionStrategy(bodyNode.Id, EmissionStrategy.SeparateFunction (List.length captures))
 
-    lambdaNode
+    builder.SetMetadata(lambdaNode.Id, ClosureMetadata.LambdaExpression, MetadataValue.Bool true)
 
 
 //-------------------------------------------------------------------------

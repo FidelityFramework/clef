@@ -2668,6 +2668,12 @@ type LexFilterImpl (
               true
 
           // Split this token to allow "1..2" for range specification
+          | CLEF_INT_DOT_DOT value ->
+              let dotDotPos = LexbufState(tokenTup.EndPos.ShiftColumnBy(-2), tokenTup.EndPos, false)
+              delayToken(let rented = pool.Rent() in rented.Token <- DOT_DOT; rented.LexbufState <- dotDotPos; rented.LastTokenPos <- tokenTup.LastTokenPos; rented)
+              delayToken(pool.UseShiftedLocation(tokenTup, BIGNUM(value, ""), 0, -2))
+              pool.Return tokenTup
+              true
           | INT32_DOT_DOT (i, v) ->
               let dotDotPos = LexbufState(tokenTup.EndPos.ShiftColumnBy(-2), tokenTup.EndPos, false)
               delayToken(let rented = pool.Rent() in rented.Token <- DOT_DOT; rented.LexbufState <- dotDotPos; rented.LastTokenPos <- tokenTup.LastTokenPos; rented)
@@ -2731,10 +2737,13 @@ type LexFilterImpl (
                   | INT16(v, bad) -> delayMergedToken(INT16((if plus then v else -v), (plus && bad))) // note: '-' makes a 'bad' max int 'good'. '+' does not
                   | INT32(v, bad) -> delayMergedToken(INT32((if plus then v else -v), (plus && bad))) // note: '-' makes a 'bad' max int 'good'. '+' does not
                   | INT32_DOT_DOT(v, bad) -> delayMergedToken(INT32_DOT_DOT((if plus then v else -v), (plus && bad))) // note: '-' makes a 'bad' max int 'good'. '+' does not
+                  | CLEF_INT_DOT_DOT value -> delayMergedToken(CLEF_INT_DOT_DOT(if plus then value else "-" + value))
                   | INT64(v, bad) -> delayMergedToken(INT64((if plus then v else -v), (plus && bad))) // note: '-' makes a 'bad' max int 'good'. '+' does not
                   | NATIVEINT(v, bad) -> delayMergedToken(NATIVEINT((if plus then v else -v), (plus && bad))) // note: '-' makes a 'bad' max int 'good'. '+' does not
                   | IEEE32 v -> delayMergedToken(IEEE32(if plus then v else -v))
-                  | IEEE64 v -> delayMergedToken(IEEE64(if plus then v else -v))
+                  | IEEE64 (v, source) ->
+                      let signedSource = source |> Option.map (fun text -> if plus then text else "-" + text)
+                      delayMergedToken(IEEE64((if plus then v else -v), signedSource))
                   | DECIMAL v -> delayMergedToken(DECIMAL(if plus then v else Decimal.op_UnaryNegation v))
                   | BIGNUM(v, s) -> delayMergedToken(BIGNUM((if plus then v else "-" + v), s))
                   | _ -> noMerge()

@@ -14,12 +14,12 @@ open System.Text
 open Internal.Utilities.Library
 open Internal.Utilities.Library.Extras
 
-open FSharp.Native.Compiler
-open FSharp.Native.Compiler.DiagnosticsLogger
-open FSharp.Native.Compiler.Features
-open FSharp.Native.Compiler.IO
-open FSharp.Native.Compiler.Syntax
-open FSharp.Native.Compiler.Text.Range
+open Clef.Compiler
+open Clef.Compiler.DiagnosticsLogger
+open Clef.Compiler.Features
+open Clef.Compiler.IO
+open Clef.Compiler.Syntax
+open Clef.Compiler.Text.Range
 
 module Ranges =
     /// Whether valid as signed int8 when a minus sign is prepended, compares true to 0x80
@@ -205,8 +205,8 @@ let evalIfDefExpression startPos reportLibraryOnlyFeatures langVersion strictInd
     let lexbuf          = LexBuffer<char>.FromChars (reportLibraryOnlyFeatures, langVersion, strictIndentation, lexed.ToCharArray ())
     lexbuf.StartPos     <- startPos
     lexbuf.EndPos       <- startPos
-    let tokenStream     = FSharp.Native.Compiler.PPLexer.tokenstream args
-    let expr            = FSharp.Native.Compiler.PPParser.start tokenStream lexbuf
+    let tokenStream     = Clef.Compiler.PPLexer.tokenstream args
+    let expr            = Clef.Compiler.PPParser.start tokenStream lexbuf
     (LexerIfdefEval lookup expr), expr
 
 let evalFloat args lexbuf =
@@ -402,20 +402,19 @@ rule token (args: LexArgs) (skip: bool) = parse
 
  | int '.' '.'
      { let s = removeUnderscores (lexemeTrimRight lexbuf 2)
-       // Allow <max_int+1> to parse as min_int.  Allowed only because we parse '-' as an operator.
-       if Ranges.isInt32BadMax s then INT32_DOT_DOT(Int32.MinValue, true (* 'true' = 'bad'*) ) else
-       let n = try int32 s with _ ->  fail args lexbuf (FSComp.SR.lexOutsideThirtyTwoBitSigned()) 0
-       INT32_DOT_DOT(n, false)
+       match System.Int32.TryParse(s, NumberStyles.None, CultureInfo.InvariantCulture) with
+       | true, n -> INT32_DOT_DOT(n, false)
+       | _ -> CLEF_INT_DOT_DOT s
      }
 
  | xint
  | int
      { let s = removeUnderscores (lexeme lexbuf)
-       // Allow <max_int+1> to parse as min_int.  Allowed only because we parse '-' as an operator.
-       if Ranges.isInt32BadMax s then INT32(Int32.MinValue, true (* 'true' = 'bad'*) ) else
-       let n =
-           try int32 s with _ ->  fail args lexbuf (FSComp.SR.lexOutsideThirtyTwoBitSigned()) 0
-       INT32(n, false)
+       // Unsuffixed Clef integers do not select a source width. Preserve large
+       // magnitudes for native elaboration rather than rejecting them as Int32.
+       match System.Int32.TryParse(s, NumberStyles.None, CultureInfo.InvariantCulture) with
+       | true, n -> INT32(n, false)
+       | _ -> BIGNUM(s, "")
      }
 
  | xint32
@@ -484,7 +483,9 @@ rule token (args: LexArgs) (skip: bool) = parse
      }
 
  | ieee64
-     { IEEE64 (try float(lexeme lexbuf) with _ -> fail args lexbuf (FSComp.SR.lexInvalidFloat()) 0.0) }
+     { let source = lexeme lexbuf
+       let value = try float(removeUnderscores source) with _ -> fail args lexbuf (FSComp.SR.lexInvalidFloat()) 0.0
+       IEEE64 (value, Some source) }
 
  | decimal
      { try
@@ -506,7 +507,7 @@ rule token (args: LexArgs) (skip: bool) = parse
  | xieee64
      {
        let n64 = (try int64 (removeUnderscores (lexemeTrimRight lexbuf 2)) with _ -> fail args lexbuf (FSComp.SR.lexInvalidFloat()) 0L)
-       IEEE64 (System.BitConverter.Int64BitsToDouble(n64)) }
+       IEEE64 (System.BitConverter.Int64BitsToDouble(n64), None) }
 
  | bignum
        { let s = lexeme lexbuf

@@ -417,46 +417,17 @@ let tryUnify (t1: NativeType) (t2: NativeType) (range: SourceRange) : Result<uni
 /// Check if two types can be unified without actually modifying state
 /// (This would require a more complex implementation with rollback)
 let canUnify (t1: NativeType) (t2: NativeType) : bool =
-    // For now, just check structural compatibility without binding
-    let rec check t1 t2 =
-        let t1 = applySubst t1
-        let t2 = applySubst t2
-        match (t1, t2) with
-        | NativeType.TVar _, _ -> true
-        | _, NativeType.TVar _ -> true
-        | NativeType.TApp(tc1, args1), NativeType.TApp(tc2, args2) ->
-            tc1.Name = tc2.Name && tc1.Module = tc2.Module &&
-            List.length args1 = List.length args2 &&
-            List.forall2 check args1 args2
-        | NativeType.TNum(c1, d1), NativeType.TNum(c2, d2) ->
-            // The carriers are read without binding; the dimensions are checked by the pure
-            // solver against the store without binding.
-            let carriersAgree =
-                match CarrierRef.resolve c1, CarrierRef.resolve c2 with
-                | CarrierRef.Carrier tc1, CarrierRef.Carrier tc2 -> Types.sameCarrierIdentity tc1 tc2
-                | _ -> true
-            carriersAgree
-            && (match solveDim lookupMeasure (freshMeasureSupply ()) d1 d2 with Ok _ -> true | Error _ -> false)
-        | NativeType.TFun(d1, r1), NativeType.TFun(d2, r2) ->
-            check d1 d2 && check r1 r2
-        | NativeType.TTuple(e1, s1), NativeType.TTuple(e2, s2) ->
-            s1 = s2 && List.length e1 = List.length e2 && List.forall2 check e1 e2
-        | NativeType.TLazy e1, NativeType.TLazy e2 ->
-            check e1 e2  // PRD-14
-        | NativeType.TSeq e1, NativeType.TSeq e2 ->
-            check e1 e2  // PRD-15
-        | NativeType.TSeqEnumerator e1, NativeType.TSeqEnumerator e2 ->
-            check e1 e2  // PRD-15/16
-        | NativeType.TList e1, NativeType.TList e2 ->
-            check e1 e2  // PRD-13a
-        | NativeType.TMap(k1, v1), NativeType.TMap(k2, v2) ->
-            check k1 k2 && check v1 v2  // PRD-13a
-        | NativeType.TSet e1, NativeType.TSet e2 ->
-            check e1 e2  // PRD-13a
-        | NativeType.TError _, _ -> true
-        | _, NativeType.TError _ -> true
-        | _ -> false
-    check t1 t2
+    // Freshen the pair together: repeated variables must retain one identity across
+    // all constraints, while the compatibility probe must not bind caller-owned cells.
+    let pair = applySubst (NativeType.TTuple([t1; t2], false))
+    let parameters =
+        collectFreeTypeParams pair @ (freeMeasureVars pair |> List.map measureCellOf)
+        |> List.distinctBy (fun parameter -> parameter.Id)
+    let arguments = parameters |> List.map (fun parameter -> freshInstanceOf parameter parameter.Range)
+    match instantiate parameters arguments pair with
+    | NativeType.TTuple([left; right], _) ->
+        match tryUnify left right dummyRange with Ok () -> true | Error _ -> false
+    | _ -> false
 
 //-------------------------------------------------------------------------
 // Subsumption (for contravariance/covariance)

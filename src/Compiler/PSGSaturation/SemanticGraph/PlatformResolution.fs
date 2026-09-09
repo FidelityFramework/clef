@@ -49,6 +49,9 @@ type DeclaredSpace = {
     Kind: string
     Capacity: int64
     Alignment: int
+    Granularity: int
+    Growth: string
+    Base: int64 option
     Access: string
 }
 
@@ -152,7 +155,7 @@ type Reading = {
 /// quotation to the expression it quotes, through a VarRef to its binding's
 /// value, and through a conversion application (`int64 X`) to its operand.
 /// Stops at the first node that is none of those.
-let rec private valueOf (graph: SemanticGraph) (id: NodeId) : SemanticNode option =
+let rec valueOf (graph: SemanticGraph) (id: NodeId) : SemanticNode option =
     match SemanticGraph.tryGetNode id graph with
     | None -> None
     | Some node ->
@@ -176,13 +179,13 @@ let private siteOf (graph: SemanticGraph) (id: NodeId) : SemanticNode option =
     | Some node -> Some node
     | None -> SemanticGraph.tryGetNode id graph
 
-let private stringOf (graph: SemanticGraph) (id: NodeId) : string option =
+let stringOf (graph: SemanticGraph) (id: NodeId) : string option =
     match valueOf graph id with
     | Some ({ Kind = SemanticKind.Literal (NativeLiteral.String s) } : SemanticNode) -> Some s
     | _ -> None
 
 /// An integer as declared: a literal, or the negation of one (`-4095L`, a floor).
-let rec private int64Of (graph: SemanticGraph) (id: NodeId) : int64 option =
+let rec int64Of (graph: SemanticGraph) (id: NodeId) : int64 option =
     match valueOf graph id with
     | Some ({ Kind = SemanticKind.Literal (NativeLiteral.Int (v, _)) } : SemanticNode) -> Some v
     | Some ({ Kind = SemanticKind.Literal (NativeLiteral.UInt (v, _)) } : SemanticNode) -> Some (int64 v)
@@ -198,7 +201,7 @@ let private boolOf (graph: SemanticGraph) (id: NodeId) : bool option =
     | _ -> None
 
 /// The fields of a record value, with the declaring node.
-let private recordOf (graph: SemanticGraph) (id: NodeId) : (SemanticNode * (string * NodeId) list) option =
+let recordOf (graph: SemanticGraph) (id: NodeId) : (SemanticNode * (string * NodeId) list) option =
     match valueOf graph id with
     | Some (({ Kind = SemanticKind.RecordExpr (fields, _) } : SemanticNode) as node) -> Some (node, fields)
     | _ -> None
@@ -222,12 +225,12 @@ let private optionOf (graph: SemanticGraph) (id: NodeId) : NodeId option option 
     | Some ({ Kind = SemanticKind.DUConstruct ("None", _, _, _) } : SemanticNode) -> Some None
     | _ -> None
 
-let private field (name: string) (fields: (string * NodeId) list) : NodeId option =
+let field (name: string) (fields: (string * NodeId) list) : NodeId option =
     fields |> List.tryFind (fun (n, _) -> n = name) |> Option.map snd
 
 /// The last segment of a node's type-constructor name: `Platform.MemorySpace`
 /// -> `MemorySpace`.
-let private typeName (node: SemanticNode) : string option =
+let typeName (node: SemanticNode) : string option =
     match node.Type with
     | NativeType.TApp (tycon, _) ->
         let name = tycon.Name
@@ -298,10 +301,16 @@ let private readSpace (graph: SemanticGraph) (id: NodeId) : Result<DeclaredSpace
     | Some (node, fields) when typeName node = Some "MemorySpace" ->
         let str n = field n fields |> Option.bind (stringOf graph)
         let i64 n = field n fields |> Option.bind (int64Of graph)
-        match str "Name", str "Kind", i64 "Capacity", i64 "Alignment", str "Access" with
-        | Some name, Some kind, Some capacity, Some align, Some access ->
-            Ok { Node = node.Id; Name = name; Kind = kind; Capacity = capacity; Alignment = int align; Access = access }
-        | _ -> Error (findingAt node DeclarationDefect.Malformed "a MemorySpace's Name, Kind and Access must be string literals and its Capacity and Alignment integer literals")
+        let baseValue =
+            field "Base" fields |> Option.bind (optionOf graph) |> Option.bind (function
+                | None -> Some None
+                | Some value -> int64Of graph value |> Option.map Some)
+        match str "Name", str "Kind", i64 "Capacity", i64 "Alignment", i64 "Granularity", str "Growth", str "Access", baseValue with
+        | Some name, Some kind, Some capacity, Some align, Some granularity, Some growth, Some access, Some baseValue
+            when align >= 0L && align <= int64 System.Int32.MaxValue && granularity >= 0L && granularity <= int64 System.Int32.MaxValue ->
+            Ok { Node = node.Id; Name = name; Kind = kind; Capacity = capacity; Alignment = int align
+                 Granularity = int granularity; Growth = growth; Base = baseValue; Access = access }
+        | _ -> Error (findingAt node DeclarationDefect.Malformed "a MemorySpace requires literal Name, Kind, Growth and Access, integer Capacity, bounded Alignment and Granularity, and Base = None or Some integer")
     | _ -> Error (findingOn graph id DeclarationDefect.Malformed "an element of Spaces is not a MemorySpace record")
 
 let private readBuffer (graph: SemanticGraph) (id: NodeId) : Result<DeclaredBuffer, DeclarationFinding> =
@@ -515,6 +524,9 @@ type DeclaredField = {
     Range: ValueRange
 }
 
+/// Measured physical fields are retained independently of integer range facts.
+type DeclaredPhysicalField = { Node: NodeId; Name: string; Repr: string; Offset: int; Count: int }
+
 /// A layout descriptor (a `StructDescriptor` or a `PeripheralDescriptor`): the node that
 /// declares it, its declared name, the record type of this graph it describes when exactly one
 /// record type bears that name (its fields are then seeded from `Fields`), and its integer
@@ -525,6 +537,9 @@ type DeclaredLayout = {
     Name: string
     RecordType: string option
     Fields: DeclaredField list
+    PhysicalFields: DeclaredPhysicalField list
+    Size: int option
+    Alignment: int option
 }
 
 /// One parameter or the return of a binding descriptor (BAREWire `ParameterInfo`, `TypeRef`)
@@ -534,6 +549,13 @@ type DeclaredParameter = {
     Name: string
     Bits: int
     Range: ValueRange
+}
+
+/// A pointer cell carries an opaque nullable handle, never a source numeric range.
+type DeclaredPointerReference = {
+    Node: NodeId
+    Name: string
+    Bits: int
 }
 
 /// A binding descriptor (`Expr<FunctionDescriptor>`, the quotation a generator emits beside an
@@ -547,6 +569,10 @@ type DeclaredFunction = {
     Node: NodeId
     CName: string
     Parameters: (NodeId * DeclaredParameter option) list
+    /// A reference parameter exposes exactly one declared scalar in a bounded array.
+    References: (NodeId * DeclaredParameter) list
+    PointerReferences: (NodeId * DeclaredPointerReference) list
+    RecordReferences: (NodeId * bool) list // parameter, explicitly read-only
     Body: NodeId option
     Return: DeclaredParameter option
 }
@@ -577,7 +603,7 @@ let private rangeOfRepr (repr: string) : Result<(int * ValueRange) option, strin
 
 /// A union case as declared: its name and its payload node, through a `UnionCase` (before
 /// Baker saturation) or the `DUConstruct` it becomes.
-let private caseOf (graph: SemanticGraph) (id: NodeId) : (SemanticNode * string * NodeId option) option =
+let caseOf (graph: SemanticGraph) (id: NodeId) : (SemanticNode * string * NodeId option) option =
     match valueOf graph id with
     | Some (({ Kind = SemanticKind.UnionCase (name, _, payload) } : SemanticNode) as node)
     | Some (({ Kind = SemanticKind.DUConstruct (name, _, payload, _) } : SemanticNode) as node) -> Some (node, name, payload)
@@ -615,14 +641,27 @@ let private readTypeRef (graph: SemanticGraph) (id: NodeId) : Result<(int * Valu
     | None -> Error (findingOn graph id DeclarationDefect.Malformed "a Type must be a TypeRef case (Integer, Float, Pointer, Bool, Void, Named)")
 
 /// One `ParameterInfo` as declared.
-let private readParameter (graph: SemanticGraph) (id: NodeId) : Result<(string * DeclaredParameter option), DeclarationFinding> =
+let private readParameter (graph: SemanticGraph) (id: NodeId) : Result<(string * DeclaredParameter option * bool * DeclaredPointerReference option * string option * bool), DeclarationFinding> =
     match recordOf graph id with
     | Some (node, fields) when typeName node = Some "ParameterInfo" ->
         match field "Name" fields |> Option.bind (stringOf graph), field "Type" fields with
         | Some name, Some typeId ->
             readTypeRef graph typeId
             |> Result.map (Option.map (fun (bits, range) -> { Node = node.Id; Name = name; Bits = bits; Range = range }))
-            |> Result.map (fun declared -> name, declared)
+            |> Result.map (fun declared ->
+                let passing = field "PassBy" fields |> Option.bind (caseOf graph)
+                let readOnly = passing |> Option.exists (fun (_, name, _) -> name = "ReadOnlyReference")
+                let byReference = readOnly || (passing |> Option.exists (fun (_, name, _) -> name = "Reference"))
+                let pointer =
+                    match caseOf graph typeId with
+                    | Some (_, "Pointer", Some bits) ->
+                        int64Of graph bits |> Option.map (fun bits -> { Node = node.Id; Name = name; Bits = int bits } : DeclaredPointerReference)
+                    | _ -> None
+                let named =
+                    match caseOf graph typeId with
+                    | Some (_, "Named", Some name) -> stringOf graph name
+                    | _ -> None
+                name, declared, byReference, pointer, named, readOnly)
         | _ -> Error (findingAt node DeclarationDefect.Malformed "a ParameterInfo's Name must be a string literal and it must declare a Type")
     | _ -> Error (findingOn graph id DeclarationDefect.Malformed "an element of Parameters is not a ParameterInfo record")
 
@@ -665,6 +704,7 @@ let private shortName (name: string) : string =
 /// the name, or those whose last segment is.
 let private recordTypesNamed (graph: SemanticGraph) (name: string) : string list =
     let types = graph.Types.Value |> Map.toList |> List.map fst
+                |> List.filter (fun name -> SemanticGraph.tryGetRecordFields name graph |> Option.isSome)
     match types |> List.filter (fun t -> t = name) with
     | [ exact ] -> [ exact ]
     | _ -> types |> List.filter (fun t -> shortName t = name)
@@ -701,10 +741,24 @@ let private readLayout (graph: SemanticGraph) (node: SemanticNode) (fields: (str
                     |> List.map (fun f -> findingAt (SemanticGraph.tryGetNode f.Node graph |> Option.defaultValue node) DeclarationDefect.Invalid (sprintf "the field '%s' is declared '%s' but the record '%s' carries no integer or boolean field of that name" f.Name f.Repr one))
                 Some one, absent
             | many -> None, [ findingAt node DeclarationDefect.Ambiguous (sprintf "the descriptor '%s' names more than one record type of the program (%s); qualify the name" name (String.concat ", " many)) ]
-        Some { Node = node.Id; Name = name; RecordType = recordType; Fields = layoutFields }, layoutFindings @ typeFindings
+        let physical, size, alignment =
+            match field "Layout" fields |> Option.bind (recordOf graph) with
+            | Some (_, body) ->
+                let physical =
+                    field "Fields" body |> Option.bind (elementsOf graph) |> Option.defaultValue []
+                    |> List.choose (fun id ->
+                        match recordOf graph id with
+                        | Some (f, ff) ->
+                            match field "Name" ff |> Option.bind (stringOf graph), field "Repr" ff |> Option.bind (stringOf graph), field "Offset" ff |> Option.bind (int64Of graph), field "Count" ff |> Option.bind (int64Of graph) with
+                            | Some name, Some repr, Some offset, Some count -> Some { Node = f.Id; Name = name; Repr = repr; Offset = int offset; Count = int count }
+                            | _ -> None
+                        | None -> None)
+                physical, (field "Size" body |> Option.bind (int64Of graph) |> Option.map int), (field "Alignment" body |> Option.bind (int64Of graph) |> Option.map int)
+            | None -> [], None, None
+        Some { Node = node.Id; Name = name; RecordType = recordType; Fields = layoutFields; PhysicalFields = physical; Size = size; Alignment = alignment }, layoutFindings @ typeFindings
 
 /// The lambda a binding's value is, through an annotation.
-let private lambdaOfBinding (graph: SemanticGraph) (bindingId: NodeId) : ((string * NativeType * NodeId) list * NodeId) option =
+let lambdaOfBinding (graph: SemanticGraph) (bindingId: NodeId) : ((string * NativeType * NodeId) list * NodeId) option =
     let rec ofValue (id: NodeId) (depth: int) =
         if depth > 4 then None
         else
@@ -713,6 +767,7 @@ let private lambdaOfBinding (graph: SemanticGraph) (bindingId: NodeId) : ((strin
             | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> ofValue inner (depth + 1)
             | _ -> None
     match SemanticGraph.tryGetNode bindingId graph with
+    | Some { Kind = SemanticKind.Lambda _ } -> ofValue bindingId 0
     | Some { Children = children } when not (List.isEmpty children) -> ofValue (List.last children) 0
     | _ -> None
 
@@ -730,7 +785,7 @@ let private externBeside (graph: SemanticGraph) (descriptor: SemanticNode) (bind
             | _ -> None)
 
 /// A binding descriptor at its declaring node, paired with the extern beside it.
-let private readFunction (graph: SemanticGraph) (binding: SemanticNode) (bindingName: string) (node: SemanticNode) (fields: (string * NodeId) list) : DeclaredFunction option * DeclarationFinding list =
+let readFunctionForBinding (graph: SemanticGraph) (binding: SemanticNode) (_bindingName: string) (node: SemanticNode) (fields: (string * NodeId) list) : DeclaredFunction option * DeclarationFinding list =
     match field "CName" fields |> Option.bind (stringOf graph), field "ReturnType" fields with
     | Some cname, Some returnId ->
         let parameters, parameterFindings = readList graph fields "Parameters" (readParameter graph)
@@ -739,26 +794,56 @@ let private readFunction (graph: SemanticGraph) (binding: SemanticNode) (binding
             | Ok (Some (bits, range)) -> Some { Node = returnId; Name = "ReturnType"; Bits = bits; Range = range }, []
             | Ok None -> None, []
             | Error f -> None, [ f ]
-        let paired, externFindings =
-            match externBeside graph binding bindingName |> Option.bind (fun e -> lambdaOfBinding graph e.Id) with
-            | None -> [], None, []
+        let pairs, references, pointerReferences, recordReferences, body, externFindings =
+            match lambdaOfBinding graph binding.Id with
+            | None -> [], [], [], [], None, []
             | Some (lambdaParameters, body) ->
+                let lambdaParameters =
+                    match parameters, lambdaParameters with
+                    | [], [(_, ty, _)] when Types.tryGetNTUKind ty = Some NTUKind.NTUunit -> []
+                    | _ -> lambdaParameters
                 if List.length lambdaParameters <> List.length parameters then
-                    [], None, [ findingAt node DeclarationDefect.Invalid (sprintf "the descriptor of '%s' declares %d parameters; the extern beside it takes %d" cname (List.length parameters) (List.length lambdaParameters)) ]
+                    [], [], [], [], None, [ findingAt node DeclarationDefect.Invalid (sprintf "the descriptor of '%s' declares %d parameters; the binding takes %d" cname parameters.Length lambdaParameters.Length) ]
                 else
-                    let pairs =
+                    let rows =
                         List.zip lambdaParameters parameters
-                        |> List.map (fun ((_, ty, paramId), (declaredName, declared)) ->
-                            let ranged = Types.isIntegerType ty || Types.tryGetNTUKind ty = Some NTUKind.NTUbool
-                            match declared with
-                            | Some d when not ranged -> (paramId, None), Some (findingAt (SemanticGraph.tryGetNode d.Node graph |> Option.defaultValue node) DeclarationDefect.Invalid (sprintf "the parameter '%s' of '%s' is declared an integer of %d bits, but the extern's parameter is not an integer" declaredName cname d.Bits))
-                            | _ -> (paramId, (if ranged then declared else None)), None)
-                    pairs |> List.map fst, Some body, pairs |> List.choose snd
-            |> fun (pairs, body, findings) -> (pairs, body), findings
-        let (pairs, body) = paired
-        Some { Node = node.Id; CName = cname; Parameters = pairs; Body = body; Return = returned },
+                        |> List.map (fun ((_, ty, paramId), (declaredName, declared, byReference, pointer, named, readOnly)) ->
+                            let ranged ty = Types.isIntegerType ty || Types.tryGetNTUKind ty = Some NTUKind.NTUbool
+                            let element =
+                                match ty with
+                                | NativeType.TApp (tc, [elem]) when tc.Name = "array" || tc.Name = "Array" -> Some elem
+                                | _ -> None
+                            let nullableHandle ty =
+                                match ty with
+                                | NativeType.TApp (tc, [inner]) when tc.Name = "option" -> Types.tryGetNTUKind inner = Some NTUKind.NTUptr
+                                | _ -> false
+                            let invalid message = (paramId, None), None, None, None, Some (findingAt node DeclarationDefect.Invalid message)
+                            match declared, byReference, pointer, named, element with
+                            | Some d, true, _, _, Some elem when ranged elem -> (paramId, None), Some (paramId, d), None, None, None
+                            | Some _, true, _, _, _ -> invalid (sprintf "the reference parameter '%s' of '%s' requires a bounded scalar array" declaredName cname)
+                            | _, true, Some d, _, Some elem when nullableHandle elem -> (paramId, None), None, Some (paramId, d), None, None
+                            | _, true, Some _, _, _ -> invalid (sprintf "the pointer reference '%s' of '%s' requires a bounded option<CHandle<_>> array" declaredName cname)
+                            | _, true, _, Some name, _ ->
+                                let declaredTypes = recordTypesNamed graph name
+                                let actual = match ty with NativeType.TApp (tc, _) -> Some tc.Name | _ -> None
+                                if actual |> Option.exists (fun actual -> declaredTypes |> List.exists (fun name -> name = actual || shortName name = shortName actual)) then
+                                    (paramId, None), None, None, Some (paramId, readOnly), None
+                                else invalid (sprintf "the reference '%s' of '%s' requires the declared record '%s'" declaredName cname name)
+                            | Some d, false, _, _, _ when not (ranged ty) -> invalid (sprintf "the parameter '%s' of '%s' is declared an integer of %d bits, but the binding's parameter is not an integer" declaredName cname d.Bits)
+                            | _ -> (paramId, (if ranged ty then declared else None)), None, None, None, None)
+                    rows |> List.map (fun (p, _, _, _, _) -> p),
+                    rows |> List.choose (fun (_, r, _, _, _) -> r),
+                    rows |> List.choose (fun (_, _, p, _, _) -> p),
+                    rows |> List.choose (fun (_, _, _, r, _) -> r),
+                    Some body, rows |> List.choose (fun (_, _, _, _, f) -> f)
+        Some { Node = node.Id; CName = cname; Parameters = pairs; References = references; PointerReferences = pointerReferences; RecordReferences = recordReferences; Body = body; Return = returned },
         parameterFindings @ returnFindings @ externFindings
     | _ -> None, [ findingAt node DeclarationDefect.Malformed "a FunctionDescriptor's CName must be a string literal and it must declare a ReturnType" ]
+
+/// Resolve the generated extern beside its descriptor, then use the same reader as callbacks.
+let private readFunction graph binding bindingName node fields =
+    let target = externBeside graph binding bindingName |> Option.defaultValue binding
+    readFunctionForBinding graph target bindingName node fields
 
 /// Every boundary declaration in the graph: a module-level binding whose value, through an
 /// annotation or a quotation, is a `StructDescriptor`, a `PeripheralDescriptor` or a
@@ -787,3 +872,81 @@ let readDescriptors (graph: SemanticGraph) : Descriptors =
             | None -> (layouts, functions, findings)
         | _ -> (layouts, functions, findings)) ([], [], [])
     |> fun (layouts, functions, findings) -> { Layouts = List.rev layouts; Functions = List.rev functions; Findings = findings }
+
+/// The bounded scalar references a call passes, paired with its actual arrays.
+/// The descriptor supplies the element ABI; the lowering must retain an extent
+/// check before projecting the first element's address across the foreign call.
+let referenceArguments (graph: SemanticGraph) (funcId: NodeId) (args: NodeId list) =
+    let rec binding id =
+        match SemanticGraph.tryGetNode id graph with
+        | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> binding inner
+        | Some { Kind = SemanticKind.VarRef (_, Some id) } -> Some id
+        | _ -> None
+    match binding funcId |> Option.bind (lambdaOfBinding graph) with
+    | Some (parameters, _) when parameters.Length = args.Length ->
+        let declared = (readDescriptors graph).Functions |> List.collect (fun f -> f.References) |> Map.ofList
+        List.zip parameters args
+        |> List.choose (fun ((_, _, parameter), arg) -> Map.tryFind parameter declared |> Option.map (fun d -> arg, d))
+    | _ -> []
+
+/// Scalar arrays retain their interior representation. A native projection may
+/// omit copy-back only when the parameter declaration explicitly permits reads.
+let readOnlyScalarReferenceArguments graph funcId args =
+    referenceArguments graph funcId args
+    |> List.choose (fun (id, declared) ->
+        match recordOf graph declared.Node with
+        | Some (_, fields) ->
+            match field "PassBy" fields |> Option.bind (caseOf graph) with
+            | Some (_, "ReadOnlyReference", _) -> Some id
+            | _ -> None
+        | None -> None)
+    |> Set.ofList
+
+/// Non-numeric reference contracts remain separate from scalar range propagation.
+let private actualReferences (graph: SemanticGraph) (funcId: NodeId) (args: NodeId list) (select: DeclaredFunction -> (NodeId * 'T) list) =
+    let rec binding id =
+        match SemanticGraph.tryGetNode id graph with
+        | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> binding inner
+        | Some { Kind = SemanticKind.VarRef (_, Some id) } -> Some id
+        | _ -> None
+    match binding funcId |> Option.bind (lambdaOfBinding graph) with
+    | Some (parameters, _) when parameters.Length = args.Length ->
+        let declared = (readDescriptors graph).Functions |> List.collect select |> Map.ofList
+        List.zip parameters args |> List.choose (fun ((_, _, parameter), arg) -> Map.tryFind parameter declared |> Option.map (fun d -> arg, d))
+    | _ -> []
+
+let pointerReferenceArguments graph funcId args = actualReferences graph funcId args (fun f -> f.PointerReferences)
+let recordReferenceArguments graph funcId args = actualReferences graph funcId args (fun f -> f.RecordReferences) |> List.map fst |> Set.ofList
+
+/// The result ABI declared beside the actual foreign callee. A call's locally
+/// refined range does not change the width returned by the native library.
+let returnOfCall (graph: SemanticGraph) (funcId: NodeId) =
+    let rec binding id =
+        match SemanticGraph.tryGetNode id graph with
+        | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> binding inner
+        | Some { Kind = SemanticKind.VarRef (_, Some id) } -> Some id
+        | _ -> None
+    binding funcId
+    |> Option.bind (lambdaOfBinding graph)
+    |> Option.bind (fun (_, body) ->
+        (readDescriptors graph).Functions
+        |> List.tryPick (fun f -> if f.Body = Some body then f.Return else None))
+
+/// The target declares which C ABI its foreign aggregate calls use.
+let cAbiOfGraph (graph: SemanticGraph) =
+    graph.Nodes |> Map.toSeq |> Seq.choose (fun (_, node) ->
+        match node.Kind with
+        | SemanticKind.Binding _ ->
+            node.Children |> List.tryLast |> Option.bind (recordOf graph)
+            |> Option.bind (fun (record, fields) ->
+                if typeName record <> Some "CAbiDescriptor" then None
+                else
+                    match field "Name" fields |> Option.bind (stringOf graph), field "PointerBits" fields |> Option.bind (int64Of graph), field "ScalarAggregateRegisterBytes" fields |> Option.bind (int64Of graph) with
+                    | Some name, Some bits, Some registerBytes -> Some (name, int bits, int registerBytes)
+                    | _ -> None)
+        | _ -> None) |> Seq.distinct |> Seq.toList
+
+/// Only these parameters allow a temporary native record projection without write-back.
+let readOnlyRecordReferenceArguments graph funcId args =
+    actualReferences graph funcId args (fun f -> f.RecordReferences)
+    |> List.choose (fun (id, readOnly) -> if readOnly then Some id else None) |> Set.ofList

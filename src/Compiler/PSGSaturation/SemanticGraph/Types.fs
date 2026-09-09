@@ -5,6 +5,7 @@
 module Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.DimensionAlgebra
 open Clef.Compiler.PSGSaturation.SemanticGraph.SeqSaturation
 
 //-------------------------------------------------------------------------
@@ -69,6 +70,7 @@ type IntrinsicModule =
     | DateTime      // DateTime operations (now, utcNow, today, toString, components)
     | TimeSpan      // TimeSpan operations (fromMilliseconds, fromSeconds, components)
     | FnPtr         // Function pointer operations (fromSymbol, invoke, ofFunction)
+    | BorrowedView  // Declared mapped-storage access; no address constructors
     | Lazy          // Lazy values (create, force, isValueCreated)
     | Seq           // Sequence generation (seq { }, toArray, toList, etc.)
     | SeqEnumerator // Sequence enumerator operations (moveNext, current) - PRD-15/16
@@ -219,10 +221,50 @@ and [<RequireQualifiedAccess>] Pattern =
 // INVARIANT I1: every body is a proposition over literals with an enumerated
 // source set. All fragments are quantifier-free.
 
+/// The exponent relation required by a numeric operation. These laws concern
+/// dimensions; they do not assert numeric range, precision or nonzero divisors.
+[<RequireQualifiedAccess>]
+type DimensionalRule =
+    | Product
+    | Quotient
+    | SameDimension
+    | Comparison
+
 /// What an obligation asserts. Every constant is a literal fixed at saturation;
 /// the two dispatches transcribe, never compute.
+type MappedSpanModel = {
+    PointerBits: int
+    MaximumExtent: bigint
+    ElementBytes: int
+    BaseAlignment: int
+    ElementAlignment: int
+}
+
 [<RequireQualifiedAccess>]
 type ObligationBody =
+    /// The additive/index step after successful native mapping guards establish
+    /// a finite byte extent. Native allocation provenance and stride*rows
+    /// arithmetic are explicit premises, not conclusions of this QF_LIA slice.
+    | MappedElementSpan of model: MappedSpanModel
+    /// Exact integer literal enclosed by the range already analysed on its node.
+    | IntegerLiteralRange of value: bigint * lower: bigint * upper: bigint
+    /// The analysed integer range fits the representation actually selected
+    /// from the platform declaration; this does not assert physical placement.
+    | IntegerRepresentationCoverage of lower: bigint * upper: bigint * minimum: bigint * maximum: bigint
+    /// Dimensional positions in an ordinary call: instantiated signature versus
+    /// actual arguments/result. A missing side is an incompatible type shape,
+    /// never an invented dimensionless value. Paths include partial results.
+    | ApplicationDimensions of comparisons: (string * Dimension option * Dimension option) list
+    /// Exact source-real literal and the singleton enclosure it seeds.
+    | RealLiteralRange of value: ExactRational * lower: ExactRational * upper: ExactRational
+    /// Finite-bound coverage against the actual representation declaration.
+    /// This is a range obligation, not a rounding or optimal-selection claim.
+    | RealRepresentationCoverage of lower: ExactRational * upper: ExactRational * minimum: ExactRational * maximum: ExactRational
+    /// Actual operand/result dimensions from the saturated graph. Free measure
+    /// variables retain their identities as formal generators; the solver
+    /// checks each coefficient, including axes absent from another operand.
+    /// Comparisons have no numeric result dimension (None).
+    | DimensionalRelation of rule: DimensionalRule * left: Dimension * right: Dimension * result: Dimension option
     /// storage = len + 1 (the NUL byte is reserved at allocation)
     | StorageReservation of len: int * storage: int
     /// view = len AND view < storage (the terminator is never written)
@@ -234,6 +276,9 @@ type ObligationBody =
     /// span fits the space's capacity. `capacity` is None when no declaration
     /// was found to cite.
     | ConsecutiveLayout of storages: int list * span: int * capacity: int64 option
+    /// Concrete BAREWire placements in the exact byte pool emitted by Composer.
+    /// Every alignment, extent and capacity is checked, never assumed.
+    | StaticStorageLayout of slots: (int * int * int) list * usedSize: int * allocationSize: int * poolAlignment: int * capacity: int64 * spaceAlignment: int * granularity: int
     /// String.concat2 copy discipline: for ANY operand lengths a, b >= 0
     /// (pinned where the operand is a literal), the two copy windows [0,a) and
     /// [a,a+b) lie within the (a+b)-byte allocation.
@@ -620,6 +665,7 @@ type MetadataValue =
     | Int64 of int64
     | Bool of bool
     | Float of float
+    | RealLiteral of sourceText: string * value: ExactRational
     | Type of NativeType
     | NodeId of NodeId
     | SourceRange of SourceRange
@@ -701,6 +747,11 @@ module SchemeMetadata =
 /// even when the captures list is empty.
 [<RequireQualifiedAccess>]
 module ClosureMetadata =
+    /// An anonymous function expression (`fun` or `function`), distinguished from
+    /// the Lambda used to represent a named function declaration.
+    [<Literal>]
+    let LambdaExpression = "Closure.LambdaExpression"
+
     /// When true, indicates this Lambda requires closure pair construction
     /// ({code_ptr, env_ptr}) even with zero captures. The env_ptr will be null.
     /// Set by Baker when a Lambda is discovered in value position (e.g., as
@@ -755,9 +806,9 @@ type SettledSlot =
     /// A real at its declared bits.
     | Real of bits: int
     /// A pointer-sized field: `words` declared Pointer widths. One word is an address (a handle,
-    /// a byref, a list or map node); two words a function value (the closure pair); five words a
-    /// view of a buffer (a string, an array, a nested record, a tuple, an option, a union, a lazy
-    /// or a seq), which the CPU leg holds as its memref descriptor: two addresses, an offset, a
+    /// a byref, a list or map node); five words a view of a buffer (a string, an array, a nested
+    /// record, a tuple, an option, a union, a lazy, a seq or a function's closure pair), which the
+    /// CPU leg holds as its memref descriptor: two addresses, an offset, a
     /// size and a stride. The word count is the leg's realisation, read here and never summed
     /// below the graph; a declaration of it belongs to the platform description (CS-12, owed).
     | Pointer of words: int
@@ -820,6 +871,8 @@ type MeetKind =
     | ExtendUnsigned
     | ExtendSigned
     | Truncate
+    | ExtendFloat
+    | TruncateFloat
 
 /// One meet: the consumer node, the operand node (the consumer itself for a read of a slot), and
 /// the bit widths it adapts between.
@@ -846,12 +899,12 @@ type CurryInfo = {
 /// What a closure environment slot holds.
 [<RequireQualifiedAccess>]
 type CaptureSlotKind =
-    /// One word: the base address of a buffer-backed value (an array, a union, a lazy, a seq, a
+    /// One word: the base address of a buffer-backed value (a record, tuple, union, lazy, seq,
     /// function value's pair) or of a mutable cell; construction extracts the base pointer first.
     | Address
-    /// One word held as it arrives: a record or tuple's base index, a handle.
+    /// One word held as it arrives, such as an opaque handle.
     | Handle
-    /// A string, decomposed into its base address and its extent: two words.
+    /// A string or array, decomposed into its base address and its extent: two words.
     | Decomposed
     /// A scalar at its settled slot.
     | Scalar of SettledSlot
@@ -934,6 +987,11 @@ type PinMapping = {
     FieldPinAttrs: Map<string, string list>
 }
 
+/// A native callback keeps a resolved declaration edge, without a closure environment.
+type FunctionPointerPlan =
+    | Address of symbol: string * lambda: NodeId
+    | Invoke of pointer: NodeId * arguments: NodeId list * parameters: NativeType list * result: NativeType
+
 /// The codata the graph carries for emission, settled once at the end of saturation.
 type Codata = {
     Escapes: Map<NodeId, EscapeKind>
@@ -947,6 +1005,7 @@ type Codata = {
     Pins: PinMapping option
     /// The lambda of each declaration root, with the root's flavour.
     DeclarationRootLambdas: Map<NodeId, DeclRoot>
+    FunctionPointers: Map<NodeId, FunctionPointerPlan>
 }
 
 module Codata =
@@ -959,7 +1018,33 @@ module Codata =
         Bindings = { RuntimeMode = RuntimeMode.Console; Bindings = Map.empty; ExternLibraries = Set.empty }
         Pins = None
         DeclarationRootLambdas = Map.empty
+        FunctionPointers = Map.empty
     }
+
+/// A source string's view into the BAREWire-owned static byte pool.
+type StaticStringEntry = {
+    NodeIds: NodeId list
+    Content: string
+    Offset: int
+    Length: int
+    StorageLength: int
+}
+
+/// One immutable allocation plan shared by obligations and native emission.
+/// Offsets are pool-relative; the linker assigns its aligned absolute origin.
+type StaticStringPool = {
+    Symbol: string
+    Bytes: byte list
+    Alignment: int
+    Size: int
+    UsedSize: int
+    Entries: StaticStringEntry list
+    SpaceName: string
+    Capacity: int64
+    SpaceAlignment: int
+    Granularity: int
+    DeclarationNode: NodeId
+}
 
 /// The complete semantic graph output
 [<NoComparison; NoEquality>]
@@ -993,6 +1078,8 @@ type SemanticGraph = {
     /// construction. The CPU leg reads a field's representation, offset and size here and computes
     /// none of them.
     Layouts: Lazy<Map<string, SettledLayout>>
+    /// BAREWire static storage placement, settled after range/aggregate placement.
+    StaticStringPool: StaticStringPool option
     /// Per escaping lambda (Dimensional_Range_Design.md ruling 1; CS-11 slice 1): the reason it
     /// escapes as a value, keyed by the Lambda node. A lambda here has its parameters and its
     /// result at the declared Register width, the value-call boundary (§4.1's second row);
