@@ -564,7 +564,7 @@ let unionCarriers (tp1: TypeParam) (tp2: TypeParam) : unit =
 let dimensionOccurrences (ty: NativeType) : Dimension list =
     let rec go (acc: Dimension list) (ty: NativeType) : Dimension list =
         match ty with
-        | NativeType.TNum(_, d) ->
+        | NativeType.TNum(_, d) | NativeType.TMeasure d ->
             let d = resolveDim d
             if List.contains d acc then acc else acc @ [ d ]
         | NativeType.TVar tp ->
@@ -580,7 +580,7 @@ let dimensionOccurrences (ty: NativeType) : Dimension list =
         | NativeType.TAnon(fields, _) -> fields |> List.fold (fun acc (_, t) -> go acc t) acc
         | NativeType.TUnion(_, cases) ->
             cases |> List.fold (fun acc c -> c.Fields |> List.fold (fun acc (_, t) -> go acc t) acc) acc
-        | NativeType.TForall _ | NativeType.TMeasure _ | NativeType.TError _ -> acc
+        | NativeType.TForall _ | NativeType.TError _ -> acc
     go [] ty
 
 /// The free measure variables of a type's numeric positions, resolved, in first-occurrence
@@ -735,12 +735,12 @@ let private simplifyMeasures (candidates: MeasureVar list) (occurrences: Dimensi
 /// quantify. A carrier survivor is a fresh variable named `'k`, `'k1`, ... that the old variable
 /// is unioned into (so the body resolves to it); a measure survivor is quantified through its
 /// cell. The body is canonicalised so the scheme's parameters and the variables in its body are
-/// the same records. Type variables are quantified as before this changeset (not subtracted:
-/// nothing binds a type variable across a top-level boundary in this checker).
+/// the same records. Type variables are also subtracted, so nested bindings cannot quantify a captured
+/// value or mutable storage cell.
 let generalizeType (envFree: Set<int>) (ty: NativeType) : NativeType =
     let ty = canonicalizeVars ty
     let freeParams = collectFreeTypeParams ty |> List.distinctBy (fun tp -> tp.Id)
-    let typeParams = freeParams |> List.filter (fun tp -> tp.Kind = TypeParamKind.Type)
+    let typeParams = freeParams |> List.filter (fun tp -> tp.Kind = TypeParamKind.Type && not (Set.contains tp.Id envFree))
     let carrierParams = freeParams |> List.filter (fun tp -> tp.Kind = TypeParamKind.Carrier && not (Set.contains tp.Id envFree))
     let allMeasures = freeMeasureVars ty
     let measureCandidates = allMeasures |> List.filter (fun v -> not (Set.contains v.Id envFree))

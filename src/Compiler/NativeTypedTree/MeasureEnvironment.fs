@@ -124,6 +124,14 @@ module MeasureEnv =
         |> List.tryFind (denotes path)
         |> Option.bind (fun b -> Map.tryFind b env.Defs)
 
+    /// Exact declaration lookup. Source name resolution supplies lexical path
+    /// candidates before querying the catalog; a matching suffix alone does
+    /// not make a declaration visible in another module.
+    let tryFindQualified (path: string list) (env: MeasureEnv) : MeasureDef option =
+        match List.rev path with
+        | [] -> None
+        | name :: revModule -> Map.tryFind { Name = name; Module = List.rev revModule } env.Defs
+
     /// The environment with one more definition, shadowing any earlier one of the same identity.
     let private add (def: MeasureDef) (env: MeasureEnv) : MeasureEnv =
         let b = MeasureDef.measure def

@@ -1,8 +1,8 @@
 ﻿// Copyright (c) Microsoft Corporation.  All Rights Reserved.  See License.txt in the project root for license information.
 
 {
-open FSharp.Native.Compiler.DiagnosticsLogger
-open FSharp.Native.Compiler.ParseHelpers
+open Clef.Compiler.DiagnosticsLogger
+open Clef.Compiler.ParseHelpers
 
 let lexeme (lexbuf : UnicodeLexing.Lexbuf) = UnicodeLexing.Lexbuf.LexemeString lexbuf
 

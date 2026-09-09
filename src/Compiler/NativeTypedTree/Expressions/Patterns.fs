@@ -32,7 +32,9 @@ let rec checkPattern
     | SynPat.Const(constant, constRange) ->
         warnSuffix constRange constant env
         match checkConst env constant with
-        | Result.Ok (_, literal) -> (Pattern.Const literal, [])
+        | Result.Ok (literalType, literal) ->
+            addConstraint (Constraint.Equals(expectedTy, literalType, range)) env
+            (Pattern.Const literal, [])
         | Result.Error failure ->
             // CCS8018 (plan L-3) or a measure failure; the diagnostic is an Error, so nothing runs
             // on the wildcard.
@@ -72,92 +74,54 @@ let rec checkPattern
     | SynPat.LongIdent(SynLongIdent(idents, _, _), _, _, argPats, _, _) ->
         // Constructor or identifier pattern
         let caseName = idents |> List.map (fun id -> id.idText) |> String.concat "."
-        match argPats with
-        | SynArgPats.Pats [] ->
-            // No arguments - could be variable binding or nullary constructor
-            // Lowercase single identifier = variable binding, otherwise = constructor
-            match idents with
-            | [ident] when not (System.Char.IsUpper(ident.idText.[0])) ->
-                // Lowercase single identifier - treat as variable binding
-                (Pattern.Var(caseName, expectedTy), [(caseName, expectedTy)])
-            | _ ->
-                // Uppercase or qualified - nullary constructor
-                // Look up binding to get tag index from UnionCaseInfo
-                let tagIndex =
-                    match tryLookupBinding caseName env with
-                    | Some binding ->
-                        match binding.UnionCaseInfo with
-                        | Some caseInfo -> caseInfo.CaseIndex
-                        | None -> 0  // Fallback for non-DU constructors
-                    | None ->
-                        addDiagnostic { Severity = NativeDiagnosticSeverity.Error
-                                        Code = DiagnosticCodes.CCS8008_UndefinedConstructor
-                                        Message = $"The constructor '{caseName}' is not defined."
-                                        Range = range; RelatedNodes = []; Reachability = ReachabilityContext.Unknown } env
-                        0
-                (Pattern.Union(caseName, tagIndex, None, expectedTy), [])
-        | SynArgPats.Pats pats ->
-            // Constructor with arguments (e.g., Some x, Error e)
-            // Look up constructor binding to get payload types and tag index (FCS TyconRef.Deref pattern)
-            let (payloadTypes, tagIndex) =
+        match idents, argPats with
+        | [ident], SynArgPats.Pats [] when not (System.Char.IsUpper(ident.idText.[0])) ->
+            (Pattern.Var(caseName, expectedTy), [(caseName, expectedTy)])
+        | _ ->
+            let payloadTypes, tagIndex =
                 match tryLookupBinding caseName env with
                 | Some binding ->
-                    // Extract domain types from constructor's function type
-                    // e.g., IntVal : int -> Number has type TFun(int, Number)
-                    // e.g., Pair : int -> string -> T has type TFun(int, TFun(string, T))
-                    // e.g., Some : forall 'a. 'a -> option<'a> (need to unwrap TForall first)
-                    // A polymorphic constructor (`Some : forall 'a. 'a -> option<'a>`) is instantiated
-                    // with fresh type variables at every pattern, exactly as at every expression use
-                    // (Types.instantiateTForall). Unwrapping the scheme and using its quantified
-                    // variable directly would make every `Some v` pattern in the program share one
-                    // payload type: whichever match unified it first would type all the others.
+                    let constructorType =
+                        match binding.Type with
+                        | NativeType.TForall(parameters, body) ->
+                            let arguments = parameters |> List.map (fun tp ->
+                                freshInstanceOf tp range)
+                            instantiate parameters arguments body
+                        | ty -> ty
                     let rec extractDomains ty acc =
                         match ty with
-                        | NativeType.TForall _ -> extractDomains (Types.instantiateTForall ty range) acc
-                        | NativeType.TFun(domain, range) -> extractDomains range (domain :: acc)
-                        | result -> (List.rev acc, result)
-                    let (types, constructedTy) = extractDomains binding.Type []
-                    // The constructor builds the scrutinee's type: `Some b` against `int option` ties
-                    // the instance's payload variable to `int`, so `b` has the payload's type at every
-                    // use and not only the type its uses happen to give it (sequence CS-9: a
-                    // conversion `float b` binds nothing through its result, and needed this).
-                    addConstraint (Constraint.Equals(expectedTy, constructedTy, range)) env
-                    // Extract tag index from UnionCaseInfo
-                    let idx =
-                        match binding.UnionCaseInfo with
-                        | Some caseInfo -> caseInfo.CaseIndex
-                        | None -> 0  // Fallback for non-DU constructors
-                    (types, idx)
+                        | NativeType.TFun(domain, result) -> extractDomains result (domain :: acc)
+                        | result -> List.rev acc, result
+                    let fields, result = extractDomains constructorType []
+                    // The payload and the scrutinee share this use's fresh variables.
+                    addConstraint (Constraint.Equals(expectedTy, result, range)) env
+                    fields, (binding.UnionCaseInfo |> Option.map (fun info -> info.CaseIndex) |> Option.defaultValue 0)
                 | None ->
-                    addDiagnostic { Severity = NativeDiagnosticSeverity.Error
-                                    Code = DiagnosticCodes.CCS8008_UndefinedConstructor
-                                    Message = $"The constructor '{caseName}' is not defined."
-                                    Range = range; RelatedNodes = []; Reachability = ReachabilityContext.Unknown } env
-                    (pats |> List.map (fun _ -> freshTypeVar range), 0)
+                    addNativeError DiagnosticCodes.CCS8008_UndefinedConstructor pat.Range $"The constructor '{caseName}' is not defined." env
+                    [], 0
 
-            let (argPatterns, argBindings) =
-                List.zip pats payloadTypes
-                |> List.map (fun (p, argTy) ->
-                    checkPattern env p argTy range)
-                |> List.unzip
-            let payload = if List.isEmpty argPatterns then None else Some (Pattern.Tuple argPatterns)
-            (Pattern.Union(caseName, tagIndex, payload, expectedTy), List.concat argBindings)
-        | SynArgPats.NamePatPairs _ ->
-            // Named pattern pairs (e.g., { Field = pat })
-            // Look up binding to get tag index from UnionCaseInfo
-            let tagIndex =
-                match tryLookupBinding caseName env with
-                | Some binding ->
-                    match binding.UnionCaseInfo with
-                    | Some caseInfo -> caseInfo.CaseIndex
-                    | None -> 0
-                | None ->
-                        addDiagnostic { Severity = NativeDiagnosticSeverity.Error
-                                        Code = DiagnosticCodes.CCS8008_UndefinedConstructor
-                                        Message = $"The constructor '{caseName}' is not defined."
-                                        Range = range; RelatedNodes = []; Reachability = ReachabilityContext.Unknown } env
-                        0
-            (Pattern.Union(caseName, tagIndex, None, expectedTy), [])
+            match argPats with
+            | SynArgPats.Pats pats ->
+                let rec tupleElements pat =
+                    match pat with
+                    | SynPat.Paren(inner, _) -> tupleElements inner
+                    | SynPat.Tuple(_, elements, _, _) -> Some elements
+                    | _ -> None
+                let pats =
+                    match pats with
+                    | [tuple] when payloadTypes.Length > 1 -> tupleElements tuple |> Option.defaultValue pats
+                    | _ -> pats
+                if pats.Length <> payloadTypes.Length then
+                    addNativeError DiagnosticCodes.CCS8004_ArityMismatch pat.Range $"Constructor '{caseName}' expects {payloadTypes.Length} fields, got {pats.Length}" env
+                let patterns, bindings =
+                    pats |> List.mapi (fun index pat ->
+                        let ty = payloadTypes |> List.tryItem index |> Option.defaultValue (NativeType.TError "constructor arity")
+                        checkPattern env pat ty range) |> List.unzip
+                let payload = if patterns.IsEmpty then None else Some(Pattern.Tuple patterns)
+                Pattern.Union(caseName, tagIndex, payload, expectedTy), List.concat bindings
+            | SynArgPats.NamePatPairs _ ->
+                addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct pat.Range "Named constructor field patterns are not supported" env
+                Pattern.Union(caseName, tagIndex, None, expectedTy), []
 
     | SynPat.As(lhsPat, rhsPat, _) ->
         // Pattern alias: pat as name

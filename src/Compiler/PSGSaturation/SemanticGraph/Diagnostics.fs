@@ -47,6 +47,10 @@ type CheckResult = {
 }
 
 module Diagnostic =
+    /// Compiler classification projected as the standard LSP unnecessary tag.
+    /// Presentation may fade this declaration; proof status is independent.
+    let isUnnecessary (d: Diagnostic) = d.Code = "CCS8500"
+
     /// Effective severity given reachability context.
     /// Reachable diagnostics report at intrinsic severity.
     /// Unreachable diagnostics are demoted to Info.

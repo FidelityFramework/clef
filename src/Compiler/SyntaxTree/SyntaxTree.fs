@@ -156,7 +156,7 @@ type SynConst =
 
     | Single of single
 
-    | Double of double
+    | Double of approximation: double * sourceText: string option
 
     | Char of char
 

@@ -105,6 +105,8 @@ module DiagnosticCodes =
     // Code generation (CCS8400-CCS8499)
     let CCS8400_CodeGenError = "CCS8400"
     let CCS8401_UnsupportedConstruct = "CCS8401"
+    // An own-project source function has no incoming reference in an executable.
+    let CCS8500_UnusedBinding = "CCS8500"
     // Record field label resolution (CCS8701-CCS8705, inference-name-resolution.md)
     let CCS8701_NoFields = "CCS8701"
     let CCS8702_UndefinedField = "CCS8702"
@@ -135,7 +137,7 @@ module DiagnosticCodes =
     let CCS8011_UnobservableRange = "CCS8011"
     // CCS8012: a value's analysed range is not covered by a declared representation
     // (Dimensional_Range_Design.md §4.2, §7): on a substrate with declared representations, a
-    // bounded integer range none of them holds. A warning, promoted by --warnaserror (RangeAnalysis).
+    // bounded integer range none of them holds. A required conformance error (RangeAnalysis).
     let CCS8012_RangeNotCovered = "CCS8012"
     // CCS8014 (Info): a declared boundary representation wider than the range requires
     // (Dimensional_Range_Design.md §4.2, §7): a wire field's or a C ABI parameter's descriptor
@@ -181,13 +183,16 @@ type TypeEnv = {
     /// Compositional name resolution context
     /// BCL is structurally impossible - only source-defined bindings exist
     Resolution: NR.ResolutionContext
+    /// Visible binding schemes, used to retain captured storage identities during generalization.
+    BindingTypes: Map<string, NativeType>
+    /// Type parameters belonging to this declaration or binding scope.
+    TypeParameters: Map<string, TypeParam> ref
     /// Type definitions (name -> TypeConRef)
     TypeDefs: Map<string, TypeConRef>
     /// Type abbreviations (name -> NativeType it expands to)
     TypeAbbrevs: Map<string, NativeType>
-    /// The declared measures and their expansions (design a.3). Empty in every environment this
-    /// changeset builds: the `[<Measure>] type` declaration arm in NativeService.fs is not yet
-    /// redirected here (sequence CS-4), so declarations still fall through to `TypeDefs`.
+    /// Canonical declared measures and their expansions. Lexical resolution determines which
+    /// declaration paths are accessible; their existence alone does not import their short names.
     Measures: MeasureEnv
     /// The named measure variables of the enclosing binding (`'u` written in its parameter or
     /// return annotations), one variable per name for the whole binding (spec §Generalization of
@@ -208,6 +213,9 @@ type TypeEnv = {
     CurrentArena: ArenaAffinity
     /// Enclosing function return type (for return checking)
     ExpectedReturnType: NativeType option
+    /// A type annotation's one-use hint for its direct record literal. Record checking
+    /// consumes it before checking field expressions; it never imports field labels.
+    ExpectedRecordType: NativeType option
     /// Enclosing function name for nested bindings (None at module level)
     /// PRD-13: Used to qualify nested function names for MLIR emission
     EnclosingFunction: string option
@@ -277,6 +285,8 @@ let internal resultTycon  : TypeConRef = mkTypeConRef "Result"  2 TypeLayout.Opa
 let createTypeEnv () : TypeEnv =
     let baseEnv = {
         Resolution = NR.createContext ()
+        BindingTypes = Map.empty
+        TypeParameters = ref Map.empty
         TypeDefs = Map.empty
         TypeAbbrevs = Map.empty
         Measures = MeasureEnv.empty
@@ -287,6 +297,7 @@ let createTypeEnv () : TypeEnv =
         Diagnostics = ref []
         CurrentArena = ArenaAffinity.CurrentActor
         ExpectedReturnType = None
+        ExpectedRecordType = None
         EnclosingFunction = None
         EnclosingSeqExpr = None
     }
@@ -296,7 +307,7 @@ let createTypeEnv () : TypeEnv =
         let binding: NR.ResolvedBinding = {
             QualifiedName = name; Type = ty; IsMutable = false; NodeId = None
             InlineBody = None; UnionCaseInfo = Some caseInfo; NativeLiteral = None; IsModuleLevel = true }
-        { env with Resolution = NR.registerBinding name binding env.Resolution }
+        { env with Resolution = NR.registerBinding name binding env.Resolution; BindingTypes = Map.add name ty env.BindingTypes }
     // option: None : option<'T>   Some : 'T -> option<'T>
     let optA   = freshTypeParamAuto TypeParamKind.Type dummyRange
     let optATy = NativeType.TVar optA
@@ -346,6 +357,53 @@ let addNativeError (code: string) (r: range) (message: string) (env: TypeEnv) : 
     } env
 
 
+/// A declaration's measure parameters share the canonical measure cells used by TNum.
+let typeParameterArgument (parameter: TypeParam) =
+    match parameter.Kind with
+    | TypeParamKind.Type -> NativeType.TVar parameter
+    | TypeParamKind.Carrier -> NativeType.TNum(CarrierRef.CVar parameter, Dimension.one)
+    | TypeParamKind.Measure ->
+        NativeType.TMeasure(Dimension.ofVar (measureVarOf parameter))
+
+let resolveTypeParameter kind (ident: Ident) (env: TypeEnv) =
+    match Map.tryFind ident.idText !(env.TypeParameters) with
+    | Some parameter ->
+        if parameter.Kind <> kind then
+            addNativeError DiagnosticCodes.CCS8045_MeasureSortMismatch ident.idRange $"Parameter '{ident.idText}' is used as both a type and a measure" env
+        parameter
+    | None ->
+        let parameter = freshTypeParam ("'" + ident.idText) kind (rangeToSourceRange ident.idRange)
+        env.TypeParameters := Map.add ident.idText parameter !(env.TypeParameters)
+        parameter
+
+let withDeclaredTypeParameters (declarations: SynTyparDecls option) (env: TypeEnv) =
+    let mutable scope = env.MeasureScope
+    let mutable parameters = !(env.TypeParameters)
+    let declared =
+        declarations |> Option.map (fun declarations ->
+            declarations.TyparDecls |> List.map (fun (SynTyparDecl(attributes, SynTypar(ident, _, _), _, _)) ->
+                let isMeasure = attributes |> List.exists (fun group -> group.Attributes |> List.exists (fun attribute ->
+                    attribute.TypeName.LongIdent |> List.tryLast |> Option.exists (fun name -> name.idText = "Measure" || name.idText = "MeasureAttribute")))
+                let parameter =
+                    if isMeasure then
+                        let variable = freshMeasureVar (Some ident.idText)
+                        scope <- Map.add ident.idText variable scope
+                        measureCellOf variable
+                    else freshTypeParam ("'" + ident.idText) TypeParamKind.Type (rangeToSourceRange ident.idRange)
+                parameters <- Map.add ident.idText parameter parameters
+                parameter)) |> Option.defaultValue []
+    { env with TypeParameters = ref parameters; MeasureScope = scope }, declared
+
+/// Generalization excludes every variable free in the surrounding bindings, including
+/// ordinary type variables that stand for captured mutable storage.
+let generalizeInEnv (env: TypeEnv) ty =
+    let excluded =
+        env.BindingTypes |> Map.toSeq |> Seq.map (fun (_, ty) ->
+            let ty = applySubst ty
+            Set.union (freeTypeVars ty) (freeMeasureVars ty |> List.map (fun variable -> variable.Id) |> Set.ofList))
+        |> Set.unionMany
+    generalizeType excluded ty
+
 /// Create and add a warning diagnostic with specific code
 let addNativeWarning (code: string) (r: range) (message: string) (env: TypeEnv) : unit =
     addDiagnostic {
@@ -371,18 +429,16 @@ let addNativeWarningOnce (code: string) (sr: SourceRange) (message: string) (env
             Reachability = ReachabilityContext.Unknown
         } env
 
-/// CCS8019 once per spelled site (CS-12 step 5a, the alias): the width-named spelling read at
-/// `sr` denotes the one kind (`int`, or `float` for a real spelling); the representation it names
-/// is the interim declared boundary of the annotated node, read by RangeAnalysis through
-/// `RangeSources.declarationOfKind`. The bare kinds report nothing.
+/// Source numeric kinds carry dimensions; representation names belong to boundary declarations.
+let isWidthNamedNumericType name =
+    NativeTypes.Types.isWidthSpelling name
+    || List.contains name ["uint"; "nativeint"; "unativeint"; "double"; "single"; "Posit8"; "Posit16"; "Posit32"; "Posit64"; "posit8"; "posit16"; "posit32"; "posit64"]
+
 let warnWidthSpellingAt (name: string) (sr: SourceRange) (env: TypeEnv) : unit =
-    if NativeTypes.Types.isWidthSpelling name then
-        let bare =
-            match NativeTypes.Types.tryNumericTyConOfName name |> Option.bind (fun tc -> tc.NTUKind) with
-            | Some k when NativeTypes.NTUKind.isInteger k -> "int"
-            | _ -> "float"
-        addNativeWarningOnce DiagnosticCodes.CCS8019_WidthSpellingAlias sr
-            (sprintf "the width-named spelling `%s` is an interim alias of `%s`; write `%s` and declare the representation at the boundary (a descriptor, a schema field, a contract)" name bare bare) env
+    if isWidthNamedNumericType name then
+        addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8706"
+                        Message = $"'{name}' is not a Clef source type; use int or float with a dimension. Width and representation follow from range analysis and platform declarations."
+                        Range = sr; RelatedNodes = []; Reachability = ReachabilityContext.Unknown } env
 
 let warnWidthSpelling (name: string) (r: range) (env: TypeEnv) : unit =
     warnWidthSpellingAt name (rangeToSourceRange r) env
@@ -433,7 +489,7 @@ let addBinding (name: string) (ty: NativeType) (isMutable: bool) (nodeId: NodeId
         NativeLiteral = None
         IsModuleLevel = isModuleLevel
     }
-    { env with Resolution = NR.registerBinding name binding env.Resolution }
+    { env with Resolution = NR.registerBinding name binding env.Resolution; BindingTypes = Map.add name ty env.BindingTypes }
 
 /// Add a binding with inline body for transparent function expansion
 /// Only functions explicitly marked `inline` get their bodies captured
@@ -448,7 +504,7 @@ let addInlineBinding (name: string) (ty: NativeType) (nodeId: NodeId option) (in
         NativeLiteral = None
         IsModuleLevel = env.EnclosingFunction.IsNone
     }
-    { env with Resolution = NR.registerBinding name binding env.Resolution }
+    { env with Resolution = NR.registerBinding name binding env.Resolution; BindingTypes = Map.add name ty env.BindingTypes }
 
 /// Add a DU constructor binding with case info for proper UnionCase node creation
 /// DU types are always defined at module scope, so constructors are module-level
@@ -463,7 +519,7 @@ let addUnionCaseBinding (name: string) (ty: NativeType) (caseInfo: NR.UnionCaseI
         NativeLiteral = None
         IsModuleLevel = true  // DU constructors are always module-level
     }
-    { env with Resolution = NR.registerBinding name binding env.Resolution }
+    { env with Resolution = NR.registerBinding name binding env.Resolution; BindingTypes = Map.add name ty env.BindingTypes }
 
 /// Add a [<Literal>] binding with compile-time constant value for substitution
 /// Literal values are substituted at use sites during name resolution
@@ -478,7 +534,7 @@ let addLiteralBinding (name: string) (ty: NativeType) (nodeId: NodeId option) (l
         NativeLiteral = Some litValue
         IsModuleLevel = env.EnclosingFunction.IsNone
     }
-    { env with Resolution = NR.registerBinding name binding env.Resolution }
+    { env with Resolution = NR.registerBinding name binding env.Resolution; BindingTypes = Map.add name ty env.BindingTypes }
 
 /// Look up a binding using compositional resolver
 /// BCL is structurally impossible - only source-defined bindings exist
@@ -489,6 +545,33 @@ let tryLookupBinding (name: string) (env: TypeEnv) : NR.ResolvedBinding option =
 /// This composes a resolver that prefixes lookups with the namespace
 let addOpen (ns: string) (env: TypeEnv) : TypeEnv =
     { env with Resolution = NR.addOpen ns env.Resolution }
+
+/// Module entry extends lexical lookup while retaining the shared project constraint graph.
+let enterModuleScope (path: string list) (env: TypeEnv) : TypeEnv =
+    { env with Resolution = NR.enterModule path env.Resolution
+               TypeParameters = ref Map.empty; MeasureScope = Map.empty }
+
+/// Export canonical declarations, then restore the enclosing scope's local names and imports.
+/// Record metadata and measure definitions remain available for already-resolved type identities.
+let leaveModuleScope (path: string list) (outer: TypeEnv) (inner: TypeEnv) : TypeEnv =
+    let prefix = String.concat "." path + "."
+    let exportMap (enclosing: Map<string, 'a>) (declarations: Map<string, 'a>) =
+        declarations |> Map.fold (fun acc name value ->
+            if path.IsEmpty || name.StartsWith(prefix, System.StringComparison.Ordinal) then
+                Map.add name value acc
+            else acc) enclosing
+    { outer with
+        Resolution = NR.leaveModule path outer.Resolution inner.Resolution
+        BindingTypes = exportMap outer.BindingTypes inner.BindingTypes
+        TypeDefs = exportMap outer.TypeDefs inner.TypeDefs
+        TypeAbbrevs = exportMap outer.TypeAbbrevs inner.TypeAbbrevs
+        Measures = inner.Measures
+        RecordDefs = inner.RecordDefs
+        FieldLabels = inner.FieldLabels }
+
+let private tryLookupMeasure (path: string list) (env: TypeEnv) =
+    NR.candidateNames (String.concat "." path) env.Resolution
+    |> List.tryPick (fun name -> MeasureEnv.tryFindQualified (name.Split('.') |> Array.toList) env.Measures)
 
 //-------------------------------------------------------------------------
 // Type Definition Management
@@ -503,7 +586,7 @@ let addTypeDef (name: string) (tyCon: TypeConRef) (env: TypeEnv) : TypeEnv =
 
 /// Look up a type definition
 let tryLookupTypeDef (name: string) (env: TypeEnv) : TypeConRef option =
-    Map.tryFind name env.TypeDefs
+    NR.candidateNames name env.Resolution |> List.tryPick (fun path -> Map.tryFind path env.TypeDefs)
 
 /// Add a type abbreviation to the environment
 let addTypeAbbrev (name: string) (ty: NativeType) (env: TypeEnv) : TypeEnv =
@@ -511,7 +594,7 @@ let addTypeAbbrev (name: string) (ty: NativeType) (env: TypeEnv) : TypeEnv =
 
 /// Look up a type abbreviation
 let tryLookupTypeAbbrev (name: string) (env: TypeEnv) : NativeType option =
-    Map.tryFind name env.TypeAbbrevs
+    NR.candidateNames name env.Resolution |> List.tryPick (fun path -> Map.tryFind path env.TypeAbbrevs)
 
 //-------------------------------------------------------------------------
 // Record Type Infrastructure
@@ -557,20 +640,26 @@ let tryLookupRecordDef (name: string) (env: TypeEnv) : RecordTypeInfo option =
 /// This is the canonical way to resolve record field types - no SRTP constraints needed.
 let tryResolveRecordFieldType (ty: NativeType) (fieldName: string) (env: TypeEnv) : NativeType option =
     match applySubst ty with
-    | NativeType.TApp(tycon, _typeArgs) ->
+    | NativeType.TApp(tycon, typeArgs) ->
         // Try to find this type in RecordDefs
         match tryLookupRecordDef tycon.Name env with
         | Some recordInfo ->
             // Look up the field in the record's field list
             recordInfo.Fields
             |> List.tryFind (fun (name, _) -> name = fieldName)
-            |> Option.map snd
+            |> Option.map (fun (_, fieldType) -> instantiate recordInfo.TypeParameters typeArgs fieldType)
         | None -> None
     | _ -> None
 
 /// Look up field labels (all record types that have a field with this name)
 let lookupFieldLabels (fieldName: string) (env: TypeEnv) : FieldRef list =
     Map.tryFind fieldName env.FieldLabels |> Option.defaultValue []
+    |> List.filter (fun field ->
+        let simpleName = field.RecordType.Name.Split('.') |> Array.last
+        NR.candidateNames simpleName env.Resolution
+        |> List.exists (fun path ->
+            Map.tryFind path env.TypeDefs
+            |> Option.exists (fun tycon -> tycon.Name = field.RecordType.Name && tycon.Module = field.RecordType.Module)))
 
 /// Resolve record type from field labels.
 /// Per clef-lang-spec inference-procedures.md: Field Label Resolution Algorithm
@@ -595,7 +684,21 @@ let resolveRecordTypeFromFields
         let candidateSets =
             fieldNames
             |> List.map (fun fieldName ->
-                let candidates = lookupFieldLabels fieldName env
+                let candidates =
+                    match typeQualifier with
+                    | None -> lookupFieldLabels fieldName env
+                    | Some qualifier ->
+                        // A qualified record literal can name a type whose labels are not
+                        // imported, including a RequireQualifiedAccess record.
+                        match tryLookupTypeDef qualifier env with
+                        | Some tycon ->
+                            match Map.tryFind tycon.Name env.RecordDefs with
+                            | Some info ->
+                                info.Fields |> List.mapi (fun index (name, ty) ->
+                                    { RecordType = tycon; FieldName = name; FieldType = ty; FieldIndex = index })
+                                |> List.filter (fun field -> field.FieldName = fieldName)
+                            | None -> []
+                        | None -> []
                 (fieldName, candidates))
 
         // Check if any field has no candidates (undefined field label)
@@ -628,9 +731,9 @@ let resolveRecordTypeFromFields
             let intersection =
                 match typeQualifier with
                 | Some qualifier ->
-                    // Filter to types whose name ends with or equals the qualifier
-                    intersection |> Set.filter (fun typeName ->
-                        typeName = qualifier || typeName.EndsWith("." + qualifier))
+                    match tryLookupTypeDef qualifier env with
+                    | Some tycon -> intersection |> Set.filter ((=) tycon.Name)
+                    | None -> Set.empty
                 | None -> intersection
 
             // Step 4: Disambiguate
@@ -647,7 +750,7 @@ let resolveRecordTypeFromFields
                 | Some recordInfo ->
                     // Spec Section 4.2: Use TApp for records (single representation invariant)
                     // ParamKinds is the single source of truth — fresh vars for generic records
-                    let freshArgs = recordInfo.TypeCon.ParamKinds |> List.map (fun _kind -> freshTypeVar _range)
+                    let freshArgs = recordInfo.TypeParameters |> List.map (fun parameter -> freshInstanceOf parameter _range)
                     Result.Ok (NativeType.TApp(recordInfo.TypeCon, freshArgs))
                 | None ->
                     // INTERNAL ERROR: Field label resolution found this type name,
@@ -676,7 +779,7 @@ let resolveRecordTypeFromFields
                     |> fun fr -> fr.RecordType.Name
                 match Map.tryFind lastTypeName env.RecordDefs with
                 | Some recordInfo ->
-                    let freshArgs = recordInfo.TypeCon.ParamKinds |> List.map (fun _kind -> freshTypeVar _range)
+                    let freshArgs = recordInfo.TypeParameters |> List.map (fun parameter -> freshInstanceOf parameter _range)
                     Result.Ok (NativeType.TApp(recordInfo.TypeCon, freshArgs))
                 | None ->
                     let typeNames = intersection |> Set.toList |> String.concat ", "
@@ -689,6 +792,12 @@ let resolveRecordTypeFromFields
 
 /// Add a constraint to the environment
 let addConstraint (c: Constraint) (env: TypeEnv) : unit =
+    // Solve equality before a local scheme escapes, retaining the constraint for the
+    // service's canonical diagnostics and final member-constraint discharge.
+    match c with
+    | Constraint.Equals(left, right, range) ->
+        Clef.Compiler.NativeTypedTree.Unify.tryUnify left right range |> ignore
+    | _ -> ()
     env.Constraints := c :: !(env.Constraints)
 
 
@@ -916,6 +1025,10 @@ let private tryResolveBuiltinTypeConstructor (name: string) (args: NativeType li
     // C-04: array is NTUarray/FatPointer — already carried by arrayTyCon and
     // every Array.* intrinsic; this makes it denotable in a signature.
     | "array", [elem] -> Some (NativeType.TApp(Types.arrayTyCon, [elem]))
+    // Native callback signatures use the same constructor as FnPtr intrinsics.
+    | "FnPtr", [signature] -> Some (NativeType.TApp(Types.fnPtrTyCon, [signature]))
+    | "CHandle", [pointee] -> Some (NativeType.TApp(Types.cHandleTyCon, [pointee]))
+    | "BorrowedView", [schema] -> Some (NativeType.TApp(Types.borrowedViewTyCon, [schema]))
     // Built-in discriminated union type constructors
     | "option",  [elem]      -> Some (NativeType.TApp(optionTycon,  [elem]))
     | "voption", [elem]      -> Some (NativeType.TApp(voptionTycon, [elem]))
@@ -929,38 +1042,41 @@ let private tryResolveBuiltinTypeConstructor (name: string) (args: NativeType li
 /// Resolve a type name to NativeType via NTU lookup.
 /// Checks: TypeAbbrevs, TypeDefs, then NTU primitives.
 let private resolveTypeName (name: string) (env: TypeEnv) : NativeType option =
-    // 1. Check type abbreviations first
-    match tryLookupTypeAbbrev name env with
-    | Some ty -> Some ty
+    // Select the nearest declaration across both categories before interpreting it.
+    // An imported abbreviation cannot outrank a local nominal declaration.
+    let declaration =
+        NR.candidateNames name env.Resolution |> List.tryPick (fun path ->
+            match Map.tryFind path env.TypeAbbrevs with
+            | Some ty -> Some (Choice1Of2 ty)
+            | None -> Map.tryFind path env.TypeDefs |> Option.map Choice2Of2)
+    match declaration with
+    | Some (Choice1Of2 ty) -> Some ty
+    | Some (Choice2Of2 tyCon) ->
+        // A fresh variable per parameter, in the parameter's sort (design a.2).
+        let args =
+            tyCon.ParamKinds
+            |> List.map (function
+                | TypeParamKind.Type -> freshTypeVar dummyRange
+                | TypeParamKind.Measure -> NativeType.TMeasure (Dimension.ofVar (freshMeasureVar None))
+                // No declared constructor takes a carrier parameter: carrier variables are
+                // the operator schemes' (design c), never a constructor's position.
+                | TypeParamKind.Carrier -> failwith $"resolveTypeName: constructor {tyCon.Name} declares a carrier-kinded parameter: kind violation")
+        Some (NativeType.TApp(tyCon, args))
     | None ->
-        // 2. Check type definitions — ParamKinds is the single source of truth for arity
-        match tryLookupTypeDef name env with
-        | Some tyCon ->
-            // A fresh variable per parameter, in the parameter's sort (design a.2).
-            let args =
-                tyCon.ParamKinds
-                |> List.map (function
-                    | TypeParamKind.Type -> freshTypeVar dummyRange
-                    | TypeParamKind.Measure -> NativeType.TMeasure (Dimension.ofVar (freshMeasureVar None))
-                    // No declared constructor takes a carrier parameter: carrier variables are
-                    // the operator schemes' (design c), never a constructor's position.
-                    | TypeParamKind.Carrier -> failwith $"resolveTypeName: constructor {tyCon.Name} declares a carrier-kinded parameter: kind violation")
-            Some (NativeType.TApp(tyCon, args))
+        // 3. NTU primitives: a numeric spelling reads the one spelling table (sequence CS-5);
+        //    the non-numeric primitives are named here.
+        match NativeTypes.Types.tryNumericTyConOfName name with
+        | Some carrier -> Some (NativeTypes.Types.numericType carrier)
         | None ->
-            // 3. NTU primitives: a numeric spelling reads the one spelling table (sequence CS-5);
-            //    the non-numeric primitives are named here.
-            match NativeTypes.Types.tryNumericTyConOfName name with
-            | Some carrier -> Some (NativeTypes.Types.numericType carrier)
-            | None ->
-                match name with
-                | "bool" -> Some NativeTypes.Types.boolType
-                | "char" -> Some NativeTypes.Types.charType
-                | "string" -> Some NativeTypes.Types.stringType
-                | "unit" -> Some NativeTypes.Types.unitType
-                | "decimal" -> Some NativeTypes.Types.decimalType
-                // The bare quotation type, the type of `<@@ e @@>`: `Expr<ty>` for a fresh `ty` (D9).
-                | "Expr" -> Some (NativeType.TApp(NativeTypes.Types.exprTyCon, [ freshTypeVar dummyRange ]))
-                | _ -> None
+            match name with
+            | "bool" -> Some NativeTypes.Types.boolType
+            | "char" -> Some NativeTypes.Types.charType
+            | "string" -> Some NativeTypes.Types.stringType
+            | "unit" -> Some NativeTypes.Types.unitType
+            | "decimal" -> Some NativeTypes.Types.decimalType
+            // The bare quotation type, the type of `<@@ e @@>`: `Expr<ty>` for a fresh `ty` (D9).
+            | "Expr" -> Some (NativeType.TApp(NativeTypes.Types.exprTyCon, [ freshTypeVar dummyRange ]))
+            | _ -> None
 
 //-------------------------------------------------------------------------
 // Measure syntax → Dimension: the one translator (design a.4)
@@ -1247,7 +1363,7 @@ let dimensionOfSyntax
             |> Result.bind (fun (d, ctx) -> bounded r (Dimension.pow n d) |> Result.map (fun d -> d, ctx)))
 
     let named (path: string list) (r: range) (ctx: MeasureContext) =
-        match MeasureEnv.tryFind path env.Measures with
+        match tryLookupMeasure path env with
         | Some def -> Ok(MeasureDef.dimension def, ctx)
         | None ->
             let name = String.concat "." path
@@ -1406,8 +1522,28 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
         match head with
         // A head resolved from a type name is always a constructor; no syntax names a carrier variable.
         | NativeType.TNum(CarrierRef.Carrier carrier, dim) -> numericApplication env carrier dim typeArgs r
-        | NativeType.TApp(tyCon, _) -> NativeType.TApp(tyCon, argumentsFor tyCon typeArgs)
-        | other -> other
+        | NativeType.TApp(tyCon, _) ->
+            if tyCon.ParamKinds.Length <> typeArgs.Length then
+                addNativeError DiagnosticCodes.CCS8004_ArityMismatch r $"Type '{tyCon.Name}' expects {tyCon.ParamKinds.Length} arguments" env
+                NativeType.TError "Type argument arity mismatch"
+            else
+                let arguments = argumentsFor tyCon typeArgs
+                match arguments |> List.tryPick (function NativeType.TError message -> Some message | _ -> None) with
+                | Some message -> NativeType.TError message
+                | None -> NativeType.TApp(tyCon, arguments)
+        | NativeType.TForall(parameters, body) ->
+            if parameters.Length <> typeArgs.Length then
+                addNativeError DiagnosticCodes.CCS8004_ArityMismatch r $"Type abbreviation expects {parameters.Length} arguments" env
+                NativeType.TError "Type argument arity mismatch"
+            else
+                let args = List.map2 (fun (parameter: TypeParam) arg ->
+                    if parameter.Kind = TypeParamKind.Measure then measureArgument env arg else resolveSynType env arg) parameters typeArgs
+                match args |> List.tryPick (function NativeType.TError message -> Some message | _ -> None) with
+                | Some message -> NativeType.TError message
+                | None -> instantiate parameters args body
+        | _ ->
+            addNativeError DiagnosticCodes.CCS8092_TypeArgumentsOnNonScheme r "Type does not accept type arguments" env
+            NativeType.TError "Unexpected type arguments"
 
     let hasMeasureParameter (tyCon: TypeConRef) = List.contains TypeParamKind.Measure tyCon.ParamKinds
 
@@ -1416,22 +1552,31 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
         // Simple type name: int, string, MyType, Module.Type
         let path = idents |> List.map (fun id -> id.idText)
         let name = String.concat "." path
-        match resolveTypeName name env with
-        | Some ty ->
+        if isWidthNamedNumericType name then
             warnWidthSpelling name synType.Range env
-            ty
+            NativeType.TError "Width-named numeric type"
+        else
+        match resolveTypeName name env with
+        | Some ty -> ty
         | None ->
             // A measure name where a type is required is a sort mismatch (design a.4, CCS8045),
             // never an unknown type; anything else is the unknown-type error as before.
-            match MeasureEnv.tryFind path env.Measures with
+            match tryLookupMeasure path env with
             | Some _ -> refuseMeasure env (MeasureFailure.SortMismatch(name, synType.Range))
             | None -> refuseUnknownType env name synType.Range
+
+    | SynType.App(SynType.Paren(inner, _), less, args, commas, greater, postfix, r) ->
+        resolveSynType env (SynType.App(inner, less, args, commas, greater, postfix, r))
 
     | SynType.App(typeName, _, typeArgs, _, _, _, r) ->
         // Generic type application: nativeptr<byte>, List<int>, Option<string>, float<m>
         match typeName with
         | SynType.LongIdent(SynLongIdent(idents, _, _)) ->
             let name = idents |> List.map (fun id -> id.idText) |> String.concat "."
+            if isWidthNamedNumericType name then
+                warnWidthSpelling name r env
+                NativeType.TError "Width-named numeric type"
+            else
             match resolveTypeName name env with
             // A numeric carrier or a measure-parameterised constructor reads its arguments in
             // their own sorts, before any built-in constructor is tried, so that no measure
@@ -1439,6 +1584,7 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
             | Some (NativeType.TNum _ as head) ->
                 warnWidthSpelling name r env
                 apply head typeArgs r
+            | Some (NativeType.TForall _ as head) -> apply head typeArgs r
             | Some (NativeType.TApp(tyCon, _) as head) when hasMeasureParameter tyCon -> apply head typeArgs r
             | resolved ->
                 let argTys = typeArgs |> List.map (resolveSynType env)
@@ -1448,30 +1594,21 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
                 | None ->
                     // Fall back to regular type resolution (user-defined generics)
                     match resolved with
-                    | Some (NativeType.TApp(tyCon, _)) -> NativeType.TApp(tyCon, argTys)
-                    | Some ty -> ty
+                    | Some (NativeType.TApp _ as head) | Some (NativeType.TForall _ as head) -> apply head typeArgs r
+                    | Some ty -> apply ty typeArgs r
                     | None -> refuseUnknownType env name r
         | _ ->
             // Complex type expression - recurse
             apply (resolveSynType env typeName) typeArgs r
 
-    | SynType.LongIdentApp(typeName, SynLongIdent(idents, _, _), _, typeArgs, _, _, r) ->
-        // Qualified generic: Module.List<int>
-        let name = idents |> List.map (fun id -> id.idText) |> String.concat "."
-        let baseTy = resolveSynType env typeName
-        match baseTy with
-        | NativeType.TNum _ -> apply baseTy typeArgs r
-        | NativeType.TApp(tyCon, _) when hasMeasureParameter tyCon -> apply baseTy typeArgs r
+    | SynType.LongIdentApp(typeName, SynLongIdent(idents, _, _), less, typeArgs, commas, greater, r) ->
+        match typeName with
+        | SynType.LongIdent(SynLongIdent(prefix, _, _)) ->
+            let qualified = SynType.LongIdent(SynLongIdent(prefix @ idents, [], []))
+            resolveSynType env (SynType.App(qualified, less, typeArgs, commas, greater, false, r))
         | _ ->
-            let argTys = typeArgs |> List.map (resolveSynType env)
-            // Try built-in type constructor first
-            match tryResolveBuiltinTypeConstructor name argTys with
-            | Some ty -> ty
-            | None ->
-                // Fall back to regular type resolution
-                match baseTy with
-                | NativeType.TApp(tyCon, _) -> NativeType.TApp(tyCon, argTys)
-                | _ -> baseTy
+            addNativeError DiagnosticCodes.CCS8706_UndefinedType r "A qualified generic type requires an established named constructor" env
+            NativeType.TError "Qualified type constructor is not established"
 
     | SynType.Tuple(isStruct, segments, r) ->
         // Tuple type: int * string * bool. A `/` segment is measure syntax (`m / s`), which where
@@ -1494,10 +1631,9 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
         NativeType.TFun(argTy, retTy)
 
     | SynType.Var(SynTypar(ident, _, _), _) ->
-        // Type variable: 'a, 'T
-        let name = "'" + ident.idText
-        let range = rangeToSourceRange ident.idRange
-        NativeType.TVar(freshTypeParam name TypeParamKind.Type range)
+        let parameter = resolveTypeParameter TypeParamKind.Type ident env
+        if parameter.Kind = TypeParamKind.Type then NativeType.TVar parameter
+        else NativeType.TError "Expected a value type"
 
     | SynType.Array(rank, elemType, _) ->
         // Array type: int[], int[,]
@@ -1562,4 +1698,3 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
     | SynType.SignatureParameter(_, _, _idOpt, ty, _) ->
         // Signature parameter - resolve the underlying type
         resolveSynType env ty
-

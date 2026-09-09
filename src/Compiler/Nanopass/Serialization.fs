@@ -127,6 +127,21 @@ let emitSaturationRecipes (recipeSet: RecipeSet) : unit =
 // DIAGNOSTIC SERIALIZATION (using FSharp.Json)
 //=============================================================================
 
+/// Created recipes refer to graph nodes; serialize their artifact summary rather
+/// than traversing mutable type-inference cells and non-string measure-map keys.
+/// The full node records are available in the corresponding PSG artifact.
+let serializeDiagnostics (diagnostics: RecipeDiagnostic list) : string =
+    diagnostics
+    |> List.map (fun diagnostic ->
+        let result =
+            match diagnostic.Result with
+            | RecipeCreated recipe -> sprintf "{\"RecipeCreated\":%s}" (serializeRecipe recipe)
+            | other -> Json.serialize other
+        sprintf "{\"NodeId\":%s,\"ElaborationKind\":\"%s\",\"Result\":%s}"
+            (Json.serialize diagnostic.NodeId) (escapeJson diagnostic.ElaborationKind) result)
+    |> String.concat ",\n"
+    |> sprintf "[%s]"
+
 /// Emit intrinsic diagnostics (artifact 02a)
 let emitIntrinsicDiagnostics (diagnostics: RecipeDiagnostic list) : unit =
     // Use artifact ID 2 with "a" suffix convention: "02a_intrinsic_diagnostics.json"
@@ -136,7 +151,7 @@ let emitIntrinsicDiagnostics (diagnostics: RecipeDiagnostic list) : unit =
     | Some recipePath ->
         // Replace "02_intrinsic_recipes.json" with "02a_intrinsic_diagnostics.json"
         let diagPath = recipePath.Replace("02_intrinsic_recipes.json", "02a_intrinsic_diagnostics.json")
-        let json = Json.serialize diagnostics
+        let json = serializeDiagnostics diagnostics
         ensureDirectoryForFilePath diagPath
         System.IO.File.WriteAllText(diagPath, json)
         if isVerbose() then printfn "[CCS] Wrote intrinsic diagnostics: %s" diagPath
@@ -148,7 +163,7 @@ let emitSaturationDiagnostics (diagnostics: RecipeDiagnostic list) : unit =
     | Some recipePath ->
         // Replace "04_saturation_recipes.json" with "04a_saturation_diagnostics.json"
         let diagPath = recipePath.Replace("04_saturation_recipes.json", "04a_saturation_diagnostics.json")
-        let json = Json.serialize diagnostics
+        let json = serializeDiagnostics diagnostics
         ensureDirectoryForFilePath diagPath
         System.IO.File.WriteAllText(diagPath, json)
         if isVerbose() then printfn "[CCS] Wrote saturation diagnostics: %s" diagPath

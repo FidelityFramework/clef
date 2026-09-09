@@ -58,6 +58,43 @@ let checkTuple
 // Array/List Expressions
 //-------------------------------------------------------------------------
 
+/// Recover explicit elements from the body of ArrayOrListComputed. The parser
+/// uses this case for nonempty literals as well as comprehensions.
+let rec tryLiteralCollectionElements (expr: SynExpr) : SynExpr list option =
+    match expr with
+    | SynExpr.Sequential(_, true, first, rest, _, _) ->
+        match tryLiteralCollectionElements first, tryLiteralCollectionElements rest with
+        | Some firstElements, Some restElements -> Some (firstElements @ restElements)
+        | _ -> None
+    | SynExpr.Paren(inner, _, _, _)
+    | SynExpr.Typed(inner, _, _)
+    | SynExpr.DebugPoint(_, _, inner) ->
+        // Parentheses retain one element even when its expression is sequential.
+        tryLiteralCollectionElements inner |> Option.map (fun _ -> [expr])
+    | SynExpr.For _
+    | SynExpr.ForEach _
+    | SynExpr.While _
+    | SynExpr.WhileBang _
+    | SynExpr.IfThenElse _
+    | SynExpr.Match _
+    | SynExpr.MatchBang _
+    | SynExpr.TryWith _
+    | SynExpr.TryFinally _
+    | SynExpr.LetOrUse _
+    | SynExpr.Do _
+    | SynExpr.DoBang _
+    | SynExpr.ComputationExpr _
+    | SynExpr.YieldOrReturn _
+    | SynExpr.YieldOrReturnFrom _
+    | SynExpr.ImplicitZero _
+    | SynExpr.IndexRange _
+    | SynExpr.Sequential _
+    | SynExpr.SequentialOrImplicitYield _ ->
+        // These bodies can yield zero, one, or many elements. Their result
+        // requires comprehension elaboration, including any nested yields.
+        None
+    | _ -> Some [expr]
+
 let checkArrayOrList
     (checkExpr: CheckExprFn)
     (env: TypeEnv)
@@ -87,7 +124,7 @@ let checkArrayOrList
     builder.Create(kind, collectionTy, range, children = childIds)
 
 //-------------------------------------------------------------------------
-// ArrayOrListComputed: [| for x in xs -> f x |] or [ for x in xs -> f x ]
+// ArrayOrListComputed: nonempty literals and collection comprehensions
 //-------------------------------------------------------------------------
 
 let checkArrayOrListComputed
@@ -99,30 +136,12 @@ let checkArrayOrListComputed
     (range: SourceRange)
     : SemanticNode =
 
-    // A one-line literal `[| e1; e2; e3 |]` or `[ e1; e2; e3 ]` arrives as one Sequential
-    // chain (isTrueSeq); its elements are the chain's items, checked and typed individually,
-    // exactly like `checkArrayOrList` and exactly as the multi-line form of the same literal
-    // is. Comprehension bodies (for/while/ranges/yield) keep the single computed body.
-    let rec flattenElements (e: SynExpr) : SynExpr list =
-        match e with
-        | SynExpr.Sequential(_, true, e1, e2, _, _) -> e1 :: flattenElements e2
-        | other -> [other]
-    let isComprehension =
-        match compExpr with
-        | SynExpr.ForEach _ | SynExpr.For _ | SynExpr.While _
-        | SynExpr.IndexRange _ | SynExpr.YieldOrReturn _ | SynExpr.YieldOrReturnFrom _ -> true
-        | _ -> false
-    if not isComprehension then
-        checkArrayOrList checkExpr env builder isArray (flattenElements compExpr) range
-    else
-    let compNode = checkExpr env builder compExpr
-    let elemType = freshTypeVar range
-    let resultType = if isArray then NativeType.TApp(Types.arrayTyCon, [elemType]) else NativeType.TList elemType
-    builder.Create(
-        SemanticKind.ArrayExpr [compNode.Id],
-        resultType,
-        range,
-        children = [compNode.Id])
+    match tryLiteralCollectionElements compExpr with
+    | Some elements -> checkArrayOrList checkExpr env builder isArray elements range
+    | None ->
+        let message = "Computed list and array expressions are not yet supported; use explicit collection elements"
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct compExpr.Range message env
+        builder.Create(SemanticKind.Error message, NativeType.TError message, range)
 
 //-------------------------------------------------------------------------
 // Record Expressions
@@ -138,6 +157,8 @@ let checkRecord
     (range: SourceRange)
     : SemanticNode =
 
+    let expectedRecordType = env.ExpectedRecordType |> Option.map applySubst
+    let env = { env with ExpectedRecordType = None }
     let copyNode = copyInfo |> Option.map (fun (expr, _) -> checkExpr env builder expr)
 
     // Extract field names and check expressions
@@ -166,11 +187,32 @@ let checkRecord
         | Some copyExpr ->
             // Copy-update expression: { existingRecord with Field = value }
             // The type comes from the copied record
+            for fieldName, _, exprNode in fieldNodes do
+                match tryResolveRecordFieldType copyExpr.Type fieldName env with
+                | Some expected -> addConstraint (Constraint.Equals(expected, exprNode.Type, range)) env
+                | None -> addNativeError DiagnosticCodes.CCS8706_UndefinedType recordRange $"Unknown record field: {fieldName}" env
             copyExpr.Type
         | None ->
             // Fresh record expression: { Field1 = v1; Field2 = v2 }
-            // Resolve type from field labels
-            match resolveRecordTypeFromFields fieldNames typeQualifier range env with
+            // An explicit annotation supplies an owner and its instantiated arguments.
+            // Otherwise only labels visible in the lexical scope participate in inference.
+            let resolved =
+                match expectedRecordType with
+                | Some (NativeType.TApp(owner, _) as expected)
+                    when Map.tryFind owner.Name env.RecordDefs
+                         |> Option.exists (fun record -> record.TypeCon.Module = owner.Module) ->
+                    let conflictingQualifier =
+                        fieldNodes |> List.exists (fun (_, qualifier, _) ->
+                            qualifier |> Option.exists (fun name ->
+                                tryLookupTypeDef name env
+                                |> Option.forall (fun specified -> specified.Name <> owner.Name || specified.Module <> owner.Module)))
+                    if List.isEmpty fieldNames then
+                        Result.Error(DiagnosticCodes.CCS8701_NoFields, "Record expression must have at least one field")
+                    elif conflictingQualifier then
+                        Result.Error(DiagnosticCodes.CCS8003_TypeMismatch, "Qualified record fields do not belong to the annotated record type")
+                    else Result.Ok expected
+                | _ -> resolveRecordTypeFromFields fieldNames typeQualifier range env
+            match resolved with
             | Result.Ok resolvedTy ->
                 // Verify field types match (add constraints)
                 // Each NativeType case must be handled explicitly - no catch-all patterns
@@ -178,11 +220,11 @@ let checkRecord
                 | NativeType.TApp(tyCon, _) ->
                     // Expected case: nominal record type like `Person` or `Record<'a>`
                     match Map.tryFind tyCon.Name env.RecordDefs with
-                    | Some recordInfo ->
+                    | Some _ ->
                         // Add constraints: each field expression must match field type
                         for (fieldName, _, exprNode) in fieldNodes do
-                            match recordInfo.Fields |> List.tryFind (fun (n, _) -> n = fieldName) with
-                            | Some (_, expectedTy) ->
+                            match tryResolveRecordFieldType resolvedTy fieldName env with
+                            | Some expectedTy ->
                                 addConstraint (Constraint.Equals(exprNode.Type, expectedTy, range)) env
                             | None ->
                                 // Field not found in record definition - this is an error
@@ -375,7 +417,7 @@ let checkMatchLambda
     // Function keyword lambdas have no outer captures (synthetic)
     builder.SetEmissionStrategy(matchNode.Id, EmissionStrategy.SeparateFunction 0)
 
-    lambdaNode
+    builder.SetMetadata(lambdaNode.Id, ClosureMetadata.LambdaExpression, MetadataValue.Bool true)
 
 
 //-------------------------------------------------------------------------

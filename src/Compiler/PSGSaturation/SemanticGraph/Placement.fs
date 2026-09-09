@@ -30,11 +30,10 @@ open Clef.Compiler.NativeTypedTree.Expressions.Intrinsics
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 
-/// The words of the CPU leg's pointer-sized realisations (`SettledSlot.Pointer`): an address, a
-/// function value's closure pair, and a view of a buffer (a memref descriptor: two addresses, an
+/// The words of the CPU leg's pointer-sized realisations (`SettledSlot.Pointer`): an address and
+/// a view of a buffer (a memref descriptor: two addresses, an
 /// offset, a size and a stride). Read here into the layout; never summed below the graph.
 let [<Literal>] private HandleWords = 1
-let [<Literal>] private ClosureWords = 2
 let [<Literal>] private ViewWords = 5
 
 /// The aggregate types the graph reaches, each with the key `Layouts` holds it under.
@@ -48,6 +47,7 @@ type private Aggregate =
 
 /// What the pass reads of the graph once.
 type private Placer = {
+    Boundaries: Map<string, PlatformResolution.DeclaredLayout>
     Graph: SemanticGraph
     Context: PlatformContext option
     /// The declared Pointer width in bytes; None on fabric or where the description declares none.
@@ -157,7 +157,7 @@ let private slotOfKind (p: Placer) (range: ValueRange) (kind: NTUKind) : Settled
     | NTUKind.NTUbool -> SettledSlot.Bool
     | NTUKind.NTUchar -> SettledSlot.Char
     | NTUKind.NTUunit -> SettledSlot.Unit
-    | NTUKind.NTUstring | NTUKind.NTUarray | NTUKind.NTUlazy | NTUKind.NTUseq -> SettledSlot.Pointer ViewWords
+    | NTUKind.NTUstring | NTUKind.NTUarray | NTUKind.NTUborrowedview | NTUKind.NTUlazy | NTUKind.NTUseq -> SettledSlot.Pointer ViewWords
     | NTUKind.NTUlist | NTUKind.NTUmap | NTUKind.NTUset -> SettledSlot.Pointer HandleWords
     | NTUKind.NTUdecimal | NTUKind.NTUuuid | NTUKind.NTUdatetime | NTUKind.NTUtimespan ->
         SettledSlot.Opaque (sprintf "the kind %A, which the CPU leg does not place" kind)
@@ -168,7 +168,11 @@ let rec private slotOf (p: Placer) (range: ValueRange) (ty: NativeType) : Settle
     match ty with
     | NativeType.TVar _ -> SettledSlot.Opaque (sprintf "the unresolved type variable %s" (formatType ty))
     | NativeType.TForall (_, body) -> slotOf p range body
-    | NativeType.TFun _ -> SettledSlot.Pointer ClosureWords
+    // A function value is currently carried as a rank-one view of its code/env
+    // pair. Aggregate stores retain that view, not the two words it points at.
+    // Settling only the pointee size would let the descriptor overwrite the
+    // following field or the end of the aggregate allocation.
+    | NativeType.TFun _ -> SettledSlot.Pointer ViewWords
     | NativeType.TTuple _ | NativeType.TAnon _ | NativeType.TUnion _
     | NativeType.TLazy _ | NativeType.TSeq _ | NativeType.TSeqEnumerator _ -> SettledSlot.Pointer ViewWords
     | NativeType.TNativePtr _ | NativeType.TByref _ | NativeType.TList _ | NativeType.TMap _ | NativeType.TSet _ -> SettledSlot.Pointer HandleWords
@@ -261,7 +265,15 @@ let private payloadSlot (p: Placer) (fields: (string option * NativeType) list) 
 let private place (p: Placer) (a: Aggregate) : SettledLayout =
     match a with
     | Aggregate.Record (name, fields) ->
-        tile p (fields |> List.map (fun (field, ty) -> field, slotOf p (fieldRange p name field) ty))
+        let declared = Map.tryFind name p.Boundaries
+        tile p (fields |> List.map (fun (field, ty) ->
+            let physical = declared |> Option.bind (fun d -> d.PhysicalFields |> List.tryFind (fun f -> f.Name = field && f.Count = 1))
+            let slot =
+                match physical, Types.tryGetNTUKind ty with
+                | Some { Repr = "f32" }, Some (NTUKind.NTUfloat _) -> SettledSlot.Real 32
+                | Some { Repr = "f64" }, Some (NTUKind.NTUfloat _) -> SettledSlot.Real 64
+                | _ -> slotOf p (fieldRange p name field) ty
+            field, slot))
     | Aggregate.Tuple (key, elements) ->
         tile p (elements |> List.mapi (fun i ty -> sprintf "Item%d" (i + 1), slotOf p (tupleRange p key i) ty))
     | Aggregate.Union (_, cases) ->
@@ -295,6 +307,7 @@ let settle (context: PlatformContext option) (graph: SemanticGraph) : SemanticGr
                 Map.add key joined acc
             | _ -> acc) Map.empty
     let placer = {
+        Boundaries = (PlatformResolution.readDescriptors graph).Layouts |> List.choose (fun d -> d.RecordType |> Option.map (fun name -> name, d)) |> Map.ofList
         Graph = graph
         Context = context
         PointerBytes =
@@ -360,9 +373,9 @@ let private valueBytes (p: Placer) (range: ValueRange) (ty: NativeType) : Settle
             | None -> failwithf "Placement: the slot %A has no extent on this context" slot
 
 /// The slot a capture is held in, and its bytes: a mutable capture the address of its cell; a
-/// string decomposed into address and extent; a buffer-backed value (an array, a union, an
+/// string or array decomposed into address and extent; a buffer-backed value (a union, an
 /// option, a Result, a lazy, a seq, a function value's pair) its base address, extracted at
-/// construction; a record or tuple its base index as it arrives; a pointer-sized kind one word;
+/// construction, including a record or tuple; a pointer-sized kind one word;
 /// a scalar at its held width, an integer of the bare kind at the width its source node is held.
 let private captureSlot (p: Placer) (capture: CaptureInfo) : CaptureSlotKind * int =
     let ptr = pointerBytes p
@@ -374,13 +387,13 @@ let private captureSlot (p: Placer) (capture: CaptureInfo) : CaptureSlotKind * i
             | Some (bytes, _) -> CaptureSlotKind.Scalar slot, bytes
             | None -> failwithf "Placement: the capture '%s' has a slot %A with no extent" capture.Name slot
         match ty with
-        | NativeType.TFun _ | NativeType.TLazy _ | NativeType.TSeq _ | NativeType.TSeqEnumerator _ | NativeType.TUnion _ -> CaptureSlotKind.Address, ptr
-        | NativeType.TTuple _ | NativeType.TAnon _ | NativeType.TVar _ | NativeType.TForall _
+        | NativeType.TFun _ | NativeType.TLazy _ | NativeType.TSeq _ | NativeType.TSeqEnumerator _ | NativeType.TUnion _ | NativeType.TTuple _ -> CaptureSlotKind.Address, ptr
+        | NativeType.TAnon _ | NativeType.TVar _ | NativeType.TForall _
         | NativeType.TList _ | NativeType.TMap _ | NativeType.TSet _ | NativeType.TNativePtr _ | NativeType.TByref _ -> CaptureSlotKind.Handle, ptr
         | _ ->
             match Types.tryGetNTUKind ty with
-            | Some NTUKind.NTUstring -> CaptureSlotKind.Decomposed, 2 * ptr
-            | Some (NTUKind.NTUarray | NTUKind.NTUlazy | NTUKind.NTUseq) -> CaptureSlotKind.Address, ptr
+            | Some (NTUKind.NTUstring | NTUKind.NTUarray) -> CaptureSlotKind.Decomposed, 2 * ptr
+            | Some (NTUKind.NTUlazy | NTUKind.NTUseq | NTUKind.NTUborrowedview) -> CaptureSlotKind.Address, ptr
             | Some (NTUKind.NTUlist | NTUKind.NTUmap | NTUKind.NTUset | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff)
             | Some (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer)) | Some (NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer)) -> CaptureSlotKind.Handle, ptr
             | Some (NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register)) | Some (NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Register)) ->
@@ -392,7 +405,6 @@ let private captureSlot (p: Placer) (capture: CaptureInfo) : CaptureSlotKind * i
             | Some kind -> scalar (slotOfKind p ValueRange.Unbounded kind)
             | None ->
                 match aggregateOf p.Graph ty with
-                | Some (Aggregate.Record _ | Aggregate.Tuple _) -> CaptureSlotKind.Handle, ptr
                 | Some _ -> CaptureSlotKind.Address, ptr
                 | None -> CaptureSlotKind.Handle, ptr
 
@@ -405,6 +417,8 @@ let private requiresClosurePair (node: SemanticNode) : bool =
 /// A named function nested in another passes its captures as parameters: no environment.
 let private isNestedNamedFunction (graph: SemanticGraph) (node: SemanticNode) (enclosing: string option) : bool =
     Option.isSome enclosing &&
+    not (requiresClosurePair node) &&
+    not (node.Metadata |> Map.tryFind ClosureMetadata.LambdaExpression = Some (MetadataValue.Bool true)) &&
     (match node.Parent |> Option.bind (fun p -> SemanticGraph.tryGetNode p graph) with
      | Some { Kind = SemanticKind.Binding _ } -> true
      | _ -> false)
@@ -440,9 +454,12 @@ let private placeClosure (p: Placer) (node: SemanticNode) (bodyId: NodeId) (capt
 /// no closure (a function is an hw.module, a value its instance).
 let closures (context: PlatformContext option) (graph: SemanticGraph) : Map<NodeId, ClosurePlacement> =
     let onFabric = context |> Option.exists (fun ctx -> PlatformContext.substrateKind ctx = SubstrateKind.FPGA)
-    if onFabric then Map.empty
+    // Type checking without a target does not settle a physical closure layout.
+    // The native leg must supply an actual context declaring Pointer before emission.
+    if onFabric || context.IsNone then Map.empty
     else
         let placer = {
+            Boundaries = Map.empty
             Graph = graph
             Context = context
             PointerBytes = context |> Option.bind (fun ctx -> PlatformContext.pointerSize ctx |> Result.toOption)

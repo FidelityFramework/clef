@@ -26,11 +26,13 @@ module PlatformDeclaration = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformD
 module RangeAnalysis = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis
 module Placement = Clef.Compiler.PSGSaturation.SemanticGraph.Placement
 module Curry = Clef.Compiler.PSGSaturation.SemanticGraph.Curry
+module FunctionPointers = Clef.Compiler.PSGSaturation.SemanticGraph.FunctionPointers
 module Escape = Clef.Compiler.PSGSaturation.SemanticGraph.Escape
 module Meets = Clef.Compiler.PSGSaturation.SemanticGraph.Meets
 module PlatformBindings = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformBindings
 module Roots = Clef.Compiler.PSGSaturation.SemanticGraph.Roots
 open Clef.Compiler.NativeTypedTree.NameResolution
+module NameResolution = Clef.Compiler.NativeTypedTree.NameResolution
 open Clef.Compiler.NativeTypedTree.Expressions.Types
 
 // Handler module aliases for qualified dispatch
@@ -443,6 +445,8 @@ let private generalizeTopLevelFunction (builder: NodeBuilder) (env: TypeEnv) (no
         let resolved = applySubst node.Type
         // The environment is walked only when there is a measure or carrier variable to subtract.
         let envFree = if hasFreeMeasureOrCarrierVars resolved then envFreeMeasureAndCarrierIds builder node else Set.empty
+        let captured = env.BindingTypes |> Map.toSeq |> Seq.map (snd >> applySubst >> freeTypeVars) |> Set.unionMany
+        let envFree = Set.union envFree captured
         match generalizeType envFree resolved with
         | NativeType.TForall _ as scheme ->
             builder.SetType(node.Id, scheme)
@@ -883,24 +887,80 @@ let private dispatchStringAddition (nodes: Map<NodeId, SemanticNode>) : Map<Node
         |> Map.map (fun id node ->
             if Set.contains id stringAdditions then { node with Kind = SemanticKind.Intrinsic concat2 } else node)
 
+/// A source-reference check before monomorphisation or pruning. Project ownership
+/// comes from .fidproj; dependency exports and library APIs are not unused locals.
+let private unusedBindingDiagnostics (ownedSources: Set<string>) (graph: SemanticGraph) (diagnostics: Diagnostic list) =
+    let rec functionType = function
+        | NativeType.TFun _ -> true
+        | NativeType.TForall(_, body) -> functionType body
+        | _ -> false
+    let hasEntry = graph.Nodes.Values |> Seq.exists (fun node ->
+        match node.Kind with
+        | SemanticKind.Binding(name, _, _, root) -> name = "main" || root.IsSome
+        | _ -> false)
+    if Set.isEmpty ownedSources || not hasEntry then []
+    else
+        let within (outer: SourceRange) (inner: SourceRange) =
+            outer.File = inner.File
+            && (outer.Start.Line, outer.Start.Column) <= (inner.Start.Line, inner.Start.Column)
+            && (inner.End.Line, inner.End.Column) <= (outer.End.Line, outer.End.Column)
+        let qualified = buildQualifiedBindingIndex graph
+        let references =
+            graph.Nodes.Values
+            |> Seq.choose (fun node ->
+                let target =
+                    match node.Kind with
+                    | SemanticKind.VarRef(_, Some target) -> Some target
+                    | _ -> getStringLiteralBindingRef node qualified
+                target |> Option.map (fun target -> target, node.Range))
+            |> Seq.groupBy fst
+            |> Seq.map (fun (target, uses) -> target, uses |> Seq.map snd |> Seq.toList)
+            |> Map.ofSeq
+        graph.Nodes.Values |> Seq.choose (fun node ->
+            match node.Kind, Map.tryFind "SourceBinding.NameRange" node.Metadata, Map.tryFind "SourceBinding.FullRange" node.Metadata with
+            | SemanticKind.Binding(name, false, _, None), Some (MetadataValue.SourceRange nameRange), Some (MetadataValue.SourceRange fullRange)
+                when name <> "main" && not (name.StartsWith("_", System.StringComparison.Ordinal))
+                     && Set.contains nameRange.File ownedSources
+                     && (functionType node.Type || Map.tryFind "SourceBinding.Local" node.Metadata = Some (MetadataValue.Bool true))
+                     && not (Map.containsKey "FidelityExtern.Library" node.Metadata) ->
+                let used = Map.tryFind node.Id references |> Option.defaultValue [] |> List.exists (fun useRange -> not (within fullRange useRange))
+                let failed = diagnostics |> List.exists (fun diagnostic -> diagnostic.Severity = NativeDiagnosticSeverity.Error && within fullRange diagnostic.Range)
+                if used || failed then None
+                else Some {
+                    Severity = NativeDiagnosticSeverity.Warning
+                    Code = DiagnosticCodes.CCS8500_UnusedBinding
+                    Message =
+                        if functionType node.Type then sprintf "The function '%s' is not referenced in this executable project." name
+                        else sprintf "The local value '%s' is not referenced." name
+                    Range = nameRange
+                    RelatedNodes = [node.Id]
+                    Reachability = ReachabilityContext.Unknown
+                }
+            | _ -> None)
+        // Inline expansion can revisit the same source let. Its original
+        // identifier receives one diagnostic, regardless of expansion count.
+        |> Seq.distinctBy (fun diagnostic -> diagnostic.Range)
+        |> Seq.toList
+
 /// Build a CheckResult from builder state and diagnostics
 /// platformContext: Optional platform context for freestanding builds (enables entry point elaboration)
-let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) (platformContext: PlatformContext option) : CheckResult =
+let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) (platformContext: PlatformContext option) (ownedSources: Set<string>) : CheckResult =
     let declRoots = findDeclarationRoots builder.Nodes topLevelNodes
 
     // CRITICAL: Apply type substitutions to resolve type variables after constraint solving.
     // During type checking, nodes are created with fresh type variables that get unified
     // with concrete types. The substitutions are stored in UnionFind but not automatically
-    // applied to node types. We must apply them here to get concrete types in the output.
+    // applied to node types. Resolve them throughout node metadata as well, without choosing
+    // representations or retiring type structure consumed by later stages.
     let resolvedNodes =
         builder.Nodes
-        |> Map.map (fun _id node ->
-            { node with Type = applySubst node.Type })
+        |> Map.map (fun _id node -> SemanticGraph.mapNodeTypes applySubst node)
         // An application of a generalised binding records its instance (design b.4 step 4).
         |> annotateInstantiations
     // The saturation residual (CS-8): asserted here, where types have left the stores and before
     // the map is copied per instantiation; from here the node map is immutable (I2).
     let residual = saturationResidual builder resolvedNodes diagnostics
+    let sourceNodes = resolvedNodes
     let resolvedNodes =
         resolvedNodes
         // Generic (TForall) top-level functions are compiled once per instantiation.
@@ -925,6 +985,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         FieldRanges = lazy Map.empty
         ElementRanges = lazy Map.empty
         Layouts = lazy Map.empty
+        StaticStringPool = None
         Escaping = lazy Map.empty
         Codata = lazy Codata.empty
         // F is empty at construction; enrichment mints into it at saturation.
@@ -932,6 +993,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     }
 
     // Phase 1: Emit structural construction result
+    let unusedBindings = unusedBindingDiagnostics ownedSources { graph with Nodes = sourceNodes } (diagnostics @ residual)
     emitPhaseIfEnabled PhaseTypes.PhaseId.Structural graph diagnostics
 
     // Phase 4: Reachability analysis
@@ -997,7 +1059,6 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // spine; the witness never sees them (PHG paper 2.4).
     //=========================================================================
     let finalGraph = ObligationElaboration.foldIn (ObligationElaboration.elaborate finalGraph) finalGraph
-    ObligationDischarge.emit finalGraph  // Artifacts 06a/06b: the design-time dispatch
 
     //=========================================================================
     // The declared platform fills the context (plan D8, L-13): the graph is
@@ -1026,6 +1087,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // the graph carries it (Layouts). Composer reads it and computes no size.
     //=========================================================================
     let finalGraph = Placement.settle platformContext finalGraph
+    let finalGraph, staticLayoutDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout.settle finalGraph
+    let settledObligations, realLiteralDiagnostics = ObligationElaboration.elaborateSettled finalGraph
+    let finalGraph = ObligationElaboration.foldIn settledObligations finalGraph
+    ObligationDischarge.emit finalGraph  // Both structural and settled numeric obligations.
 
     //=========================================================================
     // Emission codata (CCS_Architecture.md, the coeffect table): the curried
@@ -1035,6 +1100,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // declaration roots' lambdas. Composer reads Codata and computes none of it.
     //=========================================================================
     let finalGraph, curry = Curry.normalize finalGraph
+    let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
     let finalGraph =
         let settled = finalGraph
         { finalGraph with
@@ -1046,7 +1112,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 Closures = Placement.closures platformContext settled
                 Bindings = PlatformBindings.resolve platformContext settled
                 Pins = PlatformBindings.pins settled
-                DeclarationRootLambdas = Roots.declarationRootLambdas settled } }
+                DeclarationRootLambdas = Roots.declarationRootLambdas settled
+                FunctionPointers = functionPointers } }
 
     let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
     let quotationErrors = quotationDiagnostics finalGraph
@@ -1090,7 +1157,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ rangeDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics
+        Diagnostics = taggedDiagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics
         PlatformContext = platformContext
     }
 
@@ -1131,7 +1198,10 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
         Literals.warnSuffix syn.Range constant env
         match Literals.checkConst env constant with
         | Result.Ok (ty, litVal) ->
-            builder.Create(SemanticKind.Literal litVal, ty, range)
+            let node = builder.Create(SemanticKind.Literal litVal, ty, range)
+            match Literals.realLiteralMetadata constant with
+            | Some metadata -> builder.SetMetadata(node.Id, "Numeric.RealLiteral", metadata)
+            | None -> node
         | Result.Error failure ->
             // CCS8018 (plan L-3) or a measure failure (design a.4): an error node, not a type.
             Literals.addConstFailure syn.Range failure env
@@ -1704,7 +1774,7 @@ let checkExpression (expr: SynExpr) : CheckResult =
     let node = checkExpr env builder expr
     let diagnostics = solveAndGetDiagnostics env !(env.Constraints)
 
-    buildResult builder [node] Map.empty diagnostics None
+    buildResult builder [node] Map.empty diagnostics None Set.empty
 
 //-------------------------------------------------------------------------
 // Type Checking: Binding Level
@@ -1724,7 +1794,7 @@ let checkLetBinding (binding: SynBinding) : CheckResult =
     let (node, _inlineBody, _isMutable, _literalValue) = Bindings.checkBinding checkExpr env builder binding None
     let diagnostics = solveAndGetDiagnostics env !(env.Constraints)
 
-    buildResult builder [node] Map.empty diagnostics None
+    buildResult builder [node] Map.empty diagnostics None Set.empty
 
 //-------------------------------------------------------------------------
 // Type Checking: Module Level
@@ -1824,6 +1894,15 @@ let private hasRequireQualifiedAccessAttribute (attrs: SynAttributes) : bool =
         )
     )
 
+let private checkModuleAttributes (attrs: SynAttributes) (at: range) (env: TypeEnv) =
+    let hasAutoOpen =
+        attrs |> List.exists (fun group -> group.Attributes |> List.exists (fun attr ->
+            attr.TypeName.LongIdent |> List.tryLast
+            |> Option.exists (fun id -> id.idText = "AutoOpen" || id.idText = "AutoOpenAttribute")))
+    if hasAutoOpen then
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct at
+            "Clef does not support AutoOpen. Import the module explicitly with 'open'." env
+
 /// Check a single module declaration, returning updated environment and nodes
 /// Environment threading is critical so that later declarations can see earlier bindings
 let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: ModuleContext) (decl: SynModuleDecl) : TypeEnv * SemanticNode list =
@@ -1897,6 +1976,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     |> List.fold (fun (accEnv, accResults) (binding, simpleName, placeholderTy, preCreatedNode) ->
                         let (node, inlineBodyOpt, isMutable, literalValueOpt) =
                             Bindings.checkBinding checkExpr envWithAllNames builder binding (Some preCreatedNode)
+                        Bindings.recordSourceBinding false builder binding node (inlineBodyOpt.IsSome || literalValueOpt.IsSome)
 
                         // Unify placeholder type with inferred type
                         addConstraint (Constraint.Equals(placeholderTy, node.Type, range)) accEnv
@@ -1914,18 +1994,26 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         (envWithNode, (node, inlineBodyOpt, simpleName) :: accResults)
                     ) (envWithAllNames, [])
 
-                let nodes = checkedBindings |> List.map (fun (node, _, _) -> node) |> List.rev
+                let updatedEnv, nodes =
+                    checkedBindings |> List.rev |> List.fold (fun (current, nodes) (node, inlineBody, name) ->
+                        let node = Bindings.generalizeRecursiveBinding env builder node
+                        let current = bindingNameSuffixes name |> List.fold (fun current qualified ->
+                            match inlineBody with
+                            | Some body -> addInlineBinding qualified node.Type (Some node.Id) body current
+                            | None -> addBinding qualified node.Type false (Some node.Id) true current) current
+                        current, nodes @ [node]) (updatedEnv, [])
                 (updatedEnv, nodes)
             | false ->
                 // NON-RECURSIVE BINDINGS: Sequential processing (existing behavior)
                 // Each binding can only reference bindings that came before it
                 bindings |> List.fold (fun (accEnv, accNodes) binding ->
                     let (node, inlineBodyOpt, isMutable, literalValueOpt) = Bindings.checkBinding checkExpr accEnv builder binding None
+                    Bindings.recordSourceBinding false builder binding node (inlineBodyOpt.IsSome || literalValueOpt.IsSome)
                     // Let-polymorphism: a top-level function with free type variables left after
                     // solving the constraints so far becomes a TForall scheme (Binding node + env).
                     let bindingType = generalizeTopLevelFunction builder accEnv node inlineBodyOpt.IsSome
                     // Add the binding to environment so later bindings can reference it
-                    // Register under all qualified name suffixes (handles AutoOpen modules)
+                    // Register lexical aliases and the canonical export path
                     // CRITICAL: Use actual isMutable flag for module-level mutable variables
                     // [<Literal>] bindings are registered for compile-time substitution
                     let simpleName = Bindings.getBindingName binding
@@ -1952,21 +2040,18 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
         // Type definitions - process each and potentially update environment
         let _ = rangeToSourceRange typesRange  // Range for the whole types block
 
-        // Every name a type is registered under: for a type inside nested modules, each suffix of
-        // the module path (AutoOpen modules are not tracked, so all suffixes are registered).
+        // Keep lexical shorthand inside this declaration scope. Only canonical paths escape
+        // its boundary; retain the existing primary TypeCon name used by graph consumers.
         let typeNameSuffixesOf (simpleTypeName: string) : string list =
-            match ctx.Path with
-            | [] | [_] -> [simpleTypeName]
-            | _ :: rest ->
-                let rec allSuffixes = function
-                    | [] -> [[]]
-                    | x :: xs -> (x :: xs) :: allSuffixes xs
-                rest
-                |> allSuffixes
-                |> List.map (fun modPath ->
-                    match modPath with
-                    | [] -> simpleTypeName
-                    | _ -> (modPath |> String.concat ".") + "." + simpleTypeName)
+            let localNames =
+                match ctx.Path with
+                | [] | [_] -> [simpleTypeName]
+                | _ :: rest ->
+                    let rec allSuffixes = function
+                        | [] -> [[]]
+                        | x :: xs -> (x :: xs) :: allSuffixes xs
+                    rest |> allSuffixes |> List.map (fun path -> String.concat "." (path @ [simpleTypeName]))
+            (localNames @ [String.concat "." (ctx.Path @ [simpleTypeName])]) |> List.distinct
 
         // `[<Measure>] type` declarations of the group register into the measure environment and
         // produce no type node (design a.3; sequence CS-4); the remaining members are checked
@@ -1986,6 +2071,19 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
         // to it counts as one word in the layout estimates), then, once its fields have resolved
         // against the placeholders, as its final constructor. The fold below reuses these final
         // constructors, so every reference to a group member carries the same TypeConRef.
+        // Each declaration owns parameter identities shared by its fields, constructor and aliases.
+        let declarationScopes =
+            typeDefns |> List.map (fun (SynTypeDefn(SynComponentInfo(_, declarations, _, longId, _, _, _, _), _, _, _, _, _)) ->
+                let name = longId |> List.map (fun ident -> ident.idText) |> String.concat "."
+                name, withDeclaredTypeParameters declarations env)
+            |> Map.ofList
+        let declarationEnv name current =
+            let scoped, _ = declarationScopes.[name]
+            { current with TypeParameters = scoped.TypeParameters; MeasureScope = scoped.MeasureScope }
+        let withParameterKinds name (constructor: TypeConRef) =
+            let _, parameters = declarationScopes.[name]
+            { constructor with ParamKinds = parameters |> List.map (fun parameter -> parameter.Kind) }
+
         let groupMembers =
             typeDefns |> List.choose (fun typeDef ->
                 let (SynTypeDefn(typeInfo, typeRepr, _, _, _, _)) = typeDef
@@ -2006,6 +2104,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         (simpleName, mkUnionTypeConRef (List.head (typeNameSuffixesOf simpleName)) arity TypeLayout.Opaque (List.length cases))
                     | Choice2Of2 (simpleName, arity, fields) ->
                         (simpleName, mkRecordTypeConRef (List.head (typeNameSuffixesOf simpleName)) ctx.Path arity TypeLayout.Opaque (List.length fields))
+                let tycon = withParameterKinds simpleName tycon
                 typeNameSuffixesOf simpleName |> List.fold (fun e n -> addTypeDef n tycon e) e) env
         let groupTycons : Map<string, TypeConRef> =
             groupMembers |> List.map (fun m ->
@@ -2014,13 +2113,13 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     let typeName = List.head (typeNameSuffixesOf simpleName)
                     // The layout is the union's identity; its tag and payload slot are settled at
                     // saturation (Placement), where the platform's representations are known.
-                    (typeName, mkUnionTypeConRef typeName arity TypeLayout.Union (List.length cases))
+                    (typeName, mkUnionTypeConRef typeName arity TypeLayout.Union (List.length cases) |> withParameterKinds simpleName)
                 | Choice2Of2 (simpleName, arity, fields) ->
                     let typeName = List.head (typeNameSuffixesOf simpleName)
                     let fieldInfosWithPins =
                         fields |> List.choose (fun (SynField(fieldAttrs, _, idOpt, fieldType, _, _, _, _, _)) ->
                             idOpt |> Option.map (fun ident ->
-                                (ident.idText, resolveSynType placeholderEnv fieldType, extractFieldPinNames fieldAttrs)))
+                                (ident.idText, resolveSynType (declarationEnv simpleName placeholderEnv) fieldType, extractFieldPinNames fieldAttrs)))
                     let fieldInfos = fieldInfosWithPins |> List.map (fun (n, t, _) -> (n, t))
                     let pinAttrs =
                         fieldInfosWithPins
@@ -2030,7 +2129,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     let tycon =
                         if Map.isEmpty pinAttrs then mkRecordTypeConRef typeName ctx.Path arity layout (List.length fieldInfos)
                         else mkRecordTypeConRefWithPins typeName ctx.Path arity layout (List.length fieldInfos) pinAttrs
-                    (typeName, tycon))
+                    (typeName, withParameterKinds simpleName tycon))
             |> Map.ofList
         let preEnv =
             groupMembers |> List.fold (fun e m ->
@@ -2049,44 +2148,23 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     let (SynComponentInfo(_, _, _, longId, _, _, _, _)) = typeInfo
                     longId |> List.map (fun id -> id.idText) |> String.concat "."
                 
-                // For nested modules, we need to register types with qualified names
-                // so they can be looked up as "ModuleName.TypeName"
-                // The module path relative to namespace (skip the namespace prefix)
-                // For path ["Alloy"; "Internal"] we want to prefix with "Internal."
-                // 
-                // Additionally, for [<AutoOpen>] modules, types inside them should be
-                // accessible without the AutoOpen module prefix. Since we don't track
-                // AutoOpen attributes, we register under ALL suffix variations to be safe.
-                // E.g., for path ["Alloy", "Fsil", "Internal"] and type "Condition":
-                //   - "Fsil.Internal.Condition"
-                //   - "Internal.Condition" 
-                //   - "Condition"
-                let typeNameSuffixes =
-                    match ctx.Path with
-                    | [] | [_] -> [simpleTypeName]  // No nested module or just namespace
-                    | _ :: rest -> 
-                        // Generate all suffix variations of the module path
-                        let rec allSuffixes = function
-                            | [] -> [[]]
-                            | x :: xs -> (x :: xs) :: allSuffixes xs
-                        
-                        rest
-                        |> allSuffixes
-                        |> List.map (fun modPath ->
-                            match modPath with
-                            | [] -> simpleTypeName
-                            | _ -> (modPath |> String.concat ".") + "." + simpleTypeName)
+                let typeNameSuffixes = typeNameSuffixesOf simpleTypeName
                 
                 // Primary name for semantic graph node (use most qualified)
                 let typeName = List.head typeNameSuffixes
+
+                let typeEnv = declarationEnv simpleTypeName accEnv
+                let _, typeParameters = declarationScopes.[simpleTypeName]
+                let typeArguments = typeParameters |> List.map typeParameterArgument
 
                 // Check if this is a type abbreviation
                 match typeRepr with
                 | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.TypeAbbrev(_detail, rhsType, _), _) ->
                     // Type abbreviation like `type I32 = int32`
                     // Resolve the target type using the current environment
-                    let targetTy = resolveSynType accEnv rhsType
-                    // Register under all name suffixes (handles AutoOpen modules)
+                    let targetTy = resolveSynType typeEnv rhsType
+                    let targetTy = if typeParameters.IsEmpty then targetTy else NativeType.TForall(typeParameters, targetTy)
+                    // Register lexical aliases and the canonical export path
                     let updatedEnv = 
                         typeNameSuffixes 
                         |> List.fold (fun env name -> addTypeAbbrev name targetTy env) accEnv
@@ -2120,7 +2198,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                             match synField with
                                             | SynField(_, _, idOpt, fieldType, _, _, _, _, _) ->
                                                 let fieldName = idOpt |> Option.map (fun id -> id.idText)
-                                                let fieldTy = resolveSynType accEnv fieldType
+                                                let fieldTy = resolveSynType typeEnv fieldType
                                                 (fieldName, fieldTy)
                                         )
                                     | SynUnionCaseKind.FullType(synType, _) ->
@@ -2140,7 +2218,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         match Map.tryFind typeName groupTycons with
                         | Some pre -> pre   // the group's pre-registered constructor (recursive types)
                         | None -> mkUnionTypeConRef typeName arity layout caseCount
-                    let unionType = mkSimpleType tyCon
+                    let unionType = NativeType.TApp(tyCon, typeArguments)
 
                     // Register type definition under all name suffixes
                     let envWithType =
@@ -2169,6 +2247,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                     // Multiple fields (e.g., Ok of int * string): tuple -> union
                                     let tupleType = NativeType.TTuple(multipleFields, false)
                                     NativeType.TFun(tupleType, unionType)
+                            let constructorType = if typeParameters.IsEmpty then constructorType else NativeType.TForall(typeParameters, constructorType)
                             // Add constructor binding with case info for proper UnionCase node creation
                             let caseInfo: Clef.Compiler.NativeTypedTree.NameResolution.UnionCaseInfo = {
                                 CaseName = caseName
@@ -2187,8 +2266,14 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                 |> List.fold (fun accEnv qualifiedName ->
                                     addUnionCaseBinding qualifiedName constructorType caseInfo accEnv
                                 ) env
-                            // Also register under simple name for unqualified access
-                            addUnionCaseBinding caseName constructorType caseInfo envWithQualifiedCases
+                            let (SynComponentInfo(attrs, _, _, _, _, _, _, _)) = typeInfo
+                            if hasRequireQualifiedAccessAttribute attrs then envWithQualifiedCases
+                            else
+                                // Opening the containing module exposes its cases, but never
+                                // flattens a child module or a qualified-access union.
+                                envWithQualifiedCases
+                                |> addUnionCaseBinding (String.concat "." (ctx.Path @ [caseName])) constructorType caseInfo
+                                |> addUnionCaseBinding caseName constructorType caseInfo
                         ) envWithType
 
                     // Create TypeDef node with case metadata for Alex
@@ -2218,7 +2303,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                 match idOpt with
                                 | Some ident ->
                                     let fieldName = ident.idText
-                                    let nativeType = resolveSynType accEnv fieldType
+                                    let nativeType = resolveSynType typeEnv fieldType
                                     let pinNames = extractFieldPinNames fieldAttrs
                                     Some (fieldName, nativeType, pinNames)
                                 | None ->
@@ -2253,7 +2338,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                             else
                                 mkRecordTypeConRefWithPins typeName ctx.Path typeArity layout (List.length fieldInfos) pinAttrs
                     
-                    // Register under all name suffixes (handles AutoOpen modules)
+                    // Register lexical aliases and the canonical export path
                     let updatedEnv = 
                         typeNameSuffixes 
                         |> List.fold (fun env name -> addTypeDef name tyCon env) accEnv
@@ -2262,6 +2347,9 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // This populates RecordDefs and (unless RequireQualifiedAccess) FieldLabels
                     let recordInfo: RecordTypeInfo = {
                         TypeCon = tyCon
+                        TypeParameters = typeParameters
+                        MutableFields = fields |> List.choose (fun (SynField(isMutable = isMutable; idOpt = ident)) ->
+                            if isMutable then ident |> Option.map (fun name -> name.idText) else None) |> Set.ofList
                         Fields = fieldInfos
                         Module = ctx.Path
                         RequireQualifiedAccess = requireQualifiedAccess
@@ -2272,7 +2360,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // Record constructor takes field values and returns the record type
                     // Use TApp - field information is carried in the TypeDef node (SemanticGraph.Types lookup)
                     // This follows the FCS pattern: TyconRef.Deref for metadata, not embedded in type refs
-                    let recordType = mkSimpleType tyCon
+                    let recordType = NativeType.TApp(tyCon, typeArguments)
                     let updatedEnv = addBinding typeName recordType false None true updatedEnv  // Type constructors are module-level
                     
                     // Create semantic node with field information for downstream consumers
@@ -2287,7 +2375,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Enum(_, _), _) ->
                     // Enum type
                     let tyCon = mkTypeConRef typeName 0 (TypeLayout.Inline(4, 4))  // Enums are typically i32
-                    // Register under all name suffixes (handles AutoOpen modules)
+                    // Register lexical aliases and the canonical export path
                     let updatedEnv = 
                         typeNameSuffixes 
                         |> List.fold (fun env name -> addTypeDef name tyCon env) accEnv
@@ -2306,7 +2394,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     let isStruct = match kind with SynTypeDefnKind.Struct -> true | _ -> hasStructAttribute attrs
                     let layout = if isStruct then TypeLayout.Opaque else TypeLayout.Reference ArenaAffinity.CurrentActor
                     let tyCon = mkTypeConRef typeName arity layout
-                    // Register under all name suffixes (handles AutoOpen modules)
+                    // Register lexical aliases and the canonical export path
                     let updatedEnv = 
                         typeNameSuffixes 
                         |> List.fold (fun env name -> addTypeDef name tyCon env) accEnv
@@ -2342,16 +2430,19 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
         let range = rangeToSourceRange moduleRange
 
         // Extract module name from moduleInfo
-        let moduleName =
-            let (SynComponentInfo(_, _, _, longId, _, _, _, _)) = moduleInfo
-            longId |> List.map (fun id -> id.idText) |> String.concat "."
+        let (SynComponentInfo(attrs, _, _, longId, _, _, _, _)) = moduleInfo
+        let moduleParts = longId |> List.map (fun id -> id.idText)
+        let moduleName = String.concat "." moduleParts
+        checkModuleAttributes attrs moduleRange env
 
         // Create nested context with extended path
-        let nestedPath = ctx.Path @ [moduleName]
+        let nestedPath = ctx.Path @ moduleParts
         let nestedCtx = { Path = nestedPath; IsRecursive = isRecursive }
 
         // Check all declarations in the nested module
-        let (nestedEnv, childNodes) = checkModuleDecls env builder nestedCtx nestedDecls
+        let declaredEnv =
+            { env with Resolution = NameResolution.registerModule nestedPath false (hasRequireQualifiedAccessAttribute attrs) env.Resolution }
+        let (nestedEnv, childNodes) = checkModuleDecls (enterModuleScope nestedPath declaredEnv) builder nestedCtx nestedDecls
         let childIds = childNodes |> List.map (fun n -> n.Id)
 
         // Create a ModuleDef node for the nested module
@@ -2362,7 +2453,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
             children = childIds
         )
 
-        (nestedEnv, [moduleNode])
+        (leaveModuleScope nestedPath declaredEnv nestedEnv, [moduleNode])
 
     | SynModuleDecl.Open(target, range) ->
         // Open statements affect name resolution - compose into resolver
@@ -2378,9 +2469,19 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         (sprintf "Cannot open namespace '%s'. BCL namespaces are not available in native compilation. Use intrinsics instead." ns) env
                     env
                 else
-                    addOpen ns env
+                    match NameResolution.tryResolveModule ns env.Resolution with
+                    | Some (_, scope) when scope.RequireQualifiedAccess ->
+                        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct range
+                            (sprintf "Module '%s' requires qualified access and cannot be opened." ns) env
+                        env
+                    | Some (path, _) -> addOpen path env
+                    | None ->
+                        addNativeError DiagnosticCodes.CCS8009_UndefinedValue range
+                            (sprintf "Module or namespace '%s' is not defined in this scope." ns) env
+                        env
             | SynOpenDeclTarget.Type _ ->
-                // open type - not currently supported in native
+                addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct range
+                    "Opening a type is not supported by the native checker." env
                 env
         (updatedEnv, [])
 
@@ -2388,10 +2489,15 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
         // Hash directives (#if, #nowarn, etc.) - preprocessing, no semantic nodes
         (env, [])
 
-    | SynModuleDecl.ModuleAbbrev _ ->
-        // Module abbreviations (module M = Long.Path) - affects name resolution
-        // TODO: Track in environment
-        (env, [])
+    | SynModuleDecl.ModuleAbbrev(ident, longId, range) ->
+        let name = longId |> List.map (fun id -> id.idText) |> String.concat "."
+        match NameResolution.tryResolveModule name env.Resolution with
+        | Some (path, scope) when not scope.IsNamespace ->
+            ({ env with Resolution = NameResolution.addModuleAlias ident.idText path env.Resolution }, [])
+        | _ ->
+            addNativeError DiagnosticCodes.CCS8009_UndefinedValue range
+                (sprintf "Module abbreviation '%s' must name an accessible module; '%s' does not." ident.idText name) env
+            (env, [])
 
     | SynModuleDecl.Attributes _ ->
         // Standalone attributes (assembly-level, etc.)
@@ -2438,7 +2544,7 @@ let checkModuleDeclarations (decls: SynModuleDecl list) : CheckResult =
     let (finalEnv, nodes) = checkModuleDecls env builder ctx decls
     let diagnostics = solveAndGetDiagnostics finalEnv !(env.Constraints)
 
-    buildResult builder nodes Map.empty diagnostics None
+    buildResult builder nodes Map.empty diagnostics None Set.empty
 
 //-------------------------------------------------------------------------
 // Type Checking: Module or Namespace Level
@@ -2446,7 +2552,7 @@ let checkModuleDeclarations (decls: SynModuleDecl list) : CheckResult =
 
 /// Check a module or namespace and return updated environment and semantic nodes
 let private checkModuleOrNamespace (env: TypeEnv) (builder: NodeBuilder) (moduleOrNs: SynModuleOrNamespace) : TypeEnv * ModulePath * SemanticNode list =
-    let (SynModuleOrNamespace(longId, isRecursive, kind, decls, _xmlDoc, _attribs, _accessibility, nsRange, _trivia)) = moduleOrNs
+    let (SynModuleOrNamespace(longId, isRecursive, kind, decls, _xmlDoc, attrs, _accessibility, nsRange, _trivia)) = moduleOrNs
 
     // Build the module path from the long identifier
     let modulePath: ModulePath = longId |> List.map (fun id -> id.idText)
@@ -2464,7 +2570,11 @@ let private checkModuleOrNamespace (env: TypeEnv) (builder: NodeBuilder) (module
     let ctx = { Path = modulePath; IsRecursive = isRecursive }
 
     // Check all declarations
-    let (updatedEnv, contentNodes) = checkModuleDecls env builder ctx decls
+    checkModuleAttributes attrs nsRange env
+    let declaredEnv =
+        { env with Resolution = NameResolution.registerModule modulePath isNamespace (hasRequireQualifiedAccessAttribute attrs) env.Resolution }
+    let (innerEnv, contentNodes) = checkModuleDecls (enterModuleScope modulePath declaredEnv) builder ctx decls
+    let updatedEnv = leaveModuleScope modulePath declaredEnv innerEnv
 
     if isNamespace then
         // Namespaces don't get a wrapper node - just return content
@@ -2516,9 +2626,10 @@ let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
         |> Map.ofList
 
     let solved = solveAndGetDiagnostics finalEnv !(initialEnv.Constraints)
-    let diagnostics = solved @ residualDiagnostics builder solved
+    let reported = solved @ List.rev !(initialEnv.Diagnostics)
+    let diagnostics = reported @ residualDiagnostics builder reported
 
-    buildResult builder allNodes modulePaths diagnostics None
+    buildResult builder allNodes modulePaths diagnostics None Set.empty
 
 /// Check multiple parsed implementation files together with optional platform context.
 /// Files are processed in order, with earlier files' bindings available to later files.
@@ -2527,7 +2638,7 @@ let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
 ///
 /// platformContext: Optional platform context. When Some, enables entry point elaboration
 /// for freestanding builds (adds _start wrapper that calls main).
-let checkParsedInputsWithPlatform (inputs: ParsedInput list) (platformContext: PlatformContext option) : CheckResult =
+let checkParsedInputsWithPlatformAndSources (inputs: ParsedInput list) (platformContext: PlatformContext option) (ownedSources: Set<string>) : CheckResult =
     let initialEnv = createTypeEnv()
     let builder = NodeBuilder()
     NodeId.reset()
@@ -2564,7 +2675,12 @@ let checkParsedInputsWithPlatform (inputs: ParsedInput list) (platformContext: P
     let reported = constraintDiags @ (List.rev !(initialEnv.Diagnostics))
     let allDiagnostics = reported @ residualDiagnostics builder reported
 
-    buildResult builder allNodes modulePaths allDiagnostics platformContext
+    buildResult builder allNodes modulePaths allDiagnostics platformContext ownedSources
+
+/// The general checking API has no project ownership facts, so it does not
+/// classify public declarations as unused application helpers.
+let checkParsedInputsWithPlatform (inputs: ParsedInput list) (platformContext: PlatformContext option) : CheckResult =
+    checkParsedInputsWithPlatformAndSources inputs platformContext Set.empty
 
 /// Check multiple parsed implementation files together (backward compatible version).
 /// Use checkParsedInputsWithPlatform for freestanding builds that need entry point elaboration.
@@ -2579,7 +2695,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
         // A signature file has no checker yet: the input contributes no graph, and that is an
         // error rather than a warning, because a warning would let the program lose a file silently.
         {
-            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty; FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Layouts = lazy Map.empty; Escaping = lazy Map.empty; Codata = lazy Codata.empty; Edges = [] }
+            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty; FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Layouts = lazy Map.empty; StaticStringPool = None; Escaping = lazy Map.empty; Codata = lazy Codata.empty; Edges = [] }
             Diagnostics = [{
                 Severity = NativeDiagnosticSeverity.Error
                 Code = DiagnosticCodes.CCS8401_UnsupportedConstruct

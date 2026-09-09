@@ -33,6 +33,19 @@ module StringRecipes = Clef.Compiler.Baker.Recipes.StringRecipes
 module NumericRecipes = Clef.Compiler.Baker.Recipes.NumericRecipes
 module MatchRecipes = Clef.Compiler.Baker.Recipes.MatchRecipes
 
+/// A native callback is a declaration reference, not a closure value. Preserve
+/// its edge for function-pointer settlement instead of eta-expanding it.
+let private isNativeCallbackArgument (graph: SemanticGraph) (node: SemanticNode) =
+    let rec parentUse child parent =
+        match SemanticGraph.tryGetNode parent graph with
+        | Some { Kind = SemanticKind.TypeAnnotation _; Parent = Some next } -> parentUse parent next
+        | Some { Kind = SemanticKind.Application (fn, [arg]) } when arg = child ->
+            match SemanticGraph.tryGetNode fn graph with
+            | Some { Kind = SemanticKind.Intrinsic info } -> info.Module = IntrinsicModule.FnPtr && info.Operation = "ofFunction"
+            | _ -> false
+        | _ -> false
+    node.Parent |> Option.exists (parentUse node.Id)
+
 //-------------------------------------------------------------------------
 // Type Extraction Helpers (from HOFDecomposition)
 //-------------------------------------------------------------------------
@@ -361,7 +374,8 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
         RecipeCreated (toRecipe node.Id "UnionCase" result)
 
     | SemanticKind.Lambda(params', body, captures, enclosing, context) when List.isEmpty captures ->
-        // Zero-capture lambda — check if it's in value position (argument to a function).
+        // Anonymous function expressions are values in bindings, fields, branches and
+        // returns as well as arguments. Named declarations remain direct functions.
         // When a lambda is passed as an argument, it needs closure pair construction
         // ({code_ptr, null_env}) even with zero captures, for uniform calling convention.
         //
@@ -369,6 +383,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
         // the developer. The developer writes `(fun x -> x * 2)` and the compiler
         // handles the value representation.
         let isInValuePosition =
+            node.Metadata |> Map.tryFind ClosureMetadata.LambdaExpression = Some (MetadataValue.Bool true) ||
             match node.Parent with
             | Some parentId ->
                 match SemanticGraph.tryGetNode parentId graph with
@@ -381,7 +396,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                 | None -> false
             | None -> false
 
-        if isInValuePosition then
+        if isInValuePosition && not (isNativeCallbackArgument graph node) then
             let ctx = mkContext node.Range node.Type graph.Platform "Lambda" node.Id
             // Enrichment: create a new Lambda node identical to the original
             // but with ClosureMetadata marking it for closure pair construction.
@@ -408,21 +423,20 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
             NotApplicable "Zero-capture lambda not in value position"
 
     | SemanticKind.VarRef (name, Some defId) ->
-        // A named, capture-free function in value position (an argument, a binding's value, a
-        // field, a return): the closure the developer wrote by naming the function. Elaborated
-        // here, as the zero-capture lambda above is, into an eta-expanded Lambda that applies
-        // the function to fresh parameters (one application per currying level, as the binding
-        // eta-expansion does), marked for closure pair construction. The pair and the function
-        // are then witnessed by the closure path like any other lambda, and no layer below the
-        // graph synthesises a forwarding function. A VarRef to a capturing local function is
-        // not elaborated: its binding already holds a closure value.
-        // The definition: a Binding whose value is a capture-free Lambda; its arity is the
-        // number of arguments a direct call of it takes
+        // A named, capture-free declaration in value position needs a closure pair.
+        // A reference to an existing function value already denotes a pair and must be
+        // evaluated here, especially when it reads a mutable slot. Elaborating that
+        // reference into a forwarding lambda would change snapshot semantics.
+        // Capturing named declarations require a separate promotion plan.
         let definitionArity =
             match SemanticGraph.tryGetNode defId graph with
-            | Some { Kind = SemanticKind.Binding _; Children = lambdaId :: _ } ->
+            | Some { Kind = SemanticKind.Binding (_, false, _, _); Children = lambdaId :: _ } ->
                 match SemanticGraph.tryGetNode lambdaId graph with
-                | Some { Kind = SemanticKind.Lambda (params', _, captures, _, _) } when List.isEmpty captures -> Some params'.Length
+                | Some ({ Kind = SemanticKind.Lambda (params', _, captures, _, _) } as lambda)
+                    when List.isEmpty captures &&
+                         Map.tryFind ClosureMetadata.LambdaExpression lambda.Metadata <> Some (MetadataValue.Bool true) &&
+                         Map.tryFind ClosureMetadata.RequiresClosurePair lambda.Metadata <> Some (MetadataValue.Bool true) ->
+                    Some params'.Length
                 | _ -> None
             | _ -> None
         let inCallPosition =
@@ -456,7 +470,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
         match definitionArity with
         | None ->
             NotApplicable "Reference is not to a capture-free named function"
-        | Some _ when inCallPosition ->
+        | Some _ when inCallPosition || isNativeCallbackArgument graph node ->
             NotApplicable "Function reference in call position"
         | Some _ when node.Parent |> Option.map inHardwareModuleDeclaration |> Option.defaultValue false ->
             NotApplicable "Declaration field of a hardware module Design"
@@ -498,8 +512,8 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                         | NativeType.TFun (_, rangeTy) -> typeAfter rangeTy (k - 1)
                         | other -> other
                 // The body: a direct call saturating the definition's arity (the flat application
-                // every direct call is), then one application per remaining currying level, as
-                // the binding eta-expansion applies a returned closure
+                // every direct call is), then one application per remaining currying level
+                // when that declaration returns another function.
                 let funcRef = mk (SemanticKind.VarRef (name, Some defId)) funcType []
                 let direct = min arity paramRefs.Length
                 let directArgs = paramRefs |> List.take direct |> List.map (fun r -> r.Id)

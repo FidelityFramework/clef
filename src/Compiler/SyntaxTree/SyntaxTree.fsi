@@ -145,8 +145,9 @@ type SynConst =
     /// F# syntax: 1.30f, 1.40e10f etc.
     | Single of single
 
-    /// F# syntax: 1.30, 1.40e10 etc.
-    | Double of double
+    /// Decimal real syntax, retaining the spelling before hosted approximation.
+    /// Bit-pattern literals have no decimal source spelling.
+    | Double of approximation: double * sourceText: string option
 
     /// F# syntax: 'a'
     | Char of char

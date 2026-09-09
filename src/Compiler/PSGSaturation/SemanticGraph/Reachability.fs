@@ -151,6 +151,10 @@ let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId>
     // if a string literal naming a compiled function is itself reachable,
     // the function it names is reachable.
     let qualifiedIndex = buildQualifiedBindingIndex graph
+    let mappedReferences =
+        (MappedBindings.read graph).Mappings
+        |> List.map (fun mapping -> mapping.Binding, [mapping.AcquireBinding; mapping.ReleaseBinding])
+        |> Map.ofList
 
     let rec walk (visited: Set<NodeId>) (nodeId: NodeId) =
         if Set.contains nodeId visited then
@@ -161,7 +165,10 @@ let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId>
             | Some node ->
                 let visited = Set.add nodeId visited
                 // Follow structural children and semantic references
-                let refs = getSemanticReferences node
+                let refs =
+                    match Map.tryFind node.Id mappedReferences with
+                    | Some nativeBindings -> nativeBindings
+                    | None -> getSemanticReferences node
                 // Also follow type references to ensure TypeDefs are reachable
                 let typeRefs = getTypeDefRefs node graph
                 // Follow intrinsic implementation function references
@@ -172,7 +179,11 @@ let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId>
                 // module initialises (D9): the walk does not enter them from the module. A reference
                 // from executed code still reaches one, and is CCS8066 there.
                 let allRefs =
-                    (node.Children @ refs @ typeRefs @ intrinsicRef @ symbolRef)
+                    // A mapped wrapper is a compiler-owned scoped declaration.
+                    // Its placeholder body is not executable Clef; the actual
+                    // acquisition/release bindings above remain dependencies.
+                    ((if Map.containsKey node.Id mappedReferences then [] else node.Children)
+                     @ refs @ typeRefs @ intrinsicRef @ symbolRef)
                     |> List.distinct
                     |> List.filter (fun r ->
                         match node.Kind with

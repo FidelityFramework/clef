@@ -219,13 +219,26 @@ let rec private mayUnify (a: NativeType) (b: NativeType) : bool =
     | NativeType.TTuple _, _ | _, NativeType.TTuple _ -> false
     | _ -> true
 
+/// The direct lambda chain that Curry.normalize will flatten after range analysis.
+/// Read its complete parameter list here too: `fun lo hi -> ...` is still two
+/// nested one-parameter nodes at this phase, while a saturated call already has
+/// both arguments. Comparing only the outer parameter loses the actual call's
+/// range evidence and can leave callback-to-callback argument cycles at Empty.
+let rec private lambdaShape (nodes: Map<NodeId, SemanticNode>) (id: NodeId) : ((string * NativeType * NodeId) list * NodeId) option =
+    match Map.tryFind id nodes with
+    | Some { Kind = SemanticKind.Lambda (parameters, body, _, _, _) } ->
+        match lambdaShape nodes body with
+        | Some (innerParameters, innerBody) -> Some (parameters @ innerParameters, innerBody)
+        | None -> Some (parameters, body)
+    | _ -> None
+
 /// The Lambda a function binding holds, if any (through a type annotation of the value).
 let private lambdaOf (reachable: Map<NodeId, SemanticNode>) (bindingId: NodeId) : (NodeId * (string * NativeType * NodeId) list * NodeId) option =
     let rec ofValue (id: NodeId) (depth: int) =
         if depth > 4 then None
         else
             match Map.tryFind id reachable with
-            | Some { Kind = SemanticKind.Lambda (parameters, body, _, _, _) } -> Some (id, parameters, body)
+            | Some { Kind = SemanticKind.Lambda _ } -> lambdaShape reachable id |> Option.map (fun (parameters, body) -> id, parameters, body)
             | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> ofValue inner (depth + 1)
             | _ -> None
     match Map.tryFind bindingId reachable with
@@ -283,7 +296,7 @@ let private resolveCallee (nodes: Map<NodeId, SemanticNode>) (candidates: Candid
     let value () = Callee.Value (reachable nodes candidates allArgs, poisonReaches nodes poisons allArgs)
     match Map.tryFind rootId nodes with
     | Some { Kind = SemanticKind.Intrinsic info } -> Some (Callee.Intrinsic info, allArgs)
-    | Some { Kind = SemanticKind.Lambda (parameters, body, _, _, _) } -> Some (Callee.Direct (parameters, body), allArgs)
+    | Some { Kind = SemanticKind.Lambda _ } -> lambdaShape nodes rootId |> Option.map (fun (parameters, body) -> Callee.Direct (parameters, body), allArgs)
     | Some { Kind = SemanticKind.VarRef (_, Some defId) } ->
         match lambdaOf nodes defId with
         | Some (_, parameters, body) -> Some (Callee.Direct (parameters, body), allArgs)
@@ -323,7 +336,7 @@ let private escapingOf (nodes: Map<NodeId, SemanticNode>) (ordered: SemanticNode
         ordered
         |> List.choose (fun node ->
             match node.Kind with
-            | SemanticKind.Lambda (parameters, body, _, _, _) ->
+            | SemanticKind.Lambda _ ->
                 let ownedByBinding =
                     match Map.tryFind node.Id parents |> Option.bind (fun p -> Map.tryFind p nodes) with
                     | Some { Kind = SemanticKind.Binding _ } -> true
@@ -335,7 +348,9 @@ let private escapingOf (nodes: Map<NodeId, SemanticNode>) (ordered: SemanticNode
                         |> Option.exists (fun p -> match p.Kind with SemanticKind.Binding _ -> true | _ -> false)
                     | _ -> false
                 if ownedByBinding || Set.contains node.Id calleePositions then None
-                else Some { LambdaId = node.Id; Parameters = parameters; Body = body; Offset = 0; Escape = escapeOf nodes parents node.Id }
+                else
+                    lambdaShape nodes node.Id |> Option.map (fun (parameters, body) ->
+                        { LambdaId = node.Id; Parameters = parameters; Body = body; Offset = 0; Escape = escapeOf nodes parents node.Id })
             | _ -> None)
     let referenced =
         ordered
@@ -817,7 +832,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     // binding's, or every candidate the value may be.
     let lambdasOfValue (id: NodeId) : (string * NativeType * NodeId) list list =
         match Map.tryFind id reachableNodes with
-        | Some { Kind = SemanticKind.Lambda (parameters, _, _, _, _) } -> [ parameters ]
+        | Some { Kind = SemanticKind.Lambda _ } -> lambdaShape reachableNodes id |> Option.map (fst >> List.singleton) |> Option.defaultValue []
         | Some { Kind = SemanticKind.VarRef (_, Some defId) } ->
             match lambdaOf reachableNodes defId with
             | Some (_, parameters, _) -> [ parameters ]
@@ -947,6 +962,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     // and signedness seed the nodes that cross. A record or field no descriptor declares takes no
     // seed and stays unobservable (CCS8011 names the missing declaration); nothing is invented.
     let descriptors = PlatformResolution.readDescriptors graph
+    let descriptors = { descriptors with Functions = descriptors.Functions @ ((CallbackDeclarations.read graph).Callbacks |> List.map (fun c -> c.Function)) }
     let inputSeeds =
         descriptors.Layouts
         |> List.fold (fun (acc: Map<string, Map<string, ValueRange>>) layout ->
@@ -970,6 +986,11 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                 | Some body, Some r -> Map.add body r.Range seeds
                 | _ -> seeds
             (seeds, declared @ (f.Parameters |> List.choose (fun (paramId, d) -> d |> Option.map (fun d -> paramId, d))))) (Map.empty, [])
+    let boundarySeeds =
+        ordered |> List.fold (fun seeds node ->
+            match CallbackDeclarations.invocationResult graph node.Id |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph node.Id) |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph node.Id) with
+            | Some result -> Map.add node.Id result.Range seeds
+            | None -> seeds) boundarySeeds
     // Every value stored into an array, by element type (§3.3): an array literal's elements (a
     // comprehension's yields), an indexer or `Array.set` assignment, `Array.create`'s seed,
     // `Array.init`'s function result (a named lambda's body, or every candidate's through a value),
@@ -989,6 +1010,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             | None -> Some (reachable reachableNodes candidates [] |> List.map (fun c -> c.Body))
         | Some { Kind = SemanticKind.Intrinsic _ } -> None
         | _ -> Some []
+    let referenceParameters = descriptors.Functions |> List.collect (fun f -> f.References) |> Map.ofList
     let (elementStores, elementSeeds) =
         ordered
         |> List.fold (fun (stores: Map<string, (NodeId * NodeId) list>, seeds: Map<string, ValueRange>) node ->
@@ -1027,10 +1049,18 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                         | _ -> false
                 let seeds =
                     if isBoundaryCall then
-                        node.Children
-                        |> List.fold (fun (s: Map<string, ValueRange>) argId ->
+                        let supplied =
+                            match Map.tryFind node.Id callees with
+                            | Some (Callee.Direct (parameters, _), args) when parameters.Length = args.Length ->
+                                List.zip parameters args |> List.map (fun ((_, _, paramId), arg) -> arg, Map.tryFind paramId referenceParameters)
+                            | _ -> node.Children |> List.map (fun arg -> arg, None)
+                        supplied
+                        |> List.fold (fun (s: Map<string, ValueRange>) (argId, declared) ->
                             match typeOf argId |> Option.bind arrayElementType with
-                            | Some elem -> Map.add (elementKey elem) ValueRange.Unbounded s
+                            | Some elem ->
+                                let key = elementKey elem
+                                let incoming = declared |> Option.map (fun d -> d.Range) |> Option.defaultValue ValueRange.Unbounded
+                                Map.add key (ValueRange.join (Map.tryFind key s |> Option.defaultValue ValueRange.Empty) incoming) s
                             | None -> s) seeds
                     else seeds
                 match Map.tryFind node.Id callees with
@@ -1587,6 +1617,7 @@ let private boundaryOf (nodes: Map<NodeId, SemanticNode>) (escaping: Map<NodeId,
     | SemanticKind.Application (funcId, args) ->
         let (rootId, allArgs) = flattenApplication nodes funcId args
         match Map.tryFind rootId nodes with
+        | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.FnPtr; Operation = "invoke" } } -> Some Boundary.ValueCall
         | Some { Kind = SemanticKind.Intrinsic _ } -> None
         | Some { Kind = SemanticKind.Lambda (parameters, _, _, _, _) } ->
             if bounded rootId || allArgs.Length > parameters.Length then Some Boundary.ValueCall else None
@@ -1760,7 +1791,7 @@ let private unobservableDiagnostics (program: Program) (state: State) : Diagnost
               Reachability = ReachabilityContext.Reachable })
 
 /// CCS8012 for every reachable integer of the bare kind whose bounded range no declared integer
-/// representation covers (§4.2): a warning, promoted by `--warnaserror`, naming the range and the
+/// representation covers (§4.2): a required conformance error, naming the range and the
 /// widest representation selected in its place; once per enclosing binding. Only on a context that
 /// declares integer representations (fabric declares none and synthesises the exact width).
 let private coverageDiagnostics (program: Program) (state: State) : Diagnostic list =
@@ -1786,10 +1817,10 @@ let private coverageDiagnostics (program: Program) (state: State) : Diagnostic l
         |> fun nodes ->
             oncePerBinding program nodes (fun node name where ->
                 let (r, rep) = Map.find node.Id reported
-                { Severity = NativeDiagnosticSeverity.Warning
+                { Severity = NativeDiagnosticSeverity.Error
                   Code = DiagnosticCodes.CCS8012_RangeNotCovered
                   Message =
-                    sprintf "The range %s of '%s'%s is not covered by any integer representation the platform description of '%s' declares; the widest, '%s' (%d bits, %s), is selected; bound the value with a comparison, a modulus or a clamp, or declare a wider representation"
+                    sprintf "The range %s of '%s'%s is not covered by any integer representation the platform description of '%s' declares; the widest, '%s' (%d bits, %s), is insufficient; bound the value with a comparison, a modulus or a clamp, or declare a wider representation"
                         (ValueRange.render r) name where ctx.PlatformId rep.Name rep.Bits
                         (RangeSources.declaredRange rep |> Option.map ValueRange.render |> Option.defaultValue "?")
                   Range = node.Range
@@ -1829,7 +1860,7 @@ let private boundaryDiagnostics (program: Program) (state: State) : Diagnostic l
             oncePerBinding program (found |> List.map fst) (fun node name where ->
                 let (lambdaId, r, rep) = Map.find node.Id byNode
                 let why = Map.tryFind lambdaId program.EscapingLambdas |> Option.map (sprintf ", which is %s,") |> Option.defaultValue ", a declaration root,"
-                { Severity = NativeDiagnosticSeverity.Warning
+                { Severity = NativeDiagnosticSeverity.Error
                   Code = DiagnosticCodes.CCS8012_RangeNotCovered
                   Message =
                     sprintf "The range %s of '%s'%s is not covered by '%s' (%d bits, %s), the representation of the platform description of '%s' at its declared Register width, the calling convention of '%s'%s so its parameters and result sit at the word; bound the value with a comparison, a modulus or a clamp, or change the declaration"
@@ -1880,7 +1911,7 @@ let private declaredDiagnostics (program: Program) (state: State) : Diagnostic l
                 let uncovered =
                     leaving f.Range values
                     |> List.choose (fun (v, r) ->
-                        at v NativeDiagnosticSeverity.Warning DiagnosticCodes.CCS8012_RangeNotCovered
+                        at v NativeDiagnosticSeverity.Error DiagnosticCodes.CCS8012_RangeNotCovered
                             (sprintf "The range %s of the value stored into field '%s' of '%s' is not covered by its declared representation '%s' (%d bits, %s); bound the value with a comparison, a modulus or a clamp, or change the declaration"
                                 (ValueRange.render r) f.Name (short typeName) f.Repr f.Bits (ValueRange.render f.Range)))
                 let wider =
@@ -1905,7 +1936,7 @@ let private declaredDiagnostics (program: Program) (state: State) : Diagnostic l
                 let uncovered =
                     leaving d.Range values
                     |> List.choose (fun (v, r) ->
-                        at v NativeDiagnosticSeverity.Warning DiagnosticCodes.CCS8012_RangeNotCovered
+                        at v NativeDiagnosticSeverity.Error DiagnosticCodes.CCS8012_RangeNotCovered
                             (sprintf "The range %s of the argument passed to parameter '%s' of '%s' is not covered by its declared representation (%d bits, %s) in the binding descriptor; bound the value with a comparison, a modulus or a clamp, or change the declaration"
                                 (ValueRange.render r) d.Name owner d.Bits (ValueRange.render d.Range)))
                 let wider =
@@ -1944,7 +1975,7 @@ let private spelledDiagnostics (program: Program) (state: State) : Diagnostic li
         let uncovered =
             oncePerBinding program (leaving |> List.map fst) (fun node name where ->
                 let (d, r) = Map.find node.Id byNode
-                { Severity = NativeDiagnosticSeverity.Warning
+                { Severity = NativeDiagnosticSeverity.Error
                   Code = DiagnosticCodes.CCS8012_RangeNotCovered
                   Message =
                     sprintf "The range %s of '%s'%s is not covered by '%s' (%d bits, %s), the representation its width-named spelling declares; bound the value with a comparison, a modulus or a clamp, or write `int` and declare the representation at the boundary"
@@ -2134,6 +2165,9 @@ let selectedRepresentationOf (graph: SemanticGraph) (range: ValueRange) : Numeri
 let selectedRepresentation (graph: SemanticGraph) (nodeId: NodeId) : NumericRepresentation option =
     match graph.Platform, SemanticGraph.tryGetNode nodeId graph with
     | Some ctx, Some node when isIntegerNode node && selectsFromDeclared ctx ->
+        match CallbackDeclarations.numericBoundary graph nodeId |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph nodeId) |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph nodeId) with
+        | Some declared -> (selectRange ctx declared.Range).Representation
+        | None ->
         match node.ValueRange, boundaryOfNode graph node with
         | Some r, Some _ -> registerRepresentation ctx r
         | Some r, None -> (selectNode ctx graph.Nodes node r).Representation
@@ -2183,6 +2217,9 @@ let heldWidthOf (graph: SemanticGraph) (range: ValueRange) : int option =
 let selectedWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
     match graph.Platform, SemanticGraph.tryGetNode nodeId graph with
     | Some ctx, Some node when isIntegerNode node && PlatformContext.substrateKind ctx <> SubstrateKind.FPGA ->
+        match CallbackDeclarations.numericBoundary graph nodeId |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph nodeId) |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph nodeId) with
+        | Some declared -> Some declared.Bits
+        | None ->
         match boundaryOfNode graph node with
         | Some _ -> registerWidth ctx
         | None ->

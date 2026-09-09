@@ -147,13 +147,14 @@ let getHeadPattern (binding: SynBinding) : SynPat =
 //-------------------------------------------------------------------------
 
 /// Extract function parameters from a LongIdent pattern
-/// For `let f x y = body`, returns Some [(x, ty); (y, ty)]
+/// Each parameter retains its own identifier range for graph navigation and diagnostics.
 /// For `let x = body`, returns None
 let tryGetFunctionParams
     (headPat: SynPat)
     (env: TypeEnv)
     (range: SourceRange)
-    : (string * NativeType) list option =
+    : (string * NativeType * SourceRange) list option =
+    let named (ident: Ident) ty = ident.idText, ty, rangeToSourceRange ident.idRange
     match headPat with
     | SynPat.LongIdent(_, _, _, argPats, _, _) ->
         match argPats with
@@ -166,30 +167,30 @@ let tryGetFunctionParams
                     match innerPat with
                     | SynPat.Const(SynConst.Unit, _) ->
                         // Unit literal - bind to dummy name
-                        [("_", Types.unitType)]
+                        [("_", Types.unitType, rangeToSourceRange innerPat.Range)]
                     | SynPat.Named(SynIdent(ident, _), _, _, _) ->
-                        [(ident.idText, freshTypeVar range)]
+                        [named ident (freshTypeVar range)]
                     | SynPat.Typed(typedInner, synType, _) ->
                         // Typed pattern like (name: NativeStr)
                         let annotatedType = resolveSynType env synType
                         match typedInner with
                         | SynPat.Named(SynIdent(ident, _), _, _, _) ->
-                            [(ident.idText, annotatedType)]
-                        | _ -> [("_", annotatedType)]
+                            [named ident annotatedType]
+                        | _ -> [("_", annotatedType, rangeToSourceRange typedInner.Range)]
                     | SynPat.Tuple(_, tuplePats, _, _) ->
                         tuplePats |> List.map (fun tuplePat ->
                             match tuplePat with
-                            | SynPat.Named(SynIdent(ident, _), _, _, _) -> (ident.idText, freshTypeVar range)
+                            | SynPat.Named(SynIdent(ident, _), _, _, _) -> named ident (freshTypeVar range)
                             | SynPat.Typed(SynPat.Named(SynIdent(ident, _), _, _, _), synType, _) ->
-                                (ident.idText, resolveSynType env synType)
-                            | _ -> ("_", freshTypeVar range))
-                    | _ -> [("_", freshTypeVar range)]
+                                named ident (resolveSynType env synType)
+                            | _ -> ("_", freshTypeVar range, rangeToSourceRange tuplePat.Range))
+                    | _ -> [("_", freshTypeVar range, rangeToSourceRange innerPat.Range)]
                 | SynPat.Named(SynIdent(ident, _), _, _, _) ->
-                    [(ident.idText, freshTypeVar range)]
+                    [named ident (freshTypeVar range)]
                 | SynPat.Const(SynConst.Unit, _) ->
                     // Unit literal - bind to dummy name
-                    [("_", Types.unitType)]
-                | _ -> [("_", freshTypeVar range)]
+                    [("_", Types.unitType, rangeToSourceRange pat.Range)]
+                | _ -> [("_", freshTypeVar range, rangeToSourceRange pat.Range)]
             )
             Some extractedParameters
         | _ -> None
@@ -198,6 +199,75 @@ let tryGetFunctionParams
 //-------------------------------------------------------------------------
 // Binding Checking
 //-------------------------------------------------------------------------
+
+/// Check construction before inline expansion can hide an allocating call, then
+/// check the elaborated value's storage. generalizeInEnv separately excludes
+/// variables belonging to existing storage and captures.
+let private isGeneralizableValue (env: TypeEnv) (builder: NodeBuilder) source (node: SemanticNode) =
+    let rec sourceValue = function
+        | SynExpr.Const _ | SynExpr.Ident _ | SynExpr.LongIdent _ | SynExpr.Lambda _ -> true
+        | SynExpr.Paren(inner, _, _, _) | SynExpr.Typed(inner, _, _) | SynExpr.Lazy(inner, _) -> sourceValue inner
+        | SynExpr.Tuple(_, items, _, _) | SynExpr.ArrayOrList(false, items, _) -> List.forall sourceValue items
+        | SynExpr.ArrayOrListComputed(false, body, _) ->
+            Clef.Compiler.NativeTypedTree.Expressions.Collections.tryLiteralCollectionElements body
+            |> Option.exists (List.forall sourceValue)
+        | SynExpr.Record(_, copied, fields, _) ->
+            (copied |> Option.forall (fst >> sourceValue))
+            && (fields |> List.forall (fun (SynExprRecordField(_, _, value, _, _)) -> value |> Option.exists sourceValue))
+        | SynExpr.AnonRecd(_, copied, fields, _, _) ->
+            (copied |> Option.forall (fst >> sourceValue))
+            && (fields |> List.forall (fun (_, _, value) -> sourceValue value))
+        | SynExpr.App(_, _, constructor, argument, _) -> unionConstructor constructor && sourceValue argument
+        | _ -> false
+    and unionConstructor = function
+        | SynExpr.Ident ident ->
+            tryLookupBinding ident.idText env |> Option.exists (fun binding -> binding.UnionCaseInfo.IsSome)
+        | SynExpr.LongIdent(_, SynLongIdent(idents, _, _), _, _) ->
+            let name = idents |> List.map (fun ident -> ident.idText) |> String.concat "."
+            tryLookupBinding name env |> Option.exists (fun binding -> binding.UnionCaseInfo.IsSome)
+        | SynExpr.Paren(inner, _, _, _) | SynExpr.TypeApp(inner, _, _, _, _, _, _) -> unionConstructor inner
+        | SynExpr.App(_, _, constructor, argument, _) -> unionConstructor constructor && sourceValue argument
+        | _ -> false
+    let rec safe id =
+        let node = builder.Nodes.[id]
+        match node.Kind with
+        | SemanticKind.Literal _ | SemanticKind.VarRef _ | SemanticKind.Lambda _ -> true
+        | SemanticKind.Intrinsic _ when node.Children.IsEmpty -> true
+        | SemanticKind.TypeAnnotation(inner, _) -> safe inner
+        | SemanticKind.TupleExpr items | SemanticKind.ListExpr items -> List.forall safe items
+        | SemanticKind.UnionCase(_, _, payload) -> payload |> Option.forall safe
+        | SemanticKind.RecordExpr(fields, copied) ->
+            let immutable =
+                match applySubst node.Type with
+                | NativeType.TApp(tycon, _) ->
+                    tryLookupRecordDef tycon.Name env
+                    |> Option.exists (fun record -> record.TypeCon.Module = tycon.Module && record.MutableFields.IsEmpty)
+                | NativeType.TAnon _ -> true
+                | _ -> false
+            immutable && (fields |> List.forall (snd >> safe)) && (copied |> Option.forall safe)
+        | SemanticKind.LazyExpr(thunk, _) ->
+            match builder.Nodes.[thunk].Kind with
+            | SemanticKind.Lambda(_, body, _, _, _) -> safe body
+            | _ -> false
+        | _ -> false
+    sourceValue source && safe node.Id
+
+/// Preserve the source identifier and RHS boundary before graph rewriting.
+/// Substituted inline/literal bindings need separate use tracking and remain
+/// exempt. The local marker distinguishes lexical values from module APIs.
+let recordSourceBinding (isLocal: bool) (builder: NodeBuilder) (binding: SynBinding) (node: SemanticNode) (substituted: bool) =
+    let (SynBinding(_, _, _, _, _, _, _, pattern, _, _, _, _, _)) = binding
+    let rec identifier = function
+        | SynPat.Named(SynIdent(ident, _), _, _, _) -> Some ident
+        | SynPat.LongIdent(longId, _, _, _, _, _) -> longId.LongIdent |> List.tryLast
+        | SynPat.Paren(inner, _) | SynPat.Typed(inner, _, _) -> identifier inner
+        | _ -> None
+    match node.Kind, identifier pattern with
+    | SemanticKind.Binding _, Some ident when not substituted ->
+        builder.SetMetadata(node.Id, "SourceBinding.NameRange", MetadataValue.SourceRange(rangeToSourceRange ident.idRange)) |> ignore
+        builder.SetMetadata(node.Id, "SourceBinding.FullRange", MetadataValue.SourceRange(rangeToSourceRange binding.RangeOfBindingWithRhs)) |> ignore
+        builder.SetMetadata(node.Id, "SourceBinding.Local", MetadataValue.Bool isLocal) |> ignore
+    | _ -> ()
 
 /// Check a single binding
 /// Returns the semantic node, optionally an InlineBody for transparent function expansion,
@@ -215,6 +285,11 @@ let checkBinding
     : SemanticNode * InlineBody option * bool * NativeLiteral option =
 
     let (SynBinding(_, _, isInline, isMutable, attrs, _, _, headPat, returnInfo, expr, bindingRange, _, _)) = binding
+    let declarations =
+        match headPat with
+        | SynPat.LongIdent(typarDecls = Some(SynValTyparDecls(declarations, _))) -> declarations
+        | _ -> None
+    let env, explicitParameters = withDeclaredTypeParameters declarations env
     let range = rangeToSourceRange bindingRange
     let name = getBindingName binding
     // One measure variable per name for the whole binding (spec §Generalization of Measure
@@ -358,11 +433,11 @@ let checkBinding
         // These nodes are needed for SSA assignment to map parameters to %argN
         let paramNodesAndEnv =
             paramBindings
-            |> List.fold (fun (acc, env) (paramName, paramTy) ->
+            |> List.fold (fun (acc, env) (paramName, paramTy, paramRange) ->
                 let paramNode = builder.Create(
                     SemanticKind.PatternBinding(paramName),
                     paramTy,
-                    range,
+                    paramRange,
                     arena = env.CurrentArena)
                 let newEnv = addBinding paramName paramTy false (Some paramNode.Id) false env  // Parameters are always local
                 ((paramName, paramTy, paramNode.Id) :: acc, newEnv)
@@ -415,9 +490,15 @@ let checkBinding
             else
                 mkFunctionType paramTypes bodyNode.Type
 
-        // NOTE: Generalization disabled - it was causing type mismatches.
-        // The proper fix requires smarter generalization (only top-level, not nested).
-        // For now, rely on primitive operators having TForall in Intrinsics.
+        let bindingType =
+            if preCreatedBinding.IsSome || isMutable then applySubst funcType
+            else
+                let scheme = generalizeInEnv env funcType
+                if explicitParameters.IsEmpty then scheme
+                else
+                    let parameters, body = match scheme with NativeType.TForall(parameters, body) -> parameters, body | _ -> [], scheme
+                    let additional = parameters |> List.filter (fun parameter -> explicitParameters |> List.forall (fun explicit -> explicit.Id <> parameter.Id))
+                    NativeType.TForall(explicitParameters @ additional, body)
 
         // Create Lambda node with parameter NodeIds for SSA assignment
         // Children includes parameter PatternBindings + body for proper traversal
@@ -458,12 +539,17 @@ let checkBinding
             match preCreatedBinding with
             | Some preCreated ->
                 // Link pre-created Binding to the Lambda we just created
+                addConstraint (Constraint.Equals(preCreated.Type, funcType, range)) env
                 builder.SetChildren(preCreated.Id, [lambdaNode.Id])
-                preCreated
+                let declaredType =
+                    if explicitParameters.IsEmpty then funcType
+                    else NativeType.TForall(explicitParameters, funcType)
+                builder.SetType(preCreated.Id, declaredType)
+                builder.Nodes.[preCreated.Id]
             | None ->
                 builder.Create(
                     SemanticKind.Binding(name, isMutable, false, declRoot),
-                    funcType,
+                    bindingType,
                     range,
                     children = [lambdaNode.Id])
 
@@ -502,118 +588,28 @@ let checkBinding
     | None ->
         // Regular value binding (not a function - no inline body)
         let exprNode = checkExpr env builder expr
+        let bindingType =
+            if not isMutable && preCreatedBinding.IsNone && isGeneralizableValue env builder expr exprNode then generalizeInEnv env exprNode.Type
+            else applySubst exprNode.Type
 
-        // ETA-EXPANSION for partial applications:
-        // When a binding's value has function type (TFun), it's a partial application
-        // that should be eta-expanded to a proper Lambda. This enables Alex to emit
-        // it as a callable function rather than an opaque value.
-        //
-        // Example: let helloGreeter = greet "Hello"
-        //   - greet has type: string -> string -> unit
-        //   - greet "Hello" has type: string -> unit
-        //   - This should become: let helloGreeter name = greet "Hello" name
-        //
-        // We recursively expand all function arguments:
-        //   TFun(a, TFun(b, c)) expands to: fun x y -> (expr x y)
-        //
-        // CRITICAL: We do NOT flatten applications across currying boundaries.
-        // If makeCounter : int -> (unit -> int), then:
-        //   makeCounter 0 : unit -> int  (returns a closure)
-        // Eta-expanding this creates: fun _eta0 -> (makeCounter 0) _eta0
-        // NOT: fun _eta0 -> makeCounter 0 _eta0  (which would pass 2 args to makeCounter)
-
-        let rec etaExpand (funcExprId: NodeId) (funcType: NativeType) (accParams: (string * NativeType * NodeId) list) (counter: int) : SemanticNode =
-            match funcType with
-            | NativeType.TFun(domainTy, rangeTy) ->
-                // Create synthetic parameter for this currying level
-                let paramName = sprintf "_eta%d" counter
-                let paramNode = builder.Create(
-                    SemanticKind.PatternBinding(paramName),
-                    domainTy,
-                    range,
-                    arena = env.CurrentArena)
-
-                // Create VarRef to the parameter
-                let paramVarRef = builder.Create(
-                    SemanticKind.VarRef(paramName, Some paramNode.Id),
-                    domainTy,
-                    range,
-                    arena = env.CurrentArena)
-
-                // Apply ONE eta parameter to the current expression
-                // Do NOT flatten - each currying level is a separate application
-                // This preserves: (makeCounter 0) _eta0 as App(App(makeCounter,[0]), [_eta0])
-                let appNode = builder.Create(
-                    SemanticKind.Application(funcExprId, [paramVarRef.Id]),
-                    rangeTy,
-                    range,
-                    children = [funcExprId; paramVarRef.Id])
-
-                // Recursively expand if result is still a function type
-                etaExpand appNode.Id rangeTy ((paramName, domainTy, paramNode.Id) :: accParams) (counter + 1)
-
-            | _ ->
-                // Base case: not a function type anymore
-                // Build Lambda with all accumulated parameters
-                let lambdaParams = List.rev accParams
-                let bodyId = funcExprId
-
-                if List.isEmpty lambdaParams then
-                    // No eta-expansion needed - return original expression
-                    builder.Nodes.[funcExprId]
-                else
-                    // Build the function type from parameters
-                    let paramTypes = lambdaParams |> List.map (fun (_, ty, _) -> ty)
-                    let funcType = mkFunctionType paramTypes funcType
-
-                    // Eta-expanded lambdas don't capture anything new
-                    // Children includes parameter PatternBindings + body for proper traversal
-                    // Eta-expanded lambdas are synthetic - no enclosingFunction context
-                    let paramNodeIds = lambdaParams |> List.map (fun (_, _, nodeId) -> nodeId)
-                    let lambdaChildren = paramNodeIds @ [bodyId]
-                    let lambdaNode = builder.Create(
-                        SemanticKind.Lambda(lambdaParams, bodyId, [], None, LambdaContext.RegularClosure),
-                        funcType,
-                        range,
-                        children = lambdaChildren)
-                    // PRD-13: Set parent on all children for scope chain
-                    for childId in lambdaChildren do
-                        builder.SetParent(childId, lambdaNode.Id)
-                    // Architectural fix (January 2026): Mark Lambda body as SeparateFunction
-                    // Eta-expanded lambdas have no captures
-                    builder.SetEmissionStrategy(bodyId, EmissionStrategy.SeparateFunction 0)
-                    lambdaNode
-
-        // Check if eta-expansion is needed
-        // CRITICAL: Only eta-expand VarRefs to functions (true partial application)
-        // Do NOT eta-expand Applications that return functions (closure factories)
-        // e.g., `let counter = makeCounter 0` should NOT become `fun () -> makeCounter 0 ()`
-        //       because makeCounter 0 returns a closure that should be stored directly
-        let finalExprNode =
-            match exprNode.Type, exprNode.Kind with
-            | NativeType.TFun _, SemanticKind.VarRef _ ->
-                // VarRef with function type = partial application, needs eta-expansion
-                etaExpand exprNode.Id exprNode.Type [] 0
-            | NativeType.TFun _, SemanticKind.Application _ ->
-                // Application returning function = closure factory, store result directly
-                exprNode
-            | NativeType.TFun _, SemanticKind.Lambda _ ->
-                // Lambda with function type = higher-order function, store directly
-                exprNode
-            | _ ->
-                // Not a function type or other cases - use as-is
-                exprNode
+        // A function-valued reference is an ordinary value: evaluate it at this binding,
+        // including a snapshot of a mutable function slot. Turning it into a forwarding
+        // lambda would delay that read until invocation and invent currying boundaries.
+        // Baker elaborates references to actual named function declarations into pairs;
+        // existing closure values and closure-factory results remain values here.
+        let finalExprNode = exprNode
 
         // PRD-13: Use pre-created Binding if provided (for recursive bindings)
         let node =
             match preCreatedBinding with
             | Some preCreated ->
+                addConstraint (Constraint.Equals(preCreated.Type, finalExprNode.Type, range)) env
                 builder.SetChildren(preCreated.Id, [finalExprNode.Id])
                 preCreated
             | None ->
                 builder.Create(
                     SemanticKind.Binding(name, isMutable, false, declRoot),
-                    finalExprNode.Type,
+                    bindingType,
                     range,
                     children = [finalExprNode.Id])
         // Establish bidirectional parent-child link
@@ -644,6 +640,26 @@ let checkBinding
 // Let/LetRec Handling
 //-------------------------------------------------------------------------
 
+/// Recursive references stay monomorphic while checking the entire group.
+/// Only then quantify variables that are not captured from the outer scope.
+let generalizeRecursiveBinding (env: TypeEnv) (builder: NodeBuilder) (node: SemanticNode) =
+    match node.Kind, node.Children with
+    | SemanticKind.Binding(isMutable = false), [child] ->
+        match builder.Nodes.[child].Kind with
+        | SemanticKind.Lambda _ ->
+            let declared, body =
+                match node.Type with NativeType.TForall(parameters, body) -> parameters, body | ty -> [], ty
+            let inferred = generalizeInEnv env body
+            let parameters, body =
+                match inferred with NativeType.TForall(parameters, body) -> parameters, body | ty -> [], ty
+            let additional = parameters |> List.filter (fun tp -> declared |> List.forall (fun explicit -> explicit.Id <> tp.Id))
+            let parameters = declared @ additional
+            let scheme = if parameters.IsEmpty then body else NativeType.TForall(parameters, body)
+            builder.SetType(node.Id, scheme)
+            builder.Nodes.[node.Id]
+        | _ -> node
+    | _ -> node
+
 /// Check a let-or-use binding
 /// PRD-13: For recursive bindings (let rec), pre-create Binding nodes to get NodeIds
 /// so that self-referential VarRefs can resolve correctly.
@@ -662,6 +678,10 @@ let checkLetOrUse
     let extendEnvWithResults baseEnv bindingList (results: (SemanticNode * InlineBody option * bool * NativeLiteral option) list) =
         List.zip bindingList results
         |> List.fold (fun env (binding, (node: SemanticNode, inlineBodyOpt, isMutable, literalValueOpt)) ->
+            // `use` has an implicit disposal use; generated bindings and source
+            // parameters are outside this named-let diagnostic.
+            if letOrUse.IsFromSource && not letOrUse.IsUse then
+                recordSourceBinding true builder binding node (inlineBodyOpt.IsSome || literalValueOpt.IsSome)
             let name = getBindingName binding
             // PRD-13a: Handle tuple destructuring
             if name = TuplePatternMarker then
@@ -745,6 +765,9 @@ let checkLetOrUse
             preCreatedBindings
             |> List.map (fun (binding, _, _, preCreatedNode) ->
                 checkBinding checkExpr envWithBindings builder binding (Some preCreatedNode))
+
+        let bindingResults = bindingResults |> List.map (fun (node, inlineBody, isMutable, literal) ->
+            generalizeRecursiveBinding env builder node, inlineBody, isMutable, literal)
 
         let bindingNodes = bindingResults |> List.map (fun (node, _, _, _) -> node)
         let bodyEnv = extendEnvWithResults envWithBindings bindings bindingResults
@@ -944,6 +967,9 @@ let checkDotSet
     let objNode = checkExpr env builder objExpr
     let valueNode = checkExpr env builder valueExpr
     let fieldName = longId |> List.map (fun id -> id.idText) |> String.concat "."
+    match tryResolveRecordFieldType objNode.Type fieldName env with
+    | Some fieldType -> addConstraint (Constraint.Equals(fieldType, valueNode.Type, range)) env
+    | None -> addNativeError DiagnosticCodes.CCS8706_UndefinedType objExpr.Range $"Cannot resolve field '{fieldName}' on '{formatType objNode.Type}'" env
     builder.Create(
         SemanticKind.FieldSet(objNode.Id, fieldName, valueNode.Id),
         Types.unitType,
@@ -964,6 +990,7 @@ let checkLongIdentSet
     let targetName = parts |> String.concat "."
     match tryLookupBinding targetName env with
     | Some binding when binding.IsMutable ->
+        addConstraint (Constraint.Equals(binding.Type, valueNode.Type, range)) env
         let targetNode = builder.Create(
             SemanticKind.VarRef(targetName, binding.NodeId),
             binding.Type,
@@ -1016,6 +1043,7 @@ let checkLongIdentSet
             builder.SetParent(valueNode.Id, setNode.Id)
             setNode
         | None ->
+            addNativeError DiagnosticCodes.CCS8009_UndefinedValue valueExpr.Range $"Cannot assign to '{targetName}' (not found or not mutable)" env
             builder.Create(
                 SemanticKind.Error $"Cannot assign to '{targetName}' (not found or not mutable)",
                 NativeType.TError "assignment error",

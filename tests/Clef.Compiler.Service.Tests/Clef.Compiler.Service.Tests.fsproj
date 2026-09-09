@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="DimensionalCases.fs" />
+    <Compile Include="DimensionalTests.fs" />
+    <Compile Include="ApplicationObligationCases.fs" />
+    <Compile Include="IntegerObligationCases.fs" />
+    <Compile Include="StaticStringLayoutCases.fs" />
+    <Compile Include="FunctionPointerCases.fs" />
+    <Compile Include="ClosureValueCases.fs" />
+    <Compile Include="ForeignReferenceCases.fs" />
+    <Compile Include="BorrowedViewCases.fs" />
+    <Compile Include="LocalUnusedCases.fs" />
+    <Compile Include="ModuleScopeCases.fs" />
+    <Compile Include="ModuleScopeTests.fs" />
+    <Compile Include="ProjectLinkTests.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
+    <ProjectReference Include="../../src/Compiler/Clef.Compiler.Service.fsproj" />
+  </ItemGroup>
+</Project>

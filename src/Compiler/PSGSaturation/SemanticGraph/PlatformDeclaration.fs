@@ -169,6 +169,8 @@ let check (context: PlatformContext option) (graph: SemanticGraph) : Diagnostic 
         // layouts and binding descriptors the same reader follows)
         let declaration =
             (PlatformResolution.read graph).Findings @ (PlatformResolution.readDescriptors graph).Findings
+            @ (CallbackDeclarations.read graph).Findings
+            @ (ScopedCallbacks.read graph).Findings
             |> List.map (declarationDiagnostic ctx)
         let sites =
             if PlatformContext.substrateKind ctx = SubstrateKind.FPGA then []
