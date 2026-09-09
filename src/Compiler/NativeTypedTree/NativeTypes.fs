@@ -2069,6 +2069,11 @@ module Types =
     // it does not introduce pointer arithmetic, dereference or integer conversions.
     let cHandleTyCon = mkNTUTypeConRefWithArity "CHandle" NTUKind.NTUptr 1 TypeLayout.PlatformWord
 
+    // Distinct nominal types, represented by the platform's pointer word.
+    let mmio8TyCon = mkNTUTypeConRefWithArity "Mmio8" NTUKind.NTUptr 0 TypeLayout.PlatformWord
+    let mmio16TyCon = mkNTUTypeConRefWithArity "Mmio16" NTUKind.NTUptr 0 TypeLayout.PlatformWord
+    let mmio32TyCon = mkNTUTypeConRefWithArity "Mmio32" NTUKind.NTUptr 0 TypeLayout.PlatformWord
+
     /// The schema is a nominal source type named by ViewLayoutDescriptor.
     let borrowedViewTyCon = mkNTUTypeConRefWithArity "BorrowedView" NTUKind.NTUborrowedview 1 TypeLayout.FatPointer
 

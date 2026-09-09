@@ -86,6 +86,9 @@ type DeclaredRepresentation = {
 /// BAREWire.Platform.TargetCore; the identity fields are not carried here.
 type DeclaredCore = {
     Node: NodeId
+    Arch: string
+    Triple: string
+    CpuModel: string
     Widths: DeclaredWidth list
     Representations: DeclaredRepresentation list
 }
@@ -371,7 +374,11 @@ let private readCore (graph: SemanticGraph) (id: NodeId) : DeclaredCore option *
                 | Some wordSize, Some register when int64 register.Bits <> wordSize ->
                     [ findingAt node DeclarationDefect.Invalid (sprintf "the declared Register width %d disagrees with WordSizeBits %d" register.Bits wordSize) ]
                 | _ -> []
-            Some { Node = node.Id; Widths = widths; Representations = representations },
+            let text name = field name fields |> Option.bind (stringOf graph) |> Option.defaultValue ""
+            let optionalText name = field name fields |> Option.bind (optionOf graph) |> Option.flatten |> Option.bind (stringOf graph) |> Option.defaultValue ""
+            let triple = if text "Triple" <> "" then text "Triple" else optionalText "TripleOverride"
+            let cpu = if text "CpuModel" <> "" then text "CpuModel" else optionalText "CpuModel"
+            Some { Node = node.Id; Arch = text "Arch"; Triple = triple; CpuModel = cpu; Widths = widths; Representations = representations },
             widthFindings @ representationFindings @ duplicateWidths @ duplicateRepresentations @ wordSizeFindings
         | _ -> None, [ findingOn graph coreId DeclarationDefect.Malformed "Core's payload is not a TargetCore record" ]
 
