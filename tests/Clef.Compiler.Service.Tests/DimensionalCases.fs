@@ -492,4 +492,107 @@ let tests = [
         noErrors result
         same (measured metre) (bindingType "distance" result)
         same (measured second) (bindingType "time" result)
+
+    "sharing immutable records permits independent dimensions", fun () ->
+        let result = check "type Holder<'a> = { Value: 'a option }\nlet empty = { Value = None }\nlet distance: Holder<float<m>> = empty\nlet duration: Holder<float<s>> = empty\nlet length = distance.Value\nlet time = duration.Value\n"
+        noErrors result
+        same (NativeType.TApp(Types.optionTyCon, [measured metre])) (bindingType "length" result)
+        same (NativeType.TApp(Types.optionTyCon, [measured second])) (bindingType "time" result)
+
+    "sharing phantom record measures permits independent dimensions", fun () ->
+        let result = check "type Phantom<[<Measure>] 'u> = { Value: int }\nlet phantom = { Value = 1 }\nlet distance: Phantom<m> = phantom\nlet duration: Phantom<s> = phantom\n"
+        noErrors result
+        for name, expected in ["distance", metre; "duration", second] do
+            match bindingType name result with
+            | NativeType.TApp(_, [NativeType.TMeasure measure]) -> same (measured expected) (measured measure)
+            | ty -> failwithf "Phantom measure lost from %s: %s" name (formatType ty)
+
+    "sharing lazy immutable results permits independent dimensions", fun () ->
+        let result = check "let delayed = lazy None\nlet distance: float<m> option = Lazy.force delayed\nlet duration: float<s> option = Lazy.force delayed\n"
+        noErrors result
+        same (NativeType.TApp(Types.optionTyCon, [measured metre])) (bindingType "distance" result)
+        same (NativeType.TApp(Types.optionTyCon, [measured second])) (bindingType "duration" result)
+
+    "sharing lazy immutable functions permits independent dimensions", fun () ->
+        let result = check "let delayed = lazy (fun x -> x)\nlet distance = (Lazy.force delayed) 1.0<m>\nlet duration = (Lazy.force delayed) 2.0<s>\n"
+        noErrors result
+        same (measured metre) (bindingType "distance" result)
+        same (measured second) (bindingType "duration" result)
+
+    "sharing immutable union and list constructions permits independent dimensions", fun () ->
+        for expression, annotation in ["Some None", "option option"; "[None]", "option list"; "lazy (Some None)", "option option Lazy"] do
+            let result = check $"let empty = {expression}\nlet distance: float<m> {annotation} = empty\nlet duration: float<s> {annotation} = empty\n"
+            noErrors result
+
+    "sharing mutable record contents retains one dimensional identity", fun () ->
+        let sources = [
+            "type Cell<'a> = { mutable Value: 'a option }\nlet shared = { Value = None }\nshared.Value <- Some 1.0<m>\nshared.Value <- Some 2.0<s>\n"
+            "type Cell<'a> = { mutable Value: 'a option }\ntype Holder<'a> = { Inner: Cell<'a> }\nlet shared = { Inner = { Value = None } }\nshared.Inner.Value <- Some 1.0<m>\nshared.Inner.Value <- Some 2.0<s>\n"
+            "type Cell<'a> = { mutable Value: 'a option }\nlet shared = { Value = None }\nlet alias = shared\nalias.Value <- Some 1.0<m>\nshared.Value <- Some 2.0<s>\n"
+            "type Cell<'a> = { mutable Value: 'a option }\nlet shared = { Value = None }\nlet set x = shared.Value <- Some x\nset 1.0<m>\nset 2.0<s>\n"
+            "let mutable shared = None\nlet alias = shared\nlet distance: float<m> option = alias\nlet duration: float<s> option = shared\n"
+            "type Cell<'a> = { mutable Value: 'a option }\ntype Holder<'a> = { Inner: Cell<'a>; Flag: bool }\nlet original = { Inner = { Value = None }; Flag = false }\nlet copied = { original with Flag = true }\ncopied.Inner.Value <- Some 1.0<m>\noriginal.Inner.Value <- Some 2.0<s>\n"
+            "type Cell<'a> = { mutable Value: 'a option }\nlet wrapped = Some { Value = None }\nlet distance: Cell<float<m>> option = wrapped\nlet duration: Cell<float<s>> option = wrapped\n"
+        ]
+        for source in sources do
+            let result = check source
+            if not (result.Diagnostics |> List.exists (fun d -> d.Code = "CCS8040" && d.Range.File = "dimensions.clef")) then
+                failwithf "Shared mutable storage acquired independent dimensions: %A" result.Diagnostics
+
+    "sharing memoized mutable results retains one dimensional identity", fun () ->
+        let sources = [
+            "type Cell<'a> = { mutable Value: 'a option }\nlet delayed = lazy { Value = None }\nlet shared = Lazy.force delayed\nshared.Value <- Some 1.0<m>\nshared.Value <- Some 2.0<s>\n"
+            "let delayed = lazy (let mutable state = None in fun x -> state <- Some x)\nlet set = Lazy.force delayed\nset 1.0<m>\nset 2.0<s>\n"
+            "let mutable state = None\nlet delayed = lazy (fun x -> state <- Some x)\nlet set = Lazy.force delayed\nset 1.0<m>\nset 2.0<s>\n"
+            "let make () =\n    let mutable state = None\n    fun x -> state <- Some x\nlet set = make ()\nset 1.0<m>\nset 2.0<s>\n"
+        ]
+        for source in sources do
+            let result = check source
+            if not (result.Diagnostics |> List.exists (fun d -> d.Code = "CCS8040" && d.Range.File = "dimensions.clef")) then
+                failwithf "Memoization or closure construction changed shared storage identity: %A" result.Diagnostics
+
+    "sharing inline results retains allocated mutable identity", fun () ->
+        let sources = [
+            "type Cell<'a> = { mutable Value: 'a option }\nlet inline identity x = x\nlet shared = identity { Value = None }\nlet distance: Cell<float<m>> = shared\nlet duration: Cell<float<s>> = shared\n"
+            "type Cell<'a> = { mutable Value: 'a option }\ntype Holder<'a> = { Inner: Cell<'a> }\nlet inline identity x = x\nlet shared = { Inner = identity { Value = None } }\nlet distance: Holder<float<m>> = shared\nlet duration: Holder<float<s>> = shared\n"
+            "let inline make () =\n    let mutable state = None\n    fun x -> state <- Some x\nlet shared = make ()\nlet distance: float<m> -> unit = shared\nlet duration: float<s> -> unit = shared\n"
+        ]
+        for source in sources do
+            let result = check source
+            if not (result.Diagnostics |> List.exists (fun d -> d.Code = "CCS8040" && d.Range.File = "dimensions.clef")) then
+                failwithf "Inline expansion hid fresh shared storage: %A" result.Diagnostics
+
+    "sharing intrinsic aliases permits independent dimensions", fun () ->
+        let result = check "let convert = float\nlet distance = convert 1<m>\nlet duration = convert 2<s>\n"
+        noErrors result
+        same (measured metre) (bindingType "distance" result)
+        same (measured second) (bindingType "duration" result)
+
+    "collection literals retain element dimensions and collection kind", fun () ->
+        for expression, expected, isArray, count in [
+            "[1.0<m>; 2.0<m>]", NativeType.TList(measured metre), false, 2
+            "[|1.0<m>; 2.0<m>|]", NativeType.TApp(Types.arrayTyCon, [measured metre]), true, 2
+            "[(1.0<m>; 2.0<m>)]", NativeType.TList(measured metre), false, 1
+        ] do
+            let result = check $"let values = {expression}\n"
+            noErrors result
+            same expected (bindingType "values" result)
+            let children = result.Graph.Nodes.Values |> Seq.pick (fun node ->
+                match node.Kind with
+                | SemanticKind.ListExpr items when not isArray -> Some items
+                | SemanticKind.ArrayExpr items when isArray -> Some items
+                | _ -> None)
+            if children.Length <> count then failwithf "Collection element boundaries changed: %A" children
+
+    "collection literals diagnose mixed dimensions", fun () ->
+        for expression in ["[1.0<m>; 2.0<s>]"; "[|1.0<m>; 2.0<s>|]"] do
+            let result = check $"let invalid = {expression}\n"
+            if not (result.Diagnostics |> List.exists (fun d -> d.Code = "CCS8040" && d.Range.File = "dimensions.clef")) then
+                failwithf "Collection silently discarded its element dimensions: %A" result.Diagnostics
+
+    "computed collections diagnose unsupported elaboration", fun () ->
+        for expression in ["[for n in [1; 2] -> 1.0<m>]"; "[|for n in [1; 2] -> 1.0<m>|]"; "[if true then yield 1.0<m>]"] do
+            let result = check $"let values = {expression}\n"
+            if not (result.Diagnostics |> List.exists (fun d -> d.Code = "FS8401" && d.Severity = NativeDiagnosticSeverity.Error && d.Range.File = "dimensions.clef")) then
+                failwithf "Unsupported comprehension fabricated an element type: %A" result.Diagnostics
 ]

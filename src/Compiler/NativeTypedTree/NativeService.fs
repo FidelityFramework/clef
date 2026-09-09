@@ -1574,6 +1574,10 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         TypeCon = tyCon
                         TypeParameters = declaredParameters
                         Fields = fieldInfos
+                        MutableFields =
+                            fields |> List.choose (fun (SynField(isMutable = isMutable; idOpt = ident)) ->
+                                if isMutable then ident |> Option.map (fun name -> name.idText) else None)
+                            |> Set.ofList
                         Module = ctx.Path
                         RequireQualifiedAccess = requireQualifiedAccess
                     }

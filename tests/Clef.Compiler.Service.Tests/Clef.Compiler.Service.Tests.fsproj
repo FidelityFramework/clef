@@ -8,6 +8,8 @@
   <ItemGroup>
     <Compile Include="DimensionalCases.fs" />
     <Compile Include="DimensionalTests.fs" />
+    <Compile Include="ModuleScopeCases.fs" />
+    <Compile Include="ModuleScopeTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="FSharp.Core" Version="10.0.101" />
