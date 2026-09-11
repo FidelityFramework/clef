@@ -55,6 +55,14 @@ type DeclaredSpace = {
     Access: string
 }
 
+/// The physical-layout projection shared by device-access checking and image
+/// layout. Availability/version/map metadata are outside this projection.
+let memorySpace (s: DeclaredSpace) : BAREWire.Platform.MemorySpace = {
+    Name = s.Name; Kind = s.Kind; Base = s.Base; Capacity = s.Capacity
+    Alignment = s.Alignment; Granularity = s.Granularity; Growth = s.Growth; Access = s.Access
+    Notes = ""; MapKind = ""; Since = ""; Until = ""
+}
+
 /// A declared buffer schema. Mirrors BAREWire.Platform.BufferSchema.
 type DeclaredBuffer = {
     Node: NodeId
@@ -87,6 +95,8 @@ type DeclaredRepresentation = {
 type DeclaredCore = {
     Node: NodeId
     Arch: string
+    Os: string
+    Runtime: string
     Triple: string
     CpuModel: string
     Widths: DeclaredWidth list
@@ -378,7 +388,7 @@ let private readCore (graph: SemanticGraph) (id: NodeId) : DeclaredCore option *
             let optionalText name = field name fields |> Option.bind (optionOf graph) |> Option.flatten |> Option.bind (stringOf graph) |> Option.defaultValue ""
             let triple = if text "Triple" <> "" then text "Triple" else optionalText "TripleOverride"
             let cpu = if text "CpuModel" <> "" then text "CpuModel" else optionalText "CpuModel"
-            Some { Node = node.Id; Arch = text "Arch"; Triple = triple; CpuModel = cpu; Widths = widths; Representations = representations },
+            Some { Node = node.Id; Arch = text "Arch"; Os = text "Os"; Runtime = text "Runtime"; Triple = triple; CpuModel = cpu; Widths = widths; Representations = representations },
             widthFindings @ representationFindings @ duplicateWidths @ duplicateRepresentations @ wordSizeFindings
         | _ -> None, [ findingOn graph coreId DeclarationDefect.Malformed "Core's payload is not a TargetCore record" ]
 
@@ -471,7 +481,7 @@ let private declaredByBinding (graph: SemanticGraph) : SemanticNode -> bool =
 /// the one read, being the one with spaces and buffers; a second description
 /// of the form read, from the binding's own sources, is a finding at its
 /// declaration and is not read.
-let read (graph: SemanticGraph) : Reading =
+let private readLegacy (graph: SemanticGraph) : Reading =
     let isDeclaration = declaredByBinding graph
     let candidates =
         graph.Nodes
@@ -495,6 +505,189 @@ let read (graph: SemanticGraph) : Reading =
     | Some (node, fields) ->
         let platform, findings = readPlatform graph node fields
         { Platform = platform; Findings = findings @ ambiguous }
+
+/// Canonical module-level export identity, including namespaces (which have
+/// no ModuleDef wrapper). The module map retains every file in a namespace.
+let qualifiedExportName (graph: SemanticGraph) (binding: SemanticNode) : string option =
+    let combine (prefix: string) (name: string) =
+        if prefix = "" || name = prefix || name.StartsWith(prefix + ".", System.StringComparison.Ordinal) then name
+        else prefix + "." + name
+    let declaredPrefix id =
+        graph.Modules
+        |> Map.toList
+        |> List.tryPick (fun (path, nodes) ->
+            if List.contains id nodes then Some (String.concat "." path) else None)
+    let rec modulePrefix seen id =
+        if Set.contains id seen then None else
+        match SemanticGraph.tryGetNode id graph with
+        | Some node ->
+            match node.Kind with
+            | SemanticKind.ModuleDef(name, _) ->
+                let prefix =
+                    match node.Parent with
+                    | Some parent -> modulePrefix (Set.add id seen) parent
+                    | None -> declaredPrefix id
+                prefix |> Option.map (fun prefix -> combine prefix name)
+            | _ -> None
+        | None -> None
+    match binding.Kind with
+    | SemanticKind.Binding(name, _, _, _) ->
+        let prefix =
+            match binding.Parent with
+            | Some parent -> modulePrefix Set.empty parent
+            | None -> declaredPrefix binding.Id
+        prefix |> Option.map (fun prefix -> combine prefix name)
+    | _ -> None
+
+/// Select a static export without executing calls or taking a mutable
+/// initializer as its value. Quoted exports and immutable aliases preserve
+/// the original record identity used by memory-space and MMIO checks.
+let private explicitDescription (graph: SemanticGraph) (binding: SemanticNode) =
+    let rec follow seen id =
+        if Set.contains id seen then None else
+        let seen = Set.add id seen
+        match SemanticGraph.tryGetNode id graph with
+        | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] }
+        | Some { Kind = SemanticKind.TypeAnnotation(value, _) }
+        | Some { Kind = SemanticKind.Quote(value, _) } -> follow seen value
+        | Some { Kind = SemanticKind.VarRef(_, Some value) } -> follow seen value
+        | Some node ->
+            match node.Kind with
+            | SemanticKind.RecordExpr(fields, _) when isDescriptionType node -> Some(node, fields)
+            | _ -> None
+        | None -> None
+    follow Set.empty binding.Id
+
+/// Selection is constrained by the selected package's dependency closure,
+/// independently of the larger compilation's application and catalogue inputs.
+let private inSelectedSources (graph: SemanticGraph) (node: SemanticNode) =
+    node.Range.File <> "" &&
+    (graph.Platform |> Option.exists (fun ctx ->
+        let path = (System.IO.Path.GetFullPath node.Range.File).Replace('\\', '/')
+        Set.contains path ctx.PlatformSourcePaths))
+
+/// A root inside the closure must not obtain its core, spaces or aliased value
+/// from an unrelated dependency that happened to be loaded first. Preserve
+/// the references; report the undeclared package dependency at its use site.
+let private explicitSourceFindings (graph: SemanticGraph) (root: SemanticNode) =
+    let rec visit seen id =
+        if Set.contains id seen then seen, [] else
+        let seen = Set.add id seen
+        match SemanticGraph.tryGetNode id graph with
+        | None -> seen, []
+        | Some node ->
+            let refs, findings =
+                match node.Kind with
+                | SemanticKind.VarRef(_, Some bindingId) ->
+                    match SemanticGraph.tryGetNode bindingId graph with
+                    | Some ({ Kind = SemanticKind.Binding _ } as binding) when not (inSelectedSources graph binding) ->
+                        [], [findingAt node DeclarationDefect.Malformed
+                            "the explicit description references a binding outside the selected platform's source dependency closure"]
+                    | _ -> [bindingId], []
+                | _ -> [], []
+            (node.Children @ refs)
+            |> List.fold (fun (seen, findings) child ->
+                let seen, nested = visit seen child
+                seen, findings @ nested) (seen, findings)
+    visit Set.empty root.Id |> snd
+
+/// Auxiliary platform declarations (for example C ABI and pin inventory) use
+/// the same source provenance as an explicit root. Legacy unbound graphs keep
+/// their existing structural discovery behavior.
+let isSelectedPlatformDeclaration (graph: SemanticGraph) (node: SemanticNode) =
+    match graph.Platform |> Option.bind (fun ctx -> ctx.PlatformDescription) with
+    | None -> true
+    | Some _ -> inSelectedSources graph node && List.isEmpty (explicitSourceFindings graph node)
+
+let private explicitCoreFindings (ctx: PlatformContext) (graph: SemanticGraph) (platform: DeclaredPlatform option) =
+    match platform |> Option.bind (fun p -> p.Core) with
+    | None -> [] // FPGA descriptions legitimately have no instruction core.
+    | Some core ->
+        let runtime = function
+            | RuntimeModel.Libc -> "libc"
+            | RuntimeModel.Freestanding | RuntimeModel.Bare -> "freestanding"
+            | RuntimeModel.ROCm -> "rocm"
+            | RuntimeModel.XDNA -> "xdna"
+        let normalizeRuntime = function "bare" -> "freestanding" | name -> name
+        let metadataFindings =
+            [ "arch", ctx.PlatformArchitecture, core.Arch
+              "os", ctx.PlatformOS, core.Os
+              "runtime_model", ctx.RuntimeModel |> Option.map runtime, normalizeRuntime core.Runtime ]
+            |> List.choose (fun (key, claim, actual) ->
+                match claim with
+                | Some expected when expected <> actual ->
+                    Some (findingOn graph core.Node DeclarationDefect.Invalid
+                        (sprintf "selected [platform] %s '%s' disagrees with the explicit description's core '%s'" key expected actual))
+                | _ -> None)
+        // Compatibility for the instruction/OS spellings implemented by the
+        // current explicit targets. This is not LLVM's general triple parser
+        // or alias canonicalizer; extending the target vocabulary requires
+        // extending these checks alongside that target's backend support.
+        let tripleFindings =
+            if System.String.IsNullOrWhiteSpace core.Triple then [] else
+            let parts = core.Triple.Split '-'
+            let architecture = parts.[0]
+            let expectedArchitecture =
+                match core.Arch with
+                | "x86_64" -> Some "x86_64"
+                | "arm_cortex_m33" -> Some "thumbv8m.main"
+                | _ -> None
+            let architectureFindings =
+                match expectedArchitecture with
+                | Some expected when architecture <> expected ->
+                    [findingOn graph core.Node DeclarationDefect.Invalid
+                        (sprintf "target triple architecture '%s' disagrees with core Arch '%s'; the supported triple spelling uses '%s'" architecture core.Arch expected)]
+                | _ -> []
+            let os =
+                match Array.toList parts with
+                // The existing ARM embedded triple omits the vendor component.
+                | ["thumbv8m.main"; "none"; "eabi"] -> "none"
+                | _ when parts.Length >= 3 -> parts.[2]
+                | _ -> ""
+            let osFindings =
+                match expectedArchitecture, core.Os with
+                | Some _, ("linux" | "none") when os <> core.Os ->
+                    [findingOn graph core.Node DeclarationDefect.Invalid
+                        (sprintf "target triple OS '%s' disagrees with core Os '%s'; current targets support explicit Linux/none OS components and thumbv8m.main-none-eabi" os core.Os)]
+                | _ -> []
+            architectureFindings @ osFindings
+        metadataFindings @ tripleFindings
+
+/// An explicit export is authoritative even when its declaration belongs to
+/// a sibling dependency. Unselected catalogue records are ordinary data.
+/// Legacy leaves retain the directory-scoped, BAREWire-preferred reader.
+let read (graph: SemanticGraph) : Reading =
+    match graph.Platform |> Option.bind (fun ctx -> ctx.PlatformDescription) with
+    | None -> readLegacy graph
+    | Some name ->
+        let candidates =
+            graph.Nodes.Values
+            |> Seq.filter (fun node -> inSelectedSources graph node && qualifiedExportName graph node = Some name)
+            |> Seq.toList
+        match candidates with
+        | [] ->
+            let path = graph.Platform |> Option.bind (fun ctx -> ctx.PlatformLibraryPath) |> Option.defaultValue ""
+            { Platform = None
+              Findings = [{ Node = NodeId 0; Range = { noRange with File = path }; Defect = DeclarationDefect.Malformed
+                            Message = sprintf "explicit description export '%s' was not found in the selected platform's source dependency closure" name }] }
+        | [binding] ->
+            match explicitSourceFindings graph binding with
+            | _ :: _ as findings -> { Platform = None; Findings = findings }
+            | [] ->
+            match explicitDescription graph binding with
+            | None ->
+                { Platform = None
+                  Findings = [findingAt binding DeclarationDefect.Malformed
+                    (sprintf "explicit description export '%s' must be an immutable PlatformDescription or PlatformDescriptor declaration (plain, quoted, or an immutable alias)" name)] }
+            | Some(node, fields) ->
+                let platform, findings = readPlatform graph node fields
+                let consistency = graph.Platform |> Option.map (fun ctx -> explicitCoreFindings ctx graph platform) |> Option.defaultValue []
+                { Platform = platform; Findings = findings @ consistency }
+        | bindings ->
+            { Platform = None
+              Findings = bindings |> List.map (fun binding ->
+                  findingAt binding DeclarationDefect.Ambiguous
+                      (sprintf "explicit description export '%s' is ambiguous: %d bindings have that qualified name" name bindings.Length)) }
 
 /// The declaration alone, for readers that cite it: what `read` could read.
 /// The findings are reported once, by PlatformDeclaration at saturation.
@@ -943,7 +1136,7 @@ let returnOfCall (graph: SemanticGraph) (funcId: NodeId) =
 let cAbiOfGraph (graph: SemanticGraph) =
     graph.Nodes |> Map.toSeq |> Seq.choose (fun (_, node) ->
         match node.Kind with
-        | SemanticKind.Binding _ ->
+        | SemanticKind.Binding _ when isSelectedPlatformDeclaration graph node ->
             node.Children |> List.tryLast |> Option.bind (recordOf graph)
             |> Option.bind (fun (record, fields) ->
                 if typeName record <> Some "CAbiDescriptor" then None

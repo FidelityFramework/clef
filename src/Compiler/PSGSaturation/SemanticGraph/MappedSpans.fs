@@ -34,7 +34,7 @@ let declarationSources graph (mapping: MappedBindings.DeclaredMapping) =
         | SemanticKind.Binding _, Some body ->
             recordOf graph body |> Option.bind (fun (node, fields) ->
                 match typeName node with
-                | Some "CAbiDescriptor" -> Some node.Id
+                | Some "CAbiDescriptor" when isSelectedPlatformDeclaration graph binding -> Some node.Id
                 | Some "ViewLayoutDescriptor" when field "Schema" fields |> Option.bind (stringOf graph) = Some mapping.Layout -> Some node.Id
                 | _ -> None)
         | _ -> None) |> Seq.toList

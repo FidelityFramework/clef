@@ -268,6 +268,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\Core.fs" />
     <Compile Include="NativeTypedTree\UnionFind.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\PlatformResolution.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\Predicates.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\MappedBindings.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallbackDeclarations.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Mmio.fs" />
@@ -335,6 +336,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
     <!-- The declared platform fills the context at saturation; sealed sites are checked against it (CS-7b) -->
     <Compile Include="PSGSaturation\SemanticGraph\PlatformDeclaration.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\DeviceAccess.fs" />
     <!-- The range pass: every integer's analysed range as a coeffect on the node, CCS8011 (CS-10) -->
     <Compile Include="PSGSaturation\SemanticGraph\RangeAnalysis.fs" />
     <!-- Obligation recipes observe the range pass's selection; they do not select again. -->

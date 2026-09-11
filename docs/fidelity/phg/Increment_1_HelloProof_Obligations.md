@@ -12,7 +12,7 @@
 |---|---|---|
 | **DMM** (DTS/DMM §2.5, §3) | Memory spaces as an *enumeration sort* in the same decidable constraint system as physical units. Placement is a dimensional constraint. | The type system; `NTUMemorySpace`, `ArenaAffinity` already exist in clef |
 | **BAREWire** (docs/11) | The vocabulary: `MemorySpace {Capacity; Alignment; Access; …}`, `BufferSchema {Capacity; Framing; Space; …}`. The declared authority on layout. | `BAREWire/src/Platform/Description.fs`, compiled as Clef |
-| **Cross-compilation** | `Fidelity.Platform/CPU/Linux/x86_64/Description.clef` declares `text`, `rodata`, `data`, `bss`, `stack`, `arena`, `heap`, `consoleReadln`, `consoleWrite` in that vocabulary — and compiles *with* the program. | Already `RecordExpr` nodes in HelloProof's PSG. Unread. |
+| **Cross-compilation** | `Fidelity.Platform/Environments/Linux/x86_64/Description.clef` declares `text`, `rodata`, `data`, `bss`, `stack`, `arena`, `heap`, `consoleReadln`, `consoleWrite` in that vocabulary — and compiles *with* the program. | Already `RecordExpr` nodes in HelloProof's PSG. Unread. |
 
 The hypergraph is what joins the declaration to the values that live in it. A
 string literal *resides in* `rodata`; that residence is a relation, not

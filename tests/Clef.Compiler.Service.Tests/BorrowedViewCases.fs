@@ -27,6 +27,8 @@ let viewScope: Expr<ScopedCallbackDescriptor> = <@ { Binding = "BorrowedViewTest
     let context: PlatformContext = {
         PlatformId = "borrowed-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
         Representations = Map.empty; EndpointReturns = Map.empty; PlatformLibraryPath = None
+        PlatformDescription = None; PlatformArchitecture = None; PlatformOS = None
+        PlatformSourcePaths = Set.empty
         Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
         AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
 

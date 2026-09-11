@@ -145,6 +145,25 @@ let private isQuotationBinding (graph: SemanticGraph) (id: NodeId) : bool =
     | Some { Kind = SemanticKind.Binding _; Children = [ valueId ] } -> holdsQuotation valueId
     | _ -> false
 
+/// A hardware Design is a declaration boundary, matching Composer's hardware
+/// witness: InitialState supplies register reset values and Step supplies
+/// executable logic. Clock supplies pin/timing metadata, retained in the graph
+/// for those readers rather than initialized as a runtime record. A separate
+/// ordinary reference to clock data still follows the normal reachability walk.
+let private hardwareDesignReferences (graph: SemanticGraph) (node: SemanticNode) =
+    let rec record id =
+        match SemanticGraph.tryGetNode id graph with
+        | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } -> record inner
+        | Some ({ Kind = SemanticKind.RecordExpr(fields, _) } as value) when PlatformResolution.typeName value = Some "Design" ->
+            let field name = fields |> List.tryFind (fst >> (=) name) |> Option.map snd
+            match field "InitialState", field "Step", field "Clock" with
+            | Some initial, Some step, Some _ -> Some [initial; step]
+            | _ -> None
+        | _ -> None
+    match node.Kind, node.Children with
+    | SemanticKind.Binding(_, _, _, Some DeclRoot.HardwareModule), [value] -> record value
+    | _ -> None
+
 let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId> =
     // Build qualified binding index once for string-literal → binding resolution.
     // This enables reachability through dlsym(RTLD_DEFAULT, "Module.function"):
@@ -189,6 +208,16 @@ let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId>
                         match node.Kind with
                         | SemanticKind.ModuleDef _ -> not (isQuotationBinding graph r)
                         | _ -> true)
+                // Binding names select compile-time declarations. They are
+                // retained in the graph for CCS, but do not occupy image bytes.
+                let allRefs =
+                    match Mmio.operation graph node.Id, node.Kind with
+                    | Some(op, _), SemanticKind.Application(fn, _) when op.StartsWith("bind") -> [fn]
+                    | _ -> allRefs
+                let allRefs =
+                    match hardwareDesignReferences graph node with
+                    | Some executable -> executable @ typeRefs
+                    | None -> allRefs
                 allRefs |> List.fold walk visited
 
     entries |> List.fold walk Set.empty

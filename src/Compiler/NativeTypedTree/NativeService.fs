@@ -1101,6 +1101,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     //=========================================================================
     let finalGraph, curry = Curry.normalize finalGraph
     let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
+    let mmio, mmioDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess.settle (diagnostics @ residual @ rangeDiagnostics) finalGraph
     let finalGraph =
         let settled = finalGraph
         { finalGraph with
@@ -1113,7 +1114,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 Bindings = PlatformBindings.resolve platformContext settled
                 Pins = PlatformBindings.pins settled
                 DeclarationRootLambdas = Roots.declarationRootLambdas settled
-                FunctionPointers = functionPointers } }
+                FunctionPointers = functionPointers
+                Mmio = mmio } }
 
     let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
     let quotationErrors = quotationDiagnostics finalGraph
@@ -1157,7 +1159,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics
+        Diagnostics = taggedDiagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics
         PlatformContext = platformContext
     }
 
@@ -2623,7 +2625,8 @@ let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
     let modulePaths =
         moduleResultsOrdered
         |> List.map (fun (path, nodes) -> (path, nodes |> List.map (fun n -> n.Id)))
-        |> Map.ofList
+        |> List.fold (fun paths (path, nodes) ->
+            Map.change path (fun previous -> Some (Option.defaultValue [] previous @ nodes)) paths) Map.empty
 
     let solved = solveAndGetDiagnostics finalEnv !(initialEnv.Constraints)
     let reported = solved @ List.rev !(initialEnv.Diagnostics)
@@ -2668,7 +2671,8 @@ let checkParsedInputsWithPlatformAndSources (inputs: ParsedInput list) (platform
     let modulePaths =
         moduleResultsOrdered
         |> List.map (fun (path, nodes) -> (path, nodes |> List.map (fun n -> n.Id)))
-        |> Map.ofList
+        |> List.fold (fun paths (path, nodes) ->
+            Map.change path (fun previous -> Some (Option.defaultValue [] previous @ nodes)) paths) Map.empty
 
     // Solve constraints - now using ref cells, all environment copies share same constraints
     let constraintDiags = solveAndGetDiagnostics finalEnv !(initialEnv.Constraints)

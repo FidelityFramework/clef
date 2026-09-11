@@ -30,7 +30,7 @@ module ProjectChecker =
     /// description compiled into the graph and filled in at saturation
     /// (PlatformDeclaration.fill, plan D8, L-13). No word size is read from a
     /// project file and no target is assumed when the section is absent.
-    let private buildPlatformContext (options: FidprojOptions) : PlatformContext option =
+    let private buildPlatformContext (options: FidprojOptions) (platformSources: Set<string>) : PlatformContext option =
         // Libraries are substrate-neutral — no platform context needed
         match options.TargetPlatform with
         | TargetPlatform.Library -> None
@@ -71,7 +71,11 @@ module ProjectChecker =
                 Dimensions = Map.empty
                 Representations = Map.empty
                 EndpointReturns = Map.empty
-                PlatformLibraryPath = platformPath
+                PlatformLibraryPath = platformPath |> Option.orElse (metadata |> Option.map (fun _ -> options.ProjectPath))
+                PlatformDescription = metadata |> Option.bind (fun m -> m.Description)
+                PlatformSourcePaths = platformSources
+                PlatformArchitecture = metadata |> Option.bind (fun m -> m.Arch)
+                PlatformOS = metadata |> Option.bind (fun m -> m.OS)
                 Predicates = Map.empty
                 FreestandingStartup = freestanding
                 SubstrateKind = Some substrateKind
@@ -214,7 +218,7 @@ module ProjectChecker =
                                 ParseErrors = parseErrors
                             }
                         else
-                            let platformContext = buildPlatformContext options
+                            let platformContext = buildPlatformContext options resolved.PlatformSourcePaths
 
                             // Check all parsed inputs together with platform context
                             // The platform context is set on the graph BEFORE entry point elaboration
@@ -293,7 +297,7 @@ module ProjectChecker =
                                 | Result.Error _ -> None)
 
                         // Build platform context BEFORE checking
-                        let platformContext = buildPlatformContext options
+                        let platformContext = buildPlatformContext options resolved.PlatformSourcePaths
 
                         // Check all parsed inputs together with platform context
                         let checkedInputs = checkParsedInputsWithPlatformAndSources parsedInputs platformContext (ownedApplicationSources options)

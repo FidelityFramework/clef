@@ -346,7 +346,8 @@ let private resolveBitsOp (op: string) (_range: SourceRange) : IntrinsicResoluti
     | unknown ->
         UnknownOperation $"Unknown Bits intrinsic: Bits.{unknown}. Available: htons, ntohs, htonl, ntohl, float32ToInt32Bits, int32BitsToFloat32, float64ToInt64Bits, int64BitsToFloat64"
 
-/// Resolve FnPtr.* operations
+/// Resolve hardware access operations. A bound handle selects declaration
+/// identities; its permissions and address are settled by CCS.
 let private resolveMmioOp (op: string) (_range: SourceRange) : IntrinsicResolution =
     let integer = Types.intType
     let signature =
@@ -354,6 +355,7 @@ let private resolveMmioOp (op: string) (_range: SourceRange) : IntrinsicResoluti
         |> List.tryPick (fun (bits, tc) ->
             let handle = NativeType.TApp(tc, [])
             if op = "reg" + string bits then Some (NativeType.TFun(integer, handle))
+            elif op = "bind" + string bits then Some (NativeType.TFun(Types.stringType, NativeType.TFun(Types.stringType, handle)))
             elif op = "read" + string bits then Some (NativeType.TFun(handle, integer))
             elif op = "write" + string bits then Some (NativeType.TFun(handle, NativeType.TFun(integer, Types.unitType)))
             else None)

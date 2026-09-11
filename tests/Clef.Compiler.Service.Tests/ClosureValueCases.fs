@@ -44,6 +44,8 @@ module private ClosureValues =
     let context: PlatformContext = {
             PlatformId = "closure-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
             Representations = Map.empty; EndpointReturns = Map.empty; PlatformLibraryPath = None
+            PlatformDescription = None; PlatformArchitecture = None; PlatformOS = None
+            PlatformSourcePaths = Set.empty
             Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
             AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
     let assertPairs (result: CheckResult) =
