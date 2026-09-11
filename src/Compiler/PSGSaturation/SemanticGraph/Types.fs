@@ -993,6 +993,39 @@ type FunctionPointerPlan =
     | Address of symbol: string * lambda: NodeId
     | Invoke of pointer: NodeId * arguments: NodeId list * parameters: NativeType list * result: NativeType
 
+/// A quoted source condition's standing at its declaration dependencies.
+type PredicateStatus = Established | Contradicted | Pending
+
+type PredicateEvidence = {
+    Name: string
+    Declaration: NodeId
+    Expression: NodeId
+    Dependencies: NodeId list
+    Status: PredicateStatus
+    Message: string
+    Source: string
+}
+
+type MmioBindingEvidence = {
+    Plan: string
+    Grant: string
+    Register: string
+    Region: string
+    Mapping: string
+    AddressSpace: string
+    DeclarationNodes: NodeId list
+    Predicates: PredicateEvidence list
+    /// Platform/loader assertions. Arithmetic checks do not prove hardware.
+    Premises: string list
+}
+
+type MmioAccessEvidence = {
+    Operation: string
+    Address: bigint
+    Bits: int
+    Binding: MmioBindingEvidence option
+}
+
 /// The codata the graph carries for emission, settled once at the end of saturation.
 type Codata = {
     Escapes: Map<NodeId, EscapeKind>
@@ -1007,6 +1040,7 @@ type Codata = {
     /// The lambda of each declaration root, with the root's flavour.
     DeclarationRootLambdas: Map<NodeId, DeclRoot>
     FunctionPointers: Map<NodeId, FunctionPointerPlan>
+    Mmio: Map<NodeId, MmioAccessEvidence>
 }
 
 module Codata =
@@ -1020,6 +1054,7 @@ module Codata =
         Pins = None
         DeclarationRootLambdas = Map.empty
         FunctionPointers = Map.empty
+        Mmio = Map.empty
     }
 
 /// A source string's view into the BAREWire-owned static byte pool.

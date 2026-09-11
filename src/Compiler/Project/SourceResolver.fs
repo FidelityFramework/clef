@@ -38,6 +38,9 @@ module SourceResolutionError =
 module SourceResolver =
     type ResolvedSources = {
         SourcePaths: string list
+        /// The selected platform's own transitive source closure, excluding
+        /// unrelated workload dependencies and application-owned sources.
+        PlatformSourcePaths: Set<string>
         LinkedLibraries: string list
     }
 
@@ -49,23 +52,24 @@ module SourceResolver =
     /// Transitive dependencies are resolved first (deepest dependencies come first).
     /// The dependency's .fidproj is the single source of truth for file ordering.
     /// Returns Error if dependency cannot be loaded - this is NEVER silently ignored.
-    /// Uses visited set to detect circular dependencies.
+    /// Active paths diagnose cycles; completed paths deduplicate diamonds.
     ///
     /// depPath is always a fidproj file path — resolution from directory paths happens
     /// in FidprojLoader.parseDependency, not here.
     let rec private getDependencySourcesRec
         (depName: string)
         (depPath: string)
-        (visitedPaths: Set<string>)
+        (completedPaths: Set<string>)
+        (activePaths: Set<string>)
         (visitChain: string list)
         : Result<string list * string list * Set<string>, SourceResolutionError> =
 
         let normalizedPath = normalizePath depPath
 
-        // Already processed (diamond dependency) — skip without error.
-        // True circular deps (mutual module imports) will surface as type-check errors.
-        if Set.contains normalizedPath visitedPaths then
-            Ok ([], [], visitedPaths)
+        if Set.contains normalizedPath activePaths then
+            Error (CircularDependency (List.rev (depName :: visitChain)))
+        elif Set.contains normalizedPath completedPaths then
+            Ok ([], [], completedPaths)
         else
             if not (File.Exists normalizedPath) then
                 Error (DependencyFidprojNotFound (depName, normalizedPath))
@@ -75,8 +79,8 @@ module SourceResolver =
                 | Error msg ->
                     Error (DependencyFidprojLoadError (depName, normalizedPath, msg))
                 | Ok depOptions ->
-                    // Mark this path as visited BEFORE recursing
-                    let newVisited = Set.add normalizedPath visitedPaths
+                    // Active until its children and own sources have been resolved.
+                    let newActive = Set.add normalizedPath activePaths
                     let newChain = depName :: visitChain
 
                     // FIRST: Recursively get sources from THIS dependency's dependencies
@@ -88,11 +92,11 @@ module SourceResolver =
                             match acc with
                             | Error e -> Error e
                             | Ok (accSources, accLibraries, accVisited) ->
-                                match getDependencySourcesRec dep.Name dep.Path.Value accVisited newChain with
+                                match getDependencySourcesRec dep.Name dep.Path.Value accVisited newActive newChain with
                                 | Error e -> Error e
                                 | Ok (depSources, depLibraries, depVisited) ->
                                     Ok (accSources @ depSources, accLibraries @ depLibraries, depVisited)
-                        ) (Ok ([], [], newVisited))
+                        ) (Ok ([], [], completedPaths))
 
                     match transitiveDepsResult with
                     | Error e -> Error e
@@ -111,7 +115,7 @@ module SourceResolver =
 
                         match missingFiles with
                         | [] -> Ok (transitiveSources @ resolvedPaths,
-                                    depOptions.LinkedLibraries @ transitiveLibraries, finalVisited)
+                                    depOptions.LinkedLibraries @ transitiveLibraries, Set.add normalizedPath finalVisited)
                         | missing :: _ ->
                             Error (DependencySourceFileNotFound (depName, missing))
 
@@ -150,7 +154,7 @@ module SourceResolver =
                 match acc with
                 | Error e -> Error e  // Short-circuit on first error
                 | Ok (accSources, accLibraries, visited) ->
-                    match getDependencySourcesRec dep.Name dep.Path.Value visited [] with
+                    match getDependencySourcesRec dep.Name dep.Path.Value visited (Set.singleton (normalizePath options.ProjectPath)) [options.Name] with
                     | Error e -> Error e
                     | Ok (depSources, depLibraries, newVisited) ->
                         Ok (accSources @ depSources, accLibraries @ depLibraries, newVisited)
@@ -163,8 +167,21 @@ module SourceResolver =
             match resolveProjectSources options.ProjectDirectory options.SourceFiles with
             | Error e -> Error e
             | Ok projectSources ->
-                Ok { SourcePaths = dependencySources @ projectSources
-                     LinkedLibraries = List.distinct (options.LinkedLibraries @ dependencyLibraries) }
+                // Source identity is its normalized absolute path, independently
+                // of package aliases or metadata/full-package views. Keep the
+                // first occurrence in dependency/source order.
+                let sources = List.distinct (dependencySources @ projectSources)
+                let platformSources =
+                    match options.PlatformPath with
+                    | Some path ->
+                        getDependencySourcesRec "platform" path Set.empty Set.empty []
+                        |> Result.map (fun (paths, _, _) -> Set.ofList paths)
+                    | None when options.PlatformMetadata.IsSome -> Ok (Set.ofList sources)
+                    | None -> Ok Set.empty
+                platformSources |> Result.map (fun platformSources ->
+                    { SourcePaths = sources
+                      PlatformSourcePaths = platformSources
+                      LinkedLibraries = List.distinct (options.LinkedLibraries @ dependencyLibraries) })
 
     /// Source-only compatibility API. Dependency and link metadata share one
     /// traversal so a malformed transitive declaration cannot be dropped.

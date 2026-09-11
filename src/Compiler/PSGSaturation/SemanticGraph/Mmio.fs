@@ -8,10 +8,11 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 let operation (graph: SemanticGraph) id =
     match SemanticGraph.tryGetNode id graph with
     | Some { Kind = SemanticKind.Application (fn, args) } ->
-        match valueOf graph fn with
+        match Predicates.valueOf graph fn with
         | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Mmio; Operation = op } } -> Some (op, args)
         | _ -> None
     | _ -> None
+
 
 let numericBoundary graph id : DeclaredParameter option =
     match operation graph id with

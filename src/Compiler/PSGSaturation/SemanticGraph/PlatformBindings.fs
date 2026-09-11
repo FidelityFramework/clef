@@ -194,7 +194,8 @@ let pins (graph: SemanticGraph) : PinMapping option =
             |> Map.toList
             |> List.choose (fun (_, node) ->
                 match node.Kind, node.Children with
-                | SemanticKind.Binding _, [ childId ] -> shortName node.Type |> Option.bind (fun n -> recordFields graph childId |> Option.map (fun f -> n, f))
+                | SemanticKind.Binding _, [ childId ] when PlatformResolution.isSelectedPlatformDeclaration graph node ->
+                    shortName node.Type |> Option.bind (fun n -> recordFields graph childId |> Option.map (fun f -> n, f))
                 | _ -> None)
         let ofShape name read = bindings |> List.choose (fun (n, fields) -> if n = name then read graph fields else None)
         let pinsByName = ofShape "PinEndpoint" pinOf |> List.map (fun p -> p.PortName, p) |> Map.ofList

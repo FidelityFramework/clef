@@ -710,9 +710,9 @@ module NTUQualifiers =
     /// Create qualifiers with only an access pattern
     let withAccessPattern pattern = { MemorySpace = None; AccessPattern = Some pattern }
 
-/// Platform predicate types (abstract, erased at runtime).
-/// F*-inspired propositions for conditional compilation without runtime checks.
-/// CCS resolves these at saturation against the platform description; the verdict rides on the PSG and Alex reads it.
+/// Legacy capability identifiers. The context map currently has no general
+/// resolver/consumer. ClefPredicate device-access conditions use the separate
+/// Predicates/DeviceAccess path and retain their evidence in graph codata.
 [<RequireQualifiedAccess>]
 type PlatformPredicate =
     /// Platform supports 32-bit word operations
@@ -916,7 +916,20 @@ type PlatformContext = {
     /// Path to the Fidelity.Platform library
     PlatformLibraryPath: string option
 
-    /// Evaluated platform predicates (from quotations)
+    /// Explicit description export from the selected platform manifest. When
+    /// absent, legacy platform selection uses the binding directory.
+    PlatformDescription: string option
+
+    /// Normalized source identities in the selected platform's dependency
+    /// closure. An application's other declarations cannot supply its exports.
+    PlatformSourcePaths: Set<string>
+
+    /// Selected manifest claims, checked against an explicit description's core.
+    PlatformArchitecture: string option
+    PlatformOS: string option
+
+    /// Legacy capability map, currently initialized empty. This is not the
+    /// evidence carrier for ClefPredicate or MMIO access settlement.
     Predicates: Map<PlatformPredicate, bool>
 
     /// Freestanding startup configuration (populated for freestanding builds)

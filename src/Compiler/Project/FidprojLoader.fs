@@ -58,6 +58,9 @@ type PlatformSection = {
     OS: string option
     /// Architecture (e.g., "x86_64", "arm_cortex_m7").
     Arch: string option
+    /// Fully qualified immutable binding exported by the selected platform's
+    /// source dependency closure. Selects one description independently of paths.
+    Description: string option
     /// Keys the section carries that the compiler no longer reads (`word_size`,
     /// retired by CS-7b: width dimensions come from the platform description,
     /// plan L-13). Reported as CCS8205 information, never an error.
@@ -199,6 +202,18 @@ module FidprojLoader =
 
     /// Parses a [platform] section from a TOML document.
     let private parsePlatformSection (doc: TomlDocument) : Result<PlatformSection, string> =
+        let description =
+            match Toml.getValue "platform.description" doc with
+            | None -> Ok None
+            | Some (TomlValue.String name) when
+                not (System.String.IsNullOrWhiteSpace name)
+                && name = name.Trim()
+                && name.Contains '.'
+                && (name.Split('.') |> Array.forall (System.String.IsNullOrWhiteSpace >> not)) -> Ok (Some name)
+            | Some _ -> Error "Expected [platform] description to be a fully qualified binding name"
+        match description with
+        | Error message -> Error message
+        | Ok description ->
         match Toml.getString "platform.runtime_model" doc with
         | None -> Error "Missing required field [platform] runtime_model"
         | Some rmStr ->
@@ -209,6 +224,7 @@ module FidprojLoader =
                     RuntimeModel = runtimeModel
                     OS = Toml.getString "platform.os" doc
                     Arch = Toml.getString "platform.arch" doc
+                    Description = description
                     UnusedKeys = [ "word_size" ] |> List.filter (fun key -> (Toml.getValue ("platform." + key) doc).IsSome)
                     Substrate = Toml.getString "platform.substrate" doc
                     Vendor = Toml.getString "platform.vendor" doc
@@ -353,17 +369,18 @@ module FidprojLoader =
                 // The binding IS the specification — this is the authoritative source.
                 // When no platform dependency exists (e.g., standalone kernel fidproj),
                 // fall back to the project's own [platform] section as metadata source.
-                let platformMetadata =
+                let platformMetadataResult =
                     match platformPath with
-                    | Some path ->
-                        match loadBindingPlatformSection path with
-                        | Ok section -> Some section
-                        | Error _ -> None
+                    | Some path -> loadBindingPlatformSection path |> Result.map Some
                     | None ->
-                        // No platform dependency; try the project's own [platform] section
-                        match parsePlatformSection doc with
-                        | Ok section -> Some section
-                        | Error _ -> None
+                        // A missing section is allowed; a present malformed section is not.
+                        match Toml.getTable "platform" doc with
+                        | Some _ -> parsePlatformSection doc |> Result.map Some
+                        | None -> Ok None
+
+                match platformMetadataResult with
+                | Error message -> Error message
+                | Ok platformMetadata ->
 
                 // Project-level clock override from [compilation] section
                 let clockMhzOverride =

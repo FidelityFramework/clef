@@ -100,6 +100,8 @@ module DiagnosticCodes =
     // CCS8208: more than one platform description of one form compiled into the graph; the
     // first in node order is read and each other is reported at its declaration.
     let CCS8208_AmbiguousPlatformDescription = "CCS8208"
+    let CCS8209_DeviceAccessDeclaration = "CCS8209"
+    let CCS8210_DeviceAccessUnestablished = "CCS8210"
     // Effect system (CCS8300-CCS8399)
     let CCS8300_ExceptionPattern = "CCS8300"
     // Code generation (CCS8400-CCS8499)
