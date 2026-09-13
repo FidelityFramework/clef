@@ -631,6 +631,7 @@ let private explicitCoreFindings (ctx: PlatformContext) (graph: SemanticGraph) (
                 match core.Arch with
                 | "x86_64" -> Some "x86_64"
                 | "arm_cortex_m33" -> Some "thumbv8m.main"
+                | "arm_cortex_m7" -> Some "thumbv7em"
                 | _ -> None
             let architectureFindings =
                 match expectedArchitecture with
@@ -642,13 +643,14 @@ let private explicitCoreFindings (ctx: PlatformContext) (graph: SemanticGraph) (
                 match Array.toList parts with
                 // The existing ARM embedded triple omits the vendor component.
                 | ["thumbv8m.main"; "none"; "eabi"] -> "none"
+                | ["thumbv7em"; "none"; "eabihf"] -> "none"
                 | _ when parts.Length >= 3 -> parts.[2]
                 | _ -> ""
             let osFindings =
                 match expectedArchitecture, core.Os with
                 | Some _, ("linux" | "none") when os <> core.Os ->
                     [findingOn graph core.Node DeclarationDefect.Invalid
-                        (sprintf "target triple OS '%s' disagrees with core Os '%s'; current targets support explicit Linux/none OS components and thumbv8m.main-none-eabi" os core.Os)]
+                        (sprintf "target triple OS '%s' disagrees with core Os '%s'; current targets support explicit Linux/none OS components and declared Cortex-M embedded triples" os core.Os)]
                 | _ -> []
             architectureFindings @ osFindings
         metadataFindings @ tripleFindings
