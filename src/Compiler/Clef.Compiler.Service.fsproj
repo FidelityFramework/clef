@@ -267,6 +267,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\Elaboration.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Core.fs" />
     <Compile Include="NativeTypedTree\UnionFind.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\RecordInstances.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\PlatformResolution.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Predicates.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\MappedBindings.fs" />
@@ -308,6 +309,7 @@
     <Compile Include="Nanopass\FanOut.fs" />
     <Compile Include="Nanopass\FoldIn.fs" />
     <Compile Include="Nanopass\Monomorphization.fs" />
+    <Compile Include="Nanopass\ClosedCallbacks.fs" />
     <Compile Include="Nanopass\Serialization.fs" />
     <!-- Baker - Post-construction semantic enrichment (peer to NativeTypedTree) -->
     <Compile Include="Baker\ShadowAST.fs" />
@@ -320,6 +322,8 @@
     <Compile Include="Baker\Ingredients\Obligations.fs" />
     <!-- Baker Recipes - HOF decomposition templates (PRD-13a) -->
     <Compile Include="Baker\Recipes\Decomposition.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\CallableOrigins.fs" />
+    <Compile Include="Baker\Recipes\ApplicationRecipes.fs" />
     <Compile Include="Baker\Recipes\SeqRecipes.fs" />
     <Compile Include="Baker\Recipes\ListRecipes.fs" />
     <Compile Include="Baker\Recipes\MapRecipes.fs" />
@@ -332,6 +336,7 @@
     <!-- Nanopass passes - must come after Baker -->
     <Compile Include="Nanopass\IntrinsicElaboration.fs" />
     <Compile Include="Nanopass\BakerSaturation.fs" />
+    <Compile Include="Nanopass\CallableApplications.fs" />
     <Compile Include="Nanopass\ObligationDischarge.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
     <!-- The declared platform fills the context at saturation; sealed sites are checked against it (CS-7b) -->

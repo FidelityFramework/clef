@@ -6,12 +6,19 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="DimensionalCases.fs" />
+    <Compile Include="CallableApplicationCases.fs" />
     <Compile Include="DimensionalTests.fs" />
     <Compile Include="ApplicationObligationCases.fs" />
     <Compile Include="IntegerObligationCases.fs" />
     <Compile Include="StaticStringLayoutCases.fs" />
     <Compile Include="FunctionPointerCases.fs" />
+    <Compile Include="ClosedCallbackCases.fs" />
     <Compile Include="ClosureValueCases.fs" />
+    <Compile Include="OptionOperationCases.fs" />
+    <Compile Include="OptionClosureCases.fs" />
+    <Compile Include="OptionValueCases.fs" />
+    <Compile Include="PipeEvaluationCases.fs" />
+    <Compile Include="MonomorphizationMembershipCases.fs" />
     <Compile Include="ForeignReferenceCases.fs" />
     <Compile Include="BorrowedViewCases.fs" />
     <Compile Include="LocalUnusedCases.fs" />

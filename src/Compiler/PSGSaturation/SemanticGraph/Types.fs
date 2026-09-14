@@ -749,7 +749,8 @@ module SchemeMetadata =
 [<RequireQualifiedAccess>]
 module ClosureMetadata =
     /// An anonymous function expression (`fun` or `function`), distinguished from
-    /// the Lambda used to represent a named function declaration.
+    /// the Lambda used to represent a named function declaration. Synthetic subsequent
+    /// parameter groups of one `fun` are not separate expression boundaries.
     [<Literal>]
     let LambdaExpression = "Closure.LambdaExpression"
 
@@ -1108,7 +1109,8 @@ type SemanticGraph = {
     /// read of it is unobservable. Filled by RangeAnalysis.
     ElementRanges: Lazy<Map<string, ValueRange>>
     /// Per aggregate type, its settled layout (Dimensional_Range_Design.md §3.3, ruling 2): every
-    /// reachable record and union type keyed by the type constructor's name (as `FieldRanges`),
+    /// reachable non-generic record and union keyed by the type constructor's name (as
+    /// `FieldRanges`), each generic record instance by RecordInstances.layoutKey,
     /// every reachable tuple, option and Result type keyed by its rendered form (as
     /// `ElementRanges`). Filled by Placement after RangeAnalysis; defaulted empty at every graph
     /// construction. The CPU leg reads a field's representation, offset and size here and computes

@@ -820,12 +820,37 @@ let private resolvePlatformOp (op: string) (range: SourceRange) : IntrinsicResol
 // PRD-13a: Core Collection Intrinsics (Unified Lookup)
 //-------------------------------------------------------------------------
 
-/// Collection intrinsics (Map, Set, List, Option, Result) are handled through Baker elaboration.
-/// They don't need intrinsic type definitions - Baker saturation recipes provide the semantics.
-/// Return NotAnIntrinsic to let normal binding resolution handle these.
+/// The admitted Option surface has polymorphic types at name resolution, before Baker
+/// decomposes its applications. A recipe cannot supply a missing source-level type scheme.
+/// See option-operations-representation.md §§3–4 and Composer's Surface_Gaps_2026-09.md.
+/// Each lookup mints fresh parameters; neither carriers nor dimensions are concretized here.
+let private resolveOptionOp (op: string) (range: SourceRange) : IntrinsicResolution =
+    let parameter = freshTypeParam "'a" TypeParamKind.Type range
+    let valueType = NativeType.TVar parameter
+    let optionType = NativeType.TApp(Types.optionTyCon, [valueType])
+    let resolve parameters callback result =
+        let scheme = NativeType.TForall(parameters,
+            NativeType.TFun(callback, NativeType.TFun(optionType, result)))
+        Resolved (mkIntrinsic IntrinsicModule.Option op IntrinsicCategory.Pure ("Option." + op), scheme)
+    match op with
+    | "map" | "bind" ->
+        let outputParameter = freshTypeParam "'b" TypeParamKind.Type range
+        let outputType = NativeType.TVar outputParameter
+        let outputOption = NativeType.TApp(Types.optionTyCon, [outputType])
+        let callbackResult = if op = "map" then outputType else outputOption
+        resolve [parameter; outputParameter] (NativeType.TFun(valueType, callbackResult)) outputOption
+    | "filter" | "exists" | "forall" ->
+        let result = if op = "filter" then optionType else Types.boolType
+        resolve [parameter] (NativeType.TFun(valueType, Types.boolType)) result
+    | "isSome" | "isNone" | "get" ->
+        let result = if op = "get" then valueType else Types.boolType
+        let scheme = NativeType.TForall([parameter], NativeType.TFun(optionType, result))
+        Resolved (mkIntrinsic IntrinsicModule.Option op IntrinsicCategory.Pure ("Option." + op), scheme)
+    | _ -> NotAnIntrinsic
+
+/// Collection operations not yet admitted as typed schemes retain normal binding lookup.
+/// Baker owns their decomposition; it runs after source name and type resolution.
 let private resolveCollectionOp (_modl: IntrinsicModule) (_moduleName: string) (_op: string) (_range: SourceRange) : IntrinsicResolution =
-    // Collection operations are resolved through Baker elaboration, not as raw intrinsics.
-    // The type resolution happens through SRTP and Baker recipes.
     NotAnIntrinsic
 
 //-------------------------------------------------------------------------
@@ -864,7 +889,7 @@ let resolveModuleIntrinsic
     | IntrinsicModule.Map -> resolveCollectionOp IntrinsicModule.Map "Map" op range
     | IntrinsicModule.Set -> resolveCollectionOp IntrinsicModule.Set "Set" op range
     | IntrinsicModule.List -> resolveCollectionOp IntrinsicModule.List "List" op range
-    | IntrinsicModule.Option -> resolveCollectionOp IntrinsicModule.Option "Option" op range
+    | IntrinsicModule.Option -> resolveOptionOp op range
     | IntrinsicModule.Result -> resolveCollectionOp IntrinsicModule.Result "Result" op range
     | IntrinsicModule.Convert -> NotAnIntrinsic  // Conversions handled separately (float, int, etc.)
     | IntrinsicModule.Operators -> NotAnIntrinsic  // Operators handled separately
@@ -1316,5 +1341,5 @@ module RangeSources =
         | IntrinsicModule.Array, "collect" -> [ (0, [ Seed.Unknown ]) ]
         | (IntrinsicModule.Seq | IntrinsicModule.List), ("iter" | "map" | "filter" | "collect" | "tryPick" | "minBy" | "exists" | "forall" | "tryFind" | "find" | "choose") -> [ (0, [ Seed.Unknown ]) ]
         | (IntrinsicModule.Seq | IntrinsicModule.List), "fold" -> [ (0, [ Seed.Unknown; Seed.Unknown ]) ]
-        | IntrinsicModule.Option, ("map" | "bind" | "iter" | "defaultWith") -> [ (0, [ Seed.Unknown ]) ]
+        | IntrinsicModule.Option, ("map" | "bind" | "filter" | "exists" | "forall" | "iter" | "defaultWith") -> [ (0, [ Seed.Unknown ]) ]
         | _ -> []

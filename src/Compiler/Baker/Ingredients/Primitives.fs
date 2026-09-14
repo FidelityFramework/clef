@@ -205,36 +205,6 @@ let isSome (optionNodeId: NodeId) (innerType: NativeType) : SaturationParser<Nod
         return appNode.Id
     }
 
-/// Check if option is None: Option.isNone x
-let isNone (optionNodeId: NodeId) (innerType: NativeType) : SaturationParser<NodeId> =
-    saturation {
-        let! state = getUserState
-        let optionType = NativeType.TApp (Types.optionTyCon, [innerType])
-        let funcType = NativeType.TFun (optionType, Types.boolType)
-        let info = { Module = IntrinsicModule.Option; Operation = "isNone"; Category = IntrinsicCategory.Pure; FullName = "Option.isNone" }
-        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
-        do! emit funcNode
-        let! state' = getUserState
-        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [optionNodeId])) Types.boolType [funcNode.Id; optionNodeId]
-        do! emit appNode
-        return appNode.Id
-    }
-
-/// Get value from option: Option.get x (assumes Some)
-let optionGet (optionNodeId: NodeId) (innerType: NativeType) : SaturationParser<NodeId> =
-    saturation {
-        let! state = getUserState
-        let optionType = NativeType.TApp (Types.optionTyCon, [innerType])
-        let funcType = NativeType.TFun (optionType, innerType)
-        let info = { Module = IntrinsicModule.Option; Operation = "get"; Category = IntrinsicCategory.Pure; FullName = "Option.get" }
-        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
-        do! emit funcNode
-        let! state' = getUserState
-        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [optionNodeId])) innerType [funcNode.Id; optionNodeId]
-        do! emit appNode
-        return appNode.Id
-    }
-
 //=============================================================================
 // STRUCTURAL PRIMITIVES
 //=============================================================================
@@ -263,6 +233,34 @@ let ifThenElse (guardId: NodeId) (thenId: NodeId) (elseId: NodeId) (resultType: 
         let node = mkNode state (SemanticKind.IfThenElse (guardId, thenId, Some elseId)) resultType [guardId; thenId; elseId]
         do! emit node
         return node.Id
+    }
+
+/// Preserve eager argument evaluation when a recipe moves uses into conditional
+/// branches. The graph evaluates these nodes in order, once, before the result;
+/// later references reuse their values. Callback invocation stays in its branch.
+let evaluateBefore (inputs: NodeId list) (resultId: NodeId) (resultType: NativeType) : SaturationParser<NodeId> =
+    saturation {
+        let! state = getUserState
+        let children = inputs @ [resultId]
+        let node = mkNode state (SemanticKind.Sequential children) resultType children
+        do! emit node
+        return node.Id
+    }
+
+/// A replacement value retains its source scope and emission boundary. Its new
+/// elaboration metadata stays authoritative while other source metadata survives.
+let inheritContext (source: SemanticNode) (replacement: NodeId) : SaturationParser<NodeId> =
+    saturation {
+        do! updateUserState (fun state ->
+            let nodes =
+                state.EmittedNodes |> List.map (fun node ->
+                    if node.Id = replacement then
+                        { node with ArenaAffinity = source.ArenaAffinity
+                                    EmissionStrategy = source.EmissionStrategy
+                                    Metadata = Map.fold (fun metadata key value -> Map.add key value metadata) source.Metadata node.Metadata }
+                    else node)
+            { state with EmittedNodes = nodes })
+        return replacement
     }
 
 /// Create a variable reference
@@ -318,45 +316,40 @@ let letRecBind (name: string) (valueNodeId: NodeId) (ty: NativeType) : Saturatio
         return node.Id
     }
 
-/// Create a lambda node
-let lambda
+/// A function value with an explicit, already-resolved capture frontier.
+/// Recipes provide the body using references local to the new function scope;
+/// captured expressions are evaluated by their bindings in the forming scope.
+/// Parameters are explicit and nonempty; a unit parameter is represented explicitly.
+let closure
     (parameters: (string * NativeType) list)
-    (bodyBuilder: NodeId list -> SaturationParser<NodeId>)
+    (captures: CaptureInfo list)
+    (enclosingFunction: string option)
+    (bodyBuilder: NodeId list -> NodeId list -> SaturationParser<NodeId>)
     (returnType: NativeType)
     : SaturationParser<NodeId> =
     saturation {
-        // Create parameter binding nodes
-        let rec createParams plist acc =
-            saturation {
-                match plist with
-                | [] -> return List.rev acc
-                | (name, ty) :: rest ->
-                    let! paramState = getUserState
-                    let paramNode = mkNode paramState (SemanticKind.PatternBinding name) ty []
-                    do! emit paramNode
-                    do! withBinding name paramNode.Id ty
-                    let! remaining = createParams rest ((name, ty, paramNode.Id) :: acc)
-                    return remaining
-            }
-
-        let! paramNodes = createParams parameters []
-        let paramIds = paramNodes |> List.map (fun (_, _, id) -> id)
-
-        // Build the body with parameters in scope
-        let! bodyId = bodyBuilder paramIds
-
-        // Compute the full function type
-        let funcType =
-            parameters
-            |> List.foldBack (fun (_, paramTy) acc -> NativeType.TFun (paramTy, acc))
-            <| returnType
-
-        // Create the lambda node
-        let! finalState = getUserState
-        let kind = SemanticKind.Lambda (paramNodes, bodyId, [], None, LambdaContext.RegularClosure)
-        let lambdaNode = mkNode finalState kind funcType [bodyId]
-        do! emit lambdaNode
-        return lambdaNode.Id
+        let! parameterIds = parameters |> List.map (fun (name, ty) -> patternBinding name ty) |> sequence
+        let parameterNodes = List.map2 (fun (name, ty) id -> name, ty, id) parameters parameterIds
+        let! parameterRefs = parameterNodes |> List.map (fun (name, ty, id) -> varRef name (Some id) ty) |> sequence
+        let! captureRefs = captures |> List.map (fun capture -> varRef capture.Name capture.SourceNodeId capture.Type) |> sequence
+        let! bodyId = bodyBuilder parameterRefs captureRefs
+        // The body belongs to the lifted function; its construction belongs to the caller.
+        do! updateUserState (fun state ->
+            let nodes =
+                state.EmittedNodes |> List.map (fun node ->
+                    if node.Id = bodyId then
+                        { node with EmissionStrategy = EmissionStrategy.SeparateFunction captures.Length }
+                    else node)
+            { state with EmittedNodes = nodes })
+        let functionType = List.foldBack (fun (_, ty) result -> NativeType.TFun (ty, result)) parameters returnType
+        let! state = getUserState
+        let node = mkNode state (SemanticKind.Lambda (parameterNodes, bodyId, captures, enclosingFunction, LambdaContext.RegularClosure)) functionType (parameterIds @ [bodyId])
+        let value =
+            { node with Metadata = node.Metadata
+                                    |> Map.add ClosureMetadata.LambdaExpression (MetadataValue.Bool true)
+                                    |> Map.add ClosureMetadata.RequiresClosurePair (MetadataValue.Bool true) }
+        do! emit value
+        return value.Id
     }
 
 //=============================================================================

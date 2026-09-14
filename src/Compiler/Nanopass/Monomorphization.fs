@@ -9,7 +9,7 @@
 /// function type while the definition's body still mentions the scheme's type parameters.
 ///
 /// Native code has one representation per type, so a generic function is compiled once per
-/// distinct instantiation: this pass clones the Binding + Lambda subtree for every distinct
+/// distinct instantiation: this pass clones the Binding + callable subtree for every distinct
 /// type-argument tuple found at its use sites, substitutes the type arguments into every
 /// node type (and into the types embedded in patterns and lambda parameters), renames the
 /// clone (`name__monoN`), repoints the use sites at their clone, replaces the generic
@@ -199,7 +199,7 @@ let private collectSubtree (nodes: Map<NodeId, SemanticNode>) (rootId: NodeId) :
 /// Clone the subtree rooted at `rootId` with fresh NodeIds, substituting `f` into every
 /// type, remapping internal references, and re-parenting the clone under `newParent`.
 /// Returns the new root id and the cloned nodes.
-let private cloneSubtree
+let internal cloneSubtree
     (nodes: Map<NodeId, SemanticNode>)
     (rootId: NodeId)
     (f: NativeType -> NativeType)
@@ -226,14 +226,23 @@ let private cloneSubtree
 // The pass
 //-------------------------------------------------------------------------
 
-/// A generic top-level function: its Binding node (with a TForall type) and its Lambda child.
+/// A generic function declaration or immutable bare library operation alias.
+/// Bare operations have no captured evaluation to duplicate; Baker reifies each
+/// specialized intrinsic later. Existing function-value references remain values.
+let rec private isBareOption (nodes: Map<NodeId, SemanticNode>) id =
+    match Map.tryFind id nodes with
+    | Some { Kind = SemanticKind.Intrinsic info } -> info.Module = IntrinsicModule.Option
+    | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> isBareOption nodes inner
+    | _ -> false
+
 let private isGenericFunctionBinding (nodes: Map<NodeId, SemanticNode>) (node: SemanticNode) : (TypeParam list * NativeType * NodeId) option =
     match node.Kind, node.Type with
-    | SemanticKind.Binding (_, _, false, None), NativeType.TForall (typars, body) ->
+    | SemanticKind.Binding (_, isMutable, false, None), NativeType.TForall (typars, body) ->
         match node.Children with
         | [lambdaId] ->
             match Map.tryFind lambdaId nodes with
             | Some { Kind = SemanticKind.Lambda _ } -> Some (typars, body, lambdaId)
+            | _ when not isMutable && isBareOption nodes lambdaId -> Some (typars, body, lambdaId)
             | _ -> None
         | _ -> None
     | _ -> None
@@ -248,6 +257,21 @@ let private instanceKey (typars: TypeParam list) (subst: Map<int, NativeType>) :
         | Some ty -> formatType (applySubst ty)
         | None -> "?")
     |> String.concat ","
+
+/// Declaration membership is authoritative before parent navigation edges are linked.
+/// Replace module members, and pure local library aliases in their sequence, at the
+/// existing position so specialization leaves no references to the removed generic declaration.
+let private replaceBindingMembership (bindingId: NodeId) (replacements: NodeId list) (localLibraryAlias: bool) (nodes: Map<NodeId, SemanticNode>) =
+    let replace ids = ids |> List.collect (fun id -> if id = bindingId then replacements else [id])
+    nodes |> Map.map (fun _ node ->
+        match node.Kind with
+        | SemanticKind.ModuleDef (name, members) when List.contains bindingId members ->
+            { node with Kind = SemanticKind.ModuleDef (name, replace members)
+                        Children = replace node.Children }
+        | SemanticKind.Sequential expressions when localLibraryAlias && List.contains bindingId expressions ->
+            { node with Kind = SemanticKind.Sequential (replace expressions)
+                        Children = replace node.Children }
+        | _ -> node)
 
 /// Run monomorphization over the resolved node map. Returns the updated node map.
 let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
@@ -264,6 +288,7 @@ let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
             |> List.choose (fun (id, node) ->
                 isGenericFunctionBinding current node |> Option.map (fun (tps, body, lambdaId) -> (id, node, tps, body, lambdaId)))
         for (bindingId, bindingNode, rawTypars, rawSchemeBody, lambdaId) in generics do
+            let localLibraryAlias = isBareOption current lambdaId
             // Re-root the scheme: unions since generalization may have moved a parameter's root.
             let typars = rawTypars |> List.map (fun tp -> fst (find tp)) |> List.distinctBy (fun tp -> tp.Id)
             let schemeBody = canonicalizeVars rawSchemeBody
@@ -287,13 +312,7 @@ let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
                     // No instantiation anywhere: nothing to compile. Remove the generic original so no
                     // body with unbound type variables reaches emission.
                     progress <- true
-                    match bindingNode.Parent with
-                    | Some parentId ->
-                        match Map.tryFind parentId current with
-                        | Some ({ Kind = SemanticKind.ModuleDef (mname, members) } as parentNode) ->
-                            current <- Map.add parentId { parentNode with Kind = SemanticKind.ModuleDef (mname, members |> List.filter ((<>) bindingId)); Children = parentNode.Children |> List.filter ((<>) bindingId) } current
-                        | _ -> ()
-                    | None -> ()
+                    current <- replaceBindingMembership bindingId [] localLibraryAlias current
                     for id in collectSubtree current bindingId do
                         current <- Map.remove id current
                 else
@@ -349,15 +368,7 @@ let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
                             current <- Map.add useId { useNode with Kind = SemanticKind.VarRef (name, Some target) } current
                         | None -> ()
                     // Replace the generic original in its ModuleDef by the clones, and drop it
-                    match bindingNode.Parent with
-                    | Some parentId ->
-                        match Map.tryFind parentId current with
-                        | Some ({ Kind = SemanticKind.ModuleDef (mname, members) } as parentNode) ->
-                            let replaced = members |> List.collect (fun m -> if m = bindingId then cloneIds else [m])
-                            let children = parentNode.Children |> List.collect (fun m -> if m = bindingId then cloneIds else [m])
-                            current <- Map.add parentId { parentNode with Kind = SemanticKind.ModuleDef (mname, replaced); Children = children } current
-                        | _ -> ()
-                    | None -> ()
+                    current <- replaceBindingMembership bindingId cloneIds localLibraryAlias current
                     // Drop the generic original and its subtree
                     for id in collectSubtree current bindingId do
                         current <- Map.remove id current

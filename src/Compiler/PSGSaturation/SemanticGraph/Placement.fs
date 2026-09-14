@@ -39,7 +39,7 @@ let [<Literal>] private ViewWords = 5
 /// The aggregate types the graph reaches, each with the key `Layouts` holds it under.
 [<RequireQualifiedAccess>]
 type private Aggregate =
-    | Record of name: string * fields: (string * NativeType) list
+    | Record of key: string * name: string * fields: (string * NativeType) list
     | Union of name: string * cases: (string * (string option * NativeType) list) list
     | Tuple of key: string * elements: NativeType list
     | Option of key: string * inner: NativeType
@@ -72,9 +72,9 @@ let private aggregateOf (graph: SemanticGraph) (ty: NativeType) : Aggregate opti
     | NativeType.TTuple (elements, _) as t -> Some (Aggregate.Tuple (keyOf t, elements))
     | NativeType.TApp (tycon, [ inner ]) as t when tycon.Name = "option" || tycon.Name = "voption" -> Some (Aggregate.Option (keyOf t, inner))
     | NativeType.TApp (tycon, [ ok; err ]) as t when tycon.Name = "Result" || tycon.Name = "result" -> Some (Aggregate.Result (keyOf t, ok, err))
-    | NativeType.TApp (tycon, _) ->
-        match SemanticGraph.tryGetRecordFields tycon.Name graph with
-        | Some fields -> Some (Aggregate.Record (tycon.Name, fields))
+    | NativeType.TApp (tycon, _) as instance ->
+        match RecordInstances.tryFields instance graph with
+        | Some fields -> Some (Aggregate.Record (RecordInstances.layoutKey instance, tycon.Name, fields))
         | None ->
             match unionCasesOf graph tycon.Name with
             | Some cases -> Some (Aggregate.Union (tycon.Name, cases))
@@ -85,13 +85,14 @@ let private aggregateOf (graph: SemanticGraph) (ty: NativeType) : Aggregate opti
 
 let private aggregateKey (a: Aggregate) : string =
     match a with
-    | Aggregate.Record (name, _) | Aggregate.Union (name, _) -> name
+    | Aggregate.Record (key, _, _) -> key
+    | Aggregate.Union (name, _) -> name
     | Aggregate.Tuple (key, _) | Aggregate.Option (key, _) | Aggregate.Result (key, _, _) -> key
 
 /// The types an aggregate's placement reads: its fields, elements or payloads.
 let private constituents (a: Aggregate) : NativeType list =
     match a with
-    | Aggregate.Record (_, fields) -> fields |> List.map snd
+    | Aggregate.Record (_, _, fields) -> fields |> List.map snd
     | Aggregate.Union (_, cases) -> cases |> List.collect (fun (_, fields) -> fields |> List.map snd)
     | Aggregate.Tuple (_, elements) -> elements
     | Aggregate.Option (_, inner) -> [ inner ]
@@ -264,7 +265,10 @@ let private payloadSlot (p: Placer) (fields: (string option * NativeType) list) 
 
 let private place (p: Placer) (a: Aggregate) : SettledLayout =
     match a with
-    | Aggregate.Record (name, fields) ->
+    | Aggregate.Record (_, name, fields) ->
+        // Each instance has its own field types and layout. The existing constructor-keyed
+        // range is a conservative join over every numeric write; keeping it does not change
+        // dimensions or carriers, and cannot select a narrower representation for an instance.
         let declared = Map.tryFind name p.Boundaries
         tile p (fields |> List.map (fun (field, ty) ->
             let physical = declared |> Option.bind (fun d -> d.PhysicalFields |> List.tryFind (fun f -> f.Name = field && f.Count = 1))
@@ -355,8 +359,8 @@ let private valueBytes (p: Placer) (range: ValueRange) (ty: NativeType) : Settle
     let ptr = pointerBytes p
     let ty = applySubst ty
     match aggregateOf p.Graph ty with
-    | Some (Aggregate.Record (name, _)) ->
-        match Map.tryFind name p.Graph.Layouts.Value with
+    | Some (Aggregate.Record (key, name, _)) ->
+        match Map.tryFind key p.Graph.Layouts.Value with
         | Some (SettledLayout.Record (_, Some size, _)) -> SettledSlot.Pointer ViewWords, size
         | _ -> failwithf "Placement: the record %s has no settled size to hold a lazy value in" name
     | Some (Aggregate.Tuple (key, _)) ->

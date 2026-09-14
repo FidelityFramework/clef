@@ -21,11 +21,10 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 // Core Types
 // =============================================================================
 
-/// Information about an inline function body (for transparent expansion)
-type InlineBody = {
-    Parameters: string list
-    Body: SynExpr
-    Range: SourceRange
+/// Resolution context - tracks open namespaces for error messages
+type ModuleScope = {
+    IsNamespace: bool
+    RequireQualifiedAccess: bool
 }
 
 /// Union case info for DU constructor bindings
@@ -38,9 +37,16 @@ type UnionCaseInfo = {
     CaseIndex: int
 }
 
+/// Information about an inline function body (for transparent expansion)
+type InlineBody = {
+    Parameters: string list
+    Body: SynExpr
+    Range: SourceRange
+    DefinitionScope: InlineScope
+}
+
 /// A resolved binding - the witness produced by resolution
-[<NoComparison; NoEquality>]
-type ResolvedBinding = {
+and [<NoComparison; NoEquality>] ResolvedBinding = {
     /// The fully qualified name (e.g., "Alloy.Console.Write")
     QualifiedName: string
     /// The binding's type
@@ -68,7 +74,34 @@ type ResolvedBinding = {
 /// given a name, produces an optional binding. The "codata" perspective
 /// means we think of it as something we observe/query, not something
 /// we build by accumulation.
-type Resolver = string -> ResolvedBinding option
+and Resolver = string -> ResolvedBinding option
+
+and ResolutionContext = {
+    /// Open namespace prefixes in resolution order (most recent first)
+    OpenNamespaces: string list
+    /// The base resolver (all registered bindings)
+    BaseResolver: Resolver
+    /// The composed resolver (base + opens applied)
+    ComposedResolver: Resolver
+    /// Canonical declaration paths, including modules with no value bindings.
+    ModulesAndNamespaces: Map<string, ModuleScope>
+    /// Private lexical abbreviations; never exported as module declarations.
+    ModuleAliases: Map<string, string>
+    /// Current declaration and enclosing paths, nearest first.
+    LexicalPaths: string list
+}
+
+and InlineScope = {
+    Resolution: ResolutionContext
+    BindingTypes: Map<string, NativeType>
+    TypeParameters: Map<string, TypeParam>
+    TypeDefs: Map<string, TypeConRef>
+    TypeAbbrevs: Map<string, NativeType>
+    Measures: Clef.Compiler.NativeTypedTree.MeasureEnvironment.MeasureEnv
+    MeasureScope: Map<string, Clef.Compiler.NativeTypedTree.DimensionAlgebra.MeasureVar>
+    RecordDefs: Map<string, RecordTypeInfo>
+    FieldLabels: Map<string, FieldRef list>
+}
 
 // =============================================================================
 // Resolver Combinators
@@ -138,27 +171,6 @@ let addBindings (bindings: (string * ResolvedBinding) list) (resolver: Resolver)
 // =============================================================================
 // Resolution with Scope Tracking
 // =============================================================================
-
-/// Resolution context - tracks open namespaces for error messages
-type ModuleScope = {
-    IsNamespace: bool
-    RequireQualifiedAccess: bool
-}
-
-type ResolutionContext = {
-    /// Open namespace prefixes in resolution order (most recent first)
-    OpenNamespaces: string list
-    /// The base resolver (all registered bindings)
-    BaseResolver: Resolver
-    /// The composed resolver (base + opens applied)
-    ComposedResolver: Resolver
-    /// Canonical declaration paths, including modules with no value bindings.
-    ModulesAndNamespaces: Map<string, ModuleScope>
-    /// Private lexical abbreviations; never exported as module declarations.
-    ModuleAliases: Map<string, string>
-    /// Current declaration and enclosing paths, nearest first.
-    LexicalPaths: string list
-}
 
 /// Create initial resolution context with empty scope
 let createContext () : ResolutionContext = {

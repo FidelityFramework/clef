@@ -70,6 +70,7 @@ module DiagnosticCodes =
     let CCS8090_InternalInvariant = "CCS8090"
     let CCS8091_NullableAnnotationIgnored = "CCS8091"
     let CCS8092_TypeArgumentsOnNonScheme = "CCS8092"
+    let CCS8096_ClosedCallbackDeclaration = "CCS8096"
     // Memory management (CCS8100-CCS8199)
     let CCS8100_RegionMismatch = "CCS8100"
     let CCS8101_LifetimeError = "CCS8101"
@@ -268,7 +269,9 @@ type CheckerCallbacks = {
 //-------------------------------------------------------------------------
 
 /// Canonical TypeConRef for option<'T>.
-let internal optionTycon  : TypeConRef = mkTypeConRef "option"  1 TypeLayout.Opaque
+/// Share the NTU constructor used by library schemes and Baker ingredients;
+/// a second constructor with another layout identity defeats typed recipe matching.
+let internal optionTycon : TypeConRef = NativeTypes.Types.optionTyCon
 /// Canonical TypeConRef for voption<'T>.
 let internal voptionTycon : TypeConRef = mkTypeConRef "voption" 1 TypeLayout.Opaque
 /// Canonical TypeConRef for Result<'T,'E>. Capital R — matches F# annotation syntax.

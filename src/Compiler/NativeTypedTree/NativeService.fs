@@ -996,6 +996,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let unusedBindings = unusedBindingDiagnostics ownedSources { graph with Nodes = sourceNodes } (diagnostics @ residual)
     emitPhaseIfEnabled PhaseTypes.PhaseId.Structural graph diagnostics
 
+    // Declared closed adapters become ordinary module entries before either
+    // pruning or Baker can discard their source template or factory body.
+    let graph, closedCallbackDiagnostics = Clef.Compiler.Nanopass.ClosedCallbacks.expand graph
+
     // Phase 4: Reachability analysis
     // Use soft-delete (mark IsReachable = false) or hard prune based on config
     let reachableGraph =
@@ -1048,6 +1052,11 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             markUnreachable foldedGraph
         else
             pruneUnreachable foldedGraph
+
+    // Reified function values retain their actual parameter boundaries. Stage
+    // proven overapplications through the same recipe/fold-in machinery before
+    // range and placement inspect the calls and their returned function values.
+    let finalGraph = Clef.Compiler.Nanopass.CallableApplications.normalize finalGraph
 
     //=========================================================================
     // Pass 5: Obligation Elaboration -- the declared platform, cross-compiled
@@ -1159,7 +1168,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics
+        Diagnostics = taggedDiagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics
         PlatformContext = platformContext
     }
 
@@ -1274,8 +1283,8 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     //---------------------------------------------------------------------
     // Lambda expressions
     //---------------------------------------------------------------------
-    | SynExpr.Lambda(_, _, args, bodyExpr, _, _, _) ->
-        Applications.checkLambda checkExpr Bindings.extractLambdaParams env builder args bodyExpr range
+    | SynExpr.Lambda(_, inLambdaSeq, args, bodyExpr, _, _, _) ->
+        Applications.checkLambda checkExpr Bindings.extractLambdaParams env builder inLambdaSeq args bodyExpr range
 
     //---------------------------------------------------------------------
     // Let bindings
@@ -2079,7 +2088,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 let name = longId |> List.map (fun ident -> ident.idText) |> String.concat "."
                 name, withDeclaredTypeParameters declarations env)
             |> Map.ofList
-        let declarationEnv name current =
+        let declarationEnv name (current: TypeEnv) =
             let scoped, _ = declarationScopes.[name]
             { current with TypeParameters = scoped.TypeParameters; MeasureScope = scoped.MeasureScope }
         let withParameterKinds name (constructor: TypeConRef) =
@@ -2455,6 +2464,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
             children = childIds
         )
 
+        for child in childIds do builder.SetParent(child, moduleNode.Id)
         (leaveModuleScope nestedPath declaredEnv nestedEnv, [moduleNode])
 
     | SynModuleDecl.Open(target, range) ->
@@ -2593,6 +2603,7 @@ let private checkModuleOrNamespace (env: TypeEnv) (builder: NodeBuilder) (module
             children = childIds
         )
 
+        for child in childIds do builder.SetParent(child, moduleNode.Id)
         (updatedEnv, modulePath, [moduleNode])
 
 //-------------------------------------------------------------------------

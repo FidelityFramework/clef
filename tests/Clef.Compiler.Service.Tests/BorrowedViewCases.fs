@@ -153,6 +153,56 @@ let readAt (view: BorrowedView<Pixel>) = fun (index: int) -> BorrowedView.get vi
 let main _ = withView (fun view -> readAt view 0)
 """
         Assert.Empty((ScopedCallbacks.read result.Graph).Findings)
+        // The lifetime proof must span the two actual callable boundaries;
+        // flattening away the returned function is not its justification.
+        Assert.Contains(result.Graph.Nodes.Values, fun node ->
+            node.IsReachable && match node.Kind with
+                                | SemanticKind.Application (callee, [_]) ->
+                                    match Core.SemanticGraph.tryGetNode callee result.Graph with
+                                    | Some { Kind = SemanticKind.Application (_, [_]); Type = NativeType.TFun _ } -> true
+                                    | _ -> false
+                                | _ -> false)
+
+    [<Fact>]
+    member _.``Immediately completed unit closure remains a synchronous borrower``() =
+        let result = BorrowedViewCases.source """
+let readLength (view: BorrowedView<Pixel>) = fun () -> BorrowedView.length view
+[<EntryPoint>]
+let main _ = withView (fun view -> readLength view ())
+"""
+        let scopes = ScopedCallbacks.read result.Graph
+        Assert.Empty scopes.Findings
+        let returned = result.Graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with
+                                | SemanticKind.Lambda ([], _, captures, _, _) -> not captures.IsEmpty
+                                | _ -> false) |> Assert.Single
+        // Synchronous borrowing does not permit allocating this environment in
+        // the helper frame that has already returned before the unit call.
+        Assert.False(scopes.StackLambdas.Contains returned.Id)
+        Assert.Equal(EscapeKind.EscapesViaReturn, (Escape.analyze result.Graph)[returned.Id])
+
+    [<Fact>]
+    member _.``One saturated use does not authorize retaining the same helper result``() =
+        let result = BorrowedViewCases.source """
+let readAt (view: BorrowedView<Pixel>) = fun (index: int) -> BorrowedView.get view index
+[<EntryPoint>]
+let main _ = withView (fun view ->
+    let immediate = readAt view 0
+    let retained = readAt view
+    immediate + retained 0)
+"""
+        Assert.Contains((ScopedCallbacks.read result.Graph).Findings, fun f -> f.Message.Contains("escapes its mapping scope"))
+
+    [<Fact>]
+    member _.``Returned helper closure cannot be forwarded through an unknown consumer``() =
+        let result = BorrowedViewCases.source """
+let readAt (view: BorrowedView<Pixel>) = fun (index: int) -> BorrowedView.get view index
+let forward (unknown: (int -> int) -> int) (view: BorrowedView<Pixel>) =
+    unknown (readAt view)
+[<EntryPoint>]
+let main _ = withView (fun view -> forward (fun callback -> callback 0) view)
+"""
+        Assert.Contains((ScopedCallbacks.read result.Graph).Findings, fun f -> f.Message.Contains("escapes its mapping scope"))
 
     [<Fact>]
     member _.``Default record cannot manufacture a nested view``() =

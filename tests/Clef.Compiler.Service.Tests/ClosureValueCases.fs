@@ -208,6 +208,116 @@ let main _ =
         ClosureValues.assertPairs result
 
     [<Fact>]
+    member _.``Returned unit closures retain their concrete generic record captures``() =
+        let source = """type State<'a> = { Value: 'a; Ready: bool }
+let make (state: State<'a>) = fun () -> state
+[<EntryPoint>]
+let main _ =
+    let number = make { Value = 1000; Ready = true }
+    let flag = make { Value = false; Ready = false }
+    let numberState = number ()
+    let flagState = flag ()
+    if numberState.Value = 1000 && numberState.Ready && not flagState.Value && not flagState.Ready then 0 else 1
+"""
+        let result = ClosureValues.check source
+        // As in assertPairs, supply the physical context directly to the placement stage;
+        // a full platform check requires a source description declaring its dimensions.
+        let placements = Clef.Compiler.PSGSaturation.SemanticGraph.Placement.closures (Some ClosureValues.context) result.Graph
+        let closures = ClosureValues.expressionLambdas result
+        Assert.Equal(2, closures.Length)
+        for closure in closures do
+            Assert.False(result.Graph.Codata.Value.Curry.AbsorbedLambdas.Contains closure.Id)
+            Assert.True(placements.ContainsKey closure.Id)
+            match closure.Kind with
+            | SemanticKind.Lambda (parameters, _, captures, _, _) ->
+                Assert.Empty parameters
+                let capture = Assert.Single captures
+                Assert.Equal("state", capture.Name)
+                Assert.False(Clef.Compiler.NativeTypedTree.UnionFind.hasUnboundVars capture.Type)
+            | kind -> failwithf "Returned function value ceased to be a lambda: %A" kind
+            match closure.Parent |> Option.map (fun id -> result.Graph.Nodes[id]) with
+            | Some { Kind = SemanticKind.Lambda (parameters, body, _, _, _) } ->
+                Assert.Single parameters |> ignore
+                Assert.Equal(closure.Id, body)
+            | parent -> failwithf "Returned closure lost its enclosing callable: %A" parent
+
+    [<Fact>]
+    member _.``Ordinary curried declaration parameters still form one callable``() =
+        let result = ClosureValues.check """
+let add (left: int) (right: int) = left + right
+[<EntryPoint>]
+let main _ = add 20 22
+"""
+        let binding = ClosureValues.bindingNamed "add" result
+        let lambda = ClosureValues.valueNode result binding.Children.Head
+        match lambda.Kind with
+        | SemanticKind.Lambda (parameters, body, _, _, _) ->
+            Assert.Equal(2, parameters.Length)
+            match result.Graph.Nodes[body].Kind with
+            | SemanticKind.Lambda _ -> failwith "A formal parameter tail was left as a returned closure"
+            | _ -> ()
+        | kind -> failwithf "Named declaration ceased to be a callable: %A" kind
+
+    [<Fact>]
+    member _.``Range evidence keeps the closure factory separate from its returned callable``() =
+        let result = ClosureValues.check """
+[<Measure>] type m
+let make (seed: int<m>) = fun (delta: int<m>) -> seed + delta
+[<EntryPoint>]
+let main _ =
+    let work = make 1000<m>
+    let actual = work 7<m>
+    if actual = 1007<m> then 0 else 1
+"""
+        let factory = ClosureValues.bindingNamed "make" result
+        let factoryLambda = ClosureValues.valueNode result factory.Children.Head
+        match factoryLambda.Kind with
+        | SemanticKind.Lambda (parameters, body, _, _, _) ->
+            let _, _, seed = Assert.Single parameters
+            Assert.Equal(Some (ValueRange.point 1000I), result.Graph.Nodes[seed].ValueRange)
+            // Calling make supplies its complete parameter list. Its returned
+            // function is the escaping value, rather than a partial call of make.
+            Assert.Equal(None, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.escapes result.Graph factoryLambda.Id)
+            let returned = result.Graph.Nodes[body]
+            Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.escapes result.Graph returned.Id |> Option.isSome)
+            match returned.Kind with
+            | SemanticKind.Lambda (returnedParameters, _, captures, _, _) ->
+                let _, deltaType, delta = Assert.Single returnedParameters
+                Assert.Equal(Some (ValueRange.point 7I), result.Graph.Nodes[delta].ValueRange)
+                let capture = Assert.Single captures
+                Assert.Equal(Some seed, capture.SourceNodeId)
+                Assert.Equal(formatType deltaType, formatType capture.Type)
+            | kind -> failwithf "Factory result lost its callable boundary: %A" kind
+        | kind -> failwithf "Expected a closure factory: %A" kind
+
+    [<Fact>]
+    member _.``One source fun keeps all formal parameters in its closure callable``() =
+        let result = ClosureValues.check """
+let mutable selected: int -> int -> int = fun left right -> left + right
+let invoke (work: int -> int -> int) left right = work left right
+[<EntryPoint>]
+let main _ =
+    let saved = selected
+    selected <- fun left right -> left - right
+    if invoke saved 7 3 = 10 && selected 7 3 = 4 then 0 else 1
+"""
+        let closures = ClosureValues.expressionLambdas result
+        Assert.Equal(2, closures.Length)
+        for closure in closures do
+            match closure.Kind with
+            | SemanticKind.Lambda (parameters, body, captures, _, _) ->
+                Assert.Equal(2, parameters.Length)
+                Assert.Empty captures
+                match result.Graph.Nodes[body].Kind with
+                | SemanticKind.Lambda _ -> failwith "A synthetic parameter group became a returned function value"
+                | _ -> ()
+            | kind -> failwithf "Function value ceased to be a lambda: %A" kind
+        Assert.NotEmpty result.Graph.Codata.Value.Curry.AbsorbedLambdas
+        for absorbed in result.Graph.Codata.Value.Curry.AbsorbedLambdas do
+            let node = result.Graph.Nodes[absorbed]
+            Assert.NotEqual(Some (MetadataValue.Bool true), Map.tryFind ClosureMetadata.LambdaExpression node.Metadata)
+
+    [<Fact>]
     member _.``Named native callback declarations stay direct``() =
         let result = ClosureValues.check """
 let identity (value: int) : int = value

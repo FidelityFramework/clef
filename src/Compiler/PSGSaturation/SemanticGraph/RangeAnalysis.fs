@@ -224,10 +224,16 @@ let rec private mayUnify (a: NativeType) (b: NativeType) : bool =
 /// nested one-parameter nodes at this phase, while a saturated call already has
 /// both arguments. Comparing only the outer parameter loses the actual call's
 /// range evidence and can leave callback-to-callback argument cycles at Empty.
+/// Explicit returned function values stop the chain, as they do in Curry: their
+/// parameters and result belong to a different callable and range boundary.
 let rec private lambdaShape (nodes: Map<NodeId, SemanticNode>) (id: NodeId) : ((string * NativeType * NodeId) list * NodeId) option =
     match Map.tryFind id nodes with
     | Some { Kind = SemanticKind.Lambda (parameters, body, _, _, _) } ->
-        match lambdaShape nodes body with
+        let returnedFunction =
+            Map.tryFind body nodes |> Option.exists (fun node ->
+                [ClosureMetadata.LambdaExpression; ClosureMetadata.RequiresClosurePair]
+                |> List.exists (fun key -> Map.tryFind key node.Metadata = Some (MetadataValue.Bool true)))
+        match (if returnedFunction then None else lambdaShape nodes body) with
         | Some (innerParameters, innerBody) -> Some (parameters @ innerParameters, innerBody)
         | None -> Some (parameters, body)
     | _ -> None

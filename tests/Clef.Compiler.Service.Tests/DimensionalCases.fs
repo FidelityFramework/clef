@@ -10,6 +10,8 @@ open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.NativeTypedTree.Expressions.Intrinsics
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+module RecordInstances = Clef.Compiler.PSGSaturation.SemanticGraph.RecordInstances
+module Placement = Clef.Compiler.PSGSaturation.SemanticGraph.Placement
 
 let check body =
     let source = "module Dimensions\n[<Measure>] type m\n[<Measure>] type s\n" + body
@@ -549,6 +551,81 @@ let main _ = if divide 12.0<m> 3.0<s> > 0.0<m/s> then 0 else 1
         let result = check "type Quantity<[<Measure>] 'u> = { Value: float<'u> }\nlet distance: Quantity<m> = { Value = 1.0<m> }\nlet duration: Quantity<s> = { Value = 2.0<s> }\nlet value = distance.Value\n"
         noErrors result
         same (measured metre) (bindingType "value" result)
+
+    "record instance facts follow declaration order without binding shared parameters", fun () ->
+        let result = check """type Pending<'unused, 'a, 'b> = { Second: 'b; Desired: 'a; Committed: 'a option; Dirty: bool }
+let first: Pending<string, int, bool> = { Second = false; Desired = 1000; Committed = Some 1000; Dirty = true }
+let second: Pending<int, bool, int> = { Second = 7; Desired = false; Committed = None; Dirty = false }
+"""
+        noErrors result
+        let first = bindingType "first" result
+        let second = bindingType "second" result
+        let fields ty = RecordInstances.tryFields ty result.Graph |> Option.get |> Map.ofList
+        for ty, desired, other in [first, Types.intType, Types.boolType; second, Types.boolType, Types.intType; first, Types.intType, Types.boolType] do
+            let instance = fields ty
+            same desired instance["Desired"]
+            same other instance["Second"]
+            match instance["Committed"] with
+            | NativeType.TApp (_, [payload]) -> same desired payload
+            | ty -> failwithf "Lost optional record field type: %A" ty
+        let declaration = result.Graph.Nodes |> Map.values |> Seq.find (fun node ->
+            match node.Kind with SemanticKind.TypeDef ("Pending", _, _) -> true | _ -> false)
+        match declaration.Type with
+        | NativeType.TApp (_, parameters) ->
+            for parameter in parameters do
+                match parameter with
+                | NativeType.TVar { Parent = TypeParamState.Unbound } -> ()
+                | other -> failwithf "Instance lookup bound a shared declaration parameter: %A" other
+        | _ -> failwith "Record declaration lost its parameter list"
+        if RecordInstances.layoutKey first = RecordInstances.layoutKey second then
+            failwith "Different record instances share a layout key"
+
+    "record instance facts preserve measure and module identity", fun () ->
+        let result = check "type Quantity<[<Measure>] 'u> = { Value: int<'u> }\nlet distance: Quantity<m> = { Value = 1000<m> }\nlet duration: Quantity<s> = { Value = 2<s> }\n"
+        noErrors result
+        let distance = bindingType "distance" result
+        let duration = bindingType "duration" result
+        let field ty = RecordInstances.tryFields ty result.Graph |> Option.get |> List.head |> snd
+        same (measuredInt metre) (field distance)
+        same (measuredInt second) (field duration)
+        same (measuredInt metre) (field distance)
+        if RecordInstances.layoutKey distance = RecordInstances.layoutKey duration then
+            failwith "Different dimensional instances share a semantic layout identity"
+        match distance with
+        | NativeType.TApp (constructor, arguments) ->
+            let otherModule = NativeType.TApp ({ constructor with Module = ["Other"] }, arguments)
+            if RecordInstances.layoutKey distance = RecordInstances.layoutKey otherModule then
+                failwith "Record layout identity lost the constructor's module"
+            if RecordInstances.tryFields otherModule result.Graph |> Option.isSome then
+                failwith "Record field lookup confused declarations from different modules"
+        | _ -> failwith "Expected a record application"
+
+    "generic record placement reads concrete fields and conservative numeric ranges", fun () ->
+        let result = check "type Holder<'a> = { Value: 'a; Tail: bool }\nlet number: Holder<int> = { Value = 1000; Tail = true }\nlet flag: Holder<bool> = { Value = false; Tail = true }\n[<EntryPoint>]\nlet main _ = if number.Value = 1000 && number.Tail && not flag.Value && flag.Tail then 0 else 1\n"
+        noErrors result
+        let representation bits maximum : NumericRepresentation = {
+            Name = "unsigned" + string bits; Capability = "native"; Family = "uint"; Bits = bits
+            MinMagnitude = "0"; MaxMagnitude = maximum; Boundary = "wrap" }
+        let offered = [representation 8 "255"; representation 16 "65535"; representation 64 "18446744073709551615"]
+        let context: PlatformContext = {
+            PlatformId = "record-instance-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
+            Representations = offered |> List.map (fun r -> r.Name, r) |> Map.ofList
+            EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None
+            PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.empty
+            Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
+            AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+        let graph = { result.Graph with Platform = Some context }
+        let graph, _ = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run (Some context) graph
+        let graph = Placement.settle (Some context) graph
+        let layout name = graph.Layouts.Value[RecordInstances.layoutKey (bindingType name result)]
+        match layout "number", layout "flag" with
+        | SettledLayout.Record ([number; numberTail], Some numberSize, _), SettledLayout.Record ([flag; flagTail], Some flagSize, _) ->
+            match number.Slot with
+            | SettledSlot.Integer (16, _) -> ()
+            | other -> failwithf "Generic integer field lost its 1000 range: %A" other
+            if flag.Slot <> SettledSlot.Bool || numberTail.Offset <> Some 2 || flagTail.Offset <> Some 1 || numberSize <> 4 || flagSize <> 2 then
+                failwithf "Record instances did not retain their own settled fields: %A / %A" (layout "number") (layout "flag")
+        | other -> failwithf "Generic record instance remained unplaced: %A" other
 
     "shared record labels preserve measure parameter kinds", fun () ->
         let result = check "type Earlier<[<Measure>] 'u> = { Value: float<'u> }\ntype Later<[<Measure>] 'u> = { Value: float<'u> }\nlet distance = { Value = 1.0<m> }\nlet duration = { Value = 2.0<s> }\nlet length = distance.Value\nlet time = duration.Value\n"

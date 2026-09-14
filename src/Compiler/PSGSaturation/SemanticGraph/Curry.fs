@@ -10,16 +10,25 @@
 /// that binding that completes the argument list is a saturated call. Runs at the end of
 /// saturation, after the range pass and placement have read the graph in its curried form (the
 /// order Composer's former pass kept); the result is carried as `Codata.Curry`.
+/// A source function expression or an already-settled closure pair is a value boundary,
+/// not another formal parameter group. Its lambda, captures and result type remain intact.
 module Clef.Compiler.PSGSaturation.SemanticGraph.Curry
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 
+/// Reuse the distinction recorded during elaboration and read by closure placement.
+/// In particular, `fun () -> value` has no bound parameter nodes, but still returns a
+/// function value; absorbing it would silently change its parent's result to the payload.
+let private isFunctionValue (node: SemanticNode) : bool =
+    [ClosureMetadata.LambdaExpression; ClosureMetadata.RequiresClosurePair]
+    |> List.exists (fun key -> Map.tryFind key node.Metadata = Some (MetadataValue.Bool true))
+
 /// The parameters of a chain of nested lambdas, its innermost body, and the lambdas absorbed.
 let rec private chain (graph: SemanticGraph) (nodeId: NodeId) : (string * NativeType * NodeId) list * NodeId * NodeId list =
     match SemanticGraph.tryGetNode nodeId graph with
-    | Some ({ Kind = SemanticKind.Lambda (parameters, bodyId, _, _, _) } as node) when node.IsReachable ->
+    | Some ({ Kind = SemanticKind.Lambda (parameters, bodyId, _, _, _) } as node) when node.IsReachable && not (isFunctionValue node) ->
         let (deeper, innermost, absorbed) = chain graph bodyId
         (parameters @ deeper, innermost, nodeId :: absorbed)
     | _ -> ([], nodeId, [])
@@ -34,7 +43,7 @@ let private flatten (graph: SemanticGraph) : SemanticGraph * Set<NodeId> =
             match node.Kind with
             | SemanticKind.Lambda (outerParams, bodyId, captures, enclosing, context) ->
                 match SemanticGraph.tryGetNode bodyId graph with
-                | Some ({ Kind = SemanticKind.Lambda _ } as bodyNode) when bodyNode.IsReachable ->
+                | Some ({ Kind = SemanticKind.Lambda _ } as bodyNode) when bodyNode.IsReachable && not (isFunctionValue bodyNode) ->
                     let (innerParams, innermost, absorbed) = chain graph bodyId
                     let allParams = outerParams @ innerParams
                     let flattened =

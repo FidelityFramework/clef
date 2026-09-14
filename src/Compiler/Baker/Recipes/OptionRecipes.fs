@@ -47,6 +47,32 @@ let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Re
         failwithf "Saturation failed: %s" reason
 
 //=============================================================================
+// OPTION STRUCTURE: compose the same DU ingredients as an explicit source match.
+// Baker emits the complete decomposition in this firing: generated nodes are not
+// sent through a second recipe pass. Preserve the payload type, including measures.
+//=============================================================================
+
+let private optionType innerType = NativeType.TApp (Types.optionTyCon, [innerType])
+
+let private optionCaseTest optionNodeId innerType caseIndex =
+    saturation {
+        let! tag = duGetTag optionNodeId (optionType innerType)
+        let! expected = int8Lit caseIndex
+        return! compareEq tag expected Types.int8Type
+    }
+
+let private optionHasValue optionNodeId innerType = optionCaseTest optionNodeId innerType 1
+
+let private optionValue optionNodeId innerType =
+    duEliminate optionNodeId "Some" 1 innerType
+
+let private optionSome valueNodeId innerType =
+    duConstruct "Some" 1 (Some valueNodeId) None (optionType innerType)
+
+let private optionNone innerType =
+    duConstruct "None" 0 None None (optionType innerType)
+
+//=============================================================================
 // OPTION.MAP: map f opt → if isSome then Some (f (get opt)) else None
 //=============================================================================
 
@@ -61,15 +87,15 @@ let private optionMapRecipe
 
     saturation {
         // Check if option has value
-        let! isSomeResult = isSome optionNodeId inputType
+        let! isSomeResult = optionHasValue optionNodeId inputType
 
         // Then branch: Some (f (get opt))
-        let! value = optionGet optionNodeId inputType
+        let! value = optionValue optionNodeId inputType
         let! mapped = app1 mapperNodeId value outputType
-        let! someResult = some mapped outputType
+        let! someResult = optionSome mapped outputType
 
         // Else branch: None
-        let! noneResult = none outputType
+        let! noneResult = optionNone outputType
 
         // Conditional: if isSome then Some(f(get)) else None
         return! ifThenElse isSomeResult someResult noneResult outputOptionType
@@ -90,14 +116,14 @@ let private optionBindRecipe
 
     saturation {
         // Check if option has value
-        let! isSomeResult = isSome optionNodeId inputType
+        let! isSomeResult = optionHasValue optionNodeId inputType
 
         // Then branch: f (get opt) - binder returns Option<'U>
-        let! value = optionGet optionNodeId inputType
+        let! value = optionValue optionNodeId inputType
         let! boundResult = app1 binderNodeId value outputOptionType
 
         // Else branch: None
-        let! noneResult = none outputType
+        let! noneResult = optionNone outputType
 
         // Conditional: if isSome then f(get) else None
         return! ifThenElse isSomeResult boundResult noneResult outputOptionType
@@ -117,58 +143,134 @@ let private optionFilterRecipe
 
     saturation {
         // Check if option has value
-        let! isSomeResult = isSome optionNodeId valueType
+        let! isSomeResult = optionHasValue optionNodeId valueType
 
         // Get the value
-        let! value = optionGet optionNodeId valueType
+        let! value = optionValue optionNodeId valueType
 
         // Apply predicate
         let! predicateResult = app1 predicateNodeId value Types.boolType
 
         // None for else branches
-        let! noneResult = none valueType
+        let! noneResult = optionNone valueType
 
-        // Inner if: if p(value) then opt else None
-        // We need a varRef to the original option
-        let! optRef = varRef "opt_filter" (Some optionNodeId) optionType
-        let! innerIf = ifThenElse predicateResult optRef noneResult optionType
+        // Reuse the expression value. Fold-in remaps this structural reference
+        // if the input is itself decomposed (a constructor or another HOF).
+        let! innerIf = ifThenElse predicateResult optionNodeId noneResult optionType
 
         // Outer if: if isSome then innerIf else None
-        let! noneOuter = none valueType
+        let! noneOuter = optionNone valueType
         return! ifThenElse isSomeResult innerIf noneOuter optionType
+    }
+
+/// exists and forall differ only at absence. The payload extraction and callback
+/// belong to the Some branch; the None branch is the specified boolean literal.
+let private optionPredicateRecipe predicate optionNodeId valueType absentResult =
+    saturation {
+        let! present = optionHasValue optionNodeId valueType
+        let! value = optionValue optionNodeId valueType
+        let! tested = app1 predicate value Types.boolType
+        let! absent = boolLit absentResult
+        return! ifThenElse present tested absent Types.boolType
     }
 
 //=============================================================================
 // PUBLIC API: tryDecompose
 //=============================================================================
 
-/// Try to decompose an Option HOF operation
-let tryDecompose
-    (ctx: Context)
-    (operation: string)
-    (args: NodeId list)
-    (inputType: NativeType)
-    (outputType: NativeType option)
-    : Result option =
-
+/// The operation body is shared by direct applications and reified function values.
+/// No body emits another Option HOF that would require a second saturation firing.
+let private operationRecipe operation args inputType outputType =
     match operation, args with
     | "map", [mapper; opt] ->
         let outType = outputType |> Option.defaultValue inputType
-        Some (runSaturation ctx (optionMapRecipe mapper opt inputType outType))
-
+        Some (optionMapRecipe mapper opt inputType outType, optionType outType)
     | "bind", [binder; opt] ->
         let outType = outputType |> Option.defaultValue inputType
-        Some (runSaturation ctx (optionBindRecipe binder opt inputType outType))
-
+        Some (optionBindRecipe binder opt inputType outType, optionType outType)
     | "filter", [predicate; opt] ->
-        Some (runSaturation ctx (optionFilterRecipe predicate opt inputType))
+        Some (optionFilterRecipe predicate opt inputType, optionType inputType)
+    | "exists", [predicate; opt] ->
+        Some (optionPredicateRecipe predicate opt inputType false, Types.boolType)
+    | "forall", [predicate; opt] ->
+        Some (optionPredicateRecipe predicate opt inputType true, Types.boolType)
+    | "isSome", [opt] -> Some (optionCaseTest opt inputType 1, Types.boolType)
+    | "isNone", [opt] -> Some (optionCaseTest opt inputType 0, Types.boolType)
+    | "get", [opt] -> Some (optionValue opt inputType, inputType)
+    | "get", opt :: remaining ->
+        // get consumes one option. Any remaining source arguments apply to its
+        // function payload; preserve that boundary in this same recipe firing.
+        let resultType =
+            remaining |> List.fold (fun current _ ->
+                current |> Option.bind (function NativeType.TFun (_, result) -> Some result | _ -> None)) (Some inputType)
+        resultType |> Option.map (fun resultType ->
+            let recipe = saturation {
+                let! value = optionValue opt inputType
+                let! result = app value remaining resultType
+                return! evaluateBefore (opt :: remaining) result resultType
+            }
+            recipe, resultType)
+    | _ -> None
 
-    // Primitive operations - Alex witnesses directly
-    | "isSome", _
-    | "isNone", _
-    | "get", _
-    | "defaultValue", _
-    | "some", _
-    | "none", _ -> None
+let private innerType = function
+    | NativeType.TApp (constructor, [payload]) when constructor = Types.optionTyCon -> Some payload
+    | _ -> None
 
+let private hasCallback = function
+    | "map" | "bind" | "filter" | "exists" | "forall" -> true
+    | _ -> false
+
+/// Try to decompose a fully applied Option operation.
+let tryDecompose ctx operation args inputType outputType : Result option =
+    operationRecipe operation args inputType outputType
+    |> Option.map (fun (recipe, resultType) ->
+        runSaturation ctx (saturation {
+            let! result = recipe
+            if hasCallback operation then return! evaluateBefore args result resultType
+            else return result
+        }))
+
+/// Snapshot the supplied function at partial formation. The closure captures the
+/// immutable snapshot, while any mutable cells inside that function remain shared.
+let private partialRecipe (ctx: Context) operation callback callbackType inputType resultType enclosing =
+    let name = sprintf "__option_callback_%d" ctx.ExpansionId
+    saturation {
+        let! snapshot = letBind name callback callbackType
+        let capture = { Name = name; Type = callbackType; IsMutable = false; SourceNodeId = Some snapshot }
+        let body parameters captures =
+            match parameters, captures with
+            | [opt], [fn] -> operationRecipe operation [fn; opt] inputType (innerType resultType) |> Option.get |> fst
+            | _ -> failwith "An Option partial requires one option parameter and one callback capture"
+        let! value = closure [("__option", optionType inputType)] [capture] enclosing body resultType
+        return! evaluateBefore [snapshot] value (NativeType.TFun (optionType inputType, resultType))
+    }
+
+/// A supplied callback leaves exactly one option parameter, even when its payload
+/// or the operation result contains function types.
+let tryDecomposePartial (ctx: Context) operation callback callbackType residualType enclosing : Result option =
+    match residualType with
+    | NativeType.TFun (domain, resultType) when hasCallback operation ->
+        innerType domain |> Option.map (fun inputType ->
+            runSaturation ctx (partialRecipe ctx operation callback callbackType inputType resultType enclosing))
+    | _ -> None
+
+/// Bare library operations become ordinary function values after their source type
+/// scheme has been instantiated (and a generic alias specialized). Declared arity,
+/// not the entire TFun spine, determines the operation's parameter boundary.
+let tryReifyValue (ctx: Context) operation functionType enclosing : Result option =
+    match functionType with
+    | NativeType.TFun (callbackType, (NativeType.TFun (domain, resultType) as residual)) when hasCallback operation ->
+        innerType domain |> Option.map (fun inputType ->
+            let body parameters _ =
+                match parameters with
+                | [callback] -> partialRecipe ctx operation callback callbackType inputType resultType enclosing
+                | _ -> failwith "An Option HOF value requires one callback parameter"
+            runSaturation ctx (closure [("__callback", callbackType)] [] enclosing body residual))
+    | NativeType.TFun (domain, resultType) ->
+        innerType domain |> Option.bind (fun inputType ->
+            match operation with
+            | "isSome" | "isNone" | "get" ->
+                let body parameters _ = operationRecipe operation parameters inputType None |> Option.get |> fst
+                Some (runSaturation ctx (closure [("__option", domain)] [] enclosing body resultType))
+            | _ -> None)
     | _ -> None

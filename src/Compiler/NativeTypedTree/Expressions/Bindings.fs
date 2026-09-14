@@ -579,6 +579,12 @@ let checkBinding
                     Parameters = lambdaParams |> List.map (fun (name, _, _) -> name)
                     Body = expr
                     Range = rangeToSourceRange bindingRange
+                    DefinitionScope = {
+                        Resolution = env.Resolution; BindingTypes = env.BindingTypes
+                        TypeParameters = env.TypeParameters.Value; TypeDefs = env.TypeDefs
+                        TypeAbbrevs = env.TypeAbbrevs; Measures = env.Measures; MeasureScope = env.MeasureScope
+                        RecordDefs = env.RecordDefs; FieldLabels = env.FieldLabels
+                    }
                 }
             else
                 None

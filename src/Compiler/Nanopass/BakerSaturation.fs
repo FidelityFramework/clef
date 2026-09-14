@@ -71,6 +71,18 @@ let private extractOptionInnerType (ty: NativeType) : NativeType option =
     | NativeType.TApp (tycon, [innerTy]) when tycon = Types.voptionTyCon -> Some innerTy
     | _ -> None
 
+let private enclosingFunctionName (graph: SemanticGraph) nodeId =
+    let rec find nodeId =
+        match SemanticGraph.tryGetNode nodeId graph with
+        | Some { Kind = SemanticKind.Lambda (_, _, _, enclosing, _); Parent = Some bindingId } ->
+            match SemanticGraph.tryGetNode bindingId graph with
+            | Some { Kind = SemanticKind.Binding (name, _, _, _) } -> Some name
+            | _ -> enclosing
+        | Some { Kind = SemanticKind.Lambda (_, _, _, enclosing, _) } -> enclosing
+        | Some { Parent = Some parentId } -> find parentId
+        | _ -> None
+    SemanticGraph.tryGetNode nodeId graph |> Option.bind (fun node -> node.Parent) |> Option.bind find
+
 let private extractSeqElementType (ty: NativeType) : NativeType option =
     match ty with
     | NativeType.TSeq elemTy -> Some elemTy
@@ -118,6 +130,9 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Option, "map" -> true
     | IntrinsicModule.Option, "bind" -> true
     | IntrinsicModule.Option, "filter" -> true
+    | IntrinsicModule.Option, "exists" -> true
+    | IntrinsicModule.Option, "forall" -> true
+    | IntrinsicModule.Option, ("isSome" | "isNone" | "get") -> true
     // Seq HOFs - Producers
     | IntrinsicModule.Seq, "map" -> true
     | IntrinsicModule.Seq, "filter" -> true
@@ -142,7 +157,7 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.List, ("empty" | "isEmpty" | "head" | "tail" | "cons") -> false
     | IntrinsicModule.Map, ("empty" | "isEmpty") -> false
     | IntrinsicModule.Set, ("empty" | "isEmpty") -> false
-    | IntrinsicModule.Option, ("isSome" | "isNone" | "get" | "defaultValue" | "some" | "none") -> false
+    | IntrinsicModule.Option, ("defaultValue" | "some" | "none") -> false
     | IntrinsicModule.Seq, "empty" -> false
     | IntrinsicModule.Seq, "getEnumerator" -> false
     // String operations
@@ -165,6 +180,7 @@ let private needsSaturationBasic (node: SemanticNode) : bool =
     | SemanticKind.Match _ -> true
     | SemanticKind.UnionCase _ -> true  // DU construction needs lowering to DUConstruct
     | SemanticKind.Application _ -> true  // May or may not need decomposition, checked in recipe creation
+    | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Option && shouldDecomposeIntrinsic info -> true
     | SemanticKind.Lambda(_, _, captures, _, LambdaContext.RegularClosure)
         when List.isEmpty captures -> true  // Zero-capture lambda may need closure pair (checked in recipe)
     | SemanticKind.VarRef (_, Some _) -> true  // A named function in value position is elaborated (checked in recipe)
@@ -229,7 +245,7 @@ let private applyIntrinsicRecipe
     | IntrinsicModule.Option ->
         let optionArgType =
             args
-            |> List.tryLast
+            |> (if info.Operation = "get" then List.tryHead else List.tryLast)
             |> Option.bind (fun argId -> SemanticGraph.tryGetNode argId graph)
             |> Option.map (fun n -> n.Type)
             |> Option.bind extractOptionInnerType
@@ -238,7 +254,13 @@ let private applyIntrinsicRecipe
         | Some innerType ->
             let outputType = extractOptionInnerType returnType
             OptionRecipes.tryDecompose ctx info.Operation args innerType outputType
-        | None -> None
+        | None ->
+            match args with
+            | [callbackId] ->
+                SemanticGraph.tryGetNode callbackId graph |> Option.bind (fun callback ->
+                    OptionRecipes.tryDecomposePartial ctx info.Operation callbackId callback.Type returnType
+                        (enclosingFunctionName graph ctx.InspiringNode))
+            | _ -> None
 
     | IntrinsicModule.Seq ->
         let seqArgType =
@@ -285,6 +307,26 @@ let private toRecipe (originalNodeId: NodeId) (source: string) (result: Result) 
 /// RecipeCreator signature: SemanticNode -> SemanticGraph -> RecipeCreationResult
 let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) : RecipeCreationResult =
     match node.Kind with
+    | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Option && shouldDecomposeIntrinsic info ->
+        // A call head is consumed by its application's recipe. Only value occurrences
+        // need reification; explicit TypeApp may put a TypeAnnotation between the two.
+        let rec isHead candidate =
+            candidate = node.Id ||
+            match SemanticGraph.tryGetNode candidate graph with
+            | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> isHead inner
+            | _ -> false
+        let isApplied = graph.Nodes |> Map.exists (fun _ candidate ->
+            candidate.IsReachable &&
+            match candidate.Kind with
+            | SemanticKind.Application (head, _) -> isHead head
+            | _ -> false)
+        if isApplied then NotApplicable "Option intrinsic is an application head"
+        else
+            let name = sprintf "%A.%s" info.Module info.Operation
+            let ctx = mkContext node.Range node.Type graph.Platform name node.Id
+            match OptionRecipes.tryReifyValue ctx info.Operation node.Type (enclosingFunctionName graph node.Id) with
+            | Some result -> RecipeCreated (toRecipe node.Id name result)
+            | None -> NotApplicable "Option value has no settled callable instance"
     | SemanticKind.Application (funcNodeId, argNodeIds) ->
         match SemanticGraph.tryGetNode funcNodeId graph with
         | Some funcNode ->

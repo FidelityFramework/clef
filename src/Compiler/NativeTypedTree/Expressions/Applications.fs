@@ -100,29 +100,79 @@ let checkApp
     // Without inlining: buffer is in readln's frame, pointer dangles after return.
     // With inlining: buffer is in caller's frame, pointer valid through caller's scope.
     let inlineExpansionResult =
-        match tryGetFunctionName funcExpr with
+        // A curried call is one application spine. Expansion requires all of
+        // the declaration's parameters; a proper prefix remains a function
+        // value. Check supplied operands in the caller before substituting any
+        // formal, retaining their order and evaluation even when unused.
+        let rec spine expression arguments =
+            match expression with
+            | SynExpr.App (_, _, callee, argument, _) -> spine callee (argument :: arguments)
+            | callee -> callee, arguments
+        let callee, arguments = spine funcExpr [argExpr]
+        match tryGetFunctionName callee with
         | Some funcName ->
             match tryLookupBinding funcName env with
             | Some binding when binding.InlineBody.IsSome ->
                 let inlineBody = binding.InlineBody.Value
-                // Check the argument first (always needed for substitution)
-                let argNode = checkExpr env builder argExpr
-
-                // Create environment with parameter bound to argument's value
-                // This substitutes the argument for the parameter in the body
-                match inlineBody.Parameters with
-                | [paramName] ->
-                    // Single-parameter function - direct substitution
-                    let inlineEnv = addBinding paramName argNode.Type false (Some argNode.Id) false env  // Inline params are local
-                    // Check the body in the new environment - allocations now in caller's frame
-                    Some (checkExpr inlineEnv builder inlineBody.Body)
-                | [] ->
-                    // No parameters (shouldn't happen for unit - unit has a parameter)
-                    Some (checkExpr env builder inlineBody.Body)
-                | _ ->
-                    // Multi-parameter function - partial application
-                    // For now, don't inline partial applications (would need closure handling)
-                    None
+                if arguments.Length <> max 1 inlineBody.Parameters.Length then None
+                else
+                    let argumentNodes = arguments |> List.map (checkExpr env builder)
+                    let signature, instantiateScopeType =
+                        match binding.Type with
+                        | NativeType.TForall (parameters, signature) ->
+                            let fresh = parameters |> List.map (fun parameter -> freshInstanceOf parameter range)
+                            let instantiate ty = NativeTypes.instantiate parameters fresh (canonicalizeVars ty)
+                            instantiate signature, instantiate
+                        | signature -> signature, id
+                    let resultType =
+                        argumentNodes |> List.fold (fun signature argument ->
+                            match applySubst signature with
+                            | NativeType.TFun (domain, result) ->
+                                addConstraint (Constraint.Equals (domain, argument.Type, argument.Range)) env
+                                result
+                            | other ->
+                                let result = freshTypeVar range
+                                addConstraint (Constraint.Equals (other, NativeType.TFun (argument.Type, result), range)) env
+                                result) signature
+                    let scope = inlineBody.DefinitionScope
+                    // Body annotations belong to this same fresh instance. Retain
+                    // free variables of captured storage, but never share the
+                    // declaration's quantified cells between expansion sites.
+                    let typeParameters =
+                        scope.TypeParameters |> Map.map (fun _ parameter ->
+                            match instantiateScopeType (NativeType.TVar parameter) with
+                            | NativeType.TVar fresh -> fresh
+                            | _ -> parameter)
+                    let measureScope =
+                        scope.MeasureScope |> Map.map (fun _ variable ->
+                            let original = NativeType.TMeasure (Clef.Compiler.NativeTypedTree.DimensionAlgebra.Dimension.ofVar variable)
+                            match instantiateScopeType original with
+                            | NativeType.TMeasure dimension when dimension <> resolveDim (Clef.Compiler.NativeTypedTree.DimensionAlgebra.Dimension.ofVar variable) ->
+                                let fresh = freshMeasureVar variable.Name
+                                bindMeasures [fresh, dimension]
+                                fresh
+                            | _ -> variable)
+                    let definitionEnv =
+                        { env with Resolution = scope.Resolution; BindingTypes = scope.BindingTypes
+                                   TypeParameters = ref typeParameters; TypeDefs = scope.TypeDefs
+                                   TypeAbbrevs = scope.TypeAbbrevs; Measures = scope.Measures; MeasureScope = measureScope
+                                   RecordDefs = scope.RecordDefs; FieldLabels = scope.FieldLabels }
+                    let argumentBindings =
+                        argumentNodes |> List.map (fun argument ->
+                            let name = sprintf "__inline_argument_%d" (NodeId.value argument.Id)
+                            let binding = builder.Create(SemanticKind.Binding (name, false, false, None), argument.Type, argument.Range, children = [argument.Id])
+                            builder.SetParent(argument.Id, binding.Id)
+                            binding)
+                    let inlineEnv =
+                        if inlineBody.Parameters.IsEmpty then definitionEnv
+                        else
+                            List.zip inlineBody.Parameters argumentBindings
+                            |> List.fold (fun current (name, argument) ->
+                                addBinding name argument.Type false (Some argument.Id) false current) definitionEnv
+                    let body = checkExpr inlineEnv builder inlineBody.Body
+                    addConstraint (Constraint.Equals (resultType, body.Type, range)) env
+                    let ordered = (argumentBindings |> List.map (fun argument -> argument.Id)) @ [body.Id]
+                    Some (builder.Create(SemanticKind.Sequential ordered, body.Type, range, children = ordered))
             | _ -> None
         | None -> None
 
@@ -210,11 +260,11 @@ let checkApp
     //   - Inner App: (<|, f) where existingArgs = [fId]
     //   - argNode is x
 
-    // INTRINSIC APPLICATION SATURATION:
-    // Intrinsics don't support partial application - they're primitives that must
-    // be called with all arguments at once. When we see curried application of an
-    // intrinsic (e.g., Array.set buffer count byte), we flatten into a single
-    // Application node with all arguments.
+    // INTRINSIC APPLICATION SPINES:
+    // Collect supplied arguments into one Application so Baker can distinguish
+    // a complete operation from a residual function value using its typed shape.
+    // Curried source applications such as Array.set buffer count byte retain
+    // their ordered arguments in that one node.
     //
     // Without this, Array.set buffer count byte creates:
     //   App(App(App(Intrinsic, buffer), count), byte)  -- nested, hard to codegen
@@ -226,11 +276,11 @@ let checkApp
     // become orphaned and will be pruned by reachability.
     //
     // See memory: typeapp_preserves_kind_principle (same principle applies)
-    let (targetFuncId, allArgs) =
+    let (targetFuncId, allArgs, pipePrerequisites) =
         match funcNode.Kind with
         | SemanticKind.Intrinsic _ ->
             // Direct intrinsic application: App(Intrinsic, arg)
-            (funcNode.Id, [argNode.Id])
+            (funcNode.Id, [argNode.Id], [])
         | SemanticKind.Application(innerFuncId, existingArgs) ->
             // Check what the inner function is
             match builder.Nodes.TryFind innerFuncId with
@@ -243,10 +293,10 @@ let checkApp
                     | [valueId] ->
                         // argNode is the function, valueId is the value
                         // Transform: f(x) instead of (|>)(x)(f)
-                        (argNode.Id, [valueId])
+                        (argNode.Id, [valueId], [valueId])
                     | _ ->
                         // Unexpected structure - keep as-is
-                        (funcNode.Id, [argNode.Id])
+                        (funcNode.Id, [argNode.Id], [])
                 // PIPE REDUCTION: Forward pipe (|>) - Intrinsic form
                 // When pipe is recognized as intrinsic during type checking
                 | SemanticKind.Intrinsic info when isIntrinsicPipeRight info ->
@@ -254,10 +304,10 @@ let checkApp
                     | [valueId] ->
                         // argNode is the function, valueId is the value
                         // Transform: f(x) instead of (|>)(x)(f)
-                        (argNode.Id, [valueId])
+                        (argNode.Id, [valueId], [valueId])
                     | _ ->
                         // Unexpected structure - keep as-is
-                        (funcNode.Id, [argNode.Id])
+                        (funcNode.Id, [argNode.Id], [])
                 // PIPE REDUCTION: Backward pipe (<|) - VarRef form
                 // App(App(<|, f), x) -> App(f, [x])
                 | SemanticKind.VarRef(name, _) when isPipeLeft name ->
@@ -265,20 +315,20 @@ let checkApp
                     | [funcRefId] ->
                         // funcRefId is the function, argNode is the value
                         // Transform: f(x) instead of (<|)(f)(x)
-                        (funcRefId, [argNode.Id])
+                        (funcRefId, [argNode.Id], [])
                     | _ ->
                         // Unexpected structure - keep as-is
-                        (funcNode.Id, [argNode.Id])
+                        (funcNode.Id, [argNode.Id], [])
                 // PIPE REDUCTION: Backward pipe (<|) - Intrinsic form
                 | SemanticKind.Intrinsic info when isIntrinsicPipeLeft info ->
                     match existingArgs with
                     | [funcRefId] ->
                         // funcRefId is the function, argNode is the value
                         // Transform: f(x) instead of (<|)(f)(x)
-                        (funcRefId, [argNode.Id])
+                        (funcRefId, [argNode.Id], [])
                     | _ ->
                         // Unexpected structure - keep as-is
-                        (funcNode.Id, [argNode.Id])
+                        (funcNode.Id, [argNode.Id], [])
                 // APPLICATION SATURATION: Flatten ALL curried applications
                 // This is a SEMANTIC TRANSFORM that belongs in CCS, enabling direct
                 // emission as multi-arg calls. Without flattening:
@@ -304,19 +354,19 @@ let checkApp
                         innerNode.Type,
                         innerNode.Range,
                         arena = env.CurrentArena)
-                    (freshIntrinsic.Id, existingArgs @ [argNode.Id])
+                    (freshIntrinsic.Id, existingArgs @ [argNode.Id], [])
                 | SemanticKind.PlatformBinding _
                 | SemanticKind.VarRef _
                 | SemanticKind.Lambda _
                 | SemanticKind.Application _ ->
                     // Flatten curried application: accumulate args
-                    (innerFuncId, existingArgs @ [argNode.Id])
+                    (innerFuncId, existingArgs @ [argNode.Id], [])
                 | _ ->
                     // Unknown node kind - keep as-is (shouldn't happen)
-                    (funcNode.Id, [argNode.Id])
+                    (funcNode.Id, [argNode.Id], [])
             | None ->
                 // Inner node not found (shouldn't happen) - keep curried
-                (funcNode.Id, [argNode.Id])
+                (funcNode.Id, [argNode.Id], [])
         | SemanticKind.VarRef(_, Some defId) ->
             // PARTIAL APPLICATION SATURATION (within same scope only):
             // VarRef with definition - check if the definition is a partial application
@@ -338,21 +388,21 @@ let checkApp
                 match defNode.Kind with
                 | SemanticKind.Application(innerFuncId, existingArgs) ->
                     // Direct Application node (same expression context) - safe to flatten
-                    (innerFuncId, existingArgs @ [argNode.Id])
+                    (innerFuncId, existingArgs @ [argNode.Id], [])
                 | SemanticKind.Binding _ ->
                     // Module-level binding - do NOT flatten across scope boundary
                     // The partial application is in a different scope; its arguments
                     // won't be available in the current context.
-                    (funcNode.Id, [argNode.Id])
+                    (funcNode.Id, [argNode.Id], [])
                 | _ ->
                     // Definition is not an Application - regular call
-                    (funcNode.Id, [argNode.Id])
+                    (funcNode.Id, [argNode.Id], [])
             | None ->
                 // Definition not found - regular call
-                (funcNode.Id, [argNode.Id])
+                (funcNode.Id, [argNode.Id], [])
         | _ ->
             // Regular function application - keep curried structure
-            (funcNode.Id, [argNode.Id])
+            (funcNode.Id, [argNode.Id], [])
 
     // RECURSIVE FLATTENING:
     // After pipe reduction, the targetFuncId may itself be an Application node.
@@ -364,13 +414,21 @@ let checkApp
     //
     // Without this, Alex sees "Application as function" which it can't handle.
     // See memory: curried_call_flattening_insight
-    let rec flattenApplication (funcId: NodeId) (args: NodeId list) : NodeId * NodeId list =
+    let rec flattenApplication (funcId: NodeId) (args: NodeId list) : NodeId * NodeId list * NodeId list =
         match builder.Nodes.TryFind funcId with
         | Some node ->
             match node.Kind with
             | SemanticKind.Application(innerFuncId, innerArgs) ->
                 // Recursively flatten: App(App(f, a), b) -> App(f, [a; b])
                 flattenApplication innerFuncId (innerArgs @ args)
+            | SemanticKind.Sequential expressions ->
+                // A piped function can immediately receive another argument: (x |> f) y.
+                // Preserve its prerequisites while exposing the final call for saturation.
+                match List.rev expressions with
+                | last :: reversedPrerequisites ->
+                    let target, allArgs, prerequisites = flattenApplication last args
+                    target, allArgs, List.rev reversedPrerequisites @ prerequisites
+                | [] -> funcId, args, []
             | SemanticKind.VarRef(_, Some defId) ->
                 // Only follow VarRef if the definition is a direct Application
                 // Do NOT follow through Binding nodes (different scope)
@@ -381,16 +439,16 @@ let checkApp
                         flattenApplication innerFuncId (innerArgs @ args)
                     | _ ->
                         // Not a direct Application - stop here
-                        (funcId, args)
-                | None -> (funcId, args)
+                        (funcId, args, [])
+                | None -> (funcId, args, [])
             | _ ->
                 // Base case: not an Application or VarRef to Application
-                (funcId, args)
+                (funcId, args, [])
         | None ->
             // Node not found, return as-is
-            (funcId, args)
+            (funcId, args, [])
 
-    let (targetFuncId, allArgs) = flattenApplication targetFuncId allArgs
+    let (targetFuncId, allArgs, functionPrerequisites) = flattenApplication targetFuncId allArgs
 
     // DU CONSTRUCTOR DETECTION:
     // If the target function is a DU constructor (has UnionCaseInfo), create
@@ -421,56 +479,66 @@ let checkApp
             | _ -> None
         | None -> None
 
-    match unionCaseInfo with
-    | Some caseInfo ->
-        // DU constructor application: create UnionCase node
-        // For single-arg case like `IntVal 42`, payload is the argument
-        // For multi-arg case like `Node(1, 2)`, payload is a tuple (handled by arg flattening)
-        let payloadOpt =
-            match allArgs with
-            | [singleArg] -> Some singleArg  // Common case: single payload
-            | _ -> None  // Multi-arg or nullary (shouldn't reach here for nullary)
-        builder.Create(
-            SemanticKind.UnionCase(caseInfo.CaseName, caseInfo.CaseIndex, payloadOpt),
-            resultTy,
-            range,
-            children = allArgs)
-    | None ->
-        // Check for semantic intrinsics that should become specific SemanticKinds
-        // PRD-14: Lazy.force becomes LazyForce
-        match builder.Nodes.TryFind targetFuncId with
-        | Some targetNode ->
-            match targetNode.Kind with
-            | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Lazy && info.Operation = "force" ->
-                // Lazy.force lazyVal -> LazyForce(lazyVal)
+    let result =
+        match unionCaseInfo with
+        | Some caseInfo ->
+            // DU constructor application: create UnionCase node
+            // For single-arg case like `IntVal 42`, payload is the argument
+            // For multi-arg case like `Node(1, 2)`, payload is a tuple (handled by arg flattening)
+            let payloadOpt =
                 match allArgs with
-                | [lazyValId] ->
-                    builder.Create(
-                        SemanticKind.LazyForce(lazyValId),
-                        resultTy,
-                        range,
-                        children = [lazyValId])
+                | [singleArg] -> Some singleArg  // Common case: single payload
+                | _ -> None  // Multi-arg or nullary (shouldn't reach here for nullary)
+            builder.Create(
+                SemanticKind.UnionCase(caseInfo.CaseName, caseInfo.CaseIndex, payloadOpt),
+                resultTy,
+                range,
+                children = allArgs)
+        | None ->
+            // Check for semantic intrinsics that should become specific SemanticKinds
+            // PRD-14: Lazy.force becomes LazyForce
+            match builder.Nodes.TryFind targetFuncId with
+            | Some targetNode ->
+                match targetNode.Kind with
+                | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Lazy && info.Operation = "force" ->
+                    // Lazy.force lazyVal -> LazyForce(lazyVal)
+                    match allArgs with
+                    | [lazyValId] ->
+                        builder.Create(
+                            SemanticKind.LazyForce(lazyValId),
+                            resultTy,
+                            range,
+                            children = [lazyValId])
+                    | _ ->
+                        // Unexpected arity - fall through to regular Application
+                        builder.Create(
+                            SemanticKind.Application(targetFuncId, allArgs),
+                            resultTy,
+                            range,
+                            children = targetFuncId :: allArgs)
                 | _ ->
-                    // Unexpected arity - fall through to regular Application
+                    // Regular function application
                     builder.Create(
                         SemanticKind.Application(targetFuncId, allArgs),
                         resultTy,
                         range,
                         children = targetFuncId :: allArgs)
-            | _ ->
-                // Regular function application
+            | None ->
+                // Target not found - regular application
                 builder.Create(
                     SemanticKind.Application(targetFuncId, allArgs),
                     resultTy,
                     range,
                     children = targetFuncId :: allArgs)
-        | None ->
-            // Target not found - regular application
-            builder.Create(
-                SemanticKind.Application(targetFuncId, allArgs),
-                resultTy,
-                range,
-                children = targetFuncId :: allArgs)
+
+    // Forward pipe evaluates its left operand before the function expression on its right.
+    // Parameter order after flattening is different (x |> f y becomes f y x), so retain
+    // that evaluation as structure. Reuse each operand's node in the call to evaluate it once.
+    match pipePrerequisites @ functionPrerequisites with
+    | [] -> result
+    | prerequisites ->
+        let expressions = prerequisites @ [result.Id]
+        builder.Create(SemanticKind.Sequential expressions, resultTy, range, children = expressions)
 
 //-------------------------------------------------------------------------
 // Type Application: SynExpr.TypeApp
@@ -496,7 +564,13 @@ let checkTypeApp
     let funcType =
         match tryGetFunctionName funcExpr |> Option.bind (fun name -> tryLookupBinding name env) with
         | Some binding -> binding.Type
-        | None -> funcNode.Type
+        | None ->
+            match funcNode.Kind with
+            | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Option ->
+                match Intrinsics.resolveModuleIntrinsic info.Module info.Operation range with
+                | Intrinsics.Resolved (_, scheme) -> scheme
+                | _ -> funcNode.Type
+            | _ -> funcNode.Type
     let parameters = match funcType with NativeType.TForall(parameters, _) -> parameters | _ -> []
     let typeArgTypes = typeArgs |> List.mapi (fun index syntax ->
         match List.tryItem index parameters with
@@ -600,6 +674,7 @@ let checkLambda
     (extractLambdaParams: TypeEnv -> SynSimplePats -> SourceRange -> (string * NativeType) list)
     (env: TypeEnv)
     (builder: NodeBuilder)
+    (inLambdaSeq: bool)
     (args: SynSimplePats)
     (bodyExpr: SynExpr)
     (range: SourceRange)
@@ -657,7 +732,11 @@ let checkLambda
     // Pass capture count so SSA assignment starts body SSAs after capture extraction
     builder.SetEmissionStrategy(bodyNode.Id, EmissionStrategy.SeparateFunction (List.length captures))
 
-    builder.SetMetadata(lambdaNode.Id, ClosureMetadata.LambdaExpression, MetadataValue.Bool true)
+    // PushCurriedPatternsToExpr marks synthetic tails of one `fun x y -> ...`
+    // with inLambdaSeq. Only the head is a function expression boundary; a new
+    // explicit `fun` in the body has its own head and must remain a returned value.
+    if inLambdaSeq then lambdaNode
+    else builder.SetMetadata(lambdaNode.Id, ClosureMetadata.LambdaExpression, MetadataValue.Bool true)
 
 
 //-------------------------------------------------------------------------

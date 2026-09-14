@@ -50,16 +50,19 @@ let private nodeWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
 
 let private layoutKey (ty: NativeType) : string = formatType (applySubst ty)
 
-/// The settled layout of an aggregate type: a record or union by its constructor's name, a
-/// tuple, an option or a Result by its rendered form.
+/// The settled layout of an aggregate type: a record by its CCS instance identity, a union
+/// by its constructor's name, a tuple, an option or a Result by its rendered form.
 let private settledLayout (graph: SemanticGraph) (ty: NativeType) : SettledLayout option =
     match applySubst ty with
     | NativeType.TApp (tycon, _) as t when tycon.Name = "option" || tycon.Name = "voption" || tycon.Name = "Result" || tycon.Name = "result" ->
         Map.tryFind (layoutKey t) graph.Layouts.Value
     | NativeType.TApp (tycon, _) as t ->
-        match Map.tryFind tycon.Name graph.Layouts.Value with
-        | Some layout -> Some layout
-        | None -> Map.tryFind (layoutKey t) graph.Layouts.Value
+        match RecordInstances.tryFields t graph with
+        | Some _ -> Map.tryFind (RecordInstances.layoutKey t) graph.Layouts.Value
+        | None ->
+            match Map.tryFind tycon.Name graph.Layouts.Value with
+            | Some layout -> Some layout
+            | None -> Map.tryFind (layoutKey t) graph.Layouts.Value
     | NativeType.TUnion (tycon, _) -> Map.tryFind tycon.Name graph.Layouts.Value
     | t -> Map.tryFind (layoutKey t) graph.Layouts.Value
 

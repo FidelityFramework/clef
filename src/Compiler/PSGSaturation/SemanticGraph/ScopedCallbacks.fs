@@ -1,6 +1,7 @@
 /// Synchronous callback contracts and bounded borrowed-value use. Declarations
 /// are library obligations; inferred summaries accept only invocation, aliases,
-/// and calls to other proven synchronous consumers. Stores/returns are escapes.
+/// and calls to other proven synchronous consumers. A returned function is bounded
+/// only when every call immediately completes its argument chain; stores escape.
 module Clef.Compiler.PSGSaturation.SemanticGraph.ScopedCallbacks
 
 open System.Runtime.CompilerServices
@@ -10,7 +11,14 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 
-type private Use = Alias of NodeId | Argument of NodeId * int * bool | Invoke | Capture of NodeId | Escape
+type private Use =
+    | Alias of NodeId
+    | Declaration of NodeId
+    | Argument of callable: NodeId * index: int * application: NodeId
+    | Invoke of application: NodeId * arguments: int
+    | Capture of NodeId
+    | ReturnedFunction of NodeId
+    | Escape
 type Reading = { Parameters: Set<NodeId>; StackLambdas: Set<NodeId>; Findings: DeclarationFinding list }
 
 let private readUncached (graph: SemanticGraph) =
@@ -67,18 +75,33 @@ let private readUncached (graph: SemanticGraph) =
     let mutable users: Map<NodeId, Use list> = Map.empty
     let useValue source usage = users <- Map.add source (usage :: (Map.tryFind source users |> Option.defaultValue [])) users
     let moduleBinding node = node.Parent |> Option.bind (fun p -> SemanticGraph.tryGetNode p graph) |> Option.exists (fun p -> match p.Kind with SemanticKind.ModuleDef _ -> true | _ -> false)
+    let namedDeclaration source =
+        match SemanticGraph.tryGetNode source graph with
+        | Some { Kind = SemanticKind.Lambda _; Metadata = metadata } ->
+            Map.tryFind ClosureMetadata.LambdaExpression metadata <> Some (MetadataValue.Bool true)
+            && Map.tryFind ClosureMetadata.RequiresClosurePair metadata <> Some (MetadataValue.Bool true)
+        | _ -> false
     for node in graph.Nodes.Values do
         if node.IsReachable then
             match node.Kind with
             | SemanticKind.VarRef (_, Some source) | SemanticKind.TypeAnnotation (source, _) -> useValue source (Alias node.Id)
             | SemanticKind.Binding (_, mutableValue, _, _) ->
-                List.tryLast node.Children |> Option.iter (fun source -> useValue source (if mutableValue || moduleBinding node then Escape else Alias node.Id))
+                List.tryLast node.Children |> Option.iter (fun source ->
+                    let usage =
+                        if mutableValue then Escape
+                        elif moduleBinding node then
+                            if namedDeclaration source then Declaration node.Id else Escape
+                        else Alias node.Id
+                    useValue source usage)
             | SemanticKind.Application (fn, arguments) ->
-                useValue fn Invoke
-                let complete = match applySubst node.Type with NativeType.TFun _ -> false | _ -> true
-                arguments |> List.iteri (fun index value -> useValue value (Argument (fn, index, complete)))
+                useValue fn (Invoke (node.Id, arguments.Length))
+                arguments |> List.iteri (fun index value -> useValue value (Argument (fn, index, node.Id)))
             | SemanticKind.Lambda (_, body, captures, _, _) ->
-                useValue body Escape
+                let usage =
+                    match SemanticGraph.tryGetNode body graph with
+                    | Some { Kind = SemanticKind.Lambda _ } -> ReturnedFunction node.Id
+                    | _ -> Escape
+                useValue body usage
                 captures |> List.iter (fun capture -> capture.SourceNodeId |> Option.iter (fun source -> useValue source (Capture node.Id)))
             | SemanticKind.Sequential nodes -> List.tryLast nodes |> Option.iter (fun source -> useValue source (Alias node.Id))
             | SemanticKind.IfThenElse (guard, yes, no) ->
@@ -102,6 +125,10 @@ let private readUncached (graph: SemanticGraph) =
             | SemanticKind.DUConstruct (_, _, Some value, _) | SemanticKind.UnionCase (_, _, Some value) -> useValue value Escape
             | SemanticKind.Set (_, value) | SemanticKind.FieldSet (_, _, value) | SemanticKind.IndexSet (_, _, value) -> useValue value Escape
             | SemanticKind.PatternBinding _ | SemanticKind.Literal _ | SemanticKind.Intrinsic _ -> ()
+            // Membership in a module names declarations; it does not consume
+            // their values. The Binding rule above separately checks storage
+            // of module values, including mutable slots and anonymous closures.
+            | SemanticKind.ModuleDef _ -> ()
             // A new consuming syntax must opt in with a proved use rule. It
             // cannot silently make an unrecognized borrowed use non-escaping.
             | _ -> node.Children |> List.iter (fun child -> useValue child Escape)
@@ -112,18 +139,63 @@ let private readUncached (graph: SemanticGraph) =
         | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Operators; Operation = "ignore" } } -> true
         | _ -> false
     let parameterAt fn index = parameters fn |> List.tryItem index |> Option.map (fun (_, _, id) -> id)
+    // Callable staging preserves an explicit returned `fun` as a separate
+    // application. Follow only an immediate result-as-callee chain: aliases,
+    // stores and unknown consumers of an intermediate result are not completion.
+    let rec completes seen required consumed application =
+        if Set.contains application seen then false
+        else
+            let seen = Set.add application seen
+            match SemanticGraph.tryGetNode application graph with
+            | Some node ->
+                match applySubst node.Type with
+                | NativeType.TFun _ ->
+                    match Map.tryFind application users |> Option.defaultValue [] with
+                    | [] -> false
+                    | uses -> uses |> List.forall (function
+                        | Invoke (next, arguments) -> completes seen required (consumed + arguments) next
+                        | _ -> false)
+                | _ -> consumed >= required
+            | None -> false
+    let callCompletes application = completes Set.empty 0 0 application
+    // Discharge a returned function only when every use of its enclosing
+    // callable immediately completes the known chain, whether represented as
+    // one source application or several applications at settled boundaries.
+    // A declaration edge is not a stored closure value; all other storage,
+    // unknown consumers and recursive use chains remain unproved.
+    let immediatelyCompleted callable =
+        let rec arity seen id =
+            match target seen id with
+            | Some { Id = lambda; Kind = SemanticKind.Lambda (parameters, body, _, _, _) } ->
+                // A unit domain binds no PatternBinding, but still consumes an
+                // argument. This is source call arity, before unit ABI erasure.
+                max 1 parameters.Length + arity (Set.add lambda seen) body
+            | _ -> 0
+        let required = arity Set.empty callable
+        let rec everyUse seen value =
+            if Set.contains value seen then false
+            else
+                let seen = Set.add value seen
+                match Map.tryFind value users |> Option.defaultValue [] with
+                | [] -> false
+                | uses -> uses |> List.forall (function
+                    | Alias other | Declaration other -> everyUse seen other
+                    | Invoke (application, arguments) -> completes Set.empty required arguments application
+                    | _ -> false)
+        everyUse Set.empty callable
     let rec safe (scoped: Set<NodeId>) seen value =
         if Set.contains value seen then false
         else
             let seen = Set.add value seen
             Map.tryFind value users |> Option.defaultValue []
             |> List.forall (function
-                | Invoke -> true
+                | Invoke _ -> true
                 | Alias other | Capture other -> safe scoped seen other
-                | Argument (fn, index, complete) ->
-                    complete && (intrinsicArgument fn index ||
+                | ReturnedFunction callable -> immediatelyCompleted callable
+                | Argument (fn, index, application) ->
+                    callCompletes application && (intrinsicArgument fn index ||
                         (parameterAt fn index |> Option.exists (fun p -> Set.contains p scoped)))
-                | Escape -> false)
+                | Declaration _ | Escape -> false)
     let candidates =
         graph.Nodes.Values |> Seq.collect (fun node ->
             match node.Kind with
@@ -143,8 +215,8 @@ let private readUncached (graph: SemanticGraph) =
             let seen = Set.add id seen
             Map.tryFind id users |> Option.defaultValue [] |> List.exists (function
                 | Alias other -> reachesDeclared seen other
-                | Argument (fn, index, complete) ->
-                    complete &&
+                | Argument (fn, index, application) ->
+                    callCompletes application &&
                     (parameterAt fn index |> Option.exists (fun p -> Set.contains p declared))
                 | _ -> false)
     let rec capturesView seen id =
@@ -159,7 +231,13 @@ let private readUncached (graph: SemanticGraph) =
     let stack =
         graph.Nodes.Values |> Seq.choose (fun node ->
             match node.Kind with
-            | SemanticKind.Lambda _ when safe scoped Set.empty node.Id && (reachesDeclared Set.empty node.Id || capturesView Set.empty node.Id) -> Some node.Id
+            | SemanticKind.Lambda _ when
+                safe scoped Set.empty node.Id &&
+                (reachesDeclared Set.empty node.Id || capturesView Set.empty node.Id) &&
+                // Immediate application proves that the borrowed view remains
+                // within its mapping scope, not that an environment may die in
+                // the returning helper's stack frame. Preserve escaping placement.
+                not (Map.tryFind node.Id users |> Option.defaultValue [] |> List.exists (function ReturnedFunction _ -> true | _ -> false)) -> Some node.Id
             | _ -> None) |> Set.ofSeq
 
     let rec whyUnsafe seen value =
@@ -168,11 +246,13 @@ let private readUncached (graph: SemanticGraph) =
             let seen = Set.add value seen
             Map.tryFind value users |> Option.defaultValue [] |> List.tryPick (function
                 | Alias other | Capture other when not (safe scoped Set.empty other) -> Some (whyUnsafe seen other)
-                | Argument (_, index, complete) when not complete -> Some (sprintf "argument %d enters a partially applied function" index)
+                | ReturnedFunction callable when not (immediatelyCompleted callable) ->
+                    Some (sprintf "returned function %A is not immediately completed at every use" value)
+                | Argument (_, index, application) when not (callCompletes application) -> Some (sprintf "argument %d enters a function whose returned value is not immediately completed" index)
                 | Argument (fn, index, _) when not (intrinsicArgument fn index || (parameterAt fn index |> Option.exists (fun p -> Set.contains p scoped))) ->
                     let name = match SemanticGraph.tryGetNode fn graph with Some { Kind = SemanticKind.VarRef (name, _) } -> name | _ -> string fn
                     Some (sprintf "argument %d enters '%s', whose callback lifetime is not proved synchronous" index name)
-                | Escape -> Some (sprintf "value %A is stored or returned" value)
+                | Declaration _ | Escape -> Some (sprintf "value %A is stored or returned" value)
                 | _ -> None)
             |> Option.defaultValue "the consumer lifetime cannot be proved"
 
