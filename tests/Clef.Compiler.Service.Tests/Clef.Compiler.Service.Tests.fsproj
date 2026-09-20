@@ -29,6 +29,9 @@
     <Compile Include="ComputationAdmissionCases.fs" />
     <Compile Include="SequenceElementCases.fs" />
     <Compile Include="SequenceFormalCases.fs" />
+    <Compile Include="SeqProducerRecipeCases.fs" />
+    <Compile Include="TreeSequenceRecipeCases.fs" />
+    <Compile Include="SequenceProducerCases.fs" />
     <Compile Include="CountedLoopCases.fs" />
     <Compile Include="OptionFoldCases.fs" />
     <Compile Include="ResultOperationCases.fs" />

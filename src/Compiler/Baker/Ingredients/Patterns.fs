@@ -928,14 +928,15 @@ let inOrderKeysSeq
         // Parameter: tree
         let! treeParamId = patternBinding "tree" mapType
         do! withBinding "tree" treeParamId mapType
+        let! treeRefId = varRef "tree" (Some treeParamId) mapType
 
         // Guard: isEmpty tree
-        let! isEmptyId = mapIsEmpty treeParamId keyType valueType
+        let! isEmptyId = mapIsEmpty treeRefId keyType valueType
 
         // Get key, left, right
-        let! nodeKeyId = mapKey treeParamId keyType valueType
-        let! leftId = mapLeft treeParamId keyType valueType
-        let! rightId = mapRight treeParamId keyType valueType
+        let! nodeKeyId = mapKey treeRefId keyType valueType
+        let! leftId = mapLeft treeRefId keyType valueType
+        let! rightId = mapRight treeRefId keyType valueType
 
         // Recursive calls to traverse
         let! traverseRefLeft = varRef "traverse" None traverseFuncType
@@ -945,9 +946,9 @@ let inOrderKeysSeq
         let! rightSeqId = app1 traverseRefRight rightId seqKeyType
 
         // Build seq body: yield! left; yield key; yield! right
-        let! yieldLeftId = yieldBang leftSeqId keyType
-        let! yieldKeyId = yield' nodeKeyId keyType
-        let! yieldRightId = yieldBang rightSeqId keyType
+        let! yieldLeftId = yieldBang leftSeqId
+        let! yieldKeyId = yield' nodeKeyId
+        let! yieldRightId = yieldBang rightSeqId
 
         // Sequential body: yieldLeft; yieldKey; yieldRight
         let! state1 = getUserState
@@ -957,13 +958,13 @@ let inOrderKeysSeq
         do! emit seqBodyNode
         let seqBodyId = seqBodyNode.Id
 
-        // If isEmpty then empty seq else seq body
-        let! emptySeqId = emptySeq keyType
-        let! condBodyId = ifThenElse isEmptyId emptySeqId seqBodyId seqKeyType
+        // A generator body returns unit whether it yields or skips an empty tree.
+        let! emptyBodyId = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
+        let! condBodyId = ifThenElse isEmptyId emptyBodyId seqBodyId Types.unitType
 
         // Wrap in SeqExpr (captures the tree parameter)
         let capture: CaptureInfo = { Name = "tree"; Type = mapType; IsMutable = false; SourceNodeId = Some treeParamId }
-        let! seqExprId = seqExpr condBodyId [capture] keyType
+        let! seqExprId = seqExpr condBodyId [capture] keyType (Some "traverse")
 
         // Lambda: fun tree -> seq { ... }
         let! state2 = getUserState
@@ -974,7 +975,7 @@ let inOrderKeysSeq
             Some "traverse",
             LambdaContext.RegularClosure
         )
-        let lambdaNode = mkNode state2 lambdaKind traverseFuncType [seqExprId]
+        let lambdaNode = mkNode state2 lambdaKind traverseFuncType [treeParamId; seqExprId]
         do! emit lambdaNode
         let lambdaId = lambdaNode.Id
 
@@ -1003,14 +1004,15 @@ let inOrderValuesSeq
         // Parameter: tree
         let! treeParamId = patternBinding "tree" mapType
         do! withBinding "tree" treeParamId mapType
+        let! treeRefId = varRef "tree" (Some treeParamId) mapType
 
         // Guard: isEmpty tree
-        let! isEmptyId = mapIsEmpty treeParamId keyType valueType
+        let! isEmptyId = mapIsEmpty treeRefId keyType valueType
 
         // Get value, left, right
-        let! nodeValueId = mapValue treeParamId keyType valueType
-        let! leftId = mapLeft treeParamId keyType valueType
-        let! rightId = mapRight treeParamId keyType valueType
+        let! nodeValueId = mapValue treeRefId keyType valueType
+        let! leftId = mapLeft treeRefId keyType valueType
+        let! rightId = mapRight treeRefId keyType valueType
 
         // Recursive calls to traverse
         let! traverseRefLeft = varRef "traverse" None traverseFuncType
@@ -1020,9 +1022,9 @@ let inOrderValuesSeq
         let! rightSeqId = app1 traverseRefRight rightId seqValueType
 
         // Build seq body: yield! left; yield value; yield! right
-        let! yieldLeftId = yieldBang leftSeqId valueType
-        let! yieldValueId = yield' nodeValueId valueType
-        let! yieldRightId = yieldBang rightSeqId valueType
+        let! yieldLeftId = yieldBang leftSeqId
+        let! yieldValueId = yield' nodeValueId
+        let! yieldRightId = yieldBang rightSeqId
 
         // Sequential body: yieldLeft; yieldValue; yieldRight
         let! state1 = getUserState
@@ -1032,13 +1034,13 @@ let inOrderValuesSeq
         do! emit seqBodyNode
         let seqBodyId = seqBodyNode.Id
 
-        // If isEmpty then empty seq else seq body
-        let! emptySeqId = emptySeq valueType
-        let! condBodyId = ifThenElse isEmptyId emptySeqId seqBodyId seqValueType
+        // A generator body returns unit whether it yields or skips an empty tree.
+        let! emptyBodyId = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
+        let! condBodyId = ifThenElse isEmptyId emptyBodyId seqBodyId Types.unitType
 
         // Wrap in SeqExpr (captures the tree parameter)
         let capture: CaptureInfo = { Name = "tree"; Type = mapType; IsMutable = false; SourceNodeId = Some treeParamId }
-        let! seqExprId = seqExpr condBodyId [capture] valueType
+        let! seqExprId = seqExpr condBodyId [capture] valueType (Some "traverse")
 
         // Lambda: fun tree -> seq { ... }
         let! state2 = getUserState
@@ -1049,7 +1051,7 @@ let inOrderValuesSeq
             Some "traverse",
             LambdaContext.RegularClosure
         )
-        let lambdaNode = mkNode state2 lambdaKind traverseFuncType [seqExprId]
+        let lambdaNode = mkNode state2 lambdaKind traverseFuncType [treeParamId; seqExprId]
         do! emit lambdaNode
         let lambdaId = lambdaNode.Id
 
@@ -1093,20 +1095,21 @@ let inOrderPairsSeq
         // Parameter: tree
         let! treeParamId = patternBinding "tree" mapType
         do! withBinding "tree" treeParamId mapType
+        let! treeRefId = varRef "tree" (Some treeParamId) mapType
 
         // Guard: isEmpty tree
-        let! isEmptyId = mapIsEmpty treeParamId keyType valueType
+        let! isEmptyId = mapIsEmpty treeRefId keyType valueType
 
         // Get key, value, left, right
-        let! nodeKeyId = mapKey treeParamId keyType valueType
-        let! nodeValueId = mapValue treeParamId keyType valueType
-        let! leftId = mapLeft treeParamId keyType valueType
-        let! rightId = mapRight treeParamId keyType valueType
+        let! nodeKeyId = mapKey treeRefId keyType valueType
+        let! nodeValueId = mapValue treeRefId keyType valueType
+        let! leftId = mapLeft treeRefId keyType valueType
+        let! rightId = mapRight treeRefId keyType valueType
 
         // Create (key, value) tuple
         let! state0 = getUserState
         let tupleKind = SemanticKind.TupleExpr [nodeKeyId; nodeValueId]
-        let tupleNode = mkNode state0 tupleKind pairType []
+        let tupleNode = mkNode state0 tupleKind pairType [nodeKeyId; nodeValueId]
         do! emit tupleNode
         let tupleId = tupleNode.Id
 
@@ -1118,9 +1121,9 @@ let inOrderPairsSeq
         let! rightSeqId = app1 traverseRefRight rightId seqPairType
 
         // Build seq body: yield! left; yield (key, value); yield! right
-        let! yieldLeftId = yieldBang leftSeqId pairType
-        let! yieldPairId = yield' tupleId pairType
-        let! yieldRightId = yieldBang rightSeqId pairType
+        let! yieldLeftId = yieldBang leftSeqId
+        let! yieldPairId = yield' tupleId
+        let! yieldRightId = yieldBang rightSeqId
 
         // Sequential body: yieldLeft; yieldPair; yieldRight
         let! state1 = getUserState
@@ -1130,13 +1133,13 @@ let inOrderPairsSeq
         do! emit seqBodyNode
         let seqBodyId = seqBodyNode.Id
 
-        // If isEmpty then empty seq else seq body
-        let! emptySeqId = emptySeq pairType
-        let! condBodyId = ifThenElse isEmptyId emptySeqId seqBodyId seqPairType
+        // A generator body returns unit whether it yields or skips an empty tree.
+        let! emptyBodyId = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
+        let! condBodyId = ifThenElse isEmptyId emptyBodyId seqBodyId Types.unitType
 
         // Wrap in SeqExpr (captures the tree parameter)
         let capture: CaptureInfo = { Name = "tree"; Type = mapType; IsMutable = false; SourceNodeId = Some treeParamId }
-        let! seqExprId = seqExpr condBodyId [capture] pairType
+        let! seqExprId = seqExpr condBodyId [capture] pairType (Some "traverse")
 
         // Lambda: fun tree -> seq { ... }
         let! state2 = getUserState
@@ -1147,7 +1150,7 @@ let inOrderPairsSeq
             Some "traverse",
             LambdaContext.RegularClosure
         )
-        let lambdaNode = mkNode state2 lambdaKind traverseFuncType [seqExprId]
+        let lambdaNode = mkNode state2 lambdaKind traverseFuncType [treeParamId; seqExprId]
         do! emit lambdaNode
         let lambdaId = lambdaNode.Id
 

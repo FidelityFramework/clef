@@ -869,32 +869,48 @@ let compareIsGreater (compareResultId: NodeId) : SaturationParser<NodeId> =
 // SEQ PRIMITIVES (PRD-15/16 - Lazy Sequences)
 //=============================================================================
 
-/// Create a seq expression: seq { body }
-/// The body should contain Yield/YieldBang nodes
-let seqExpr (bodyId: NodeId) (captures: CaptureInfo list) (elemType: NativeType) : SaturationParser<NodeId> =
+/// Create the same owner/generator relationship as source sequence elaboration.
+/// The unit body still awaits suspension elaboration; this establishes its
+/// deferred scope, not the generator's Boolean resumption implementation.
+let seqExpr (bodyId: NodeId) (captures: CaptureInfo list) (elemType: NativeType)
+            (enclosingFunction: string option) : SaturationParser<NodeId> =
     saturation {
         let! state = getUserState
         let seqType = NativeType.TSeq elemType
-        let node = mkNode state (SemanticKind.SeqExpr (bodyId, captures)) seqType [bodyId]
-        do! emit node
-        return node.Id
+        let parameterType = NativeType.TNativePtr seqType
+        let parameter = mkNode state (SemanticKind.PatternBinding "_seq_ptr") parameterType []
+        let generator = mkNode state
+                            (SemanticKind.Lambda ([("_seq_ptr", parameterType, parameter.Id)],
+                                bodyId, captures, enclosingFunction, LambdaContext.SeqGenerator))
+                            (NativeType.TFun (parameterType, Types.boolType)) [parameter.Id; bodyId]
+        let owner = mkNode state (SemanticKind.SeqExpr (generator.Id, captures)) seqType [generator.Id]
+        do! emit { parameter with Parent = Some generator.Id; Range = { state.SourceRange with End = state.SourceRange.Start } }
+        do! emit { generator with Parent = Some owner.Id }
+        do! updateUserState (fun current ->
+            let nodes = current.EmittedNodes |> List.map (fun node ->
+                if node.Id = bodyId then
+                    { node with Parent = Some generator.Id; EmissionStrategy = EmissionStrategy.SeparateFunction captures.Length }
+                else node)
+            { current with EmittedNodes = nodes })
+        do! emit owner
+        return owner.Id
     }
 
 /// Yield a single value in a seq expression
-let yield' (valueId: NodeId) (elemType: NativeType) : SaturationParser<NodeId> =
+let yield' (valueId: NodeId) : SaturationParser<NodeId> =
     saturation {
         let! state = getUserState
-        let node = mkNode state (SemanticKind.Yield valueId) elemType [valueId]
+        let node = mkNode state (SemanticKind.Yield valueId) Types.unitType [valueId]
         do! emit node
         return node.Id
     }
 
 /// Yield all values from a nested seq (yield!)
 /// Used to compose/flatten nested sequences
-let yieldBang (seqId: NodeId) (elemType: NativeType) : SaturationParser<NodeId> =
+let yieldBang (seqId: NodeId) : SaturationParser<NodeId> =
     saturation {
         let! state = getUserState
-        let node = mkNode state (SemanticKind.YieldBang seqId) elemType [seqId]
+        let node = mkNode state (SemanticKind.YieldBang seqId) Types.unitType [seqId]
         do! emit node
         return node.Id
     }

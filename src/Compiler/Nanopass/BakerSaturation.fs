@@ -305,6 +305,7 @@ let private applyIntrinsicRecipe
             // SeqRecipes takes stateType as 6th parameter (for fold), not graph
             let stateType = None  // Seq doesn't use stateType currently
             SeqRecipes.tryDecompose ctx info.Operation args elemType outputElemType stateType
+                (enclosingFunctionName graph ctx.InspiringNode)
         | None -> None
 
     | IntrinsicModule.String ->

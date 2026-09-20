@@ -276,231 +276,99 @@ let private seqBoolFold
     }
 
 //=============================================================================
-// PRODUCER: SEQ.MAP
+// PRODUCERS: eager value capture, deferred generator work
 //=============================================================================
 
-let private seqMapRecipe
-    (mapperNodeId: NodeId)
-    (inputSeqId: NodeId)
-    (inputElemType: NativeType)
-    (outputElemType: NativeType)
-    : SaturationParser<NodeId> =
-
-    let inputSeqType = NativeType.TSeq inputElemType
-    let enumType = NativeType.TSeqEnumerator inputElemType
-
+/// Supplied expressions are evaluated in argument order in the forming scope.
+/// The generator refers to those immutable snapshots; their captured storage
+/// identities remain shared according to the ordinary closure contract.
+let private producer (arguments: (NodeId * NativeType) list) (elementType: NativeType)
+                     (enclosingFunction: string option)
+                     (bodyBuilder: NodeId list -> SaturationParser<NodeId>) : SaturationParser<NodeId> =
     saturation {
-        // Get enumerator
-        let getEnumInfo = {
-            Module = IntrinsicModule.Seq
-            Operation = "getEnumerator"
-            Category = IntrinsicCategory.Pure
-            FullName = "Seq.getEnumerator"
-        }
-        let getEnumFuncType = NativeType.TFun (inputSeqType, enumType)
-        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
-        let! enumId = app1 getEnumFuncId inputSeqId enumType
-
-        // MoveNext
-        let moveNextInfo = {
-            Module = IntrinsicModule.SeqEnumerator
-            Operation = "moveNext"
-            Category = IntrinsicCategory.Memory
-            FullName = "SeqEnumerator.moveNext"
-        }
-        let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
-        let! conditionId = app1 moveNextFuncId enumId Types.boolType
-
-        // Get current element
-        let currentInfo = {
-            Module = IntrinsicModule.SeqEnumerator
-            Operation = "current"
-            Category = IntrinsicCategory.Pure
-            FullName = "SeqEnumerator.current"
-        }
-        let currentFuncType = NativeType.TFun (enumType, inputElemType)
-        let! currentFuncId = intrinsicNode currentInfo currentFuncType
-        let! elemId = app1 currentFuncId enumId inputElemType
-
-        // Apply mapper: f elem
-        let! mappedId = app1 mapperNodeId elemId outputElemType
-
-        // Yield the mapped element
-        let! yieldId = yield' mappedId outputElemType
-
-        // While loop: while moveNext do yield f(current)
-        let! whileBodyId = whileLoop conditionId yieldId
-
-        // Seq expression wrapping the iteration
-        let capture: CaptureInfo = { Name = "xs"; Type = inputSeqType; IsMutable = false; SourceNodeId = Some inputSeqId }
-        let mapperCapture: CaptureInfo = { Name = "f"; Type = NativeType.TFun(inputElemType, outputElemType); IsMutable = false; SourceNodeId = Some mapperNodeId }
-        return! seqExpr whileBodyId [capture; mapperCapture] outputElemType
+        let! origin = getUserState
+        // These nodes are synthesized at the call, not declarations of source
+        // variables. Only the replacement expression claims the full call span.
+        do! updateUserState (fun (state: SaturationState) -> { state with SourceRange = { origin.SourceRange with End = origin.SourceRange.Start } })
+        let! captures =
+            arguments |> List.mapi (fun index (value, valueType) -> saturation {
+                let name = sprintf "__seq_capture_%d_%d" origin.ExpansionId index
+                let! snapshot = letBind name value valueType
+                return { Name = name; Type = valueType; IsMutable = false; SourceNodeId = Some snapshot }
+            }) |> sequence
+        let! localRefs = captures |> List.map (fun capture -> varRef capture.Name capture.SourceNodeId capture.Type) |> sequence
+        let! body = bodyBuilder localRefs
+        let! value = seqExpr body captures elementType enclosingFunction
+        do! updateUserState (fun state -> { state with SourceRange = origin.SourceRange })
+        return! evaluateBefore (captures |> List.choose (fun capture -> capture.SourceNodeId)) value (NativeType.TSeq elementType)
     }
 
-//=============================================================================
-// PRODUCER: SEQ.FILTER
-//=============================================================================
-
-let private seqFilterRecipe
-    (predicateNodeId: NodeId)
-    (inputSeqId: NodeId)
-    (elemType: NativeType)
-    : SaturationParser<NodeId> =
-
-    let seqType = NativeType.TSeq elemType
-    let enumType = NativeType.TSeqEnumerator elemType
-
+let private sequenceOperation modl operation argument argumentType resultType =
     saturation {
-        // Get enumerator
-        let getEnumInfo = {
-            Module = IntrinsicModule.Seq
-            Operation = "getEnumerator"
-            Category = IntrinsicCategory.Pure
-            FullName = "Seq.getEnumerator"
+        let info = {
+            Module = modl; Operation = operation
+            Category = if operation = "moveNext" then IntrinsicCategory.Memory else IntrinsicCategory.Pure
+            FullName = sprintf "%A.%s" modl operation
         }
-        let getEnumFuncType = NativeType.TFun (seqType, enumType)
-        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
-        let! enumId = app1 getEnumFuncId inputSeqId enumType
-
-        // MoveNext
-        let moveNextInfo = {
-            Module = IntrinsicModule.SeqEnumerator
-            Operation = "moveNext"
-            Category = IntrinsicCategory.Memory
-            FullName = "SeqEnumerator.moveNext"
-        }
-        let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
-        let! conditionId = app1 moveNextFuncId enumId Types.boolType
-
-        // Get current
-        let currentInfo = {
-            Module = IntrinsicModule.SeqEnumerator
-            Operation = "current"
-            Category = IntrinsicCategory.Pure
-            FullName = "SeqEnumerator.current"
-        }
-        let currentFuncType = NativeType.TFun (enumType, elemType)
-        let! currentFuncId = intrinsicNode currentInfo currentFuncType
-        let! elemId = app1 currentFuncId enumId elemType
-
-        // Apply predicate
-        let! predResultId = app1 predicateNodeId elemId Types.boolType
-
-        // Yield element (conditional)
-        let! yieldId = yield' elemId elemType
-
-        // Unit for else branch
-        let! unitId = unitLit
-
-        // If predicate then yield else skip
-        let! conditionalYieldId = ifThenElse predResultId yieldId unitId Types.unitType
-
-        // While loop
-        let! whileBodyId = whileLoop conditionId conditionalYieldId
-
-        // Seq expression
-        let capture: CaptureInfo = { Name = "xs"; Type = seqType; IsMutable = false; SourceNodeId = Some inputSeqId }
-        let predCapture: CaptureInfo = { Name = "p"; Type = NativeType.TFun(elemType, Types.boolType); IsMutable = false; SourceNodeId = Some predicateNodeId }
-        return! seqExpr whileBodyId [capture; predCapture] elemType
+        let! functionId = intrinsicNode info (NativeType.TFun (argumentType, resultType))
+        return! app1 functionId argument resultType
     }
 
-//=============================================================================
-// PRODUCER: SEQ.COLLECT (flatMap/bind)
-//=============================================================================
-
-let private seqCollectRecipe
-    (mapperNodeId: NodeId)
-    (inputSeqId: NodeId)
-    (inputElemType: NativeType)
-    (outputElemType: NativeType)
-    : SaturationParser<NodeId> =
-
-    let inputSeqType = NativeType.TSeq inputElemType
-    let outputSeqType = NativeType.TSeq outputElemType
-    let enumType = NativeType.TSeqEnumerator inputElemType
-
+/// Enumeration is initialized inside the generator, before its loop. Each loop
+/// iteration reads current once, then executes the transformation/yield body.
+let private producerIteration input elementType consume =
     saturation {
-        // Get enumerator
-        let getEnumInfo = {
-            Module = IntrinsicModule.Seq
-            Operation = "getEnumerator"
-            Category = IntrinsicCategory.Pure
-            FullName = "Seq.getEnumerator"
-        }
-        let getEnumFuncType = NativeType.TFun (inputSeqType, enumType)
-        let! getEnumFuncId = intrinsicNode getEnumInfo getEnumFuncType
-        let! enumId = app1 getEnumFuncId inputSeqId enumType
-
-        // MoveNext
-        let moveNextInfo = {
-            Module = IntrinsicModule.SeqEnumerator
-            Operation = "moveNext"
-            Category = IntrinsicCategory.Memory
-            FullName = "SeqEnumerator.moveNext"
-        }
-        let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
-        let! moveNextFuncId = intrinsicNode moveNextInfo moveNextFuncType
-        let! conditionId = app1 moveNextFuncId enumId Types.boolType
-
-        // Get current
-        let currentInfo = {
-            Module = IntrinsicModule.SeqEnumerator
-            Operation = "current"
-            Category = IntrinsicCategory.Pure
-            FullName = "SeqEnumerator.current"
-        }
-        let currentFuncType = NativeType.TFun (enumType, inputElemType)
-        let! currentFuncId = intrinsicNode currentInfo currentFuncType
-        let! elemId = app1 currentFuncId enumId inputElemType
-
-        // Apply mapper to get inner seq: f elem
-        let! innerSeqId = app1 mapperNodeId elemId outputSeqType
-
-        // Yield! the inner seq (flattens)
-        let! yieldBangId = yieldBang innerSeqId outputElemType
-
-        // While loop
-        let! whileBodyId = whileLoop conditionId yieldBangId
-
-        // Seq expression
-        let capture: CaptureInfo = { Name = "xs"; Type = inputSeqType; IsMutable = false; SourceNodeId = Some inputSeqId }
-        let mapperCapture: CaptureInfo = { Name = "f"; Type = NativeType.TFun(inputElemType, outputSeqType); IsMutable = false; SourceNodeId = Some mapperNodeId }
-        return! seqExpr whileBodyId [capture; mapperCapture] outputElemType
+        let! expansion = getExpansionId
+        let enumType = NativeType.TSeqEnumerator elementType
+        let enumName = sprintf "__seq_enumerator_%d" expansion
+        let! enumerator = sequenceOperation IntrinsicModule.Seq "getEnumerator" input (NativeType.TSeq elementType) enumType
+        let! enumBinding = letBind enumName enumerator enumType
+        let! conditionRef = varRef enumName (Some enumBinding) enumType
+        let! condition = sequenceOperation IntrinsicModule.SeqEnumerator "moveNext" conditionRef enumType Types.boolType
+        let! bodyRef = varRef enumName (Some enumBinding) enumType
+        let! current = sequenceOperation IntrinsicModule.SeqEnumerator "current" bodyRef enumType elementType
+        let currentName = sprintf "__seq_current_%d" expansion
+        let! currentBinding = letBind currentName current elementType
+        let! currentRef = varRef currentName (Some currentBinding) elementType
+        let! action = consume currentRef
+        // The current value dominates both the filter predicate and its yield.
+        let! loopBody = evaluateBefore [currentBinding; currentRef] action Types.unitType
+        let! loop = whileLoop condition loopBody
+        return! evaluateBefore [enumBinding] loop Types.unitType
     }
 
-//=============================================================================
-// PRODUCER: SEQ.APPEND
-//=============================================================================
+let private transformRecipe operation callback input inputElement outputElement enclosingFunction =
+    let callbackResult =
+        match operation with
+        | "filter" -> Types.boolType
+        | "collect" -> NativeType.TSeq outputElement
+        | _ -> outputElement
+    let callbackType = NativeType.TFun (inputElement, callbackResult)
+    producer [callback, callbackType; input, NativeType.TSeq inputElement] outputElement enclosingFunction (fun locals ->
+        match locals with
+        | [callbackRef; inputRef] ->
+            producerIteration inputRef inputElement (fun current -> saturation {
+                let! transformed = app1 callbackRef current callbackResult
+                match operation with
+                | "filter" ->
+                    let! yielded = yield' current
+                    let! skipped = unitLit
+                    return! ifThenElse transformed yielded skipped Types.unitType
+                | "collect" -> return! yieldBang transformed
+                | _ -> return! yield' transformed
+            })
+        | _ -> failwith "A sequence transformer requires its callback and input captures")
 
-let private seqAppendRecipe
-    (seq1Id: NodeId)
-    (seq2Id: NodeId)
-    (elemType: NativeType)
-    : SaturationParser<NodeId> =
-
-    let seqType = NativeType.TSeq elemType
-
-    saturation {
-        // yield! xs
-        let! yieldBang1Id = yieldBang seq1Id elemType
-
-        // yield! ys
-        let! yieldBang2Id = yieldBang seq2Id elemType
-
-        // Sequential: yield! xs; yield! ys
-        let! state = getUserState
-        let seqKind = SemanticKind.Sequential [yieldBang1Id; yieldBang2Id]
-        let seqBodyNode = mkNode state seqKind Types.unitType [yieldBang1Id; yieldBang2Id]
-        do! emit seqBodyNode
-        let seqBodyId = seqBodyNode.Id
-
-        // Seq expression
-        let capture1: CaptureInfo = { Name = "xs"; Type = seqType; IsMutable = false; SourceNodeId = Some seq1Id }
-        let capture2: CaptureInfo = { Name = "ys"; Type = seqType; IsMutable = false; SourceNodeId = Some seq2Id }
-        return! seqExpr seqBodyId [capture1; capture2] elemType
-    }
+let private seqAppendRecipe first second elementType enclosingFunction =
+    let sequenceType = NativeType.TSeq elementType
+    producer [first, sequenceType; second, sequenceType] elementType enclosingFunction (fun locals ->
+        match locals with
+        | [firstRef; secondRef] -> saturation {
+            let! firstYield = yieldBang firstRef
+            let! secondYield = yieldBang secondRef
+            return! evaluateBefore [firstYield] secondYield Types.unitType
+          }
+        | _ -> failwith "Sequence append requires both input captures")
 
 //=============================================================================
 // CONSUMER: SEQ.TOLIST
@@ -1244,23 +1112,24 @@ let tryDecompose
     (elemType: NativeType)
     (outputElemType: NativeType option)
     (stateType: NativeType option)
+    (enclosingFunction: string option)
     : Result option =
 
     match operation, args with
     // Producers
     | "map", [mapper; xs] ->
         let outElem = outputElemType |> Option.defaultValue elemType
-        Some (runSaturation ctx (seqMapRecipe mapper xs elemType outElem))
+        Some (runSaturation ctx (transformRecipe "map" mapper xs elemType outElem enclosingFunction))
 
     | "filter", [predicate; xs] ->
-        Some (runSaturation ctx (seqFilterRecipe predicate xs elemType))
+        Some (runSaturation ctx (transformRecipe "filter" predicate xs elemType elemType enclosingFunction))
 
     | "collect", [mapper; xs] ->
         let outElem = outputElemType |> Option.defaultValue elemType
-        Some (runSaturation ctx (seqCollectRecipe mapper xs elemType outElem))
+        Some (runSaturation ctx (transformRecipe "collect" mapper xs elemType outElem enclosingFunction))
 
     | "append", [xs; ys] ->
-        Some (runSaturation ctx (seqAppendRecipe xs ys elemType))
+        Some (runSaturation ctx (seqAppendRecipe xs ys elemType enclosingFunction))
 
     // Consumers
     | "toList", [xs] ->
