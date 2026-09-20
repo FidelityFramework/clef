@@ -174,7 +174,7 @@ let main _ = withView (fun view -> readLength view ())
         Assert.Empty scopes.Findings
         let returned = result.Graph.Nodes.Values |> Seq.filter (fun node ->
             node.IsReachable && match node.Kind with
-                                | SemanticKind.Lambda ([], _, captures, _, _) -> not captures.IsEmpty
+                                | SemanticKind.Lambda ([(_, NativeType.TApp ({ NTUKind = Some NTUKind.NTUunit }, []), _)], _, captures, _, _) -> not captures.IsEmpty
                                 | _ -> false) |> Assert.Single
         // Synchronous borrowing does not permit allocating this environment in
         // the helper frame that has already returned before the unit call.

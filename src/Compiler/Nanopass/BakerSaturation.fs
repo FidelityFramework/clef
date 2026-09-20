@@ -133,6 +133,7 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Option, "exists" -> true
     | IntrinsicModule.Option, "forall" -> true
     | IntrinsicModule.Option, "defaultValue" -> true
+    | IntrinsicModule.Option, "defaultWith" -> true
     | IntrinsicModule.Option, ("isSome" | "isNone" | "get") -> true
     // Seq HOFs - Producers
     | IntrinsicModule.Seq, "map" -> true
@@ -251,7 +252,7 @@ let private applyIntrinsicRecipe
             args
             |> (match info.Operation with
                 | "get" -> List.tryHead
-                | "defaultValue" -> List.tryItem 1
+                | "defaultValue" | "defaultWith" -> List.tryItem 1
                 | _ -> List.tryLast)
             |> Option.bind (fun argId -> SemanticGraph.tryGetNode argId graph)
             |> Option.map (fun n -> n.Type)

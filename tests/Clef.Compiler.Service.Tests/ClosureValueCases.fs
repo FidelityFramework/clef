@@ -230,7 +230,9 @@ let main _ =
             Assert.True(placements.ContainsKey closure.Id)
             match closure.Kind with
             | SemanticKind.Lambda (parameters, _, captures, _, _) ->
-                Assert.Empty parameters
+                let _, parameterType, parameterId = Assert.Single parameters
+                DimensionalCases.same Types.unitType parameterType
+                Assert.Contains(parameterId, closure.Children)
                 let capture = Assert.Single captures
                 Assert.Equal("state", capture.Name)
                 Assert.False(Clef.Compiler.NativeTypedTree.UnionFind.hasUnboundVars capture.Type)

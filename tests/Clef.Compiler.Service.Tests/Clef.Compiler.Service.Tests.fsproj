@@ -14,10 +14,12 @@
     <Compile Include="FunctionPointerCases.fs" />
     <Compile Include="ClosedCallbackCases.fs" />
     <Compile Include="ClosureValueCases.fs" />
+    <Compile Include="UnitLambdaCases.fs" />
     <Compile Include="OptionOperationCases.fs" />
     <Compile Include="OptionClosureCases.fs" />
     <Compile Include="OptionValueCases.fs" />
     <Compile Include="OptionDefaultsCases.fs" />
+    <Compile Include="OptionDefaultWithCases.fs" />
     <Compile Include="PipeEvaluationCases.fs" />
     <Compile Include="MonomorphizationMembershipCases.fs" />
     <Compile Include="ForeignReferenceCases.fs" />

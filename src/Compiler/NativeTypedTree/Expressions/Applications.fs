@@ -709,15 +709,10 @@ let checkLambda
     // Use computeCaptures helper (PRD-14: shared with checkLazy)
     let captures = computeCaptures builder env bodyNode.Id paramNames
 
-    // Build function type
-    // For unit-parameterized lambdas (fun () -> body), paramTypes is empty
-    // but we still need to create unit -> bodyType, not just bodyType
+    // The function type and graph share the same logical parameter list,
+    // including the ignored unit formal of `fun () -> body`.
     let paramTypes = lambdaParams |> List.map (fun (_, ty, _) -> ty)
-    let funcType =
-        if List.isEmpty paramTypes then
-            NativeType.TFun(Types.unitType, bodyNode.Type)
-        else
-            mkFunctionType paramTypes bodyNode.Type
+    let funcType = mkFunctionType paramTypes bodyNode.Type
 
     // Children includes parameter PatternBindings + body for proper traversal
     // Anonymous lambdas inherit the current enclosing function context

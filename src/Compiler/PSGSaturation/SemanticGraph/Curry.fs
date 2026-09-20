@@ -19,7 +19,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 
 /// Reuse the distinction recorded during elaboration and read by closure placement.
-/// In particular, `fun () -> value` has no bound parameter nodes, but still returns a
+/// In particular, `fun () -> value` retains its unit formal and is a returned
 /// function value; absorbing it would silently change its parent's result to the payload.
 let private isFunctionValue (node: SemanticNode) : bool =
     [ClosureMetadata.LambdaExpression; ClosureMetadata.RequiresClosurePair]

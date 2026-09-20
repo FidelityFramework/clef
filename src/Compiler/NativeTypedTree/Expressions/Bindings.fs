@@ -42,6 +42,11 @@ let extractLambdaParams
     (range: SourceRange)
     : (string * NativeType) list =
     match args with
+    | SynSimplePats.SimplePats([], _, _) ->
+        // The parser represents the unit pattern by an empty simple-pattern
+        // list. It still denotes one logical argument: preserve its formal
+        // node just as for `let f () = ...` and Baker-created closures.
+        [("_", Types.unitType)]
     | SynSimplePats.SimplePats(pats, _, _) ->
         pats |> List.map (fun pat ->
             match pat with

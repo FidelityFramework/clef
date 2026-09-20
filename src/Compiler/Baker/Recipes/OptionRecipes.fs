@@ -183,6 +183,18 @@ let private optionDefaultValueRecipe fallback optionNodeId valueType =
         return! ifThenElse present value fallback valueType
     }
 
+/// Evaluate the thunk value eagerly, but invoke it only in the None branch.
+/// A function-valued payload is the result of this selection, not an extra
+/// parameter of the Option operation or an additional thunk invocation.
+let private optionDefaultWithRecipe fallback optionNodeId valueType =
+    saturation {
+        let! present = optionHasValue optionNodeId valueType
+        let! value = optionValue optionNodeId valueType
+        let! unitArgument = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
+        let! absent = app1 fallback unitArgument valueType
+        return! ifThenElse present value absent valueType
+    }
+
 //=============================================================================
 // PUBLIC API: tryDecompose
 //=============================================================================
@@ -203,7 +215,7 @@ let private operationRecipe operation args inputType outputType =
         Some (optionPredicateRecipe predicate opt inputType false, Types.boolType)
     | "forall", [predicate; opt] ->
         Some (optionPredicateRecipe predicate opt inputType true, Types.boolType)
-    | "defaultValue", fallback :: opt :: remaining ->
+    | ("defaultValue" | "defaultWith"), fallback :: opt :: remaining ->
         // Two arguments eliminate the option. Further source arguments apply
         // its selected function payload, in this same saturation firing.
         let resultType =
@@ -211,7 +223,9 @@ let private operationRecipe operation args inputType outputType =
                 current |> Option.bind (function NativeType.TFun (_, result) -> Some result | _ -> None)) (Some inputType)
         resultType |> Option.map (fun resultType ->
             let recipe = saturation {
-                let! value = optionDefaultValueRecipe fallback opt inputType
+                let! value =
+                    if operation = "defaultWith" then optionDefaultWithRecipe fallback opt inputType
+                    else optionDefaultValueRecipe fallback opt inputType
                 if List.isEmpty remaining then return value
                 else return! app value remaining resultType
             }
@@ -239,7 +253,7 @@ let private innerType = function
     | _ -> None
 
 let private hasLeadingArgument = function
-    | "map" | "bind" | "filter" | "exists" | "forall" | "defaultValue" -> true
+    | "map" | "bind" | "filter" | "exists" | "forall" | "defaultValue" | "defaultWith" -> true
     | _ -> false
 
 /// Try to decompose a fully applied Option operation.
@@ -248,6 +262,9 @@ let tryDecompose ctx operation args inputType outputType : Result option =
     |> Option.map (fun (recipe, resultType) ->
         runSaturation ctx (saturation {
             let! result = recipe
+            // expressions.md: an application evaluates all supplied operands
+            // before entering the body, including arguments subsequently applied
+            // to a returned function. Thunk invocation remains in the None arm.
             if hasLeadingArgument operation then return! evaluateBefore args result resultType
             else return result
         }))
