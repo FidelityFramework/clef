@@ -72,6 +72,19 @@ type NodeBuilder() =
     /// Get all nodes created by this builder
     member _.Nodes = nodes
 
+    /// Complete an owner created before its body. Replace the temporary kind
+    /// and children together so forward references cannot survive completion.
+    member _.CompleteNode(nodeId: NodeId, kind: SemanticKind, children: NodeId list) : SemanticNode =
+        match Map.tryFind nodeId nodes with
+        | Some node ->
+            let explicitSet = Set.ofList children
+            let implied = extractImpliedChildren nodeId kind
+            let finalChildren = children @ (implied |> List.filter (fun child -> not (Set.contains child explicitSet)))
+            let completed = { node with Kind = kind; Children = finalChildren }
+            nodes <- Map.add nodeId completed nodes
+            completed
+        | None -> invalidArg "nodeId" "Cannot complete an owner that has not been created"
+
     /// Set parent on an existing node (for bidirectional parent-child links)
     /// ARCHITECTURAL NOTE: Child is created first, then parent. This method
     /// allows setting the parent after both are created.

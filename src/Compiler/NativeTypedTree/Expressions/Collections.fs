@@ -680,32 +680,15 @@ let checkSeq
     (bodyExpr: SynExpr)
     (range: SourceRange)
     : SemanticNode =
-    // Check the body with EnclosingSeqExpr set as a marker (NodeId -1 = inside seq)
-    // This enables checkYield to validate that yield appears inside a seq
-    let bodyEnv = { env with EnclosingSeqExpr = Some (NodeId -1) }
-    let bodyNode = checkExpr bodyEnv builder bodyExpr
-
-    // Infer element type from Yield nodes in the body
-    // yield returns unit, so we look at the type of the VALUE being yielded
-    let rec findYieldValueType (nodeId: NodeId) : NativeType option =
-        match Map.tryFind nodeId builder.Nodes with
-        | None -> None
-        | Some node ->
-            match node.Kind with
-            | SemanticKind.Yield valueId ->
-                // Found a yield - get the type of the value expression
-                match Map.tryFind valueId builder.Nodes with
-                | Some valueNode -> Some valueNode.Type
-                | None -> None
-            | _ ->
-                // Recurse into children
-                node.Children |> List.tryPick findYieldValueType
-
-    let elementType =
-        match findYieldValueType bodyNode.Id with
-        | Some ty -> ty
-        | None -> freshTypeVar range  // No yields found, use type variable
+    // C-06: the sequence owns its element constraint before its body is checked.
+    // Every yield contributes to this same type; a nested seq creates another
+    // owner. No traversal guesses the element type from a descendant yield.
+    let elementType = freshTypeVar range
     let seqType = NativeTypes.Types.mkSeqType elementType
+    let owner = builder.Create(
+        SemanticKind.SeqExpr(NodeId -1, []), seqType, range, children = [])
+    let bodyEnv = { env with EnclosingSeqExpr = Some owner.Id }
+    let bodyNode = checkExpr bodyEnv builder bodyExpr
 
     // Capture analysis: find VarRefs in body that are NOT local to the seq
     // PRD-15: Seq values are "extended flat closures" with inlined captures
@@ -721,17 +704,22 @@ let checkSeq
         moveNextType,
         range,
         children = [bodyNode.Id])
+    builder.SetParent(bodyNode.Id, moveNextLambda.Id)
+    builder.SetParent(moveNextLambda.Id, owner.Id)
 
     // Architectural fix (January 2026): Mark Lambda body as SeparateFunction
     // Pass capture count so SSA assignment starts body SSAs after capture extraction
     builder.SetEmissionStrategy(bodyNode.Id, EmissionStrategy.SeparateFunction (List.length captures))
 
-    // Create SeqExpr with the MoveNext thunk as body
-    builder.Create(
-        SemanticKind.SeqExpr(moveNextLambda.Id, captures),
-        seqType,
-        range,
-        children = [moveNextLambda.Id])
+    builder.CompleteNode(owner.Id, SemanticKind.SeqExpr(moveNextLambda.Id, captures), [moveNextLambda.Id])
+
+let private trySequenceOwner (env: TypeEnv) (builder: NodeBuilder) =
+    env.EnclosingSeqExpr
+    |> Option.bind (fun id -> Map.tryFind id builder.Nodes)
+    |> Option.bind (fun owner ->
+        match owner.Kind, owner.Type with
+        | SemanticKind.SeqExpr _, NativeType.TSeq element -> Some (owner.Type, element)
+        | _ -> None)
 
 /// A lexical source context grants yield admission; it does not establish a
 /// continuation frame or its proof. Ordinary deferred boundaries clear it.
@@ -757,11 +745,12 @@ let checkYield
     (range: SourceRange)
     : SemanticNode =
     // Validate that yield appears inside a seq expression
-    match env.EnclosingSeqExpr with
+    match trySequenceOwner env builder with
     | None ->
         rejectYieldOwner env builder range "yield"
-    | Some _ ->
+    | Some (_, elementType) ->
         let valueNode = checkExpr env builder valueExpr
+        addConstraint (Constraint.Equals(elementType, valueNode.Type, range)) env
         // yield is an effectful operation - it stores the value but returns unit
         // The value's type is captured in the Yield node for codegen, but the
         // expression type is unit (yield doesn't return a value to the caller)
@@ -781,11 +770,12 @@ let checkYieldBang
     (range: SourceRange)
     : SemanticNode =
     // Validate that yield! appears inside a seq expression
-    match env.EnclosingSeqExpr with
+    match trySequenceOwner env builder with
     | None ->
         rejectYieldOwner env builder range "yield!"
-    | Some _ ->
+    | Some (sequenceType, _) ->
         let seqNode = checkExpr env builder seqExpr
+        addConstraint (Constraint.Equals(sequenceType, seqNode.Type, range)) env
         // yield! is an effectful operation - it flattens a seq but returns unit
         // The element type is inferred from the seqNode for codegen purposes
         builder.Create(
