@@ -332,6 +332,7 @@
     <Compile Include="Baker\Recipes\MapRecipes.fs" />
     <Compile Include="Baker\Recipes\SetRecipes.fs" />
     <Compile Include="Baker\Recipes\OptionRecipes.fs" />
+    <Compile Include="Baker\Recipes\ResultRecipes.fs" />
     <Compile Include="Baker\Recipes\NumericRecipes.fs" />
     <Compile Include="Baker\Recipes\StringRecipes.fs" />
     <Compile Include="Baker\Recipes\MatchRecipes.fs" />

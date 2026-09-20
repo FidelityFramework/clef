@@ -124,7 +124,8 @@ let checkFor
         children = [startNode.Id])
     builder.SetParent(startNode.Id, varBinding.Id)
 
-    // Body sees the loop variable (mutability is unobservable inside the body)
+    // The body currently receives this mutable binding. A distinct source-level
+    // iteration-binding contract remains pending; do not infer immutability here.
     let bodyEnv = addBinding loopVar Types.intType true (Some varBinding.Id) false env
     let bodyNode = checkExpr bodyEnv builder bodyExpr
 
@@ -322,23 +323,42 @@ let checkForEach
     (range: SourceRange)
     : SemanticNode =
 
-    let enumNode = checkExpr env builder enumExpr
-    // Extract variable from pattern
-    let varName, varType =
-        match pat with
-        | SynPat.Named(SynIdent(ident, _), _, _, _) ->
-            ident.idText, freshTypeVar range
-        | SynPat.LongIdent(SynLongIdent([ident], _, _), _, _, _, _, _) ->
-            ident.idText, freshTypeVar range
-        | _ -> "_", freshTypeVar range
-    // Add loop variable to environment
-    let loopEnv = addBinding varName varType false None false env  // Loop vars are local
-    let bodyNode = checkExpr loopEnv builder bodyExpr
-    builder.Create(
-        SemanticKind.ForEach(varName, enumNode.Id, bodyNode.Id),
-        Types.unitType,
-        range,
-        children = [enumNode.Id; bodyNode.Id])
+    // A closed, unstepped integer range has the counted-loop elaboration.
+    // Parentheses affect neither that syntax nor endpoint evaluation. Keep
+    // explicit range-operator bindings on the ordinary expression path.
+    let rec unparen = function
+        | SynExpr.Paren(inner, _, _, _) -> unparen inner
+        | expression -> expression
+    let isRange expression =
+        match unparen expression with SynExpr.IndexRange _ -> true | _ -> false
+    let countedRange =
+        match pat, unparen enumExpr with
+        | SynPat.Named(SynIdent(ident, _), _, _, _),
+          SynExpr.IndexRange(Some first, _, Some last, _, _, _)
+            when not (isRange first || isRange last)
+                 && (tryLookupBinding "op_Range" env).IsNone -> Some (ident, first, last)
+        | _ -> None
+    match countedRange with
+    | Some (ident, first, last) ->
+        checkFor checkExpr env builder ident first true last bodyExpr range
+    | None ->
+        let enumNode = checkExpr env builder enumExpr
+        // Extract variable from pattern
+        let varName, varType =
+            match pat with
+            | SynPat.Named(SynIdent(ident, _), _, _, _) ->
+                ident.idText, freshTypeVar range
+            | SynPat.LongIdent(SynLongIdent([ident], _, _), _, _, _, _, _) ->
+                ident.idText, freshTypeVar range
+            | _ -> "_", freshTypeVar range
+        // Add loop variable to environment
+        let loopEnv = addBinding varName varType false None false env  // Loop vars are local
+        let bodyNode = checkExpr loopEnv builder bodyExpr
+        builder.Create(
+            SemanticKind.ForEach(varName, enumNode.Id, bodyNode.Id),
+            Types.unitType,
+            range,
+            children = [enumNode.Id; bodyNode.Id])
 
 
 //-------------------------------------------------------------------------

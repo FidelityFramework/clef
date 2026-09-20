@@ -229,10 +229,11 @@ let internal cloneSubtree
 /// A generic function declaration or immutable bare library operation alias.
 /// Bare operations have no captured evaluation to duplicate; Baker reifies each
 /// specialized intrinsic later. Existing function-value references remain values.
-let rec private isBareOption (nodes: Map<NodeId, SemanticNode>) id =
+let rec private isBareLibraryOperation (nodes: Map<NodeId, SemanticNode>) id =
     match Map.tryFind id nodes with
-    | Some { Kind = SemanticKind.Intrinsic info } -> info.Module = IntrinsicModule.Option
-    | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> isBareOption nodes inner
+    | Some { Kind = SemanticKind.Intrinsic info } ->
+        info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result
+    | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> isBareLibraryOperation nodes inner
     | _ -> false
 
 let private isGenericFunctionBinding (nodes: Map<NodeId, SemanticNode>) (node: SemanticNode) : (TypeParam list * NativeType * NodeId) option =
@@ -242,7 +243,7 @@ let private isGenericFunctionBinding (nodes: Map<NodeId, SemanticNode>) (node: S
         | [lambdaId] ->
             match Map.tryFind lambdaId nodes with
             | Some { Kind = SemanticKind.Lambda _ } -> Some (typars, body, lambdaId)
-            | _ when not isMutable && isBareOption nodes lambdaId -> Some (typars, body, lambdaId)
+            | _ when not isMutable && isBareLibraryOperation nodes lambdaId -> Some (typars, body, lambdaId)
             | _ -> None
         | _ -> None
     | _ -> None
@@ -288,7 +289,7 @@ let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
             |> List.choose (fun (id, node) ->
                 isGenericFunctionBinding current node |> Option.map (fun (tps, body, lambdaId) -> (id, node, tps, body, lambdaId)))
         for (bindingId, bindingNode, rawTypars, rawSchemeBody, lambdaId) in generics do
-            let localLibraryAlias = isBareOption current lambdaId
+            let localLibraryAlias = isBareLibraryOperation current lambdaId
             // Re-root the scheme: unions since generalization may have moved a parameter's root.
             let typars = rawTypars |> List.map (fun tp -> fst (find tp)) |> List.distinctBy (fun tp -> tp.Id)
             let schemeBody = canonicalizeVars rawSchemeBody

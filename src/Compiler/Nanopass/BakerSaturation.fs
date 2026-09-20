@@ -28,6 +28,7 @@ module ListRecipes = Clef.Compiler.Baker.Recipes.ListRecipes
 module MapRecipes = Clef.Compiler.Baker.Recipes.MapRecipes
 module SetRecipes = Clef.Compiler.Baker.Recipes.SetRecipes
 module OptionRecipes = Clef.Compiler.Baker.Recipes.OptionRecipes
+module ResultRecipes = Clef.Compiler.Baker.Recipes.ResultRecipes
 module SeqRecipes = Clef.Compiler.Baker.Recipes.SeqRecipes
 module StringRecipes = Clef.Compiler.Baker.Recipes.StringRecipes
 module NumericRecipes = Clef.Compiler.Baker.Recipes.NumericRecipes
@@ -139,6 +140,7 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Option, "orElse" -> true
     | IntrinsicModule.Option, "orElseWith" -> true
     | IntrinsicModule.Option, ("isSome" | "isNone" | "get") -> true
+    | IntrinsicModule.Result, ("map" | "mapError" | "bind") -> true
     // Seq HOFs - Producers
     | IntrinsicModule.Seq, "map" -> true
     | IntrinsicModule.Seq, "filter" -> true
@@ -186,7 +188,8 @@ let private needsSaturationBasic (node: SemanticNode) : bool =
     | SemanticKind.Match _ -> true
     | SemanticKind.UnionCase _ -> true  // DU construction needs lowering to DUConstruct
     | SemanticKind.Application _ -> true  // May or may not need decomposition, checked in recipe creation
-    | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Option && shouldDecomposeIntrinsic info -> true
+    | SemanticKind.Intrinsic info when
+        (info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result) && shouldDecomposeIntrinsic info -> true
     | SemanticKind.Lambda(_, _, captures, _, LambdaContext.RegularClosure)
         when List.isEmpty captures -> true  // Zero-capture lambda may need closure pair (checked in recipe)
     | SemanticKind.VarRef (_, Some _) -> true  // A named function in value position is elaborated (checked in recipe)
@@ -281,6 +284,13 @@ let private applyIntrinsicRecipe
                         (enclosingFunctionName graph ctx.InspiringNode))
             | _ -> None
 
+    | IntrinsicModule.Result ->
+        let supplied = args |> List.choose (fun id ->
+            SemanticGraph.tryGetNode id graph |> Option.map (fun node -> id, node.Type))
+        if supplied.Length <> args.Length then None
+        else ResultRecipes.tryDecompose ctx info.Operation supplied returnType
+                (enclosingFunctionName graph ctx.InspiringNode)
+
     | IntrinsicModule.Seq ->
         let seqArgType =
             args
@@ -326,7 +336,8 @@ let private toRecipe (originalNodeId: NodeId) (source: string) (result: Result) 
 /// RecipeCreator signature: SemanticNode -> SemanticGraph -> RecipeCreationResult
 let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) : RecipeCreationResult =
     match node.Kind with
-    | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Option && shouldDecomposeIntrinsic info ->
+    | SemanticKind.Intrinsic info when
+        (info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result) && shouldDecomposeIntrinsic info ->
         // A call head is consumed by its application's recipe. Only value occurrences
         // need reification; explicit TypeApp may put a TypeAnnotation between the two.
         let rec isHead candidate =
@@ -339,13 +350,14 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
             match candidate.Kind with
             | SemanticKind.Application (head, _) -> isHead head
             | _ -> false)
-        if isApplied then NotApplicable "Option intrinsic is an application head"
+        if isApplied then NotApplicable "Library intrinsic is an application head"
         else
             let name = sprintf "%A.%s" info.Module info.Operation
             let ctx = mkContext node.Range node.Type graph.Platform name node.Id
-            match OptionRecipes.tryReifyValue ctx info.Operation node.Type (enclosingFunctionName graph node.Id) with
+            let reify = if info.Module = IntrinsicModule.Option then OptionRecipes.tryReifyValue else ResultRecipes.tryReifyValue
+            match reify ctx info.Operation node.Type (enclosingFunctionName graph node.Id) with
             | Some result -> RecipeCreated (toRecipe node.Id name result)
-            | None -> NotApplicable "Option value has no settled callable instance"
+            | None -> NotApplicable "Library value has no settled callable instance"
     | SemanticKind.Application (funcNodeId, argNodeIds) ->
         match SemanticGraph.tryGetNode funcNodeId graph with
         | Some funcNode ->

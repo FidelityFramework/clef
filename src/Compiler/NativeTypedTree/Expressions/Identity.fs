@@ -104,7 +104,7 @@ let rec private resolveIdentifierCore
     elif parts.Length = 2 then
         // 3a. Try module-qualified intrinsic
         match tryParseModuleQualified fullName with
-        | Some ((IntrinsicModule.Option | IntrinsicModule.Math), _) when
+        | Some ((IntrinsicModule.Option | IntrinsicModule.Result | IntrinsicModule.Math), _) when
             (tryLookupBinding fullName env).IsSome || (tryLookupBinding parts.Head env).IsSome ->
             // Library schemes are fallbacks. Explicit module members and
             // function-valued fields retain their source binding identity.
@@ -206,11 +206,11 @@ let resolveIdentifier
 
     match resolveIdentifierCore parts env range with
     | IntrinsicNode (info, ty) ->
-        // An Option operation is also a first-class library value. Its occurrence
+        // An Option or Result operation is also a first-class library value. Its occurrence
         // participates in the surrounding constraints; the declared scheme remains
         // in the intrinsic resolver for explicit type application.
         let occurrenceType =
-            if info.Module = IntrinsicModule.Option then instantiateTForall ty range
+            if info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result then instantiateTForall ty range
             else ty
         builder.Create(
             SemanticKind.Intrinsic info,

@@ -566,7 +566,7 @@ let checkTypeApp
         | Some binding -> binding.Type
         | None ->
             match funcNode.Kind with
-            | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Option ->
+            | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result ->
                 match Intrinsics.resolveModuleIntrinsic info.Module info.Operation range with
                 | Intrinsics.Resolved (_, scheme) -> scheme
                 | _ -> funcNode.Type

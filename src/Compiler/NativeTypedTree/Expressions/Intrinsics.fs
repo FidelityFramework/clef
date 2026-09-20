@@ -869,6 +869,24 @@ let private resolveOptionOp (op: string) (range: SourceRange) : IntrinsicResolut
         Resolved (mkIntrinsic IntrinsicModule.Option op IntrinsicCategory.Pure ("Option." + op), scheme)
     | _ -> NotAnIntrinsic
 
+/// Canonical Result payloads are quantified independently, including dimensions.
+/// Explicit argument order is map/bind<'a,'b,'e>, mapError<'a,'e,'f>.
+let private resolveResultOp (op: string) (range: SourceRange) : IntrinsicResolution =
+    match op with
+    | "map" | "mapError" | "bind" ->
+        let names = if op = "mapError" then ["'a"; "'e"; "'f"] else ["'a"; "'b"; "'e"]
+        let parameters = names |> List.map (fun name -> freshTypeParam name TypeParamKind.Type range)
+        let first, second, third = NativeType.TVar parameters[0], NativeType.TVar parameters[1], NativeType.TVar parameters[2]
+        let result ok error = NativeType.TApp(Clef.Compiler.NativeTypedTree.Expressions.Types.resultTycon, [ok; error])
+        let callback, input, output =
+            if op = "mapError" then NativeType.TFun(second, third), result first second, result first third
+            else
+                let output = result second third
+                NativeType.TFun(first, if op = "bind" then output else second), result first third, output
+        let scheme = NativeType.TForall(parameters, NativeType.TFun(callback, NativeType.TFun(input, output)))
+        Resolved (mkIntrinsic IntrinsicModule.Result op IntrinsicCategory.Pure ("Result." + op), scheme)
+    | _ -> NotAnIntrinsic
+
 /// Collection operations not yet admitted as typed schemes retain normal binding lookup.
 /// Baker owns their decomposition; it runs after source name and type resolution.
 let private resolveCollectionOp (_modl: IntrinsicModule) (_moduleName: string) (_op: string) (_range: SourceRange) : IntrinsicResolution =
@@ -911,7 +929,7 @@ let resolveModuleIntrinsic
     | IntrinsicModule.Set -> resolveCollectionOp IntrinsicModule.Set "Set" op range
     | IntrinsicModule.List -> resolveCollectionOp IntrinsicModule.List "List" op range
     | IntrinsicModule.Option -> resolveOptionOp op range
-    | IntrinsicModule.Result -> resolveCollectionOp IntrinsicModule.Result "Result" op range
+    | IntrinsicModule.Result -> resolveResultOp op range
     | IntrinsicModule.Convert -> NotAnIntrinsic  // Conversions handled separately (float, int, etc.)
     | IntrinsicModule.Operators -> NotAnIntrinsic  // Operators handled separately
     | IntrinsicModule.Unchecked -> NotAnIntrinsic  // Rejected via BCL check

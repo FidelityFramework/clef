@@ -24,8 +24,10 @@
     <Compile Include="OptionDefaultWithCases.fs" />
     <Compile Include="OptionAlternativesCases.fs" />
     <Compile Include="OptionIterationCases.fs" />
+    <Compile Include="RangeLoopCases.fs" />
     <Compile Include="CountedLoopCases.fs" />
     <Compile Include="OptionFoldCases.fs" />
+    <Compile Include="ResultOperationCases.fs" />
     <Compile Include="MathSineCases.fs" />
     <Compile Include="CallEffectRangeCases.fs" />
     <Compile Include="PipeEvaluationCases.fs" />
