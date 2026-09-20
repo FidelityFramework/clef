@@ -104,10 +104,10 @@ let rec private resolveIdentifierCore
     elif parts.Length = 2 then
         // 3a. Try module-qualified intrinsic
         match tryParseModuleQualified fullName with
-        | Some (IntrinsicModule.Option, _) when
+        | Some ((IntrinsicModule.Option | IntrinsicModule.Math), _) when
             (tryLookupBinding fullName env).IsSome || (tryLookupBinding parts.Head env).IsSome ->
-            // Admitting the built-in Option schemes must preserve an explicitly
-            // declared module member. Library fallbacks do not shadow source bindings.
+            // Library schemes are fallbacks. Explicit module members and
+            // function-valued fields retain their source binding identity.
             resolveBinding parts fullName env range
         | Some (modl, op) ->
             match resolveModuleIntrinsic modl op range with
