@@ -195,6 +195,21 @@ let private optionDefaultWithRecipe fallback optionNodeId valueType =
         return! ifThenElse present value absent valueType
     }
 
+/// Alternatives retain the selected option itself, including its payload.
+/// The thunk-valued alternative is invoked only in the None branch.
+let private optionAlternativeRecipe lazyFallback fallback optionNodeId valueType =
+    saturation {
+        let! present = optionHasValue optionNodeId valueType
+        let resultType = optionType valueType
+        let! absent = saturation {
+            if lazyFallback then
+                let! unitArgument = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
+                return! app1 fallback unitArgument resultType
+            else return fallback
+        }
+        return! ifThenElse present optionNodeId absent resultType
+    }
+
 //=============================================================================
 // PUBLIC API: tryDecompose
 //=============================================================================
@@ -215,6 +230,8 @@ let private operationRecipe operation args inputType outputType =
         Some (optionPredicateRecipe predicate opt inputType false, Types.boolType)
     | "forall", [predicate; opt] ->
         Some (optionPredicateRecipe predicate opt inputType true, Types.boolType)
+    | ("orElse" | "orElseWith"), [fallback; opt] ->
+        Some (optionAlternativeRecipe (operation = "orElseWith") fallback opt inputType, optionType inputType)
     | ("defaultValue" | "defaultWith"), fallback :: opt :: remaining ->
         // Two arguments eliminate the option. Further source arguments apply
         // its selected function payload, in this same saturation firing.
@@ -253,7 +270,7 @@ let private innerType = function
     | _ -> None
 
 let private hasLeadingArgument = function
-    | "map" | "bind" | "filter" | "exists" | "forall" | "defaultValue" | "defaultWith" -> true
+    | "map" | "bind" | "filter" | "exists" | "forall" | "defaultValue" | "defaultWith" | "orElse" | "orElseWith" -> true
     | _ -> false
 
 /// Try to decompose a fully applied Option operation.
@@ -272,7 +289,7 @@ let tryDecompose ctx operation args inputType outputType : Result option =
 /// Snapshot the supplied argument at partial formation. The closure captures the
 /// immutable value, while referenced storage and mutable cells remain shared.
 let private partialRecipe (ctx: Context) operation supplied suppliedType inputType resultType enclosing =
-    let role = if operation = "defaultValue" then "fallback" else "callback"
+    let role = if operation = "defaultValue" || operation = "orElse" then "fallback" else "callback"
     let name = sprintf "__option_%s_%d" role ctx.ExpansionId
     saturation {
         let! snapshot = letBind name supplied suppliedType
@@ -305,7 +322,7 @@ let tryReifyValue (ctx: Context) operation functionType enclosing : Result optio
                 match parameters with
                 | [supplied] -> partialRecipe ctx operation supplied suppliedType inputType resultType enclosing
                 | _ -> failwith "An Option operation value requires one leading parameter"
-            let parameterName = if operation = "defaultValue" then "__fallback" else "__callback"
+            let parameterName = if operation = "defaultValue" || operation = "orElse" then "__fallback" else "__callback"
             runSaturation ctx (closure [(parameterName, suppliedType)] [] enclosing body residual))
     | NativeType.TFun (domain, resultType) ->
         innerType domain |> Option.bind (fun inputType ->

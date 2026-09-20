@@ -103,6 +103,16 @@ type private Callee =
     | Value of candidates: Candidate list * poisoned: bool
     | Intrinsic of IntrinsicInfo
 
+/// May-writes while evaluating a node, rather than while merely constructing a
+/// delayed body. Unknown calls may write any mutable cell visible to the program.
+type private WriteEffect = { Definitions: Set<NodeId>; Unknown: bool }
+
+let private noWrites = { Definitions = Set.empty; Unknown = false }
+let private unknownWrites = { noWrites with Unknown = true }
+let private joinWrites left right =
+    { Definitions = Set.union left.Definitions right.Definitions
+      Unknown = left.Unknown || right.Unknown }
+
 /// What the pass reads of the graph, computed once: the reachable nodes, the parent index, the
 /// callee of every application, what supplies every parameter, the assignments to every mutable
 /// binding, the refinement at every reference, the reachable constructions of every record type
@@ -117,6 +127,7 @@ type private Program = {
     Parents: Map<NodeId, NodeId>
     /// An application node -> what it calls and its whole argument list (curried calls flattened).
     Callees: Map<NodeId, Callee * NodeId list>
+    Effects: Map<NodeId, WriteEffect>
     /// A Lambda parameter node -> (the call node, the argument node) at every reachable call that
     /// supplies it, directly or through a function value; the parameter reads the argument as the
     /// call does.
@@ -441,6 +452,112 @@ let private isLiteralBool (program: Program) (id: NodeId) (value: bool) : bool =
     | Some { Kind = SemanticKind.Literal (NativeLiteral.Bool b) } -> b = value
     | _ -> false
 
+/// Finite least fixed point: each node accumulates only reachable definition IDs
+/// and one unknown-effect bit. Recursive and transitive calls use the same body
+/// summaries; a partial application and a closure construction do not run a body.
+let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
+    let candidates = escapingOf program.Reachable program.Ordered program.Parents
+    let poisons = poisoningOf program.Reachable program.Ordered
+    let read effects id = Map.tryFind id effects |> Option.defaultValue noWrites
+    let union effects ids = ids |> List.fold (fun acc id -> joinWrites acc (read effects id)) noWrites
+    let rec invocation effects callee (args: NodeId list) =
+        match callee with
+        | Callee.Direct (parameters, body) ->
+            if args.Length < parameters.Length then noWrites
+            elif args.Length = parameters.Length then read effects body
+            else
+                let surplus = List.skip parameters.Length args
+                let returned = Callee.Value (reachable program.Reachable candidates surplus, poisonReaches program.Reachable poisons surplus)
+                joinWrites (read effects body) (invocation effects returned surplus)
+        | Callee.Value (possible, poisoned) ->
+            let initial = if poisoned || List.isEmpty possible then unknownWrites else noWrites
+            possible |> List.fold (fun acc candidate ->
+                if args.Length < candidate.Parameters.Length - candidate.Offset then acc
+                else joinWrites acc (read effects candidate.Body)) initial
+        | Callee.Intrinsic info ->
+            // The emission category is not a callback-effect declaration. Read
+            // the existing callback table, and keep delayed/foreign operations
+            // conservative even when their emission category says Pure.
+            let callbacks = RangeSources.calls info
+            let delayed =
+                match info.Module with
+                | IntrinsicModule.Lazy | IntrinsicModule.Seq | IntrinsicModule.SeqEnumerator -> true
+                | _ -> false
+            let unmodelledCallback =
+                List.isEmpty callbacks && (args |> List.exists (fun id ->
+                    Map.tryFind id program.Reachable |> Option.exists (fun n ->
+                        match applySubst n.Type with NativeType.TFun _ -> true | _ -> false)))
+            let initial =
+                match info.Category with
+                | IntrinsicCategory.Platform | IntrinsicCategory.Reactive -> unknownWrites
+                | IntrinsicCategory.Memory when List.isEmpty callbacks -> unknownWrites
+                | _ when delayed || unmodelledCallback -> unknownWrites
+                | _ -> noWrites
+            callbacks |> List.fold (fun acc (position, supplies) ->
+                match List.tryItem position args with
+                | None -> acc
+                | Some callback ->
+                    let mutableCallback =
+                        match Map.tryFind callback program.Reachable with
+                        | Some { Kind = SemanticKind.VarRef (_, Some definition) } -> isMutableDefinition program definition
+                        | _ -> false
+                    let possible =
+                        match Map.tryFind callback program.Reachable with
+                        | Some { Kind = SemanticKind.Lambda _ } ->
+                            lambdaShape program.Reachable callback |> Option.map (fun (_, body) -> [body])
+                        | Some { Kind = SemanticKind.VarRef (_, Some definition) } ->
+                            lambdaOf program.Reachable definition |> Option.map (fun (_, _, body) -> [body])
+                        | _ -> None
+                    let effect =
+                        match possible with
+                        | _ when mutableCallback -> unknownWrites
+                        | Some bodies -> union effects bodies
+                        | None ->
+                            // The callback argument supplies no concrete values
+                            // here; every escaped callable of this arity may run.
+                            let bodies = candidates |> List.filter (fun c -> c.Parameters.Length - c.Offset = supplies.Length) |> List.map (fun c -> c.Body)
+                            let seed = if List.isEmpty bodies || not (List.isEmpty poisons) then unknownWrites else noWrites
+                            joinWrites seed (union effects bodies)
+                    joinWrites acc effect) initial
+    let transfer effects (node: SemanticNode) =
+        match node.Kind with
+        | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.SeqExpr _
+        | SemanticKind.VarRef _ | SemanticKind.Quote _ -> noWrites
+        | SemanticKind.Set (target, value) ->
+            let store =
+                match Map.tryFind target program.Reachable with
+                | Some { Kind = SemanticKind.VarRef (_, Some definition) } -> { noWrites with Definitions = Set.singleton definition }
+                | _ -> unknownWrites
+            joinWrites (read effects value) store
+        | SemanticKind.Application (calleeId, arguments) ->
+            let root, _ = flattenApplication program.Reachable calleeId arguments
+            let mutableCallee =
+                match Map.tryFind root program.Reachable with
+                | Some { Kind = SemanticKind.VarRef (_, Some definition) } -> isMutableDefinition program definition
+                | _ -> false
+            let call =
+                match Map.tryFind node.Id program.Callees with
+                | _ when mutableCallee -> unknownWrites
+                | Some (callee, args) -> invocation effects callee args
+                | None -> unknownWrites
+            joinWrites (union effects node.Children) call
+        | SemanticKind.LazyForce _ | SemanticKind.YieldBang _ | SemanticKind.TraitCall _ | SemanticKind.PlatformBinding _ ->
+            joinWrites (union effects node.Children) unknownWrites
+        | _ -> union effects node.Children
+    let rec settle effects =
+        let next = program.Ordered |> List.fold (fun acc node -> Map.add node.Id (transfer effects node) acc) Map.empty
+        if next = effects then effects else settle next
+    settle Map.empty
+
+let private effectAt (program: Program) id = Map.tryFind id program.Effects |> Option.defaultValue noWrites
+
+let private afterEffect (program: Program) effect bounds =
+    bounds |> List.filter (fun (compared, _) ->
+        match compared with
+        | Compared.Definition definition when isMutableDefinition program definition ->
+            not effect.Unknown && not (Set.contains definition effect.Definitions)
+        | _ -> true)
+
 //-------------------------------------------------------------------------
 // Comparison refinement (width-inference.md §2, "Comparisons seed ranges")
 //-------------------------------------------------------------------------
@@ -487,9 +604,9 @@ let rec private atoms (program: Program) (depth: int) (guardId: NodeId) (polarit
             | Some { Module = IntrinsicModule.Operators; Operation = "not" }, [ x ] ->
                 atoms program (depth + 1) x (not polarity)
             | Some { Module = IntrinsicModule.Operators; Operation = "op_BooleanAnd" }, [ x; y ] ->
-                if polarity then atoms program (depth + 1) x true @ atoms program (depth + 1) y true else []
+                if polarity then afterEffect program (effectAt program y) (atoms program (depth + 1) x true) @ atoms program (depth + 1) y true else []
             | Some { Module = IntrinsicModule.Operators; Operation = "op_BooleanOr" }, [ x; y ] ->
-                if polarity then [] else atoms program (depth + 1) x false @ atoms program (depth + 1) y false
+                if polarity then [] else afterEffect program (effectAt program y) (atoms program (depth + 1) x false) @ atoms program (depth + 1) y false
             | Some { Module = IntrinsicModule.Operators; Operation = op }, [ x; y ] ->
                 match relationOf op with
                 | None -> []
@@ -518,7 +635,8 @@ let rec private atoms (program: Program) (depth: int) (guardId: NodeId) (polarit
                             (Compared.Node side, { Bound = Bound.Of other; Relation = r }) :: pushed
                         | Some _ -> [ (Compared.Node side, { Bound = Bound.Of other; Relation = r }) ]
                         | None -> []
-                    ofSide x y relation @ ofSide y x (flip relation)
+                    afterEffect program (joinWrites (effectAt program x) (effectAt program y)) (ofSide x y relation)
+                    @ afterEffect program (effectAt program y) (ofSide y x (flip relation))
             | None, _ ->
                 // A call of a boolean function whose body is comparison atoms over its parameters
                 // (`Cursor.fits data offset count`, ruling 3): the body's atoms, with each parameter
@@ -554,20 +672,24 @@ let rec private atoms (program: Program) (depth: int) (guardId: NodeId) (polarit
                             | Some arg -> Some (Compared.Node arg.Id, refinement)
                         | Compared.Definition d when isImmutableDefinition program d -> Some (compared, refinement)
                         | _ -> None)
+                    |> afterEffect program (effectAt program guardId)
                 | _ -> []
             | _ -> []
         | Some { Kind = SemanticKind.IfThenElse (g, t, Some e) } ->
             // `g && t` is `if g then t else false`; `g || e` is `if g then true else e`
             if isLiteralBool program e false then
-                (if polarity then atoms program (depth + 1) g true @ atoms program (depth + 1) t true else [])
+                (if polarity then afterEffect program (effectAt program t) (atoms program (depth + 1) g true) @ atoms program (depth + 1) t true else [])
             elif isLiteralBool program t true then
-                (if polarity then [] else atoms program (depth + 1) g false @ atoms program (depth + 1) e false)
+                (if polarity then [] else afterEffect program (effectAt program e) (atoms program (depth + 1) g false) @ atoms program (depth + 1) e false)
             else []
         | Some { Kind = SemanticKind.VarRef (_, Some defId) } ->
             match Map.tryFind defId program.Reachable with
             | Some ({ Kind = SemanticKind.Binding (_, false, _, _) } as binding) ->
                 match List.tryLast binding.Children with
-                | Some valueId -> atoms program (depth + 1) valueId polarity
+                | Some valueId ->
+                    // An immutable bool preserves an earlier observation. It is
+                    // not a fresh comparison of mutable storage at this use.
+                    atoms program (depth + 1) valueId polarity |> afterEffect program unknownWrites
                 | None -> []
             | _ -> []
         | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> atoms program (depth + 1) inner polarity
@@ -607,79 +729,59 @@ let private addEdge (consumer: NodeId) (operand: NodeId) (refs: Refinement list)
         let existing = Map.tryFind operand edges |> Option.defaultValue []
         Map.add consumer (Map.add operand (existing @ refs) edges) acc
 
-/// The mutable definitions assigned anywhere in a subtree (a `Set` whose target is a reference
-/// to the definition), for the loop rule below.
-let private assignedWithin (program: Program) (rootId: NodeId) : Set<NodeId> =
-    let rec walk (acc: Set<NodeId>) (id: NodeId) =
-        match Map.tryFind id program.Reachable with
-        | None -> acc
-        | Some node ->
-            let acc =
-                match node.Kind with
-                | SemanticKind.Set (targetId, _) ->
-                    match Map.tryFind targetId program.Reachable with
-                    | Some { Kind = SemanticKind.VarRef (_, Some defId) } -> Set.add defId acc
-                    | _ -> acc
-                | _ -> acc
-            node.Children |> List.fold walk acc
-    walk Set.empty rootId
-
-/// The refinements a guarded subtree's use edges carry. The subtree is walked in evaluation
-/// order; every read (a node's child, a reference's binding) by a node exclusive to the subtree
-/// (not also in `excluded`: the guard, the other branch) of a compared binding or node carries
-/// the bound. A mutable binding's bound holds only until the first assignment to it in the
-/// subtree (the value assigned is evaluated before the store, so it still carries the bound),
-/// and never inside a nested lambda, whose body runs at some other time.
+/// Guard facts follow evaluation order. Each parent's operand edge is recorded
+/// after that operand is evaluated, before a later operand or the call body can
+/// write a cell. A value already read therefore remains a valid snapshot.
 let private refineEdges (program: Program) (rootId: NodeId) (excluded: Set<NodeId>) (bounds: (Compared * Refinement) list)
                         (acc: Map<NodeId, Map<NodeId, Refinement list>>) : Map<NodeId, Map<NodeId, Refinement list>> =
     if List.isEmpty bounds then acc
     else
         let mutableDefs =
             bounds |> List.choose (fun (k, _) -> match k with Compared.Definition d when isMutableDefinition program d -> Some d | _ -> None) |> Set.ofList
-        let live (assigned: Set<NodeId>) (inLambda: bool) (refs: Refinement list) (operand: NodeId) =
-            match Map.tryFind operand program.Reachable with
-            | Some { Kind = SemanticKind.VarRef (_, Some defId) } when Set.contains defId mutableDefs ->
-                if Set.contains defId assigned || inLambda then [] else refs
-            | _ -> refs
-        // walk: (assigned mutable definitions so far, edges) -> node -> the same
-        let rec walk (inLambda: bool) (state: Set<NodeId> * Map<NodeId, Map<NodeId, Refinement list>>) (id: NodeId) =
-            let (assigned, edges) = state
+        let invalidate assigned effect =
+            Set.union assigned (if effect.Unknown then mutableDefs else effect.Definitions)
+        let live assigned inLambda =
+            bounds |> List.filter (fun (key, _) ->
+                match key with
+                | Compared.Definition definition when Set.contains definition mutableDefs ->
+                    not inLambda && not (Set.contains definition assigned)
+                | _ -> true)
+        let rec walk inLambda (assigned, edges) id =
             match Map.tryFind id program.Reachable with
-            | None -> state
+            | None -> assigned, edges
             | Some node ->
-                let exclusive = not (Set.contains id excluded)
-                let reads =
-                    match node.Kind with
-                    | SemanticKind.VarRef (_, Some defId) -> [ defId ]
-                    | _ -> node.Children
-                // A reference to a compared mutable that has been assigned since the guard (or that
-                // is read inside a lambda) reads its definition unrefined: the bound is dead on the
-                // reference's own edge to its definition, not only on the edges that read the
-                // reference.
-                let deadReference =
-                    match node.Kind with
-                    | SemanticKind.VarRef (_, Some defId) when Set.contains defId mutableDefs -> Set.contains defId assigned || inLambda
-                    | _ -> false
-                let edges =
-                    if exclusive && not deadReference then
-                        reads |> List.fold (fun e operand ->
-                            addEdge id operand (live assigned inLambda (boundsOn program bounds operand) operand) e) edges
-                    else edges
+                let record assigned edges operand =
+                    if Set.contains id excluded then edges
+                    else addEdge id operand (boundsOn program (live assigned inLambda) operand) edges
+                let operand (assigned, edges) child =
+                    let assigned, edges = walk inLambda (assigned, edges) child
+                    assigned, record assigned edges child
                 match node.Kind with
-                | SemanticKind.Set (targetId, valueId) ->
-                    let (assigned, edges) = walk inLambda (assigned, edges) valueId
-                    match Map.tryFind targetId program.Reachable with
-                    | Some { Kind = SemanticKind.VarRef (_, Some defId) } -> (Set.add defId assigned, edges)
-                    | _ -> (assigned, edges)
-                | SemanticKind.Lambda _ -> node.Children |> List.fold (walk true) (assigned, edges)
-                | SemanticKind.WhileLoop _ ->
-                    // A loop nested in the guarded subtree runs its iterations without re-checking
-                    // this guard: a compared mutable it assigns anywhere in its body is unbound from
-                    // the loop's first read, not from its first assignment in tree order (the
-                    // CS-10 review's `if n < 100 then while c < 5 do (read n; n <- n + 50; ...)`).
-                    let deadFromHere = Set.intersect (assignedWithin program id) mutableDefs
-                    node.Children |> List.fold (walk inLambda) (Set.union assigned deadFromHere, edges)
-                | _ -> node.Children |> List.fold (walk inLambda) (assigned, edges)
+                | SemanticKind.VarRef (_, Some definition) -> assigned, record assigned edges definition
+                | SemanticKind.Set (_, value) ->
+                    let assigned, edges = operand (assigned, edges) value
+                    invalidate assigned (effectAt program id), edges
+                | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.SeqExpr _ ->
+                    // Constructing a delayed value does not execute its body.
+                    // Immutable observations can still refine its later reads.
+                    let _, edges = node.Children |> List.fold (walk true) (assigned, edges)
+                    assigned, edges
+                | SemanticKind.IfThenElse (guard, yes, no) ->
+                    let afterGuard, edges = operand (assigned, edges) guard
+                    let afterYes, edges = operand (afterGuard, edges) yes
+                    let afterNo, edges =
+                        match no with
+                        | Some branch -> operand (afterGuard, edges) branch
+                        | None -> afterGuard, edges
+                    Set.union afterYes afterNo, edges
+                | SemanticKind.WhileLoop _ | SemanticKind.ForLoop _ | SemanticKind.ForEach _ ->
+                    // Outer guard facts must survive every iteration, including
+                    // transitive calls, to constrain even the loop's first read.
+                    let assigned = invalidate assigned (effectAt program id)
+                    node.Children |> List.fold operand (assigned, edges)
+                | _ ->
+                    let assigned, edges = node.Children |> List.fold operand (assigned, edges)
+                    invalidate assigned (effectAt program id), edges
         snd (walk false (Set.empty, acc) rootId)
 
 /// The refinements of the whole program: for every reachable `if`, the guard's bounds on the
@@ -777,6 +879,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Ordered = ordered
         Parents = parents
         Callees = Map.empty
+        Effects = Map.empty
         CallArguments = Map.empty
         IndexSeeds = Map.empty
         Escaping = Map.empty
@@ -1123,6 +1226,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             DeclaredParameters = declaredParameters
             ElementStores = elementStores
             ElementSeeds = elementSeeds }
+    let program = { program with Effects = effectsOf program }
     { program with Refinements = refinementsOf program }
 
 //-------------------------------------------------------------------------
