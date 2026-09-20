@@ -481,6 +481,10 @@ type EdgeRole =
     | Symbol
     // provenance
     | EnrichedWith
+    /// Direct capture origin: ordered sources [lambda; captured declaration]
+    /// produce the hidden formal target. The declaration may itself be a
+    /// hidden formal; source tooling follows this specific relation by identity.
+    | CaptureOrigin
     // declared platform (BAREWire docs/11: cross-applied with the code it governs)
     /// A declared memory space or buffer schema constrains the value that
     /// resides in it: source = the declaration node, target = the value.
@@ -748,6 +752,11 @@ module SchemeMetadata =
 /// even when the captures list is empty.
 [<RequireQualifiedAccess>]
 module ClosureMetadata =
+    /// The source-visible callable type before hidden capture parameters are
+    /// made explicit. Semantic Type remains the fully saturated signature.
+    [<Literal>]
+    let SourceSignature = "Closure.SourceSignature"
+
     /// An anonymous function expression (`fun` or `function`), distinguished from
     /// the Lambda used to represent a named function declaration. Synthetic subsequent
     /// parameter groups of one `fun` are not separate expression boundaries.

@@ -318,11 +318,14 @@
     <!-- Baker Ingredients - XParsec-centric combinator primitives and patterns (PRD-13a) -->
     <Compile Include="Baker\Ingredients\SaturationCombinators.fs" />
     <Compile Include="Baker\Ingredients\Primitives.fs" />
+    <Compile Include="Baker\Ingredients\Closures.fs" />
     <Compile Include="Baker\Ingredients\Patterns.fs" />
     <Compile Include="Baker\Ingredients\Obligations.fs" />
     <!-- Baker Recipes - HOF decomposition templates (PRD-13a) -->
     <Compile Include="Baker\Recipes\Decomposition.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableOrigins.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\DirectCaptures.fs" />
+    <Compile Include="Baker\Recipes\ClosureRecipes.fs" />
     <Compile Include="Baker\Recipes\ApplicationRecipes.fs" />
     <Compile Include="Baker\Recipes\SeqRecipes.fs" />
     <Compile Include="Baker\Recipes\ListRecipes.fs" />
@@ -337,6 +340,7 @@
     <Compile Include="Nanopass\IntrinsicElaboration.fs" />
     <Compile Include="Nanopass\BakerSaturation.fs" />
     <Compile Include="Nanopass\CallableApplications.fs" />
+    <Compile Include="Nanopass\ClosureElaboration.fs" />
     <Compile Include="Nanopass\ObligationDischarge.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
     <!-- The declared platform fills the context at saturation; sealed sites are checked against it (CS-7b) -->

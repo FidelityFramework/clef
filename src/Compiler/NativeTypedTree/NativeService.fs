@@ -1057,6 +1057,9 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // proven overapplications through the same recipe/fold-in machinery before
     // range and placement inspect the calls and their returned function values.
     let finalGraph = Clef.Compiler.Nanopass.CallableApplications.normalize finalGraph
+    // Known non-escaping named functions carry admitted immutable captures as
+    // explicit parameters. Mutable capture storage remains a separate contract.
+    let finalGraph = Clef.Compiler.Nanopass.ClosureElaboration.normalize finalGraph
 
     //=========================================================================
     // Pass 5: Obligation Elaboration -- the declared platform, cross-compiled

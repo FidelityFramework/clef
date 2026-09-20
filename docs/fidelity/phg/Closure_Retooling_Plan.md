@@ -38,6 +38,19 @@ step of this plan, not a prerequisite.
 
 ## 1. What works and what does not — the FidelityHelloWorld set
 
+**2026-09-19 bounded implementation update.** Baker now elaborates immutable
+captures of eligible direct named functions into typed leading formals, using
+ingredients, a recipe and nanopass fan-out/fold-in. Admission accounts for all
+reachable uses; value uses, partial uses and mutable frontiers remain outside
+this increment. Resolved definitions and nested capture sources follow identity,
+with explicit capture-origin provenance and retained source signatures for editor
+projection. The native `11a_DirectCaptures` oracle passes; it supplements the older
+`11_Closures` case. The [companion waypoint record](../../../../Composer/docs/Language_Coverage_Waypoints.md)
+pins compiler, native, proof and tooling evidence. This does not complete the
+materialized forms, residence obligations or two-value closure migration below.
+
+The following table remains the dated September 4 baseline.
+
 Measured 2026-09-04 against the rebuilt compiler, each sample compiled
 individually through the CLI and run against the manifest's expected output.
 **17 of 24 pass end to end.**
@@ -164,8 +177,11 @@ f_closure = (S_f = captured bindings ∪ {lambda},  t_f = environment node,  λ_
 
 **Recipes** (`Baker/Recipes/ClosureRecipes.fs`, new):
 - *fan-out* — for each capturing `Lambda`: mint the five structures and the
-  hyperedge. For a nested named function (spec §8.3: enclosing function present
-  and parent is a `Binding`): mint nothing; captures become leading parameters.
+  hyperedge. A nested named binding is only a candidate for the direct form:
+  all uses must establish direct, nonescaping invocation (spec §8). In that form,
+  captures become leading parameters without an environment allocation. The
+  current implementation admits immutable captures; mutable storage needs its
+  own truthful parameter, range-effect and residence contract before admission.
 - *fold-in* — select the form (§14.2) from modes, escape class, and sizes;
   compute the layout with `placeSlots` (`Layout_As_Joint_Constraint` §2.3 —
   the one placement function, taking `PlatformContext`); emit VC-EXT/DIS/REG/
