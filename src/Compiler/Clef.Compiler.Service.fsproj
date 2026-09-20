@@ -322,6 +322,7 @@
     <Compile Include="Baker\Ingredients\Patterns.fs" />
     <Compile Include="Baker\Ingredients\Obligations.fs" />
     <Compile Include="Baker\Ingredients\Suspensions.fs" />
+    <Compile Include="Baker\Ingredients\Evaluation.fs" />
     <!-- Baker Recipes - HOF decomposition templates (PRD-13a) -->
     <Compile Include="Baker\Recipes\Decomposition.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableOrigins.fs" />
@@ -331,6 +332,7 @@
     <Compile Include="Baker\Recipes\SeqRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceOwnershipRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceDelegationRecipes.fs" />
+    <Compile Include="Baker\Recipes\SequenceEvaluationRecipes.fs" />
     <Compile Include="Baker\Recipes\ListRecipes.fs" />
     <Compile Include="Baker\Recipes\MapRecipes.fs" />
     <Compile Include="Baker\Recipes\SetRecipes.fs" />
@@ -347,6 +349,7 @@
     <Compile Include="Nanopass\ClosureElaboration.fs" />
     <Compile Include="Nanopass\SequenceOwnership.fs" />
     <Compile Include="Nanopass\SequenceDelegation.fs" />
+    <Compile Include="Nanopass\SequenceEvaluation.fs" />
     <Compile Include="Nanopass\ObligationDischarge.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
     <!-- The declared platform fills the context at saturation; sealed sites are checked against it (CS-7b) -->

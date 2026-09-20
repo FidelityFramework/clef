@@ -421,6 +421,41 @@ and MemberKind =
 // elaboration. Nothing may construct an edge whose source set is open; that is
 // what keeps the obligations these edges will carry quantifier-free.
 
+/// Ports of a local evaluation contract. Operand indices identify incidences
+/// within the target node, not runtime states or new semantic node identities.
+[<RequireQualifiedAccess>]
+type EvaluationPort =
+    | Entry
+    | OperandEntry of int
+    | OperandExit of int
+    | Ready
+    | Exit
+
+[<RequireQualifiedAccess>]
+type EvaluationTransfer =
+    | Continue
+    | WhenTrue
+    | WhenFalse
+    | Resume
+
+/// A value demand does not re-execute a referenced declaration's initializer.
+[<RequireQualifiedAccess>]
+type EvaluationAccess =
+    | Value
+    | Storage
+
+/// Explicitly unsettled local contracts; these are not source diagnostics or
+/// permission for a witness to reconstruct missing control semantics.
+[<RequireQualifiedAccess>]
+type EvaluationResidual =
+    | MissingOperand
+    | InvalidShape
+    | MatchSelection
+    | ExceptionFlow
+    | CollectionIteration
+    | CountedIteration
+    | Delegation
+
 /// How an edge participates in the graph's projections.
 [<RequireQualifiedAccess>]
 type EdgeClass =
@@ -438,6 +473,9 @@ type EdgeClass =
     /// A suspension relation settled by Baker. This is neither containment
     /// nor an execution edge; it does not number states or prove feasibility.
     | Suspension
+    /// Baker's local evaluation contracts. Composition, dominance and frame
+    /// liveness require further saturation; this is not a flattened CFG.
+    | Evaluation
 
 /// The role the source plays relative to the target -- the edge label.
 /// Generalises Traversal.RegionKind, which named the same thing but was
@@ -493,6 +531,17 @@ type EdgeRole =
     /// Ordered sources [delegation expression; supplied sequence operand]
     /// produce the target owner-local yield after Baker expands yield!.
     | DelegationOrigin
+    /// [owner; operand] constrains a container's indexed operand demand.
+    | EvaluationOperand of EvaluationAccess
+    /// Port transfer within the target container. Sources retain the owner
+    /// and the operands named by the two ports; identities never hide in beta.
+    | EvaluationFlow of EvaluationPort * EvaluationPort * EvaluationTransfer
+    /// [owner; captured declaration] constrains deferred value formation.
+    | EvaluationCapture
+    /// [owner; generator] selects that generator's own body as a local root.
+    | EvaluationRoot
+    /// [owner; resident related sites] constrains an unsettled local contract.
+    | EvaluationPending of EvaluationResidual
     // declared platform (BAREWire docs/11: cross-applied with the code it governs)
     /// A declared memory space or buffer schema constrains the value that
     /// resides in it: source = the declaration node, target = the value.

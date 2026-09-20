@@ -1117,6 +1117,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // declaration roots' lambdas. Composer reads Codata and computes none of it.
     //=========================================================================
     let finalGraph, curry = Curry.normalize finalGraph
+    // Local evaluation contracts cite the final body/operand identities after
+    // structural normalization. They do not yet establish suspension segments,
+    // dominance or a frame that Alex could witness.
+    let finalGraph = Clef.Compiler.Nanopass.SequenceEvaluation.normalize finalGraph
     let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
     let mmio, mmioDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess.settle (diagnostics @ residual @ rangeDiagnostics) finalGraph
     let finalGraph =
