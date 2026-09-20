@@ -50,27 +50,55 @@ let private operationBody operation callback input inputType outputType okType e
                 return! duConstruct "Error" 1 (Some mapped) None outputType
             else return! duConstruct "Error" 1 (Some errorValue) None outputType
         }
-        let! choice = ifThenElse isOk okBranch errorBranch outputType
-        // Only operand values are eager. Payload extraction and callback
-        // invocation remain within their established case.
-        return! evaluateBefore [callback; input] choice outputType
+        return! ifThenElse isOk okBranch errorBranch outputType
     }
 
-let private body operation callback input inputType outputType =
-    match payloadTypes inputType, payloadTypes outputType with
-    | Some (okType, errorType), Some _ ->
-        Some (operationBody operation callback input inputType outputType okType errorType)
+/// Elimination retains each payload's logical type, including unit and functions.
+/// defaultWith receives the Error payload; it is not a unit thunk.
+let private eliminationBody operation supplied input inputType outputType okType errorType =
+    saturation {
+        let! tag = duGetTag input inputType
+        let! okTag = int8Lit 0
+        let! isOk = compareEq tag okTag Types.int8Type
+        let! okBranch = saturation {
+            let! value = duEliminate input "Ok" 0 okType
+            if operation = "iter" then return! app1 supplied value Types.unitType
+            else return value
+        }
+        let! errorBranch = saturation {
+            match operation with
+            | "defaultWith" ->
+                let! error = duEliminate input "Error" 1 errorType
+                return! app1 supplied error outputType
+            | "defaultValue" -> return supplied
+            | _ -> return! createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
+        }
+        return! ifThenElse isOk okBranch errorBranch outputType
+    }
+
+let private body operation supplied input inputType outputType =
+    match payloadTypes inputType, operation with
+    | Some (okType, errorType), ("defaultValue" | "defaultWith" | "iter") ->
+        Some (eliminationBody operation supplied input inputType outputType okType errorType)
+    | Some (okType, errorType), _ when (payloadTypes outputType).IsSome ->
+        Some (operationBody operation supplied input inputType outputType okType errorType)
     | _ -> None
 
 /// Formation snapshots the callback value, preserving any storage it references.
 let private partialRecipe (ctx: Context) operation callback callbackType inputType outputType enclosing =
     saturation {
-        let name = sprintf "__result_callback_%d" ctx.ExpansionId
+        let role = if operation = "defaultValue" then "fallback" else "callback"
+        let name = sprintf "__result_%s_%d" role ctx.ExpansionId
         let! snapshot = letBind name callback callbackType
         let capture = { Name = name; Type = callbackType; IsMutable = false; SourceNodeId = Some snapshot }
         let closureBody parameters captures =
             match parameters, captures with
-            | [input], [callback] -> body operation callback input inputType outputType |> Option.get
+            | [input], [callback] -> saturation {
+                let! result = body operation callback input inputType outputType |> Option.get
+                // Shared operands must dominate both case arms, including in
+                // residual closures. Payload reads stay in the selected case.
+                return! evaluateBefore [callback; input] result outputType
+              }
             | _ -> failwith "A Result partial requires one input and one callback capture"
         let! value = closure [("__result", inputType)] [capture] enclosing closureBody outputType
         return! evaluateBefore [snapshot] value (NativeType.TFun(inputType, outputType))
@@ -81,17 +109,33 @@ let tryDecompose ctx operation arguments returnType enclosing : Result option =
     | [callback, callbackType] ->
         match returnType with
         | NativeType.TFun (inputType, outputType)
-            when (payloadTypes inputType).IsSome && (payloadTypes outputType).IsSome ->
+            when (payloadTypes inputType).IsSome ->
             Some (runRecipe ctx (partialRecipe ctx operation callback callbackType inputType outputType enclosing))
         | _ -> None
-    | [callback, _; input, inputType] ->
-        body operation callback input inputType returnType |> Option.map (runRecipe ctx)
+    | (supplied, _) :: (input, inputType) :: remaining ->
+        // A default consumes two operands even if the selected payload is a
+        // function. All supplied source operands precede that selection.
+        let isDefault = operation = "defaultValue" || operation = "defaultWith"
+        if not isDefault && not remaining.IsEmpty then None
+        else
+            let operationType =
+                if isDefault then payloadTypes inputType |> Option.map fst
+                else Some returnType
+            operationType |> Option.bind (fun outputType ->
+                body operation supplied input inputType outputType |> Option.map (fun parser ->
+                    runRecipe ctx (saturation {
+                        let! value = parser
+                        let! result =
+                            if remaining.IsEmpty then saturation { return value }
+                            else app value (List.map fst remaining) returnType
+                        return! evaluateBefore (List.map fst arguments) result returnType
+                    })))
     | _ -> None
 
 let tryReifyValue ctx operation functionType enclosing : Result option =
     match functionType with
     | NativeType.TFun (callbackType, (NativeType.TFun (inputType, outputType) as residual))
-        when (payloadTypes inputType).IsSome && (payloadTypes outputType).IsSome ->
+        when (payloadTypes inputType).IsSome ->
         let closureBody parameters _ =
             match parameters with
             | [callback] -> partialRecipe ctx operation callback callbackType inputType outputType enclosing
