@@ -352,22 +352,47 @@ let checkForEach
         checkFor checkExpr env builder ident first true last bodyExpr range
     | None ->
         let enumNode = checkExpr env builder enumExpr
-        // Extract variable from pattern
-        let varName, varType =
+        let variable =
             match pat with
             | SynPat.Named(SynIdent(ident, _), _, _, _) ->
-                ident.idText, freshTypeVar range
+                Some (ident.idText, rangeToSourceRange ident.idRange)
             | SynPat.LongIdent(SynLongIdent([ident], _, _), _, _, _, _, _) ->
-                ident.idText, freshTypeVar range
-            | _ -> "_", freshTypeVar range
-        // Add loop variable to environment
-        let loopEnv = addBinding varName varType false None false env  // Loop vars are local
-        let bodyNode = checkExpr loopEnv builder bodyExpr
-        builder.Create(
-            SemanticKind.ForEach(varName, enumNode.Id, bodyNode.Id),
-            Types.unitType,
-            range,
-            children = [enumNode.Id; bodyNode.Id])
+                Some (ident.idText, rangeToSourceRange ident.idRange)
+            | SynPat.Wild patternRange -> Some ("_", rangeToSourceRange patternRange)
+            | _ -> None
+        match enumNode.Kind, variable with
+        | SemanticKind.Error _, _ ->
+            let message = "This iteration source has no admitted native sequence elaboration"
+            addDiagnostic {
+                Severity = NativeDiagnosticSeverity.Error
+                Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+                Message = message; Range = enumNode.Range; RelatedNodes = [enumNode.Id]
+                Reachability = ReachabilityContext.Unknown
+            } env
+            builder.Create(SemanticKind.Error message, NativeType.TError message, range, children = [enumNode.Id])
+        | _, None ->
+            let message = "This sequence iteration pattern has no admitted native binding elaboration"
+            addDiagnostic {
+                Severity = NativeDiagnosticSeverity.Error
+                Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+                Message = message; Range = range; RelatedNodes = [enumNode.Id]
+                Reachability = ReachabilityContext.Unknown
+            } env
+            builder.Create(SemanticKind.Error message, NativeType.TError message, range)
+        | _, Some (varName, variableRange) ->
+            let varType = freshTypeVar variableRange
+            addConstraint (Constraint.Equals(enumNode.Type, Types.mkSeqType varType, range)) env
+            // The declaration exists before the body is checked. Baker later
+            // initializes this same immutable identity from each pulled value.
+            let formal = builder.Create(SemanticKind.PatternBinding varName, varType, variableRange, arena = env.CurrentArena)
+            let loopEnv = if varName = "_" then env else addBinding varName varType false (Some formal.Id) false env
+            let bodyNode = checkExpr loopEnv builder bodyExpr
+            addConstraint (Constraint.Equals(bodyNode.Type, Types.unitType, range)) env
+            let loop = builder.Create(
+                SemanticKind.ForEach(varName, formal.Id, enumNode.Id, bodyNode.Id),
+                Types.unitType, range, children = [enumNode.Id; formal.Id; bodyNode.Id])
+            for child in loop.Children do builder.SetParent(child, loop.Id)
+            loop
 
 
 //-------------------------------------------------------------------------

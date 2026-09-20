@@ -323,6 +323,7 @@
     <Compile Include="Baker\Ingredients\Obligations.fs" />
     <Compile Include="Baker\Ingredients\Suspensions.fs" />
     <Compile Include="Baker\Ingredients\Evaluation.fs" />
+    <Compile Include="Baker\Ingredients\Continuations.fs" />
     <!-- Baker Recipes - HOF decomposition templates (PRD-13a) -->
     <Compile Include="Baker\Recipes\Decomposition.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableOrigins.fs" />
@@ -330,9 +331,18 @@
     <Compile Include="Baker\Recipes\ClosureRecipes.fs" />
     <Compile Include="Baker\Recipes\ApplicationRecipes.fs" />
     <Compile Include="Baker\Recipes\SeqRecipes.fs" />
+    <Compile Include="Baker\Recipes\SequenceConsumptionRecipes.fs" />
+    <Compile Include="Baker\Recipes\SequenceCurrentRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceOwnershipRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceDelegationRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceEvaluationRecipes.fs" />
+    <Compile Include="Baker\Recipes\SequenceControlRecipes.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\SequenceOrigins.fs" />
+    <Compile Include="Baker\Recipes\SequenceElementRecipes.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\SequenceResidence.fs" />
+    <Compile Include="Baker\Recipes\ContinuationObligationRecipes.fs" />
+    <Compile Include="Baker\Recipes\SequenceMachineRecipes.fs" />
+    <Compile Include="Baker\Recipes\SequenceContinuationEvidence.fs" />
     <Compile Include="Baker\Recipes\ListRecipes.fs" />
     <Compile Include="Baker\Recipes\MapRecipes.fs" />
     <Compile Include="Baker\Recipes\SetRecipes.fs" />
@@ -347,6 +357,9 @@
     <Compile Include="Nanopass\BakerSaturation.fs" />
     <Compile Include="Nanopass\CallableApplications.fs" />
     <Compile Include="Nanopass\ClosureElaboration.fs" />
+    <Compile Include="Nanopass\SequenceConsumption.fs" />
+    <Compile Include="Nanopass\SequenceCurrentAdmission.fs" />
+    <Compile Include="Nanopass\SequenceElements.fs" />
     <Compile Include="Nanopass\SequenceOwnership.fs" />
     <Compile Include="Nanopass\SequenceDelegation.fs" />
     <Compile Include="Nanopass\SequenceEvaluation.fs" />
@@ -368,6 +381,9 @@
     <Compile Include="PSGSaturation\SemanticGraph\Meets.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\PlatformBindings.fs" />
 
+    <Compile Include="Nanopass\SequenceFactoryResults.fs" />
+    <Compile Include="Nanopass\SequenceRegions.fs" />
+    <Compile Include="Nanopass\SequenceRuntime.fs" />
     <Compile Include="NativeTypedTree\NativeService.fs" />
 
     <!-- Project - Unified project loading and checking (DRY - single source of truth) -->

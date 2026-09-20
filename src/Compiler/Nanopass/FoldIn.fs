@@ -48,10 +48,17 @@ let remapKindReferences (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKin
         SemanticKind.Sequential (List.map update nodes)
     | SemanticKind.WhileLoop (guard, body) ->
         SemanticKind.WhileLoop (update guard, update body)
+    | SemanticKind.ContinuationDispatch (selector, cases, otherwise) ->
+        SemanticKind.ContinuationDispatch (update selector, cases |> List.map (fun (state, body) -> state, update body), update otherwise)
+    | SemanticKind.FrameRead (frame, slot) -> SemanticKind.FrameRead (update frame, update slot)
+    | SemanticKind.FrameBorrow (frame, slot) -> SemanticKind.FrameBorrow (update frame, update slot)
+    | SemanticKind.FrameWrite (frame, slot, value) -> SemanticKind.FrameWrite (update frame, update slot, update value)
+    | SemanticKind.ContinuationStorage owner -> SemanticKind.ContinuationStorage (update owner)
+    | SemanticKind.ContinuationAllocate owner -> SemanticKind.ContinuationAllocate (update owner)
     | SemanticKind.ForLoop (var, start, finish, isUp, body) ->
         SemanticKind.ForLoop (var, update start, update finish, isUp, update body)
-    | SemanticKind.ForEach (var, coll, body) ->
-        SemanticKind.ForEach (var, update coll, update body)
+    | SemanticKind.ForEach (var, formal, coll, body) ->
+        SemanticKind.ForEach (var, update formal, update coll, update body)
     | SemanticKind.TryWith (body, handler) ->
         SemanticKind.TryWith (update body, update handler)
     | SemanticKind.TryFinally (body, cleanup) ->

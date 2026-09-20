@@ -155,6 +155,42 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
                         yield sprintf "(or (<= %s %s) (<= %s %s))" (integer (endpoint left)) (number ro) (integer (endpoint right)) (number lo) ]
         [ sprintf "(assert (= %s (and %s)))" id (String.concat " " clauses)
           sprintf "(assert (not %s))" id ]
+    | ObligationBody.ContinuationLayout (slots, extent, alignment) ->
+        let number (value: int) = integer (bigint value)
+        let powerOfTwo value =
+            [0 .. 30] |> List.map (fun exponent -> sprintf "(= %s %s)" (number value) (integer (1I <<< exponent)))
+            |> String.concat " " |> sprintf "(or %s)"
+        let aligned endpoint required =
+            // Invalid alignment still fails its power-of-two conjunct; keep
+            // the division defined so malformed facts cannot create vacuity.
+            let divisor = integer (bigint (max 1 required))
+            sprintf "(* (div (+ %s (- %s 1)) %s) %s)" endpoint divisor divisor divisor
+        let endpoint (offset, length, _) = sprintf "(+ %s %s)" (number offset) (number length)
+        let previous = "0" :: (slots |> List.map endpoint)
+        let clauses =
+            [ sprintf "(>= %s 0)" (number extent)
+              powerOfTwo alignment
+              sprintf "(>= %s 1)" (number alignment)
+              // Together with >= every field alignment this is exactly max.
+              ("(= " + number alignment + " 1)") :: (slots |> List.map (fun (_, _, required) -> sprintf "(= %s %s)" (number alignment) (number required)))
+              |> String.concat " " |> sprintf "(or %s)"
+              sprintf "(= %s %s)" (number extent) (aligned (List.last previous) alignment) ]
+            @ (slots |> List.mapi (fun index (offset, length, required) ->
+                [ sprintf "(>= %s 0)" (number offset)
+                  sprintf "(> %s 0)" (number length)
+                  powerOfTwo required
+                  sprintf "(>= %s %s)" (number alignment) (number required)
+                  sprintf "(= (mod %s %s) 0)" (number offset) (number (max 1 required))
+                  sprintf "(= (mod %s %s) 0)" (number alignment) (number (max 1 required))
+                  sprintf "(= %s %s)" (number offset) (aligned previous[index] required)
+                  sprintf "(<= %s %s)" (endpoint (offset, length, required)) (number extent) ]) |> List.concat)
+            @ [ for index, left in List.indexed slots do
+                    for right in List.skip (index + 1) slots do
+                        let leftOffset, _, _ = left
+                        let rightOffset, _, _ = right
+                        yield sprintf "(or (<= %s %s) (<= %s %s))" (endpoint left) (number rightOffset) (endpoint right) (number leftOffset) ]
+        [ sprintf "(assert (= %s (and %s)))" id (String.concat " " clauses)
+          sprintf "(assert (not %s))" id ]
     | ObligationBody.ConsecutiveLayout (storages, span, capacity) ->
         let n = List.length storages
         let bases = [ for i in 0 .. n - 1 -> sprintf "b%d" i ]

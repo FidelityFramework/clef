@@ -481,7 +481,8 @@ let addNullWarning (r: range) (env: TypeEnv) : unit =
 /// PRD-14: Tracks IsModuleLevel for correct capture analysis
 /// isModuleLevel must be explicitly specified by the caller based on binding semantics:
 /// - Parameters (function, loop, inline) → false (always local)
-/// - Let bindings → env.EnclosingFunction.IsNone (depends on scope)
+/// - Expression let and match bindings → false (lexically local)
+/// - Module declarations → true
 /// - Type definitions → true (always module-level)
 let addBinding (name: string) (ty: NativeType) (isMutable: bool) (nodeId: NodeId option) (isModuleLevel: bool) (env: TypeEnv) : TypeEnv =
     let binding: NR.ResolvedBinding = {
@@ -498,7 +499,7 @@ let addBinding (name: string) (ty: NativeType) (isMutable: bool) (nodeId: NodeId
 
 /// Add a binding with inline body for transparent function expansion
 /// Only functions explicitly marked `inline` get their bodies captured
-let addInlineBinding (name: string) (ty: NativeType) (nodeId: NodeId option) (inlineBody: NR.InlineBody) (env: TypeEnv) : TypeEnv =
+let addInlineBindingInScope (isModuleLevel: bool) (name: string) (ty: NativeType) (nodeId: NodeId option) (inlineBody: NR.InlineBody) (env: TypeEnv) : TypeEnv =
     let binding: NR.ResolvedBinding = {
         QualifiedName = name
         Type = ty
@@ -507,9 +508,14 @@ let addInlineBinding (name: string) (ty: NativeType) (nodeId: NodeId option) (in
         InlineBody = Some inlineBody
         UnionCaseInfo = None
         NativeLiteral = None
-        IsModuleLevel = env.EnclosingFunction.IsNone
+        IsModuleLevel = isModuleLevel
     }
     { env with Resolution = NR.registerBinding name binding env.Resolution; BindingTypes = Map.add name ty env.BindingTypes }
+
+/// Existing declaration callers retain their module scope; expression callers
+/// select lexical scope explicitly through addInlineBindingInScope.
+let addInlineBinding name ty nodeId inlineBody (env: TypeEnv) =
+    addInlineBindingInScope env.EnclosingFunction.IsNone name ty nodeId inlineBody env
 
 /// Add a DU constructor binding with case info for proper UnionCase node creation
 /// DU types are always defined at module scope, so constructors are module-level
@@ -528,7 +534,7 @@ let addUnionCaseBinding (name: string) (ty: NativeType) (caseInfo: NR.UnionCaseI
 
 /// Add a [<Literal>] binding with compile-time constant value for substitution
 /// Literal values are substituted at use sites during name resolution
-let addLiteralBinding (name: string) (ty: NativeType) (nodeId: NodeId option) (litValue: NativeLiteral) (env: TypeEnv) : TypeEnv =
+let addLiteralBindingInScope (isModuleLevel: bool) (name: string) (ty: NativeType) (nodeId: NodeId option) (litValue: NativeLiteral) (env: TypeEnv) : TypeEnv =
     let binding: NR.ResolvedBinding = {
         QualifiedName = name
         Type = ty
@@ -537,9 +543,12 @@ let addLiteralBinding (name: string) (ty: NativeType) (nodeId: NodeId option) (l
         InlineBody = None
         UnionCaseInfo = None
         NativeLiteral = Some litValue
-        IsModuleLevel = env.EnclosingFunction.IsNone
+        IsModuleLevel = isModuleLevel
     }
     { env with Resolution = NR.registerBinding name binding env.Resolution; BindingTypes = Map.add name ty env.BindingTypes }
+
+let addLiteralBinding name ty nodeId litValue (env: TypeEnv) =
+    addLiteralBindingInScope env.EnclosingFunction.IsNone name ty nodeId litValue env
 
 /// Look up a binding using compositional resolver
 /// BCL is structurally impossible - only source-defined bindings exist

@@ -279,6 +279,10 @@ type ObligationBody =
     /// Concrete BAREWire placements in the exact byte pool emitted by Composer.
     /// Every alignment, extent and capacity is checked, never assumed.
     | StaticStorageLayout of slots: (int * int * int) list * usedSize: int * allocationSize: int * poolAlignment: int * capacity: int64 * spaceAlignment: int * granularity: int
+    /// Exact ordered continuation slots, including alignment padding. This
+    /// establishes layout only, not allocation lifetime or a memory budget.
+    /// The empty transient activation layout has extent zero and alignment one.
+    | ContinuationLayout of slots: (int * int * int) list * extent: int * alignment: int
     /// String.concat2 copy discipline: for ANY operand lengths a, b >= 0
     /// (pinned where the operand is a literal), the two copy windows [0,a) and
     /// [a,a+b) lie within the (a+b)-byte allocation.
@@ -331,8 +335,23 @@ type SemanticKind =
     | CaseElimination of scrutinee: NodeId * arms: CaseArm list
     | Sequential of nodes: NodeId list
     | WhileLoop of guard: NodeId * body: NodeId
+    /// Baker-settled finite continuation selection. Each child is a complete
+    /// region; the witness pulls those regions without discovering successors.
+    | ContinuationDispatch of selector: NodeId * cases: (int * NodeId) list * otherwise: NodeId
+    /// Typed access to a slot whose identity and layout belong to a settled
+    /// continuation frame. The slot reference is not an initializer demand.
+    | FrameRead of frame: NodeId * slot: NodeId
+    /// Borrow the typed cell view, retaining its frame's lifetime obligation.
+    | FrameBorrow of frame: NodeId * slot: NodeId
+    | FrameWrite of frame: NodeId * slot: NodeId * value: NodeId
+    /// Transient activation storage, separate from the persistent suspension
+    /// frame. Its exact slots and extent are settled on the owning continuation.
+    | ContinuationStorage of owner: NodeId
+    /// Internal caller-owned destination for one sequence factory result.
+    /// Allocation does not initialize the frame; the factory constructor does.
+    | ContinuationAllocate of owner: NodeId
     | ForLoop of var: string * start: NodeId * finish: NodeId * isUp: bool * body: NodeId
-    | ForEach of var: string * collection: NodeId * body: NodeId
+    | ForEach of var: string * formal: NodeId * collection: NodeId * body: NodeId
     | IfThenElse of guard: NodeId * thenBranch: NodeId * elseBranch: NodeId option
     | TryWith of body: NodeId * handler: NodeId
     | TryFinally of body: NodeId * cleanup: NodeId
@@ -470,8 +489,9 @@ type EdgeClass =
     | Provenance
     /// An obligation's constraining structure -> the obligation node.
     | Obligation
-    /// A suspension relation settled by Baker. This is neither containment
-    /// nor an execution edge; it does not number states or prove feasibility.
+    /// Suspension, iterator and continuation evidence settled by Baker.
+    /// Roles distinguish ownership, enumerated cuts and resume/live identities;
+    /// these are neither containment nor executable transfer edges.
     | Suspension
     /// Baker's local evaluation contracts. Composition, dominance and frame
     /// liveness require further saturation; this is not a flattened CFG.
@@ -531,6 +551,31 @@ type EdgeRole =
     /// Ordered sources [delegation expression; supplied sequence operand]
     /// produce the target owner-local yield after Baker expands yield!.
     | DelegationOrigin
+    /// [immutable enumerator binding; successful pull guard; iteration loop]
+    /// admits the target current read at that loop's first body action.
+    | IteratorCurrentAdmitted
+    /// [enumerator binding; successful pull guard; iteration loop] retains the
+    /// current-admission dependency of the target current call's element facts.
+    | SequenceElementAdmission
+    /// [iterator operand; sequence owner] contributes a finite known origin.
+    | SequenceElementOwner
+    /// [sequence owner; exact yielded payload] contributes to the target
+    /// admitted current call's range fixed point, through its delimiter.
+    | SequenceElementPayload
+    /// [iterator operand; unknown origin site] prevents finite narrowing.
+    | SequenceElementUnknown
+    /// [owner; generator; payload] enumerates the target source cut's state.
+    | SuspensionCut of int
+    /// [owner; generator; source cut] retains an exact live-across value.
+    | SuspensionLiveAcross
+    /// [owner; generator; source cut] selects the generated resume entry;
+    /// state zero has only owner/generator because it precedes every cut.
+    | SuspensionResume of int
+    /// [owner; generator; generated entry; source cut when positive] selects
+    /// the actual first dispatch action after pass-through control is skipped.
+    | SuspensionResumeAction of int
+    /// [owner; generator; state slot] selects the completed-entry body.
+    | SuspensionCompleted
     /// [owner; operand] constrains a container's indexed operand demand.
     | EvaluationOperand of EvaluationAccess
     /// Port transfer within the target container. Sources retain the owner
@@ -542,6 +587,17 @@ type EdgeRole =
     | EvaluationRoot
     /// [owner; resident related sites] constrains an unsettled local contract.
     | EvaluationPending of EvaluationResidual
+    | ContinuationCase of int
+    | ContinuationDefault
+    | FrameSlot
+    /// Exact source-value identity retained by continuation realization.
+    | ContinuationValue
+    | ContinuationRegion
+    | ContinuationBorrow
+    /// [source allocation; covering activation; captured declaration;
+    /// capturing generator] proves the target sequence template's complete
+    /// bounded use is covered by its captured source allocation's residence.
+    | SequenceTemplateBorrow
     // declared platform (BAREWire docs/11: cross-applied with the code it governs)
     /// A declared memory space or buffer schema constrains the value that
     /// resides in it: source = the declaration node, target = the value.
@@ -627,10 +683,20 @@ let kindEdges (target: NodeId) (kind: SemanticKind) : Hyperedge list =
 
     | SemanticKind.Sequential nodes -> sts EdgeRole.Element nodes
     | SemanticKind.WhileLoop (guard, body) -> [ st EdgeRole.Guard guard; st EdgeRole.Body body ]
+    | SemanticKind.ContinuationDispatch (selector, cases, otherwise) ->
+        st EdgeRole.Scrutinee selector :: st EdgeRole.ContinuationDefault otherwise
+        :: (cases |> List.map (fun (state, body) -> st (EdgeRole.ContinuationCase state) body))
+    | SemanticKind.FrameRead (frame, slot) -> [ st EdgeRole.Subject frame; Hyperedge.edge1 EdgeClass.Provenance EdgeRole.FrameSlot 0 slot target ]
+    | SemanticKind.FrameBorrow (frame, slot) -> [ st EdgeRole.Subject frame; Hyperedge.edge1 EdgeClass.Provenance EdgeRole.FrameSlot 0 slot target ]
+    | SemanticKind.FrameWrite (frame, slot, value) ->
+        [ st EdgeRole.Subject frame; Hyperedge.edge1 EdgeClass.Provenance EdgeRole.FrameSlot 0 slot target; st EdgeRole.AssignValue value ]
+    | SemanticKind.ContinuationStorage owner
+    | SemanticKind.ContinuationAllocate owner ->
+        [ Hyperedge.edge1 EdgeClass.Provenance EdgeRole.Definition 0 owner target ]
     | SemanticKind.ForLoop (_, start, finish, _, body) ->
         [ st EdgeRole.LoopStart start; st EdgeRole.LoopFinish finish; st EdgeRole.Body body ]
-    | SemanticKind.ForEach (_, collection, body) ->
-        [ st EdgeRole.Collection collection; st EdgeRole.Body body ]
+    | SemanticKind.ForEach (_, formal, collection, body) ->
+        [ st EdgeRole.Collection collection; st EdgeRole.Parameter formal; st EdgeRole.Body body ]
     | SemanticKind.IfThenElse (guard, thenB, elseB) ->
         [ st EdgeRole.Guard guard; st EdgeRole.ThenBranch thenB ]
         @ (elseB |> Option.toList |> List.map (st EdgeRole.ElseBranch))
@@ -967,6 +1033,12 @@ type CurryInfo = {
 /// What a closure environment slot holds.
 [<RequireQualifiedAccess>]
 type CaptureSlotKind =
+    /// A complete rank-one memref descriptor for a captured mutable cell.
+    /// Its payload type is retained; no address-to-view reconstruction occurs.
+    | CellView of NativeType
+    /// A complete rank-one descriptor for a buffer-backed value. Bounds and
+    /// stride travel with the value rather than being reconstructed from an address.
+    | ValueView of NativeType
     /// One word: the base address of a buffer-backed value (a record, tuple, union, lazy, seq,
     /// function value's pair) or of a mutable cell; construction extracts the base pointer first.
     | Address
@@ -1012,6 +1084,45 @@ type ClosurePlacement = {
     WithCodePointerBytes: int
     /// The prefix, then the captures.
     WithPrefixBytes: int
+}
+
+/// A continuation slot retains the declaration/value identity used by Baker's
+/// liveness relation and the exact representation chosen by placement.
+type ContinuationSlot = {
+    Source: NodeId
+    ValueType: NativeType
+    Field: SettledField
+    Holds: CaptureSlotKind
+    IsCapture: bool
+}
+
+/// Source construction, fresh enumeration and generator access share this
+/// single settled frame contract. The callable identity is separate from its
+/// storage; no slot carries a function address.
+type ContinuationRegion = {
+    ParentOwner: NodeId
+    ParentFormal: NodeId
+    ChildOwner: NodeId
+    Offset: int
+    Bytes: int
+    Alignment: int
+}
+
+type ContinuationFrame = {
+    Owner: NodeId
+    Generator: NodeId
+    Formal: NodeId
+    State: NodeId
+    Current: NodeId
+    Slots: ContinuationSlot list
+    Bytes: int
+    Alignment: int
+    ScratchSlots: ContinuationSlot list
+    ScratchBytes: int
+    ScratchAlignment: int
+    Initializers: (NodeId * NodeId) list
+    ResumeStates: int list
+    Obligations: NodeId list
 }
 
 /// Where a union's values live on a core: a heterogeneous union in the arena, a homogeneous one
@@ -1102,6 +1213,18 @@ type Codata = {
     /// Per lambda, the meet of its body's last value to the body's width.
     ReturnMeets: Map<NodeId, Meet>
     Closures: Map<NodeId, ClosurePlacement>
+    ContinuationFrames: Map<NodeId, ContinuationFrame>
+    /// A unique sequence constructor at a use, established in Baker. This
+    /// evidence permits elision of the known function half of (fn, env).
+    SequenceOrigins: Map<NodeId, NodeId>
+    /// Transient activation allocation/reference -> owning continuation.
+    ContinuationStorage: Map<NodeId, NodeId>
+    /// Exact allocation occurrence -> owned byte region within a parent frame.
+    ContinuationRegions: Map<NodeId, ContinuationRegion>
+    SequenceInitializers: Map<NodeId, (NodeId * NodeId) list>
+    /// Caller-owned destination for a known sequence factory constructor.
+    SequenceDestinations: Map<NodeId, NodeId>
+    SequenceCurrentReads: Set<NodeId>
     Bindings: PlatformBindings
     Pins: PinMapping option
     /// The lambda of each declaration root, with the root's flavour.
@@ -1117,6 +1240,13 @@ module Codata =
         Meets = Map.empty
         ReturnMeets = Map.empty
         Closures = Map.empty
+        ContinuationFrames = Map.empty
+        SequenceOrigins = Map.empty
+        ContinuationStorage = Map.empty
+        ContinuationRegions = Map.empty
+        SequenceInitializers = Map.empty
+        SequenceDestinations = Map.empty
+        SequenceCurrentReads = Set.empty
         Bindings = { RuntimeMode = RuntimeMode.Console; Bindings = Map.empty; ExternLibraries = Set.empty }
         Pins = None
         DeclarationRootLambdas = Map.empty

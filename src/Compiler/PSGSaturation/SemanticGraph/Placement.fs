@@ -213,6 +213,16 @@ let private extentOf (p: Placer) (slot: SettledSlot) : (int * int) option =
 let private alignUp (offset: int) (align: int) : int =
     if align <= 1 then offset else ((offset + align - 1) / align) * align
 
+/// Tile already selected extents; callers supply the alignment authority.
+let private tileExtents (fields: (string * SettledSlot * (int * int)) list) : SettledLayout =
+    let placed, cursor, maxAlign =
+        fields
+        |> List.fold (fun (acc, cursor, maxAlign) (name, slot, (size, align)) ->
+            let offset = alignUp cursor align
+            ({ Name = name; Slot = slot; Offset = Some offset; Size = Some size; Align = Some align } :: acc,
+             offset + size, max maxAlign align)) ([], 0, 1)
+    SettledLayout.Record (List.rev placed, Some (alignUp cursor maxAlign), Some maxAlign)
+
 /// The fields of a record or tuple tiled in declaration order: each at the next offset aligned
 /// to its slot's alignment, the aggregate aligned to its widest field, its size rounded up to
 /// that alignment. A field with no extent (fabric, an opaque slot) leaves every offset and the
@@ -222,13 +232,9 @@ let private tile (p: Placer) (fields: (string * SettledSlot) list) : SettledLayo
     if extents |> List.exists Option.isNone then
         SettledLayout.Record (fields |> List.map (fun (name, slot) -> { Name = name; Slot = slot; Offset = None; Size = None; Align = None }), None, None)
     else
-        let placed, cursor, maxAlign =
-            List.zip fields extents
-            |> List.fold (fun (acc, cursor, maxAlign) ((name, slot), extent) ->
-                let (size, align) = Option.get extent
-                let offset = alignUp cursor align
-                ({ Name = name; Slot = slot; Offset = Some offset; Size = Some size; Align = Some align } :: acc, offset + size, max maxAlign align)) ([], 0, 1)
-        SettledLayout.Record (List.rev placed, Some (alignUp cursor maxAlign), Some maxAlign)
+        List.zip fields extents
+        |> List.map (fun ((name, slot), extent) -> name, slot, Option.get extent)
+        |> tileExtents
 
 /// A union's layout: one byte of tag at offset zero, the payload slot of the widest case at
 /// offset one, alignment one (the leg's byte-buffer realisation, its payloads read through typed
@@ -411,6 +417,179 @@ let private captureSlot (p: Placer) (capture: CaptureInfo) : CaptureSlotKind * i
                 match aggregateOf p.Graph ty with
                 | Some _ -> CaptureSlotKind.Address, ptr
                 | None -> CaptureSlotKind.Handle, ptr
+
+//-------------------------------------------------------------------------
+// Continuations: explicit Baker field identities, without a code-pointer slot.
+//-------------------------------------------------------------------------
+
+[<RequireQualifiedAccess>]
+type ContinuationRole = State | Current | Capture | LiveAcross | Local
+
+type ContinuationField = {
+    Source: NodeId
+    Role: ContinuationRole
+    Holds: CaptureSlotKind
+    Field: SettledField
+}
+
+[<RequireQualifiedAccess>]
+type ContinuationPlacementError =
+    | MissingPlatform
+    | InvalidPlatform of reason: string
+    | MissingSource of NodeId
+    | DuplicateSource of NodeId
+    | InvalidCapture of name: string * reason: string
+    | UnsupportedField of source: NodeId * reason: string
+    | UnsettledField of source: NodeId * reason: string
+    | ExtentOverflow
+
+/// Shared storage selection for explicitly enumerated continuation fields.
+/// This supplies neither liveness, definite assignment nor placement lifetime.
+let private placeContinuationFields (graph: SemanticGraph)
+                                    (prefix: (ContinuationRole * NodeId) list)
+                                    (captures: CaptureInfo list)
+                                    (suffix: (ContinuationRole * NodeId) list)
+                                    : Result<SettledLayout * ContinuationField list, ContinuationPlacementError> =
+    let error id reason = Error (ContinuationPlacementError.UnsettledField(id, reason))
+    let source id =
+        match graph.Nodes.TryFind id with
+        | Some node when node.IsReachable -> Ok node
+        | _ -> Error (ContinuationPlacementError.MissingSource id)
+    let concrete (node: SemanticNode) =
+        let ty = applySubst node.Type
+        match ty with
+        | NativeType.TForall _ | NativeType.TError _ -> false
+        | _ -> Set.isEmpty (freeTypeVars ty)
+    match graph.Platform with
+    | None -> Error ContinuationPlacementError.MissingPlatform
+    | Some context when PlatformContext.substrateKind context = SubstrateKind.FPGA ->
+        Error (ContinuationPlacementError.InvalidPlatform "The declared substrate does not supply a byte-addressed continuation frame")
+    | Some context ->
+    match PlatformContext.tryWidth context (WidthDimension.name WidthDimension.Pointer) with
+    | Error reason -> Error (ContinuationPlacementError.InvalidPlatform reason)
+    | Ok bits when bits <= 0 || bits % 8 <> 0 ->
+        Error (ContinuationPlacementError.InvalidPlatform "Pointer width must declare a positive whole number of bytes")
+    | Ok bits ->
+    let placer = { Boundaries = Map.empty; Graph = graph; Context = Some context
+                   PointerBytes = Some (bits / 8); TupleRanges = Map.empty }
+    let extent id slot alignmentKind =
+        match extentOf placer slot, PlatformContext.resolveAlign context alignmentKind with
+        | Some (bytes, _), Ok align when bytes > 0 && align > 0 && (align &&& (align - 1)) = 0 ->
+            Ok (bytes, align)
+        | _, Error reason -> error id reason
+        | _ -> error id "No supported extent and power-of-two platform alignment for this field"
+    let scalar (node: SemanticNode) =
+        let ty = applySubst node.Type
+        let unsupported () = Error (ContinuationPlacementError.UnsupportedField(node.Id, formatType ty))
+        if not (concrete node) then unsupported ()
+        else
+            let settled slot alignmentKind =
+                extent node.Id slot alignmentKind |> Result.map (fun size -> slot, size)
+            match Types.tryGetNTUKind ty with
+            | Some (NTUKind.NTUint _ | NTUKind.NTUuint _) ->
+                match node.ValueRange, RangeAnalysis.selectedRepresentation graph node.Id with
+                | Some range, Some representation when ValueRange.isObservable range ->
+                    match RangeSources.declaredRange representation with
+                    | Some declared when ValueRange.contains declared range ->
+                        settled (SettledSlot.Integer(representation.Bits, Some representation.Name))
+                                (NTUKind.NTUint (NTUWidth.Fixed representation.Bits))
+                    | _ -> error node.Id "The selected integer representation does not cover the field range"
+                | _ -> error node.Id "An integer frame field requires a settled observable range and declared representation"
+            | Some ((NTUKind.NTUfloat _ | NTUKind.NTUposit _) as kind) ->
+                match slotOfKind placer ValueRange.Unbounded kind with
+                | SettledSlot.Real width as slot ->
+                    let family = match kind with NTUKind.NTUfloat _ -> "ieee" | _ -> "posit"
+                    if context.Representations |> Map.exists (fun _ rep -> rep.Family = family && rep.Bits = width && NumericRepresentation.isOffered rep) then
+                        settled slot (NTUKind.NTUfloat (NTUWidth.Fixed width))
+                    else error node.Id "The platform does not offer the field's declared real representation"
+                | _ -> error node.Id "The field's declared real width is not settled"
+            | Some ((NTUKind.NTUbool | NTUKind.NTUchar | NTUKind.NTUunit
+                    | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff) as kind) ->
+                settled (slotOfKind placer ValueRange.Unbounded kind) kind
+            | _ -> unsupported ()
+    let isValueView ty =
+        match ty with
+        | NativeType.TSeq _ | NativeType.TSeqEnumerator _ -> true
+        | _ ->
+            Types.tryGetNTUKind ty = Some NTUKind.NTUarray
+            || (RecordInstances.tryFields ty graph |> Option.isSome)
+    let view role id holds =
+        let slot = SettledSlot.Pointer ViewWords
+        extent id slot NTUKind.NTUptr
+        |> Result.map (fun size -> id, role, holds, slot, size)
+    let regular role id =
+        source id |> Result.bind (fun node ->
+            let ty = applySubst node.Type
+            if role <> ContinuationRole.State && concrete node && isValueView ty then
+                view role id (CaptureSlotKind.ValueView ty)
+            else
+                scalar node |> Result.bind (fun (slot, size) ->
+                    match role, slot with
+                    | ContinuationRole.State, SettledSlot.Integer _ -> Ok (id, role, CaptureSlotKind.Scalar slot, slot, size)
+                    | ContinuationRole.State, _ -> error id "A continuation state field requires an integer representation"
+                    | _ -> Ok (id, role, CaptureSlotKind.Scalar slot, slot, size)))
+    let capture (item: CaptureInfo) =
+        match item.SourceNodeId with
+        | None -> Error (ContinuationPlacementError.InvalidCapture(item.Name, "The capture has no source identity"))
+        | Some id ->
+            source id |> Result.bind (fun node ->
+                if not (concrete node) || applySubst item.Type <> applySubst node.Type then
+                    Error (ContinuationPlacementError.InvalidCapture(item.Name, "The capture requires its concrete source type"))
+                else
+                    let ty = applySubst node.Type
+                    if item.IsMutable || isValueView ty then
+                        // Preserve the complete typed view: a bare address loses
+                        // the cell/value's extent, offset and stride on reload.
+                        let holds = if item.IsMutable then CaptureSlotKind.CellView ty else CaptureSlotKind.ValueView ty
+                        view ContinuationRole.Capture id holds
+                    else regular ContinuationRole.Capture id)
+    let fields = List.map (fun (role, id) -> regular role id) prefix
+                 @ List.map capture captures
+                 @ List.map (fun (role, id) -> regular role id) suffix
+    let rec collectFields accumulated = function
+        | [] -> Ok (List.rev accumulated)
+        | Error reason :: _ -> Error reason
+        | Ok field :: rest -> collectFields (field :: accumulated) rest
+    collectFields [] fields |> Result.bind (fun fields ->
+        match fields |> List.countBy (fun (id, _, _, _, _) -> id) |> List.tryFind (fun (_, count) -> count > 1) with
+        | Some (id, _) -> Error (ContinuationPlacementError.DuplicateSource id)
+        | None ->
+            // Bound every intermediate cursor and alignment addition before the
+            // shared int-based tiler. No carrier width or padding is invented.
+            let upper = fields |> List.sumBy (fun (_, _, _, _, (bytes, align)) -> bigint bytes + bigint align - 1I)
+            let maxAlign = fields |> List.fold (fun largest (_, _, _, _, (_, align)) -> max largest align) 1
+            if upper + bigint maxAlign - 1I > bigint System.Int32.MaxValue then
+                Error ContinuationPlacementError.ExtentOverflow
+            else
+                let layout = fields |> List.map (fun (id, role, _, slot, size) -> sprintf "%A_%d" role (NodeId.value id), slot, size) |> tileExtents
+                match layout with
+                | SettledLayout.Record (placed, _, _) ->
+                    let descriptors = List.map2 (fun (id, role, holds, _, _) field ->
+                        { Source = id; Role = role; Holds = holds; Field = field }) fields placed
+                    Ok (layout, descriptors)
+                | _ -> failwith "Continuation tiling returned a non-record layout")
+
+/// Place Baker's persistent frame after platform and range settlement. No code
+/// pointer is a frame field. Captured cells and buffer values retain typed views;
+/// unsupported aggregate scalar fields remain explicit residuals.
+let placeContinuation (graph: SemanticGraph) (state: NodeId) (current: NodeId)
+                      (captures: CaptureInfo list) (liveAcross: NodeId list)
+                      : Result<SettledLayout * ContinuationField list, ContinuationPlacementError> =
+    placeContinuationFields graph
+        [ContinuationRole.State, state; ContinuationRole.Current, current] captures
+        (liveAcross |> List.map (fun id -> ContinuationRole.LiveAcross, id))
+
+/// A region without cuts never has an in-flight payload. Its logical element
+/// type remains on the sequence; no invented value or payload storage is needed.
+let placeEmptyContinuation (graph: SemanticGraph) (state: NodeId) (captures: CaptureInfo list) =
+    placeContinuationFields graph [ContinuationRole.State, state] captures []
+
+/// Place one activation's transient values, separately from the persistent frame.
+/// The caller must establish every store-before-read relation; no initial value
+/// or persistent lifetime is implied by this storage layout.
+let placeContinuationLocals (graph: SemanticGraph) (locals: NodeId list)
+                            : Result<SettledLayout * ContinuationField list, ContinuationPlacementError> =
+    placeContinuationFields graph [] [] (locals |> List.map (fun id -> ContinuationRole.Local, id))
 
 let private requiresClosurePair (node: SemanticNode) : bool =
     node.Metadata

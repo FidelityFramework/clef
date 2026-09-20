@@ -128,6 +128,9 @@ type private Program = {
     /// An application node -> what it calls and its whole argument list (curried calls flattened).
     Callees: Map<NodeId, Callee * NodeId list>
     Effects: Map<NodeId, WriteEffect>
+    /// Complete owner-local payload incidence for a certified current read.
+    /// Missing/unknown origin alternatives deliberately have no entry.
+    SequenceElements: Map<NodeId, NodeId * NodeId list>
     /// A Lambda parameter node -> (the call node, the argument node) at every reachable call that
     /// supplies it, directly or through a function value; the parameter reads the argument as the
     /// call does.
@@ -866,6 +869,53 @@ let private yieldsWithin (nodes: Map<NodeId, SemanticNode>) (rootId: NodeId) : N
             node.Children |> List.fold walk acc
     walk [] rootId |> List.rev
 
+/// Consume finite Baker evidence, retaining its exact successful-pull dependency.
+/// Completeness against owner delimiters prevents a missing payload edge from
+/// silently narrowing the join. Unknown alternatives have no finite entry.
+let private sequenceElements (graph: SemanticGraph) =
+    let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
+    let edges = graph.Edges |> List.filter (fun edge -> edge.Class = EdgeClass.Suspension)
+    let byTarget = edges |> List.groupBy _.Target
+    byTarget |> List.choose (fun (target, facts) ->
+        let sources role = facts |> List.filter (fun edge -> edge.Role = role) |> List.map _.Sources
+        let owners = sources EdgeRole.SequenceElementOwner
+        let payloads = sources EdgeRole.SequenceElementPayload
+        let admissions = sources EdgeRole.SequenceElementAdmission
+        let certified = sources EdgeRole.IteratorCurrentAdmitted
+        let completeAdmission =
+            match admissions with
+            | [[enumerator; _; _] as dependency] ->
+                List.contains dependency certified && (dependency |> List.forall nodes.ContainsKey)
+                && (match nodes.TryFind target with
+                    | Some { Kind = SemanticKind.Application (_, [iterator]) } ->
+                        match nodes.TryFind iterator with
+                        | Some { Kind = SemanticKind.VarRef (_, Some actual) } -> actual = enumerator
+                        | _ -> false
+                    | _ -> false)
+            | _ -> false
+        let ownerPairs = owners |> List.choose (function [iterator; owner] -> Some (iterator, owner) | _ -> None)
+        let supplied = payloads |> List.choose (function [owner; payload] -> Some (owner, payload) | _ -> None) |> Set.ofList
+        let expected = ownerPairs |> List.map (fun (_, owner) ->
+            match nodes.TryFind owner with
+            | Some { Kind = SemanticKind.SeqExpr (generator, _) } ->
+                let delimiters = edges |> List.filter (fun edge -> edge.Role = EdgeRole.Delimiter && edge.Sources = [owner; generator])
+                let values = delimiters |> List.choose (fun edge ->
+                    match nodes.TryFind edge.Target with
+                    | Some { Kind = SemanticKind.Yield value } when nodes.ContainsKey value -> Some (owner, value)
+                    | _ -> None)
+                if values.Length = delimiters.Length then Some values else None
+            | _ -> None)
+        let iterators = ownerPairs |> List.map fst |> List.distinct
+        if not completeAdmission || not (List.isEmpty (sources EdgeRole.SequenceElementUnknown))
+           || List.isEmpty owners || ownerPairs.Length <> owners.Length
+           || supplied.Count <> payloads.Length || (expected |> List.exists Option.isNone) then None
+        else
+            let expected = expected |> List.collect Option.get |> Set.ofList
+            match iterators with
+            | [iterator] when expected = supplied -> Some (target, (iterator, supplied |> Set.toList |> List.map snd |> List.distinct))
+            | _ -> None)
+    |> Map.ofList
+
 let private readProgram (context: PlatformContext option) (graph: SemanticGraph) : Program =
     let reachableNodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let ordered = reachableNodes |> Map.toList |> List.map snd
@@ -880,6 +930,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Parents = parents
         Callees = Map.empty
         Effects = Map.empty
+        SequenceElements = sequenceElements graph
         CallArguments = Map.empty
         IndexSeeds = Map.empty
         Escaping = Map.empty
@@ -1404,6 +1455,11 @@ let rec private tupleElement (program: Program) (state: State) (visited: Set<Nod
 /// intrinsic result the table does not hold, is unobservable here.
 let private applicationRange (program: Program) (state: State) (node: SemanticNode) (fallback: ValueRange) : ValueRange =
     match Map.tryFind node.Id program.Callees with
+    | Some (Callee.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "current" }, [iterator]) ->
+        match program.SequenceElements.TryFind node.Id with
+        | Some (actual, payloads) when actual = iterator ->
+            payloads |> List.fold (fun range payload -> ValueRange.join range (current state payload)) ValueRange.Empty
+        | _ -> fallback
     | Some (Callee.Intrinsic info, args) ->
         let arguments =
             args

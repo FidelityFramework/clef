@@ -457,7 +457,7 @@ module ClefExpr =
                 ClefExpr.ForLoop(var, startExpr, finishExpr, isUp, bodyExpr)
 
             // For-each loop
-            | SemanticKind.ForEach(var, collectionId, bodyId) ->
+            | SemanticKind.ForEach(var, _, collectionId, bodyId) ->
                 let collectionExpr = fromNode graph collectionId
                 let bodyExpr = fromNode graph bodyId
                 ClefExpr.ForEach(var, collectionExpr, bodyExpr)
@@ -699,6 +699,32 @@ module ClefExpr =
                     node.Type)
 
             // Error
+            // Internal continuation nodes retain their explicit identity in
+            // the graph; this expression-only diagnostic view names the
+            // operation and shows its value operands without following slots
+            // back into declaration initializers.
+            | SemanticKind.ContinuationDispatch (selector, cases, otherwise) ->
+                ClefExpr.Intrinsic(
+                    { Module = IntrinsicModule.Seq; Operation = "continuationDispatch"
+                      Category = IntrinsicCategory.Pure
+                      FullName = sprintf "Seq.continuationDispatch[%s]" (cases |> List.map (fst >> string) |> String.concat ",") },
+                    (selector :: (cases |> List.map snd) @ [otherwise]) |> List.map (fromNode graph), node.Type)
+            | SemanticKind.FrameRead (frame, slot) | SemanticKind.FrameBorrow (frame, slot) ->
+                ClefExpr.Intrinsic(
+                    { Module = IntrinsicModule.Seq; Operation = "frameRead"; Category = IntrinsicCategory.Memory
+                      FullName = sprintf "Seq.frameRead[%d]" (NodeId.value slot) }, [fromNode graph frame], node.Type)
+            | SemanticKind.FrameWrite (frame, slot, value) ->
+                ClefExpr.Intrinsic(
+                    { Module = IntrinsicModule.Seq; Operation = "frameWrite"; Category = IntrinsicCategory.Memory
+                      FullName = sprintf "Seq.frameWrite[%d]" (NodeId.value slot) }, [fromNode graph frame; fromNode graph value], node.Type)
+            | SemanticKind.ContinuationStorage owner ->
+                ClefExpr.Intrinsic(
+                    { Module = IntrinsicModule.Seq; Operation = "continuationStorage"; Category = IntrinsicCategory.Memory
+                      FullName = sprintf "Seq.continuationStorage[%d]" (NodeId.value owner) }, [], node.Type)
+            | SemanticKind.ContinuationAllocate owner ->
+                ClefExpr.Intrinsic(
+                    { Module = IntrinsicModule.Seq; Operation = "continuationAllocate"; Category = IntrinsicCategory.Memory
+                      FullName = sprintf "Seq.continuationAllocate[%d]" (NodeId.value owner) }, [], node.Type)
             | SemanticKind.Error message ->
                 ClefExpr.Error(message, node.Range)
 

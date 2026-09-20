@@ -1062,9 +1062,13 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // Source and recipe-produced suspension sites retain their exact delimiter
     // after the preceding identity rewrites. Ownership is not segmentation,
     // branch feasibility, state numbering or a settled frame representation.
+    let finalGraph = Clef.Compiler.Nanopass.SequenceConsumption.normalize finalGraph
     let finalGraph, sequenceOwnershipDiagnostics = Clef.Compiler.Nanopass.SequenceOwnership.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.SequenceDelegation.normalize finalGraph
     let finalGraph, delegatedOwnershipDiagnostics = Clef.Compiler.Nanopass.SequenceOwnership.normalize finalGraph
+    // An admitted current read depends jointly on the successful pull and all
+    // possible owner payloads. Range saturation consumes these source relations.
+    let finalGraph = Clef.Compiler.Nanopass.SequenceElements.normalize finalGraph
 
     //=========================================================================
     // Pass 5: Obligation Elaboration -- the declared platform, cross-compiled
@@ -1107,7 +1111,6 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph, staticLayoutDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout.settle finalGraph
     let settledObligations, realLiteralDiagnostics = ObligationElaboration.elaborateSettled finalGraph
     let finalGraph = ObligationElaboration.foldIn settledObligations finalGraph
-    ObligationDischarge.emit finalGraph  // Both structural and settled numeric obligations.
 
     //=========================================================================
     // Emission codata (CCS_Architecture.md, the coeffect table): the curried
@@ -1121,34 +1124,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // structural normalization. They do not yet establish suspension segments,
     // dominance or a frame that Alex could witness.
     let finalGraph = Clef.Compiler.Nanopass.SequenceEvaluation.normalize finalGraph
-    let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
-    let mmio, mmioDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess.settle (diagnostics @ residual @ rangeDiagnostics) finalGraph
-    let finalGraph =
-        let settled = finalGraph
-        { finalGraph with
-            Codata = lazy {
-                Escapes = Escape.analyze settled
-                Curry = curry
-                Meets = Meets.derive platformContext settled curry
-                ReturnMeets = Meets.returns platformContext settled
-                Closures = Placement.closures platformContext settled
-                Bindings = PlatformBindings.resolve platformContext settled
-                Pins = PlatformBindings.pins settled
-                DeclarationRootLambdas = Roots.declarationRootLambdas settled
-                FunctionPointers = functionPointers
-                Mmio = mmio } }
-
-    let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
-    let quotationErrors = quotationDiagnostics finalGraph
-
-    // Phase 5: Emit final result
-    emitPhaseIfEnabled PhaseTypes.PhaseId.Final finalGraph diagnostics
-
-    // Emit ClefExpr view (expression-centric representation)
-    PhaseEmitter.emitExpressionView finalGraph
-    PhaseEmitter.emitExpressionText finalGraph
-
-    // Tag diagnostics with reachability context.
+    // Source admission precedes native continuation construction. Tag the
+    // source graph before representation rewrites retire its evaluation spine.
     // Strategy: Build a (file, line) → IsReachable index from the graph.
     // If ANY node at a diagnostic's source line is reachable, the diagnostic is Reachable.
     // If ALL nodes at that line are unreachable, the diagnostic is Unreachable.
@@ -1173,6 +1150,46 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     let taggedDiagnostics = (diagnostics @ residual) |> List.map tagReachability
 
+    let sourceAdmitted =
+        taggedDiagnostics |> List.exists (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error) |> not
+    let finalGraph, sequences = Clef.Compiler.Nanopass.SequenceRuntime.normalizeWhenSourceAdmitted sourceAdmitted finalGraph curry
+    let curry = sequences.Curry
+    ObligationDischarge.emit finalGraph  // Includes settled continuation frame obligations.
+    let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
+    let mmio, mmioDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess.settle (diagnostics @ residual @ rangeDiagnostics) finalGraph
+    let finalGraph =
+        let settled = finalGraph
+        { finalGraph with
+            Codata = lazy {
+                Escapes = sequences.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) (Escape.analyze settled)
+                Curry = curry
+                Meets = Meets.continuations sequences.Frames sequences.Origins sequences.Storage settled
+                        |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) (Meets.derive platformContext settled curry)
+                ReturnMeets = Meets.returns platformContext settled
+                Closures = Placement.closures platformContext settled
+                ContinuationFrames = sequences.Frames
+                SequenceOrigins = sequences.Origins
+                ContinuationStorage = sequences.Storage
+                ContinuationRegions = sequences.Regions
+                SequenceInitializers = sequences.Initializers
+                SequenceDestinations = sequences.Destinations
+                SequenceCurrentReads = sequences.CurrentReads
+                Bindings = PlatformBindings.resolve platformContext settled
+                Pins = PlatformBindings.pins settled
+                DeclarationRootLambdas = Roots.declarationRootLambdas settled
+                FunctionPointers = functionPointers
+                Mmio = mmio } }
+
+    let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
+    let quotationErrors = quotationDiagnostics finalGraph
+
+    // Phase 5: Emit final result
+    emitPhaseIfEnabled PhaseTypes.PhaseId.Final finalGraph diagnostics
+
+    // Emit ClefExpr view (expression-centric representation)
+    PhaseEmitter.emitExpressionView finalGraph
+    PhaseEmitter.emitExpressionText finalGraph
+
     // Layer 1: Combinational depth analysis (FPGA-only structural heuristic)
     // Walks the final PSG bottom-up, counting weighted operation depth.
     // Reports paths exceeding threshold as Info diagnostics.
@@ -1180,7 +1197,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ sequences.Diagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 

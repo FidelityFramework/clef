@@ -281,7 +281,8 @@ let recordSourceBinding (isLocal: bool) (builder: NodeBuilder) (binding: SynBind
 /// escape analysis where allocations are lifted to the caller's frame.
 /// PRD-13: preCreatedBinding allows recursive bindings to provide a pre-created Binding node
 /// so that VarRefs can resolve to it before the body is checked.
-let checkBinding
+let private checkBindingInScope
+    (isModuleLevel: bool)
     (checkExpr: CheckExprFn)
     (env: TypeEnv)
     (builder: NodeBuilder)
@@ -512,13 +513,15 @@ let checkBinding
         let lambdaChildren = paramNodeIds @ [bodyNode.Id]
 
         // PRD-13: Compute captures for nested functions
-        // Top-level functions (env.EnclosingFunction = None) never capture.
+        // Only declarations are module-level. A named function inside a
+        // sequence/lazy/lexical expression can capture without an enclosing
+        // named function; the source binding boundary supplies that scope.
         // Nested functions may capture variables from enclosing scope.
         // Exclude: the function's own parameters AND the function's own name (for recursive self-reference)
         let paramNames = lambdaParams |> List.map (fun (pname, _, _) -> pname) |> Set.ofList
         let excludeNames = Set.add name paramNames
         let captures =
-            if env.EnclosingFunction.IsSome then
+            if not isModuleLevel then
                 computeCaptures builder env bodyNode.Id excludeNames
             else
                 []
@@ -642,10 +645,15 @@ let checkBinding
             | Some { Kind = SemanticKind.Quote _ } -> true
             | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> holdsQuotation inner
             | _ -> false
-        if env.EnclosingFunction.IsNone && declRoot.IsNone && not (holdsQuotation finalExprNode.Id) then
+        if isModuleLevel && declRoot.IsNone && not (holdsQuotation finalExprNode.Id) then
             builder.SetEmissionStrategy(node.Id, EmissionStrategy.MainPrologue)
 
         (node, None, isMutable, literalValue)
+
+/// Module declaration entry. Lexical expression bindings use the explicit
+/// local entry below, independently of whether a named function encloses them.
+let checkBinding checkExpr env builder binding preCreatedBinding =
+    checkBindingInScope true checkExpr env builder binding preCreatedBinding
 
 //-------------------------------------------------------------------------
 // Let/LetRec Handling
@@ -722,7 +730,7 @@ let checkLetOrUse
                                 match builder.Nodes.TryFind elemNodeId with
                                 | Some elemNode -> elemNode.Type
                                 | None -> freshTypeVar node.Range  // Fallback
-                            addBinding elemName elemType isMutable (Some elemNodeId) env.EnclosingFunction.IsNone env
+                            addBinding elemName elemType isMutable (Some elemNodeId) false env
                         else
                             env
                     ) env
@@ -732,11 +740,11 @@ let checkLetOrUse
             else
                 match inlineBodyOpt, literalValueOpt with
                 | Some inlineBody, _ ->
-                    addInlineBinding name node.Type (Some node.Id) inlineBody env
+                    addInlineBindingInScope false name node.Type (Some node.Id) inlineBody env
                 | None, Some litVal ->
-                    addLiteralBinding name node.Type (Some node.Id) litVal env
+                    addLiteralBindingInScope false name node.Type (Some node.Id) litVal env
                 | None, None ->
-                    addBinding name node.Type isMutable (Some node.Id) env.EnclosingFunction.IsNone env
+                    addBinding name node.Type isMutable (Some node.Id) false env
         ) baseEnv
 
     // Helper: build final Sequential node
@@ -778,14 +786,14 @@ let checkLetOrUse
         let envWithBindings =
             preCreatedBindings
             |> List.fold (fun env (_, name, ty, node) ->
-                addBinding name ty false (Some node.Id) env.EnclosingFunction.IsNone env
+                addBinding name ty false (Some node.Id) false env
             ) env
 
         // Check each binding body - VarRefs now resolve to pre-created NodeIds
         let bindingResults =
             preCreatedBindings
             |> List.map (fun (binding, _, _, preCreatedNode) ->
-                checkBinding checkExpr envWithBindings builder binding (Some preCreatedNode))
+                checkBindingInScope false checkExpr envWithBindings builder binding (Some preCreatedNode))
 
         let bindingResults = bindingResults |> List.map (fun (node, inlineBody, isMutable, literal) ->
             generalizeRecursiveBinding env builder node, inlineBody, isMutable, literal)
@@ -799,7 +807,7 @@ let checkLetOrUse
         // NON-RECURSIVE BINDINGS: Standard sequential processing
         let bindingResults =
             bindings |> List.map (fun binding ->
-                checkBinding checkExpr env builder binding None)
+                checkBindingInScope false checkExpr env builder binding None)
 
         let bindingNodes = bindingResults |> List.map (fun (node, _, _, _) -> node)
         let bodyEnv = extendEnvWithResults env bindings bindingResults
@@ -931,7 +939,7 @@ let checkMatchClause
                         range,
                         arena = env.CurrentArena)
                     (node, fieldIds)
-            let env' = addBinding name ty false (Some patternBindingNode.Id) env.EnclosingFunction.IsNone env
+            let env' = addBinding name ty false (Some patternBindingNode.Id) false env
             (env', patternBindingNode.Id :: bindingIds, newFieldIds)
         ) (env, [], [])
     let patternBindingIds = List.rev patternBindingIds  // Preserve order

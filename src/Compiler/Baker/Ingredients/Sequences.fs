@@ -71,3 +71,8 @@ let delegateAt (source: SemanticNode) input elementType : SaturationParser<NodeI
 let delegationOrigin source input yielded : Hyperedge =
     { Sources = [source; input]; Target = yielded
       Class = EdgeClass.Provenance; Role = EdgeRole.DelegationOrigin; Ordinal = 0 }
+
+/// Exact iterator-instance evidence, independent of local evaluation facts.
+let currentAdmitted enumerator guard loop current : Hyperedge =
+    { Sources = [enumerator; guard; loop]; Target = current
+      Class = EdgeClass.Suspension; Role = EdgeRole.IteratorCurrentAdmitted; Ordinal = 0 }

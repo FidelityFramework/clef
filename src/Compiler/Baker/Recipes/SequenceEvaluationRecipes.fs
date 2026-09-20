@@ -106,6 +106,10 @@ let private local (graph: SemanticGraph) owner generator (node: SemanticNode) =
     | SemanticKind.AddressOf _ | SemanticKind.Quote _ | SemanticKind.ObjectExpr _
     | SemanticKind.ModuleDef _ | SemanticKind.TypeDef _ | SemanticKind.MemberDef _
     | SemanticKind.Error _ | SemanticKind.Obligation _ -> pending EvaluationResidual.InvalidShape []
+    | SemanticKind.ContinuationDispatch _ | SemanticKind.FrameRead _ | SemanticKind.FrameWrite _ | SemanticKind.FrameBorrow _ ->
+        pending EvaluationResidual.InvalidShape []
+    | SemanticKind.ContinuationStorage _ -> pending EvaluationResidual.InvalidShape []
+    | SemanticKind.ContinuationAllocate _ -> eager []
 
 let forOwner (graph: SemanticGraph) (owner: SemanticNode) : Enrichment =
     match owner.Kind with

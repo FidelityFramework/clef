@@ -52,9 +52,16 @@ type RangeLoopCases() =
     [<Theory>]
     [<InlineData("", "first () .. 2 .. last ()")>]
     [<InlineData("let op_Range first last = first\n", "first () .. last ()")>]
-    member _.``Stepped and lexically bound ranges stay outside the simple counted normalization``(binding: string, range: string) =
+    member _.``Unelaborated stepped and lexically bound ranges cannot masquerade as iterable sequences``(binding: string, range: string) =
         let source = (RangeLoops.source range).Replace("[<EntryPoint>]", binding + "[<EntryPoint>]")
         let result = RangeLoops.parse source
+        Assert.True(CheckResult.hasErrors result)
+        let diagnostic = result.Diagnostics |> List.filter (fun diagnostic ->
+            diagnostic.Code = "CCS8401" && Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error) |> Assert.Single
+        let line = if binding = "" then 7 else 8
+        let column = "    for index in ".Length
+        Assert.Equal<SourceRange>(
+            { File = "range-loops.clef"; Start = { Line = line; Column = column }; End = { Line = line; Column = column + range.Length } },
+            diagnostic.Range)
         let nodes = result.Graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable) |> Seq.toList
-        Assert.DoesNotContain(nodes, fun node -> match node.Kind with SemanticKind.WhileLoop _ -> true | _ -> false)
-        Assert.Single(nodes |> List.filter (fun node -> match node.Kind with SemanticKind.ForEach _ -> true | _ -> false)) |> ignore
+        Assert.DoesNotContain(nodes, fun node -> match node.Kind with SemanticKind.WhileLoop _ | SemanticKind.ForEach _ -> true | _ -> false)
