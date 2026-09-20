@@ -453,7 +453,7 @@ let checkBinding
         
         // PRD-13: Set this function as the enclosing function for nested bindings
         // This enables qualified names like "factorialTail_loop" for nested functions
-        let bodyEnv = { bodyEnvWithParams with EnclosingFunction = Some name }
+        let bodyEnv = { bodyEnvWithParams with EnclosingFunction = Some name; EnclosingSeqExpr = None }
 
         // Check body with extended environment
         // For [<FidelityExtern>] bindings, the body is a placeholder (Unchecked.defaultof<T>)
@@ -682,6 +682,16 @@ let checkLetOrUse
     (range: SourceRange)
     : SemanticNode =
 
+    if letOrUse.IsBang || letOrUse.IsUse then
+        let message =
+            if letOrUse.IsBang then
+                let form = if letOrUse.IsUse then "use!" else "let!/and!"
+                $"The '{form}' form has no admitted native bind or suspension semantics"
+            else "Resource-use bindings require an admitted native resource lifecycle"
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct letOrUse.Range message env
+        builder.Create(SemanticKind.Error message, NativeType.TError message, range)
+    else
+
     let bindings = letOrUse.Bindings
     let bodyExpr = letOrUse.Body
 
@@ -689,8 +699,8 @@ let checkLetOrUse
     let extendEnvWithResults baseEnv bindingList (results: (SemanticNode * InlineBody option * bool * NativeLiteral option) list) =
         List.zip bindingList results
         |> List.fold (fun env (binding, (node: SemanticNode, inlineBodyOpt, isMutable, literalValueOpt)) ->
-            // `use` has an implicit disposal use; generated bindings and source
-            // parameters are outside this named-let diagnostic.
+            // Generated bindings and source parameters are outside this
+            // named-let diagnostic. Resource-use forms are rejected above.
             if letOrUse.IsFromSource && not letOrUse.IsUse then
                 recordSourceBinding true builder binding node (inlineBodyOpt.IsSome || literalValueOpt.IsSome)
             let name = getBindingName binding

@@ -698,7 +698,7 @@ let checkLambda
         ) ([], env)
 
     let lambdaParams = List.rev (fst paramNodesAndEnv)
-    let bodyEnv = snd paramNodesAndEnv
+    let bodyEnv = { snd paramNodesAndEnv with EnclosingSeqExpr = None }
     let paramNames = lambdaParams |> List.map (fun (name, _, _) -> name) |> Set.ofList
 
     // Check body

@@ -635,7 +635,7 @@ let checkLazy
     (innerExpr: SynExpr)
     (range: SourceRange)
     : SemanticNode =
-    let innerNode = checkExpr env builder innerExpr
+    let innerNode = checkExpr { env with EnclosingSeqExpr = None } builder innerExpr
     let lazyType = NativeTypes.Types.mkLazyType innerNode.Type
 
     // Capture analysis: find VarRefs in body that are NOT the unit parameter
@@ -733,6 +733,20 @@ let checkSeq
         range,
         children = [moveNextLambda.Id])
 
+/// A lexical source context grants yield admission; it does not establish a
+/// continuation frame or its proof. Ordinary deferred boundaries clear it.
+let private rejectYieldOwner (env: TypeEnv) (builder: NodeBuilder) (range: SourceRange) operation =
+    let message = $"The '{operation}' form requires an enclosing native seq expression"
+    addDiagnostic {
+        Severity = NativeDiagnosticSeverity.Error
+        Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+        Message = message
+        Range = range
+        RelatedNodes = []
+        Reachability = ReachabilityContext.Unknown
+    } env
+    builder.Create(SemanticKind.Error message, NativeType.TError message, range)
+
 /// Check yield: yield value
 /// PRD-15: Produces a single value in the sequence
 let checkYield
@@ -745,11 +759,7 @@ let checkYield
     // Validate that yield appears inside a seq expression
     match env.EnclosingSeqExpr with
     | None ->
-        // Return error node - yield outside seq context
-        builder.Create(
-            SemanticKind.Error "yield may only appear directly in a seq expression",
-            Types.unitType,
-            range)
+        rejectYieldOwner env builder range "yield"
     | Some _ ->
         let valueNode = checkExpr env builder valueExpr
         // yield is an effectful operation - it stores the value but returns unit
@@ -773,11 +783,7 @@ let checkYieldBang
     // Validate that yield! appears inside a seq expression
     match env.EnclosingSeqExpr with
     | None ->
-        // Return error node - yield! outside seq context
-        builder.Create(
-            SemanticKind.Error "yield! may only appear directly in a seq expression",
-            Types.unitType,
-            range)
+        rejectYieldOwner env builder range "yield!"
     | Some _ ->
         let seqNode = checkExpr env builder seqExpr
         // yield! is an effectful operation - it flattens a seq but returns unit

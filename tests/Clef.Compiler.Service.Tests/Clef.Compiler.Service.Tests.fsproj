@@ -26,6 +26,7 @@
     <Compile Include="OptionIterationCases.fs" />
     <Compile Include="RangeLoopCases.fs" />
     <Compile Include="LoopBindingCases.fs" />
+    <Compile Include="ComputationAdmissionCases.fs" />
     <Compile Include="CountedLoopCases.fs" />
     <Compile Include="OptionFoldCases.fs" />
     <Compile Include="ResultOperationCases.fs" />

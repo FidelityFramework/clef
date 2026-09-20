@@ -1203,6 +1203,9 @@ and private checkMatchClause' (checkExpr: CheckExprFn) (checkPattern: TypeEnv ->
 /// This is a pure dispatcher - all type logic lives in handler modules.
 and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : SemanticNode =
     let range = rangeToSourceRange syn.Range
+    let unsupported message =
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct syn.Range message env
+        builder.Create(SemanticKind.Error message, NativeType.TError message, range)
 
     match syn with
     //---------------------------------------------------------------------
@@ -1260,7 +1263,7 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // Sequence expression: seq { ... }
     //---------------------------------------------------------------------
     | SynExpr.App(_, _, SynExpr.Ident(ident), SynExpr.ComputationExpr(_, compExpr, _), _)
-        when ident.idText = "seq" ->
+        when ident.idText = "seq" && (tryLookupBinding ident.idText env).IsNone ->
         Collections.checkSeq checkExpr Applications.computeCaptures env builder compExpr range
 
     //---------------------------------------------------------------------
@@ -1522,59 +1525,43 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
         if hasSeqBuilder then
             Collections.checkSeq checkExpr Applications.computeCaptures env builder compExpr range
         else
-            let compNode = checkExpr env builder compExpr
-            builder.Create(
-                SemanticKind.Sequential [compNode.Id],
-                compNode.Type,
-                range,
-                children = [compNode.Id])
+            unsupported "This computation expression has no admitted native builder semantics"
 
     //---------------------------------------------------------------------
     // YieldOrReturn: yield expr or return expr
     //---------------------------------------------------------------------
     | SynExpr.YieldOrReturn((isYield, _isReturn), expr, _, _trivia) ->
-        if isYield && env.EnclosingSeqExpr.IsSome then
+        if isYield then
             Collections.checkYield checkExpr env builder expr range
         else
-            checkExpr env builder expr
+            unsupported "The 'return' form has no admitted native computation owner"
 
     //---------------------------------------------------------------------
     // YieldOrReturnFrom: yield! expr or return! expr
     //---------------------------------------------------------------------
     | SynExpr.YieldOrReturnFrom((isYield, _isReturn), expr, _, _trivia) ->
-        if isYield && env.EnclosingSeqExpr.IsSome then
+        if isYield then
             Collections.checkYieldBang checkExpr env builder expr range
         else
-            checkExpr env builder expr
+            unsupported "The 'return!' form has no admitted native computation owner"
 
     //---------------------------------------------------------------------
     // DoBang: do! expr
     //---------------------------------------------------------------------
-    | SynExpr.DoBang(expr, _, _trivia) ->
-        let exprNode = checkExpr env builder expr
-        builder.Create(
-            SemanticKind.Sequential [exprNode.Id],
-            Types.unitType,
-            range,
-            children = [exprNode.Id])
+    | SynExpr.DoBang _ ->
+        unsupported "The 'do!' form has no admitted native bind or suspension semantics"
 
     //---------------------------------------------------------------------
     // MatchBang: match! expr with ...
     //---------------------------------------------------------------------
-    | SynExpr.MatchBang(_, expr, clauses, _, _) ->
-        ControlFlow.checkMatchBang checkExpr checkPattern env builder expr clauses range
+    | SynExpr.MatchBang _ ->
+        unsupported "The 'match!' form has no admitted native bind or suspension semantics"
 
     //---------------------------------------------------------------------
     // WhileBang: while! expr do body
     //---------------------------------------------------------------------
-    | SynExpr.WhileBang(_, guardExpr, bodyExpr, _) ->
-        let guardNode = checkExpr env builder guardExpr
-        let bodyNode = checkExpr env builder bodyExpr
-        builder.Create(
-            SemanticKind.WhileLoop(guardNode.Id, bodyNode.Id),
-            Types.unitType,
-            range,
-            children = [guardNode.Id; bodyNode.Id])
+    | SynExpr.WhileBang _ ->
+        unsupported "The 'while!' form has no admitted native bind or suspension semantics"
 
     //---------------------------------------------------------------------
     // ImplicitZero: implicit unit in computation expressions
