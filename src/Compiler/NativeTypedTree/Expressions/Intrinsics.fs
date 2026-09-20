@@ -833,6 +833,17 @@ let private resolveOptionOp (op: string) (range: SourceRange) : IntrinsicResolut
             NativeType.TFun(callback, NativeType.TFun(optionType, result)))
         Resolved (mkIntrinsic IntrinsicModule.Option op IntrinsicCategory.Pure ("Option." + op), scheme)
     match op with
+    | "fold" | "foldBack" ->
+        let stateParameter = freshTypeParam "'State" TypeParamKind.Type range
+        let stateType = NativeType.TVar stateParameter
+        let folder, arguments =
+            if op = "fold" then
+                NativeType.TFun(stateType, NativeType.TFun(valueType, stateType)), [stateType; optionType]
+            else
+                NativeType.TFun(valueType, NativeType.TFun(stateType, stateType)), [optionType; stateType]
+        let body = List.foldBack (fun argument result -> NativeType.TFun(argument, result)) (folder :: arguments) stateType
+        Resolved (mkIntrinsic IntrinsicModule.Option op IntrinsicCategory.Pure ("Option." + op),
+                  NativeType.TForall([stateParameter; parameter], body))
     | "map" | "bind" ->
         let outputParameter = freshTypeParam "'b" TypeParamKind.Type range
         let outputType = NativeType.TVar outputParameter

@@ -102,8 +102,8 @@ let checkFor
     addConstraint (Constraint.Equals(endNode.Type, Types.intType, range)) env
 
     // A counted loop is a while loop over a mutable cell:
-    //   let __for_end = <end>            (the bound is evaluated once)
     //   let mutable i = <start>
+    //   let __for_end = <end>            (both bounds evaluated once, start first)
     //   while i <= __for_end do           (>= for downto)
     //       <body>
     //       i <- i + 1                    (- 1 for downto)
@@ -183,10 +183,10 @@ let checkFor
         children = [guardNode.Id; loopBody.Id])
     for cid in whileNode.Children do builder.SetParent(cid, whileNode.Id)
     let result = builder.Create(
-        SemanticKind.Sequential [endBinding.Id; varBinding.Id; whileNode.Id],
+        SemanticKind.Sequential [varBinding.Id; endBinding.Id; whileNode.Id],
         Types.unitType,
         range,
-        children = [endBinding.Id; varBinding.Id; whileNode.Id])
+        children = [varBinding.Id; endBinding.Id; whileNode.Id])
     for cid in result.Children do builder.SetParent(cid, result.Id)
     result
 

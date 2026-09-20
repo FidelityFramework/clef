@@ -221,6 +221,88 @@ let private optionAlternativeRecipe lazyFallback fallback optionNodeId valueType
         return! ifThenElse present optionNodeId absent resultType
     }
 
+/// A single optional fold: the None branch is the original state value.
+let private optionFoldRecipe operation folder state optionNodeId inputType stateType =
+    saturation {
+        let! present = optionHasValue optionNodeId inputType
+        let! value = optionValue optionNodeId inputType
+        let arguments = if operation = "fold" then [state; value] else [value; state]
+        let! folded = app folder arguments stateType
+        return! ifThenElse present folded state stateType
+    }
+
+/// Read exactly the two folder arguments. A function-valued state remains a
+/// state; neither its own domains nor an optional state changes the operation arity.
+let private foldShape operation callbackType =
+    match operation, callbackType with
+    | "fold", NativeType.TFun (stateType, NativeType.TFun (inputType, _)) ->
+        Some (inputType, stateType, [("__folder", callbackType); ("__state", stateType); ("__option", optionType inputType)])
+    | "foldBack", NativeType.TFun (inputType, NativeType.TFun (stateType, _)) ->
+        Some (inputType, stateType, [("__folder", callbackType); ("__option", optionType inputType); ("__state", stateType)])
+    | _ -> None
+
+let private foldBody operation arguments inputType stateType =
+    match operation, arguments with
+    | "fold", [folder; state; optionId]
+    | "foldBack", [folder; optionId; state] -> optionFoldRecipe operation folder state optionId inputType stateType
+    | _ -> failwith "An Option fold requires its three declared arguments"
+
+/// A completed residual has the same eager operands as a direct invocation.
+/// Establish its local capture and parameter references before either branch:
+/// the state is shared by the folder call and the unchanged None result.
+let private foldResidualBody operation arguments inputType stateType =
+    saturation {
+        let! result = foldBody operation arguments inputType stateType
+        return! evaluateBefore arguments result stateType
+    }
+
+/// Each formation frontier snapshots precisely the values supplied so far.
+/// One logical parameter per residual closure preserves the next frontier even
+/// when a supplied state or the ultimate result is itself a function.
+let rec private foldPartialRecipe (ctx: Context) operation supplied parameters inputType stateType enclosing =
+    saturation {
+        let! snapshots =
+            supplied |> List.mapi (fun index (id, ty) ->
+                saturation {
+                    let name = sprintf "__option_fold_%d_%d_%d" supplied.Length index ctx.ExpansionId
+                    let! snapshot = letBind name id ty
+                    return snapshot, { Name = name; Type = ty; IsMutable = false; SourceNodeId = Some snapshot }
+                }) |> sequence
+        match parameters with
+        | (name, parameterType) :: remaining ->
+            let resultType = List.foldBack (fun (_, ty) result -> NativeType.TFun(ty, result)) remaining stateType
+            let body arguments captures =
+                let values = List.zip captures (List.map snd supplied) @ List.zip arguments [parameterType]
+                if List.isEmpty remaining then foldResidualBody operation (List.map fst values) inputType stateType
+                else foldPartialRecipe ctx operation values remaining inputType stateType enclosing
+            let! value = closure [(name, parameterType)] (List.map snd snapshots) enclosing body resultType
+            if List.isEmpty snapshots then return value
+            else return! evaluateBefore (List.map fst snapshots) value (NativeType.TFun(parameterType, resultType))
+        | [] -> return! foldResidualBody operation (List.map fst supplied) inputType stateType
+    }
+
+/// Fold applications have a declared three-argument boundary. Any further
+/// arguments apply to the selected function-valued state, after every supplied
+/// source operand has been evaluated in written order.
+let tryDecomposeFold ctx operation supplied returnType enclosing : Result option =
+    match supplied with
+    | (_, callbackType) :: _ ->
+        foldShape operation callbackType |> Option.map (fun (inputType, stateType, parameters) ->
+            let recipe =
+                if supplied.Length < 3 then
+                    foldPartialRecipe ctx operation supplied (List.skip supplied.Length parameters) inputType stateType enclosing
+                else saturation {
+                    let arguments = List.map fst supplied
+                    let! folded = foldBody operation (List.take 3 arguments) inputType stateType
+                    let! result =
+                        match List.skip 3 arguments with
+                        | [] -> saturation { return folded }
+                        | remaining -> app folded remaining returnType
+                    return! evaluateBefore arguments result returnType
+                }
+            runSaturation ctx recipe)
+    | [] -> None
+
 //=============================================================================
 // PUBLIC API: tryDecompose
 //=============================================================================
@@ -329,6 +411,9 @@ let tryDecomposePartial (ctx: Context) operation supplied suppliedType residualT
 /// not the entire TFun spine, determines the operation's parameter boundary.
 let tryReifyValue (ctx: Context) operation functionType enclosing : Result option =
     match functionType with
+    | NativeType.TFun (callbackType, _) when operation = "fold" || operation = "foldBack" ->
+        foldShape operation callbackType |> Option.map (fun (inputType, stateType, parameters) ->
+            runSaturation ctx (foldPartialRecipe ctx operation [] parameters inputType stateType enclosing))
     | NativeType.TFun (suppliedType, (NativeType.TFun (domain, resultType) as residual)) when hasLeadingArgument operation ->
         innerType domain |> Option.map (fun inputType ->
             let body parameters _ =

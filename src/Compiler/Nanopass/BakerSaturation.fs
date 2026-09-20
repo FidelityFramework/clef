@@ -133,6 +133,7 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Option, "exists" -> true
     | IntrinsicModule.Option, "forall" -> true
     | IntrinsicModule.Option, "iter" -> true
+    | IntrinsicModule.Option, ("fold" | "foldBack") -> true
     | IntrinsicModule.Option, "defaultValue" -> true
     | IntrinsicModule.Option, "defaultWith" -> true
     | IntrinsicModule.Option, "orElse" -> true
@@ -246,6 +247,13 @@ let private applyIntrinsicRecipe
         | Some elemType ->
             SetRecipes.tryDecompose ctx info.Operation args elemType
         | None -> None
+
+    | IntrinsicModule.Option when info.Operation = "fold" || info.Operation = "foldBack" ->
+        let supplied = args |> List.choose (fun id ->
+            SemanticGraph.tryGetNode id graph |> Option.map (fun node -> id, node.Type))
+        if supplied.Length <> args.Length then None
+        else OptionRecipes.tryDecomposeFold ctx info.Operation supplied returnType
+                (enclosingFunctionName graph ctx.InspiringNode)
 
     | IntrinsicModule.Option ->
         // The operation boundary is declared, not inferred from an argument's
