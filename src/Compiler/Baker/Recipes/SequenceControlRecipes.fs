@@ -169,7 +169,8 @@ let private definiteAssignment (graph: SemanticGraph) (owner: SemanticNode) entr
             match graph.Nodes.TryFind id with
             | Some { Kind = SemanticKind.Binding _; IsReachable = true } -> true
             | _ -> false)
-    let initial = Seq.append captures declared |> Seq.filter (isUnit graph >> not) |> Set.ofSeq
+    let implementations = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.implementationBindings graph
+    let initial = seq { yield! captures; yield! declared; yield! implementations } |> Seq.filter (isUnit graph >> not) |> Set.ofSeq
     let universe = steps.Values |> Seq.fold (fun all step -> Set.union all step.Defines) initial
     let assigned = mustFacts steps entry initial universe (fun step -> step.Defines) (backedgeScope steps scopes)
     let missing = steps.Values |> Seq.tryPick (fun step ->

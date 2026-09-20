@@ -313,7 +313,22 @@ let main _ =
                     | _ -> false)
         for node in graph.Nodes.Values do
             match node.Kind with
-            | SemanticKind.ModuleDef (_, members) | SemanticKind.Sequential members ->
+            | SemanticKind.ModuleDef (_, members) ->
+                Assert.Empty node.Children
+                let membership =
+                    kindEdges node.Id node.Kind
+                    |> List.filter (fun edge -> edge.Role = EdgeRole.Member)
+                    |> List.sortBy _.Ordinal
+                Assert.Equal<int list>([0 .. members.Length - 1], membership |> List.map _.Ordinal)
+                let referenced = membership |> List.map (fun edge ->
+                    Assert.Equal(EdgeClass.Reference, edge.Class)
+                    Assert.Equal(node.Id, edge.Target)
+                    Assert.Single edge.Sources)
+                Assert.Equal<NodeId list>(members, referenced)
+                for memberId in members do
+                    Assert.True(graph.Nodes.ContainsKey memberId)
+                    Assert.Equal(Some node.Id, graph.Nodes[memberId].Parent)
+            | SemanticKind.Sequential members ->
                 Assert.Equal<NodeId list>(members, node.Children)
                 for memberId in members do Assert.True(graph.Nodes.ContainsKey memberId)
             | _ -> ()

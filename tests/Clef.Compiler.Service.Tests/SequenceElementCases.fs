@@ -11,9 +11,8 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 // These are source/type/graph gates, not sequence frame or execution evidence.
 module private SequenceElements =
     let prelude = "module Dimensions\n[<Measure>] type m\n[<Measure>] type s\n"
-    let finish = "\n[<EntryPoint>]\nlet main _ = ignore observed; 0\n"
-
-    let check source =
+    let checkWithMain mainBody source =
+        let finish = "\n[<EntryPoint>]\nlet main _ = " + mainBody + "\n"
         match parseAndCheck (prelude + source + finish) "sequence-elements.clef" with
         | Success result ->
             DimensionalCases.noErrors result
@@ -22,6 +21,8 @@ module private SequenceElements =
             result
         | CheckFailure result -> failwithf "Expected admitted sequence elements: %A" result.Diagnostics
         | ParseFailure errors -> failwithf "Expected parsed sequence source: %A" errors
+
+    let check source = checkWithMain "ignore observed; 0" source
 
     let reject code (marked: string) =
         let first, last = marked.IndexOf('«'), marked.IndexOf('»')
@@ -145,11 +146,9 @@ type SequenceElementCases() =
 
     [<Fact>]
     member _.``Typed empty owners admit independent element types without a first yield``() =
-        let result = SequenceElements.check """
+        let result = SequenceElements.checkWithMain "ignore distance; ignore flags; 0" """
 let distance: seq<int<m>> = seq { () }
 let flags: seq<bool> = seq { () }
-let observed = distance
-let keepFlags = flags
 """
         DimensionalCases.same (Types.mkSeqType (SequenceElements.expectedElement "distance")) (DimensionalCases.bindingType "distance" result)
         DimensionalCases.same (Types.mkSeqType Types.boolType) (DimensionalCases.bindingType "flags" result)

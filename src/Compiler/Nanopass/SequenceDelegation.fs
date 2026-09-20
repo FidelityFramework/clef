@@ -44,7 +44,7 @@ let normalize (graph: SemanticGraph) =
             RecipeCreated {
                 OriginalNodeId = node.Id; NewNodes = plan.Structure.NewNodes
                 ReplacementRootId = plan.Structure.ResultNodeId
-                ElaborationKind = "Baker"; ElaborationSource = "Seq.delegate" }
+                ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "Seq.delegate" }
         let recipes = FanOut.fanOut "SequenceDelegation" (fun node -> plans.ContainsKey node.Id) create graph
         let folded = FoldIn.foldIn recipes graph
         let provenance = plans.Values |> Seq.collect _.Edges |> Seq.toList

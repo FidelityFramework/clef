@@ -12,6 +12,7 @@ open Clef.Compiler.Baker.Ingredients.Obligations
 open Clef.Compiler.Baker.Ingredients.Closures
 module Control = Clef.Compiler.Baker.Recipes.SequenceControlRecipes
 module Machine = Clef.Compiler.Baker.Recipes.SequenceMachineRecipes
+module ProgramStorage = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization
 
 let private edge role sources target : Hyperedge =
     { Class = EdgeClass.Suspension; Role = role; Sources = sources; Target = target; Ordinal = 0 }
@@ -68,10 +69,20 @@ let forMachine (graph: SemanticGraph) (control: Control.Control)
         |> Seq.filter (fun id ->
             match graph.Nodes.TryFind id with Some { Kind = SemanticKind.Binding(_, false, _, _) } -> true | _ -> false)
         |> Set.ofSeq
+    // ProgramValue establishes the cell's program residence, not the lifetime
+    // of storage addressed by a descriptor held in that cell.
+    let programResidents =
+        control.LiveAcross.Values |> Seq.fold Set.union Set.empty |> Set.toList
+        |> List.choose (fun id ->
+            match graph.Nodes.TryFind id |> Option.bind (fun node -> Types.tryGetNTUKind node.Type) with
+            | Some (NTUKind.NTUint _ | NTUKind.NTUuint _ | NTUKind.NTUfloat _ | NTUKind.NTUposit _ | NTUKind.NTUbool | NTUKind.NTUchar) ->
+                ProgramStorage.tryValueAuthority graph id |> Option.map (fun authority -> id, authority.Evidence)
+            | _ -> None)
+        |> Map.ofList
     let liveResident id =
         exists id && (
             (frame.Slots |> List.exists (fun slot -> slot.Source = id && slot.ValueType = nodes[id].Type))
-            || globals.Contains id || Machine.isSymbolic graph Set.empty id)
+            || globals.Contains id || programResidents.ContainsKey id || Machine.isSymbolic graph Set.empty id)
     let malformedStep = control.Steps.Values |> Seq.tryFind (fun step ->
         step.Successors |> List.exists (fun arc -> not (control.Steps.ContainsKey arc.Target)))
     let labelsConsistent = control.Steps |> Map.forall (fun label step -> label = step.Label)
@@ -193,7 +204,9 @@ let forMachine (graph: SemanticGraph) (control: Control.Control)
                         [owner.Id; control.Generator; machine.ResumeBodies[state]; step.Origin]
                         machine.CaseBodies[machine.ResumeTargets[state]]
                 :: (control.LiveAcross[step.Label] |> Set.toList |> List.map (fun value ->
-                    edge EdgeRole.SuspensionLiveAcross [owner.Id; control.Generator; step.Origin] value)))
+                    let authority = programResidents.TryFind value |> Option.map _.Sources |> Option.defaultValue []
+                    edge EdgeRole.SuspensionLiveAcross
+                        (List.distinct ([owner.Id; control.Generator; step.Origin] @ authority)) value)))
             let numeric value participants site =
                 let node = obligationNode owner (NodeId.value owner.Id) {
                     Id = sprintf "seq_%d_state_%d" (NodeId.value owner.Id) (NodeId.value site)

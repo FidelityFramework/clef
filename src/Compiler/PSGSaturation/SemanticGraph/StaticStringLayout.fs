@@ -30,8 +30,8 @@ let settle (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
             { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8206"
               Message = "Cannot settle BAREWire static string storage: " + message
               Range = site.Range; RelatedNodes = [site.Id]; Reachability = ReachabilityContext.Reachable }
-        match Declaration.spaceNamed "rodata" platform with
-        | None -> graph, [error first "the platform has no rodata memory-space declaration."]
+        match Declaration.immutableProgramSpace platform with
+        | None -> graph, [error first "the platform has no immutable program-lifetime space designation."]
         | Some declared ->
             let site = SemanticGraph.tryGetNode declared.Node graph |> Option.defaultValue first
             let space: BAREWire.Platform.MemorySpace =

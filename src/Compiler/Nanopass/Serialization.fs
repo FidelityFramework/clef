@@ -14,7 +14,7 @@ open Clef.Compiler.Nanopass.Recipe
 open FSharp.Json
 
 //=============================================================================
-// JSON SERIALIZATION HELPERS
+// JSON SERIALIZATION
 //=============================================================================
 
 let private escapeJson (s: string | null) : string =
@@ -52,12 +52,18 @@ let serializeRecipe (recipe: Recipe) : string =
 
     let (NodeId origId) = recipe.OriginalNodeId
     let (NodeId replId) = recipe.ReplacementRootId
+    let newEdges = recipe.NewEdges |> List.map (fun edge ->
+        sprintf """{"sources":[%s],"target":%d,"class":"%s","role":"%s","ordinal":%d}"""
+            (edge.Sources |> List.map (NodeId.value >> string) |> String.concat ",")
+            (NodeId.value edge.Target) (escapeJson (sprintf "%A" edge.Class))
+            (escapeJson (sprintf "%A" edge.Role)) edge.Ordinal) |> String.concat ","
 
     sprintf """{
     "originalNodeId": %d,
     "replacementRootId": %d,
     "newNodeIds": [%s],
     "newNodeCount": %d,
+    "newEdges": [%s],
     "elaborationKind": "%s",
     "elaborationSource": "%s"
   }"""
@@ -65,6 +71,7 @@ let serializeRecipe (recipe: Recipe) : string =
         replId
         newNodeIds
         (List.length recipe.NewNodes)
+        newEdges
         (escapeJson recipe.ElaborationKind)
         (escapeJson recipe.ElaborationSource)
 

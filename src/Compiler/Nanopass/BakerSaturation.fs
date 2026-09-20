@@ -48,7 +48,7 @@ let private isNativeCallbackArgument (graph: SemanticGraph) (node: SemanticNode)
     node.Parent |> Option.exists (parentUse node.Id)
 
 //-------------------------------------------------------------------------
-// Type Extraction Helpers (from HOFDecomposition)
+// Checked Higher-Order Operand Types
 //-------------------------------------------------------------------------
 
 let private extractListElementType (ty: NativeType) : NativeType option =
@@ -146,10 +146,12 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Seq, "filter" -> true
     | IntrinsicModule.Seq, "collect" -> true
     | IntrinsicModule.Seq, "append" -> true
+    | IntrinsicModule.Seq, "take" -> true
     // Seq HOFs - Consumers
     | IntrinsicModule.Seq, "toList" -> true
     | IntrinsicModule.Seq, "toArray" -> true
     | IntrinsicModule.Seq, "fold" -> true
+    | IntrinsicModule.Seq, "iter" -> true
     | IntrinsicModule.Seq, "tryPick" -> true
     | IntrinsicModule.Seq, "max" -> true
     | IntrinsicModule.Seq, "min" -> true
@@ -301,9 +303,15 @@ let private applyIntrinsicRecipe
 
         match seqArgType with
         | Some elemType ->
-            let outputElemType = extractSeqElementType returnType
-            // SeqRecipes takes stateType as 6th parameter (for fold), not graph
-            let stateType = None  // Seq doesn't use stateType currently
+            let outputElemType =
+                if info.Operation = "tryPick" then extractOptionInnerType returnType
+                else extractSeqElementType returnType
+            let stateType =
+                if info.Operation = "fold" then
+                    args |> List.tryItem 1
+                    |> Option.bind (fun id -> SemanticGraph.tryGetNode id graph)
+                    |> Option.map _.Type
+                else None
             SeqRecipes.tryDecompose ctx info.Operation args elemType outputElemType stateType
                 (enclosingFunctionName graph ctx.InspiringNode)
         | None -> None
@@ -330,7 +338,7 @@ let private toRecipe (originalNodeId: NodeId) (source: string) (result: Result) 
         NewNodes = result.NewNodes @ result.AuxFunctions
         ReplacementRootId = result.ResultNodeId
         ElaborationKind = ElaborationKind.Baker
-        ElaborationSource = source
+        NewEdges = []; ElaborationSource = source
     }
 
 /// Create a saturation recipe for a node.
@@ -414,7 +422,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
             if isTupleMatch then
                 MatchRecipes.decomposeMatch ctx scrutineeId cases node.Type
             else
-                MatchRecipes.enrichMatch ctx scrutineeId cases node.Type
+                MatchRecipes.enrichMatch graph ctx scrutineeId cases node.Type
         RecipeCreated (toRecipe node.Id "Match" result)
 
     | SemanticKind.UnionCase (caseName, caseIndex, payload) ->
@@ -636,4 +644,4 @@ let fanOut (graph: SemanticGraph) : RecipeSet =
 /// Builds fresh PSG with saturation structures applied.
 /// Uses generic FoldIn - the recipes from Pass 3 drive the transformation.
 let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
-    FoldIn.foldIn recipeSet graph
+    FoldIn.foldIn recipeSet graph |> BranchOccurrences.normalize

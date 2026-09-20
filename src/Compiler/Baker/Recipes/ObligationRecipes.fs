@@ -126,9 +126,9 @@ let dimensional (enrichId: int) (name: string, (site: SemanticNode, left: Semant
       Annotated = [] }
 
 /// storage-reservation, view-containment, terminator-sentinel: one triple per
-/// literal, S_f = {literal}. Where `rodata` is declared the literal also
-/// carries a residence edge from the declaration.
-let literal (rodata: DeclaredSpace option) (enrichId: int) (name: string, (content: string, subject: SemanticNode)) : Enrichment =
+/// literal, S_f = {literal}. Named immutable program storage contributes its
+/// selected descriptor, designation and space declaration to residence.
+let literal (immutableSpace: DeclaredSpace option) (authority: NodeId list) (enrichId: int) (name: string, (content: string, subject: SemanticNode)) : Enrichment =
     let len = byteLength content
     let storage = len + 1
     let born = fmtRange subject.Range
@@ -147,7 +147,8 @@ let literal (rodata: DeclaredSpace option) (enrichId: int) (name: string, (conte
              Source = born; Refs = [ "CWE-170" ]; Body = ObligationBody.NulSentinel 0 }
     { NewNodes = [ storageN; viewN; sentinelN ]
       NewEdges =
-        (rodata |> Option.map (fun r -> resides r.Node subject.Id) |> Option.toList)
+        (immutableSpace |> Option.map (fun space ->
+            { resides space.Node subject.Id with Sources = space.Node :: authority |> List.distinct }) |> Option.toList)
         @ [ constrains [ subject.Id ] storageN
             constrains [ subject.Id ] viewN
             constrains [ subject.Id ] sentinelN ]
@@ -155,7 +156,7 @@ let literal (rodata: DeclaredSpace option) (enrichId: int) (name: string, (conte
 
 /// Check the actual BAREWire pool that emission consumes. No placement premise
 /// is invented: the concrete offsets, extents and declared bounds are evidence.
-let staticStorageLayout (enrichId: int) (entry: SemanticNode option) (subject: SemanticNode) (pool: StaticStringPool) : Enrichment =
+let staticStorageLayout (enrichId: int) (entry: SemanticNode option) (subject: SemanticNode) (pool: StaticStringPool) (authority: NodeId list) : Enrichment =
     let subject = entry |> Option.defaultValue subject
     let slots = pool.Entries |> List.map (fun item -> item.Offset, item.StorageLength, 1)
     let node =
@@ -165,7 +166,7 @@ let staticStorageLayout (enrichId: int) (entry: SemanticNode option) (subject: S
                                   slots.Length pool.UsedSize pool.Size pool.Alignment pool.Granularity pool.SpaceName pool.Capacity
               Source = fmtRange subject.Range; Refs = ["CWE-787"; "CWE-125"; "CWE-131"]
               Body = ObligationBody.StaticStorageLayout(slots, pool.UsedSize, pool.Size, pool.Alignment, pool.Capacity, pool.SpaceAlignment, pool.Granularity) }
-    let sources = (entry |> Option.map (fun n -> n.Id) |> Option.toList) @ [pool.DeclarationNode] @ (pool.Entries |> List.collect (fun item -> item.NodeIds))
+    let sources = (entry |> Option.map (fun n -> n.Id) |> Option.toList) @ [pool.DeclarationNode] @ authority @ (pool.Entries |> List.collect (fun item -> item.NodeIds))
     { NewNodes = [node]; NewEdges = [constrains (List.distinct sources) node]; Annotated = [] }
 
 /// concat-copy-bound for one String.concat2 site, S_f = {site; left; right}.

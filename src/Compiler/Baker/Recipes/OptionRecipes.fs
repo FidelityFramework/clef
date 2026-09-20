@@ -6,9 +6,8 @@
 /// Option operations are simpler than List/Map/Set since Option is a discriminated union
 /// with just two cases (None, Some). Most operations decompose to conditionals.
 ///
-/// COMBINATOR MODEL:
-/// Each recipe is 5-10 lines composing patterns from Ingredients/.
-/// The verbose 100+ line manual node construction is eliminated.
+/// Recipes compose the shared typed Option structure and explicit eager
+/// operand snapshots; generated operations are complete in this firing.
 ///
 /// See: docs/fidelity/Baker_Saturation_Architecture.md
 /// See: Serena memory "baker_saturation_architecture"
@@ -21,6 +20,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Baker.Recipes.Decomposition
 open Clef.Compiler.Baker.Ingredients.SaturationCombinators
 open Clef.Compiler.Baker.Ingredients.Primitives
+module Options = Clef.Compiler.Baker.Ingredients.Options
 
 //=============================================================================
 // BRIDGE: Convert SaturationParser results to Decomposition.Result
@@ -47,32 +47,6 @@ let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Re
         failwithf "Saturation failed: %s" reason
 
 //=============================================================================
-// OPTION STRUCTURE: compose the same DU ingredients as an explicit source match.
-// Baker emits the complete decomposition in this firing: generated nodes are not
-// sent through a second recipe pass. Preserve the payload type, including measures.
-//=============================================================================
-
-let private optionType innerType = NativeType.TApp (Types.optionTyCon, [innerType])
-
-let private optionCaseTest optionNodeId innerType caseIndex =
-    saturation {
-        let! tag = duGetTag optionNodeId (optionType innerType)
-        let! expected = int8Lit caseIndex
-        return! compareEq tag expected Types.int8Type
-    }
-
-let private optionHasValue optionNodeId innerType = optionCaseTest optionNodeId innerType 1
-
-let private optionValue optionNodeId innerType =
-    duEliminate optionNodeId "Some" 1 innerType
-
-let private optionSome valueNodeId innerType =
-    duConstruct "Some" 1 (Some valueNodeId) None (optionType innerType)
-
-let private optionNone innerType =
-    duConstruct "None" 0 None None (optionType innerType)
-
-//=============================================================================
 // OPTION.MAP: map f opt → if isSome then Some (f (get opt)) else None
 //=============================================================================
 
@@ -87,15 +61,15 @@ let private optionMapRecipe
 
     saturation {
         // Check if option has value
-        let! isSomeResult = optionHasValue optionNodeId inputType
+        let! isSomeResult = Options.hasValue optionNodeId inputType
 
         // Then branch: Some (f (get opt))
-        let! value = optionValue optionNodeId inputType
+        let! value = Options.value optionNodeId inputType
         let! mapped = app1 mapperNodeId value outputType
-        let! someResult = optionSome mapped outputType
+        let! someResult = Options.some mapped outputType
 
         // Else branch: None
-        let! noneResult = optionNone outputType
+        let! noneResult = Options.none outputType
 
         // Conditional: if isSome then Some(f(get)) else None
         return! ifThenElse isSomeResult someResult noneResult outputOptionType
@@ -116,14 +90,14 @@ let private optionBindRecipe
 
     saturation {
         // Check if option has value
-        let! isSomeResult = optionHasValue optionNodeId inputType
+        let! isSomeResult = Options.hasValue optionNodeId inputType
 
         // Then branch: f (get opt) - binder returns Option<'U>
-        let! value = optionValue optionNodeId inputType
+        let! value = Options.value optionNodeId inputType
         let! boundResult = app1 binderNodeId value outputOptionType
 
         // Else branch: None
-        let! noneResult = optionNone outputType
+        let! noneResult = Options.none outputType
 
         // Conditional: if isSome then f(get) else None
         return! ifThenElse isSomeResult boundResult noneResult outputOptionType
@@ -143,23 +117,23 @@ let private optionFilterRecipe
 
     saturation {
         // Check if option has value
-        let! isSomeResult = optionHasValue optionNodeId valueType
+        let! isSomeResult = Options.hasValue optionNodeId valueType
 
         // Get the value
-        let! value = optionValue optionNodeId valueType
+        let! value = Options.value optionNodeId valueType
 
         // Apply predicate
         let! predicateResult = app1 predicateNodeId value Types.boolType
 
         // None for else branches
-        let! noneResult = optionNone valueType
+        let! noneResult = Options.none valueType
 
         // Reuse the expression value. Fold-in remaps this structural reference
         // if the input is itself decomposed (a constructor or another HOF).
         let! innerIf = ifThenElse predicateResult optionNodeId noneResult optionType
 
         // Outer if: if isSome then innerIf else None
-        let! noneOuter = optionNone valueType
+        let! noneOuter = Options.none valueType
         return! ifThenElse isSomeResult innerIf noneOuter optionType
     }
 
@@ -167,8 +141,8 @@ let private optionFilterRecipe
 /// belong to the Some branch; the None branch is the specified boolean literal.
 let private optionPredicateRecipe predicate optionNodeId valueType absentResult =
     saturation {
-        let! present = optionHasValue optionNodeId valueType
-        let! value = optionValue optionNodeId valueType
+        let! present = Options.hasValue optionNodeId valueType
+        let! value = Options.value optionNodeId valueType
         let! tested = app1 predicate value Types.boolType
         let! absent = boolLit absentResult
         return! ifThenElse present tested absent Types.boolType
@@ -178,8 +152,8 @@ let private optionPredicateRecipe predicate optionNodeId valueType absentResult 
 /// a function-valued payload is passed to the action without being invoked.
 let private optionIterRecipe action optionNodeId valueType =
     saturation {
-        let! present = optionHasValue optionNodeId valueType
-        let! value = optionValue optionNodeId valueType
+        let! present = Options.hasValue optionNodeId valueType
+        let! value = Options.value optionNodeId valueType
         let! invoked = app1 action value Types.unitType
         let! absent = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
         return! ifThenElse present invoked absent Types.unitType
@@ -189,8 +163,8 @@ let private optionIterRecipe action optionNodeId valueType =
 /// preserved by the application recipe; extraction belongs to the Some branch.
 let private optionDefaultValueRecipe fallback optionNodeId valueType =
     saturation {
-        let! present = optionHasValue optionNodeId valueType
-        let! value = optionValue optionNodeId valueType
+        let! present = Options.hasValue optionNodeId valueType
+        let! value = Options.value optionNodeId valueType
         return! ifThenElse present value fallback valueType
     }
 
@@ -199,8 +173,8 @@ let private optionDefaultValueRecipe fallback optionNodeId valueType =
 /// parameter of the Option operation or an additional thunk invocation.
 let private optionDefaultWithRecipe fallback optionNodeId valueType =
     saturation {
-        let! present = optionHasValue optionNodeId valueType
-        let! value = optionValue optionNodeId valueType
+        let! present = Options.hasValue optionNodeId valueType
+        let! value = Options.value optionNodeId valueType
         let! unitArgument = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
         let! absent = app1 fallback unitArgument valueType
         return! ifThenElse present value absent valueType
@@ -210,8 +184,8 @@ let private optionDefaultWithRecipe fallback optionNodeId valueType =
 /// The thunk-valued alternative is invoked only in the None branch.
 let private optionAlternativeRecipe lazyFallback fallback optionNodeId valueType =
     saturation {
-        let! present = optionHasValue optionNodeId valueType
-        let resultType = optionType valueType
+        let! present = Options.hasValue optionNodeId valueType
+        let resultType = Options.typeOf valueType
         let! absent = saturation {
             if lazyFallback then
                 let! unitArgument = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
@@ -224,8 +198,8 @@ let private optionAlternativeRecipe lazyFallback fallback optionNodeId valueType
 /// A single optional fold: the None branch is the original state value.
 let private optionFoldRecipe operation folder state optionNodeId inputType stateType =
     saturation {
-        let! present = optionHasValue optionNodeId inputType
-        let! value = optionValue optionNodeId inputType
+        let! present = Options.hasValue optionNodeId inputType
+        let! value = Options.value optionNodeId inputType
         let arguments = if operation = "fold" then [state; value] else [value; state]
         let! folded = app folder arguments stateType
         return! ifThenElse present folded state stateType
@@ -236,9 +210,9 @@ let private optionFoldRecipe operation folder state optionNodeId inputType state
 let private foldShape operation callbackType =
     match operation, callbackType with
     | "fold", NativeType.TFun (stateType, NativeType.TFun (inputType, _)) ->
-        Some (inputType, stateType, [("__folder", callbackType); ("__state", stateType); ("__option", optionType inputType)])
+        Some (inputType, stateType, [("__folder", callbackType); ("__state", stateType); ("__option", Options.typeOf inputType)])
     | "foldBack", NativeType.TFun (inputType, NativeType.TFun (stateType, _)) ->
-        Some (inputType, stateType, [("__folder", callbackType); ("__option", optionType inputType); ("__state", stateType)])
+        Some (inputType, stateType, [("__folder", callbackType); ("__option", Options.typeOf inputType); ("__state", stateType)])
     | _ -> None
 
 let private foldBody operation arguments inputType stateType =
@@ -313,12 +287,12 @@ let private operationRecipe operation args inputType outputType =
     match operation, args with
     | "map", [mapper; opt] ->
         let outType = outputType |> Option.defaultValue inputType
-        Some (optionMapRecipe mapper opt inputType outType, optionType outType)
+        Some (optionMapRecipe mapper opt inputType outType, Options.typeOf outType)
     | "bind", [binder; opt] ->
         let outType = outputType |> Option.defaultValue inputType
-        Some (optionBindRecipe binder opt inputType outType, optionType outType)
+        Some (optionBindRecipe binder opt inputType outType, Options.typeOf outType)
     | "filter", [predicate; opt] ->
-        Some (optionFilterRecipe predicate opt inputType, optionType inputType)
+        Some (optionFilterRecipe predicate opt inputType, Options.typeOf inputType)
     | "exists", [predicate; opt] ->
         Some (optionPredicateRecipe predicate opt inputType false, Types.boolType)
     | "forall", [predicate; opt] ->
@@ -326,7 +300,7 @@ let private operationRecipe operation args inputType outputType =
     | "iter", [action; opt] ->
         Some (optionIterRecipe action opt inputType, Types.unitType)
     | ("orElse" | "orElseWith"), [fallback; opt] ->
-        Some (optionAlternativeRecipe (operation = "orElseWith") fallback opt inputType, optionType inputType)
+        Some (optionAlternativeRecipe (operation = "orElseWith") fallback opt inputType, Options.typeOf inputType)
     | ("defaultValue" | "defaultWith"), fallback :: opt :: remaining ->
         // Two arguments eliminate the option. Further source arguments apply
         // its selected function payload, in this same saturation firing.
@@ -342,9 +316,9 @@ let private operationRecipe operation args inputType outputType =
                 else return! app value remaining resultType
             }
             recipe, resultType)
-    | "isSome", [opt] -> Some (optionCaseTest opt inputType 1, Types.boolType)
-    | "isNone", [opt] -> Some (optionCaseTest opt inputType 0, Types.boolType)
-    | "get", [opt] -> Some (optionValue opt inputType, inputType)
+    | "isSome", [opt] -> Some (Options.caseTest opt inputType 1, Types.boolType)
+    | "isNone", [opt] -> Some (Options.caseTest opt inputType 0, Types.boolType)
+    | "get", [opt] -> Some (Options.value opt inputType, inputType)
     | "get", opt :: remaining ->
         // get consumes one option. Any remaining source arguments apply to its
         // function payload; preserve that boundary in this same recipe firing.
@@ -353,7 +327,7 @@ let private operationRecipe operation args inputType outputType =
                 current |> Option.bind (function NativeType.TFun (_, result) -> Some result | _ -> None)) (Some inputType)
         resultType |> Option.map (fun resultType ->
             let recipe = saturation {
-                let! value = optionValue opt inputType
+                let! value = Options.value opt inputType
                 let! result = app value remaining resultType
                 return! evaluateBefore (opt :: remaining) result resultType
             }
@@ -393,8 +367,8 @@ let private partialRecipe (ctx: Context) operation supplied suppliedType inputTy
             match parameters, captures with
             | [opt], [argument] -> operationRecipe operation [argument; opt] inputType (innerType resultType) |> Option.get |> fst
             | _ -> failwith "An Option partial requires one option parameter and one supplied argument capture"
-        let! value = closure [("__option", optionType inputType)] [capture] enclosing body resultType
-        return! evaluateBefore [snapshot] value (NativeType.TFun (optionType inputType, resultType))
+        let! value = closure [("__option", Options.typeOf inputType)] [capture] enclosing body resultType
+        return! evaluateBefore [snapshot] value (NativeType.TFun (Options.typeOf inputType, resultType))
     }
 
 /// A supplied leading argument leaves exactly one option parameter, even when its payload

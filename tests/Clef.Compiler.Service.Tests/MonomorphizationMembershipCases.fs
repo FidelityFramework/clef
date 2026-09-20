@@ -16,10 +16,14 @@ module private MonomorphizationMembership =
         let moduleNodes = modules result
         Assert.NotEmpty moduleNodes
         for node, members in moduleNodes do
-            Assert.Equal<NodeId list>(members, node.Children)
+            Assert.Empty node.Children
+            let membership = kindEdges node.Id node.Kind |> List.filter (fun edge -> edge.Role = EdgeRole.Member) |> List.sortBy _.Ordinal
+            Assert.Equal<NodeId list>(members, membership |> List.collect _.Sources)
+            Assert.All(membership, fun edge -> Assert.Equal(EdgeClass.Reference, edge.Class))
             for memberId in members do
                 Assert.True(result.Graph.Nodes.ContainsKey memberId,
                     $"Module {node.Id} still references retired declaration {memberId}")
+                Assert.Equal(Some node.Id, result.Graph.Nodes[memberId].Parent)
         for node in result.Graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable) do
             for child in node.Children do
                 Assert.True(result.Graph.Nodes.ContainsKey child,

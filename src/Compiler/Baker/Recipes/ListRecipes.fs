@@ -34,6 +34,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Baker.Recipes.Decomposition
 open Clef.Compiler.Baker.Ingredients.SaturationCombinators
 open Clef.Compiler.Baker.Ingredients.Primitives
+module Options = Clef.Compiler.Baker.Ingredients.Options
 open Clef.Compiler.Baker.Ingredients.Patterns
 open Clef.Compiler.Baker.Recipes.SeqRecipes
 
@@ -335,7 +336,7 @@ let private listTryPickRecipe
         do! withBinding "xs" xsParamId listType
 
         // Base case: None
-        let! noneId = none outputElemType
+        let! noneId = Options.none outputElemType
 
         // Guard: isEmpty xs
         let! isEmptyId = isEmpty xsParamId inputElemType
@@ -348,7 +349,7 @@ let private listTryPickRecipe
         let! resultId = app1 chooserNodeId headId optionType
 
         // Check if result isSome
-        let! isSomeId = isSome resultId outputElemType
+        let! isSomeId = Options.hasValue resultId outputElemType
 
         // Recursive call
         let! loopRefId = varRef "loop" None loopFuncType

@@ -464,6 +464,10 @@ let private resolveSeqOp (op: string) (range: SourceRange) : IntrinsicResolution
         let predFn = NativeType.TFun(tyParamT, Types.boolType)
         let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(predFn, NativeType.TFun(seqT, seqT)))
         Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "exists" | "forall" ->
+        let predFn = NativeType.TFun(tyParamT, Types.boolType)
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(predFn, NativeType.TFun(seqT, Types.boolType)))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
     | "fold" ->
         // ('S -> 'T -> 'S) -> 'S -> seq<'T> -> 'S
         let tyParamSpecS = freshTypeParam "'S" TypeParamKind.Type range
@@ -492,6 +496,9 @@ let private resolveSeqOp (op: string) (range: SourceRange) : IntrinsicResolution
     | "head" ->
         // seq<'T> -> 'T
         let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, tyParamT))
+        Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
+    | "tryHead" ->
+        let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, NativeType.TApp(Types.optionTyCon, [tyParamT])))
         Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
     | "length" ->
         // seq<'T> -> int
@@ -527,7 +534,7 @@ let private resolveSeqOp (op: string) (range: SourceRange) : IntrinsicResolution
         let ty = NativeType.TForall([tyParamSpecT], NativeType.TFun(seqT, tyParamT))
         Resolved (mkIntrinsic IntrinsicModule.Seq op IntrinsicCategory.Pure fullName, ty)
     | unknown ->
-        UnknownOperation $"Unknown Seq intrinsic: Seq.{unknown}. Available: empty, toArray, toList, iter, map, filter, fold, take, collect, isEmpty, head, length, append, tryPick, minBy, max, min"
+        UnknownOperation $"Unknown Seq intrinsic: Seq.{unknown}. Available: empty, toArray, toList, iter, map, filter, fold, take, collect, exists, forall, isEmpty, head, tryHead, length, append, tryPick, minBy, max, min"
 
 /// Resolve SeqEnumerator.* operations (PRD-15/16: Sequence iteration state machine)
 let private resolveSeqEnumeratorOp (op: string) (range: SourceRange) : IntrinsicResolution =

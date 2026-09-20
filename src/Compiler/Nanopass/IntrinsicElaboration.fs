@@ -126,7 +126,7 @@ let private createIntrinsicRecipe (node: SemanticNode) (graph: SemanticGraph) : 
             NewNodes = []  // No new nodes!
             ReplacementRootId = argId  // Replace with the argument
             ElaborationKind = "Intrinsic"
-            ElaborationSource = sprintf "Convert.%s (same-size elimination)" info.Operation
+            NewEdges = []; ElaborationSource = sprintf "Convert.%s (same-size elimination)" info.Operation
         }
     | None ->
         // No other intrinsic elaborations in Pass 1
@@ -169,7 +169,7 @@ let private freshNodeId () = NodeId.fresh()
 ///
 /// NOTE: For now, we pass an empty array. Full argc/argv conversion would require
 /// C string to F# string conversion, which is a future enhancement.
-let private buildStartWrapper
+let buildStartWrapper
     (startup: FreestandingStartup)
     (mainNodeId: NodeId)
     (mainType: NativeType)
@@ -339,7 +339,7 @@ let private buildStartWrapper
         Id = startLambdaId
         Kind = SemanticKind.Lambda ([], seqId, [], Some startup.EntrySymbol, LambdaContext.RegularClosure)
         Range = sourceRange
-        Type = NativeType.TFun (unitType, unitType)
+        Type = unitType
         SRTPResolution = None
         ArenaAffinity = ArenaAffinity.CurrentActor
         LayoutHint = None
@@ -356,7 +356,7 @@ let private buildStartWrapper
         Id = startBindingId
         Kind = SemanticKind.Binding (startup.EntrySymbol, false, false, Some DeclRoot.EntryPoint)
         Range = sourceRange
-        Type = NativeType.TFun (unitType, unitType)
+        Type = unitType
         SRTPResolution = None
         ArenaAffinity = ArenaAffinity.CurrentActor
         LayoutHint = None

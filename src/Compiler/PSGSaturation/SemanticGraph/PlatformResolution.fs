@@ -55,6 +55,20 @@ type DeclaredSpace = {
     Access: string
 }
 
+/// A role reference and the unique memory-space declaration it resolves to.
+type DeclaredProgramSpace = {
+    Reference: NodeId
+    Space: DeclaredSpace
+}
+
+/// The selected descriptor's explicit program-lifetime authority. Absence is
+/// unavailable, including older Contracts records that declare no spaces.
+type DeclaredProgramLifetime = {
+    Node: NodeId
+    Immutable: DeclaredProgramSpace
+    Mutable: DeclaredProgramSpace option
+}
+
 /// The physical-layout projection shared by device-access checking and image
 /// layout. Availability/version/map metadata are outside this projection.
 let memorySpace (s: DeclaredSpace) : BAREWire.Platform.MemorySpace = {
@@ -122,6 +136,7 @@ type DeclaredPlatform = {
     Id: string
     Core: DeclaredCore option
     Spaces: DeclaredSpace list
+    ProgramLifetime: DeclaredProgramLifetime option
     Buffers: DeclaredBuffer list
     Returns: DeclaredReturn list
 }
@@ -168,22 +183,28 @@ type Reading = {
 /// quotation to the expression it quotes, through a VarRef to its binding's
 /// value, and through a conversion application (`int64 X`) to its operand.
 /// Stops at the first node that is none of those.
-let rec valueOf (graph: SemanticGraph) (id: NodeId) : SemanticNode option =
-    match SemanticGraph.tryGetNode id graph with
-    | None -> None
-    | Some node ->
-        match node.Kind with
-        | SemanticKind.TypeAnnotation (inner, _) -> valueOf graph inner
-        | SemanticKind.Quote (inner, _) -> valueOf graph inner
-        | SemanticKind.VarRef (_, Some bindingId) ->
-            match SemanticGraph.tryGetNode bindingId graph with
-            | Some ({ Children = [ valueId ] } : SemanticNode) -> valueOf graph valueId
-            | _ -> None
-        | SemanticKind.Application (funcId, [ arg ]) ->
-            match valueOf graph funcId with
-            | Some ({ Kind = SemanticKind.Intrinsic { Category = IntrinsicCategory.Conversion } } : SemanticNode) -> valueOf graph arg
+let valueOf (graph: SemanticGraph) (id: NodeId) : SemanticNode option =
+    let rec follow seen id =
+        // A cyclic declaration has no settled literal value. Keep its graph
+        // intact for the owning declaration/dependency diagnostic.
+        if Set.contains id seen then None else
+        let seen = Set.add id seen
+        match SemanticGraph.tryGetNode id graph with
+        | None -> None
+        | Some node ->
+            match node.Kind with
+            | SemanticKind.TypeAnnotation (inner, _) -> follow seen inner
+            | SemanticKind.Quote (inner, _) -> follow seen inner
+            | SemanticKind.VarRef (_, Some bindingId) ->
+                match SemanticGraph.tryGetNode bindingId graph with
+                | Some ({ Children = [ valueId ] } : SemanticNode) -> follow seen valueId
+                | _ -> None
+            | SemanticKind.Application (funcId, [ arg ]) ->
+                match follow seen funcId with
+                | Some ({ Kind = SemanticKind.Intrinsic { Category = IntrinsicCategory.Conversion } } : SemanticNode) -> follow seen arg
+                | _ -> Some node
             | _ -> Some node
-        | _ -> Some node
+    follow Set.empty id
 
 /// The node a finding about `id` is located at: the value it denotes, else the
 /// referencing node itself.
@@ -438,19 +459,65 @@ let private readReturns (graph: SemanticGraph) (fields: (string * NodeId) list) 
     let returns = surfaces |> List.collect fst
     returns, findings @ (surfaces |> List.collect snd) @ duplicates "return bound" (fun r -> r.Endpoint) (fun r -> r.Node) graph returns
 
+let private readProgramLifetime (graph: SemanticGraph) (fields: (string * NodeId) list) (spaces: DeclaredSpace list)
+    : DeclaredProgramLifetime option * DeclarationFinding list =
+    let reference role immutable id =
+        match stringOf graph id with
+        | None -> Result.Error (findingOn graph id DeclarationDefect.Malformed (sprintf "ProgramLifetime.%s must be a string literal" role))
+        | Some "" -> Result.Error (findingOn graph id DeclarationDefect.Invalid (sprintf "ProgramLifetime.%s must name a declared memory space" role))
+        | Some name ->
+            match spaces |> List.filter (fun space -> space.Name = name) with
+            | [] -> Result.Error (findingOn graph id DeclarationDefect.Invalid (sprintf "ProgramLifetime.%s names undeclared memory space '%s'" role name))
+            | [space] ->
+                let permitted =
+                    if immutable then space.Access = BAREWire.Platform.Access.ReadOnly || space.Access = BAREWire.Platform.Access.ReadExecute
+                    else space.Access = BAREWire.Platform.Access.ReadWrite
+                if permitted then Result.Ok { Reference = id; Space = space }
+                else Result.Error (findingOn graph id DeclarationDefect.Invalid (sprintf "ProgramLifetime.%s is incompatible with the declared access of memory space '%s'" role name))
+            | _ -> Result.Error (findingOn graph id DeclarationDefect.Ambiguous (sprintf "ProgramLifetime.%s names ambiguous memory space '%s'" role name))
+    match field "ProgramLifetime" fields with
+    | None -> None, []
+    | Some id ->
+        match optionOf graph id with
+        | Some None -> None, []
+        | None -> None, [findingOn graph id DeclarationDefect.Malformed "ProgramLifetime must be Some literal designation or None"]
+        | Some (Some payload) ->
+            match recordOf graph payload with
+            | None -> None, [findingOn graph payload DeclarationDefect.Malformed "ProgramLifetime must contain a literal designation record"]
+            | Some (node, roles) ->
+                let immutable =
+                    match field "Immutable" roles with
+                    | Some id -> reference "Immutable" true id
+                    | None -> Result.Error (findingAt node DeclarationDefect.Malformed "ProgramLifetime requires an Immutable space name")
+                let mutableSpace =
+                    match field "Mutable" roles with
+                    | None -> Result.Error (findingAt node DeclarationDefect.Malformed "ProgramLifetime requires a Mutable option")
+                    | Some id ->
+                        match optionOf graph id with
+                        | Some None -> Result.Ok None
+                        | Some (Some name) -> reference "Mutable" false name |> Result.map Some
+                        | None -> Result.Error (findingOn graph id DeclarationDefect.Malformed "ProgramLifetime.Mutable must be Some space name or None")
+                match immutable, mutableSpace with
+                | Result.Ok immutable, Result.Ok mutableSpace -> Some { Node = node.Id; Immutable = immutable; Mutable = mutableSpace }, []
+                | _ ->
+                    None, [match immutable with Result.Error error -> yield error | _ -> ()
+                           match mutableSpace with Result.Error error -> yield error | _ -> ()]
+
 let private readPlatform (graph: SemanticGraph) (node: SemanticNode) (fields: (string * NodeId) list) : DeclaredPlatform option * DeclarationFinding list =
     match field "Id" fields |> Option.bind (stringOf graph) with
     | None -> None, [ findingAt node DeclarationDefect.Malformed "a platform description's Id must be a string literal" ]
     | Some id ->
         let spaces, spaceFindings = readList graph fields "Spaces" (readSpace graph)
+        let programLifetime, programFindings = readProgramLifetime graph fields spaces
         let buffers, bufferFindings = readList graph fields "Buffers" (readBuffer graph)
         let returns, returnFindings = readReturns graph fields
         let core, coreFindings =
             match field "Core" fields with
             | Some coreId -> readCore graph coreId
             | None -> None, []
-        Some { Node = node.Id; Id = id; Core = core; Spaces = spaces; Buffers = buffers; Returns = returns },
-        spaceFindings @ bufferFindings @ returnFindings @ coreFindings
+        Some { Node = node.Id; Id = id; Core = core; Spaces = spaces; ProgramLifetime = programLifetime; Buffers = buffers; Returns = returns },
+        spaceFindings @ duplicates "memory space" (fun (space: DeclaredSpace) -> space.Name) (fun space -> space.Node) graph spaces
+        @ programFindings @ bufferFindings @ returnFindings @ coreFindings
 
 /// The sources the platform binding compiles are the ones that declare the
 /// platform; a description value anywhere else in the program is ordinary data
@@ -699,6 +766,17 @@ let resolve (graph: SemanticGraph) : DeclaredPlatform option =
 /// A declared space by name.
 let spaceNamed (name: string) (platform: DeclaredPlatform) : DeclaredSpace option =
     platform.Spaces |> List.tryFind (fun s -> s.Name = name)
+
+/// The explicitly designated immutable image space, never inferred by spelling.
+let immutableProgramSpace (platform: DeclaredPlatform) : DeclaredSpace option =
+    platform.ProgramLifetime |> Option.map (fun roles -> roles.Immutable.Space)
+
+/// The finite premises of immutable program residence: selected descriptor,
+/// designation record, its name reference, and the resolved space declaration.
+let immutableProgramAuthority (platform: DeclaredPlatform) : NodeId list =
+    platform.ProgramLifetime
+    |> Option.map (fun roles -> [platform.Node; roles.Node; roles.Immutable.Reference; roles.Immutable.Space.Node] |> List.distinct)
+    |> Option.defaultValue []
 
 /// A declared buffer by name.
 let bufferNamed (name: string) (platform: DeclaredPlatform) : DeclaredBuffer option =

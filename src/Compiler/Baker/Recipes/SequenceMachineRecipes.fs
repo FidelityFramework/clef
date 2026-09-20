@@ -13,6 +13,8 @@ open Clef.Compiler.Baker.Ingredients.SaturationCombinators
 open Clef.Compiler.Baker.Ingredients.Primitives
 open Clef.Compiler.Baker.Ingredients.Closures
 module C = Clef.Compiler.Baker.Ingredients.Continuations
+module Aggregate = Clef.Compiler.Baker.Ingredients.AggregateCopies
+module AggregateValues = Clef.Compiler.PSGSaturation.SemanticGraph.AggregateValues
 module Control = Clef.Compiler.Baker.Recipes.SequenceControlRecipes
 
 type Machine = {
@@ -26,6 +28,7 @@ type Machine = {
     ResumeBodies: Map<int, NodeId>
     ResumeTargets: Map<int, int>
     CompletedBody: NodeId
+    AggregateEvidence: Hyperedge list
 }
 
 // A recipe-local construction marker, extracted into finite provenance edges
@@ -42,14 +45,38 @@ let rec isSymbolic (graph: SemanticGraph) seen id =
     match graph.Nodes.TryFind id with
     | Some { Kind = SemanticKind.Intrinsic _ | SemanticKind.PlatformBinding _; Type = NativeType.TFun _ } -> true
     | Some { Kind = SemanticKind.VarRef (_, Some definition) } -> isSymbolic graph seen definition
-    | Some { Kind = SemanticKind.Binding _; Children = [value] } ->
-        match graph.Nodes.TryFind value with Some { Kind = SemanticKind.Lambda _ } -> true | _ -> false
+    | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } ->
+        match graph.Nodes.TryFind value with
+        | Some ({ Kind = SemanticKind.Lambda(_, _, [], _, _) } as implementation) ->
+            implementation.Metadata.TryFind ClosureMetadata.LambdaExpression <> Some(MetadataValue.Bool true)
+            && implementation.Metadata.TryFind ClosureMetadata.RequiresClosurePair <> Some(MetadataValue.Bool true)
+        | _ -> false
     | _ -> false
 
 let requiredValues (graph: SemanticGraph) (control: Control.Control) =
+    // Assignment defines a new cell value, not a new cell allocation. Only
+    // declarations evaluated by this owner and explicit captures belong in its
+    // frame or scratch storage. Other resolved declarations stay references.
+    let declarations =
+        control.Steps.Values |> Seq.choose (fun step ->
+            match step.Instruction with
+            | Control.Instruction.Evaluate id ->
+                match graph.Nodes.TryFind id with
+                | Some { Kind = SemanticKind.Binding _ } -> Some id
+                | _ -> None
+            | _ -> None) |> Set.ofSeq
+    let captures =
+        match graph.Nodes[control.Owner].Kind with
+        | SemanticKind.SeqExpr(_, captures) -> captures |> List.choose _.SourceNodeId |> Set.ofList
+        | _ -> Set.empty
     control.Steps.Values |> Seq.fold (fun all step -> Set.union all (Set.union step.Uses step.Defines)) Set.empty
     |> Set.filter (fun id ->
-        graph.Nodes.TryFind id |> Option.exists (fun node -> not (isUnit node.Type)) && not (isSymbolic graph Set.empty id))
+        graph.Nodes.TryFind id |> Option.exists (fun node ->
+            not (isUnit node.Type)
+            && not (isSymbolic graph Set.empty id)
+            && (match node.Kind with
+                | SemanticKind.Binding _ -> declarations.Contains id || captures.Contains id
+                | _ -> true)))
 
 let build (graph: SemanticGraph) (control: Control.Control) (frame: ContinuationFrame) : Machine =
     let owner = graph.Nodes[control.Owner]
@@ -60,6 +87,7 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
     let scratch = frame.ScratchSlots |> List.map _.Source |> Set.ofList
     let range = { owner.Range with End = owner.Range.Start }
     let state = SaturationState.create range "Seq.resume" (NodeId.value owner.Id) owner.Id graph.Platform
+    let aggregateEvidence = ResizeArray<Hyperedge>()
     let body = saturation {
         let! storage = C.create (SemanticKind.ContinuationStorage owner.Id) (Types.mkArrayType Types.uint8Type) []
         let! storageBinding = letBind "__continuation_storage" storage (Types.mkArrayType Types.uint8Type)
@@ -83,7 +111,13 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
         let write id value = saturation {
             if persistent.Contains id || scratch.Contains id then
                 let! target = frameRef id
-                return! C.write target id value
+                match AggregateValues.scalarOption graph graph.Nodes[id].Type with
+                | Some(inner, _, _) ->
+                    let! destination = C.read target graph.Nodes[id]
+                    let! copy, evidence = Aggregate.option value destination inner
+                    aggregateEvidence.Add evidence
+                    return copy
+                | None -> return! C.write target id value
             else
                 // Unit operations and symbolic callable identities have no
                 // runtime slot. Their evaluation effects remain in the block.
@@ -125,9 +159,15 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
                 return! write id input
             | SemanticKind.Set (reference, value) ->
                 match graph.Nodes[reference].Kind with
-                | SemanticKind.VarRef (_, Some declaration) ->
+                | SemanticKind.VarRef (name, Some declaration) ->
                     let! input = read value
-                    return! write declaration input
+                    if persistent.Contains declaration || scratch.Contains declaration then
+                        return! write declaration input
+                    else
+                        // The source resolves this existing cell outside the
+                        // owner. Preserve that identity instead of allocating
+                        // a private copy or discarding its observable write.
+                        return! C.assign declaration name graph.Nodes[declaration].Type input
                 | _ -> invalidOp "Continuation assignment requires a settled declaration identity."
             | _ when isSymbolic graph Set.empty id ->
                 return! C.create (SemanticKind.Literal NativeLiteral.Unit) Types.unitType []
@@ -160,13 +200,33 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
                         return SemanticKind.SeqExpr(generator, List.map fst captures), List.choose snd captures
                     | _ -> return kind, []
                 }
+                let! kind, cloneType, cloneChildren, initializedInPlace = saturation {
+                    match kind, AggregateValues.scalarOption graph source.Type with
+                    | SemanticKind.DUConstruct(name, index, payload, None), Some _ when persistent.Contains id || scratch.Contains id ->
+                        let! storage = frameRef id
+                        let! destination = C.read storage source
+                        return SemanticKind.DUInitialize(destination, name, index, payload), Types.unitType,
+                               destination :: Option.toList payload, true
+                    | _ ->
+                        return kind, source.Type,
+                               source.Children |> List.map (fun child -> references.TryFind child |> Option.defaultValue child), false
+                }
                 let! state = getUserState
-                let clone = mkNode state kind source.Type (source.Children |> List.map (fun child -> references.TryFind child |> Option.defaultValue child))
+                let clone = mkNode state kind cloneType cloneChildren
                 let clone = { clone with ValueRange = source.ValueRange; SRTPResolution = source.SRTPResolution
                                          Range = source.Range
                                          Metadata = clone.Metadata.Add(sourceKey, MetadataValue.NodeId source.Id) }
                 do! emit clone
-                let! save = write id clone.Id
+                do! (match kind with
+                     | SemanticKind.DUInitialize(destination, _, _, payload) ->
+                         aggregateEvidence.Add {
+                             Sources = List.distinct (source.Id :: destination :: Option.toList payload)
+                             Target = clone.Id; Class = EdgeClass.Provenance; Role = EdgeRole.AggregateCopy; Ordinal = 1 }
+                         preturn ()
+                     | _ -> preturn ())
+                let! save =
+                    if initializedInPlace then C.create (SemanticKind.Literal NativeLiteral.Unit) Types.unitType []
+                    else write id clone.Id
                 // Capture formation is eager at this constructor occurrence.
                 // Its reads/borrows are ordinary evaluation operands; the
                 // deferred generator is not entered while forming the value.
@@ -264,5 +324,6 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
           Root = root; PersistentReferences = formal.Id :: envRefs; ScratchReferences = scratchRefs
           ValueSources = valueSources; Initializers = initializers
           CaseBodies = caseBodies; ResumeBodies = resumeBodies
-          ResumeTargets = resumeTargets; CompletedBody = completed }
+          ResumeTargets = resumeTargets; CompletedBody = completed
+          AggregateEvidence = List.ofSeq aggregateEvidence }
     | NoMatch reason, _ -> invalidOp (sprintf "Continuation synthesis failed: %s" reason)

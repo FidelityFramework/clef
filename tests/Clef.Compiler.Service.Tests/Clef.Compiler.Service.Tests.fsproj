@@ -11,7 +11,12 @@
     <Compile Include="ApplicationObligationCases.fs" />
     <Compile Include="IntegerObligationCases.fs" />
     <Compile Include="StaticStringLayoutCases.fs" />
+    <Compile Include="ProgramLifetimeCases.fs" />
+    <Compile Include="ProgramActivationCases.fs" />
+    <Compile Include="ProgramInitializationSelectionCases.fs" />
+    <Compile Include="ProgramInitializationCases.fs" />
     <Compile Include="ContinuationPlacementCases.fs" />
+    <Compile Include="SequenceAggregateCases.fs" />
     <Compile Include="ContinuationObligationCases.fs" />
     <Compile Include="FunctionPointerCases.fs" />
     <Compile Include="ClosedCallbackCases.fs" />
@@ -38,6 +43,13 @@
     <Compile Include="SequenceDelegationCases.fs" />
     <Compile Include="SequenceConsumptionCases.fs" />
     <Compile Include="SequenceCurrentAdmissionCases.fs" />
+    <Compile Include="SequenceConsumerCases.fs" />
+    <Compile Include="SequenceSelectionCases.fs" />
+    <Compile Include="NestedMatchCases.fs" />
+    <Compile Include="SequencePullEffectCases.fs" />
+    <Compile Include="LoopRangeCases.fs" />
+    <Compile Include="ClosureEnvironmentRangeCases.fs" />
+    <Compile Include="ClosureEnvironmentCases.fs" />
     <Compile Include="SequenceEvaluationCases.fs" />
     <Compile Include="SequenceControlCases.fs" />
     <Compile Include="SequenceContinuationEvidenceCases.fs" />

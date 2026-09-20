@@ -162,7 +162,7 @@ let settle (sourceDiagnostics: Diagnostic list) (graph: SemanticGraph) : Map<Nod
                 let spaces = group |> List.map (fun g -> g.Space) |> List.distinctBy (fun s -> s.Node) |> List.map memorySpace |> List.toArray
                 let projection: BAREWire.Platform.PlatformDescription = {
                     Id = planName; DisplayName = planName; Substrate = "cpu"; Core = None
-                    Spaces = spaces; Surfaces = [||]; Buffers = [||]; Transports = [||]; Notes = [||]; Limits = [||]
+                    Spaces = spaces; ProgramLifetime = None; Surfaces = [||]; Buffers = [||]; Transports = [||]; Notes = [||]; Limits = [||]
                     Lifecycle = { Clocks = [||]; Resets = [||]; Entry = "mmio"; Teardown = ""; Persistence = "volatile" }
                 }
                 let findings = BAREWire.Platform.Check.run projection

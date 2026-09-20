@@ -20,7 +20,7 @@ type FunctionPointerTests() =
         let nodes = result.Graph.Nodes |> Map.values |> Seq.toList
         let recipe : Clef.Compiler.Nanopass.Recipe.Recipe = {
             OriginalNodeId = nodes.Head.Id; ReplacementRootId = nodes.Head.Id
-            NewNodes = nodes; ElaborationKind = "Baker"; ElaborationSource = "native callback\n\"entry\"" }
+            NewNodes = nodes; ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "native callback\n\"entry\"" }
         let diagnostics : Clef.Compiler.Nanopass.Recipe.RecipeDiagnostic list = [
             { NodeId = nodes.Head.Id; ElaborationKind = "Baker"; Result = Clef.Compiler.Nanopass.Recipe.RecipeCreated recipe }
             { NodeId = nodes.Head.Id; ElaborationKind = "Baker"; Result = Clef.Compiler.Nanopass.Recipe.NotApplicable "reason" } ]

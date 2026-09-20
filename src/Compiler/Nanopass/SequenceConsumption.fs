@@ -33,6 +33,6 @@ let normalize (graph: SemanticGraph) =
             RecipeCreated {
                 OriginalNodeId = source.Id; NewNodes = plan.NewNodes
                 ReplacementRootId = plan.ResultNodeId
-                ElaborationKind = "Baker"; ElaborationSource = "Seq.consume" }
+                ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "Seq.consume" }
         let recipes = FanOut.fanOut "SequenceConsumption" (fun node -> plans.ContainsKey node.Id) create graph
         FoldIn.foldIn recipes graph

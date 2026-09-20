@@ -233,7 +233,8 @@ let private entrySubject (graph: SemanticGraph) =
 /// Project the obligation enrichment from the saturated graph.
 let elaborate (graph: SemanticGraph) : Enrichment =
     let platform = resolve graph
-    let rodata = platform |> Option.bind (spaceNamed "rodata")
+    let immutableSpace = platform |> Option.bind immutableProgramSpace
+    let authority = platform |> Option.map immutableProgramAuthority |> Option.defaultValue []
     let enrichId = freshId ()
     let literals = reachableLiterals graph
     let namedLiterals = literals |> List.map (fun (c, n) -> slug c, (c, n)) |> uniquify
@@ -242,7 +243,7 @@ let elaborate (graph: SemanticGraph) : Enrichment =
         | Some (p, b) -> intrinsicSites graph IntrinsicModule.Sys "readline" |> List.map (fun (site, _) -> Recipes.readln p b enrichId site)
         | None -> []
     Enrichment.concat
-        [ namedLiterals |> List.map (Recipes.literal rodata enrichId) |> Enrichment.concat
+        [ namedLiterals |> List.map (Recipes.literal immutableSpace authority enrichId) |> Enrichment.concat
           concatSites graph |> List.map (Recipes.concat enrichId) |> Enrichment.concat
           dimensionalSites graph |> List.map (Recipes.dimensional enrichId) |> Enrichment.concat
           applicationSites graph |> List.map (Recipes.application enrichId) |> Enrichment.concat
@@ -359,7 +360,9 @@ let elaborateSettled (graph: SemanticGraph) : Enrichment * Diagnostic list =
         | Some pool ->
             pool.Entries |> List.collect (fun item -> item.NodeIds)
             |> List.tryPick (fun id -> SemanticGraph.tryGetNode id graph)
-            |> Option.map (fun subject -> Recipes.staticStorageLayout enrichId (entrySubject graph) subject pool)
+            |> Option.map (fun subject ->
+                let authority = resolve graph |> Option.map immutableProgramAuthority |> Option.defaultValue []
+                Recipes.staticStorageLayout enrichId (entrySubject graph) subject pool authority)
             |> Option.defaultValue Enrichment.empty
         | None -> Enrichment.empty
     Enrichment.concat [Enrichment.concat enrichments; integers; layout; mapped], List.concat diagnostics @ integerDiagnostics

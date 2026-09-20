@@ -36,8 +36,9 @@ let private whileLoop (conditionId: NodeId) (bodyId: NodeId) : SaturationParser<
 /// Each successful pull binds current once before the supplied unit action;
 /// exhaustion completes without evaluating that action. Source anchors and
 /// expansion provenance remain those of the surrounding saturation state.
-let iterate (input: NodeId) (elementType: NativeType)
-            (consume: NodeId -> SaturationParser<NodeId>) : SaturationParser<NodeId> =
+let private iterateWithGuard (guard: NodeId -> SaturationParser<NodeId>)
+                             (input: NodeId) (elementType: NativeType)
+                             (consume: NodeId -> SaturationParser<NodeId>) : SaturationParser<NodeId> =
     saturation {
         let! expansion = getExpansionId
         let enumType = NativeType.TSeqEnumerator elementType
@@ -45,7 +46,8 @@ let iterate (input: NodeId) (elementType: NativeType)
         let! enumerator = sequenceOperation IntrinsicModule.Seq "getEnumerator" input (NativeType.TSeq elementType) enumType
         let! enumBinding = letBind enumName enumerator enumType
         let! conditionRef = varRef enumName (Some enumBinding) enumType
-        let! condition = sequenceOperation IntrinsicModule.SeqEnumerator "moveNext" conditionRef enumType Types.boolType
+        let! pull = sequenceOperation IntrinsicModule.SeqEnumerator "moveNext" conditionRef enumType Types.boolType
+        let! condition = guard pull
         let! bodyRef = varRef enumName (Some enumBinding) enumType
         let! current = sequenceOperation IntrinsicModule.SeqEnumerator "current" bodyRef enumType elementType
         let currentName = sprintf "__seq_current_%d" expansion
@@ -57,6 +59,14 @@ let iterate (input: NodeId) (elementType: NativeType)
         let! loop = whileLoop condition loopBody
         return! evaluateBefore [enumBinding] loop Types.unitType
     }
+
+/// Iterate every successful pull with the canonical current prefix.
+let iterate input elementType consume = iterateWithGuard preturn input elementType consume
+
+/// A bounded producer may guard demand with `if condition then pull else false`.
+/// The supplied builder receives the exact pull identity; the resulting graph,
+/// not recipe construction order, determines whether that pull is demanded.
+let iterateWhile guard input elementType consume = iterateWithGuard guard input elementType consume
 
 /// Keep the source site's identity and context as a unit expression. The
 /// protocol lives beneath it, so enclosing branches/loops and proof incidence

@@ -1,15 +1,9 @@
 // SPDX-License-Identifier: MIT
 
-/// Baker Match Recipes - Decomposition of Match expressions to decision trees.
-///
-/// Pattern matching compilation reduces Match expressions to IfThenElse chains:
-/// - Union patterns: Extract tag, compare against expected, extract payload
-/// - Constant patterns: Direct equality comparison
-/// - Variable patterns: Let binding for the matched value
-/// - Wildcard patterns: Always match (default case)
-///
-/// This follows the F# spec: "Patterns are elaborated to expressions through
-/// pattern match compilation. This reduces pattern matching to decision trees."
+/// Baker match recipes construct typed decisions and source variable bindings.
+/// Nested constructor tests and guarded extraction are explicit PSG structure;
+/// the witness consumes shallow CaseElimination nodes. The earlier tuple-match
+/// decomposition path remains separate.
 ///
 /// See: docs/fidelity/Baker_Saturation_Architecture.md
 /// See: clef-lang-spec/spec/patterns.md
@@ -50,7 +44,7 @@ let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Re
         failwithf "Saturation failed: %s" reason
 
 //=============================================================================
-// PATTERN BINDING HELPERS
+// PATTERN BINDING ELABORATION
 //=============================================================================
 
 /// Create let bindings for pattern-bound variables
@@ -513,7 +507,7 @@ and private numericLiteralType (kind: NTUKind) : NativeType =
     | Some carrier -> NativeType.TNum(CarrierRef.Carrier carrier, Dimension.one)
     | None -> failwithf "numericLiteralType: no numeric carrier has kind %A" kind
 
-/// Helper to get type from literal
+/// Read the literal's source type, preserving its numeric carrier
 and private literalToType (lit: NativeLiteral) : NativeType =
     match lit with
     | NativeLiteral.Int (_, kind) -> numericLiteralType kind
@@ -687,11 +681,95 @@ let decomposeMatch
     let parser = matchDecomposeParser scrutineeId cases resultType
     runSaturation ctx parser
 
-/// Enrich a Match into a CaseElimination — preserving the fold structure.
-/// Each arm's bindings are resolved (DUEliminate + Binding via letBindAt)
-/// but no DUGetTag, comparison, or IfThenElse nodes are created.
-/// Tag comparison and control flow are elision concerns (handled by Alex).
+/// A constructor's argument list wraps a single payload in Pattern.Tuple.
+/// That wrapper does not introduce a tuple value in the union representation.
+let private singlePayload = function
+    | Pattern.Tuple [payload] -> payload
+    | payload -> payload
+
+let rec private hasNestedUnion pattern =
+    let rec containsUnion = function
+        | Pattern.Union _ -> true
+        | Pattern.Tuple patterns -> List.exists containsUnion patterns
+        | Pattern.Record(fields, _) -> fields |> List.exists (snd >> containsUnion)
+        | _ -> false
+    match pattern with
+    | Pattern.Union(_, _, Some payload, _) -> containsUnion payload
+    | Pattern.Tuple patterns -> List.exists hasNestedUnion patterns
+    | Pattern.Record(fields, _) -> fields |> List.exists (snd >> hasNestedUnion)
+    | _ -> false
+
+/// A decision consumes only one pattern test. Refutable payload patterns become
+/// further decisions in its selected body, never implicit work for the witness.
+let private caseDecision scrutinee pattern selected fallback resultType =
+    let arm pattern body : CaseArm =
+        { Pattern = pattern; Bindings = []; Guard = None; Body = body }
+    let arms = arm pattern selected :: (fallback |> Option.toList |> List.map (arm Pattern.Wildcard))
+    createWithChildren (SemanticKind.CaseElimination(scrutinee, arms)) resultType
+        (scrutinee :: (arms |> List.map _.Body))
+
+/// Compile a constructor chain with the original later cases as its failure
+/// continuation. Every payload read and source guard remains inside the branch
+/// whose pattern facts admit it. Source variable definitions retain their IDs.
+let private nestedMatchParser (graph: SemanticGraph) (scrutinee: NodeId) (cases: MatchCase list) (resultType: NativeType) =
+    let scrutineeType = graph.Nodes[scrutinee].Type
+    let rec compile (input: NodeId) (pattern: Pattern) (bindings: NodeId list) (success: NodeId) (fallback: NodeId option) : SaturationParser<NodeId> =
+        match pattern with
+        | Pattern.Wildcard -> saturation { return success }
+        | Pattern.Var(name, ty) ->
+            match bindings with
+            | [source] -> saturation {
+                let! binding = letBindAt source name input ty
+                return! evaluateBefore [binding] success resultType
+              }
+            | _ -> failwithf "Nested match variable '%s' requires its exact source binding" name
+        | Pattern.Union(name, tag, payload, unionType) -> saturation {
+            let! selected =
+                match payload |> Option.map singlePayload with
+                | None | Some Pattern.Wildcard -> preturn success
+                | Some payloadPattern -> saturation {
+                    let payloadType = getPatternType payloadPattern
+                    let! value = duEliminate input name tag payloadType
+                    return! compile value payloadPattern bindings success fallback
+                  }
+            let shallow = Pattern.Union(name, tag, payload |> Option.map (fun _ -> Pattern.Wildcard), unionType)
+            return! caseDecision input shallow selected fallback resultType
+          }
+        | Pattern.Const _ -> caseDecision input pattern success fallback resultType
+        | unsupported ->
+            failwithf "Nested match requires an elaborated constructor, variable, wildcard, or constant pattern; got %A" unsupported
+    let rec remaining (input: NodeId) (cases: MatchCase list) : SaturationParser<NodeId> =
+        match cases with
+        | [] -> failwith "A nested match requires a terminal case"
+        | case :: rest -> saturation {
+            let! fallback =
+                match rest with
+                | [] -> preturn None
+                | _ -> saturation {
+                    let! later = remaining input rest
+                    return Some later
+                  }
+            let! success =
+                match case.Guard, fallback with
+                | None, _ -> preturn case.Body
+                | Some guard, Some later -> ifThenElse guard case.Body later resultType
+                | Some _, None -> failwith "A guarded terminal nested match requires an explicit fallthrough case"
+            return! compile input case.Pattern case.PatternBindings success fallback
+          }
+    saturation {
+        let! expansion = getExpansionId
+        let name = sprintf "__match_input_%d" expansion
+        let! snapshot = letBind name scrutinee scrutineeType
+        let! input = varRef name (Some snapshot) scrutineeType
+        let! decision = remaining input cases
+        return! evaluateBefore [snapshot] decision resultType
+    }
+
+/// Enrich a Match into CaseElimination decisions. Flat cases retain their
+/// established form. Nested constructor tests are Baker-owned branch structure;
+/// Alex only witnesses the resulting shallow decisions and guarded bodies.
 let enrichMatch
+    (graph: SemanticGraph)
     (ctx: Context)
     (scrutineeId: NodeId)
     (cases: MatchCase list)
@@ -699,25 +777,38 @@ let enrichMatch
     : Result =
 
     let parser =
-        saturation {
-            let! arms =
-                cases |> List.map (fun case ->
-                    saturation {
-                        let! bindings = extractPatternBindings scrutineeId case.Pattern case.PatternBindings
-                        return { Pattern = case.Pattern
-                                 Bindings = bindings
-                                 Guard = case.Guard
-                                 Body = case.Body } : CaseArm
-                    }) |> sequence
+        if cases |> List.exists (fun case -> hasNestedUnion case.Pattern) then
+            nestedMatchParser graph scrutineeId cases resultType
+        else
+            saturation {
+                let! arms =
+                    cases |> List.map (fun case ->
+                        saturation {
+                            let! bindings = extractPatternBindings scrutineeId case.Pattern case.PatternBindings
+                            return { Pattern = case.Pattern
+                                     Bindings = bindings
+                                     Guard = case.Guard
+                                     Body = case.Body } : CaseArm
+                        }) |> sequence
 
-            let children =
-                scrutineeId :: (arms |> List.collect (fun arm ->
-                    arm.Bindings
-                    @ (match arm.Guard with Some g -> [g] | None -> [])
-                    @ [arm.Body]))
+                let children =
+                    scrutineeId :: (arms |> List.collect (fun arm ->
+                        arm.Bindings
+                        @ (match arm.Guard with Some g -> [g] | None -> [])
+                        @ [arm.Body]))
 
-            return! createWithChildren
-                (SemanticKind.CaseElimination (scrutineeId, arms))
-                resultType children
-        }
-    runSaturation ctx parser
+                return! createWithChildren
+                    (SemanticKind.CaseElimination (scrutineeId, arms))
+                    resultType children
+            }
+    let result = runSaturation ctx parser
+    // Replacing PatternBinding at its source identity also preserves its source
+    // range and any existing provenance; generated enrichment labels are added.
+    let nodes =
+        result.NewNodes |> List.map (fun node ->
+            match Map.tryFind node.Id graph.Nodes with
+            | Some original ->
+                { node with Range = original.Range
+                            Metadata = node.Metadata |> Map.fold (fun metadata key value -> Map.add key value metadata) original.Metadata }
+            | None -> node)
+    { result with NewNodes = nodes }

@@ -24,7 +24,7 @@ let normalize (graph: SemanticGraph) =
                 NewNodes = result.NewNodes @ result.AuxFunctions
                 ReplacementRootId = result.ResultNodeId
                 ElaborationKind = "Baker"
-                ElaborationSource = name }
+                NewEdges = []; ElaborationSource = name }
         | _ -> NotApplicable "Application does not cross a settled callable boundary"
     let recipes = FanOut.fanOut "CallableApplications" (fun node -> plans.ContainsKey node.Id) create graph
     FoldIn.foldIn recipes graph

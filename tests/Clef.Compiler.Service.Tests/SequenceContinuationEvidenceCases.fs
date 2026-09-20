@@ -11,6 +11,7 @@ module ContinuationEvidence = Clef.Compiler.Baker.Recipes.SequenceContinuationEv
 module EvidenceFold = Clef.Compiler.Nanopass.ObligationElaboration
 module EvidenceReplacements = Clef.Compiler.Nanopass.FoldIn
 module EvidenceFanOut = Clef.Compiler.Nanopass.FanOut
+module EvidenceProgram = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization
 
 module private ContinuationFacts =
     type Fixture = {
@@ -38,8 +39,10 @@ module private ContinuationFacts =
         let element = match owner.Type with NativeType.TSeq element -> element | _ -> failwith "Not a sequence"
         let current = slot "current" element None
         let graph = { graph with Nodes = graph.Nodes.Add(state.Id, state).Add(current.Id, current) }
-        let live = control.LiveAcross.Values |> Seq.fold Set.union Set.empty
         let required = EvidenceMachine.requiredValues graph control
+        let captures =
+            match owner.Kind with SemanticKind.SeqExpr(_, captures) -> captures |> List.choose _.SourceNodeId |> Set.ofList | _ -> Set.empty
+        let live = control.LiveAcross.Values |> Seq.fold Set.union Set.empty |> Set.intersect required |> Set.union captures
         // This fixture exercises evidence and identity only. No platform,
         // physical placement, layout discharge or native readiness is claimed.
         let fields ids = ids |> Set.toList |> List.map (fun id ->
@@ -66,6 +69,31 @@ module private ContinuationFacts =
     let relation role target edges =
         edges |> List.filter (fun (edge: Hyperedge) -> edge.Role = role && edge.Target = target) |> Assert.Single
     let fields (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+
+    let programCell () =
+        let source = """
+type MemorySpace = { Name: string; Kind: string; Capacity: int; Alignment: int; Granularity: int; Growth: string; Access: string; Base: int option }
+type ProgramLifetimeSpaces = { Immutable: string; Mutable: string option }
+type PlatformDescription = { Id: string; Spaces: MemorySpace array; ProgramLifetime: ProgramLifetimeSpaces option }
+let image = { Name = "image"; Kind = "rodata"; Capacity = 1024; Alignment = 16; Granularity = 16; Growth = "fixed"; Access = "r"; Base = None }
+let state = { Name = "state"; Kind = "data"; Capacity = 1024; Alignment = 16; Granularity = 16; Growth = "fixed"; Access = "rw"; Base = None }
+let description = { Id = "evidence"; Spaces = [| image; state |]; ProgramLifetime = Some { Immutable = "image"; Mutable = Some "state" } }
+let mutable shared = 1
+let outer = seq { yield shared; shared <- shared + 1; yield shared }
+"""
+        let fixture = fixture source
+        let context: PlatformContext = {
+            PlatformId = "evidence"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
+            Representations = Map.empty; EndpointReturns = Map.empty; PlatformLibraryPath = None
+            PlatformDescription = Some "Dimensions.description"; PlatformArchitecture = None; PlatformOS = None
+            PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "dimensions.clef")
+            Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
+            AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+        let graph, diagnostics = Clef.Compiler.Nanopass.ProgramInitialization.settleValueAuthority true { fixture.Graph with Platform = Some context }
+        Assert.Empty diagnostics
+        let shared = graph.Nodes.Values |> Seq.filter (fun node -> match node.Kind with SemanticKind.Binding("shared", true, _, _) -> true | _ -> false) |> Assert.Single
+        Assert.True((EvidenceProgram.tryValueAuthority graph shared.Id).IsSome)
+        { fixture with Graph = graph }, shared.Id
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceContinuationEvidence")>]
 type SequenceContinuationEvidenceCases() =
@@ -184,10 +212,95 @@ type SequenceContinuationEvidenceCases() =
         let creator (node: SemanticNode) _ =
             let fresh = { node with Id = NodeId.fresh() }
             RecipeCreated { OriginalNodeId = node.Id; ReplacementRootId = fresh.Id; NewNodes = [fresh]
-                            ElaborationKind = "Baker"; ElaborationSource = "Continuation evidence replacement" }
+                            ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "Continuation evidence replacement" }
         let recipes = EvidenceFanOut.fanOut "Baker" (fun node -> ids.Contains node.Id) creator graph
         let folded = EvidenceReplacements.foldIn recipes graph
         let remap id = recipes.ReplacementMap.TryFind id |> Option.defaultValue id
         for original in evidence.NewEdges do
             let expected = { original with Sources = List.map remap original.Sources; Target = remap original.Target }
             Assert.Contains(folded.Edges, fun edge -> ContinuationFacts.fields edge = ContinuationFacts.fields expected)
+
+    [<Fact>]
+    member _.``External cell writes retain the resolved declaration instead of acquiring private storage``() =
+        let fixture = ContinuationFacts.fixture "let mutable shared = 0\nlet outer = seq { shared <- 1; yield shared; shared <- 2; yield shared }"
+        let shared = fixture.Graph.Nodes.Values |> Seq.filter (fun node -> match node.Kind with SemanticKind.Binding("shared", true, _, _) -> true | _ -> false) |> Assert.Single
+        Assert.Contains(fixture.Control.Steps.Values, fun step -> step.Defines.Contains shared.Id)
+        Assert.DoesNotContain(shared.Id, EvidenceMachine.requiredValues fixture.Graph fixture.Control)
+        Assert.DoesNotContain(fixture.Frame.Slots @ fixture.Frame.ScratchSlots, fun slot -> slot.Source = shared.Id)
+        let nodes = fixture.Machine.Nodes |> List.fold (fun nodes node -> Map.add node.Id node nodes) fixture.Graph.Nodes
+        let writes = fixture.Machine.Nodes |> List.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.Set(reference, _) ->
+                match nodes[reference].Kind with SemanticKind.VarRef("shared", Some source) -> Some source | _ -> None
+            | _ -> None)
+        Assert.Equal<NodeId list>([shared.Id; shared.Id], writes)
+        Assert.Contains(fixture.Machine.Nodes, fun node -> match node.Kind with SemanticKind.VarRef("shared", Some source) -> source = shared.Id | _ -> false)
+        Assert.DoesNotContain(fixture.Machine.Nodes, fun node ->
+            match node.Kind with SemanticKind.FrameRead(_, source) | SemanticKind.FrameWrite(_, source, _) -> source = shared.Id | _ -> false)
+        ContinuationFacts.evidence fixture |> ignore
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Declared and explicitly captured mutable cells retain their owned storage`` captured =
+        let source =
+            if captured then "let outer =\n    let mutable cell = 0\n    seq { cell <- 1; yield cell; cell <- 2; yield cell }"
+            else "let outer = seq { let mutable cell = 0 in cell <- 1; yield cell; cell <- 2; yield cell }"
+        let fixture = ContinuationFacts.fixture source
+        let cell = fixture.Graph.Nodes.Values |> Seq.filter (fun node -> match node.Kind with SemanticKind.Binding("cell", true, _, _) -> true | _ -> false) |> Assert.Single
+        Assert.Contains(cell.Id, EvidenceMachine.requiredValues fixture.Graph fixture.Control)
+        Assert.Contains(fixture.Frame.Slots @ fixture.Frame.ScratchSlots, fun slot -> slot.Source = cell.Id)
+        Assert.Contains(fixture.Machine.Nodes, fun node -> match node.Kind with SemanticKind.FrameWrite(_, source, _) -> source = cell.Id | _ -> false)
+        Assert.DoesNotContain(fixture.Machine.Nodes, fun node -> match node.Kind with SemanticKind.VarRef("cell", Some source) -> source = cell.Id | _ -> false)
+        ContinuationFacts.evidence fixture |> ignore
+
+    [<Fact>]
+    member _.``External declaration liveness does not fabricate suspension residence``() =
+        let fixture = ContinuationFacts.fixture "let mutable shared = 1\nlet outer = seq { yield shared; yield shared }"
+        let shared = fixture.Graph.Nodes.Values |> Seq.filter (fun node -> match node.Kind with SemanticKind.Binding("shared", true, _, _) -> true | _ -> false) |> Assert.Single
+        Assert.Contains(fixture.Control.LiveAcross.Values, fun live -> live.Contains shared.Id)
+        Assert.DoesNotContain(shared.Id, EvidenceMachine.requiredValues fixture.Graph fixture.Control)
+        Assert.DoesNotContain(fixture.Frame.Slots @ fixture.Frame.ScratchSlots, fun slot -> slot.Source = shared.Id)
+        // This change preserves source references; it does not establish the
+        // separate startup/use/space authority needed for an external resident.
+        match ContinuationEvidence.forMachine fixture.Graph fixture.Control fixture.Frame fixture.Machine with
+        | Error _ -> ()
+        | Ok _ -> failwith "External mutable declaration acquired unproven residence"
+
+    [<Fact>]
+    member _.``A resident scalar program cell survives suspension with its exact startup authority``() =
+        let fixture, shared = ContinuationFacts.programCell ()
+        Assert.Contains(fixture.Control.LiveAcross.Values, fun live -> live.Contains shared)
+        Assert.DoesNotContain(fixture.Frame.Slots @ fixture.Frame.ScratchSlots, fun slot -> slot.Source = shared)
+        let authority = EvidenceProgram.tryValueAuthority fixture.Graph shared |> Option.get
+        let evidence = ContinuationFacts.evidence fixture
+        let step, _, _ = ContinuationFacts.cuts fixture |> List.find (fun (step, _, _) -> fixture.Control.LiveAcross[step.Label].Contains shared)
+        let relation = ContinuationFacts.relation EdgeRole.SuspensionLiveAcross shared evidence.NewEdges
+        Assert.Equal<NodeId list>(List.distinct ([fixture.Frame.Owner; fixture.Frame.Generator; step.Origin] @ authority.Evidence.Sources), relation.Sources)
+        Assert.All(relation.Sources, fun id -> Assert.True(fixture.Graph.Nodes.ContainsKey id))
+
+    [<Theory>]
+    [<InlineData("missing-authority")>]
+    [<InlineData("wrong-authority")>]
+    [<InlineData("descriptor-value")>]
+    member _.``Program cell residence cannot bypass missing authority or prove descriptor backing`` defect =
+        let fixture, shared = ContinuationFacts.programCell ()
+        let graph =
+            match defect with
+            | "missing-authority" ->
+                { fixture.Graph with Edges = fixture.Graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.ProgramValue || edge.Target <> shared) }
+            | "wrong-authority" ->
+                let edges =
+                    fixture.Graph.Edges |> List.map (fun edge ->
+                        if edge.Role = EdgeRole.ProgramValue && edge.Target = shared then { edge with Sources = List.rev edge.Sources } else edge)
+                { fixture.Graph with Edges = edges }
+            | "descriptor-value" ->
+                { fixture.Graph with Nodes = fixture.Graph.Nodes.Add(shared, { fixture.Graph.Nodes[shared] with Type = NativeType.TSeq Types.intType }) }
+            | _ -> failwith "Unknown program residence defect"
+        Assert.True(EvidenceProgram.isSlotBinding graph shared)
+        match ContinuationEvidence.forMachine graph fixture.Control fixture.Frame fixture.Machine with
+        | Error residual ->
+            Assert.Equal(fixture.Frame.Owner, residual.Owner)
+            Assert.Equal(fixture.Frame.Owner, residual.Site)
+            Assert.Equal("Continuation liveness lacks exact control incidence or persistent value residence.", residual.Reason)
+        | Ok _ -> failwithf "Unproved %s acquired suspension residence" defect

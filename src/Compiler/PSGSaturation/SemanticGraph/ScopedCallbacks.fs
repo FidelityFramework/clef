@@ -236,7 +236,7 @@ let private readUncached (graph: SemanticGraph) =
                 (reachesDeclared Set.empty node.Id || capturesView Set.empty node.Id) &&
                 // Immediate application proves that the borrowed view remains
                 // within its mapping scope, not that an environment may die in
-                // the returning helper's stack frame. Preserve escaping placement.
+                // the returning function's stack frame. Preserve escaping placement.
                 not (Map.tryFind node.Id users |> Option.defaultValue [] |> List.exists (function ReturnedFunction _ -> true | _ -> false)) -> Some node.Id
             | _ -> None) |> Set.ofSeq
 

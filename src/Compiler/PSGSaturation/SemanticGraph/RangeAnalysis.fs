@@ -46,6 +46,8 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 module PlatformResolution = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
+module LoopRecipes = Clef.Compiler.Baker.Recipes.LoopRangeRecipes
+module LoopRanges = Clef.Compiler.Nanopass.LoopRanges
 
 //-------------------------------------------------------------------------
 // The program as the pass reads it
@@ -128,9 +130,18 @@ type private Program = {
     /// An application node -> what it calls and its whole argument list (curried calls flattened).
     Callees: Map<NodeId, Callee * NodeId list>
     Effects: Map<NodeId, WriteEffect>
+    LoopRecognition: LoopRecipes.Recognition
+    LoopAccumulations: Map<NodeId, LoopRecipes.Accumulation>
     /// Complete owner-local payload incidence for a certified current read.
     /// Missing/unknown origin alternatives deliberately have no entry.
     SequenceElements: Map<NodeId, NodeId * NodeId list>
+    /// Graph-carried deferred body effects, validated against complete origins.
+    SequencePullBodies: Map<NodeId, NodeId * NodeId list>
+    SequenceInitializations: Set<NodeId>
+    SequenceCurrentReads: Set<NodeId>
+    /// Original captured declaration -> mode and exact formation initializer reads.
+    /// Shared cells retain source storage identity; immutable slots retain snapshots.
+    EnvironmentCaptures: Map<NodeId, bool * (NodeId * NodeId) list>
     /// A Lambda parameter node -> (the call node, the argument node) at every reachable call that
     /// supplies it, directly or through a function value; the parameter reads the argument as the
     /// call does.
@@ -440,15 +451,25 @@ let private intrinsicOf (program: Program) (funcId: NodeId) : IntrinsicInfo opti
 /// a binding's references are refined by a guard; a mutable one is refined only up to its first
 /// assignment in the guarded subtree (see `refinementsOf`).
 let private isImmutableDefinition (program: Program) (defId: NodeId) : bool =
-    match Map.tryFind defId program.Reachable with
-    | Some { Kind = SemanticKind.Binding (_, false, _, _) } -> true
-    | Some { Kind = SemanticKind.PatternBinding _ } -> true
+    match program.EnvironmentCaptures.TryFind defId, Map.tryFind defId program.Graph.Nodes with
+    | Some (mutableSlot, _), _ -> not mutableSlot
+    | _, Some { Kind = SemanticKind.Binding (_, false, _, _) } -> true
+    | _, Some { Kind = SemanticKind.PatternBinding _ } -> true
     | _ -> false
 
 let private isMutableDefinition (program: Program) (defId: NodeId) : bool =
-    match Map.tryFind defId program.Reachable with
-    | Some { Kind = SemanticKind.Binding (_, true, _, _) } -> true
+    match program.EnvironmentCaptures.TryFind defId, Map.tryFind defId program.Graph.Nodes with
+    | Some (mutableSlot, _), _ -> mutableSlot
+    | _, Some { Kind = SemanticKind.Binding (_, true, _, _) } -> true
     | _ -> false
+
+/// Capture reads keep the source storage identity after closure elaboration.
+/// Only a complete, typed formation relation licenses that projection.
+let private readDefinition (program: Program) (id: NodeId) =
+    match program.Reachable.TryFind id with
+    | Some { Kind = SemanticKind.VarRef(_, Some source) } -> Some source
+    | Some { Kind = SemanticKind.EnvironmentRead(_, slot) } when program.EnvironmentCaptures.ContainsKey slot -> Some slot
+    | _ -> None
 
 let private isLiteralBool (program: Program) (id: NodeId) (value: bool) : bool =
     match Map.tryFind id program.Reachable with
@@ -526,6 +547,13 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
         match node.Kind with
         | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.SeqExpr _
         | SemanticKind.VarRef _ | SemanticKind.Quote _ -> noWrites
+        | SemanticKind.EnvironmentRead _ | SemanticKind.EnvironmentBorrow _ -> union effects node.Children
+        | SemanticKind.EnvironmentWrite(_, slot, value) ->
+            let store =
+                match program.EnvironmentCaptures.TryFind slot with
+                | Some (true, _) -> { noWrites with Definitions = Set.singleton slot }
+                | _ -> unknownWrites
+            joinWrites (union effects node.Children) (joinWrites (read effects value) store)
         | SemanticKind.Set (target, value) ->
             let store =
                 match Map.tryFind target program.Reachable with
@@ -541,6 +569,14 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
             let call =
                 match Map.tryFind node.Id program.Callees with
                 | _ when mutableCallee -> unknownWrites
+                | Some (Callee.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "moveNext" }, [iterator]) ->
+                    match program.SequencePullBodies.TryFind node.Id with
+                    | Some (actual, bodies) when actual = iterator -> union effects bodies
+                    | _ -> unknownWrites
+                | Some (Callee.Intrinsic { Module = IntrinsicModule.Seq; Operation = "getEnumerator" }, [_])
+                    when program.SequenceInitializations.Contains node.Id -> noWrites
+                | Some (Callee.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "current" }, [_])
+                    when program.SequenceCurrentReads.Contains node.Id -> noWrites
                 | Some (callee, args) -> invocation effects callee args
                 | None -> unknownWrites
             joinWrites (union effects node.Children) call
@@ -616,13 +652,14 @@ let rec private atoms (program: Program) (depth: int) (guardId: NodeId) (polarit
                 | Some relation ->
                     let relation = if polarity then relation else complement relation
                     let ofDefinition (side: NodeId) (bound: Bound) (r: Relation) =
-                        match Map.tryFind side program.Reachable with
-                        | Some { Kind = SemanticKind.VarRef (_, Some defId) } when isImmutableDefinition program defId || isMutableDefinition program defId ->
+                        match readDefinition program side with
+                        | Some defId when isImmutableDefinition program defId || isMutableDefinition program defId ->
                             [ (Compared.Definition defId, { Bound = bound; Relation = r }) ]
                         | _ -> []
                     let ofSide (side: NodeId) (other: NodeId) (r: Relation) =
                         match Map.tryFind side program.Reachable with
-                        | Some { Kind = SemanticKind.VarRef (_, Some defId) } when isImmutableDefinition program defId || isMutableDefinition program defId ->
+                        | Some _ when readDefinition program side |> Option.exists (fun d -> isImmutableDefinition program d || isMutableDefinition program d) ->
+                            let defId = readDefinition program side |> Option.get
                             [ (Compared.Definition defId, { Bound = Bound.Of other; Relation = r }) ]
                         | Some { Kind = SemanticKind.Literal _ } -> []
                         | Some { Kind = SemanticKind.Application (f, [ a; b ]) } ->
@@ -720,6 +757,7 @@ let private boundsOn (program: Program) (bounds: (Compared * Refinement) list) (
     let keys =
         match Map.tryFind operand program.Reachable with
         | Some { Kind = SemanticKind.VarRef (_, Some defId) } -> [ Compared.Definition defId ]
+        | Some { Kind = SemanticKind.EnvironmentRead(_, slot) } when program.EnvironmentCaptures.ContainsKey slot -> [ Compared.Definition slot ]
         | Some { Kind = SemanticKind.Binding _ } | Some { Kind = SemanticKind.PatternBinding _ } -> [ Compared.Definition operand; Compared.Node operand ]
         | _ -> [ Compared.Node operand ]
     bounds |> List.filter (fun (k, _) -> List.contains k keys) |> List.map snd
@@ -761,6 +799,9 @@ let private refineEdges (program: Program) (rootId: NodeId) (excluded: Set<NodeI
                     assigned, record assigned edges child
                 match node.Kind with
                 | SemanticKind.VarRef (_, Some definition) -> assigned, record assigned edges definition
+                | SemanticKind.EnvironmentRead(environment, slot) ->
+                    let assigned, edges = operand (assigned, edges) environment
+                    assigned, record assigned edges slot
                 | SemanticKind.Set (_, value) ->
                     let assigned, edges = operand (assigned, edges) value
                     invalidate assigned (effectAt program id), edges
@@ -916,12 +957,101 @@ let private sequenceElements (graph: SemanticGraph) =
             | _ -> None)
     |> Map.ofList
 
+/// Read only complete effect incidence. Origin validation prevents a deleted
+/// alternative from turning a partial body list into a closed write summary.
+/// The solver still reads the retained body IDs, never a post-range override.
+let private sequenceEffectSources (graph: SemanticGraph) =
+    let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
+    let _, origins = SequenceOrigins.settle graph graph.Codata.Value.Curry
+    let edges = graph.Edges |> List.filter (fun edge -> edge.Class = EdgeClass.Suspension)
+    let byTarget = edges |> List.groupBy _.Target |> Map.ofList
+    let pullBodies, initializations =
+        nodes |> Map.fold (fun (pulls, initializers) id node ->
+            match node.Kind with
+            | SemanticKind.Application(_, [operand]) ->
+                let facts = byTarget.TryFind id |> Option.defaultValue []
+                let sources role = facts |> List.filter (fun edge -> edge.Role = role) |> List.map _.Sources
+                let pullRows, initRows = sources EdgeRole.SequencePullBody, sources EdgeRole.SequenceInitialize
+                let owners =
+                    origins.TryFind operand |> Option.bind (fun alternatives ->
+                        let known = alternatives |> Set.toList |> List.choose (function SequenceOrigins.Origin.Known owner -> Some owner | _ -> None)
+                        if not alternatives.IsEmpty && known.Length = alternatives.Count then Some known else None)
+                let definitions =
+                    owners |> Option.bind (fun owners ->
+                        let definitions =
+                            owners |> List.choose (fun owner ->
+                                match nodes.TryFind owner with
+                                | Some { Kind = SemanticKind.SeqExpr(generator, _) } ->
+                                    match nodes.TryFind generator with
+                                    | Some { Kind = SemanticKind.Lambda(_, body, _, _, LambdaContext.SeqGenerator) } when nodes.ContainsKey body -> Some(owner, generator, body)
+                                    | _ -> None
+                                | _ -> None)
+                        if definitions.Length = owners.Length then Some definitions else None)
+                match definitions with
+                | Some definitions when List.isEmpty (sources EdgeRole.SequenceEffectUnknown) ->
+                    let expectedPulls = definitions |> List.map (fun (owner, generator, body) -> [operand; owner; generator; body]) |> Set.ofList
+                    let expectedInitializers = definitions |> List.map (fun (owner, generator, _) -> [operand; owner; generator]) |> Set.ofList
+                    if List.isEmpty initRows && Set.ofList pullRows = expectedPulls then
+                        Map.add id (operand, definitions |> List.map (fun (_, _, body) -> body)) pulls, initializers
+                    elif List.isEmpty pullRows && Set.ofList initRows = expectedInitializers then
+                        pulls, Set.add id initializers
+                    else pulls, initializers
+                | _ -> pulls, initializers
+            | _ -> pulls, initializers) (Map.empty, Set.empty)
+    let consumers = Clef.Compiler.Baker.Recipes.SequenceCurrentRecipes.structuralConsumers graph
+    let currentReads =
+        edges |> List.choose (fun certificate ->
+            match certificate.Role, certificate.Sources with
+            | EdgeRole.IteratorCurrentAdmitted, [_; _; loop] ->
+                nodes.TryFind loop
+                |> Option.bind (Clef.Compiler.Baker.Recipes.SequenceCurrentRecipes.forLoop graph consumers)
+                |> Option.bind (fun actual ->
+                    if actual.Target = certificate.Target && actual.Sources = certificate.Sources then Some actual.Target else None)
+            | _ -> None) |> Set.ofList
+    pullBodies, initializations, currentReads
+
+/// Formation incidence retains capture mode independently of subsequent source
+/// rewrites. Join every formation of the same declaration, but never complete a
+/// missing or contradictory row from the read's slot name alone.
+let private environmentCaptureSources (graph: SemanticGraph) =
+    let captures =
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Class, edge.Role, edge.Sources with
+            | EdgeClass.Provenance, EdgeRole.EnvironmentCapture isMutable, [owner; slot; value] ->
+                Some (edge.Target, edge.Ordinal, owner, slot, value, isMutable)
+            | _ -> None)
+    graph.Nodes.Values
+    |> Seq.filter _.IsReachable
+    |> Seq.collect (fun node ->
+        match node.Kind with
+        | SemanticKind.EnvironmentCreate(owner, initializers) ->
+            initializers |> List.mapi (fun ordinal (slot, value) ->
+                let rows = captures |> List.filter (fun (target, order, _, source, _, _) -> target = node.Id && order = ordinal && source = slot)
+                let admitted =
+                    match rows with
+                    | [(_, _, actualOwner, _, actualValue, isMutable)]
+                        when actualOwner = owner && actualValue = value && graph.Nodes.ContainsKey slot && graph.Nodes.ContainsKey value ->
+                        Some (isMutable, (node.Id, value))
+                    | _ -> None
+                slot, admitted)
+        | _ -> [])
+    |> Seq.groupBy fst
+    |> Seq.choose (fun (slot, rows) ->
+        let rows = rows |> Seq.map snd |> Seq.toList
+        if rows |> List.exists Option.isNone then None else
+        let values = rows |> List.choose id
+        match values |> List.map fst |> List.distinct with
+        | [isMutable] -> Some (slot, (isMutable, values |> List.map snd))
+        | _ -> None)
+    |> Map.ofSeq
+
 let private readProgram (context: PlatformContext option) (graph: SemanticGraph) : Program =
     let reachableNodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let ordered = reachableNodes |> Map.toList |> List.map snd
     let parents = parentIndex reachableNodes
     let candidates = escapingOf reachableNodes ordered parents
     let poisons = poisoningOf reachableNodes ordered
+    let sequencePulls, sequenceInitializations, sequenceCurrentReads = sequenceEffectSources graph
     let baseProgram = {
         Graph = graph
         Context = context
@@ -930,7 +1060,13 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Parents = parents
         Callees = Map.empty
         Effects = Map.empty
+        LoopRecognition = { Accumulations = []; Edges = [] }
+        LoopAccumulations = Map.empty
         SequenceElements = sequenceElements graph
+        SequencePullBodies = sequencePulls
+        SequenceInitializations = sequenceInitializations
+        SequenceCurrentReads = sequenceCurrentReads
+        EnvironmentCaptures = environmentCaptureSources graph
         CallArguments = Map.empty
         IndexSeeds = Map.empty
         Escaping = Map.empty
@@ -1060,6 +1196,9 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                     let existing = Map.tryFind defId acc |> Option.defaultValue []
                     Map.add defId (valueId :: existing) acc
                 | _ -> acc
+            | SemanticKind.EnvironmentWrite(_, slot, value) when baseProgram.EnvironmentCaptures.TryFind slot |> Option.exists fst ->
+                let existing = Map.tryFind slot acc |> Option.defaultValue []
+                Map.add slot (value :: existing) acc
             | _ -> acc) Map.empty
     let constructions =
         ordered
@@ -1278,6 +1417,18 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             ElementStores = elementStores
             ElementSeeds = elementSeeds }
     let program = { program with Effects = effectsOf program }
+    let inputs: LoopRecipes.Inputs = {
+        Operators = program.Callees |> Map.toList |> List.choose (fun (id, (callee, arguments)) ->
+            match callee with
+            | Callee.Intrinsic info when info.Module = IntrinsicModule.Operators -> Some(id, (info.Operation, arguments))
+            | _ -> None) |> Map.ofList
+        Assignments = program.Assignments
+        Effects = program.Effects |> Map.map (fun _ effect -> effect.Definitions, effect.Unknown) }
+    let graph, loops = LoopRanges.recognize inputs program.Graph
+    let program = { program with
+                        Graph = graph
+                        LoopRecognition = loops
+                        LoopAccumulations = loops.Accumulations |> List.collect (fun item -> [item.Cell, item; item.Update, item]) |> Map.ofList }
     { program with Refinements = refinementsOf program }
 
 //-------------------------------------------------------------------------
@@ -1516,6 +1667,14 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
         | SemanticKind.Application _ -> Some (applicationRange program state node fallback)
         | SemanticKind.VarRef (_, Some defId) -> Some (get defId)
         | SemanticKind.VarRef (_, None) -> Some fallback
+        | SemanticKind.EnvironmentRead(_, slot) ->
+            match program.EnvironmentCaptures.TryFind slot with
+            | Some (true, _) when program.Reachable.ContainsKey slot -> Some (get slot)
+            | Some (false, initializers) ->
+                initializers |> List.fold (fun range (formation, value) ->
+                    let valueRange = if program.Reachable.ContainsKey value then read program state formation value else fallback
+                    ValueRange.join range valueRange) ValueRange.Empty |> Some
+            | _ -> Some fallback
         | SemanticKind.PatternBinding _ when Set.contains node.Id program.Parameters ->
             // a parameter is the join of the arguments at every call that supplies it, directly or
             // through a function value, and of the index seeds an intrinsic hands it; one nothing
@@ -1569,6 +1728,13 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
             | Some elem -> Some (elementRange program state elem)
             | None -> Some fallback
         | _ -> Some fallback
+    let computed =
+        match computed, program.LoopAccumulations.TryFind node.Id with
+        | Some range, Some recurrence ->
+            match LoopRecipes.saturate (current state) recurrence with
+            | Result.Ok result -> Some(ValueRange.meet range (ValueRange.Bounded(result.Invariant.Lower, result.Invariant.Upper)))
+            | Result.Error _ -> Some range
+        | _ -> computed
     match computed with
     | Some r when isIntegerNode node && isSource program node -> Some (boundByCarrier program node r)
     | other -> other
@@ -2182,6 +2348,7 @@ let private spelledDiagnostics (program: Program) (state: State) : Diagnostic li
 /// written and the field and element ranges settled.
 let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
     let program = readProgram context graph
+    let graph = program.Graph
     let state = fixpoint program
     let nodes =
         graph.Nodes
@@ -2229,7 +2396,8 @@ let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph
         |> List.choose (fun key -> typeOfKey key |> Option.map (fun elem -> key, elementRange program state elem))
         |> Map.ofList
     let diagnostics = unobservableDiagnostics program state @ coverageDiagnostics program state @ boundaryDiagnostics program state @ declaredDiagnostics program state @ spelledDiagnostics program state
-    ({ graph with Nodes = nodes; FieldRanges = lazy fieldRanges; ElementRanges = lazy elementRanges; Escaping = lazy program.EscapingLambdas }, diagnostics)
+    let graph = { graph with Nodes = nodes; FieldRanges = lazy fieldRanges; ElementRanges = lazy elementRanges; Escaping = lazy program.EscapingLambdas }
+    (LoopRanges.saturate (current state) program.LoopRecognition graph, diagnostics)
 
 //-------------------------------------------------------------------------
 // Reads for the witnesses (Composer transcribes; it computes no range and no width)

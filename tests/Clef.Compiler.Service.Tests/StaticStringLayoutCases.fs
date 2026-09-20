@@ -12,9 +12,10 @@ module StaticElaboration = Clef.Compiler.Nanopass.ObligationElaboration
 
 module private StaticEvidence =
     let template = """type MemorySpace = { Name: string; Kind: string; Capacity: int; Alignment: int; Granularity: int; Growth: string; Access: string; Base: int option }
-type PlatformDescription = { Id: string; Spaces: MemorySpace array }
+type ProgramLifetimeSpaces = { Immutable: string; Mutable: string option }
+type PlatformDescription = { Id: string; Spaces: MemorySpace array; ProgramLifetime: ProgramLifetimeSpaces option }
 let rodata = { Name = "rodata"; Kind = "rodata"; Capacity = %d; Alignment = 16; Granularity = 16; Growth = "fixed"; Access = "r"; Base = %s }
-let description = { Id = "layout-test"; Spaces = [| rodata |] }
+let description = { Id = "layout-test"; Spaces = [| rodata |]; ProgramLifetime = Some { Immutable = "rodata"; Mutable = None } }
 let consume (left: string) (right: string) = if left = right then 1 else 0
 [<EntryPoint>]
 let main _ = consume "ascii" "λ🙂" + consume "" "a\000b" + consume "ascii" ""
@@ -121,7 +122,16 @@ type StaticStringLayoutTests() =
     [<Fact>]
     member _.``Entry point layout cites the declaration and every contributing literal``() =
         let graph = StaticEvidence.check ()
-        let entry = graph.Nodes.Values |> Seq.find (fun node -> match node.Kind with SemanticKind.Binding("main", _, _, _) -> true | _ -> false)
+        let startup = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read graph |> Option.get
+        let entry = graph.Nodes[startup.EntryBinding]
+        let source = graph.Nodes[startup.SourceBinding]
+        Assert.Equal("main", startup.Symbol)
+        Assert.NotEqual(source.Range.Start, source.Range.End)
+        Assert.Equal(source.Range.Start, entry.Range.Start)
+        Assert.Equal(entry.Range.Start, entry.Range.End)
+        Assert.Contains(graph.Edges, fun edge ->
+            edge.Role = EdgeRole.ProgramInitialization && edge.Target = startup.Spine
+            && edge.Sources = [entry.Id; source.Id; startup.SourceLambda; startup.OriginalBody; startup.EntryLambda])
         let enrichment, _ = StaticElaboration.elaborateSettled graph
         let node = enrichment.NewNodes |> List.find (fun node -> match node.Kind with SemanticKind.Obligation ob -> ob.Id = "layout_user_strings" | _ -> false)
         let sources = enrichment.NewEdges |> List.find (fun edge -> edge.Target = node.Id) |> fun edge -> edge.Sources

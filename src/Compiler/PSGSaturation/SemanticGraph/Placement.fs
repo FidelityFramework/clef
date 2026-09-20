@@ -203,6 +203,7 @@ let private extentOf (p: Placer) (slot: SettledSlot) : (int * int) option =
     match p.PointerBytes, slot with
     | None, _ -> None
     | _, SettledSlot.Opaque _ -> None
+    | _, SettledSlot.InlineBytes(bytes, alignment) -> Some(bytes, alignment)
     | _, SettledSlot.Integer (bits, _) -> let b = max 1 ((bits + 7) / 8) in Some (b, b)
     | _, SettledSlot.Bool -> Some (1, 1)
     | _, SettledSlot.Char -> Some (4, 4)
@@ -520,7 +521,14 @@ let private placeContinuationFields (graph: SemanticGraph)
     let regular role id =
         source id |> Result.bind (fun node ->
             let ty = applySubst node.Type
-            if role <> ContinuationRole.State && concrete node && isValueView ty then
+            let environment = ClosureEnvironments.tryEnvironmentOwner graph id
+            if role <> ContinuationRole.State && concrete node && environment.IsSome then
+                view role id (CaptureSlotKind.EnvironmentView environment.Value)
+            elif role <> ContinuationRole.State && role <> ContinuationRole.Capture
+                 && (AggregateValues.scalarOption graph ty |> Option.isSome) then
+                let _, bytes, alignment = (AggregateValues.scalarOption graph ty).Value
+                Ok(id, role, CaptureSlotKind.InlineValue ty, SettledSlot.InlineBytes(bytes, alignment), (bytes, alignment))
+            elif role <> ContinuationRole.State && concrete node && isValueView ty then
                 view role id (CaptureSlotKind.ValueView ty)
             else
                 scalar node |> Result.bind (fun (slot, size) ->
@@ -590,6 +598,11 @@ let placeEmptyContinuation (graph: SemanticGraph) (state: NodeId) (captures: Cap
 let placeContinuationLocals (graph: SemanticGraph) (locals: NodeId list)
                             : Result<SettledLayout * ContinuationField list, ContinuationPlacementError> =
     placeContinuationFields graph [] [] (locals |> List.map (fun id -> ContinuationRole.Local, id))
+
+/// Closure environments share exact slot selection/tiling with continuation
+/// frames but have no state/current prefix and no code-address field.
+let placeEnvironment (graph: SemanticGraph) (captures: CaptureInfo list) =
+    placeContinuationFields graph [] captures []
 
 let private requiresClosurePair (node: SemanticNode) : bool =
     node.Metadata

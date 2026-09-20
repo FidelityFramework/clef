@@ -38,6 +38,27 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
         let signed = if numerator.Sign < 0 then sprintf "(- %s)" magnitude else magnitude
         if value.Denominator = 1I then signed else sprintf "(/ %s %s.0)" signed (string value.Denominator)
     match body with
+    | ObligationBody.FiniteLoopTrip model ->
+        let start, limit, step, count = integer model.InitialLower, integer model.LimitUpper, integer model.MinimumStep, integer model.MaximumIterations
+        let beyond = if model.Inclusive then ">" else ">="
+        [ sprintf "(assert (= %s (and (> %s 0) (>= %s 0) (%s (+ %s (* %s %s)) %s))))" id step count beyond start count step limit
+          sprintf "(assert (not %s))" id ]
+    | ObligationBody.AdditiveLoopInvariant model ->
+        let lo, hi = integer model.InitialLower, integer model.InitialUpper
+        let dlo, dhi = integer model.DeltaLower, integer model.DeltaUpper
+        let lower, upper, count = integer model.Lower, integer model.Upper, integer model.MaximumIterations
+        let down, up = integer (min 0I model.DeltaLower), integer (max 0I model.DeltaUpper)
+        [ "(declare-const recurrence_k Int)"
+          "(declare-const recurrence_value Int)"
+          "(declare-const recurrence_delta Int)"
+          sprintf "(define-fun recurrence_lo ((k Int)) Int (+ %s (* k %s)))" lo down
+          sprintf "(define-fun recurrence_hi ((k Int)) Int (+ %s (* k %s)))" hi up
+          // Premises are local implications. Inconsistent numeric models must
+          // refute the conclusion, rather than make global assumptions empty.
+          sprintf "(assert (= %s (and (>= %s 0) (<= %s %s) (<= %s %s) (<= %s %s) (<= %s %s) (<= %s %s)" id count lo hi dlo dhi lower upper lower lo hi upper
+          sprintf "  (=> (and (<= 0 recurrence_k) (<= recurrence_k %s)) (and (<= %s (recurrence_lo recurrence_k)) (<= (recurrence_hi recurrence_k) %s)))" count lower upper
+          sprintf "  (=> (and (<= 0 recurrence_k) (< recurrence_k %s) (<= (recurrence_lo recurrence_k) recurrence_value) (<= recurrence_value (recurrence_hi recurrence_k)) (<= %s recurrence_delta) (<= recurrence_delta %s)) (and (<= (recurrence_lo (+ recurrence_k 1)) (+ recurrence_value recurrence_delta)) (<= (+ recurrence_value recurrence_delta) (recurrence_hi (+ recurrence_k 1))))))))" count dlo dhi
+          sprintf "(assert (not %s))" id ]
     | ObligationBody.MappedElementSpan model ->
         [ "(declare-const mapped_base Int)"
           "(declare-const mapped_bytes Int)"

@@ -23,6 +23,10 @@ type Recipe = {
     /// New nodes that comprise the replacement structure
     NewNodes: SemanticNode list
 
+    /// Finite semantic incidence minted with this structure. Fold-in remaps
+    /// these participants alongside existing graph edges and node references.
+    NewEdges: Hyperedge list
+
     /// The root of the replacement (what parent references should point to)
     ReplacementRootId: NodeId
 

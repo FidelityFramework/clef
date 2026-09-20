@@ -30,6 +30,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Baker.Recipes.Decomposition
 open Clef.Compiler.Baker.Ingredients.SaturationCombinators
 open Clef.Compiler.Baker.Ingredients.Primitives
+module Options = Clef.Compiler.Baker.Ingredients.Options
 open Clef.Compiler.Baker.Ingredients.Patterns
 
 //=============================================================================
@@ -126,7 +127,7 @@ let private mapContainsKeyParser
     // Implement as isSome (tryFind k m)
     saturation {
         let! optionResult = binarySearchMap keyNodeId mapNodeId keyType valueType
-        return! isSome optionResult valueType
+        return! Options.hasValue optionResult valueType
     }
 
 //=============================================================================

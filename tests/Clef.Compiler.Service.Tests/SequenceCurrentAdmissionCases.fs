@@ -139,7 +139,7 @@ type SequenceCurrentAdmissionCases() =
             let replacement = { node with Id = NodeId.fresh() }
             RecipeCreated {
                 OriginalNodeId = node.Id; ReplacementRootId = replacement.Id
-                NewNodes = [replacement]; ElaborationKind = "Baker"; ElaborationSource = "Current identity fixture" }
+                NewNodes = [replacement]; ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "Current identity fixture" }
         let recipes = CurrentFanOut.fanOut "Baker" (fun node -> Set.contains node.Id replaced) creator graph
         let folded = CurrentFoldIn.foldIn recipes graph
         let remap id = recipes.ReplacementMap.TryFind id |> Option.defaultValue id

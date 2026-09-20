@@ -240,8 +240,32 @@ type MappedSpanModel = {
     ElementAlignment: int
 }
 
+/// Numeric premises of an admitted monotone loop, normalized to increasing
+/// coordinates. Original source identities and direction stay in F.
+type FiniteLoopTripModel = {
+    InitialLower: bigint
+    LimitUpper: bigint
+    MinimumStep: bigint
+    Inclusive: bool
+    MaximumIterations: bigint
+}
+
+/// An additive enclosure across all iteration prefixes, including the initial
+/// state and the final write. This is independent of any physical carrier.
+type AdditiveLoopInvariantModel = {
+    MaximumIterations: bigint
+    InitialLower: bigint
+    InitialUpper: bigint
+    DeltaLower: bigint
+    DeltaUpper: bigint
+    Lower: bigint
+    Upper: bigint
+}
+
 [<RequireQualifiedAccess>]
 type ObligationBody =
+    | FiniteLoopTrip of FiniteLoopTripModel
+    | AdditiveLoopInvariant of AdditiveLoopInvariantModel
     /// The additive/index step after successful native mapping guards establish
     /// a finite byte extent. Native allocation provenance and stride*rows
     /// arithmetic are explicit premises, not conclusions of this QF_LIA slice.
@@ -350,6 +374,20 @@ type SemanticKind =
     /// Internal caller-owned destination for one sequence factory result.
     /// Allocation does not initialize the frame; the factory constructor does.
     | ContinuationAllocate of owner: NodeId
+    /// Uninitialized owned aggregate backing at a proven activation occurrence.
+    | AggregateStorage of source: NodeId
+    /// Initialize a case in an explicit typed destination; returns unit.
+    | DUInitialize of destination: NodeId * caseName: string * caseIndex: int * payload: NodeId option
+    /// A logical callable retains its implementation separately from its
+    /// actual environment value. The implementation body remains deferred.
+    | ClosureValue of implementation: NodeId * environment: NodeId
+    /// Formation snapshots already evaluated captures at this occurrence.
+    /// Slot identities are provenance, never demands to reevaluate declarations.
+    | EnvironmentCreate of owner: NodeId * initializers: (NodeId * NodeId) list
+    | EnvironmentReference of callable: NodeId
+    | EnvironmentRead of environment: NodeId * slot: NodeId
+    | EnvironmentBorrow of environment: NodeId * slot: NodeId
+    | EnvironmentWrite of environment: NodeId * slot: NodeId * value: NodeId
     | ForLoop of var: string * start: NodeId * finish: NodeId * isUp: bool * body: NodeId
     | ForEach of var: string * formal: NodeId * collection: NodeId * body: NodeId
     | IfThenElse of guard: NodeId * thenBranch: NodeId * elseBranch: NodeId option
@@ -477,6 +515,18 @@ type EvaluationResidual =
 
 /// How an edge participates in the graph's projections.
 [<RequireQualifiedAccess>]
+type LoopRangeResidual =
+    | Guard
+    | Step
+    | OtherWrites
+    | ConditionalUpdate
+    | CapturedCell
+    | UnknownEffect
+    | Reentry
+    | NonAdditive
+    | MissingBound
+
+[<RequireQualifiedAccess>]
 type EdgeClass =
     /// Containment: the source is structurally part of the target.
     /// These are the edges that materialise as SemanticNode.Children.
@@ -496,12 +546,23 @@ type EdgeClass =
     /// Baker's local evaluation contracts. Composition, dominance and frame
     /// liveness require further saturation; this is not a flattened CFG.
     | Evaluation
+    /// Joint numeric premises and their recurrence dependency, distinct from
+    /// the local interval annotation resulting from range saturation.
+    | Range
 
 /// The role the source plays relative to the target -- the edge label.
 /// Generalises Traversal.RegionKind, which named the same thing but was
 /// handed to a callback and discarded instead of being stored.
 [<RequireQualifiedAccess>]
 type EdgeRole =
+    /// [owner; guard; induction cell; initial value; limit; step; update; store]
+    /// -> loop. Direction and strictness describe the actual comparison.
+    | LoopInduction of ascending: bool * inclusive: bool
+    /// [loop; induction cell; accumulator initial; store; update; delta]
+    /// -> accumulator cell. Both cell and exact update acquire its enclosure.
+    | LoopAccumulation
+    /// [owner; loop] -> cell whose recurrence remains outside admission.
+    | LoopRangePending of LoopRangeResidual
     // structural
     | Callee
     | Argument
@@ -541,10 +602,45 @@ type EdgeRole =
     | Symbol
     // provenance
     | EnrichedWith
+    /// Ordered startup, its preserved source entry, and the actual execution spine.
+    | ProgramInitialization
+    /// Source entry and its declaration constrain an unsettled initializer.
+    | ProgramInitializationPending of reason: string
+    /// [module; source binding; initializer; startup lambda] -> ordered spine.
+    | ProgramInitializer
+    /// Startup, source entry and exact owned-unit or demanded-value premises
+    /// activate this module's implementation unit before the source call.
+    | ProgramUnitActivation
+    /// [startup binding; source binding; source lambda; startup lambda] -> call.
+    | ProgramEntryCall
+    /// [startup lambda; spine; initializer] -> runtime value binding.
+    | ProgramValueIntent
+    /// Runtime value intent joined with the exact writable program designation.
+    | ProgramValue
+    /// [startup; caller activation; callee occurrence; implementation] -> call.
+    | ProgramActivationCall
+    /// Startup and complete finite callable uses cover the implementation.
+    | ProgramActivationCoverage
+    /// An elaborated expression's distinct mutually exclusive branch occurrence.
+    /// Sources retain the original expression and its original branch body.
+    | BranchOccurrence
     /// Direct capture origin: ordered sources [lambda; captured declaration]
     /// produce the hidden formal target. The declaration may itself be a
     /// hidden formal; source tooling follows this specific relation by identity.
     | CaptureOrigin
+    /// Exact environment formation inputs; the flag retains shared-cell mode.
+    /// [owner; source declaration; initializer] -> environment creation.
+    | EnvironmentCapture of isMutable: bool
+    | EnvironmentInitializer
+    | EnvironmentFormal
+    /// Complete-use covering activation and retained source cells.
+    | EnvironmentResidence
+    /// Exact source closure, implementation and formal supplying a child constructor.
+    | SequenceCaptureFormation
+    /// Original child slot and its eager value/cell initializer; never a new slot identity.
+    | SequenceCaptureInitializer of isMutable: bool
+    /// Joint environment coverage, actual call and caller-owned child destination.
+    | SequenceEnvironmentBorrow
     /// Ordered sources [sequence owner; its generator] constrain the target
     /// Yield/YieldBang site. Ordinal is zero, not a resumption state number.
     | Delimiter
@@ -564,6 +660,15 @@ type EdgeRole =
     | SequenceElementPayload
     /// [iterator operand; unknown origin site] prevents finite narrowing.
     | SequenceElementUnknown
+    /// [iterator operand; source sequence owner; generator; deferred body]
+    /// supplies one possible body's source-cell writes to the target pull.
+    | SequencePullBody
+    /// [sequence operand; source owner; generator] establishes fresh iterator
+    /// formation without invoking that deferred body at the target acquisition.
+    | SequenceInitialize
+    /// [operand; unresolved origin site] prevents a closed effect summary for
+    /// the target iterator operation, even alongside other known origins.
+    | SequenceEffectUnknown
     /// [owner; generator; payload] enumerates the target source cut's state.
     | SuspensionCut of int
     /// [owner; generator; source cut] retains an exact live-across value.
@@ -594,6 +699,10 @@ type EdgeRole =
     | ContinuationValue
     | ContinuationRegion
     | ContinuationBorrow
+    /// Source value, destination, discriminant and selected case initialization.
+    | AggregateCopy
+    /// Successful current read, owned snapshot and its finite activation uses.
+    | AggregateSnapshot
     /// [source allocation; covering activation; captured declaration;
     /// capturing generator] proves the target sequence template's complete
     /// bounded use is covered by its captured source allocation's residence.
@@ -621,7 +730,7 @@ type Hyperedge = {
     Ordinal: int
 }
 
-/// Edge construction and projection helpers.
+/// Canonical edge construction and projection.
 [<RequireQualifiedAccess>]
 module Hyperedge =
 
@@ -669,17 +778,17 @@ let kindEdges (target: NodeId) (kind: SemanticKind) : Hyperedge list =
 
     | SemanticKind.Match (scrutinee, cases) ->
         st EdgeRole.Scrutinee scrutinee
-        :: (cases |> List.collect (fun c ->
+        :: (cases |> List.mapi (fun ordinal c ->
                 sts EdgeRole.CaseBinding c.PatternBindings
-                @ (c.Guard |> Option.toList |> List.map (st EdgeRole.CaseGuard))
-                @ [ st EdgeRole.CaseBody c.Body ]))
+                @ (c.Guard |> Option.toList |> List.map (fun source -> Hyperedge.edge1 EdgeClass.Structural EdgeRole.CaseGuard ordinal source target))
+                @ [ Hyperedge.edge1 EdgeClass.Structural EdgeRole.CaseBody ordinal c.Body target ]) |> List.concat)
 
     | SemanticKind.CaseElimination (scrutinee, arms) ->
         st EdgeRole.Scrutinee scrutinee
-        :: (arms |> List.collect (fun arm ->
+        :: (arms |> List.mapi (fun ordinal arm ->
                 sts EdgeRole.CaseBinding arm.Bindings
-                @ (arm.Guard |> Option.toList |> List.map (st EdgeRole.CaseGuard))
-                @ [ st EdgeRole.CaseBody arm.Body ]))
+                @ (arm.Guard |> Option.toList |> List.map (fun source -> Hyperedge.edge1 EdgeClass.Structural EdgeRole.CaseGuard ordinal source target))
+                @ [ Hyperedge.edge1 EdgeClass.Structural EdgeRole.CaseBody ordinal arm.Body target ]) |> List.concat)
 
     | SemanticKind.Sequential nodes -> sts EdgeRole.Element nodes
     | SemanticKind.WhileLoop (guard, body) -> [ st EdgeRole.Guard guard; st EdgeRole.Body body ]
@@ -691,8 +800,22 @@ let kindEdges (target: NodeId) (kind: SemanticKind) : Hyperedge list =
     | SemanticKind.FrameWrite (frame, slot, value) ->
         [ st EdgeRole.Subject frame; Hyperedge.edge1 EdgeClass.Provenance EdgeRole.FrameSlot 0 slot target; st EdgeRole.AssignValue value ]
     | SemanticKind.ContinuationStorage owner
-    | SemanticKind.ContinuationAllocate owner ->
+    | SemanticKind.ContinuationAllocate owner
+    | SemanticKind.AggregateStorage owner ->
         [ Hyperedge.edge1 EdgeClass.Provenance EdgeRole.Definition 0 owner target ]
+    | SemanticKind.ClosureValue (implementation, environment) ->
+        [ st EdgeRole.Body implementation; st EdgeRole.Subject environment ]
+    | SemanticKind.EnvironmentCreate (owner, initializers) ->
+        Hyperedge.edge1 EdgeClass.Provenance EdgeRole.Definition 0 owner target
+        :: (initializers |> List.mapi (fun ordinal (_, value) ->
+            Hyperedge.edge1 EdgeClass.Reference EdgeRole.EnvironmentInitializer ordinal value target))
+    | SemanticKind.EnvironmentReference value -> [st EdgeRole.Subject value]
+    | SemanticKind.EnvironmentRead (environment, slot)
+    | SemanticKind.EnvironmentBorrow (environment, slot) ->
+        [st EdgeRole.Subject environment; Hyperedge.edge1 EdgeClass.Provenance EdgeRole.FrameSlot 0 slot target]
+    | SemanticKind.EnvironmentWrite (environment, slot, value) ->
+        [st EdgeRole.Subject environment; st EdgeRole.AssignValue value
+         Hyperedge.edge1 EdgeClass.Provenance EdgeRole.FrameSlot 0 slot target]
     | SemanticKind.ForLoop (_, start, finish, _, body) ->
         [ st EdgeRole.LoopStart start; st EdgeRole.LoopFinish finish; st EdgeRole.Body body ]
     | SemanticKind.ForEach (_, formal, collection, body) ->
@@ -710,6 +833,8 @@ let kindEdges (target: NodeId) (kind: SemanticKind) : Hyperedge list =
         payload |> Option.toList |> List.map (st EdgeRole.Payload)
     | SemanticKind.DUGetTag (duValue, _) -> [ st EdgeRole.Subject duValue ]
     | SemanticKind.DUEliminate (duValue, _, _, _) -> [ st EdgeRole.Subject duValue ]
+    | SemanticKind.DUInitialize (destination, _, _, payload) ->
+        st EdgeRole.Subject destination :: (payload |> Option.toList |> List.map (st EdgeRole.Payload))
     | SemanticKind.DUConstruct (_, _, payload, arenaHint) ->
         (payload |> Option.toList |> List.map (st EdgeRole.Payload))
         @ (arenaHint |> Option.toList |> List.map (st EdgeRole.ArenaHint))
@@ -741,7 +866,8 @@ let kindEdges (target: NodeId) (kind: SemanticKind) : Hyperedge list =
     | SemanticKind.Quote (expr, _) -> [ st EdgeRole.Operand expr ]
 
     | SemanticKind.ObjectExpr (_, members) -> sts EdgeRole.Member members
-    | SemanticKind.ModuleDef (_, members) -> sts EdgeRole.Member members
+    | SemanticKind.ModuleDef (_, members) ->
+        members |> List.mapi (fun ordinal memberId -> Hyperedge.edge1 EdgeClass.Reference EdgeRole.Member ordinal memberId target)
     | SemanticKind.TypeDef (_, _, members) -> sts EdgeRole.Member members
     | SemanticKind.MemberDef (_, _, body) ->
         body |> Option.toList |> List.map (st EdgeRole.Body)
@@ -930,6 +1056,8 @@ type SemanticNode = {
 /// a type's layout family and never a byte count.
 [<RequireQualifiedAccess>]
 type SettledSlot =
+    /// Owned bytes at an already settled aggregate extent and alignment.
+    | InlineBytes of bytes: int * alignment: int
     /// An integer at the representation its range selects: the bits, and the declared
     /// representation's name on a core (`None` on fabric, where the width is exactly the range's).
     | Integer of bits: int * representation: string option
@@ -1033,12 +1161,17 @@ type CurryInfo = {
 /// What a closure environment slot holds.
 [<RequireQualifiedAccess>]
 type CaptureSlotKind =
+    /// The actual environment of a separately known callable implementation.
+    /// No function address, runtime type tag or legacy closure pair is stored.
+    | EnvironmentView of owner: NodeId
     /// A complete rank-one memref descriptor for a captured mutable cell.
     /// Its payload type is retained; no address-to-view reconstruction occurs.
     | CellView of NativeType
     /// A complete rank-one descriptor for a buffer-backed value. Bounds and
     /// stride travel with the value rather than being reconstructed from an address.
     | ValueView of NativeType
+    /// Owned aggregate bytes, never a descriptor to separately lived storage.
+    | InlineValue of NativeType
     /// One word: the base address of a buffer-backed value (a record, tuple, union, lazy, seq,
     /// function value's pair) or of a mutable cell; construction extracts the base pointer first.
     | Address
@@ -1095,6 +1228,22 @@ type ContinuationSlot = {
     Holds: CaptureSlotKind
     IsCapture: bool
 }
+
+/// Shared typed slot placement for one materialized closure environment.
+/// Empty captures have a real zero-byte, alignment-one environment.
+type EnvironmentLayout = {
+    Owner: NodeId
+    Implementation: NodeId
+    Formal: NodeId
+    Slots: ContinuationSlot list
+    Bytes: int
+    Alignment: int
+    Obligations: NodeId list
+}
+
+/// This proves only the function half and layout. The environment itself is
+/// always the value at the queried occurrence, including aliases/frame reads.
+type KnownCallable = { Implementation: NodeId; EnvironmentOwner: NodeId }
 
 /// Source construction, fresh enumeration and generator access share this
 /// single settled frame contract. The callable identity is separate from its
@@ -1213,6 +1362,9 @@ type Codata = {
     /// Per lambda, the meet of its body's last value to the body's width.
     ReturnMeets: Map<NodeId, Meet>
     Closures: Map<NodeId, ClosurePlacement>
+    EnvironmentLayouts: Map<NodeId, EnvironmentLayout>
+    EnvironmentOrigins: Map<NodeId, NodeId>
+    KnownCallables: Map<NodeId, KnownCallable>
     ContinuationFrames: Map<NodeId, ContinuationFrame>
     /// A unique sequence constructor at a use, established in Baker. This
     /// evidence permits elision of the known function half of (fn, env).
@@ -1240,6 +1392,9 @@ module Codata =
         Meets = Map.empty
         ReturnMeets = Map.empty
         Closures = Map.empty
+        EnvironmentLayouts = Map.empty
+        EnvironmentOrigins = Map.empty
+        KnownCallables = Map.empty
         ContinuationFrames = Map.empty
         SequenceOrigins = Map.empty
         ContinuationStorage = Map.empty

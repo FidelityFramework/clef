@@ -252,6 +252,8 @@ let private nodeMeets (ctx: Ctx) (node: SemanticNode) : Meet list =
         match node.Children with
         | [ payloadId ] -> Option.toList (into payloadId (payloadSlotWidth graph node.Type 1))
         | _ -> []
+    | SemanticKind.DUInitialize (destination, _, caseIndex, Some payloadId) ->
+        graph.Nodes.TryFind destination |> Option.bind (fun target -> into payloadId (payloadSlotWidth graph target.Type caseIndex)) |> Option.toList
     | SemanticKind.DUConstruct (_, caseIndex, Some payloadId, _) -> Option.toList (into payloadId (payloadSlotWidth graph node.Type caseIndex))
     | SemanticKind.Set (targetId, valueId) ->
         match SemanticGraph.tryGetNode targetId graph with
@@ -328,6 +330,26 @@ let derive (context: PlatformContext option) (graph: SemanticGraph) (curry: Curr
                 | meets -> Some (node.Id, meets))
         |> Map.ofList
 
+let private environmentSlotWidths (graph: SemanticGraph) (slot: ContinuationSlot) =
+    match slot.Holds with
+    | CaptureSlotKind.Scalar(SettledSlot.Integer(bits, _)) -> Some bits, None
+    | CaptureSlotKind.Scalar(SettledSlot.Real bits) -> None, Some bits
+    | CaptureSlotKind.CellView _ ->
+        nodeWidth graph slot.Source,
+        (SemanticGraph.tryGetNode slot.Source graph |> Option.bind (realWidth graph))
+    | _ -> None, None
+let private environmentSlotRead (graph: SemanticGraph) (node: SemanticNode) slot =
+    let integer, real = environmentSlotWidths graph slot
+    readMeet graph node integer
+    @ (realMeet node.Id node.Id real (realWidth graph node) |> Option.toList)
+let private environmentSlotWrite (graph: SemanticGraph) (node: SemanticNode) valueId slot =
+    let integer, real = environmentSlotWidths graph slot
+    let value = lastValueOf graph valueId
+    Option.toList (meetInto graph node.Id value integer)
+    @ (realMeet node.Id value
+            (SemanticGraph.tryGetNode value graph |> Option.bind (realWidth graph)) real
+       |> Option.toList)
+
 /// Continuation storage meets use the same range/representation selections as
 /// ordinary cells. The maps are explicit because Codata is being constructed:
 /// forcing graph.Codata here would recurse into that unfinished construction.
@@ -345,35 +367,16 @@ let continuations (frames: Map<NodeId, ContinuationFrame>)
             |> Option.map (fun frame -> frame, frame.Slots)
     let slotAt frameId slotId =
         frameSlots frameId |> Option.bind (fun (_, slots) -> slots |> List.tryFind (fun slot -> slot.Source = slotId))
-    let widths (slot: ContinuationSlot) =
-        match slot.Holds with
-        | CaptureSlotKind.Scalar(SettledSlot.Integer(bits, _)) -> Some bits, None
-        | CaptureSlotKind.Scalar(SettledSlot.Real bits) -> None, Some bits
-        | CaptureSlotKind.CellView _ ->
-            nodeWidth graph slot.Source,
-            (SemanticGraph.tryGetNode slot.Source graph |> Option.bind (realWidth graph))
-        | _ -> None, None
-    let read (node: SemanticNode) slot =
-        let integer, real = widths slot
-        readMeet graph node integer
-        @ (realMeet node.Id node.Id real (realWidth graph node) |> Option.toList)
-    let write (node: SemanticNode) valueId slot =
-        let integer, real = widths slot
-        let value = lastValueOf graph valueId
-        Option.toList (meetInto graph node.Id value integer)
-        @ (realMeet node.Id value
-                (SemanticGraph.tryGetNode value graph |> Option.bind (realWidth graph)) real
-           |> Option.toList)
     let forNode (node: SemanticNode) =
         match node.Kind with
-        | SemanticKind.FrameRead(frame, slot) -> slotAt frame slot |> Option.map (read node) |> Option.defaultValue []
-        | SemanticKind.FrameWrite(frame, slot, value) -> slotAt frame slot |> Option.map (write node value) |> Option.defaultValue []
+        | SemanticKind.FrameRead(frame, slot) -> slotAt frame slot |> Option.map (environmentSlotRead graph node) |> Option.defaultValue []
+        | SemanticKind.FrameWrite(frame, slot, value) -> slotAt frame slot |> Option.map (environmentSlotWrite graph node value) |> Option.defaultValue []
         | SemanticKind.Application(callee, [enumerator]) ->
             match functionNodeOf graph callee with
             | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "current" } } ->
                 frameSlots enumerator
                 |> Option.bind (fun (frame, slots) -> slots |> List.tryFind (fun slot -> slot.Source = frame.Current))
-                |> Option.map (read node) |> Option.defaultValue []
+                |> Option.map (environmentSlotRead graph node) |> Option.defaultValue []
             | _ -> []
         | SemanticKind.ContinuationDispatch(_, cases, otherwise) ->
             (cases |> List.map snd) @ [otherwise]
@@ -390,6 +393,21 @@ let continuations (frames: Map<NodeId, ContinuationFrame>)
             if not node.IsReachable then None
             else match forNode node with [] -> None | meets -> Some(node.Id, meets))
         |> Map.ofList
+
+/// Closure and continuation accesses consume the same settled slot contracts.
+let environments (layouts: Map<NodeId, EnvironmentLayout>) (origins: Map<NodeId, NodeId>)
+                 (graph: SemanticGraph) : Map<NodeId, Meet list> =
+    let slotAt environment slot =
+        origins.TryFind environment |> Option.bind layouts.TryFind
+        |> Option.bind (fun layout -> layout.Slots |> List.tryFind (fun field -> field.Source = slot))
+    if onFabric graph.Platform then Map.empty else
+    graph.Nodes |> Map.toList |> List.choose (fun (_, node) ->
+        let meets =
+            match node.Kind with
+            | SemanticKind.EnvironmentRead(environment, slot) -> slotAt environment slot |> Option.map (environmentSlotRead graph node) |> Option.defaultValue []
+            | SemanticKind.EnvironmentWrite(environment, slot, value) -> slotAt environment slot |> Option.map (environmentSlotWrite graph node value) |> Option.defaultValue []
+            | _ -> []
+        if not node.IsReachable || meets.IsEmpty then None else Some(node.Id, meets)) |> Map.ofList
 
 /// The return meet of every reachable lambda whose body's last value is held at another width
 /// than the body's result.

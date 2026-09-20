@@ -37,9 +37,25 @@ let forLoop (graph: SemanticGraph) (consumers: Map<NodeId, NodeId list>) (loop: 
                     | SemanticKind.Intrinsic info when info.Module = modl && info.Operation = operation -> Some(argument, node.Type)
                     | _ -> None)
             | _ -> None)
+    let successfulPull guard =
+        match application IntrinsicModule.SeqEnumerator "moveNext" guard with
+        | Some pull -> Some pull
+        | None ->
+            // True for this exact conditional implies that its selected pull
+            // succeeded. A true fallback, duplicated pull occurrence or body
+            // action before current cannot supply this premise.
+            match resident guard with
+            | Some { Kind = SemanticKind.IfThenElse(demand, pull, Some exhausted); Type = guardType }
+                when guardType = Types.boolType && solelyWithin pull guard ->
+                match resident demand, resident exhausted with
+                | Some { Type = demandType }, Some { Kind = SemanticKind.Literal(NativeLiteral.Bool false); Type = exhaustedType }
+                    when demandType = Types.boolType && exhaustedType = Types.boolType ->
+                    application IntrinsicModule.SeqEnumerator "moveNext" pull
+                | _ -> None
+            | _ -> None
     match loop.Kind with
-    | SemanticKind.WhileLoop(guard, body) when loop.IsReachable ->
-        match application IntrinsicModule.SeqEnumerator "moveNext" guard, resident body with
+    | SemanticKind.WhileLoop(guard, body) when loop.IsReachable && solelyWithin guard loop.Id ->
+        match successfulPull guard, resident body with
         | Some(guardArgument, guardType), Some { Kind = SemanticKind.Sequential [currentBindingId; currentRefId; action] }
             when guardType = Types.boolType && (resident action).IsSome ->
             match reference guardArgument, resident currentBindingId, reference currentRefId with

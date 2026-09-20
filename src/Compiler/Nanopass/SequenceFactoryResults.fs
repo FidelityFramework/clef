@@ -11,6 +11,8 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration
 open Clef.Compiler.Nanopass.Recipe
 module Incidence = Clef.Compiler.Baker.Ingredients.Closures
 module Origins = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins
+module Environments = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments
+module Residence = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceResidence
 
 type Residual = { Factory: NodeId; Reason: string }
 type Preparation = {
@@ -35,6 +37,8 @@ type private Plan = {
     Lambda: SemanticNode
     Owner: SemanticNode
     Calls: Call list
+    Borrows: Hyperedge list
+    ResultPath: NodeId list
 }
 
 let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
@@ -63,10 +67,45 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
         | Some (NTUKind.NTUint _ | NTUKind.NTUuint _ | NTUKind.NTUfloat _ | NTUKind.NTUposit _
               | NTUKind.NTUbool | NTUKind.NTUchar | NTUKind.NTUunit | NTUKind.NTUsize | NTUKind.NTUdiff) -> false
         | _ -> true
-    let captureResidual lambda (owner: SemanticNode) =
+    let environmentResidence = lazy (Residence.analyzeEnvironments graph)
+    let environmentArguments = Environments.callEnvironments graph
+    let captureBorrow lambda (owner: SemanticNode) (call: Call) (capture: CaptureInfo) =
+        let formation = graph.Edges |> List.filter (fun edge -> edge.Target = owner.Id && edge.Role = EdgeRole.SequenceCaptureFormation)
+        match formation, capture.SourceNodeId, Environments.sequenceInitializers graph owner with
+        | [{ Class = EdgeClass.Provenance; Sources = [closure; implementation; formal] }], Some slot, Some initializers
+            when implementation = lambda && capture.IsMutable ->
+            let access = initializers |> List.tryFind (fst >> (=) slot) |> Option.map snd
+            match access, graph.Nodes.TryFind closure, environmentArguments.TryFind call.Site.Id with
+            | Some initializer, Some { Kind = SemanticKind.ClosureValue(code, environment) }, Some(_, actual)
+                when code = lambda && Environments.tryEnvironmentOwner graph actual = Some closure &&
+                     not ((enclosingFunctions slot).Contains lambda) ->
+                let reading = environmentResidence.Value
+                let evidence = reading.Evidence |> List.filter (fun edge ->
+                    edge.Role = EdgeRole.EnvironmentResidence && edge.Target = closure &&
+                    List.contains environment edge.Sources && List.contains slot edge.Sources)
+                match evidence, Set.toList (enclosingFunctions call.Site.Id) with
+                | [proof], [activation] when reading.Sites.ContainsKey environment ->
+                    let covering = proof.Sources |> List.tryItem 1
+                    let covered =
+                        covering = Some activation ||
+                        (reading.Evidence |> List.exists (fun edge ->
+                            edge.Role = EdgeRole.SequenceTemplateBorrow &&
+                            (match edge.Sources with
+                             | [allocation; scope; _; generator] -> allocation = environment && Some scope = covering && generator = activation
+                             | _ -> false)))
+                    if covered then
+                        Some { Sources = proof.Sources @ [formal; slot; initializer; lambda; call.Site.Id; actual; activation]
+                               Target = owner.Id; Class = EdgeClass.Provenance; Role = EdgeRole.SequenceEnvironmentBorrow; Ordinal = 0 }
+                    else None
+                | _ -> None
+            | _ -> None
+        | _ -> None
+    let captureResidual lambda (owner: SemanticNode) calls =
         match owner.Kind with
         | SemanticKind.SeqExpr(_, captures) ->
-            captures |> List.tryFind requiresStorageLifetime |> Option.map (fun capture ->
+            captures |> List.tryFind (fun capture ->
+                requiresStorageLifetime capture &&
+                not (calls |> List.forall (fun call -> captureBorrow lambda owner call capture |> Option.isSome))) |> Option.map (fun capture ->
                 let local = capture.SourceNodeId |> Option.exists (fun source -> (enclosingFunctions source).Contains lambda)
                 if local then
                     sprintf "Factory-local capture '%s' refers to storage in the returning activation; a covering caller/program region is not established." capture.Name
@@ -117,12 +156,17 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                 match resultType lambda.Type with
                 | NativeType.TSeq _ ->
                     let calls = allCalls |> List.choose (fun (target, call) -> if target = binding.Id then Some call else None)
-                    let final =
-                        match nodes.TryFind body with
-                        | Some { Kind = SemanticKind.SeqExpr _ } -> Some body
-                        | Some { Kind = SemanticKind.Sequential values } -> List.tryLast values
+                    let rec finalExpression seen id =
+                        if Set.contains id seen then None else
+                        match nodes.TryFind id with
+                        | Some { Kind = SemanticKind.SeqExpr _ } -> Some [id]
+                        | Some { Kind = SemanticKind.Sequential values } ->
+                            List.tryLast values |> Option.bind (finalExpression (Set.add id seen)) |> Option.map (fun path -> id :: path)
+                        | Some { Kind = SemanticKind.TypeAnnotation(value, _) } ->
+                            finalExpression (Set.add id seen) value |> Option.map (fun path -> id :: path)
                         | _ -> None
-                    let owner = final |> Option.bind nodes.TryFind |> Option.filter (fun node ->
+                    let finalPath = finalExpression Set.empty body
+                    let owner = finalPath |> Option.bind List.tryLast |> Option.bind nodes.TryFind |> Option.filter (fun node ->
                         match node.Kind with SemanticKind.SeqExpr _ -> known.TryFind body = Some node.Id | _ -> false)
                     let refs = nodes.Values |> Seq.choose (fun node ->
                         match node.Kind with SemanticKind.VarRef(_, Some target) when target = binding.Id -> Some node.Id | _ -> None) |> Set.ofSeq
@@ -157,12 +201,26 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                             // The final constructor must occur only once in this
                             // body; sharing it with an earlier prefix or another
                             // activation would reuse one destination for instances.
-                            let expectedParent = if owner.Id = body then lambda.Id else body
                             let containing = users.TryFind owner.Id |> Option.defaultValue []
-                            match captureResidual lambda.Id owner with
+                            let rec uniqueFinal seen id =
+                                if Set.contains id seen then false
+                                elif id = body then
+                                    users.TryFind id |> Option.defaultValue [] |> List.forall (fun edge -> edge.Target = lambda.Id)
+                                else
+                                    match users.TryFind id |> Option.defaultValue [] with
+                                    | [edge] ->
+                                        match nodes[edge.Target].Kind with
+                                        | SemanticKind.Sequential values when List.tryLast values = Some id -> uniqueFinal (Set.add id seen) edge.Target
+                                        | SemanticKind.TypeAnnotation(value, _) when value = id -> uniqueFinal (Set.add id seen) edge.Target
+                                        | _ -> false
+                                    | _ -> false
+                            match captureResidual lambda.Id owner calls with
                             | Some reason -> refuse binding.Id reason; None
-                            | None when containing |> List.forall (fun edge -> edge.Target = expectedParent) ->
-                                Some { Binding = binding; Lambda = lambda; Owner = owner; Calls = calls }
+                            | None when uniqueFinal Set.empty owner.Id && not containing.IsEmpty ->
+                                let borrowed = match owner.Kind with SemanticKind.SeqExpr(_, captures) -> captures |> List.filter requiresStorageLifetime | _ -> []
+                                let borrows = calls |> List.collect (fun call -> borrowed |> List.choose (captureBorrow lambda.Id owner call))
+                                Some { Binding = binding; Lambda = lambda; Owner = owner; Calls = calls; Borrows = borrows
+                                       ResultPath = lambda.Id :: finalPath.Value }
                             | None -> refuse binding.Id "Result constructor is shared or repeated outside its single final position."; None
                         | _ -> refuse binding.Id "Factory requires one concrete, uniquely known final SeqExpr constructor."; None
                 | _ -> None
@@ -200,7 +258,8 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
         signature plan.Lambda (prepend plan.Lambda.Type) (SemanticKind.Lambda(parameters, body, captures, enclosing, context))
             ((parameters |> List.map (fun (_,_,id) -> id)) @ [body]) |> add |> ignore
         signature plan.Binding factoryType plan.Binding.Kind plan.Binding.Children |> add |> ignore
-        extraEdges <- Hyperedge.edge1 EdgeClass.Provenance EdgeRole.EnrichedWith 0 plan.Owner.Id destination.Id :: extraEdges
+        extraEdges <- { Sources = plan.ResultPath; Target = destination.Id
+                        Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0 } :: extraEdges
         for call in plan.Calls do
             let snapshots = call.Arguments |> List.mapi (fun index argument ->
                 let value = nodes[argument]
@@ -220,6 +279,9 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                 signature source factoryType kind source.Children |> add |> ignore
             let arguments = destinationActual.Id :: (snapshots |> List.map snd)
             let actual = fresh call.Site (SemanticKind.Application(callee.Id, arguments)) call.Site.Type (callee.Id :: arguments) call.Site.ValueRange |> add
+            for proof in plan.Borrows do
+                if List.contains call.Site.Id proof.Sources then
+                    extraEdges <- { proof with Sources = proof.Sources @ plan.ResultPath @ [destination.Id; allocation.Id; destinationActual.Id; actual.Id] } :: extraEdges
             factoryCalls <- factoryCalls.Add(actual.Id, allocation.Id)
             let sequence = (snapshots |> List.map fst) @ [allocationBinding.Id; actual.Id]
             { call.Site with Kind = SemanticKind.Sequential sequence; Children = sequence }
@@ -248,7 +310,7 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
         let emitted = generated |> Seq.map (fun node -> node.Id, node) |> Map.ofSeq |> Map.values |> Seq.toList
         changed <- Set.union changed (emitted |> List.map _.Id |> Set.ofList)
         { OriginalNodeId = plan.Binding.Id; NewNodes = emitted; ReplacementRootId = plan.Binding.Id
-          ElaborationKind = "Baker"; ElaborationSource = "Seq.factoryResult" })
+          ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "Seq.factoryResult" })
     let recipeMap = recipes |> List.map (fun recipe -> recipe.OriginalNodeId, recipe) |> Map.ofList
     let folded =
         if recipeMap.IsEmpty then graph

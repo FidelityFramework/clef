@@ -47,9 +47,10 @@ let private slotNode (owner: SemanticNode) name ty range =
                  Metadata = Map.empty; SRTPResolution = None }
 
 let private framePlan (graph: SemanticGraph) (owner: SemanticNode) =
-    match Control.forOwner graph owner with
-    | Result.Error pending -> Result.Error (residual graph.Nodes[pending.Site] [owner.Id] pending.Reason)
-    | Ok control ->
+    match Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.sequenceInitializers graph owner, Control.forOwner graph owner with
+    | None, _ -> Result.Error (residual owner [] "The child capture initializer incidence is missing or contradictory.")
+    | _, Result.Error pending -> Result.Error (residual graph.Nodes[pending.Site] [owner.Id] pending.Reason)
+    | Some initializers, Ok control ->
         match owner.Kind, owner.Type, graph.Nodes[control.Generator].Kind with
         | SemanticKind.SeqExpr(_, captures), NativeType.TSeq item, SemanticKind.Lambda([_, _, formal], _, _, _, _) ->
             let cuts = control.ResumeEntries.Count - 1
@@ -104,6 +105,16 @@ let private framePlan (graph: SemanticGraph) (owner: SemanticNode) =
                 let obligations = Enrichment.concat [
                     layout (sprintf "seq_%d_frame" (NodeId.value owner.Id)) slots bytes alignment
                     layout (sprintf "seq_%d_activation" (NodeId.value owner.Id)) scratchSlots scratchBytes scratchAlignment ]
+                let constructionParticipants = graph.Edges |> List.collect (fun edge ->
+                    if edge.Target = owner.Id then
+                        match edge.Role with
+                        | EdgeRole.SequenceCaptureFormation | EdgeRole.SequenceCaptureInitializer _
+                        | EdgeRole.SequenceEnvironmentBorrow -> edge.Sources
+                        | _ -> []
+                    else [])
+                let constructionEdges = obligations.NewEdges |> List.map (fun edge ->
+                    { edge with Sources = List.distinct (edge.Sources @ constructionParticipants) })
+                let obligations = { obligations with NewEdges = constructionEdges }
                 let borrowEdges = retainedCells |> List.map (fun (site, source) -> {
                     Sources = [owner.Id; control.Generator; source]; Target = site
                     Class = EdgeClass.Suspension; Role = EdgeRole.ContinuationBorrow; Ordinal = 0 })
@@ -113,7 +124,7 @@ let private framePlan (graph: SemanticGraph) (owner: SemanticNode) =
                     State = state.Id; Current = current.Id
                     Slots = List.map slot slots; Bytes = bytes; Alignment = alignment
                     ScratchSlots = List.map slot scratchSlots; ScratchBytes = scratchBytes; ScratchAlignment = scratchAlignment
-                    Initializers = captures |> List.choose (fun capture -> capture.SourceNodeId |> Option.map (fun id -> id, id))
+                    Initializers = initializers |> List.filter (fst >> captured.Contains)
                     ResumeStates = control.ResumeEntries |> Map.toList |> List.map fst
                     Obligations = obligations.NewNodes |> List.map _.Id }
                 Ok (control, frame, [ { state with IsReachable = false }; { current with IsReachable = false } ], obligations)
@@ -149,7 +160,7 @@ let rec private emptyConsumers (graph: SemanticGraph) origins =
             let replacement = { source with Kind = SemanticKind.Sequential children; Children = children }
             RecipeCreated { OriginalNodeId = source.Id; ReplacementRootId = source.Id
                             NewNodes = [unitValue; replacement]
-                            ElaborationKind = "Baker"; ElaborationSource = "Seq.emptyConsumption" }
+                            ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "Seq.emptyConsumption" }
         let rewritten = FoldIn.foldIn (FanOut.fanOut "SequenceEmptyConsumers" (fun node -> loops.ContainsKey node.Id) create graph) graph
         { rewritten with FieldRanges = graph.FieldRanges; ElementRanges = graph.ElementRanges
                          Layouts = graph.Layouts; StaticStringPool = graph.StaticStringPool }
@@ -168,7 +179,13 @@ let normalizeWhenSourceAdmitted sourceAdmitted (graph: SemanticGraph) (curry: Cu
     let origins, _ = Origins.settle graph curry
     let graph = if realize then emptyConsumers graph origins else graph
     let admitted, currentEdges = SequenceCurrentAdmission.certify graph
-    let graph = { graph with Edges = (graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.IteratorCurrentAdmitted)) @ currentEdges }
+    let snapshots =
+        if realize then SequenceAggregateValues.prepare graph admitted currentEdges
+        else { SequenceAggregateValues.Graph = graph; Reads = admitted; Certificates = currentEdges; Residences = Map.empty; Unresolved = [] }
+    let snapshotsChanged = snapshots.Graph.Nodes.Count <> graph.Nodes.Count
+    let admitted, currentEdges = snapshots.Reads, snapshots.Certificates
+    let graph = { snapshots.Graph with Edges = (snapshots.Graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.IteratorCurrentAdmitted)) @ currentEdges }
+    let graph = if snapshotsChanged then SequenceEvaluation.normalize graph else graph
     let origins, _ = Origins.settle graph curry
     if not realize then graph, { empty with Origins = origins; CurrentReads = admitted; Curry = curry }
     else
@@ -194,7 +211,8 @@ let normalizeWhenSourceAdmitted sourceAdmitted (graph: SemanticGraph) (curry: Cu
                             residence.Regions origins
         let plans = plans |> List.map (fun (control, frame, slots, proof) -> control, regionPlan.Frames[frame.Owner], slots, proof)
         let diagnostics =
-            (regionPlan.Unresolved |> List.map (fun pending -> residual graph.Nodes[pending.Site] [] pending.Reason))
+            (snapshots.Unresolved |> List.map (fun (site, consumer) -> residual graph.Nodes[site] [consumer] "The Option current snapshot lacks a finite covering activation for every use."))
+            @ (regionPlan.Unresolved |> List.map (fun pending -> residual graph.Nodes[pending.Site] [] pending.Reason))
             @ (planned |> List.choose (function Result.Error diagnostic -> Some diagnostic | _ -> None))
             @ (prepared.Unresolved |> List.map (fun pending -> residual graph.Nodes[pending.Factory] [] pending.Reason))
         let graph = plans |> List.fold (fun graph (_, _, slots, obligations) ->
@@ -205,14 +223,16 @@ let normalizeWhenSourceAdmitted sourceAdmitted (graph: SemanticGraph) (curry: Cu
             match Evidence.forMachine graph control frame machine with
             | Ok evidence -> Ok (frame, machine, evidence)
             | Result.Error pending -> Result.Error (residual graph.Nodes[pending.Site] [pending.Owner] pending.Reason))
-        let evidence = realized |> List.choose (function Ok (_, _, proof) -> Some proof | _ -> None) |> Enrichment.concat
+        let evidence = realized |> List.choose (function
+            | Ok (_, machine, proof) -> Some { proof with NewEdges = machine.AggregateEvidence @ proof.NewEdges }
+            | _ -> None) |> Enrichment.concat
         let diagnostics = diagnostics @ (realized |> List.choose (function Result.Error error -> Some error | _ -> None))
         let machines = realized |> List.choose (function Ok (frame, machine, _) -> Some (frame, machine) | _ -> None)
         let byGenerator = machines |> List.map (fun (frame, machine) -> frame.Generator, machine) |> Map.ofList
         let create (source: SemanticNode) _ = RecipeCreated {
             OriginalNodeId = source.Id; NewNodes = byGenerator[source.Id].Nodes
             ReplacementRootId = source.Id
-            ElaborationKind = "Baker"; ElaborationSource = "Seq.resume" }
+            ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "Seq.resume" }
         let rewritten =
             if byGenerator.IsEmpty then graph
             else FoldIn.foldIn (FanOut.fanOut "SequenceRuntime" (fun node -> byGenerator.ContainsKey node.Id) create graph) graph
@@ -249,7 +269,7 @@ let normalizeWhenSourceAdmitted sourceAdmitted (graph: SemanticGraph) (curry: Cu
         rewritten, {
             Frames = plans |> List.map (fun (_, frame, _, _) -> frame.Owner, frame) |> Map.ofList
             Origins = propagated; Storage = storage; Regions = regions; Initializers = initializers
-            CurrentReads = currentReads; Destinations = prepared.Destinations; Curry = curry; Residences = residence.Sites; Diagnostics = diagnostics @ residenceDiagnostics @ currentDiagnostics }
+            CurrentReads = currentReads; Destinations = prepared.Destinations; Curry = curry; Residences = snapshots.Residences |> Map.fold (fun facts id site -> Map.add id site facts) residence.Sites; Diagnostics = diagnostics @ residenceDiagnostics @ currentDiagnostics }
 
 /// Standalone graph callers supply an already admitted source graph.
 let normalize graph curry = normalizeWhenSourceAdmitted true graph curry

@@ -29,6 +29,7 @@ open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Baker.Ingredients.SaturationCombinators
 open Clef.Compiler.Baker.Ingredients.Primitives
+module Options = Clef.Compiler.Baker.Ingredients.Options
 
 //=============================================================================
 // FOLD RIGHT PATTERN
@@ -493,7 +494,7 @@ let binarySearchMap
         do! withBinding "tree" treeParamId mapType
 
         // Base case: None
-        let! noneId = none valueType
+        let! noneId = Options.none valueType
 
         // Guard: isEmpty tree
         let! isEmptyId = mapIsEmpty treeParamId keyType valueType
@@ -512,7 +513,7 @@ let binarySearchMap
         let! isGreaterId = compareIsGreater cmpResultId
 
         // Found case: Some (value tree)
-        let! foundId = some nodeValueId valueType
+        let! foundId = Options.some nodeValueId valueType
 
         // Recursive calls
         let! loopRefLeft = varRef "search" None loopFuncType

@@ -35,7 +35,7 @@ type private Use =
     | Captured of owner: NodeId * generator: NodeId * declaration: NodeId
     | Refused of ResidualReason
 
-let private analyzeCore allowGenerators (graph: SemanticGraph) (destinations: Map<NodeId, NodeId>) (factoryCalls: Map<NodeId, NodeId>) : Reading =
+let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) (destinations: Map<NodeId, NodeId>) (factoryCalls: Map<NodeId, NodeId>) : Reading =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let edges node =
         let derived = kindEdges node.Id node.Kind
@@ -87,10 +87,14 @@ let private analyzeCore allowGenerators (graph: SemanticGraph) (destinations: Ma
             | _ -> None
         | _ -> None
     let sites = nodes |> Map.filter (fun _ node ->
-        match node.Kind with
-        | SemanticKind.SeqExpr _ -> not (destinations.ContainsKey node.Id)
-        | SemanticKind.ContinuationAllocate _ -> true
-        | _ -> getEnumerator node |> Option.isSome)
+        if environmentSites then match node.Kind with SemanticKind.EnvironmentCreate _ -> true | _ -> false
+        else
+            match node.Kind with
+            | SemanticKind.SeqExpr _ -> not (destinations.ContainsKey node.Id)
+            | SemanticKind.ContinuationAllocate _ -> true
+            | _ -> getEnumerator node |> Option.isSome)
+    let environmentArguments = ClosureEnvironments.callEnvironments graph
+    let programActivations = lazy (ProgramActivation.analyze graph)
     let rec storageSource seen id =
         if Set.contains id seen then None else
         let seen = Set.add id seen
@@ -112,12 +116,17 @@ let private analyzeCore allowGenerators (graph: SemanticGraph) (destinations: Ma
     let captures owner =
         match nodes.TryFind owner with Some { Kind = SemanticKind.SeqExpr(_, captures) } -> captures | _ -> []
     let borrowable (capture: CaptureInfo) =
-        not capture.IsMutable && (match applySubst capture.Type with NativeType.TSeq _ -> true | _ -> false)
+        not capture.IsMutable &&
+        (match applySubst capture.Type with
+         | NativeType.TSeq _ -> true
+         | NativeType.TFun _ when environmentSites -> capture.SourceNodeId |> Option.bind (ClosureEnvironments.tryKnown graph) |> Option.isSome
+         | _ -> false)
     let rec sourceAllocations seen id =
         if Set.contains id seen then None else
         let seen = Set.add id seen
         match nodes.TryFind id with
-        | Some { Kind = SemanticKind.SeqExpr _ | SemanticKind.ContinuationAllocate _ } -> Some (Set.singleton id)
+        | Some { Kind = SemanticKind.SeqExpr _ | SemanticKind.ContinuationAllocate _ | SemanticKind.EnvironmentCreate _ } -> Some (Set.singleton id)
+        | Some { Kind = SemanticKind.ClosureValue(_, environment) | SemanticKind.EnvironmentReference environment } -> sourceAllocations seen environment
         | Some { Kind = SemanticKind.VarRef(_, Some source) | SemanticKind.TypeAnnotation(source, _) } -> sourceAllocations seen source
         | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> sourceAllocations seen value
         | Some { Kind = SemanticKind.Sequential values } -> List.tryLast values |> Option.bind (sourceAllocations seen)
@@ -136,6 +145,8 @@ let private analyzeCore allowGenerators (graph: SemanticGraph) (destinations: Ma
                     | SemanticKind.Binding(_, false, _, _), _ -> Alias node.Id
                     | SemanticKind.Binding _, _ -> Refused (ResidualReason.StoredAt node.Id)
                     | SemanticKind.TypeAnnotation _, _ -> Alias node.Id
+                    | SemanticKind.ClosureValue(_, environment), _ when source = environment -> Alias node.Id
+                    | SemanticKind.EnvironmentReference _, _ -> Alias node.Id
                     | SemanticKind.Sequential values, _ ->
                         if List.tryLast values = Some source then Alias node.Id else Consumed node.Id
                     | SemanticKind.IfThenElse _, (EdgeRole.ThenBranch | EdgeRole.ElseBranch)
@@ -150,6 +161,7 @@ let private analyzeCore allowGenerators (graph: SemanticGraph) (destinations: Ma
                              && factoryCalls.ContainsKey node.Id -> Alias node.Id
                     | SemanticKind.Application(callee, _), EdgeRole.Argument ->
                         match intrinsic Set.empty callee, edge.Ordinal with
+                        | _, ordinal when environmentArguments.TryFind node.Id = Some(ordinal, source) -> Consumed node.Id
                         | Some { Module = IntrinsicModule.Seq; Operation = "getEnumerator" }, 0 -> Alias node.Id
                         | Some { Module = IntrinsicModule.SeqEnumerator; Operation = ("moveNext" | "current") }, 0
                         | Some { Module = IntrinsicModule.Operators; Operation = "ignore" }, _ -> Consumed node.Id
@@ -161,6 +173,12 @@ let private analyzeCore allowGenerators (graph: SemanticGraph) (destinations: Ma
                     | _ -> Refused (ResidualReason.UnsupportedConsumer node.Id)
                 useValue source usage
         match node.Kind with
+        | SemanticKind.EnvironmentCreate(_, initializers) ->
+            // Capturing a separately allocated sequence or callable requires
+            // its own retained-view residence contract; ordinary scalar/cell
+            // captures are checked against this environment's covering scope.
+            for _, source in initializers do
+                useValue source (Refused (ResidualReason.StoredAt node.Id))
         | SemanticKind.VarRef(_, Some source) -> useValue source (Alias node.Id)
         | SemanticKind.SeqExpr(generator, captured) ->
             for capture in captured do
@@ -182,11 +200,34 @@ let private analyzeCore allowGenerators (graph: SemanticGraph) (destinations: Ma
                 capture.SourceNodeId |> Option.iter (fun source -> useValue source (Refused (ResidualReason.StoredAt node.Id)))
         | _ -> ()
     let combine left right = left |> Result.bind (fun first -> right () |> Result.map (fun second -> first @ second))
+    if environmentSites then
+        // Independent reference incidence is not erased by structural recipes.
+        // Unknown consumers prevent a complete-use environment residence proof.
+        for edge in graph.Edges do
+            if edge.Class = EdgeClass.Reference then
+                match nodes.TryFind edge.Target with
+                | Some { Kind = SemanticKind.VarRef(_, Some source) }
+                    when edge.Sources = [source] -> ()
+                | Some { Kind = SemanticKind.EnvironmentCreate(_, initializers) }
+                    when edge.Role = EdgeRole.EnvironmentInitializer &&
+                         (List.tryItem edge.Ordinal initializers |> Option.exists (fun (_, value) -> edge.Sources = [value])) -> ()
+                | Some { Kind = SemanticKind.ModuleDef(_, members) }
+                    when edge.Role = EdgeRole.Member &&
+                         (List.tryItem edge.Ordinal members |> Option.exists (fun source -> edge.Sources = [source])) -> ()
+                | Some _ ->
+                    for source in edge.Sources do useValue source (Refused(ResidualReason.UnsupportedConsumer edge.Target))
+                | None -> ()
     // Coverage follows complete value use, not lexical nesting. Each crossed
     // deferred activation must have exactly one constructor whose own complete
     // use is bounded in an already covered activation.
     let rec activationCovered covering proving actual =
         if actual = covering then Ok []
+        elif ProgramActivation.coverage programActivations.Value covering actual |> Option.isSome then
+            let coverage = ProgramActivation.coverage programActivations.Value covering actual |> Option.get
+            if Set.contains actual proving then Error (ResidualReason.RecursiveValueFlow actual)
+            else
+                coverage.Dependencies |> List.fold (fun proof dependency ->
+                    combine proof (fun () -> activationCovered covering (Set.add actual proving) dependency)) (Ok coverage.Evidence)
         elif not allowGenerators then Error (ResidualReason.CrossesActivation actual)
         else
             match sequenceOwner actual with
@@ -213,6 +254,8 @@ let private analyzeCore allowGenerators (graph: SemanticGraph) (destinations: Ma
     and scopeUse allocation covering proving id =
         activation id |> Result.bind (fun actual ->
             if actual = covering then Ok []
+            elif ProgramActivation.coverage programActivations.Value covering actual |> Option.isSome then
+                activationCovered covering proving actual
             elif not allowGenerators then Error (ResidualReason.CrossesActivation id)
             else
                 match sequenceOwner actual with
@@ -265,11 +308,29 @@ let private analyzeCore allowGenerators (graph: SemanticGraph) (destinations: Ma
         | _ -> Error (ResidualReason.UnknownInputRegion id)
     sites |> Map.fold (fun result id node ->
         let proof = activation id |> Result.bind (fun owner ->
-            combine (match getEnumerator node with Some input -> inputRegion owner id Set.empty input | None -> Ok [])
+            let capturedCells =
+                match node.Kind with
+                | SemanticKind.EnvironmentCreate(layout, _) ->
+                    ClosureEnvironments.captures graph layout |> List.filter _.IsMutable
+                    |> List.fold (fun proof capture ->
+                        combine proof (fun () ->
+                            activation capture.SourceNodeId.Value |> Result.bind (fun cellOwner ->
+                                activationCovered cellOwner (Set.singleton id) owner))) (Ok [])
+                | _ -> Ok []
+            combine (combine capturedCells (fun () ->
+                        match getEnumerator node with Some input -> inputRegion owner id Set.empty input | None -> Ok []))
                 (fun () -> bounded id owner (Set.singleton id) Set.empty id)
             |> Result.map (fun evidence -> owner, evidence))
         match proof with
         | Ok(owner, evidence) ->
+            let evidence =
+                match node.Kind with
+                | SemanticKind.EnvironmentCreate(layout, initializers) ->
+                    let values = nodes |> Map.toList |> List.choose (fun (value, _) ->
+                        if sourceAllocations Set.empty value |> Option.exists (Set.contains id) then Some value else None)
+                    { Sources = List.distinct (id :: owner :: (initializers |> List.collect (fun (slot, value) -> [slot; value])) @ values)
+                      Target = layout; Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResidence; Ordinal = 0 } :: evidence
+                | _ -> evidence
             let result = { result with Evidence = evidence @ result.Evidence }
             match nodes[owner].Kind with
             | SemanticKind.Lambda(_, _, _, _, LambdaContext.SeqGenerator) -> { result with Regions = result.Regions.Add(id, owner) }
@@ -282,12 +343,17 @@ let private analyzeCore allowGenerators (graph: SemanticGraph) (destinations: Ma
             Evidence = result.Evidence |> List.distinctBy (fun edge -> edge.Class, edge.Role, edge.Sources, edge.Target, edge.Ordinal) }
 
 /// Scope-only form retains the original conservative admission boundary.
-let analyze graph = analyzeCore false graph Map.empty Map.empty
+let analyze graph = analyzeCore false false graph Map.empty Map.empty
 
 /// Destination-backed constructors do not allocate in the factory activation.
-let analyzePrepared graph destinations factoryCalls = analyzeCore false graph destinations factoryCalls
+let analyzePrepared graph destinations factoryCalls = analyzeCore false false graph destinations factoryCalls
 
 /// Generator-local values whose complete use stays within that generator can
 /// be assigned subregions of its frame. This returns a requirement, not a
 /// selected offset or permission to use activation-local stack storage.
-let analyzeWithRegions graph destinations factoryCalls = analyzeCore true graph destinations factoryCalls
+let analyzeWithRegions graph destinations factoryCalls = analyzeCore true false graph destinations factoryCalls
+
+/// The same complete-use covering proof for known callable environments.
+/// Generator-local results are requirements for owned regions, not permission
+/// to allocate backing storage in a single MoveNext activation.
+let analyzeEnvironments graph = analyzeCore true true graph Map.empty Map.empty

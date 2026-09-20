@@ -135,11 +135,19 @@ let private mapKind (r: NodeId -> NodeId) (f: NativeType -> NativeType) (kind: S
     | SemanticKind.WhileLoop (g, b) -> SemanticKind.WhileLoop (r g, r b)
     | SemanticKind.ContinuationDispatch (selector, cases, otherwise) ->
         SemanticKind.ContinuationDispatch (r selector, cases |> List.map (fun (state, body) -> state, r body), r otherwise)
+    | SemanticKind.AggregateStorage source -> SemanticKind.AggregateStorage (r source)
+    | SemanticKind.DUInitialize (destination, name, index, payload) -> SemanticKind.DUInitialize (r destination, name, index, Option.map r payload)
     | SemanticKind.FrameRead (frame, slot) -> SemanticKind.FrameRead (r frame, r slot)
     | SemanticKind.FrameBorrow (frame, slot) -> SemanticKind.FrameBorrow (r frame, r slot)
     | SemanticKind.FrameWrite (frame, slot, value) -> SemanticKind.FrameWrite (r frame, r slot, r value)
     | SemanticKind.ContinuationStorage owner -> SemanticKind.ContinuationStorage (r owner)
     | SemanticKind.ContinuationAllocate owner -> SemanticKind.ContinuationAllocate (r owner)
+    | SemanticKind.ClosureValue(implementation, environment) -> SemanticKind.ClosureValue(r implementation, r environment)
+    | SemanticKind.EnvironmentCreate(owner, initializers) -> SemanticKind.EnvironmentCreate(r owner, initializers |> List.map (fun (slot, value) -> r slot, r value))
+    | SemanticKind.EnvironmentReference value -> SemanticKind.EnvironmentReference(r value)
+    | SemanticKind.EnvironmentRead(environment, slot) -> SemanticKind.EnvironmentRead(r environment, r slot)
+    | SemanticKind.EnvironmentBorrow(environment, slot) -> SemanticKind.EnvironmentBorrow(r environment, r slot)
+    | SemanticKind.EnvironmentWrite(environment, slot, value) -> SemanticKind.EnvironmentWrite(r environment, r slot, r value)
     | SemanticKind.ForLoop (v, s, e, up, b) -> SemanticKind.ForLoop (v, r s, r e, up, r b)
     | SemanticKind.ForEach (v, p, c, b) -> SemanticKind.ForEach (v, r p, r c, r b)
     | SemanticKind.IfThenElse (g, t, e) -> SemanticKind.IfThenElse (r g, r t, ro e)
@@ -206,12 +214,12 @@ let private collectSubtree (nodes: Map<NodeId, SemanticNode>) (rootId: NodeId) :
 /// Clone the subtree rooted at `rootId` with fresh NodeIds, substituting `f` into every
 /// type, remapping internal references, and re-parenting the clone under `newParent`.
 /// Returns the new root id and the cloned nodes.
-let internal cloneSubtree
+let internal cloneSubtreeWithOrigins
     (nodes: Map<NodeId, SemanticNode>)
     (rootId: NodeId)
     (f: NativeType -> NativeType)
     (newParent: NodeId option)
-    : NodeId * SemanticNode list =
+    : NodeId * SemanticNode list * Map<NodeId, NodeId> =
     let ids = collectSubtree nodes rootId
     let mapping = ids |> List.map (fun id -> (id, NodeId.fresh())) |> Map.ofList
     let remap (id: NodeId) = match Map.tryFind id mapping with Some n -> n | None -> id
@@ -227,7 +235,11 @@ let internal cloneSubtree
                 Type = f node.Type
                 Children = node.Children |> List.map remap
                 Parent = parent })
-    (remap rootId, cloned)
+    (remap rootId, cloned, mapping)
+
+let internal cloneSubtree nodes rootId substitute newParent =
+    let root, cloned, _ = cloneSubtreeWithOrigins nodes rootId substitute newParent
+    root, cloned
 
 //-------------------------------------------------------------------------
 // The pass

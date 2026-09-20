@@ -9,10 +9,9 @@
 /// PSG node (or a small fixed number). Patterns compose these into recursive
 /// structures. Recipes compose patterns into complete algorithms.
 ///
-/// ARCHITECTURAL ENFORCEMENT:
-/// - Low-level node constructors are INTERNAL to this module
-/// - Only SaturationParser-wrapped versions are PUBLIC
-/// - Code outside Ingredients/ cannot bypass the combinator abstraction
+/// The internal node constructors stamp expansion provenance; public
+/// SaturationParser ingredients create and emit typed graph values. Recipes
+/// compose those ingredients to retain the same construction contract.
 ///
 /// See: docs/fidelity/Baker_Saturation_Architecture.md
 /// See: Serena memory "baker_saturation_architecture"
@@ -29,7 +28,7 @@ open Clef.Compiler.Baker.Ingredients.SaturationCombinators
 let saturation = SaturationCombinators.saturation
 
 //=============================================================================
-// INTERNAL: Node construction (minimal helpers - just the base node builder)
+// INTERNAL: PSG node construction and expansion provenance
 //=============================================================================
 
 /// Create a base node with expansion metadata. Returns node ready for emission.
@@ -69,7 +68,7 @@ let internal mkNodeAt (state: SaturationState) (nodeId: NodeId) (kind: SemanticK
     markBaker state.OriginalHOF state.ExpansionId baseNode
 
 //=============================================================================
-// CONVENIENCE COMBINATORS: Node creation + emission
+// PSG NODE EMISSION INGREDIENTS
 //=============================================================================
 
 /// Create a node with children and emit it. Returns the node ID.
@@ -156,51 +155,6 @@ let cons (headNodeId: NodeId) (tailNodeId: NodeId) (elemType: NativeType) : Satu
         do! emit funcNode
         let! state' = getUserState
         let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [headNodeId; tailNodeId])) listType [funcNode.Id; headNodeId; tailNodeId]
-        do! emit appNode
-        return appNode.Id
-    }
-
-//=============================================================================
-// OPTION PRIMITIVES
-//=============================================================================
-
-/// Create None value: Option.none<'T>
-let none (innerType: NativeType) : SaturationParser<NodeId> =
-    saturation {
-        let! state = getUserState
-        let optionType = NativeType.TApp (Types.optionTyCon, [innerType])
-        let info = { Module = IntrinsicModule.Option; Operation = "none"; Category = IntrinsicCategory.Pure; FullName = "Option.none" }
-        let node = mkNode state (SemanticKind.Intrinsic info) optionType []
-        do! emit node
-        return node.Id
-    }
-
-/// Create Some value: Option.some x
-let some (valueNodeId: NodeId) (innerType: NativeType) : SaturationParser<NodeId> =
-    saturation {
-        let! state = getUserState
-        let optionType = NativeType.TApp (Types.optionTyCon, [innerType])
-        let funcType = NativeType.TFun (innerType, optionType)
-        let info = { Module = IntrinsicModule.Option; Operation = "some"; Category = IntrinsicCategory.Pure; FullName = "Option.some" }
-        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
-        do! emit funcNode
-        let! state' = getUserState
-        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [valueNodeId])) optionType [funcNode.Id; valueNodeId]
-        do! emit appNode
-        return appNode.Id
-    }
-
-/// Check if option has value: Option.isSome x
-let isSome (optionNodeId: NodeId) (innerType: NativeType) : SaturationParser<NodeId> =
-    saturation {
-        let! state = getUserState
-        let optionType = NativeType.TApp (Types.optionTyCon, [innerType])
-        let funcType = NativeType.TFun (optionType, Types.boolType)
-        let info = { Module = IntrinsicModule.Option; Operation = "isSome"; Category = IntrinsicCategory.Pure; FullName = "Option.isSome" }
-        let funcNode = mkNode state (SemanticKind.Intrinsic info) funcType []
-        do! emit funcNode
-        let! state' = getUserState
-        let appNode = mkNode state' (SemanticKind.Application (funcNode.Id, [optionNodeId])) Types.boolType [funcNode.Id; optionNodeId]
         do! emit appNode
         return appNode.Id
     }
@@ -356,6 +310,10 @@ let closure
 // LITERAL PRIMITIVES
 //=============================================================================
 
+/// Create a unit literal through the shared typed emission ingredient.
+let unitLit : SaturationParser<NodeId> =
+    createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
+
 /// Create a boolean literal
 let boolLit (value: bool) : SaturationParser<NodeId> =
     saturation {
@@ -365,22 +323,18 @@ let boolLit (value: bool) : SaturationParser<NodeId> =
         return node.Id
     }
 
-/// Create an int32 literal
+/// Create a bare integer literal. Its literal payload and semantic type share
+/// the same kind; representation is selected from its range and the platform.
 let intLit (value: int) : SaturationParser<NodeId> =
     saturation {
         let! state = getUserState
-        let node = mkNode state (SemanticKind.Literal (NativeLiteral.Int (int64 value, NTUKind.NTUint (NTUWidth.Fixed 32)))) Types.intType []
-        do! emit node
-        return node.Id
-    }
-
-/// Create an int64 literal
-let int64Lit (value: int64) : SaturationParser<NodeId> =
-    saturation {
-        let! state = getUserState
-        let node = mkNode state (SemanticKind.Literal (NativeLiteral.Int (value, NTUKind.NTUint (NTUWidth.Fixed 64)))) Types.int64Type []
-        do! emit node
-        return node.Id
+        match Types.tryGetNTUKind Types.intType with
+        | Some (NTUKind.NTUint _ as kind) ->
+            let node = mkNode state (SemanticKind.Literal (NativeLiteral.Int (int64 value, kind))) Types.intType []
+            do! emit node
+            return node.Id
+        | other ->
+            return! fail (XParsec.ErrorType.Message $"intLit: the bare integer type has no integer literal kind ({other})")
     }
 
 //=============================================================================

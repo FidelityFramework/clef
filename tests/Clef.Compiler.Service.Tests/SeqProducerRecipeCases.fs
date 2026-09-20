@@ -75,7 +75,7 @@ module private SeqProducerRecipes =
         let result = SeqRecipes.tryDecompose context fixture.Operation (fixture.Operands |> List.map _.Id) fixture.Element (Some fixture.Output) None None |> Option.get
         let creator _ _ = RecipeCreated {
             OriginalNodeId = fixture.Site.Id; NewNodes = result.NewNodes @ result.AuxFunctions
-            ReplacementRootId = result.ResultNodeId; ElaborationKind = "Baker"; ElaborationSource = "Seq." + fixture.Operation }
+            ReplacementRootId = result.ResultNodeId; ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "Seq." + fixture.Operation }
         let recipes = FanOut.fanOut "Baker" (fun node -> node.Id = fixture.Site.Id) creator fixture.Graph
         result, FoldIn.foldIn recipes fixture.Graph
 

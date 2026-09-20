@@ -22,7 +22,7 @@ let rec normalize (graph: SemanticGraph) =
         let create (node: SemanticNode) _ =
             RecipeCreated { OriginalNodeId = node.Id; NewNodes = result.Structure.NewNodes
                             ReplacementRootId = result.Structure.ResultNodeId
-                            ElaborationKind = "Baker"; ElaborationSource = name }
+                            ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = name }
         let recipes = FanOut.fanOut name (fun node -> node.Id = plan.Lambda.Id) create graph
         let folded = FoldIn.foldIn recipes graph
         normalize { folded with Edges = result.Edges }

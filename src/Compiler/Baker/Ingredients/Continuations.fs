@@ -1,8 +1,9 @@
 // Copyright (c) 2026 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
-/// Typed continuation construction primitives. Frame residence and slot
-/// identities are supplied by saturation; these helpers choose no layout.
+/// Typed continuation ingredients consume settled frame residence and source
+/// slot identities. Range-bearing reads and constants preserve those facts
+/// during runtime graph construction after range analysis.
 module Clef.Compiler.Baker.Ingredients.Continuations
 
 open XParsec.Parsers
@@ -11,13 +12,8 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Baker.Ingredients.SaturationCombinators
 open Clef.Compiler.Baker.Ingredients.Primitives
 
-let create kind ty children =
-    saturation {
-        let! state = getUserState
-        let node = mkNode state kind ty children
-        do! emit node
-        return node.Id
-    }
+/// Continuation nodes use the shared PSG emission ingredient.
+let create = createWithChildren
 
 let index (value: int) =
     saturation {

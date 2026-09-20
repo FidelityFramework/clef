@@ -217,3 +217,58 @@ let main _ =
         let withoutCallProof = FactoryResidence.analyzePrepared prepared.Graph prepared.Destinations Map.empty
         for allocation in prepared.AllocationOrigins.Keys do Assert.False(withoutCallProof.Sites.ContainsKey allocation)
         Assert.NotEmpty withoutCallProof.Unresolved
+
+    [<Fact>]
+    member _.``Nested sequential factory prefixes retain their eager statements before the single result constructor``() =
+        let graph = Factories.check """
+let mutable trace = 0
+let make () =
+    if trace <> 0 then trace <- 8
+    trace <- 2
+    seq { yield 7<m> }
+[<EntryPoint>]
+let main _ =
+    let values = make ()
+    for value in values do ignore value
+    trace
+"""
+        let owner, implementation = Factories.owner graph, Factories.lambda graph "make"
+        let body = match implementation.Kind with SemanticKind.Lambda(_, body, _, _, _) -> body | _ -> failwith "Expected factory Lambda"
+        let rec terminalPath id =
+            id :: (match graph.Nodes[id].Kind with
+                   | SemanticKind.Sequential values -> terminalPath (List.last values)
+                   | SemanticKind.TypeAnnotation(value, _) -> terminalPath value
+                   | _ -> [])
+        let path = terminalPath body
+        Assert.True(path.Length >= 3, "Fixture must exercise nested Sequential result positions")
+        Assert.Equal(owner.Id, List.last path)
+        let prepared = Factories.prepare graph
+        Assert.Empty prepared.Unresolved
+        Assert.True(prepared.Destinations.ContainsKey owner.Id)
+        for id in path |> List.filter ((<>) owner.Id) do
+            Assert.Equal(graph.Nodes[id].Kind, prepared.Graph.Nodes[id].Kind)
+            Assert.Equal<NodeId list>(graph.Nodes[id].Children, prepared.Graph.Nodes[id].Children)
+        let destination = prepared.Destinations[owner.Id]
+        Assert.Contains(prepared.Graph.Edges, fun edge ->
+            edge.Target = destination && edge.Class = EdgeClass.Provenance
+            && List.contains owner.Id edge.Sources)
+
+    [<Fact>]
+    member _.``A result constructor also used in an eager prefix cannot share its caller destination``() =
+        let graph = Factories.check """
+let make () =
+    ignore 1
+    seq { yield 7<m> }
+[<EntryPoint>]
+let main _ =
+    let values = make ()
+    for value in values do ignore value
+    0
+"""
+        let owner, implementation = Factories.owner graph, Factories.lambda graph "make"
+        let shared = { graph with Nodes = graph.Nodes.Add(implementation.Id, { implementation with Children = implementation.Children @ [owner.Id] }) }
+        // The added structural use is in a separate position of the same
+        // activation; lexical scope alone must not authorize one destination.
+        let prepared = Factories.prepare shared
+        Assert.False(prepared.Destinations.ContainsKey owner.Id)
+        Assert.Contains(prepared.Unresolved, fun failure -> failure.Reason.Contains("shared or repeated"))

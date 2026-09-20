@@ -283,9 +283,13 @@ let getReachabilityStats (graph: SemanticGraph) : int * int =
         |> Map.count
     (reachableCount, unreachableCount)
 
-/// Hard prune unreachable nodes (not soft-delete!)
-/// Use for production - removes unreachable nodes entirely
+/// Physical deletion is unavailable once resident proof incidence or a target
+/// declaration phase needs the graph's non-executable participants. Preserve
+/// that structure with the same reachability marks as ordinary soft deletion;
+/// this does not turn declaration membership into an execution root.
 let pruneUnreachable (graph: SemanticGraph) : SemanticGraph =
-    let reachable = computeReachable graph (graph.DeclarationRoots |> List.map fst)
-    { graph with
-        Nodes = graph.Nodes |> Map.filter (fun id _ -> Set.contains id reachable) }
+    if not graph.Edges.IsEmpty || graph.Platform.IsSome then markUnreachable graph
+    else
+        let reachable = computeReachable graph (graph.DeclarationRoots |> List.map fst)
+        { graph with
+            Nodes = graph.Nodes |> Map.filter (fun id _ -> Set.contains id reachable) }

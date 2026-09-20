@@ -100,6 +100,17 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] ClefExpr =
         returnType: NativeType *
         srtp: WitnessResolution option
 
+    /// Settled callable view. Code identity is not an invocation or a demand
+    /// to project the lifted implementation as the source lambda.
+    | ClosureValue of implementation: NodeId * environment: ClefExpr * ty: NativeType
+    /// Capture declarations and already evaluated initializers retain their
+    /// graph identities; projecting formation must not revisit their bodies.
+    | EnvironmentCreate of owner: NodeId * initializers: (NodeId * NodeId) list * ty: NativeType
+    | EnvironmentReference of callable: ClefExpr * ty: NativeType
+    | EnvironmentRead of environment: ClefExpr * slot: NodeId * ty: NativeType
+    | EnvironmentBorrow of environment: ClefExpr * slot: NodeId * ty: NativeType
+    | EnvironmentWrite of environment: ClefExpr * slot: NodeId * value: ClefExpr * ty: NativeType
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Values
     // ═══════════════════════════════════════════════════════════════════════════
@@ -390,6 +401,21 @@ module ClefExpr =
                 let funcExpr = fromNode graph funcId
                 let argExprs = argIds |> List.map (fromNode graph)
                 ClefExpr.Application(funcExpr, argExprs, node.Type, node.SRTPResolution)
+
+            // Formation keeps its source callable type. The implementation,
+            // layout owner and slots are references, not initializer demands.
+            | SemanticKind.ClosureValue(implementation, environment) ->
+                ClefExpr.ClosureValue(implementation, fromNode graph environment, node.Type)
+            | SemanticKind.EnvironmentCreate(owner, initializers) ->
+                ClefExpr.EnvironmentCreate(owner, initializers, node.Type)
+            | SemanticKind.EnvironmentReference callable ->
+                ClefExpr.EnvironmentReference(fromNode graph callable, node.Type)
+            | SemanticKind.EnvironmentRead(environment, slot) ->
+                ClefExpr.EnvironmentRead(fromNode graph environment, slot, node.Type)
+            | SemanticKind.EnvironmentBorrow(environment, slot) ->
+                ClefExpr.EnvironmentBorrow(fromNode graph environment, slot, node.Type)
+            | SemanticKind.EnvironmentWrite(environment, slot, value) ->
+                ClefExpr.EnvironmentWrite(fromNode graph environment, slot, fromNode graph value, node.Type)
 
             // Lambda expressions
             | SemanticKind.Lambda(parameters, bodyId, _captures, enclosingFunction, _context) ->
@@ -717,6 +743,15 @@ module ClefExpr =
                 ClefExpr.Intrinsic(
                     { Module = IntrinsicModule.Seq; Operation = "frameWrite"; Category = IntrinsicCategory.Memory
                       FullName = sprintf "Seq.frameWrite[%d]" (NodeId.value slot) }, [fromNode graph frame; fromNode graph value], node.Type)
+            | SemanticKind.AggregateStorage source ->
+                ClefExpr.Intrinsic(
+                    { Module = IntrinsicModule.Seq; Operation = "aggregateStorage"; Category = IntrinsicCategory.Memory
+                      FullName = sprintf "Seq.aggregateStorage[%d]" (NodeId.value source) }, [], node.Type)
+            | SemanticKind.DUInitialize (destination, name, _, payload) ->
+                ClefExpr.Intrinsic(
+                    { Module = IntrinsicModule.Seq; Operation = "initializeCase"; Category = IntrinsicCategory.Memory
+                      FullName = "Seq.initializeCase." + name },
+                    (destination :: Option.toList payload) |> List.map (fromNode graph), node.Type)
             | SemanticKind.ContinuationStorage owner ->
                 ClefExpr.Intrinsic(
                     { Module = IntrinsicModule.Seq; Operation = "continuationStorage"; Category = IntrinsicCategory.Memory
@@ -822,6 +857,28 @@ module ClefExpr =
             let srtpStr = srtp |> Option.map (fun r -> sprintf " [SRTP: %s -> %s]" r.Operator r.ResolvedMember) |> Option.defaultValue ""
             sprintf "%sApp(%s, [%s])%s" pad funcStr argsStr srtpStr
 
+        | ClefExpr.ClosureValue(implementation, environment, _ty) ->
+            sprintf "%sClosureValue(code=%d, %s)" pad (NodeId.value implementation) (prettyPrint 0 environment)
+
+        | ClefExpr.EnvironmentCreate(owner, initializers, _ty) ->
+            let captures =
+                initializers
+                |> List.map (fun (slot, value) -> sprintf "%d <- %d" (NodeId.value slot) (NodeId.value value))
+                |> String.concat ", "
+            sprintf "%sEnvironmentCreate(owner=%d, [%s])" pad (NodeId.value owner) captures
+
+        | ClefExpr.EnvironmentReference(callable, _ty) ->
+            sprintf "%sEnvironmentReference(%s)" pad (prettyPrint 0 callable)
+
+        | ClefExpr.EnvironmentRead(environment, slot, _ty) ->
+            sprintf "%sEnvironmentRead(%s, slot=%d)" pad (prettyPrint 0 environment) (NodeId.value slot)
+
+        | ClefExpr.EnvironmentBorrow(environment, slot, _ty) ->
+            sprintf "%sEnvironmentBorrow(%s, slot=%d)" pad (prettyPrint 0 environment) (NodeId.value slot)
+
+        | ClefExpr.EnvironmentWrite(environment, slot, value, _ty) ->
+            sprintf "%sEnvironmentWrite(%s, slot=%d, %s)" pad (prettyPrint 0 environment) (NodeId.value slot) (prettyPrint 0 value)
+
         | ClefExpr.Lambda(params', body, _retTy, _srtp, enclosingFunc) ->
             let paramsStr = params' |> List.map fst |> String.concat ", "
             let bodyStr = prettyPrint (indent + 1) body
@@ -872,6 +929,12 @@ module ClefExpr =
         | ClefExpr.Literal(value, _) -> sprintf "Literal(%A)" value
         | ClefExpr.Variable(name, _, _, _) -> sprintf "Var(%s)" name
         | ClefExpr.Application(_, args, _, _) -> sprintf "App(..., %d args)" (List.length args)
+        | ClefExpr.ClosureValue(implementation, _, _) -> sprintf "ClosureValue(code=%d)" (NodeId.value implementation)
+        | ClefExpr.EnvironmentCreate(owner, captures, _) -> sprintf "EnvironmentCreate(owner=%d, %d captures)" (NodeId.value owner) captures.Length
+        | ClefExpr.EnvironmentReference _ -> "EnvironmentReference"
+        | ClefExpr.EnvironmentRead(_, slot, _) -> sprintf "EnvironmentRead(slot=%d)" (NodeId.value slot)
+        | ClefExpr.EnvironmentBorrow(_, slot, _) -> sprintf "EnvironmentBorrow(slot=%d)" (NodeId.value slot)
+        | ClefExpr.EnvironmentWrite(_, slot, _, _) -> sprintf "EnvironmentWrite(slot=%d)" (NodeId.value slot)
         | ClefExpr.Lambda(params', _, _, _, _) -> sprintf "Lambda(%d params)" (List.length params')
         | ClefExpr.LetBinding(name, _, _, _, _) -> sprintf "Let(%s)" name
         | ClefExpr.LetRecBindings(bindings, _) -> sprintf "LetRec(%d bindings)" (List.length bindings)

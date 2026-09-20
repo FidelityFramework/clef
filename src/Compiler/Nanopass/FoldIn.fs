@@ -17,7 +17,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.Nanopass.Recipe
 
 //=============================================================================
-// REFERENCE UPDATE HELPERS
+// REFERENCE IDENTITY REWRITING
 //=============================================================================
 
 /// Update a NodeId reference using the replacement map
@@ -50,11 +50,20 @@ let remapKindReferences (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKin
         SemanticKind.WhileLoop (update guard, update body)
     | SemanticKind.ContinuationDispatch (selector, cases, otherwise) ->
         SemanticKind.ContinuationDispatch (update selector, cases |> List.map (fun (state, body) -> state, update body), update otherwise)
+    | SemanticKind.AggregateStorage source -> SemanticKind.AggregateStorage (update source)
+    | SemanticKind.DUInitialize (destination, name, index, payload) -> SemanticKind.DUInitialize (update destination, name, index, Option.map update payload)
     | SemanticKind.FrameRead (frame, slot) -> SemanticKind.FrameRead (update frame, update slot)
     | SemanticKind.FrameBorrow (frame, slot) -> SemanticKind.FrameBorrow (update frame, update slot)
     | SemanticKind.FrameWrite (frame, slot, value) -> SemanticKind.FrameWrite (update frame, update slot, update value)
     | SemanticKind.ContinuationStorage owner -> SemanticKind.ContinuationStorage (update owner)
     | SemanticKind.ContinuationAllocate owner -> SemanticKind.ContinuationAllocate (update owner)
+    | SemanticKind.ClosureValue (implementation, environment) -> SemanticKind.ClosureValue (update implementation, update environment)
+    | SemanticKind.EnvironmentCreate (owner, initializers) ->
+        SemanticKind.EnvironmentCreate (update owner, initializers |> List.map (fun (slot, value) -> update slot, update value))
+    | SemanticKind.EnvironmentReference value -> SemanticKind.EnvironmentReference (update value)
+    | SemanticKind.EnvironmentRead (environment, slot) -> SemanticKind.EnvironmentRead (update environment, update slot)
+    | SemanticKind.EnvironmentBorrow (environment, slot) -> SemanticKind.EnvironmentBorrow (update environment, update slot)
+    | SemanticKind.EnvironmentWrite (environment, slot, value) -> SemanticKind.EnvironmentWrite (update environment, update slot, update value)
     | SemanticKind.ForLoop (var, start, finish, isUp, body) ->
         SemanticKind.ForLoop (var, update start, update finish, isUp, update body)
     | SemanticKind.ForEach (var, formal, coll, body) ->
@@ -223,6 +232,14 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
     // For each node, we look at its Children and set each child's Parent to
     // point back to this node.
     //=========================================================================
+    // Module membership is lexical, while a startup spine may execute the
+    // same declaration. Preserve lexical symbol/source identity independently
+    // of the structural execution edges used for activation analysis.
+    let lexicalParents =
+        newNodes.Values |> Seq.collect (fun node ->
+            match node.Kind with
+            | SemanticKind.ModuleDef(_, members) -> members |> Seq.map (fun memberId -> memberId, node.Id)
+            | _ -> Seq.empty) |> Map.ofSeq
     let nodesWithParents =
         newNodes
         |> Map.fold (fun acc parentId parentNode ->
@@ -230,7 +247,8 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
             |> List.fold (fun acc' childId ->
                 match Map.tryFind childId acc' with
                 | Some (childNode: SemanticNode) ->
-                    let updatedChild: SemanticNode = { childNode with Parent = Some parentId }
+                    let lexicalParent = lexicalParents.TryFind childId |> Option.defaultValue parentId
+                    let updatedChild: SemanticNode = { childNode with Parent = Some lexicalParent }
                     Map.add childId updatedChild acc'
                 | None -> acc'
             ) acc
@@ -262,7 +280,8 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         Codata = lazy Codata.empty
         // F survives fold-in with its references repointed at replacements.
         Edges =
-            graph.Edges |> List.map (fun e ->
+            (graph.Edges @ (recipeSet.Recipes.Values |> Seq.collect _.NewEdges |> Seq.toList))
+            |> List.map (fun e ->
                 { e with
                     Sources = e.Sources |> List.map (updateRef replacementMap)
                     Target = updateRef replacementMap e.Target })

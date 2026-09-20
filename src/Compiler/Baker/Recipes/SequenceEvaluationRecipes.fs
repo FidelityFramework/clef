@@ -37,6 +37,15 @@ let private local (graph: SemanticGraph) owner generator (node: SemanticNode) =
     | SemanticKind.Sequential ids | SemanticKind.TupleExpr ids
     | SemanticKind.ArrayExpr ids | SemanticKind.ListExpr ids -> eager ids
     | SemanticKind.Application (callee, args) -> eager (callee :: args)
+    | SemanticKind.ClosureValue(_, environment) -> eager [environment]
+    | SemanticKind.EnvironmentReference value -> eager [value]
+    | SemanticKind.EnvironmentRead(environment, _) | SemanticKind.EnvironmentBorrow(environment, _) -> eager [environment]
+    | SemanticKind.EnvironmentWrite(environment, _, value) -> eager [environment; value]
+    | SemanticKind.EnvironmentCreate(_, initializers) ->
+        let declarations = initializers |> List.map snd
+        if List.forall resident declarations then
+            (declarations |> List.mapi (E.capture owner node.Id)) @ E.ordered owner node.Id [] EvaluationTransfer.Continue, []
+        else pending EvaluationResidual.MissingOperand declarations
     | SemanticKind.Binding _ ->
         match node.Children with
         | [] | [_] -> eager node.Children
@@ -44,8 +53,13 @@ let private local (graph: SemanticGraph) owner generator (node: SemanticNode) =
     | SemanticKind.Intrinsic _ -> eager node.Children
     | SemanticKind.Literal _ | SemanticKind.VarRef _
     | SemanticKind.PatternBinding _ | SemanticKind.PlatformBinding _ -> eager []
+    | SemanticKind.SeqExpr _ ->
+        match Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.sequenceInitializers graph node with
+        | Some pairs when pairs |> List.forall (snd >> resident) ->
+            (pairs |> List.map snd |> List.mapi (E.capture owner node.Id)) @ E.ordered owner node.Id [] EvaluationTransfer.Continue, []
+        | _ -> pending EvaluationResidual.MissingOperand []
     | SemanticKind.Lambda (_, _, captures, _, _)
-    | SemanticKind.LazyExpr (_, captures) | SemanticKind.SeqExpr (_, captures) -> formation captures
+    | SemanticKind.LazyExpr (_, captures) -> formation captures
     | SemanticKind.IfThenElse (guard, thenBranch, elseBranch) ->
         let ids = [guard; thenBranch] @ Option.toList elseBranch
         withOperands ids (fun operands ->
@@ -109,7 +123,8 @@ let private local (graph: SemanticGraph) owner generator (node: SemanticNode) =
     | SemanticKind.ContinuationDispatch _ | SemanticKind.FrameRead _ | SemanticKind.FrameWrite _ | SemanticKind.FrameBorrow _ ->
         pending EvaluationResidual.InvalidShape []
     | SemanticKind.ContinuationStorage _ -> pending EvaluationResidual.InvalidShape []
-    | SemanticKind.ContinuationAllocate _ -> eager []
+    | SemanticKind.ContinuationAllocate _ | SemanticKind.AggregateStorage _ -> eager []
+    | SemanticKind.DUInitialize (destination, _, _, payload) -> eager (destination :: Option.toList payload)
 
 let forOwner (graph: SemanticGraph) (owner: SemanticNode) : Enrichment =
     match owner.Kind with

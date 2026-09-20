@@ -998,6 +998,18 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // pruning or Baker can discard their source template or factory body.
     let graph, closedCallbackDiagnostics = Clef.Compiler.Nanopass.ClosedCallbacks.expand graph
 
+    // Preserve ordered eager effects before the first reachability cut. The
+    // generated startup is distinct from the callable source entry; module
+    // membership remains a declaration relation, not an execution parent.
+    // Raw diagnostics also include unreachable declaration bodies; their
+    // effective severity is settled only after this execution structure makes
+    // reachability truthful. Source errors do not erase the partial graph, and
+    // the later source-admission gate still prevents native realization.
+    let graph, programInitializationDiagnostics =
+        let roots = topLevelNodes |> List.map _.Id
+        if ownedSources.IsEmpty then Clef.Compiler.Nanopass.ProgramInitialization.normalize roots graph
+        else Clef.Compiler.Nanopass.ProgramInitialization.normalizeOwned ownedSources roots graph
+
     // Phase 4: Reachability analysis
     // Use soft-delete (mark IsReachable = false) or hard prune based on config
     let reachableGraph =
@@ -1028,9 +1040,9 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     if PhaseConfig.shouldEmit() then
         emitPhaseIfEnabled PhaseTypes.PhaseId.BakerModuleInit psg1 diagnostics  // Artifact 03
 
-    // Pass 2.5: Entry Point Elaboration (Freestanding mode only)
-    // Adds _start wrapper that calls main with argc/argv from stack
-    let psg1WithDeclRoots = IntrinsicElaboration.elaborateEntryPoints psg1
+    // The true hosted/freestanding startup was already constructed before
+    // reachability. A second wrapper would duplicate initialization ownership.
+    let psg1WithDeclRoots = psg1
 
     // Pass 3: Saturation Fan-Out - Create Baker decomposition recipes
     let saturationRecipes = BakerSaturation.fanOut psg1WithDeclRoots
@@ -1058,6 +1070,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // Known non-escaping named functions carry admitted immutable captures as
     // explicit parameters. Mutable capture storage remains a separate contract.
     let finalGraph = Clef.Compiler.Nanopass.ClosureElaboration.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.ClosureEnvironmentElaboration.normalize finalGraph
 
     // Source and recipe-produced suspension sites retain their exact delimiter
     // after the preceding identity rewrites. Ownership is not segmentation,
@@ -1069,6 +1082,9 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // An admitted current read depends jointly on the successful pull and all
     // possible owner payloads. Range saturation consumes these source relations.
     let finalGraph = Clef.Compiler.Nanopass.SequenceElements.normalize finalGraph
+    // Iterator invocation effects remain linked to their exact possible source
+    // bodies. The effect/range fixed points consume these dependencies jointly.
+    let finalGraph = Clef.Compiler.Nanopass.SequenceEffects.normalize finalGraph
 
     //=========================================================================
     // Pass 5: Obligation Elaboration -- the declared platform, cross-compiled
@@ -1151,7 +1167,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let taggedDiagnostics = (diagnostics @ residual) |> List.map tagReachability
 
     let sourceAdmitted =
-        taggedDiagnostics |> List.exists (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error) |> not
+        (taggedDiagnostics @ programInitializationDiagnostics) |> List.exists (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error) |> not
+    let finalGraph, programStorageDiagnostics = Clef.Compiler.Nanopass.ProgramInitialization.settleValueAuthority sourceAdmitted finalGraph
+    let sourceAdmitted = sourceAdmitted && programStorageDiagnostics.IsEmpty
+    let finalGraph, environments = Clef.Compiler.Nanopass.ClosureEnvironmentSettlement.settleWhenSourceAdmitted sourceAdmitted finalGraph
     let finalGraph, sequences = Clef.Compiler.Nanopass.SequenceRuntime.normalizeWhenSourceAdmitted sourceAdmitted finalGraph curry
     let curry = sequences.Curry
     ObligationDischarge.emit finalGraph  // Includes settled continuation frame obligations.
@@ -1159,14 +1178,21 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let mmio, mmioDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess.settle (diagnostics @ residual @ rangeDiagnostics) finalGraph
     let finalGraph =
         let settled = finalGraph
+        let environmentOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.origins settled
         { finalGraph with
             Codata = lazy {
-                Escapes = sequences.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) (Escape.analyze settled)
+                Escapes = sequences.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts)
+                            (environments.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) (Escape.analyze settled))
                 Curry = curry
                 Meets = Meets.continuations sequences.Frames sequences.Origins sequences.Storage settled
                         |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) (Meets.derive platformContext settled curry)
+                        |> fun facts -> Meets.environments environments.Layouts environmentOrigins settled
+                                        |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) facts
                 ReturnMeets = Meets.returns platformContext settled
                 Closures = Placement.closures platformContext settled
+                EnvironmentLayouts = environments.Layouts
+                EnvironmentOrigins = environmentOrigins
+                KnownCallables = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.knownCallables settled
                 ContinuationFrames = sequences.Frames
                 SequenceOrigins = sequences.Origins
                 ContinuationStorage = sequences.Storage
@@ -1197,7 +1223,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ sequences.Diagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 
@@ -2686,7 +2712,10 @@ let checkParsedInputsWithPlatformAndSources (inputs: ParsedInput list) (platform
                         let (newEnv, path, nodes) = checkModuleOrNamespace env builder moduleOrNs
                         (newEnv, (path, nodes) :: results)
                     ) (accEnv, [])
-                (updatedEnv, (List.rev fileResults) @ accResults)
+                // Both accumulators are reversed. Preserve that invariant
+                // across file boundaries; the single reversal below restores
+                // file order and declaration order within each file together.
+                (updatedEnv, fileResults @ accResults)
             | ParsedInput.SigFile _ ->
                 // Skip signature files for now
                 (accEnv, accResults)

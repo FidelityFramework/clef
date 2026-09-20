@@ -13,7 +13,7 @@ module private FoldReferences =
 
     let recipe original replacement nodes =
         { OriginalNodeId = original; ReplacementRootId = replacement
-          NewNodes = nodes; ElaborationKind = "Baker"; ElaborationSource = "Reference fixture" }
+          NewNodes = nodes; ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "Reference fixture" }
 
     let capture source mutableValue =
         { Name = "value"; Type = Types.boolType; IsMutable = mutableValue; SourceNodeId = source }
@@ -101,3 +101,26 @@ type FoldInReferenceCases() =
         Assert.Equal(Some freshOwner.Id, folded.Nodes[freshRead.Id].Parent)
         Assert.False(folded.Nodes.ContainsKey original.Id)
         Assert.False(folded.Nodes.ContainsKey owner.Id)
+
+    [<Fact>]
+    member _.``Recipe incidence remaps every participant across simultaneous replacements``() =
+        let builder = NodeBuilder()
+        let create name = builder.Create(SemanticKind.PatternBinding name, Types.boolType, FoldReferences.range)
+        let source, target, retained = create "source", create "target", create "retained"
+        let graph = builder.Build []
+        let replacementSource, replacementTarget = create "source occurrence", create "target occurrence"
+        let edge = { Class = EdgeClass.Provenance; Role = EdgeRole.BranchOccurrence
+                     Sources = [source.Id; retained.Id]; Target = target.Id; Ordinal = 3 }
+        let sourceRecipe = { FoldReferences.recipe source.Id replacementSource.Id [replacementSource] with NewEdges = [edge] }
+        let targetRecipe = FoldReferences.recipe target.Id replacementTarget.Id [replacementTarget]
+        let folded = FoldIn.foldIn (RecipeSet.fromList "incidence" [sourceRecipe; targetRecipe]) graph
+        let actual = Assert.Single folded.Edges
+        Assert.Equal<NodeId list>([replacementSource.Id; retained.Id], actual.Sources)
+        Assert.Equal(replacementTarget.Id, actual.Target)
+        Assert.Equal(3, actual.Ordinal)
+        Assert.Empty graph.Edges
+        use json = System.Text.Json.JsonDocument.Parse(Clef.Compiler.Nanopass.Serialization.serializeRecipe sourceRecipe)
+        let serialized = json.RootElement.GetProperty("newEdges").EnumerateArray() |> Seq.exactlyOne
+        Assert.Equal(NodeId.value target.Id, serialized.GetProperty("target").GetInt32())
+        Assert.Equal<int list>([NodeId.value source.Id; NodeId.value retained.Id],
+            serialized.GetProperty("sources").EnumerateArray() |> Seq.map (fun value -> value.GetInt32()) |> Seq.toList)
