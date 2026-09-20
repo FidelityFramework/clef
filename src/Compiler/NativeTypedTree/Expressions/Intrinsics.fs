@@ -873,6 +873,13 @@ let private resolveOptionOp (op: string) (range: SourceRange) : IntrinsicResolut
 /// Explicit argument order is map/bind<'a,'b,'e>, mapError<'a,'e,'f>.
 let private resolveResultOp (op: string) (range: SourceRange) : IntrinsicResolution =
     match op with
+    | "isOk" | "isError" ->
+        let valueParameter = freshTypeParam "'a" TypeParamKind.Type range
+        let errorParameter = freshTypeParam "'e" TypeParamKind.Type range
+        let input = NativeType.TApp(Clef.Compiler.NativeTypedTree.Expressions.Types.resultTycon,
+                                   [NativeType.TVar valueParameter; NativeType.TVar errorParameter])
+        let scheme = NativeType.TForall([valueParameter; errorParameter], NativeType.TFun(input, Types.boolType))
+        Resolved (mkIntrinsic IntrinsicModule.Result op IntrinsicCategory.Pure ("Result." + op), scheme)
     | "defaultValue" | "defaultWith" | "iter" ->
         let valueParameter = freshTypeParam "'a" TypeParamKind.Type range
         let errorParameter = freshTypeParam "'e" TypeParamKind.Type range

@@ -26,6 +26,16 @@ let private payloadTypes = function
         when tycon = Clef.Compiler.NativeTypedTree.Expressions.Types.resultTycon -> Some (ok, error)
     | _ -> None
 
+/// Observe only the established case discriminant. Payload construction remains
+/// part of the eager input; no payload extraction or invocation is introduced.
+let private predicateBody operation input inputType =
+    saturation {
+        let! tag = duGetTag input inputType
+        let! expected = int8Lit (if operation = "isOk" then 0 else 1)
+        let! result = compareEq tag expected Types.int8Type
+        return! evaluateBefore [input] result Types.boolType
+    }
+
 /// Both cases retain their own extraction type. A changed Result type may need
 /// reconstruction; the untouched payload is passed through without conversion.
 let private operationBody operation callback input inputType outputType okType errorType =
@@ -106,6 +116,8 @@ let private partialRecipe (ctx: Context) operation callback callbackType inputTy
 
 let tryDecompose ctx operation arguments returnType enclosing : Result option =
     match arguments with
+    | [input, inputType] when (operation = "isOk" || operation = "isError") && (payloadTypes inputType).IsSome ->
+        Some (runRecipe ctx (predicateBody operation input inputType))
     | [callback, callbackType] ->
         match returnType with
         | NativeType.TFun (inputType, outputType)
@@ -134,6 +146,13 @@ let tryDecompose ctx operation arguments returnType enclosing : Result option =
 
 let tryReifyValue ctx operation functionType enclosing : Result option =
     match functionType with
+    | NativeType.TFun (inputType, outputType)
+        when (operation = "isOk" || operation = "isError") && (payloadTypes inputType).IsSome && outputType = Types.boolType ->
+        let closureBody parameters _ =
+            match parameters with
+            | [input] -> predicateBody operation input inputType
+            | _ -> failwith "A Result predicate value requires one input parameter"
+        Some (runRecipe ctx (closure [("__result", inputType)] [] enclosing closureBody Types.boolType))
     | NativeType.TFun (callbackType, (NativeType.TFun (inputType, outputType) as residual))
         when (payloadTypes inputType).IsSome ->
         let closureBody parameters _ =

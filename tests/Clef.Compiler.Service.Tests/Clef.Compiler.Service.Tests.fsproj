@@ -32,6 +32,7 @@
     <Compile Include="OptionFoldCases.fs" />
     <Compile Include="ResultOperationCases.fs" />
     <Compile Include="ResultEliminationCases.fs" />
+    <Compile Include="ResultPredicateCases.fs" />
     <Compile Include="MathSineCases.fs" />
     <Compile Include="CallEffectRangeCases.fs" />
     <Compile Include="PipeEvaluationCases.fs" />

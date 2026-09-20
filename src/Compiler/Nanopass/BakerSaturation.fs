@@ -140,7 +140,7 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Option, "orElse" -> true
     | IntrinsicModule.Option, "orElseWith" -> true
     | IntrinsicModule.Option, ("isSome" | "isNone" | "get") -> true
-    | IntrinsicModule.Result, ("map" | "mapError" | "bind" | "defaultValue" | "defaultWith" | "iter") -> true
+    | IntrinsicModule.Result, ("map" | "mapError" | "bind" | "defaultValue" | "defaultWith" | "iter" | "isOk" | "isError") -> true
     // Seq HOFs - Producers
     | IntrinsicModule.Seq, "map" -> true
     | IntrinsicModule.Seq, "filter" -> true
