@@ -699,11 +699,17 @@ let checkSeq
     // Returns true if a value was yielded, false if exhausted
     let seqPtrType = NativeType.TNativePtr seqType
     let moveNextType = NativeType.TFun(seqPtrType, Types.boolType)
+    // This internal formal has graph identity but denotes no source token.
+    // Its point anchor and parent retain the owning sequence's provenance.
+    let seqParameter = builder.Create(
+        SemanticKind.PatternBinding "_seq_ptr", seqPtrType,
+        { range with End = range.Start }, arena = env.CurrentArena)
     let moveNextLambda = builder.Create(
-        SemanticKind.Lambda([("_seq_ptr", seqPtrType, NodeId -1)], bodyNode.Id, captures, env.EnclosingFunction, LambdaContext.SeqGenerator),
+        SemanticKind.Lambda([("_seq_ptr", seqPtrType, seqParameter.Id)], bodyNode.Id, captures, env.EnclosingFunction, LambdaContext.SeqGenerator),
         moveNextType,
         range,
-        children = [bodyNode.Id])
+        children = [seqParameter.Id; bodyNode.Id])
+    builder.SetParent(seqParameter.Id, moveNextLambda.Id)
     builder.SetParent(bodyNode.Id, moveNextLambda.Id)
     builder.SetParent(moveNextLambda.Id, owner.Id)
 
