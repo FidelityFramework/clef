@@ -132,6 +132,7 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Option, "filter" -> true
     | IntrinsicModule.Option, "exists" -> true
     | IntrinsicModule.Option, "forall" -> true
+    | IntrinsicModule.Option, "iter" -> true
     | IntrinsicModule.Option, "defaultValue" -> true
     | IntrinsicModule.Option, "defaultWith" -> true
     | IntrinsicModule.Option, "orElse" -> true
@@ -254,7 +255,7 @@ let private applyIntrinsicRecipe
             args
             |> (match info.Operation with
                 | "get" -> List.tryHead
-                | "defaultValue" | "defaultWith" | "orElse" | "orElseWith" -> List.tryItem 1
+                | "defaultValue" | "defaultWith" | "orElse" | "orElseWith" | "iter" -> List.tryItem 1
                 | _ -> List.tryLast)
             |> Option.bind (fun argId -> SemanticGraph.tryGetNode argId graph)
             |> Option.map (fun n -> n.Type)

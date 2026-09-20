@@ -174,6 +174,17 @@ let private optionPredicateRecipe predicate optionNodeId valueType absentResult 
         return! ifThenElse present tested absent Types.boolType
     }
 
+/// The action consumes the payload only in Some. Both paths return unit;
+/// a function-valued payload is passed to the action without being invoked.
+let private optionIterRecipe action optionNodeId valueType =
+    saturation {
+        let! present = optionHasValue optionNodeId valueType
+        let! value = optionValue optionNodeId valueType
+        let! invoked = app1 action value Types.unitType
+        let! absent = createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
+        return! ifThenElse present invoked absent Types.unitType
+    }
+
 /// Select the original fallback or the Some payload. Argument evaluation is
 /// preserved by the application recipe; extraction belongs to the Some branch.
 let private optionDefaultValueRecipe fallback optionNodeId valueType =
@@ -230,6 +241,8 @@ let private operationRecipe operation args inputType outputType =
         Some (optionPredicateRecipe predicate opt inputType false, Types.boolType)
     | "forall", [predicate; opt] ->
         Some (optionPredicateRecipe predicate opt inputType true, Types.boolType)
+    | "iter", [action; opt] ->
+        Some (optionIterRecipe action opt inputType, Types.unitType)
     | ("orElse" | "orElseWith"), [fallback; opt] ->
         Some (optionAlternativeRecipe (operation = "orElseWith") fallback opt inputType, optionType inputType)
     | ("defaultValue" | "defaultWith"), fallback :: opt :: remaining ->
@@ -270,7 +283,7 @@ let private innerType = function
     | _ -> None
 
 let private hasLeadingArgument = function
-    | "map" | "bind" | "filter" | "exists" | "forall" | "defaultValue" | "defaultWith" | "orElse" | "orElseWith" -> true
+    | "map" | "bind" | "filter" | "exists" | "forall" | "iter" | "defaultValue" | "defaultWith" | "orElse" | "orElseWith" -> true
     | _ -> false
 
 /// Try to decompose a fully applied Option operation.
