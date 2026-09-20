@@ -179,12 +179,14 @@ let private resolveStringOp (op: string) (_range: SourceRange) : IntrinsicResolu
         let ty = NativeType.TFun(stringType, NativeType.TFun(stringListType, stringType))
         Resolved (mkIntrinsic IntrinsicModule.String op IntrinsicCategory.StringOp fullName, ty)
     | "toBytes" ->
-        // string -> byte[] (UTF-8 encoding)
-        let ty = NativeType.TFun(stringType, NativeType.TApp(Types.arrayTyCon, [Types.uint8Type]))
+        // The byte-unit view is internal; callers receive an independent int
+        // array whose storage also covers subsequent ordinary integer writes.
+        let ty = NativeType.TFun(stringType, NativeType.TApp(Types.arrayTyCon, [Types.intType]))
         Resolved (mkIntrinsic IntrinsicModule.String op IntrinsicCategory.StringOp fullName, ty)
     | "fromBytes" ->
-        // byte[] -> string (UTF-8 decoding)
-        let ty = NativeType.TFun(NativeType.TApp(Types.arrayTyCon, [Types.uint8Type]), stringType)
+        // Integer code units -> string. Byte storage and text validity are
+        // admitted jointly by Baker, not by a width-spelled source type.
+        let ty = NativeType.TFun(NativeType.TApp(Types.arrayTyCon, [Types.intType]), stringType)
         Resolved (mkIntrinsic IntrinsicModule.String op IntrinsicCategory.StringOp fullName, ty)
     | unknown ->
         UnknownOperation $"Unknown String intrinsic: String.{unknown}. Available: concat2, concat, length, isEmpty, contains, startsWith, endsWith, substring, trim, trimStart, trimEnd, toUpper, toLower, charAt, indexOf, replace, toBytes, fromBytes"

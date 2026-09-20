@@ -1116,6 +1116,13 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // thresholds) and before the declaration is checked.
     //=========================================================================
     let finalGraph, rangeDiagnostics = RangeAnalysis.run platformContext finalGraph
+    let byteGraph, stringByteDiagnostics = Clef.Compiler.Nanopass.StringByteStorage.normalize finalGraph
+    // New copy loops and their read/write dependencies participate in the same
+    // range fixed point. Replace preliminary diagnostics and invalidated tables;
+    // resident byte-read evidence supplies the exact input enclosure.
+    let finalGraph, rangeDiagnostics =
+        if obj.ReferenceEquals(finalGraph, byteGraph) then finalGraph, rangeDiagnostics
+        else RangeAnalysis.run platformContext byteGraph
 
     //=========================================================================
     // Placement (CS-11 slice 0, Dimensional_Range_Design.md ruling 2): every
@@ -1223,7 +1230,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 

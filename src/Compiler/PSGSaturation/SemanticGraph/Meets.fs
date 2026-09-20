@@ -139,10 +139,13 @@ let private payloadSlotWidth (graph: SemanticGraph) (unionTy: NativeType) (caseI
     | _ -> None
 
 let private elementSlotWidth (graph: SemanticGraph) (arrayId: NodeId) : int option =
-    match SemanticGraph.tryGetNode arrayId graph |> Option.map (fun n -> applySubst n.Type) with
-    | Some (NativeType.TApp (tycon, [ elemTy ])) when tycon.Name = "array" || tycon.Name = "Array" ->
-        if Types.tryGetNTUKind elemTy |> Option.exists isWordInteger then Some (elementWidth graph elemTy) else None
-    | _ -> None
+    match StringByteStorage.element graph arrayId with
+    | Some(SettledSlot.Integer(bits, _)) -> Some bits
+    | _ ->
+      match SemanticGraph.tryGetNode arrayId graph |> Option.map (fun n -> applySubst n.Type) with
+      | Some (NativeType.TApp (tycon, [ elemTy ])) when tycon.Name = "array" || tycon.Name = "Array" ->
+          if Types.tryGetNTUKind elemTy |> Option.exists isWordInteger then Some (elementWidth graph elemTy) else None
+      | _ -> None
 
 /// A direct call's result read from the callee's body width to the call node's own.
 let private callResultMeet (graph: SemanticGraph) (node: SemanticNode) (lambda: SemanticNode) : Meet list =

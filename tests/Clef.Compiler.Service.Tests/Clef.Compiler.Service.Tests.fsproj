@@ -11,6 +11,7 @@
     <Compile Include="ApplicationObligationCases.fs" />
     <Compile Include="IntegerObligationCases.fs" />
     <Compile Include="StaticStringLayoutCases.fs" />
+    <Compile Include="StringEncodingCases.fs" />
     <Compile Include="ProgramLifetimeCases.fs" />
     <Compile Include="ProgramActivationCases.fs" />
     <Compile Include="ProgramInitializationSelectionCases.fs" />

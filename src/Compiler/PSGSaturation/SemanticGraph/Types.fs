@@ -555,6 +555,21 @@ type EdgeClass =
 /// handed to a callback and discarded instead of being stored.
 [<RequireQualifiedAccess>]
 type EdgeRole =
+    /// [conversion; input; allocation; complete alias/write/value premises]
+    /// -> exact array occurrence. Byte units, not UTF-8 sequence validity.
+    | StringByteStorage of lower: bigint * upper: bigint * representation: string
+    /// [allocation; array occurrence; complete write/value premises] -> element read.
+    | StringByteRead
+    /// The exact read enclosure derived from complete encoding storage premises.
+    | StringByteRange of lower: bigint * upper: bigint
+    /// [original input; fresh copy] -> conversion; copy preserves string immutability.
+    | StringByteSnapshot
+    /// [immutable string; internal byte view; fresh copy] -> public array conversion.
+    | StringToBytesSnapshot
+    /// Complete storage range establishes ASCII text.
+    | StringAscii
+    /// The exact immutable byte sequence passed strict UTF-8 decoding.
+    | StringUtf8Constant of bytes: byte list
     /// [owner; guard; induction cell; initial value; limit; step; update; store]
     /// -> loop. Direction and strictness describe the actual comparison.
     | LoopInduction of ascending: bool * inclusive: bool

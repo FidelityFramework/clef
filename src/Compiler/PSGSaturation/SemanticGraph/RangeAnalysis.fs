@@ -1290,6 +1290,11 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             match CallbackDeclarations.invocationResult graph node.Id |> Option.orElseWith (fun () -> Mmio.numericBoundary graph node.Id) |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph node.Id) |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph node.Id) with
             | Some result -> Map.add node.Id result.Range seeds
             | None -> seeds) boundarySeeds
+    let boundarySeeds =
+        ordered |> List.fold (fun seeds node ->
+            match StringByteStorage.readRange graph node.Id with
+            | Some range -> Map.add node.Id range seeds
+            | None -> seeds) boundarySeeds
     // Every value stored into an array, by element type (§3.3): an array literal's elements (a
     // comprehension's yields), an indexer or `Array.set` assignment, `Array.create`'s seed,
     // `Array.init`'s function result (a named lambda's body, or every candidate's through a value),
@@ -1387,6 +1392,13 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                         let key = elementKey elem
                         (stores, Map.add key (ValueRange.join (Map.tryFind key seeds |> Option.defaultValue ValueRange.Empty) (ValueRange.point bigint.Zero)) seeds)
                     | _ -> (stores, seeds)
+                | Some (Callee.Intrinsic { Module = IntrinsicModule.String; Operation = "toBytes" }, _) ->
+                    match arrayElementType node.Type, StringByteStorage.element graph node.Id with
+                    | Some elem, Some(SettledSlot.Integer(8, _)) ->
+                        let key = elementKey elem
+                        stores, Map.add key (ValueRange.join (Map.tryFind key seeds |> Option.defaultValue ValueRange.Empty) (ValueRange.bounded 0I 255I)) seeds
+                    | Some elem, _ -> stores, Map.add (elementKey elem) ValueRange.Unbounded seeds
+                    | None, _ -> stores, seeds
                 // The element rule is closed (the reviewer's arrmap2 probe, CS-11): an intrinsic that
                 // produces an array from anything but same-element operations on an array (the
                 // `RangeSources.sameElements` table) builds elements the fold does not see, so its
