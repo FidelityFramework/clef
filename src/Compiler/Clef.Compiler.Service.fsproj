@@ -262,7 +262,6 @@
     <!-- PSGSaturation - Program Semantic Graph with saturation passes -->
     <!-- CCS's responsibility: make the PSG semantically complete -->
     <!-- SemanticGraph split into focused nanopass modules (January 2026) -->
-    <Compile Include="PSGSaturation\SemanticGraph\SeqSaturation.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Types.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Elaboration.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Core.fs" />
@@ -321,6 +320,7 @@
     <Compile Include="Baker\Ingredients\Closures.fs" />
     <Compile Include="Baker\Ingredients\Patterns.fs" />
     <Compile Include="Baker\Ingredients\Obligations.fs" />
+    <Compile Include="Baker\Ingredients\Suspensions.fs" />
     <!-- Baker Recipes - HOF decomposition templates (PRD-13a) -->
     <Compile Include="Baker\Recipes\Decomposition.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableOrigins.fs" />
@@ -328,6 +328,7 @@
     <Compile Include="Baker\Recipes\ClosureRecipes.fs" />
     <Compile Include="Baker\Recipes\ApplicationRecipes.fs" />
     <Compile Include="Baker\Recipes\SeqRecipes.fs" />
+    <Compile Include="Baker\Recipes\SequenceOwnershipRecipes.fs" />
     <Compile Include="Baker\Recipes\ListRecipes.fs" />
     <Compile Include="Baker\Recipes\MapRecipes.fs" />
     <Compile Include="Baker\Recipes\SetRecipes.fs" />
@@ -342,6 +343,7 @@
     <Compile Include="Nanopass\BakerSaturation.fs" />
     <Compile Include="Nanopass\CallableApplications.fs" />
     <Compile Include="Nanopass\ClosureElaboration.fs" />
+    <Compile Include="Nanopass\SequenceOwnership.fs" />
     <Compile Include="Nanopass\ObligationDischarge.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
     <!-- The declared platform fills the context at saturation; sealed sites are checked against it (CS-7b) -->

@@ -6,7 +6,6 @@ module Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.DimensionAlgebra
-open Clef.Compiler.PSGSaturation.SemanticGraph.SeqSaturation
 
 //-------------------------------------------------------------------------
 // SRTP Resolution
@@ -436,6 +435,9 @@ type EdgeClass =
     | Provenance
     /// An obligation's constraining structure -> the obligation node.
     | Obligation
+    /// A suspension relation settled by Baker. This is neither containment
+    /// nor an execution edge; it does not number states or prove feasibility.
+    | Suspension
 
 /// The role the source plays relative to the target -- the edge label.
 /// Generalises Traversal.RegionKind, which named the same thing but was
@@ -485,6 +487,9 @@ type EdgeRole =
     /// produce the hidden formal target. The declaration may itself be a
     /// hidden formal; source tooling follows this specific relation by identity.
     | CaptureOrigin
+    /// Ordered sources [sequence owner; its generator] constrain the target
+    /// Yield/YieldBang site. Ordinal is zero, not a resumption state number.
+    | Delimiter
     // declared platform (BAREWire docs/11: cross-applied with the code it governs)
     /// A declared memory space or buffer schema constrains the value that
     /// resides in it: source = the declaration node, target = the value.
@@ -1101,7 +1106,6 @@ type SemanticGraph = {
     Types: Lazy<Map<string, NodeId>>
     Platform: PlatformContext option
     ModuleClassifications: Lazy<Map<NodeId, ModuleClassification>>
-    SeqSaturation: Lazy<Map<NodeId, SeqStateMachineInfo>>
     /// Per record type, per field: the join of the field's range over every reachable
     /// construction of that type (Dimensional_Range_Design.md §3.3: a record's field widths are
     /// one settled fact on the graph, the `hw.struct` of a module signature). Keyed by the type

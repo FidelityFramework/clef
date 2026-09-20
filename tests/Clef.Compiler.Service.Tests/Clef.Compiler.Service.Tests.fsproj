@@ -32,6 +32,7 @@
     <Compile Include="SeqProducerRecipeCases.fs" />
     <Compile Include="TreeSequenceRecipeCases.fs" />
     <Compile Include="SequenceProducerCases.fs" />
+    <Compile Include="SequenceOwnershipCases.fs" />
     <Compile Include="CountedLoopCases.fs" />
     <Compile Include="OptionFoldCases.fs" />
     <Compile Include="ResultOperationCases.fs" />

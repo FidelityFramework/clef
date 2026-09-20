@@ -979,8 +979,6 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         Platform = platformContext
         // Module classifications computed lazily from EmissionStrategy
         ModuleClassifications = SemanticGraph.mkModuleClassifications resolvedNodes
-        // Seq saturation computed lazily from SeqExpr nodes (codata pattern)
-        SeqSaturation = SemanticGraph.mkSeqSaturation resolvedNodes
         // Per-field record ranges: written by RangeAnalysis at saturation (CS-10)
         FieldRanges = lazy Map.empty
         ElementRanges = lazy Map.empty
@@ -1060,6 +1058,11 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // Known non-escaping named functions carry admitted immutable captures as
     // explicit parameters. Mutable capture storage remains a separate contract.
     let finalGraph = Clef.Compiler.Nanopass.ClosureElaboration.normalize finalGraph
+
+    // Source and recipe-produced suspension sites retain their exact delimiter
+    // after the preceding identity rewrites. Ownership is not segmentation,
+    // branch feasibility, state numbering or a settled frame representation.
+    let finalGraph, sequenceOwnershipDiagnostics = Clef.Compiler.Nanopass.SequenceOwnership.normalize finalGraph
 
     //=========================================================================
     // Pass 5: Obligation Elaboration -- the declared platform, cross-compiled
@@ -1171,7 +1174,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics
+        Diagnostics = taggedDiagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ sequenceOwnershipDiagnostics
         PlatformContext = platformContext
     }
 
@@ -2700,7 +2703,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
         // A signature file has no checker yet: the input contributes no graph, and that is an
         // error rather than a warning, because a warning would let the program lose a file silently.
         {
-            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; SeqSaturation = lazy Map.empty; FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Layouts = lazy Map.empty; StaticStringPool = None; Escaping = lazy Map.empty; Codata = lazy Codata.empty; Edges = [] }
+            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Layouts = lazy Map.empty; StaticStringPool = None; Escaping = lazy Map.empty; Codata = lazy Codata.empty; Edges = [] }
             Diagnostics = [{
                 Severity = NativeDiagnosticSeverity.Error
                 Code = DiagnosticCodes.CCS8401_UnsupportedConstruct

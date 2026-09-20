@@ -221,8 +221,7 @@ let expand (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
             | None -> ()
         | _ -> ()
     let expanded =
-        { graph with Nodes = nodes; Types = SemanticGraph.mkTypesIndex nodes; ModuleClassifications = SemanticGraph.mkModuleClassifications nodes
-                     SeqSaturation = SemanticGraph.mkSeqSaturation nodes }
+        { graph with Nodes = nodes; Types = SemanticGraph.mkTypesIndex nodes; ModuleClassifications = SemanticGraph.mkModuleClassifications nodes }
     let remaining = computeReachable expanded (expanded.DeclarationRoots |> List.map fst)
     let factories = declarations |> List.map (fun declaration -> declaration.Factory.Id) |> Set.ofList
     for node in expanded.Nodes.Values do

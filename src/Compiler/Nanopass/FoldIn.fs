@@ -246,7 +246,6 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         Types = SemanticGraph.mkTypesIndex nodesWithParents
         Platform = graph.Platform
         ModuleClassifications = SemanticGraph.mkModuleClassifications nodesWithParents
-        SeqSaturation = SemanticGraph.mkSeqSaturation nodesWithParents
         // Fold-in runs before the range pass; the pass fills this on the final graph.
         FieldRanges = lazy Map.empty
         ElementRanges = lazy Map.empty
