@@ -37,11 +37,13 @@ checked-in NuGet package. The ignore list now describes current generated output
 
 The remote ref inventory contained 210 branches and 143 tags. The four
 Clef-specific side branches, including the dimensions work, were ancestors of
-`main`; the other remote branch tips were inherited upstream work. Retire all
-209 non-main remote branches and all inherited tags in the same publication as
-the rewritten `main`. Do not leave a backup branch or tag retaining the old
-history in this repository. The external recovery bundle retains the original
-refs without enlarging new clones.
+`main`; the other remote branch tips were inherited upstream work. All 209
+non-main remote branches and all 143 inherited tags were deleted atomically
+with publication of the rewritten `main`, using explicit expected-old-ref
+leases. No backup branch or tag retains the old history in this repository.
+The external recovery bundle retains the original refs without enlarging new
+clones. The previously linked dimensions worktree is clean and detached at the
+new history; its former branch's work was already incorporated in `main`.
 
 ## Validation and recovery
 
@@ -49,6 +51,13 @@ The cleaned source passed all 1,006 CCS tests, a Composer build and the native
 formatter/UTF-8 snapshot gate (stock MLIR verification, native exit zero, empty
 stderr and all 22 expected lines). These checks validate the cleaned current
 tree, not every filtered historical snapshot.
+
+A fresh SSH clone at `c1491aa` advertised only `main`, passed `git fsck`, and
+contained 2.21 MiB of packed objects, compared with the original 415.46 MiB
+(about 99.5% less). It also built CCS successfully from newly generated parser
+sources with explicit sibling BAREWire/Fidelity.Data project paths. The original
+checkout's obsolete refs/reflogs were pruned and its objects repacked. The cleanup
+removed 101 unused tracked files totaling 13.33 MiB before documentation edits.
 
 An external recovery archive at
 `/home/hhh/repo-archives/clef-thinning-2026-09-20/` holds the verified original
