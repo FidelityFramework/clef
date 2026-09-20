@@ -39,6 +39,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Baker.Recipes.Decomposition
 open Clef.Compiler.Baker.Ingredients.SaturationCombinators
 open Clef.Compiler.Baker.Ingredients.Primitives
+module Sequences = Clef.Compiler.Baker.Ingredients.Sequences
 
 //=============================================================================
 // BRIDGE: Convert SaturationParser results to Decomposition.Result
@@ -80,14 +81,6 @@ let private unitLit : SaturationParser<NodeId> =
     saturation {
         let! state = getUserState
         let node = mkNode state (SemanticKind.Literal NativeLiteral.Unit) Types.unitType []
-        do! emit node
-        return node.Id
-    }
-
-let private whileLoop (conditionId: NodeId) (bodyId: NodeId) : SaturationParser<NodeId> =
-    saturation {
-        let! state = getUserState
-        let node = mkNode state (SemanticKind.WhileLoop (conditionId, bodyId)) Types.unitType [conditionId; bodyId]
         do! emit node
         return node.Id
     }
@@ -303,40 +296,6 @@ let private producer (arguments: (NodeId * NativeType) list) (elementType: Nativ
         return! evaluateBefore (captures |> List.choose (fun capture -> capture.SourceNodeId)) value (NativeType.TSeq elementType)
     }
 
-let private sequenceOperation modl operation argument argumentType resultType =
-    saturation {
-        let info = {
-            Module = modl; Operation = operation
-            Category = if operation = "moveNext" then IntrinsicCategory.Memory else IntrinsicCategory.Pure
-            FullName = sprintf "%A.%s" modl operation
-        }
-        let! functionId = intrinsicNode info (NativeType.TFun (argumentType, resultType))
-        return! app1 functionId argument resultType
-    }
-
-/// Enumeration is initialized inside the generator, before its loop. Each loop
-/// iteration reads current once, then executes the transformation/yield body.
-let private producerIteration input elementType consume =
-    saturation {
-        let! expansion = getExpansionId
-        let enumType = NativeType.TSeqEnumerator elementType
-        let enumName = sprintf "__seq_enumerator_%d" expansion
-        let! enumerator = sequenceOperation IntrinsicModule.Seq "getEnumerator" input (NativeType.TSeq elementType) enumType
-        let! enumBinding = letBind enumName enumerator enumType
-        let! conditionRef = varRef enumName (Some enumBinding) enumType
-        let! condition = sequenceOperation IntrinsicModule.SeqEnumerator "moveNext" conditionRef enumType Types.boolType
-        let! bodyRef = varRef enumName (Some enumBinding) enumType
-        let! current = sequenceOperation IntrinsicModule.SeqEnumerator "current" bodyRef enumType elementType
-        let currentName = sprintf "__seq_current_%d" expansion
-        let! currentBinding = letBind currentName current elementType
-        let! currentRef = varRef currentName (Some currentBinding) elementType
-        let! action = consume currentRef
-        // The current value dominates both the filter predicate and its yield.
-        let! loopBody = evaluateBefore [currentBinding; currentRef] action Types.unitType
-        let! loop = whileLoop condition loopBody
-        return! evaluateBefore [enumBinding] loop Types.unitType
-    }
-
 let private transformRecipe operation callback input inputElement outputElement enclosingFunction =
     let callbackResult =
         match operation with
@@ -347,7 +306,7 @@ let private transformRecipe operation callback input inputElement outputElement 
     producer [callback, callbackType; input, NativeType.TSeq inputElement] outputElement enclosingFunction (fun locals ->
         match locals with
         | [callbackRef; inputRef] ->
-            producerIteration inputRef inputElement (fun current -> saturation {
+            Sequences.iterate inputRef inputElement (fun current -> saturation {
                 let! transformed = app1 callbackRef current callbackResult
                 match operation with
                 | "filter" ->

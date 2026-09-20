@@ -490,6 +490,9 @@ type EdgeRole =
     /// Ordered sources [sequence owner; its generator] constrain the target
     /// Yield/YieldBang site. Ordinal is zero, not a resumption state number.
     | Delimiter
+    /// Ordered sources [delegation expression; supplied sequence operand]
+    /// produce the target owner-local yield after Baker expands yield!.
+    | DelegationOrigin
     // declared platform (BAREWire docs/11: cross-applied with the code it governs)
     /// A declared memory space or buffer schema constrains the value that
     /// resides in it: source = the declaration node, target = the value.

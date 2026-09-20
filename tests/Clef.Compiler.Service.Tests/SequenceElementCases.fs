@@ -84,10 +84,7 @@ module private SequenceElements =
                     DimensionalCases.same Types.unitType node.Type
                     DimensionalCases.same element nodes[payload].Type
                     seen
-                | SemanticKind.YieldBang sequence ->
-                    DimensionalCases.same Types.unitType node.Type
-                    DimensionalCases.same owner.Type nodes[sequence].Type
-                    seen
+                | SemanticKind.YieldBang _ -> failwith "A final sequence graph retained an unelaborated delegation"
                 | SemanticKind.SeqExpr _ | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ -> seen
                 | _ -> node.Children |> List.fold walk seen
         walk Set.empty body |> ignore

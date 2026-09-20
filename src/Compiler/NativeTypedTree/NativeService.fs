@@ -1063,6 +1063,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // after the preceding identity rewrites. Ownership is not segmentation,
     // branch feasibility, state numbering or a settled frame representation.
     let finalGraph, sequenceOwnershipDiagnostics = Clef.Compiler.Nanopass.SequenceOwnership.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.SequenceDelegation.normalize finalGraph
+    let finalGraph, delegatedOwnershipDiagnostics = Clef.Compiler.Nanopass.SequenceOwnership.normalize finalGraph
 
     //=========================================================================
     // Pass 5: Obligation Elaboration -- the declared platform, cross-compiled
@@ -1174,7 +1176,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ sequenceOwnershipDiagnostics
+        Diagnostics = taggedDiagnostics @ rangeDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 

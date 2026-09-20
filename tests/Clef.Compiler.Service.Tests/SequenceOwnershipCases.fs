@@ -129,17 +129,17 @@ let outer = seq {
         SequenceOwners.assertComplete graph
         let outer = SequenceOwners.owner "outer" graph
         let delegated = SequenceOwners.owned graph outer |> Assert.Single
-        match delegated.Kind with SemanticKind.YieldBang _ -> () | kind -> failwithf "Delegation was replaced by an inner yield: %A" kind
+        match delegated.Kind with SemanticKind.Yield _ -> () | kind -> failwithf "Delegation has no elaborated outer yield: %A" kind
         let inner = SequenceOwners.owners graph |> List.filter (fun owner -> owner.Id <> outer.Id) |> Assert.Single
         let cut = SequenceOwners.owned graph inner |> Assert.Single
         match cut.Kind with SemanticKind.Yield _ -> () | kind -> failwithf "Expected the delegated sequence's own cut: %A" kind
 
     [<Theory>]
-    [<InlineData("Seq.map (fun (_: int<m>) -> 2<s>) (seq { yield 1<m> })", 1, false)>]
-    [<InlineData("Seq.filter (fun (value: int<m>) -> value > 0<m>) (seq { yield 1<m> })", 1, false)>]
-    [<InlineData("Seq.collect (fun (_: int<m>) -> seq { yield 2<s> }) (seq { yield 1<m> })", 1, true)>]
-    [<InlineData("Seq.append (seq { yield 1<m> }) (seq { yield 2<m> })", 2, true)>]
-    member _.``Baker producer cuts belong to the generated sequence rather than its inputs``(expression: string, count: int, delegation: bool) =
+    [<InlineData("Seq.map (fun (_: int<m>) -> 2<s>) (seq { yield 1<m> })", 1)>]
+    [<InlineData("Seq.filter (fun (value: int<m>) -> value > 0<m>) (seq { yield 1<m> })", 1)>]
+    [<InlineData("Seq.collect (fun (_: int<m>) -> seq { yield 2<s> }) (seq { yield 1<m> })", 1)>]
+    [<InlineData("Seq.append (seq { yield 1<m> }) (seq { yield 2<m> })", 2)>]
+    member _.``Baker producer cuts belong to the generated sequence rather than its inputs``(expression: string, count: int) =
         let graph = SequenceOwners.check ("let outer = " + expression)
         SequenceOwners.assertComplete graph
         let outer = SequenceOwners.owner "outer" graph
@@ -147,8 +147,7 @@ let outer = seq {
         Assert.Equal(count, cuts.Length)
         for cut in cuts do
             match cut.Kind with
-            | SemanticKind.YieldBang _ -> Assert.True delegation
-            | SemanticKind.Yield _ -> Assert.False delegation
+            | SemanticKind.Yield _ -> ()
             | kind -> failwithf "Unexpected producer cut: %A" kind
 
     [<Theory>]

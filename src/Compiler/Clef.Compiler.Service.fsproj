@@ -318,6 +318,7 @@
     <Compile Include="Baker\Ingredients\SaturationCombinators.fs" />
     <Compile Include="Baker\Ingredients\Primitives.fs" />
     <Compile Include="Baker\Ingredients\Closures.fs" />
+    <Compile Include="Baker\Ingredients\Sequences.fs" />
     <Compile Include="Baker\Ingredients\Patterns.fs" />
     <Compile Include="Baker\Ingredients\Obligations.fs" />
     <Compile Include="Baker\Ingredients\Suspensions.fs" />
@@ -329,6 +330,7 @@
     <Compile Include="Baker\Recipes\ApplicationRecipes.fs" />
     <Compile Include="Baker\Recipes\SeqRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceOwnershipRecipes.fs" />
+    <Compile Include="Baker\Recipes\SequenceDelegationRecipes.fs" />
     <Compile Include="Baker\Recipes\ListRecipes.fs" />
     <Compile Include="Baker\Recipes\MapRecipes.fs" />
     <Compile Include="Baker\Recipes\SetRecipes.fs" />
@@ -344,6 +346,7 @@
     <Compile Include="Nanopass\CallableApplications.fs" />
     <Compile Include="Nanopass\ClosureElaboration.fs" />
     <Compile Include="Nanopass\SequenceOwnership.fs" />
+    <Compile Include="Nanopass\SequenceDelegation.fs" />
     <Compile Include="Nanopass\ObligationDischarge.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
     <!-- The declared platform fills the context at saturation; sealed sites are checked against it (CS-7b) -->
