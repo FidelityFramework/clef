@@ -15,6 +15,7 @@
     <Compile Include="ClosedCallbackCases.fs" />
     <Compile Include="ClosureValueCases.fs" />
     <Compile Include="UnitLambdaCases.fs" />
+    <Compile Include="FoldInReferenceCases.fs" />
     <Compile Include="OptionOperationCases.fs" />
     <Compile Include="OptionClosureCases.fs" />
     <Compile Include="OptionValueCases.fs" />

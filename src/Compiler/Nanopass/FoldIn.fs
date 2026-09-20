@@ -26,15 +26,22 @@ let private updateRef (replacementMap: Map<NodeId, NodeId>) (nodeId: NodeId) : N
     | Some replacement -> replacement
     | None -> nodeId
 
-/// Update all NodeId references in a SemanticKind
-let private updateKindRefs (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKind) : SemanticKind =
+/// Redirect semantic references by identity, including resolved definitions and
+/// capture sources. Recipes may use the same operation with a scope-local map;
+/// it does not change types, capture modes, provenance ranges or graph topology.
+let remapKindReferences (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKind) : SemanticKind =
     let update = updateRef replacementMap
+    let updateCaptures captures =
+        captures |> List.map (fun capture ->
+            { capture with SourceNodeId = Option.map update capture.SourceNodeId })
     match kind with
     | SemanticKind.Application (funcId, args) ->
         SemanticKind.Application (update funcId, List.map update args)
     | SemanticKind.Lambda (params', body, captures, enclosing, ctx) ->
         let updatedParams = params' |> List.map (fun (name, ty, nodeId) -> (name, ty, update nodeId))
-        SemanticKind.Lambda (updatedParams, update body, captures, enclosing, ctx)
+        SemanticKind.Lambda (updatedParams, update body, updateCaptures captures, enclosing, ctx)
+    | SemanticKind.VarRef (name, definition) ->
+        SemanticKind.VarRef (name, Option.map update definition)
     | SemanticKind.IfThenElse (guard, thenBr, elseBrOpt) ->
         SemanticKind.IfThenElse (update guard, update thenBr, Option.map update elseBrOpt)
     | SemanticKind.Sequential nodes ->
@@ -50,9 +57,9 @@ let private updateKindRefs (replacementMap: Map<NodeId, NodeId>) (kind: Semantic
     | SemanticKind.TryFinally (body, cleanup) ->
         SemanticKind.TryFinally (update body, update cleanup)
     | SemanticKind.LazyExpr (body, captures) ->
-        SemanticKind.LazyExpr (update body, captures)
+        SemanticKind.LazyExpr (update body, updateCaptures captures)
     | SemanticKind.SeqExpr (body, captures) ->
-        SemanticKind.SeqExpr (update body, captures)
+        SemanticKind.SeqExpr (update body, updateCaptures captures)
     | SemanticKind.Match (scrutinee, cases) ->
         let updatedCases = cases |> List.map (fun case ->
             { case with 
@@ -137,7 +144,6 @@ let private updateKindRefs (replacementMap: Map<NodeId, NodeId>) (kind: Semantic
     // Leaf nodes - no references to update
     | SemanticKind.Binding _ 
     | SemanticKind.Literal _
-    | SemanticKind.VarRef _
     | SemanticKind.PlatformBinding _
     | SemanticKind.Intrinsic _
     | SemanticKind.PatternBinding _
@@ -168,7 +174,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         |> Seq.collect (fun r -> r.NewNodes)
         |> Seq.map (fun n ->
             // Update references in recipe-created nodes
-            let updatedKind = updateKindRefs replacementMap n.Kind
+            let updatedKind = remapKindReferences replacementMap n.Kind
             let updatedChildren = updateChildRefs replacementMap n.Children
             let updatedNode = { n with Kind = updatedKind; Children = updatedChildren }
             n.Id, updatedNode)
@@ -190,7 +196,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
                 acc
             else
                 // Update references and include
-                let updatedKind = updateKindRefs replacementMap node.Kind
+                let updatedKind = remapKindReferences replacementMap node.Kind
                 let updatedChildren = updateChildRefs replacementMap node.Children
                 let updatedParent = node.Parent |> Option.map (updateRef replacementMap)
                 let updatedNode =
