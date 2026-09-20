@@ -101,15 +101,18 @@ let checkFor
     addConstraint (Constraint.Equals(startNode.Type, Types.intType, range)) env
     addConstraint (Constraint.Equals(endNode.Type, Types.intType, range)) env
 
-    // A counted loop is a while loop over a mutable cell:
-    //   let mutable i = <start>
+    // A counted loop keeps its internal induction cell separate from the
+    // immutable source binding created at each iteration:
+    //   let mutable __counter = <start>
     //   let __for_end = <end>            (both bounds evaluated once, start first)
-    //   while i <= __for_end do           (>= for downto)
+    //   while __counter <= __for_end do  (>= for downto)
+    //       let i = __counter
     //       <body>
-    //       i <- i + 1                    (- 1 for downto)
-    // The loop variable is a real binding node, so every VarRef to it resolves, and the
-    // lowering reuses the while/mutable-cell machinery instead of a dedicated for form.
+    //       __counter <- __counter + 1   (- 1 for downto)
+    // Ordinary binding and capture rules preserve each iteration's value;
+    // Alex continues to witness existing while, binding and cell forms.
     let loopVar = ident.idText
+    let counterName = sprintf "__for_counter_%d" (NodeId.value (NodeId.fresh()))
     let endName = sprintf "__for_end_%d" (NodeId.value (NodeId.fresh()))
     let endBinding = builder.Create(
         SemanticKind.Binding(endName, false, false, None),
@@ -118,19 +121,25 @@ let checkFor
         children = [endNode.Id])
     builder.SetParent(endNode.Id, endBinding.Id)
     let varBinding = builder.Create(
-        SemanticKind.Binding(loopVar, true, false, None),
+        SemanticKind.Binding(counterName, true, false, None),
         Types.intType,
         range,
         children = [startNode.Id])
     builder.SetParent(startNode.Id, varBinding.Id)
 
-    // The body currently receives this mutable binding. A distinct source-level
-    // iteration-binding contract remains pending; do not infer immutability here.
-    let bodyEnv = addBinding loopVar Types.intType true (Some varBinding.Id) false env
-    let bodyNode = checkExpr bodyEnv builder bodyExpr
-
     let mkVarRef (name: string) (defId: NodeId) =
         builder.Create(SemanticKind.VarRef(name, Some defId), Types.intType, range, arena = env.CurrentArena)
+
+    let iterationValue = mkVarRef counterName varBinding.Id
+    let iterationBinding = builder.Create(
+        SemanticKind.Binding(loopVar, false, false, None),
+        Types.intType,
+        rangeToSourceRange ident.idRange,
+        children = [iterationValue.Id])
+    builder.SetParent(iterationValue.Id, iterationBinding.Id)
+    let bodyEnv = addBinding loopVar Types.intType false (Some iterationBinding.Id) false env
+    let bodyNode = checkExpr bodyEnv builder bodyExpr
+
     let mkOperator (opName: string) (resultTy: NativeType) =
         match Clef.Compiler.NativeTypedTree.Expressions.Intrinsics.tryResolveOperator opName range with
         | Some (info, opTy) ->
@@ -141,7 +150,7 @@ let checkFor
 
     // Guard: i <= end (or i >= end for downto)
     let cmpNode = mkOperator (if direction then "op_LessThanOrEqual" else "op_GreaterThanOrEqual") Types.boolType
-    let guardVar = mkVarRef loopVar varBinding.Id
+    let guardVar = mkVarRef counterName varBinding.Id
     let guardEnd = mkVarRef endName endBinding.Id
     let guardNode = builder.Create(
         SemanticKind.Application(cmpNode.Id, [guardVar.Id; guardEnd.Id]),
@@ -152,7 +161,7 @@ let checkFor
 
     // Step: i <- i + 1 (or i - 1 for downto)
     let stepOp = mkOperator (if direction then "op_Addition" else "op_Subtraction") Types.intType
-    let stepVar = mkVarRef loopVar varBinding.Id
+    let stepVar = mkVarRef counterName varBinding.Id
     let oneNode = builder.Create(
         SemanticKind.Literal (NativeLiteral.Int(1L, NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Register))),
         Types.intType,
@@ -163,7 +172,7 @@ let checkFor
         range,
         children = [stepOp.Id; stepVar.Id; oneNode.Id])
     for cid in stepValue.Children do builder.SetParent(cid, stepValue.Id)
-    let setTarget = mkVarRef loopVar varBinding.Id
+    let setTarget = mkVarRef counterName varBinding.Id
     let setNode = builder.Create(
         SemanticKind.Set(setTarget.Id, stepValue.Id),
         Types.unitType,
@@ -172,10 +181,10 @@ let checkFor
     for cid in setNode.Children do builder.SetParent(cid, setNode.Id)
 
     let loopBody = builder.Create(
-        SemanticKind.Sequential [bodyNode.Id; setNode.Id],
+        SemanticKind.Sequential [iterationBinding.Id; bodyNode.Id; setNode.Id],
         Types.unitType,
         range,
-        children = [bodyNode.Id; setNode.Id])
+        children = [iterationBinding.Id; bodyNode.Id; setNode.Id])
     for cid in loopBody.Children do builder.SetParent(cid, loopBody.Id)
     let whileNode = builder.Create(
         SemanticKind.WhileLoop(guardNode.Id, loopBody.Id),
