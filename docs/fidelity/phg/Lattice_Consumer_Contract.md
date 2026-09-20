@@ -38,6 +38,19 @@ The editor witnesses the graph exactly as Alex does.
 
 ## 2. The query surface (Lattice, server side)
 
+**2026-09-20 planned extension.** [Composer M-01 §5](../../../../Composer/docs/PRDs/M-01-DialectAdmission.md#5-numeric-selection-parallelism-and-design-time-projection)
+connects this projection contract to Numeric Selection, RPC wait classification
+and the Scheduler Contract in clef-lang-spec. Reads must retain the selected
+platform/backend profile, representation/range justification, arithmetic
+construction eligibility, blocking-wait participants, assumption manifest and
+established/refuted/unresolved evidence as those facts become available. Numeric
+representation error, computation error, reproducibility and cost are distinct
+readouts. A depended-upon platform change invalidates the result just as a source
+change does. Acceptance requires exact compiler/editor diagnostics, related
+source identities and unsaved repair; clients do not infer eligibility from a
+CPU name or reconstruct wait edges. This does not assert new query APIs or
+implemented fact schemas. The dated inventory below retains its original scope.
+
 Every row is a read. "Exists" means the fact is on the graph today; "scheduled" names the plan
 that lands it; "index" means the data exists but the query that serves it has not been written.
 

@@ -13,6 +13,19 @@
 
 ## 0. The design that decides this
 
+**2026-09-20 planning synchronization.** The current
+[backend standard](../../../../clef-lang-spec/spec/backend-lowering-architecture.md#211-operation-and-pathway-admission)
+and [Composer M-01](../../../../Composer/docs/PRDs/M-01-DialectAdmission.md)
+govern operation/profile admission. Baker's Ingredients/Recipes and saturation
+nanopasses construct the joint numeric, memory, continuation and wait
+relationships. Alex observes those settled facts and the selected platform to
+choose an admitted witness form. Numeric selection and arithmetic construction
+govern arith/math realization; RPC and scheduler contracts govern blocking and
+progress. Required source, platform and proof provenance must remain available
+to backend consumers and the shared CCS editor projection. This is planned
+integration work; the [waypoints](../../../../Composer/docs/Language_Coverage_Waypoints.md)
+retain the actual acceptance boundaries and coordinated revisions.
+
 | Decision | Cited by |
 |---|---|
 | Flat closure is the finiteness lemma; enumerated capture set = the hyperedge's source set | `Closure_Nanopass_Architecture` §4; spec `closure-representation` §11; DTS/DMM §3.2.1 |
@@ -28,13 +41,13 @@
 | Hyperedges: `(S_f, t_f, λ_f)`, fire when all sources are elaborated; consequence reaches emission as α or as a reified attribute, never by querying F | PHG paper §2.1–2.4 |
 | The witnessed vocabulary is fixed and additions go through the document first | `Thin_Middle_End` §22, §5 |
 
-Two documents currently **normalize the form being retired** and must follow
-the code, not lead it: spec `closure-representation` §6.3 and spec
-`backend-lowering-architecture` §4.2 and §7.5–6 (which *require* the
-`unrealized_conversion_cast` deferral and a per-target resolution plugin).
-`Gaining Closure` §"The Witnessed Form" defends the casts as honest markers.
-C-01 §14.3 is the later design and supersedes all three; the spec edits are a
-step of this plan, not a prerequisite.
+The earlier cast-deferral descriptions in the representation/backend chapters
+have been superseded. The current standard requires the settled closure forms
+and prohibits unrealized casts in middle-end output; it does not require a
+per-target closure cast-resolution plugin. Historical `Gaining Closure` prose
+and interim plugin notes do not override that contract. Remaining implementation
+acceptance is recorded in the current C-series waypoints, independently of this
+completed documentation correction.
 
 ## 1. What works and what does not — the FidelityHelloWorld set
 
