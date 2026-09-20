@@ -2,8 +2,8 @@
 <!--
   Clef.Compiler.Service - Clef Compiler Services
 
-  CCS provides F# parsing and type checking for native compilation.
-  This is a simplified, Arcade-free build for the Fidelity bridge period.
+  CCS parses Clef and constructs and saturates its Program Semantic Graph.
+  F# and .NET host the bootstrap compiler and parser-generation tools.
 -->
 <Project Sdk="Microsoft.NET.Sdk">
 
@@ -59,10 +59,9 @@
     <!-- Version is set in Directory.Build.props -->
   </PropertyGroup>
 
-  <!-- Internals visible for Firefly and testing -->
+  <!-- Internals visible for Composer and compiler tests -->
   <ItemGroup>
     <InternalsVisibleTo Include="Clef.Compiler.Service.Tests" />
-    <InternalsVisibleTo Include="Firefly" />
     <InternalsVisibleTo Include="Composer" />
   </ItemGroup>
 
@@ -70,9 +69,6 @@
     <Compile Include="Utilities\NullnessShims.fs" />
     <EmbeddedText Include="FSComp.txt">
       <Link>FSComp.txt</Link>
-    </EmbeddedText>
-    <EmbeddedText Include="Interactive\FSIstrings.txt">
-      <Link>FSIstrings.txt</Link>
     </EmbeddedText>
     <EmbeddedResource Include="FSStrings.resx">
       <Link>FSStrings.resx</Link>
@@ -143,11 +139,6 @@
     <Compile Include="Facilities\prim-lexing.fs" />
     <Compile Include="Facilities\prim-parsing.fsi" />
     <Compile Include="Facilities\prim-parsing.fs" />
-    <Compile Include="Facilities\ReferenceResolver.fsi" />
-    <Compile Include="Facilities\ReferenceResolver.fs" />
-    <!-- SimulatedMSBuildReferenceResolver removed - not needed for native compilation -->
-    <Compile Include="Facilities\CompilerLocation.fsi" />
-    <Compile Include="Facilities\CompilerLocation.fs" />
     <Compile Include="Facilities\BuildGraph.fsi" />
     <Compile Include="Facilities\BuildGraph.fs" />
     <Compile Include="Facilities\AsyncMemoize.fsi" />

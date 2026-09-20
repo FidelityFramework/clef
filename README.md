@@ -11,7 +11,10 @@
 
 ## Overview
 
-CCS (Clef Compiler Services) is the compiler frontend for [Clef](https://clef-lang.com), a concurrent programming language in the ML tradition. It parses Clef source, resolves types against the Native Type Universe (NTU), and produces a typed abstract syntax tree that flows into the Composer compiler's middle- and back-end pipeline. No .NET runtime required anywhere in the output.
+CCS (Clef Compiler Services) is the compiler frontend for [Clef](https://clef-lang.com), a concurrent programming language in the ML tradition. It parses Clef source, resolves types against the Native Type Universe (NTU), and uses Baker's elaboration and saturation nanopasses to construct the Program Semantic Graph and its joint constraints. Composer's Alex witnesses that graph into the admitted MLIR forms for the selected backend.
+
+The bootstrap compiler is written in F# and runs on .NET. Its host dependencies
+are distinct from Clef language semantics and target runtime requirements.
 
 Clef targets CPU, MCU, GPU, NPU, FPGA, and CGRA from a single source language. CCS is stage one of that compilation.
 
@@ -48,12 +51,12 @@ Clef is ML-family syntax — records, discriminated unions, pattern matching, co
 
 ```clef
 // Records are value types with struct layout
-type Point = { x: float32; y: float32 }
+type Point = { x: float; y: float }
 
 // Discriminated unions are tag + payload — no heap allocation
 type Shape =
-    | Circle of center: Point * radius: float32
-    | Rect   of origin: Point * width: float32 * height: float32
+    | Circle of center: Point * radius: float
+    | Rect   of origin: Point * width: float * height: float
 
 // Pattern matching is exhaustive and statically verified
 let area = function
@@ -61,8 +64,8 @@ let area = function
     | Rect (_, w, h) -> w * h
 
 // SRTP-based polymorphism resolves at compile time — no vtables
-let inline dot (a: ^Vec) (b: ^Vec) : float32
-    when ^Vec : (member X : float32) and ^Vec : (member Y : float32) =
+let inline dot (a: ^Vec) (b: ^Vec) : float
+    when ^Vec : (member X : float) and ^Vec : (member Y : float) =
     a.X * b.X + a.Y * b.Y
 
 // Actors are the concurrency primitive — no shared mutable state
@@ -75,6 +78,11 @@ actor Sensor (mailbox: Mailbox<Reading>) =
     loop ()
 ```
 
+These examples describe the intended language surface. Exact implemented scope,
+pending actor/CE work and compiler acceptance are tracked in Composer's
+[PRD index](../Composer/docs/PRDs/README.md) and
+[coverage waypoints](../Composer/docs/Language_Coverage_Waypoints.md).
+
 ## The Compilation Pipeline
 
 ```
@@ -84,7 +92,7 @@ CCS (this repository)       ← parsing, type checking in the NTU, saturation of
     ↓
 Program Semantic Graph (PSG, a hypergraph: nodes, hyperedges, obligations, residence, layout)
     ↓
-Composer / Alex             ← witnesses the saturated graph into MLIR (func, scf, arith, memref, index)
+Composer / Alex             ← target-aware passive witnessing into admitted MLIR forms
     ↓
 MLIR → target pathway (LLVM, CIRCT, MLIR-AIE, JSIR)
     ↓
@@ -93,8 +101,11 @@ Native binary / FPGA bitstream / NPU binary / JavaScript module
 
 CCS hands Composer a **saturated graph**, not a typed tree. Every type is native (NTU strings as `memref`
 views, value options, region-typed handles), every layout is a literal settled at saturation, and every
-proof obligation is a graph citizen with its design-time discharge already recorded. Composer's middle
-end witnesses that structure; it does not compute, infer, or decide.
+proof obligation is a graph citizen with its design-time evidence status recorded. Composer's middle
+end witnesses that structure and selects an admitted form from the settled
+platform/backend facts under the [lowering contract](../clef-lang-spec/spec/backend-lowering-architecture.md).
+Required unresolved obligations remain explicit; creating an obligation does not
+establish that it has been discharged.
 
 ## What CCS Provides
 
@@ -113,13 +124,20 @@ CCS is a focused front end, not a complete compiler:
 - **No IL generation** — Clef does not target .NET IL
 - **No MSBuild integration** — project files are `.fidproj`, loaded by CCS and driven by Composer
 - **No NuGet resolution** — package management is ClefPak (`cpk`)
-- **No REPL** — interactive scripting requires a managed runtime; Clef has none
+- **No inherited F# Interactive host** — native incremental/REPL work follows Clef's own contracts and roadmap
 - **No code generation** — that is Composer's, through Alex and MLIR
 
 ## Getting Started
 
-CCS builds inside Composer's solution as a project reference; it is not a standalone .NET library, and
-there is no separate CCS CLI. Build and run samples through Composer:
+CCS builds as a .NET bootstrap library referenced by Composer. With the sibling
+BAREWire and Fidelity.Data repositories available, its maintained local gates are:
+
+```sh
+dotnet build Clef.Compiler.Service.sln
+dotnet test tests/Clef.Compiler.Service.Tests/Clef.Compiler.Service.Tests.fsproj
+```
+
+There is no separate CCS CLI. Compile Clef applications through Composer:
 
 ```
 dotnet build /home/hhh/repos/Composer/src/Composer.fsproj
@@ -143,6 +161,18 @@ before proposing a documentation change anywhere in the corpus.
 CCS descends from a surgical fork of Microsoft's [dotnet/fsharp](https://github.com/dotnet/fsharp). The FCS parsing and name-resolution machinery is the foundation; the type universe, memory model, and output interface are being replaced wholesale. We are grateful to the F# team and community for the compiler infrastructure on which this work builds.
 
 Clef is a distinct language. It is not F# targeting native backends. The syntax is ML-family and will be familiar to F# developers, but the semantics — memory ownership, the actor model, dimensional types, hardware targeting — are Clef's own.
+
+## Repository history and scope
+
+The maintained history starts at the February 18, 2026 CCS rename/migration.
+Upstream branches, tags, unused language-server/interactive projects, obsolete
+assembly-resolution code, localization resources and packaged build output have
+been removed. The lexer/parser, parser generators, bootstrap support, Clef
+compiler and current tests remain, with their licensing and attribution.
+
+The [history migration record](docs/handoffs/Repository_History.md) explains the
+boundary, commit-ID correspondence and checkout migration. Old clones must not
+merge or push the retired history back into this repository.
 
 ## License
 
