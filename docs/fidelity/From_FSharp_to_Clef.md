@@ -1,5 +1,12 @@
 # From F# to Clef: A Developer's Journey
 
+> Historical migration essay. Composer's [completion roadmap](../../../Composer/docs/Clef_Language_Completion_Analysis.md)
+> governs implementation work. Parts V–VI and §7.4 were corrected on September 19;
+> other inherited examples, including measure-encoded region/access parameters,
+> actor inheritance and F* integration claims, are superseded context rather than
+> current Clef source or implementation contracts. See the
+> [reconciliation](../../../Composer/docs/Clef_Language_Completion_Review_2026-09-19.md).
+
 ## Introduction
 
 This document addresses the experienced .NET developer who has invested years in understanding F#, the Common Language Runtime, and the Base Class Library ecosystem. It presents Clef not as a rejection of that knowledge, but as an evolution that reclaims capabilities the language has always possessed, capabilities that the managed runtime abstracted away for convenience but that native compilation now requires us to reconsider.
@@ -423,52 +430,55 @@ This approach depends on the BCL:
 2. The marshaling layer expects BCL types
 3. Exception handling assumes the CLR is present
 
-Clef cannot use `DllImport`. Instead, it introduces a module convention for platform bindings.
+Clef uses declared platform intrinsics and generated binding contracts, as
+specified below.
 
-### 5.2 The Platform.Bindings Convention
+### 5.2 Intrinsics and Declared Bindings
 
-Platform bindings in Clef follow a module naming convention:
+The [platform-binding specification](../../../clef-lang-spec/spec/platform-bindings.md)
+defines three layers: CCS intrinsics, binding libraries and application code.
+`Sys` operations are recognized intrinsics. External library bindings carry
+declared layout, ownership, access and calling-convention information, generated
+by Farscape and read structurally by CCS. The former `Platform.Bindings` module
+convention and `Unchecked.defaultof` stubs are deprecated; they do not define the
+current binding contract.
 
-```fsharp
-module Platform.Bindings =
-    let writeBytes (fd: int) (buffer: array<byte, 'n, Stack>) (count: int) : int =
-        Unchecked.defaultof<int>
-
-    let readBytes (fd: int) (buffer: array<byte, 'n, Stack>) (maxCount: int) : int =
-        Unchecked.defaultof<int>
-
-    let getCurrentTicks () : int64 =
-        Unchecked.defaultof<int64>
-
-    let sleep (milliseconds: int) : unit =
-        ()
-```
-
-The function bodies are placeholders. CCS recognizes `Unchecked.defaultof<T>` and `()` as binding markers, indicating that the actual implementation will be provided by the compilation backend (Alex).
+Source operations use bounded arrays, width-typed `Mmio` handles and opaque
+`CHandle<'T>` values where the external contract requires them. A buffer's extent
+remains part of the compiler's evidence. Source code does not extract a raw
+pointer from that buffer to perform a platform operation.
 
 ### 5.3 Platform-Specific Implementation
 
-The Composer compiler's Alex layer provides platform-specific implementations:
+Declared platform facts participate in CCS saturation. Alex witnesses the settled
+operations for the selected target pathway; it does not invent their memory or
+lifetime premises. The platform-binding specification describes target
+realizations such as:
 
 | Binding | Linux x86_64 | macOS arm64 | Windows x86_64 |
 |---------|--------------|-------------|----------------|
-| `writeBytes` | syscall 1 (write) | syscall 0x2000004 | WriteFile |
-| `readBytes` | syscall 0 (read) | syscall 0x2000003 | ReadFile |
-| `getCurrentTicks` | clock_gettime | mach_absolute_time | QueryPerformanceCounter |
+| `Sys.write` | syscall 1 (write) | `svc #0x80`, `x16=4` | WriteFile |
+| `Sys.read` | syscall 0 (read) | `svc #0x80`, `x16=3` | ReadFile |
 
-This separation allows Alloy to define the interface in pure F#, while Alex provides the platform-specific lowering. The source code remains portable; the generated binary is platform-specific.
+These are specified target realizations, not a claim that every target is
+implemented. A target that cannot realize a reached operation requires a
+diagnostic, as specified by the platform-binding contract.
 
-### 5.4 Safety Boundaries
+### 5.4 Binding Contracts and Deterministic Memory
 
-Platform bindings are inherently unsafe: they cross the boundary between verified F# code and the operating system. Clef tracks this through coeffects:
+Platform bindings remain subject to Clef's memory, lifetime, access and extent
+judgments. BAREWire supplies the structured memory and representation contracts;
+Fidelity.Platform supplies declared target facts. CCS carries their relationships
+and applicable proof obligations on the PSG and settles them before Alex
+witnesses the operation.
 
-```fsharp
-let writeData (data: array<byte>) : unit =
-    // This function has coeffect [IO, Unsafe]
-    Platform.Bindings.writeBytes 1 data.Ptr data.Length |> ignore
-```
-
-The coeffect system (described in Part VI) ensures that unsafe operations are explicitly visible in the type system.
+Crossing a platform boundary does not suspend those judgments. External handles,
+buffer views, ownership transfer and callback lifetimes must satisfy their
+declared contracts. Missing evidence is an admission or implementation gap to
+resolve, never a permission for a caller to waive the requirement. See
+[Behavior Classification](../../../clef-lang-spec/spec/behavior-classification.md),
+[FFI Boundary](../../../clef-lang-spec/spec/ffi-boundary.md) and
+[Obligation Residency](../../../Composer/docs/Obligation_Residency_Design.md).
 
 ### 5.5 Native Library Integration
 
@@ -476,84 +486,51 @@ One of the major areas of interest is how to expand a "native library system" fo
 
 C and C++ provide the low-level hardware access patterns that systems programming requires. Clef incorporates CMSIS conventions for volatile qualifiers, structure layout control through `[<Struct>]` with packing and alignment, explicit type-safe pointer operations, and reserves space for inline assembly where platform-specific optimization demands it. All of this is documented while maintaining F#'s type safety guarantees.
 
-## Part VI: Coeffects and Effect Tracking
+## Part VI: Coeffects and Proof Obligations
 
 ### 6.1 What Are Coeffects?
 
-Standard F# has no built-in mechanism for tracking side effects. A function with signature `int -> int` might be pure, might perform I/O, or might allocate memory; the type does not reveal this.
+The PSG carries compiler-established facts, constraints and coeffects.
+Dimension judgments belong to the type and group discipline; ranges propagate
+as codata; region and access use their own equality sorts. Representation
+choices, lifetime classification, target reachability and binding resolution
+retain their corresponding judgments and provenance. Their definitions belong
+to the corresponding Clef specifications, indexed by
+[Program Semantic Graph §14](../../../clef-lang-spec/spec/program-semantic-graph.md).
 
-Clef introduces coeffects: annotations that describe what resources or effects a function requires:
+### 6.2 Inference and Provenance
 
-```fsharp
-// Pure function: no side effects
-let add (a: int) (b: int) : int = a + b
+CCS derives program facts from the source graph and declared contracts. The
+facts retain the identities of their participating nodes, their premises and
+their declaration provenance. Platform facts come from the selected platform
+description. Width, representation, lifetime and target reachability constraints
+are resolved together as specified by
+[Width Inference](../../../clef-lang-spec/spec/width-inference.md).
 
-// IO function: performs console I/O
-let greet (name: string) : unit =
-    Console.WriteLine $ "Hello, " $ name
-```
+### 6.3 Composition and Preservation
 
-In the full coeffect syntax (reserved for future implementation):
+Function application and elaboration retain the relationships needed to apply
+the relevant judgments to the actual arguments, results, captures and storage.
+For supported rules, the compiler derives and dispatches the applicable
+obligations; the application does not restate them as proof annotations.
 
-```fsharp
-let add (a: int) (b: int) : int -[Pure]-> int = a + b
+Alex reads the settled consequences. Lowering must preserve required properties
+or re-check them at transformations that could change them. Evidence must remain
+attached to its checked participants, premises and target context. These are the
+[conformance requirements](../../../clef-lang-spec/spec/conformance.md), not
+optional source annotations.
 
-let greet (name: string) : unit -[IO.Console]-> unit =
-    Console.WriteLine $ "Hello, " $ name
-```
+### 6.4 Obligations at Platform Operations
 
-### 6.2 Coeffect Inference
+Coeffects record the requirements and consequences of an operation. They do not
+authorize exceptions to Clef's judgments. A platform call retains the applicable
+buffer bounds, access permissions, residence, lifetime and release obligations,
+including when reached through a higher-order function or computation expression.
 
-When coeffect annotations are absent, CCS infers them:
-
-```fsharp
-// Inferred: Pure
-let double x = x * 2
-
-// Inferred: IO.Console
-let printNumber n = Console.WriteLine $ (string n)
-
-// Inferred: IO.File, may also have Alloc for buffer
-let readConfig path = File.ReadAllBytes path
-```
-
-### 6.3 Coeffect Composition
-
-Coeffects compose through function calls. A function that calls an IO function inherits the IO coeffect:
-
-```fsharp
-// This function inherits IO.Console from greet
-let greetTwice name =
-    greet name
-    greet name
-// Inferred coeffect: IO.Console
-```
-
-Pure functions can be called from any context. IO functions can only be called from functions that declare or inherit the appropriate coeffect.
-
-### 6.4 Unsafe Operations
-
-Platform bindings are marked as `Unsafe`:
-
-```fsharp
-module Platform.Bindings =
-    // Coeffect: Unsafe
-    let writeBytes (fd: int) (buffer: array<byte, 'n, Stack>) (count: int) : int = ...
-```
-
-Functions that call unsafe operations must be in an unsafe context or explicitly declare the `Unsafe` coeffect:
-
-```fsharp
-// Error: Pure function cannot call Unsafe operation
-let pureWrite data =
-    Platform.Bindings.writeBytes 1 data.Ptr data.Length
-
-// OK: Explicit unsafe context
-let unsafeWrite data =
-    unsafe {
-        Platform.Bindings.writeBytes 1 data.Ptr data.Length
-    }
-```
+Those obligations refer to the participating program and declaration nodes in
+the PSG. Their consequences are carried to witnesses as settled graph facts.
+Deterministic memory management remains part of the operation's contract at
+every call site.
 
 ## Part VII: Memory Management Strategies
 
@@ -570,48 +547,29 @@ Stack allocation requires no explicit management. Memory is automatically reclai
 
 ### 7.2 Arena Allocation
 
-For larger or dynamically-sized data, Clef provides arena allocation:
-
-```fsharp
-arena {
-    let buffer = Array.create 1_000_000  // Arena allocated
-    let processed = transform buffer
-    return processed.Summary  // Only summary escapes
-}  // Entire arena freed here
-```
-
-An arena is a bulk allocator: allocations within the arena are fast (pointer bump), and the entire arena is freed at once when the scope exits. This pattern is particularly effective for processing pipelines where intermediate results can be discarded.
+An arena provides region-bounded storage with bulk release. Placement and every
+use must satisfy the region's lifetime and capacity contracts. The
+[Memory Regions specification](../../../clef-lang-spec/spec/memory-regions.md)
+marks an arena computation expression as future work; that proposed syntax is
+not evidence of an available source construct.
 
 ### 7.3 Static Allocation
 
-For data that lives for the program's duration, static allocation places values in the data segment:
+Program-lifetime storage is a placement class in the
+[closure and lifetime contract](../../../clef-lang-spec/spec/closure-representation.md).
+The selected platform declares suitable storage; CCS settles placement and its
+obligations on the graph. This placement rule does not imply a separate static
+computation-expression syntax.
 
-```fsharp
-let configuration = static {
-    Timeout = 30_000
-    MaxRetries = 3
-    LogLevel = LogLevel.Info
-}
-```
+### 7.4 Lifetime Verification
 
-Static data is initialized at program start and never deallocated. It is appropriate for configuration, lookup tables, and other immutable global state.
-
-### 7.4 Explicit Ownership (Future)
-
-Clef reserves syntax for explicit ownership tracking:
-
-```fsharp
-// Owned value: caller receives exclusive ownership
-let createBuffer () : Owned<array<byte>> = ...
-
-// Borrowed reference: caller borrows, does not own
-let processBuffer (buf: Borrowed<array<byte>>) : unit = ...
-
-// Move semantics
-let newOwner = move existingBuffer
-```
-
-The relationship to Rust is one of inspiration, not imitation. Rust pioneered compile-time ownership tracking for memory safety, and Clef will adapt these concepts to F#'s idioms rather than adopting Rust's syntax directly. The point is to have the compiler deal with these concerns without the design-time "interference" that Rust developers experience with having to deal with the borrow checker at every turn. We plan to provide options for managing this directly at design time where it is performance-critical, but for now our emphasis is on keeping the design-time experience relatively consistent with F# idioms.
+Lifetime verification is carried on the PSG. Escape classification determines a
+value's placement in the lifetime lattice; region and use relationships carry
+the applicable ordering obligations. The
+[Memory Regions specification](../../../clef-lang-spec/spec/memory-regions.md)
+defines this as coeffect and obligation discipline, with no source ownership or
+borrowing annotation vocabulary planned. Deterministic release is part of that
+contract.
 
 ## Part VIII: The RAII Pattern
 

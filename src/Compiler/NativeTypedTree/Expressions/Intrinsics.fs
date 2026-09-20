@@ -842,6 +842,8 @@ let private resolveOptionOp (op: string) (range: SourceRange) : IntrinsicResolut
     | "filter" | "exists" | "forall" ->
         let result = if op = "filter" then optionType else Types.boolType
         resolve [parameter] (NativeType.TFun(valueType, Types.boolType)) result
+    | "defaultValue" ->
+        resolve [parameter] valueType valueType
     | "isSome" | "isNone" | "get" ->
         let result = if op = "get" then valueType else Types.boolType
         let scheme = NativeType.TForall([parameter], NativeType.TFun(optionType, result))

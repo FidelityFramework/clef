@@ -132,6 +132,7 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Option, "filter" -> true
     | IntrinsicModule.Option, "exists" -> true
     | IntrinsicModule.Option, "forall" -> true
+    | IntrinsicModule.Option, "defaultValue" -> true
     | IntrinsicModule.Option, ("isSome" | "isNone" | "get") -> true
     // Seq HOFs - Producers
     | IntrinsicModule.Seq, "map" -> true
@@ -157,7 +158,7 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.List, ("empty" | "isEmpty" | "head" | "tail" | "cons") -> false
     | IntrinsicModule.Map, ("empty" | "isEmpty") -> false
     | IntrinsicModule.Set, ("empty" | "isEmpty") -> false
-    | IntrinsicModule.Option, ("defaultValue" | "some" | "none") -> false
+    | IntrinsicModule.Option, ("some" | "none") -> false
     | IntrinsicModule.Seq, "empty" -> false
     | IntrinsicModule.Seq, "getEnumerator" -> false
     // String operations
@@ -243,9 +244,15 @@ let private applyIntrinsicRecipe
         | None -> None
 
     | IntrinsicModule.Option ->
+        // The operation boundary is declared, not inferred from an argument's
+        // type or the complete TFun spine. A defaultValue fallback may itself
+        // be an option, and arguments after its option apply its function result.
         let optionArgType =
             args
-            |> (if info.Operation = "get" then List.tryHead else List.tryLast)
+            |> (match info.Operation with
+                | "get" -> List.tryHead
+                | "defaultValue" -> List.tryItem 1
+                | _ -> List.tryLast)
             |> Option.bind (fun argId -> SemanticGraph.tryGetNode argId graph)
             |> Option.map (fun n -> n.Type)
             |> Option.bind extractOptionInnerType

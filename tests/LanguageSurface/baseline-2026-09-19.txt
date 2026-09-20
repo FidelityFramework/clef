@@ -1,0 +1,35 @@
+CCS assembly: /home/hhh/repos/Composer/src/bin/Debug/net10.0/Clef.Compiler.Service.dll
+CCS SHA256: 90E41B5D26005A5EA0C19F352D6EF46504883747CC3037CE14E6B046BCEC81B4
+Scope: source checking only; no platform, native execution, or solver claim.
+MET generalized-function: expected=Accept observed=accepted
+MET captured-function: expected=Accept observed=accepted
+MET generic-record-field: expected=Accept observed=accepted
+MET option-map: expected=Accept observed=accepted
+MET option-bind: expected=Accept observed=accepted
+MET option-filter: expected=Accept observed=accepted
+MET option-map-dimensions: expected=Accept observed=accepted
+MET incompatible-dimensions-rejected: expected=Reject (Some "CCS8040") observed=rejected
+  CCS8040: Measure mismatch: 'm' vs 's'; the residual 'm / s' is not 1
+GAP option-fold: expected=Accept observed=rejected
+  CCS8009: The value or constructor 'Option.fold' is not defined.
+GAP result-map: expected=Accept observed=rejected
+  CCS8009: The value or constructor 'Result.map' is not defined.
+GAP result-bind: expected=Accept observed=rejected
+  CCS8009: The value or constructor 'Result.bind' is not defined.
+GAP list-map: expected=Accept observed=rejected
+  CCS8003: Type mismatch at list-map.clef(2,14): expected 'bool', got 'int'
+  CCS8009: The value or constructor 'List.map' is not defined.
+GAP list-fold: expected=Accept observed=rejected
+  CCS8003: Type mismatch at list-fold.clef(2,14): expected 'bool', got 'int'
+  CCS8009: The value or constructor 'List.fold' is not defined.
+MET null-rejected: expected=Reject (Some "CCS8010") observed=rejected
+  CCS8010: Cannot use 'null' in Clef; use 'ValueNone' for optional values
+MET obj-rejected: expected=Reject (Some "CCS8706") observed=rejected
+  CCS8706: The type 'obj' is not defined
+MET boxing-rejected: expected=Reject (Some "CCS8009") observed=rejected
+  CCS8009: The value or constructor 'box' is not defined.
+GAP non-builder-return-rejected: expected=Reject None observed=accepted
+GAP non-builder-return-from-rejected: expected=Reject None observed=accepted
+GAP non-builder-do-bang-rejected: expected=Reject None observed=accepted
+GAP non-builder-let-bang-rejected: expected=Reject None observed=accepted
+11/20 source expectations met; 9 gaps.

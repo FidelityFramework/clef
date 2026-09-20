@@ -16,6 +16,26 @@
 
 ## The settled position, in one table
 
+### September 19 documentation reconciliation
+
+The February `SMT_Integration_Strategy.md` was retired after a full-content
+review. Its graph-obligation and checking material is superseded by Composer's
+`Obligation_Residency_Design.md` and `Proof_Composition_Architecture.md`, and by
+this directory's dimensional design/handoff and `Lattice_Consumer_Contract.md`.
+The documentation index now points to those sources; no separate February
+implementation sequence remains in force.
+
+The invented permission coeffect and source escape context in
+`From_FSharp_to_Clef.md` §§5–6 were removed. Platform operations participate in
+Clef's ordinary memory, lifetime, access and proof judgments. The same correction
+removes deprecated binding stubs, fabricated coeffect-arrow syntax and promised
+ownership/borrowing annotations from that guide. The specification's array
+bounds wording now states the unconditional obligation, and its dangling-view
+example requires valid placement or a diagnostic. See `behavior-classification`,
+`platform-bindings`, `memory-regions` and `conformance` in `clef-lang-spec/spec/`.
+
+### Earlier settled decisions
+
 | Concern | Retired form | Settled form | Where settled |
 |---|---|---|---|
 | Delimited continuations | a `cont.*` / `dcont.*` op surface; a DCont dialect; `ContStateMachine` as a Composer coeffect | the suspension recipe: segments at cuts, a frame (environment node, state-machine slot class), a delimiter edge per cut; witnessed as a discriminant, byte frame, `scf.index_switch` | spec `dcont-representation.md` §2, §5, §6, §9; `Delimited_Continuations_Architecture.md` |

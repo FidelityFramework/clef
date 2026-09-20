@@ -12,16 +12,24 @@ corpus have been removed; what remains is the Clef checker and the graph it satu
 
 ## Where the design lives
 
+The canonical implementation roadmap is Composer's
+[Clef language completion analysis](../../../Composer/docs/Clef_Language_Completion_Analysis.md),
+with its [workload frame](../../../Composer/docs/Clef_Language_Completion_Workload_Frame.md)
+and [September review](../../../Composer/docs/Clef_Language_Completion_Review_2026-09-19.md).
+The documents here supply CCS design details and historical context; older
+strategy and orientation prose does not supply a competing work sequence.
+
 | Document | What it is |
 |---|---|
 | [phg/](phg/) | The design of record: the PSG-to-PHG plan, layout as joint constraint, the closure retooling plan, the **Design Supersession Register**, and [`drift-gate.sh`](phg/drift-gate.sh), which makes retired vocabulary a lint failure across the corpus |
 | The language specification | lives in `clef-lang-spec/spec/` and nowhere else: `native-type-universe.md`, `ntu-types.md`, `ntu-dimensional-architecture.md`, `units-of-measure.md`, `width-inference.md`, `numeric-selection.md`, `access-kinds.md`, `memory-regions.md`, `platform-bindings.md`, `error-handling.md`. The parallel copies this folder carried (`ccs-specification.md`, `native-type-universe.md`, `NTU_Type_System.md`) were retired on 2026-09-04 as drift sources |
 | [Baker_Saturation_Architecture.md](Baker_Saturation_Architecture.md) | Baker: ingredients and recipes that saturate the graph (collections, obligations, closures, suspension) |
 | [Closed_Native_Callback_Adapters.md](Closed_Native_Callback_Adapters.md) | Declared binding-owned adapters specialized for known closed module handlers; captured-environment callbacks remain future work |
-| [CCS_Lazy_Seq_Coroutine_Intrinsics.md](CCS_Lazy_Seq_Coroutine_Intrinsics.md) | Lazy, seq and coroutine intrinsics as CCS elaborates them |
+| [CCS_Lazy_Seq_Coroutine_Intrinsics.md](CCS_Lazy_Seq_Coroutine_Intrinsics.md) | Historical operation inventory; its Alex-owned frame/coroutine strategies are superseded by Baker suspension and Composer's current roadmap |
 | [Platform_Predicates.md](Platform_Predicates.md) | Platform description as declared authority; predicates read structurally from the graph |
-| [SMT_Integration_Strategy.md](SMT_Integration_Strategy.md) | Obligations born in the PSG, dispatched to cvc5 at design time and re-checked at build time |
-| [From_FSharp_to_Clef.md](From_FSharp_to_Clef.md), [Clef_Language_Vision.md](Clef_Language_Vision.md) | Orientation: how Clef differs from F#, and why |
+| [Obligation Residency](../../../Composer/docs/Obligation_Residency_Design.md), [Proof Composition](../../../Composer/docs/Proof_Composition_Architecture.md) | Graph-born obligations, artifact correspondence, checking scope and proof composition; specific implementation status is recorded in the PHG and Lattice work |
+| [Dimensional Handoff](phg/Dimensional_Handoff.md), [Lattice Consumer Contract](phg/Lattice_Consumer_Contract.md) | Current dimensional authority order and the editor's versioned view of graph facts and checking results |
+| [From_FSharp_to_Clef.md](From_FSharp_to_Clef.md), [Clef_Language_Vision.md](Clef_Language_Vision.md) | Historical orientation, not an implementation roadmap or evidence of current language support; further drift is identified in the September review |
 | [Safety_Critical_Certification.md](Safety_Critical_Certification.md), [Certification_Lab_Strategy.md](Certification_Lab_Strategy.md) | The certification posture the proof story serves |
 
 The normative language specification is [clef-lang-spec](https://github.com/FidelityFramework/clef-lang-spec);

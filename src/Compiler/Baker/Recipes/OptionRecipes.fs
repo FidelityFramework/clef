@@ -174,6 +174,15 @@ let private optionPredicateRecipe predicate optionNodeId valueType absentResult 
         return! ifThenElse present tested absent Types.boolType
     }
 
+/// Select the original fallback or the Some payload. Argument evaluation is
+/// preserved by the application recipe; extraction belongs to the Some branch.
+let private optionDefaultValueRecipe fallback optionNodeId valueType =
+    saturation {
+        let! present = optionHasValue optionNodeId valueType
+        let! value = optionValue optionNodeId valueType
+        return! ifThenElse present value fallback valueType
+    }
+
 //=============================================================================
 // PUBLIC API: tryDecompose
 //=============================================================================
@@ -194,6 +203,19 @@ let private operationRecipe operation args inputType outputType =
         Some (optionPredicateRecipe predicate opt inputType false, Types.boolType)
     | "forall", [predicate; opt] ->
         Some (optionPredicateRecipe predicate opt inputType true, Types.boolType)
+    | "defaultValue", fallback :: opt :: remaining ->
+        // Two arguments eliminate the option. Further source arguments apply
+        // its selected function payload, in this same saturation firing.
+        let resultType =
+            remaining |> List.fold (fun current _ ->
+                current |> Option.bind (function NativeType.TFun (_, result) -> Some result | _ -> None)) (Some inputType)
+        resultType |> Option.map (fun resultType ->
+            let recipe = saturation {
+                let! value = optionDefaultValueRecipe fallback opt inputType
+                if List.isEmpty remaining then return value
+                else return! app value remaining resultType
+            }
+            recipe, resultType)
     | "isSome", [opt] -> Some (optionCaseTest opt inputType 1, Types.boolType)
     | "isNone", [opt] -> Some (optionCaseTest opt inputType 0, Types.boolType)
     | "get", [opt] -> Some (optionValue opt inputType, inputType)
@@ -216,8 +238,8 @@ let private innerType = function
     | NativeType.TApp (constructor, [payload]) when constructor = Types.optionTyCon -> Some payload
     | _ -> None
 
-let private hasCallback = function
-    | "map" | "bind" | "filter" | "exists" | "forall" -> true
+let private hasLeadingArgument = function
+    | "map" | "bind" | "filter" | "exists" | "forall" | "defaultValue" -> true
     | _ -> false
 
 /// Try to decompose a fully applied Option operation.
@@ -226,32 +248,33 @@ let tryDecompose ctx operation args inputType outputType : Result option =
     |> Option.map (fun (recipe, resultType) ->
         runSaturation ctx (saturation {
             let! result = recipe
-            if hasCallback operation then return! evaluateBefore args result resultType
+            if hasLeadingArgument operation then return! evaluateBefore args result resultType
             else return result
         }))
 
-/// Snapshot the supplied function at partial formation. The closure captures the
-/// immutable snapshot, while any mutable cells inside that function remain shared.
-let private partialRecipe (ctx: Context) operation callback callbackType inputType resultType enclosing =
-    let name = sprintf "__option_callback_%d" ctx.ExpansionId
+/// Snapshot the supplied argument at partial formation. The closure captures the
+/// immutable value, while referenced storage and mutable cells remain shared.
+let private partialRecipe (ctx: Context) operation supplied suppliedType inputType resultType enclosing =
+    let role = if operation = "defaultValue" then "fallback" else "callback"
+    let name = sprintf "__option_%s_%d" role ctx.ExpansionId
     saturation {
-        let! snapshot = letBind name callback callbackType
-        let capture = { Name = name; Type = callbackType; IsMutable = false; SourceNodeId = Some snapshot }
+        let! snapshot = letBind name supplied suppliedType
+        let capture = { Name = name; Type = suppliedType; IsMutable = false; SourceNodeId = Some snapshot }
         let body parameters captures =
             match parameters, captures with
-            | [opt], [fn] -> operationRecipe operation [fn; opt] inputType (innerType resultType) |> Option.get |> fst
-            | _ -> failwith "An Option partial requires one option parameter and one callback capture"
+            | [opt], [argument] -> operationRecipe operation [argument; opt] inputType (innerType resultType) |> Option.get |> fst
+            | _ -> failwith "An Option partial requires one option parameter and one supplied argument capture"
         let! value = closure [("__option", optionType inputType)] [capture] enclosing body resultType
         return! evaluateBefore [snapshot] value (NativeType.TFun (optionType inputType, resultType))
     }
 
-/// A supplied callback leaves exactly one option parameter, even when its payload
+/// A supplied leading argument leaves exactly one option parameter, even when its payload
 /// or the operation result contains function types.
-let tryDecomposePartial (ctx: Context) operation callback callbackType residualType enclosing : Result option =
+let tryDecomposePartial (ctx: Context) operation supplied suppliedType residualType enclosing : Result option =
     match residualType with
-    | NativeType.TFun (domain, resultType) when hasCallback operation ->
+    | NativeType.TFun (domain, resultType) when hasLeadingArgument operation ->
         innerType domain |> Option.map (fun inputType ->
-            runSaturation ctx (partialRecipe ctx operation callback callbackType inputType resultType enclosing))
+            runSaturation ctx (partialRecipe ctx operation supplied suppliedType inputType resultType enclosing))
     | _ -> None
 
 /// Bare library operations become ordinary function values after their source type
@@ -259,13 +282,14 @@ let tryDecomposePartial (ctx: Context) operation callback callbackType residualT
 /// not the entire TFun spine, determines the operation's parameter boundary.
 let tryReifyValue (ctx: Context) operation functionType enclosing : Result option =
     match functionType with
-    | NativeType.TFun (callbackType, (NativeType.TFun (domain, resultType) as residual)) when hasCallback operation ->
+    | NativeType.TFun (suppliedType, (NativeType.TFun (domain, resultType) as residual)) when hasLeadingArgument operation ->
         innerType domain |> Option.map (fun inputType ->
             let body parameters _ =
                 match parameters with
-                | [callback] -> partialRecipe ctx operation callback callbackType inputType resultType enclosing
-                | _ -> failwith "An Option HOF value requires one callback parameter"
-            runSaturation ctx (closure [("__callback", callbackType)] [] enclosing body residual))
+                | [supplied] -> partialRecipe ctx operation supplied suppliedType inputType resultType enclosing
+                | _ -> failwith "An Option operation value requires one leading parameter"
+            let parameterName = if operation = "defaultValue" then "__fallback" else "__callback"
+            runSaturation ctx (closure [(parameterName, suppliedType)] [] enclosing body residual))
     | NativeType.TFun (domain, resultType) ->
         innerType domain |> Option.bind (fun inputType ->
             match operation with
