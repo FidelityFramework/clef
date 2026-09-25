@@ -1,6 +1,42 @@
 # Clef PSG → PHG: The Program Hypergraph as the CCS Front End
 
-## Context
+## Current reading — September 21, 2026
+
+This plan preserves the transition's original inventory and proposed phases.
+Present-tense code observations and phase statuses in the historical sections
+below describe that baseline, not the current compiler. Graph-resident
+obligations, n-ary evaluation and suspension relations, bounded environments,
+and native sequence continuation construction now have implemented instances.
+The [coverage waypoints](../../../../Composer/docs/Language_Coverage_Waypoints.md)
+and [PRD index](../../../../Composer/docs/PRDs/README.md) own their acceptance scope;
+C-01–C-07 still have open gates. The
+[Baker architecture](../Baker_Saturation_Architecture.md) describes the current
+construction APIs.
+
+The computational spine remains semantic nodes and structural/reference
+relationships. Local coeffects record facts about those nodes; joint relations
+retain the multiple participants and premises that justify a conclusion. Their
+ordered input occurrences preserve roles and multiplicity. A binary relation-node
+encoding can express the same information; native hyperedges make it direct.
+The lattice is an analysis information domain, not this graph topology.
+
+The current [PHG contract](../../../../clef-lang-spec/spec/program-hypergraph.md)
+requires sound transfer rules and an appropriate convergence policy for each
+analysis. Finite incidence and Fresh/Elaborated/Saturated labels alone establish
+neither decidability nor a linear iteration bound. Per-family solver projections
+retain coherent premises when analyses exchange facts. Elaboration may construct
+new operational nodes as well as relationships, and must justify that process
+separately from a fixed point over a fixed annotation domain.
+
+The [bidirectional composition plan](../../../../Composer/docs/Bidirectional_Composition_Plan.md)
+owns the proposed Tardis-led exercise and the
+[NFT companion](../../../../Composer/docs/Negative_Fractional_Types_Architecture.md)
+owns its separate negative/fractional research interpretation. A backwards
+analysis requirement does not reverse runtime effects; a source demand cycle
+needs its own operational semantics. Those exercises remain Planned. This
+reconciliation changes no compiler behavior or feature acceptance status.
+
+## Historical context
 
 Every design document in the corpus assumes a graph whose relations are first-class values. Clef's PSG has none.
 
@@ -154,7 +190,7 @@ The matching removal of the 22 `<Compile Include>` entries from
 `Clef.Compiler.Service.fsproj` is a separate change and must land with it —
 without it Composer's build fails `FS0225` on the deleted sources.
 
-## Phase 0 — The embedding ($|S_f| = 1$, behavior-identical)  *(WRITTEN, UNVERIFIED)*
+## Phase 0 — The embedding ($|S_f| = 1$, behavior-identical)  *(historical status below)*
 
 Introduce $F$ and $\beta$ to `SemanticGraph` carrying *only* degenerate hyperedges derived from the four existing encodings. `RegionKind` becomes the seed of the edge-label vocabulary; the four `Reachability` accessors become edge kinds (`TypeRef`, `IntrinsicImpl`, `SymbolRef`, `Semantic`); `EnrichmentId` becomes a provenance edge.
 
@@ -168,11 +204,21 @@ Collapse the ~316-line triplicate: `extractImpliedChildren`, `getSemanticReferen
 
 ## Phase 1 — The saturation lattice
 
+**Superseded planning formulation.** The next paragraph records the original
+lifecycle proposal. Its labels are not the information domain used to prove
+convergence, and the general driver is not established by the later bounded
+analysis implementations. Use the current reading above and the owning domain
+contracts when resuming this phase.
+
 Add per-node $\{\mathrm{Fresh} < \mathrm{Elaborated} < \mathrm{Saturated}\}$ and the three-state Live/Latent/Fresh model (DTS/DMM §4.2), replacing `IsReachable: bool`. Move reachability to a per-target bitvector on the *edge* (§4.3). Replace the one-shot Pass 3/4 with a monotone driver that iterates fan-out/fold-in until no rule fires.
 
 This is what lets a recipe emit structure that is *itself* further elaborated — the precondition for DCont and INet — and it retires the `FoldIn.fs:245` paradox.
 
-**Constraint (callsheet family 13):** the fixpoint is over recipe *shapes*, never a per-program fixpoint. Keep the DBC boundary explicit in the driver.
+**Corrected constraint:** reusable proofs may cover recipe shapes while a
+particular program still requires range, support, or other dataflow fixed points.
+State their domains, transfer rules, termination policies, and unresolved-result
+behavior. Neither a compiler fixed point nor its finite obligation list proves
+that a source-level recursive computation terminates or yields a demanded value.
 
 ## Phase 2 — Arity > 1: flat closures
 
@@ -193,7 +239,11 @@ The first genuine hyperedge family, chosen because it is the finiteness lemma ev
 
 **Suspension (DCont).** Fan-out splits a computation-expression region at `let!` cuts into segments; per-segment live-across sets become frame slots; fold-in settles state count, frame layout (interference coloring over segment liveness), and placement. Every suspension carries an edge to its delimiter, so nesting is static — no prompt tag, no dynamic search. Generalize `SeqSaturation`'s two-shape recognizer into the real elaborator, and retire `YieldStateIndices.fs`. Covers `seq`, `async`, actor `receive`, and any CE, over one resumption-edge class (I/O completion, mailbox, interrupt, DMA).
 
-**Dual pairs.** η/ε pairing hyperedge; boundary saturation check shared with obligation twin-pairing.
+**Dual pairs — proposed.** Retain the selected calculus's operation identities,
+value indices, permitted resource uses, and matching/failure obligations. Existing
+graph incidence and obligation ingredients are reusable infrastructure; artifact
+twin-pairing and a source η/ε pairing have different meanings and require their
+own checked rules. See the NFT companion and bidirectional composition plan.
 
 **Nets (INet).** The interaction-net rule system as hyperedge structure — the $k$-ary generalization of the binary active pair, where $k$ is set by the domain's algebra.
 

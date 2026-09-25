@@ -6,6 +6,14 @@ index: 800
 ---
 # Changing the AST
 
+This guide retains an upstream F# parser example because CCS uses that parser
+machinery. `SyntaxTree.fs` and `SyntaxTree.fsi` are F# implementation and
+signature files for the .NET bootstrap compiler; they are not Clef source-file
+extensions. Clef has no separate signature files. Use the current
+[`Clef.Compiler.Service.fsproj`](../src/Compiler/Clef.Compiler.Service.fsproj)
+when rebuilding the parser. Clef's planned `clefx` CLI and `.clefx` scripts follow
+the [Composer workbench plan](../../Composer/docs/Interactive_Compiler_Workbench.md).
+
 Making changes to the AST is a common task when working on new F# compiler features or when working on developer tooling.  
 This document describes the process of making changes to the AST.
 
@@ -43,7 +51,7 @@ type SynRationalConst =
     // ...
 ```	
 
-After modifying `SyntaxTree.fsi` and `SyntaxTree.fs`, the compiler will report errors in `pars.fsy`. If not, the `fsy` file wasn't processed by the compilation. In this case, a rebuild of `FSharp.Compiler.Service.fsproj` should help.  
+After modifying `SyntaxTree.fsi` and `SyntaxTree.fs`, the compiler will report errors in `pars.fsy`. If not, the `fsy` file wasn't processed by the compilation. In this case, rebuild the current CCS project linked above.
 `pars.fsy` is the parser specification of F#, a list of rules that describe how to parse F# code. Don't be scared by the size of the file or the unfamiliar content.
 It's easier than it looks.
 The F# compiler uses a parser generator called [fsyacc](https://github.com/fsprojects/FsLexYacc) to generate the parser from the specification in `pars.fsy`.

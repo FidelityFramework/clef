@@ -6,6 +6,13 @@
 > [`drift-gate.sh`](drift-gate.sh) (retired vocabulary, and the per-fork count of references to
 > the F# Compiler Service typed tree, which is the size of the migration this contract defines).
 
+**Status update, 2026-09-25.** The dated query and fork inventories retain the
+September 4 baseline. Current server/client implementation and acceptance are
+recorded in [Composer's Lattice integration](../../../../Composer/docs/Lattice_Integration.md).
+The [workbench plan](../../../../Composer/docs/Interactive_Compiler_Workbench.md)
+adds a planned shared session and native `clefx` path; §4 distinguishes it from
+the retired FSI editor surfaces.
+
 ## 1. The rule
 
 The editor witnesses the graph exactly as Alex does.
@@ -99,7 +106,7 @@ Atelier adds panes, not facts. Each pane reads one of these.
 ## 4. What the editor stops doing
 
 Retired outright, because the graph does not carry the fact or the platform has no such thing:
-F# Interactive and every `fsi.*` surface (Clef has no REPL); MSBuild, `dotnet` tasks and
+inherited F# Interactive commands and `fsi.*` settings as Clef evaluation surfaces; MSBuild, `dotnet` tasks and
 `coreclr` launch; F1 help URLs into the .NET API; the .NET test explorer; the FSAC analyzer and
 linter policy block pushed as settings; `.ionide` workspace configuration; client-side project
 discovery over `.fsproj`; `fsharp/*` private protocol. Replaced by the graph: editor-owned graph
@@ -108,6 +115,20 @@ DWARF-derived layouts; the coordinator's own compiler instance; PSG-shaped types
 client; a Lezer grammar or GPU tokenizer as a source of structure. Extensions beyond standard LSP
 are named here first, under one namespace, `clef/*`, and each is a focus-and-observe pair over a
 `NodeId`; `fidelity/*` and `fsnative/*` sketches elsewhere are superseded by this section.
+
+**Interactive direction, 2026-09-25.** The planned Clef interactive CLI is
+`clefx`, matching the `.clefx` script extension. F# uses `.fsx` scripts and the
+`fsi` tool; its `.fsi` signature files are a separate concept that Clef does not
+carry forward. The removal of inherited FSI integration does not rule out a
+Clef REPL. Composer owns the planned
+[interactive compiler workbench and native bridge](../../../../Composer/docs/Interactive_Compiler_Workbench.md):
+CCS/Baker settle the graph, Alex witnesses the admitted MLIR, and LLVM supplies
+native execution. SageFS/FSI may host the bootstrap compiler while it is written
+in F#, but does not supply Clef evaluation semantics. Lattice clients consume
+the same versioned compiler/proof service. Shared sessions and native interactive
+execution remain planned; the dated inventories below do not describe current
+implementation status. See [Lattice integration](../../../../Composer/docs/Lattice_Integration.md)
+for the present server and client gates.
 
 ## 5. Where the forks stand (measured 2026-09-04)
 

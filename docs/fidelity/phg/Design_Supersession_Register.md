@@ -16,6 +16,29 @@
 
 ## The settled position, in one table
 
+### September 21 bidirectional composition and PHG reconciliation
+
+The [bidirectional composition plan](../../../../Composer/docs/Bidirectional_Composition_Plan.md)
+owns the proposed work and review gates; the existing
+[negative/fractional companion](../../../../Composer/docs/Negative_Fractional_Types_Architecture.md)
+owns the proposed operational interpretation. The current PHG and glossary
+chapters in `clef-lang-spec` correct the graph contract without admitting those
+source forms. The later C-series implementation evidence remains in Composer's
+coverage waypoints. No feature code or acceptance gate is changed by this entry.
+
+| Superseded claim | Replacement and owner |
+|---|---|
+| Every computation is a hyperedge, or hyperedges replace the program's structure | The computational spine, local coeffects, joint relations, and obligations share one graph with distinct roles. Baker can generate operational structure and its justification together; Alex consumes settled consequences. `Baker_Saturation_Architecture.md` and spec `program-hypergraph.md`. |
+| Pairwise location equality cannot establish a common location; binary encodings inherently lose n-ary semantics | Shared capacity is a joint requirement beyond location equality. A relation node with labelled ports can preserve n-ary meaning. Ordered hyperedges retain occurrence identity, order, and multiplicity directly. Spec `program-hypergraph.md`. |
+| Enumerated participants imply decidability; three lifecycle labels imply a linear saturation bound | Each admitted domain needs sound rules and a convergence/checking policy. Structural elaboration and source recursive demand need separate justifications. Spec `program-hypergraph.md`; current composition plan. |
+| Separate solver names or variables make interacting analyses independent | Per-family projections retain common premises/provenance; cross-domain propagation needs sound transfer and dependent invalidation. Spec `program-hypergraph.md`. |
+| Fractional resources imply rational dimensional exponents or inverse physical units; any future supply is `Recip<T>` | Value-indexed matching, directed negatives, generic demand, and measure algebra are distinct. Their library translations remain proposed. Spec glossary and NFT companion. |
+| All hypergraph and suspension work is future | Bounded joint relations and native continuation construction have recorded implementation evidence. `PSG_to_PHG_Plan.md` and this folder's README now mark their old inventories historical; Composer's waypoints own current acceptance. |
+
+`Horizon_Requirements.md` retains its September 4 quotations under an explicit
+supersession table. The table also supersedes its downstream plan dispositions
+where they repeat those claims; those research rows are not new normative rules.
+
 ### September 19 documentation reconciliation
 
 The February `SMT_Integration_Strategy.md` was retired after a full-content
@@ -76,7 +99,15 @@ Sample applications that "express" a capability (Composer `samples/`, the Fideli
 
 ## Waypoint — interaction-net annihilation
 
-Held as a bearing while the resumption-edge class and the RPC wait-for edge are designed, not as work scheduled now. Annihilation is the one rewrite in the Baker inventory that *removes* structure, and the hypergraph's second invariant (monotone saturation) admits no deletion. So it must be grounded as a fold-in consequence: the active pair's hyperedge fires on its complete two-member source set, both agents move to *Latent* under the DTS/DMM three-state model, and the auxiliary ports are connected pairwise as new edges. Nothing is deleted; the graph is monotone in annotation and the reduced structure is the consequence. This is the same $|S_f| = 2$ pairing shape the η/ε twin and the synchronous-RPC wait-for edge use — one pairing mechanism, three instances — which is why the continuation design should be checked against it as it comes together. Lessons from the retired dialects are measured in this frame only.
+**Historical proposal, corrected September 21.** A net reduction may be expressed
+through Baker's graph-change mechanism, provided the chosen rule has an
+operational interpretation and preserves the required identities and observations.
+Monotonicity of an analysis domain does not prohibit all graph replacement, and a
+Live/Latent display state does not prove reduction correctness. Artifact proof
+twin-pairing, η/ε resource pairing, and RPC wait incidence can reuse graph
+infrastructure without sharing one operational or logical rule. Net admission,
+conflict handling, and its correspondence proof remain proposed work; this
+waypoint schedules no implementation.
 
 ## Category (a) — already record the supersession  *(allow-listed in the gate)*
 

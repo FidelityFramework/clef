@@ -5,6 +5,13 @@ $\mathrm{PHG} = (V, F, \alpha, \beta)$ that is the CCS front end, and from which
 memory layout and the Tier 1/Tier 2 proofs fall out as one structure rather than
 two.
 
+The graph retains the computational spine, local coeffects, and explicit joint
+relations. Layout and proof obligations share their participants and premises;
+their discharge requires the owning analysis rules. The current
+[Baker architecture](../Baker_Saturation_Architecture.md) explains this boundary.
+The [bidirectional composition plan](../../../../Composer/docs/Bidirectional_Composition_Plan.md)
+records the proposed Tardis-led work without admitting new source constructs.
+
 | File | What it is |
 |---|---|
 | [Dimensional_Handoff.md](./Dimensional_Handoff.md) | **Start here for the dimensional range wave.** The reading order and authority, the placement rule, the working model, the state, the gates with exact commands, what is next, what is owed, the code map, the as-built template. Written for an agent with no prior context. |
@@ -19,7 +26,25 @@ the measured state of the Alex witness boundary. The plan's *Draining Alex*
 table is derived from its Section 4, and the layout design replaces what its
 Sections 4b and 4d document.
 
-## Status
+## Current status — September 21, 2026
+
+Graph-resident obligations, n-ary evaluation/suspension relations, bounded closure
+environments, loop-range relations, and native sequence continuation construction
+have implemented instances. Their actual gates and remaining boundaries belong
+to [Language Coverage Waypoints](../../../../Composer/docs/Language_Coverage_Waypoints.md)
+and the [PRD index](../../../../Composer/docs/PRDs/README.md). C-01–C-07 remain
+In-Progress; negative/fractional types and the composition exercises remain
+Planned. No general saturation-engine or complete continuation proof follows from
+those bounded results.
+
+The inventories below and in the original transition plan retain historical
+evidence. In particular, their unqualified “not started” phase descriptions are
+superseded as present-state claims. The
+[supersession register](Design_Supersession_Register.md) and
+[Horizon Requirements reading note](Horizon_Requirements.md#september-21-2026-supersession-and-reading-order)
+record the corrected graph, convergence, and domain-composition interpretation.
+
+## Historical transition status
 
 - **Track A** — landed (`65fa9407d`). The matching `fsproj` entry removal must
   land with it.

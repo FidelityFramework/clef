@@ -33,6 +33,36 @@ step and actual stores; the cell's resulting range alone does not retain those
 proof dependencies. Representation and proof consumers read the same settled
 participants rather than reconstructing those relationships independently.
 
+The computational spine, local coeffects, and joint relations have distinct
+roles within that graph. `SemanticKind` nodes retain applications, branches,
+loops, and generated frame operations. A node's range or placement is a local
+result; an explicit hyperedge retains the participants and premises that justify
+it. Obligation nodes also belong to the graph but remain off the emission spine.
+`Recipe.NewNodes` and `Recipe.NewEdges` therefore describe different parts of one
+elaboration, and fold-in preserves their correspondence. Input occurrences keep
+their order and multiplicity where the operation requires them; a deduplicated
+dependency set is not a substitute for its operand sequence.
+
+The lattice belongs to an analysis's information domain. The graph's topology
+records dependencies among those facts; it is not itself that lattice. Each
+domain needs sound transfer and convergence rules, including the premises it
+imports from another domain. Finite participant lists and progress labels alone
+establish neither decidability nor termination. Quiescence with missing premises
+does not authorize witnessing, and a changed premise invalidates its dependent
+conclusions.
+
+Use-site requirements can inform earlier definitions without reversing runtime
+execution. A future bidirectional library operation could elaborate both
+ordinary executable structure and the joint relationships required to check it.
+Its source demand cycle, effects, sharing, and resource usage still need an
+admitted operational contract. The
+[bidirectional composition plan](../../../Composer/docs/Bidirectional_Composition_Plan.md)
+owns that proposed work and its Tardis case study; the
+[negative/fractional companion](../../../Composer/docs/Negative_Fractional_Types_Architecture.md)
+owns the proposed duality interpretation. Neither is feature admission. Alex
+continues to consume settled codata or deliberately reified information under
+the existing witness contract.
+
 The bootstrap implementation is written in F#. Its use of F# types and parser
 computation expressions does not import CLR collection, object, or scheduling
 semantics into Clef. Clef operations are admitted and elaborated according to their

@@ -729,11 +729,11 @@ type EdgeRole =
     /// The structure an obligation constrains -> the obligation node.
     | Constrains
 
-/// One hyperedge. In this phase every edge is degenerate (|Sources| = 1);
-/// the list is the shape arity > 1 requires and costs nothing now.
+/// One directed relation. Sources retain ordered participant occurrences;
+/// structural projections may be single-source while joint facts are n-ary.
 [<NoComparison; NoEquality>]
 type Hyperedge = {
-    /// S_f -- the nodes that produce or constrain the target.
+    /// I_f -- ordered occurrences that produce or constrain the target.
     Sources: NodeId list
     /// t_f -- what they produce or constrain.
     Target: NodeId
@@ -1491,10 +1491,10 @@ type SemanticGraph = {
     /// The codata emission reads (Codata): settled at the end of saturation, after the range
     /// pass and placement; defaulted empty at every construction.
     Codata: Lazy<Codata>
-    /// F -- the hyperedge set. Phase 0 carries only what enrichment mints
-    /// explicitly (obligations, residence); the kind-derived structural and
+    /// F -- the relations enrichment mints explicitly, including joint
+    /// obligations, evaluation, suspension and residence. Kind-derived structural and
     /// reference edges are projected on demand by `kindEdges` and are not
-    /// materialised here until the fixpoint driver needs them as data.
+    /// duplicated here merely to support the structural traversal.
     /// The emission traversal never queries this set (PHG paper 2.4).
     Edges: Hyperedge list
 }

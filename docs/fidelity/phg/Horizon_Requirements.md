@@ -36,6 +36,39 @@ override it where they differ):
 -->
 # Requirements from horizons two and three on the numeric and dimensional representation
 
+## September 21, 2026 supersession and reading order
+
+The inventory below records the September 4 research reading and its contemporary
+source quotations. Its `must` and `no choice` labels are historical dispositions,
+not independent normative authority. Several quoted manuscripts have since been
+revised. Consult the current `clef-lang-spec` chapters and the
+[bidirectional composition plan](../../../../Composer/docs/Bidirectional_Composition_Plan.md)
+before deriving implementation requirements from these rows. Native acceptance is
+recorded in [Language Coverage Waypoints](../../../../Composer/docs/Language_Coverage_Waypoints.md).
+
+The following corrections supersede the affected rows and their downstream
+disposition tables; the old quotations remain below as provenance:
+
+| Historical claims affected | Current interpretation |
+|---|---|
+| C1.1, C5.2, C8.7 and the step-1 disposition tying fractional types to rational measure exponents | Rational measure exponents and value-indexed fractional resources are separate proposals. `Neg` and `Recip` remain provisional notation; neither is admitted by this inventory. A resource `1/v` retains its particular value index and usage/matching contract. |
+| C5.1, C5.8, C6.9, C9.1 and claims that disjoint solver variables establish independent analyses | A joint relation can involve several domains. The existing separate-discharge policy retains common premises and provenance across its projections. Any fact exchanged between domains requires a sound transfer rule; variable separation alone establishes neither independence nor additive total cost. A demanded property is an obligation, not a proved refinement. |
+| C5.7, C6.9, C9.6 and the general fixed-point exclusion | Compiler traversal, structural elaboration, abstract-domain convergence, source recursive values, and protocol fixed points have different justifications. A restricted rule library can generate finite application obligations; this does not prohibit per-program range fixed points or prove arbitrary recursive demands productive. Fresh/Elaborated/Saturated labels alone prove no convergence bound. |
+| C9.7 and binary-decomposition impossibility | Ordered n-ary relations make joint identity direct. A binary encoding with a relation node and labelled ports can preserve the same information. Decomposition needs its semantic correspondence; it is not intrinsically lossy. Repeated input occurrences and their order must survive when relevant. |
+| C5.15 and claims that enumeration/fragment membership alone yields bounded interactive checking | Enumeration exposes a finite set of participants, not a decision procedure for every proposition about them. Each admitted analysis needs its own domain, sound rules, convergence policy, and checking procedure. Timeouts and unresolved required premises remain distinct from contradiction and success. |
+| C9.13 and interpretations of a pairing as an inverse or a protocol proof | The selected directed/value-indexed calculus needs resource and matching rules. A common graph can carry these alongside session, lifetime, and numerical facts without identifying their algebras or proofs. |
+
+The current account distinguishes a computational spine, local coeffects, joint
+relations, and the settled codata consumed by emission. Baker can construct
+operational structure and its proof dependencies together. A dynamic check or
+protocol can remain in that structure after its static admission obligations are
+established; its runtime result is not fabricated by saturation. See
+[Baker Saturation Architecture](../Baker_Saturation_Architecture.md),
+[Program Hypergraph](../../../../clef-lang-spec/spec/program-hypergraph.md), and the
+[supersession register](Design_Supersession_Register.md).
+
+## Historical September 4 inventory
+
 Scope. This note merges the requirements derived from the grade-axis, coexponential-inference, fabric-inference, ADM, quantum and Recommendation_from_Fable_Chat research folders under `/home/hhh/repos/arxiv-papers/research/`, read against the pre-prints and the spec. Every research folder is directional by its own front matter. A requirement is marked `must` only where the source states a theorem, an algebraic fact, or a corrected position the pre-print has already taken; it is marked `directional` where the source only suggests. No requirement was upgraded. Paths below are relative to `/home/hhh/repos/arxiv-papers/research/` unless they begin with `/`. Vocabulary: Elaboration and Saturation are PSG phases; Clef is a concurrent language with an F# surface.
 
 Reading rule for the verdicts. `no choice` means the algebra or the proof architecture fixes the item and the anchor states the fixing fact. `constrained choice` means the structure, lifetime, or family is fixed and a residual decision remains, named. `open` means no source settles it.

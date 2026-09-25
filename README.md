@@ -124,8 +124,14 @@ CCS is a focused front end, not a complete compiler:
 - **No IL generation** — Clef does not target .NET IL
 - **No MSBuild integration** — project files are `.fidproj`, loaded by CCS and driven by Composer
 - **No NuGet resolution** — package management is ClefPak (`cpk`)
-- **No inherited F# Interactive host** — native incremental/REPL work follows Clef's own contracts and roadmap
+- **No inherited F# Interactive host** — Composer owns the planned [interactive workbench and native bridge](../Composer/docs/Interactive_Compiler_Workbench.md)
 - **No code generation** — that is Composer's, through Alex and MLIR
+
+The planned interactive CLI is `clefx`, matching `.clefx` script files. Clef has
+no separate signature-file extension. Composer may use SageFS/FSI to keep the
+F# bootstrap compiler resident; Clef source still requires CCS/Baker, Alex's
+graph witnessing and native LLVM execution. This does not add an FSI dependency
+to CCS's language contract or establish an implemented `clefx` command.
 
 ## Getting Started
 
