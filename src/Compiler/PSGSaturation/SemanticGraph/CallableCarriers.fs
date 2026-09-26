@@ -207,9 +207,13 @@ let settle (inputs: Inputs) (graph: SemanticGraph) : Map<NodeId, CallableCarrier
                     |> Option.map (fun layout -> Set.add layout.Formal destinations)
                     |> Option.defaultValue destinations
                 | None -> destinations
+            let directCaptures =
+                if context = LambdaContext.RegularClosure then DirectCaptures.tryCaptureFormals graph implementation hidden
+                else Some Set.empty
             let publicTypeAgrees =
-                match graph.Nodes.TryFind body with
-                | Some result ->
+                match graph.Nodes.TryFind body, directCaptures with
+                | Some result, Some captures ->
+                    let hidden = Set.union hidden captures
                     let visible = parameters |> List.filter (fun (_, _, id) -> not (hidden.Contains id))
                     let logical = List.foldBack (fun (_, ty, _) result -> NativeType.TFun(ty, result)) visible result.Type
                     let declared =
@@ -221,6 +225,7 @@ let settle (inputs: Inputs) (graph: SemanticGraph) : Map<NodeId, CallableCarrier
             if not formalsAgree then refuse node.Id "Callable formals do not match their unique typed graph declarations."
             elif not resultAgrees then refuse node.Id "Callable physical signature does not agree with its declared parameters and actual body result."
             elif not environmentAgrees then refuse node.Id "Callable environment is not the settled nonempty environment at this occurrence and its first formal."
+            elif directCaptures.IsNone then refuse node.Id "Callable direct-capture formals lack valid immutable source and typed parameter provenance."
             elif not publicTypeAgrees then refuse node.Id "Callable public signature disagrees after removing only its proved hidden formals."
             else
                 Some(node.Id,

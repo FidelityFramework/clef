@@ -418,3 +418,169 @@ let main _ =
             Assert.True(mismatch.Range.Start.Column > 0)
             Assert.Equal(NativeDiagnosticSeverity.Error, mismatch.Severity)
         | other -> failwithf "Expected a located source failure, got %A" other
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "DirectCaptureCarriers")>]
+type DirectCaptureCarrierTests() =
+    let settle graph =
+        Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.settle
+            { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty }
+            { graph with Codata = lazy (failwith "Carrier settlement must not force final Codata") }
+
+    let source = """
+[<EntryPoint>]
+let main _ =
+    let offset = 7
+    let work value = offset + value
+    work 3 + work 4
+"""
+
+    [<Fact>]
+    member _.``Direct capture carrier retains physical capture parameters and original public signature``() =
+        let result = DirectCapture.check source
+        let binding = DirectCapture.binding "work" result
+        let implementation, parameters, _ = DirectCapture.lifted "work" result
+        Assert.Equal(2, parameters.Length)
+        let carriers, residuals = settle result.Graph
+        Assert.DoesNotContain(residuals, fun residual -> residual.Occurrence = binding.Id || residual.Occurrence = implementation.Id)
+        Assert.True(carriers.ContainsKey binding.Id, "The direct named callable must retain a settled carrier.")
+        let carrier = carriers[binding.Id]
+        Assert.Equal(implementation.Id, carrier.Implementation)
+        Assert.Equal<NodeId list>(parameters |> List.map (fun (_, _, id) -> id), carrier.Parameters |> List.map (fun (_, _, id) -> id))
+        Assert.Equal(2, carrier.ParameterShapes.Length)
+        Assert.Equal(None, carrier.Environment)
+        Assert.Equal("int -> int", formatType carrier.SourceType)
+        for site, arguments in DirectCapture.calls "work" result do
+            Assert.Equal(parameters.Length, arguments.Length)
+            match site.Kind with
+            | SemanticKind.Application(callee, _) ->
+                Assert.Equal(implementation.Id, carriers[callee].Implementation)
+                Assert.Equal("int -> int", formatType carriers[callee].SourceType)
+            | _ -> failwith "Expected direct invocation"
+
+    [<Theory>]
+    [<InlineData(32)>]
+    [<InlineData(64)>]
+    member _.``Declared platform admission settles direct and recursive capture carriers``(pointerBits: int) =
+        let representations =
+            [ "signed-byte", "int", 8, "-128", "127"; "unsigned-byte", "uint", 8, "0", "255"
+              "signed-register", "int", pointerBits, string (-(1I <<< (pointerBits - 1))), string ((1I <<< (pointerBits - 1)) - 1I)
+              "unsigned-register", "uint", pointerBits, "0", string ((1I <<< pointerBits) - 1I) ]
+            |> List.map (fun (name, family, bits, low, high) ->
+                { Name = name; Family = family; Bits = bits; Capability = "native"
+                  MinMagnitude = low; MaxMagnitude = high; Boundary = "wrap" }: NumericRepresentation)
+        let platform: PlatformContext =
+            { PlatformId = "direct-capture-carrier-test"
+              Dimensions = Map.ofList ["Pointer", pointerBits; "Register", pointerBits]
+              Representations = representations |> List.map (fun representation -> representation.Name, representation) |> Map.ofList
+              EndpointReturns = Map.empty
+              PlatformLibraryPath = None; PlatformDescription = Some "CapturePlatform.description"; PlatformArchitecture = None; PlatformOS = None
+              PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "capture-platform.clef")
+              Predicates = Map.empty; FreestandingStartup = None
+              SubstrateKind = None; RuntimeModel = None; AvailableMemorySpaces = []; DefaultMemorySpace = None
+              ClockFrequencyMhz = None; NsPerWeightUnit = None }
+        let representationsText =
+            representations |> List.map (fun representation ->
+                sprintf "{ Name=\"%s\"; Family=\"%s\"; Bits=%d; Capability=\"native\"; MinMagnitude=\"%s\"; MaxMagnitude=\"%s\"; Boundary=\"wrap\" }"
+                    representation.Name representation.Family representation.Bits representation.MinMagnitude representation.MaxMagnitude)
+            |> String.concat "; "
+        let declaration = """module CapturePlatform
+type WidthDeclaration = { Name: string; Bits: int }
+type Representation = { Name: string; Family: string; Bits: int; Capability: string; MinMagnitude: string; MaxMagnitude: string; Boundary: string }
+type TargetCore = { Widths: WidthDeclaration array; Representations: Representation array }
+type MemorySpace = { Name: string; Kind: string; Capacity: int; Alignment: int; Granularity: int; Growth: string; Access: string; Base: int option }
+type ProgramLifetimeSpaces = { Immutable: string; Mutable: string option }
+type PlatformDescription = { Id: string; Core: TargetCore option; Spaces: MemorySpace array; ProgramLifetime: ProgramLifetimeSpaces option }
+let image = { Name="image"; Kind="rodata"; Capacity=4096; Alignment=16; Granularity=16; Growth="fixed"; Access="r"; Base=None }
+let core: TargetCore = { Widths = [| { Name="Pointer"; Bits=""" + string pointerBits + " }; { Name=\"Register\"; Bits=" + string pointerBits + " } |]; Representations = [| " + representationsText + """ |] }
+let description = { Id="direct-capture-carrier-test"; Core=Some core; Spaces=[|image|]; ProgramLifetime=Some { Immutable="image"; Mutable=None } }
+"""
+        let source = """module DirectCapture
+let repeated offset =
+    let add value = offset + value
+    add 10 + add 20
+let recursive offset =
+    let rec sum count =
+        if count = 0 then offset
+        else offset + sum (count - 1)
+    sum 3
+[<EntryPoint>]
+let main _ =
+    if repeated 7 = 44 && recursive 7 = 28 then 0 else 1
+"""
+        let parse path text =
+            match parseStringWithDefaults text path with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Parse failed: %A" errors
+        let result = checkParsedInputsWithPlatformAndSources
+                         [parse "capture-platform.clef" declaration; parse "direct-capture-platform.clef" source]
+                         (Some platform) (Set.singleton (System.IO.Path.GetFullPath "direct-capture-platform.clef"))
+        DimensionalCases.noErrors result
+        Assert.True(result.Graph.Platform.IsSome)
+        let carriers = result.Graph.Codata.Value.CallableCarriers
+        for name in ["add"; "sum"] do
+            let binding = DirectCapture.binding name result
+            let implementation, parameters, _ = DirectCapture.lifted name result
+            Assert.Equal(2, parameters.Length)
+            Assert.Equal(implementation.Id, carriers[binding.Id].Implementation)
+            Assert.Equal("int -> int", formatType carriers[binding.Id].SourceType)
+            Assert.Equal(2, carriers[binding.Id].Parameters.Length)
+
+    [<Theory>]
+    [<InlineData("missing origin")>]
+    [<InlineData("duplicate origin")>]
+    [<InlineData("wrong owner")>]
+    [<InlineData("wrong class")>]
+    [<InlineData("wrong ordinal")>]
+    [<InlineData("public formal")>]
+    [<InlineData("mutable source")>]
+    [<InlineData("wrong source kind")>]
+    [<InlineData("changed source type")>]
+    [<InlineData("changed formal type")>]
+    [<InlineData("missing parameter incidence")>]
+    [<InlineData("missing structural child")>]
+    [<InlineData("self origin")>]
+    member _.``Changed direct capture premises retract the public carrier``(change: string) =
+        let result = DirectCapture.check source
+        let graph = result.Graph
+        let binding = DirectCapture.binding "work" result
+        let implementation, parameters, _ = DirectCapture.lifted "work" result
+        let _, _, formal = List.head parameters
+        let _, _, publicFormal = List.last parameters
+        let original = DirectCapture.binding "offset" result
+        let origin = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.CaptureOrigin && edge.Target = formal) |> Assert.Single
+        let isOrigin (edge: Hyperedge) =
+            edge.Class = origin.Class && edge.Role = origin.Role && edge.Ordinal = origin.Ordinal &&
+            edge.Sources = origin.Sources && edge.Target = origin.Target
+        let replaceOrigin changed =
+            { graph with Edges = graph.Edges |> List.map (fun edge -> if isOrigin edge then changed else edge) }
+        let replaceNode id changed = { graph with Nodes = graph.Nodes.Add(id, changed graph.Nodes[id]) }
+        let changed =
+            match change with
+            | "missing origin" -> { graph with Edges = graph.Edges |> List.filter (isOrigin >> not) }
+            | "duplicate origin" -> { graph with Edges = origin :: graph.Edges }
+            | "wrong owner" -> replaceOrigin { origin with Sources = [binding.Id; original.Id] }
+            | "wrong class" -> replaceOrigin { origin with Class = EdgeClass.Reference }
+            | "wrong ordinal" -> replaceOrigin { origin with Ordinal = 1 }
+            | "public formal" -> replaceOrigin { origin with Target = publicFormal }
+            | "mutable source" ->
+                replaceNode original.Id (fun node ->
+                    match node.Kind with
+                    | SemanticKind.Binding(name, _, recursive, root) -> { node with Kind = SemanticKind.Binding(name, true, recursive, root) }
+                    | _ -> failwith "Expected immutable source binding")
+            | "wrong source kind" -> replaceNode original.Id (fun node -> { node with Kind = SemanticKind.VarRef("offset", None) })
+            | "changed source type" -> replaceNode original.Id (fun node -> { node with Type = Types.boolType })
+            | "changed formal type" -> replaceNode formal (fun node -> { node with Type = Types.boolType })
+            | "missing parameter incidence" ->
+                let edges = graph.Edges |> List.filter (fun edge ->
+                    not (edge.Class = EdgeClass.Structural && edge.Role = EdgeRole.Parameter && edge.Target = implementation.Id && edge.Sources = [formal]))
+                { graph with Edges = edges }
+            | "missing structural child" -> replaceNode implementation.Id (fun node -> { node with Children = node.Children |> List.filter ((<>) formal) })
+            | "self origin" -> replaceOrigin { origin with Sources = [implementation.Id; formal] }
+            | other -> failwithf "Unknown premise change: %s" other
+        let before, _ = settle graph
+        Assert.True(before.ContainsKey binding.Id)
+        let after, errors = settle changed
+        Assert.False(after.ContainsKey binding.Id)
+        Assert.Contains(errors, fun error -> error.Occurrence = binding.Id)
+        let restored, _ = settle graph
+        Assert.True(restored.ContainsKey binding.Id)

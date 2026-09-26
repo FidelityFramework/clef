@@ -42,6 +42,45 @@ let sourceDefinition (graph: SemanticGraph) (definition: NodeId) : NodeId =
         | None -> None
     follow Set.empty definition |> Option.defaultValue definition
 
+/// Read only the hidden parameters established by the direct-capture recipe.
+/// CaptureOrigin is authority for this source/physical distinction only while
+/// its implementation, immutable source, typed formal and parameter incidence
+/// still agree. The physical parameter list and call operands remain intact.
+let tryCaptureFormals (graph: SemanticGraph) (implementation: NodeId) (otherHidden: Set<NodeId>) : Set<NodeId> option =
+    match graph.Nodes.TryFind implementation with
+    | Some { Kind = SemanticKind.Lambda(parameters, body, [], _, LambdaContext.RegularClosure); Children = children } ->
+        let formals = parameters |> List.map (fun (_, _, id) -> id) |> Set.ofList
+        let rows = graph.Edges |> List.filter (fun edge ->
+            edge.Role = EdgeRole.CaptureOrigin &&
+            (List.tryHead edge.Sources = Some implementation || formals.Contains edge.Target))
+        if rows.IsEmpty then Some Set.empty
+        elif formals.Count <> parameters.Length || children <> (parameters |> List.map (fun (_, _, id) -> id)) @ [body] then None
+        else
+            let valid row =
+                match row.Class, row.Ordinal, row.Sources with
+                | EdgeClass.Provenance, 0, [owner; source] when owner = implementation && not (formals.Contains source) ->
+                    match parameters |> List.tryFindIndex (fun (_, _, formal) -> formal = row.Target),
+                          graph.Nodes.TryFind row.Target, graph.Nodes.TryFind source with
+                    | Some ordinal, Some { Kind = SemanticKind.PatternBinding _; Type = formalType },
+                      Some { Kind = SemanticKind.Binding(_, false, _, _) | SemanticKind.PatternBinding _; Type = sourceType } ->
+                        let _, parameterType, _ = parameters[ordinal]
+                        let incidence = graph.Edges |> List.filter (fun edge ->
+                            edge.Class = EdgeClass.Structural && edge.Role = EdgeRole.Parameter &&
+                            edge.Target = implementation && (edge.Ordinal = ordinal || List.contains row.Target edge.Sources))
+                        applySubst formalType = applySubst parameterType &&
+                        applySubst sourceType = applySubst parameterType &&
+                        (match incidence with
+                         | [edge] -> edge.Ordinal = ordinal && edge.Sources = [row.Target]
+                         | _ -> false)
+                    | _ -> false
+                | _ -> false
+            let targets = rows |> List.map _.Target |> Set.ofList
+            let remaining = parameters |> List.map (fun (_, _, id) -> id) |> List.filter (fun id -> not (otherHidden.Contains id))
+            let prefix = remaining |> List.truncate rows.Length |> Set.ofList
+            if targets.Count = rows.Length && targets = prefix && (Set.intersect targets otherHidden |> Set.isEmpty) &&
+               (rows |> List.forall valid) then Some targets else None
+    | _ -> None
+
 let private functionValue (node: SemanticNode) =
     [ClosureMetadata.LambdaExpression; ClosureMetadata.RequiresClosurePair]
     |> List.exists (fun key -> node.Metadata.TryFind key = Some (MetadataValue.Bool true))
