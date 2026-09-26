@@ -208,35 +208,15 @@ let analyze (graph: SemanticGraph) : Reading =
         | Some (NTUKind.NTUint _ | NTUKind.NTUuint _ | NTUKind.NTUfloat _ | NTUKind.NTUposit _ | NTUKind.NTUbool | NTUKind.NTUchar | NTUKind.NTUunit) -> true
         | _ -> false
     let isString ty = Types.tryGetNTUKind (applySubst ty) = Some NTUKind.NTUstring
-    let literalBacking = lazy (StaticStringLayout.literalEvidence graph)
     let retainedString (contract: Lazy.Instance) value =
-        let rec trace seen id =
-            if Set.contains id seen then None else
-            let seen = Set.add id seen
-            let follow source = trace seen source |> Option.map (fun dependencies -> id :: dependencies)
-            match nodes.TryFind id with
-            | Some node when isString node.Type ->
-                match node.Kind with
-                | SemanticKind.Literal(NativeLiteral.String _) -> literalBacking.Value.TryFind id
-                | SemanticKind.VarRef(_, Some source) -> follow source
-                | SemanticKind.TypeAnnotation(source, declared) when isString declared -> follow source
-                | SemanticKind.EagerExpr source when ExplicitDemand.operand graph id = Some source -> follow source
-                | SemanticKind.Binding(_, false, _, _) when node.Children.Length = 1 -> follow node.Children.Head
-                | SemanticKind.Sequential values -> List.tryLast values |> Option.bind follow
-                | SemanticKind.IfThenElse(_, left, Some right) ->
-                    match trace seen left, trace seen right with
-                    | Some left, Some right -> Some(id :: (left @ right))
-                    | _ -> None
-                | SemanticKind.LazyRead(environment, slot) ->
-                    Lazy.captureEnvironment graph contract environment |> Option.bind (fun path ->
-                        contract.Captured
-                        |> List.tryPick (fun (source, initializer, mutableCell) ->
-                            if source = slot && not mutableCell then
-                                follow initializer |> Option.map (fun dependencies -> path @ (slot :: dependencies))
-                            else None))
-                | _ -> None
+        StaticStringLayout.retainedViews graph (fun node ->
+            match node.Kind with
+            | SemanticKind.LazyRead(environment, slot) ->
+                Lazy.captureEnvironment graph contract environment |> Option.bind (fun path ->
+                    contract.Captured |> List.tryPick (fun (source, initializer, mutableCell) ->
+                        if source = slot && not mutableCell then Some(slot :: path, [initializer]) else None))
             | _ -> None
-        trace Set.empty value |> Option.map List.distinct
+        ) value
     let residuals = ResizeArray<Residual>()
     let evidence = ResizeArray<Hyperedge>()
     let mutable sites = Map.empty

@@ -226,6 +226,9 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
                 let! functionRef = varRef name (Some binding) implementationType
                 do! enrich call (SemanticKind.Application(functionRef, actualEnvironment :: arguments)) call.Type
                         (functionRef :: actualEnvironment :: arguments) call.EmissionStrategy false
+                formations.Add { Sources = [callee; implementation; actualEnvironment] @ arguments
+                                 Target = call.Id; Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentInvocation; Ordinal = 0 }
+                do! preturn ()
             | _ -> invalidOp "A known callable call plan must identify an Application."
         return environment, implementation, formal
     })

@@ -79,6 +79,23 @@ let private retypeCharConversion (builder: NodeBuilder) (funcNode: SemanticNode)
         | None -> funcNode
     | _ -> funcNode
 
+let rec private isRecordOperand = function
+    | SynExpr.Record _ -> true
+    | SynExpr.Paren(inner, _, _, _) | SynExpr.DebugPoint(_, _, inner)
+    | SynExpr.Eager(inner, _) -> isRecordOperand inner
+    | _ -> false
+
+/// This is checking context from the current actual formal, not evidence that
+/// an argument is demanded. Do not pass it into unrelated nested expressions.
+let private recordArgumentEnvironment env signature argument =
+    let expected =
+        if isRecordOperand argument then
+            match applySubst signature with
+            | NativeType.TFun(domain, _) -> Some domain
+            | _ -> None
+        else None
+    { env with ExpectedRecordType = expected }
+
 /// Check function application.
 /// Handles: inline expansion (escape analysis), pipe operator reduction,
 /// intrinsic saturation, DU constructor detection.
@@ -116,7 +133,6 @@ let checkApp
                 let inlineBody = binding.InlineBody.Value
                 if arguments.Length <> max 1 inlineBody.Parameters.Length then None
                 else
-                    let argumentNodes = arguments |> List.map (checkExpr env builder)
                     let signature, instantiateScopeType =
                         match binding.Type with
                         | NativeType.TForall (parameters, signature) ->
@@ -124,16 +140,21 @@ let checkApp
                             let instantiate ty = NativeTypes.instantiate parameters fresh (canonicalizeVars ty)
                             instantiate signature, instantiate
                         | signature -> signature, id
-                    let resultType =
-                        argumentNodes |> List.fold (fun signature argument ->
-                            match applySubst signature with
-                            | NativeType.TFun (domain, result) ->
-                                addConstraint (Constraint.Equals (domain, argument.Type, argument.Range)) env
-                                result
-                            | other ->
-                                let result = freshTypeVar range
-                                addConstraint (Constraint.Equals (other, NativeType.TFun (argument.Type, result), range)) env
-                                result) signature
+                    let argumentNodes, resultType =
+                        (([], signature), arguments)
+                        ||> List.fold (fun (nodes, signature) expression ->
+                            let argument = checkExpr (recordArgumentEnvironment env signature expression) builder expression
+                            let result =
+                                match applySubst signature with
+                                | NativeType.TFun (domain, result) ->
+                                    addConstraint (Constraint.Equals (domain, argument.Type, argument.Range)) env
+                                    result
+                                | other ->
+                                    let result = freshTypeVar range
+                                    addConstraint (Constraint.Equals (other, NativeType.TFun (argument.Type, result), range)) env
+                                    result
+                            argument :: nodes, result)
+                    let argumentNodes = List.rev argumentNodes
                     let scope = inlineBody.DefinitionScope
                     // Body annotations belong to this same fresh instance. Retain
                     // free variables of captured storage, but never share the
@@ -183,7 +204,19 @@ let checkApp
 
     // Normal path: no inline expansion (either no InlineBody or multi-arg partial application)
     let funcNode = checkExpr env builder funcExpr
-    let argNode = checkExpr env builder argExpr
+    // Reuse one fresh scheme instance for contextual literal checking and the
+    // resulting application constraints. Existing monotypes already retain
+    // their current call-site substitution through aliases/partial calls.
+    let contextualInstance =
+        if isRecordOperand argExpr then
+            match applySubst funcNode.Type with
+            | NativeType.TForall(parameters, body) ->
+                let fresh = parameters |> List.map (fun parameter -> freshInstanceOf parameter range)
+                Some(NativeTypes.instantiate parameters fresh body)
+            | _ -> None
+        else None
+    let argumentSignature = contextualInstance |> Option.defaultValue funcNode.Type
+    let argNode = checkExpr (recordArgumentEnvironment env argumentSignature argExpr) builder argExpr
     let funcNode = retypeCharConversion builder funcNode argNode
 
     // Determine result type based on function type
@@ -210,8 +243,10 @@ let checkApp
             // This is the implicit counterpart to explicit TypeApp handling.
             // See memory: typeapp_preserves_kind_principle
             // Fresh variables of each parameter's kind (design b.4 step 4), from the one minting place.
-            let freshVars = typeParams |> List.map (fun tp -> freshInstanceOf tp range)
-            let instantiatedType = NativeTypes.instantiate typeParams freshVars bodyType
+            let instantiatedType =
+                contextualInstance |> Option.defaultWith (fun () ->
+                    let freshVars = typeParams |> List.map (fun tp -> freshInstanceOf tp range)
+                    NativeTypes.instantiate typeParams freshVars bodyType)
             // Now handle the instantiated type
             match instantiatedType with
             | NativeType.TFun(domainTy, rangeTy) ->

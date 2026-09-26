@@ -610,6 +610,119 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
         | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> inputFormal seen value
         | Some { Kind = SemanticKind.EnvironmentRead(environment, _) } -> inputFormal seen environment
         | _ -> None
+    let stringIngress = lazy (CallableIngress.analyzeWith graph callableOrigins.Value)
+    let stringCallInputs formal call actual =
+        match nodes.TryFind call with
+        | Some { Kind = SemanticKind.Application(callee, arguments); Children = children }
+            when children = callee :: arguments ->
+            invocationParticipants call callee arguments |> Option.bind (fun participants ->
+                callableOrigins.Value.Calls.TryFind call |> Option.bind (fun resolved ->
+                    let matches = resolved.Targets |> List.filter (fun target ->
+                        List.zip target.Parameters target.Arguments |> List.exists (fun ((_, _, parameter), argument) ->
+                            parameter = formal && argument = actual))
+                    if resolved.Unknown || matches.IsEmpty then None
+                    else Some(call :: formal :: actual :: participants)))
+        | _ -> None
+    // A capture read belongs to the exact environment formal of its containing
+    // implementation. A formation sharing that formal's schema is not the
+    // invocation's environment. Retain every alias and structural scope premise.
+    let stringCapture (read: SemanticNode) environment slot =
+        let rec formalPath seen id =
+            if Set.contains id seen then None else
+            let seen = Set.add id seen
+            let follow source = formalPath seen source |> Option.map (fun (formal, path) -> formal, id :: path)
+            match nodes.TryFind id with
+            | Some node when applySubst node.Type = ClosureEnvironments.environmentType ->
+                match node.Kind with
+                | SemanticKind.PatternBinding _ -> Some(id, [id])
+                | SemanticKind.VarRef(_, Some source) when node.Children.IsEmpty ->
+                    match graph.Edges |> List.filter (fun edge -> edge.Target = id && edge.Role = EdgeRole.Definition) with
+                    | [] -> follow source
+                    | [{ Class = EdgeClass.Reference; Sources = [actual]; Ordinal = 0 }] when actual = source -> follow source
+                    | _ -> None
+                | SemanticKind.TypeAnnotation(source, declared)
+                    when applySubst declared = ClosureEnvironments.environmentType && node.Children = [source] -> follow source
+                | SemanticKind.Binding(_, false, _, _) when node.Children.Length = 1 -> follow node.Children.Head
+                | SemanticKind.EagerExpr source when ExplicitDemand.operand graph id = Some source -> follow source
+                | _ -> None
+            | _ -> None
+        let rec scopePath owner seen id =
+            if id = owner then Some [id]
+            elif Set.contains id seen then None
+            else
+                match nodes.TryFind id, parents.TryFind id with
+                | Some { Kind = SemanticKind.Lambda _ }, _ -> None
+                | Some _, Some enclosing when not enclosing.IsEmpty ->
+                    enclosing |> List.fold (fun proof parent ->
+                        Option.map2 (@) proof (scopePath owner (Set.add id seen) parent)) (Some [id])
+                | _ -> None
+        if read.Children <> [environment] then None else
+        formalPath Set.empty environment |> Option.bind (fun (formal, path) ->
+            let rows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.EnvironmentFormal && edge.Target = formal)
+            match rows with
+            | [{ Class = EdgeClass.Provenance; Sources = [owner; implementation]; Ordinal = 0 }] ->
+                match nodes.TryFind owner, nodes.TryFind implementation, nodes.TryFind slot with
+                | Some { Kind = SemanticKind.ClosureValue(actualImplementation, constructor) },
+                  Some { Kind = SemanticKind.Lambda(parameters, _, [], _, _) }, Some declaration
+                    when actualImplementation = implementation && applySubst declaration.Type = applySubst read.Type &&
+                         (parameters |> List.filter (fun (_, _, id) -> id = formal)
+                          |> function [(_, ty, _)] -> applySubst ty = ClosureEnvironments.environmentType | _ -> false) ->
+                    match ClosureEnvironments.capturedInitializers graph owner, scopePath implementation Set.empty read.Id with
+                    | Some captures, Some scope ->
+                        match captures |> List.filter (fun (source, _, _) -> source = slot) with
+                        | [(_, value, false)] ->
+                            nodes.TryFind value |> Option.bind (fun initializer ->
+                                if applySubst initializer.Type <> applySubst read.Type then None else
+                                Some(owner :: implementation :: constructor :: slot :: (path @ scope), [value]))
+                        | _ -> None
+                    | _ -> None
+                | _ -> None
+            | _ -> None)
+    let staticStringsFor context = StaticStringLayout.retainedViews graph (fun node ->
+        match node.Kind with
+        | SemanticKind.EnvironmentRead(environment, slot) -> stringCapture node environment slot
+        | SemanticKind.PatternBinding _ ->
+            let exact = context |> Option.bind (fun ((result: PreparedResult), call) ->
+                match nodes[result.Implementation].Kind, nodes[call].Kind with
+                | SemanticKind.Lambda(parameters, _, _, _, _), SemanticKind.Application(_, arguments) ->
+                    parameters |> List.tryFindIndex (fun (_, _, formal) -> formal = node.Id)
+                    |> Option.bind (fun ordinal -> List.tryItem ordinal arguments)
+                    |> Option.bind (fun actual -> stringCallInputs node.Id call actual)
+                    |> Option.map (fun participants ->
+                        let ordinal = parameters |> List.findIndex (fun (_, _, formal) -> formal = node.Id)
+                        result.Implementation :: result.Formal :: result.Constructor ::
+                            (result.FinalPath @ participants), [arguments[ordinal]])
+                | _ -> None)
+            match exact with
+            | Some proof -> Some proof
+            | None ->
+                let owners = nodes.Values |> Seq.choose (fun candidate ->
+                    match candidate.Kind with
+                    | SemanticKind.Lambda(parameters, _, _, _, _) when parameters |> List.exists (fun (_, _, formal) -> formal = node.Id) -> Some candidate.Id
+                    | _ -> None) |> Seq.toList
+                match owners with
+                | [owner] ->
+                    CallableIngress.tryEvidence stringIngress.Value owner |> Option.bind (fun ingress ->
+                        formalInputs node.Id |> Option.bind (fun inputs ->
+                            let calls = inputs |> List.map (fun (call, actual) -> stringCallInputs node.Id call actual)
+                            if List.forall Option.isSome calls then
+                                Some(Set.toList ingress.Participants @ (List.choose id calls |> List.concat), inputs |> List.map snd)
+                            else None))
+                | _ -> None
+        | _ -> None)
+    let staticStrings = staticStringsFor None
+    let isString ty = Types.tryGetNTUKind (applySubst ty) = Some NTUKind.NTUstring
+    let retainedString read site owner slot value =
+        let backing =
+            match nodes.TryFind slot, nodes.TryFind value with
+            | Some declaration, Some initializer when isString declaration.Type &&
+                  applySubst declaration.Type = applySubst initializer.Type -> read value
+            | _ -> None
+        match backing with
+        | None -> Error (ResidualReason.UnknownInputRegion value)
+        | Some dependencies ->
+            Ok [{ Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResidence
+                  Sources = List.distinct (site :: slot :: value :: dependencies); Target = owner; Ordinal = 0 }]
     let retainedView site owner slot value =
         match sourceAllocations Set.empty value with
         | None -> Error (ResidualReason.UnknownInputRegion value)
@@ -636,8 +749,13 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
             match ClosureEnvironments.capturedInitializers graph owner with
             | None -> Error (ResidualReason.UnknownInputRegion result.Constructor)
             | Some initializers ->
+                let strings = staticStringsFor (Some(result, call))
                 initializers |> List.fold (fun proof (slot, value, mutableCell) ->
                     combine proof (fun () ->
+                        if isString nodes[value].Type || isString nodes[slot].Type then
+                            if mutableCell then Error (ResidualReason.UnknownInputRegion value)
+                            else retainedString strings site owner slot value
+                        else
                         match actualValue result call Set.empty value with
                         | None -> Error (ResidualReason.UnknownInputRegion value)
                         | Some actual when mutableCell ->
@@ -692,7 +810,10 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                     | Some initializers ->
                         initializers |> List.fold (fun proof (slot, value, mutableCell) ->
                             combine proof (fun () ->
-                                if mutableCell then
+                                if isString nodes[value].Type || isString nodes[slot].Type then
+                                    if mutableCell then Error (ResidualReason.UnknownInputRegion value)
+                                    else retainedString staticStrings id layout slot value
+                                elif mutableCell then
                                     activation slot |> Result.bind (fun cellOwner ->
                                         activationCovered cellOwner (Set.singleton id) owner)
                                 else
@@ -723,7 +844,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                 | SemanticKind.EnvironmentAllocate layout ->
                     let prepared, call, destination = resultAllocations[id]
                     let initializers = ClosureEnvironments.capturedInitializers graph layout |> Option.defaultValue []
-                    { Sources = List.distinct ((id :: owner :: prepared.Constructor :: call :: destination :: prepared.FinalPath) @
+                    { Sources = List.distinct ((id :: owner :: prepared.Implementation :: prepared.Formal :: prepared.Constructor :: call :: destination :: prepared.FinalPath) @
                                     (initializers |> List.collect (fun (slot, value, _) -> [slot; value])))
                       Target = layout; Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResidence; Ordinal = 0 } :: evidence
                 | SemanticKind.EnvironmentCreate(layout, initializers) ->

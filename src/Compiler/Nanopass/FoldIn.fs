@@ -26,6 +26,13 @@ let private updateRef (replacementMap: Map<NodeId, NodeId>) (nodeId: NodeId) : N
     | Some replacement -> replacement
     | None -> nodeId
 
+let private remapSchemeReferences replacements metadata =
+    metadata |> Map.map (fun key value ->
+        match value with
+        | MetadataValue.NodeId id when key = SchemeMetadata.Definition || key = SchemeMetadata.ImplementationDeclaration ->
+            MetadataValue.NodeId(updateRef replacements id)
+        | _ -> value)
+
 /// Redirect semantic references by identity, including resolved definitions and
 /// capture sources. Recipes may use the same operation with a scope-local map;
 /// it does not change types, capture modes, provenance ranges or graph topology.
@@ -190,6 +197,20 @@ let private updateChildRefs (replacementMap: Map<NodeId, NodeId>) (children: Nod
 /// This is Pass 2 (Intrinsic Fold-In) or Pass 4 (Saturation Fold-In).
 let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
     let replacementMap = recipeSet.ReplacementMap
+    // Historical derivations have two identity domains: their sources are
+    // immutable snapshot identities; their target names current execution.
+    // Retaining the former never adds declaration roots or live execution.
+    let historicalParticipants =
+        graph.Edges
+        |> List.filter (fun edge -> edge.Class = EdgeClass.Provenance && edge.Role = EdgeRole.SchemeSpecialization)
+        |> List.collect _.Sources |> Set.ofList
+    let preserveHistory id metadata =
+        match graph.Nodes.TryFind id with
+        | Some original when historicalParticipants.Contains id ->
+            match original.Metadata.TryFind SchemeMetadata.Specialization with
+            | Some (MetadataValue.Specialization _ as value) -> metadata |> Map.add SchemeMetadata.Specialization value
+            | _ -> metadata
+        | _ -> metadata
 
     // Collect all new nodes from recipes AND update their cross-recipe references.
     // This is critical for recipe collision: when Recipe A creates nodes referencing
@@ -202,7 +223,8 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
             // Update references in recipe-created nodes
             let updatedKind = remapKindReferences replacementMap n.Kind
             let updatedChildren = updateChildRefs replacementMap n.Children
-            let updatedNode = { n with Kind = updatedKind; Children = updatedChildren }
+            let updatedNode = { n with Kind = updatedKind; Children = updatedChildren
+                                       Metadata = remapSchemeReferences replacementMap n.Metadata |> Map.remove SchemeMetadata.HistoricalOnly |> preserveHistory n.Id }
             n.Id, updatedNode)
         |> Map.ofSeq
 
@@ -214,8 +236,11 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         graph.Nodes
         |> Map.fold (fun acc nodeId node ->
             if RecipeSet.hasRecipe nodeId recipeSet then
-                // This node is being replaced - don't include it
-                acc
+                // Historical participants survive replacement, with their
+                // original snapshot metadata and no executable reachability.
+                if historicalParticipants.Contains nodeId && not (Map.containsKey nodeId acc) then
+                    Map.add nodeId { node with IsReachable = false; Metadata = node.Metadata.Add(SchemeMetadata.HistoricalOnly, MetadataValue.Bool true) } acc
+                else acc
             elif Map.containsKey nodeId acc then
                 // A new node already exists at this ID (e.g., Binding replacing PatternBinding)
                 // Keep the new node - it has the proper value source
@@ -229,6 +254,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
                     { node with
                         Kind = updatedKind
                         Children = updatedChildren
+                        Metadata = remapSchemeReferences replacementMap node.Metadata
                         Parent = updatedParent }
                 Map.add nodeId updatedNode acc
         ) newNodesFromRecipes
@@ -247,13 +273,16 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
     // of the structural execution edges used for activation analysis.
     let lexicalParents =
         newNodes.Values |> Seq.collect (fun node ->
-            match node.Kind with
-            | SemanticKind.ModuleDef(_, members) -> members |> Seq.map (fun memberId -> memberId, node.Id)
+            match node.Metadata.TryFind SchemeMetadata.HistoricalOnly, node.Kind with
+            | Some(MetadataValue.Bool true), _ -> Seq.empty
+            | _, SemanticKind.ModuleDef(_, members) -> members |> Seq.map (fun memberId -> memberId, node.Id)
             | _ -> Seq.empty) |> Map.ofSeq
     let nodesWithParents =
         newNodes
         |> Map.fold (fun acc parentId parentNode ->
-            parentNode.Children
+            (match parentNode.Metadata.TryFind SchemeMetadata.HistoricalOnly with
+             | Some(MetadataValue.Bool true) -> []
+             | _ -> parentNode.Children)
             |> List.fold (fun acc' childId ->
                 match Map.tryFind childId acc' with
                 | Some (childNode: SemanticNode) ->
@@ -288,12 +317,15 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
         StaticStringPool = None
         Escaping = lazy Map.empty
         Codata = lazy Codata.empty
-        // F survives fold-in with its references repointed at replacements.
+        // Current incidence follows replacements. Historical sources do not:
+        // rewriting them would silently turn "original" into "replacement".
         Edges =
             (graph.Edges @ (recipeSet.Recipes.Values |> Seq.collect _.NewEdges |> Seq.toList))
             |> List.map (fun e ->
                 { e with
-                    Sources = e.Sources |> List.map (updateRef replacementMap)
+                    Sources =
+                        if e.Class = EdgeClass.Provenance && e.Role = EdgeRole.SchemeSpecialization then e.Sources
+                        else e.Sources |> List.map (updateRef replacementMap)
                     Target = updateRef replacementMap e.Target })
     }
 

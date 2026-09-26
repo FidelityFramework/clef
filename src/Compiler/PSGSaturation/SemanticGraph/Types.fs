@@ -262,6 +262,28 @@ type AdditiveLoopInvariantModel = {
     Upper: bigint
 }
 
+/// One checked square-and-optional-multiply step. Matrices and exponents are
+/// mathematical integers, independent of any selected runtime representation.
+type RecurrencePowerStep = {
+    Odd: bool
+    Exponent: bigint
+    Matrix: bigint list list
+}
+
+/// A finite nonnegative linear enclosure. Source incidence separately proves
+/// the actual ordered updates and coefficient bounds. The certificate proves
+/// every prefix fits the final monotone upper trajectory, including final stores.
+type FiniteLinearRecurrenceModel = {
+    MaximumIterations: bigint
+    InitialLower: bigint list
+    InitialUpper: bigint list
+    CoefficientLower: bigint list list
+    CoefficientUpper: bigint list list
+    Powers: RecurrencePowerStep list
+    Lower: bigint list
+    Upper: bigint list
+}
+
 [<RequireQualifiedAccess>]
 type ObligationBody =
     | FiniteLoopTrip of FiniteLoopTripModel
@@ -321,6 +343,11 @@ type ObligationBody =
     /// For any successful read of r bytes, 1 <= r <= capacity, the trimmed copy
     /// of r - 1 bytes is within bound.
     | InputCopyBound of capacity: int64 * bound: int64
+    | FiniteLinearRecurrence of FiniteLinearRecurrenceModel
+    /// Every prefix of finitely many signed additive effects. Source evidence
+    /// separately binds each (maximum executions, exact delta) contribution to
+    /// current typed stores and actual memoization-instance activation counts.
+    | FiniteAdditiveEffects of initial: bigint * contributions: (bigint * bigint) list * lower: bigint * upper: bigint
 
 /// The obligation record carried by an Obligation node.
 type ObligationInfo = {
@@ -556,6 +583,9 @@ type LoopRangeResidual =
     | Reentry
     | NonAdditive
     | MissingBound
+    /// The compiler's bounded certificate-construction work was exhausted.
+    /// This is not a source numeric width or a representation fallback.
+    | ProofResources
 
 [<RequireQualifiedAccess>]
 type EdgeClass =
@@ -830,6 +860,25 @@ type EdgeRole =
     /// occurrence rewritten to environment access. Generated initializer/cache
     /// accesses do not carry this source-navigation relation.
     | CaptureReferenceOrigin
+    /// Complete finite recurrence participants: owner, loop/guard/induction,
+    /// seeds, actual ordered stores/RHS values, and demand/ordering authorities.
+    /// The target is one actual cell or intermediate covered by the same proof.
+    | LoopLinearRecurrence
+    /// [original callable; physical implementation; environment extraction;
+    /// ordered original arguments] -> the exact rewritten source invocation.
+    | EnvironmentInvocation
+    /// Actual sequence template allocation, owner/generator/formal and one
+    /// program initializer with exact family/layout and writable-space inputs.
+    /// This grants template residence, never acquisition or current validity.
+    | SequenceProgramStorage
+    /// Historical specialization: frozen [source declaration; source node;
+    /// original clone declaration; original clone node; requesting occurrences]
+    /// -> current replacement. Only the target follows subsequent fold-in.
+    /// Snapshots describe an applied derivation, not current admission facts.
+    | SchemeSpecialization
+    /// Current finite lazy effect premises, including actual formation/call
+    /// multiplicity, memoization protocol, all writes and original cell type.
+    | LazyEffectRange
 
 /// One directed relation. Sources retain ordered participant occurrences;
 /// structural projections may be single-source while joint facts are n-ary.
@@ -1043,6 +1092,34 @@ let kindEdges (target: NodeId) (kind: SemanticKind) : Hyperedge list =
 // Typed Metadata
 //-------------------------------------------------------------------------
 
+/// Immutable rendering at a specialization boundary. NativeType contains
+/// checker cells, so a historical snapshot deliberately records text instead
+/// of presenting a later mutable substitution as the original checked type.
+type SpecializationNodeSnapshot = {
+    Kind: string
+    Type: string
+    Children: NodeId list
+    Parent: NodeId option
+}
+
+/// One applied source-to-clone derivation. CodeArguments retain symbolic
+/// measure binders when native code is shared; Requests record the actual
+/// occurrence types separately. This is history, never a typing authority.
+type SpecializationTrace = {
+    SourceDeclaration: NodeId
+    SourceNode: NodeId
+    CloneDeclaration: NodeId
+    CloneNode: NodeId
+    Scheme: string
+    Parameters: (int * string) list
+    CodeArguments: string list
+    Requests: (NodeId * string) list
+    /// Decision at this applied rewrite, not a claim about later reachability.
+    RetiresSource: bool
+    Input: SpecializationNodeSnapshot
+    Output: SpecializationNodeSnapshot
+}
+
 /// Typed metadata values for semantic nodes.
 [<RequireQualifiedAccess>]
 type MetadataValue =
@@ -1057,6 +1134,7 @@ type MetadataValue =
     | SourceRange of SourceRange
     | StringList of string list
     | NodeIdList of NodeId list
+    | Specialization of SpecializationTrace
 
 //-------------------------------------------------------------------------
 // Elaboration Metadata Keys
@@ -1121,6 +1199,34 @@ module ObligationMetadata =
 /// Metadata keys for the generalisation of let-bound schemes (design b.4 step 4).
 [<RequireQualifiedAccess>]
 module SchemeMetadata =
+    /// Frozen specialization history (MetadataValue.Specialization). Unlike
+    /// Definition/ImplementationDeclaration, its identities are not remapped.
+    [<Literal>]
+    let Specialization = "Scheme.Specialization"
+
+    /// This node is retained solely for historical correspondence after its
+    /// executable membership was replaced. Its Children no longer establish
+    /// current parent linkage. Unreachable library declarations lack this flag.
+    [<Literal>]
+    let HistoricalOnly = "Scheme.HistoricalOnly"
+
+    /// Original quantified declaration, retained when one measure-polymorphic
+    /// implementation is shared by differently instantiated source occurrences.
+    [<Literal>]
+    let Declaration = "Scheme.Declaration"
+
+    /// Actual source declaration referenced at this instantiation occurrence.
+    [<Literal>]
+    let Definition = "Scheme.Definition"
+
+    /// Declaration whose quantified body this physical implementation realizes.
+    [<Literal>]
+    let ImplementationDeclaration = "Scheme.ImplementationDeclaration"
+
+    /// Checker-minted arguments, in the declaration's quantified parameter order.
+    /// Each entry is MetadataValue.Type, so ordinary type substitution retains it.
+    let argument ordinal = "Scheme.Argument." + string ordinal
+
     /// On an Application node whose function is a use of a generalised binding: the instance
     /// of the scheme at this use (MetadataValue.Type), so hover shows the instance while the
     /// binding keeps its scheme.
@@ -1643,6 +1749,34 @@ type MmioAccessEvidence = {
     Binding: MmioBindingEvidence option
 }
 
+[<RequireQualifiedAccess>]
+type ProgramStorageIdentity = Allocation of NodeId | BindingSlot of NodeId
+
+[<RequireQualifiedAccess>]
+type ProgramStorageShape = Bytes | Scalar of SettledSlot | ValueView of NativeType
+
+/// One source-owned writable object. No linker section, address or pooled
+/// offset is implied: those belong to the selected backend's commitment.
+type ProgramStorageEntry = {
+    Identity: ProgramStorageIdentity
+    SourceType: NativeType
+    Shape: ProgramStorageShape
+    Bytes: int
+    Alignment: int
+    SpaceNode: NodeId
+    Space: BAREWire.Platform.MemorySpace
+    Participants: Set<NodeId>
+}
+
+type ProgramStorageInventory = {
+    Entries: Map<ProgramStorageIdentity, ProgramStorageEntry>
+    Reservations: Map<NodeId, BAREWire.Platform.WritableReservation>
+    Unresolved: Map<ProgramStorageIdentity, string>
+}
+
+module ProgramStorageInventory =
+    let empty = { Entries = Map.empty; Reservations = Map.empty; Unresolved = Map.empty }
+
 /// The codata the graph carries for emission, settled once at the end of saturation.
 type Codata = {
     Escapes: Map<NodeId, EscapeKind>
@@ -1686,6 +1820,7 @@ type Codata = {
     DeclarationRootLambdas: Map<NodeId, DeclRoot>
     FunctionPointers: Map<NodeId, FunctionPointerPlan>
     Mmio: Map<NodeId, MmioAccessEvidence>
+    ProgramStorage: ProgramStorageInventory
 }
 
 module Codata =
@@ -1721,6 +1856,7 @@ module Codata =
         DeclarationRootLambdas = Map.empty
         FunctionPointers = Map.empty
         Mmio = Map.empty
+        ProgramStorage = ProgramStorageInventory.empty
     }
 
 /// A source string's view into the BAREWire-owned static byte pool.

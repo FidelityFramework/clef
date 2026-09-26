@@ -377,6 +377,7 @@ let plans (graph: SemanticGraph) =
                     capture.SourceNodeId |> Option.exists (fun source ->
                         known.ContainsKey source || (lambda source |> Option.exists candidates.Contains))
                 | NativeType.TSeq _ when not capture.IsMutable -> true
+                | ty when not capture.IsMutable && Types.tryGetNTUKind ty = Some NTUKind.NTUstring -> true
                 | ty ->
                     match Types.tryGetNTUKind ty with
                     | Some (NTUKind.NTUint _ | NTUKind.NTUuint _ | NTUKind.NTUfloat _ | NTUKind.NTUposit _

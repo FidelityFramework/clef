@@ -615,6 +615,36 @@ let placeContinuationLocals (graph: SemanticGraph) (locals: NodeId list)
                             : Result<SettledLayout * ContinuationField list, ContinuationPlacementError> =
     placeContinuationFields graph [] [] (locals |> List.map (fun id -> ContinuationRole.Local, id)) Map.empty
 
+/// A program binding stores its ordinary physical value. Aggregate values are
+/// typed views of separately owned backing; their slot is the complete view,
+/// not a second copy of the aggregate's payload or an inline continuation slot.
+let placeProgramSlot (graph: SemanticGraph) id =
+    match graph.Nodes.TryFind id, graph.Platform with
+    | Some node, Some context when node.IsReachable ->
+        let ty = applySubst node.Type
+        let aggregate =
+            match ty with
+            | NativeType.TTuple _ | NativeType.TUnion _ | NativeType.TAnon _ -> true
+            | NativeType.TApp(tc, _) ->
+                tc.NTUKind = Some NTUKind.NTUarray || tc.NTUKind = Some NTUKind.NTUstring ||
+                tc.Name = "option" || tc.Name = "voption" || tc.Name = "Result" || tc.Name = "result" ||
+                (match TypeLayout.baseLayout tc.Layout with TypeLayout.Record | TypeLayout.Union -> true | _ -> false)
+            | _ -> false
+        if aggregate then
+            match PlatformContext.pointerSize context, PlatformContext.resolveAlign context NTUKind.NTUptr with
+            | Ok pointer, Ok alignment when pointer > 0 && alignment > 0 && (alignment &&& (alignment - 1)) = 0 &&
+                                            pointer <= System.Int32.MaxValue / ViewWords ->
+                Ok(ProgramStorageShape.ValueView ty, ViewWords * pointer, alignment)
+            | _ -> Error (ContinuationPlacementError.InvalidPlatform "A program view requires the declared Pointer extent and alignment")
+        else
+            placeContinuationFields graph [] [] [ContinuationRole.Local, id] Map.empty
+            |> Result.bind (fun (layout, fields) ->
+                match layout, fields with
+                | SettledLayout.Record(_, Some bytes, Some alignment), [{ Holds = CaptureSlotKind.Scalar slot }] ->
+                    Ok(ProgramStorageShape.Scalar slot, bytes, alignment)
+                | _ -> Error (ContinuationPlacementError.UnsupportedField(id, "The program slot requires an ordinary scalar or typed value view")))
+    | _ -> Error (ContinuationPlacementError.MissingSource id)
+
 /// Closure environments share exact slot selection/tiling with continuation
 /// frames but have no state/current prefix and no code-address field.
 let placeEnvironment (graph: SemanticGraph) (captures: CaptureInfo list) =

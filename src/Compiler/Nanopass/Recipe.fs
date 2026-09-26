@@ -5,7 +5,8 @@
 /// A Recipe represents the replacement structure for a single node.
 /// A RecipeSet is the collection of all recipes from a fan-out pass.
 /// 
-/// See: psg_elaboration_fold_architecture.md (Serena memory)
+/// See Composer/docs/PSG_Elaboration_Fold_Architecture.md and
+/// Composer/docs/Nanopass_Incremental_Contract_Direction.md.
 module Clef.Compiler.Nanopass.Recipe
 
 open Clef.Compiler.NativeTypedTree.NativeTypes

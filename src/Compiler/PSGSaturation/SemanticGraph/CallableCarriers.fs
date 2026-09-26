@@ -150,6 +150,7 @@ let settle (inputs: Inputs) (graph: SemanticGraph) : Map<NodeId, CallableCarrier
     let resolution = CallableOrigins.resolve graph
     let lambdas = resolution.Lambdas
     let ingress = CallableIngress.analyzeWith graph resolution
+    let instance = CallableInstantiations.readerWith graph resolution ingress
     let lazyThunks = LazyContracts.instances graph |> Map.toSeq |> Seq.map (fun (_, instance) -> instance.Thunk) |> Set.ofSeq
     let mutable residuals = []
     let refuse occurrence reason =
@@ -220,7 +221,9 @@ let settle (inputs: Inputs) (graph: SemanticGraph) : Map<NodeId, CallableCarrier
                         match implementationNode.Metadata.TryFind ClosureMetadata.SourceSignature with
                         | Some (MetadataValue.Type ty) -> ty
                         | _ -> logical
-                    applySubst logical = applySubst declared && applySubst (sourceType node) = applySubst declared
+                    applySubst logical = applySubst declared &&
+                    (applySubst (sourceType node) = applySubst declared ||
+                     instance implementation declared node.Id |> Option.isSome)
                 | _ -> false
             if not formalsAgree then refuse node.Id "Callable formals do not match their unique typed graph declarations."
             elif not resultAgrees then refuse node.Id "Callable physical signature does not agree with its declared parameters and actual body result."

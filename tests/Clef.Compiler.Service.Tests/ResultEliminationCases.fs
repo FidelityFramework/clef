@@ -211,8 +211,17 @@ let main _ = ignore first; ignore inverse; ignore observed; 0
         DimensionalCases.same (if operation = "iter" then Types.unitType else ResultElimination.metre) (DimensionalCases.bindingType "first" result)
         let inverse = DimensionalCases.measured (DimensionalCases.power DimensionalCases.metre -1I)
         DimensionalCases.same (if operation = "iter" then Types.unitType else inverse) (DimensionalCases.bindingType "inverse" result)
-        Assert.DoesNotContain(result.Graph.Nodes.Values, fun node ->
-            match node.Kind with SemanticKind.Binding ("choose", _, _, _) -> true | _ -> false)
+        let graph = result.Graph
+        let retired = graph.Nodes.Values |> Seq.filter (fun node ->
+            match node.Kind with SemanticKind.Binding ("choose", _, _, _) -> true | _ -> false) |> Assert.Single
+        Assert.False(retired.IsReachable)
+        Assert.DoesNotContain(graph.Nodes.Values, fun node ->
+            node.IsReachable &&
+            (match node.Kind with
+             | SemanticKind.ModuleDef(_, members) | SemanticKind.Sequential members -> List.contains retired.Id members
+             | _ -> false))
+        Assert.Contains(graph.Edges, fun edge ->
+            edge.Role = EdgeRole.SchemeSpecialization && edge.Sources.Head = retired.Id && graph.Nodes[edge.Target].IsReachable)
 
     [<Theory>]
     [<InlineData("defaultValue")>]

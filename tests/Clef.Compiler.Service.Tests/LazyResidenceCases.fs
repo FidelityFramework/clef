@@ -9,7 +9,7 @@ module LazySource = Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues
 module LazyFactory = Clef.Compiler.Nanopass.LazyFactoryResults
 module LazyRuntime = Clef.Compiler.Nanopass.LazyRuntime
 
-module private LazyResidenceFixture =
+module internal LazyResidenceFixture =
     let check source =
         match parseAndCheck source "lazy-residence.clef" with
         | Success result ->

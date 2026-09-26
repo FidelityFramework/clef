@@ -38,9 +38,17 @@ let private errorAt position (result: CheckResult) =
     | None -> failwithf "Expected an error at %A; diagnostics: %A" position result.Diagnostics
 
 let private bindingAt file line (result: CheckResult) =
+    let currentDeclarations =
+        result.Graph.Nodes.Values |> Seq.collect (fun node ->
+            match node.Kind with
+            | SemanticKind.ModuleDef(_, members) | SemanticKind.Sequential members -> members :> seq<_>
+            | _ -> Seq.empty) |> Set.ofSeq
     result.Graph.Nodes.Values
     |> Seq.filter (fun node ->
-        node.Range.File = file && node.Range.Start.Line = line
+        // Applied specialization retains the source declaration as historical
+        // evidence. These library checks have no executable entry point, so
+        // lexical declaration membership (not reachability) selects its clone.
+        currentDeclarations.Contains node.Id && node.Range.File = file && node.Range.Start.Line = line
         && match node.Kind with SemanticKind.Binding _ -> true | _ -> false)
     |> Seq.exactlyOne
 

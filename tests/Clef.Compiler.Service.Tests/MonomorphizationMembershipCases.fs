@@ -91,7 +91,9 @@ let main _ =
                 | SemanticKind.Binding (name, _, _, _) -> Some (name, node.Id)
                 | _ -> None)
             |> Map.ofSeq
-        Assert.False(namedBindings.ContainsKey "keep")
+        let original = result.Graph.Nodes[namedBindings["keep"]]
+        Assert.False(original.IsReachable)
+        Assert.DoesNotContain(MonomorphizationMembership.modules result, fun (_, members) -> List.contains original.Id members)
         let clones = namedBindings |> Map.toList |> List.filter (fun (name, _) -> name.StartsWith("keep__mono"))
         Assert.Equal(2, clones.Length)
         let before = namedBindings["before"]

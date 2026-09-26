@@ -7,11 +7,13 @@
 /// Takes a PSG and a recipe-creation function, identifies nodes needing
 /// elaboration, creates recipes sequentially, and collects them into a RecipeSet.
 ///
-/// ARCHITECTURAL NOTE: Recipes MUST be created sequentially because NodeId.fresh()
-/// is a global mutable counter. Async.Parallel causes non-deterministic NodeId
-/// allocation — a correctness violation for a deterministic compiler.
+/// ARCHITECTURAL NOTE: This implementation creates recipes sequentially around
+/// the global mutable NodeId.fresh() allocator. Parallel construction requires
+/// collision-free allocation, validated proposal independence and coherent
+/// fold-in; a scheduling primitive alone supplies none of those guarantees.
 ///
-/// See: psg_elaboration_fold_architecture.md (Serena memory)
+/// See Composer/docs/PSG_Elaboration_Fold_Architecture.md and
+/// Composer/docs/Nanopass_Incremental_Contract_Direction.md.
 module Clef.Compiler.Nanopass.FanOut
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
@@ -27,10 +29,10 @@ open Clef.Compiler.Nanopass.Recipe
 type RecipeCreator = SemanticNode -> SemanticGraph -> RecipeCreationResult
 
 //=============================================================================
-// PARALLEL FAN-OUT
+// RECIPE FAN-OUT
 //=============================================================================
 
-/// Fan-out pass: identify nodes needing elaboration and create recipes in parallel.
+/// Fan-out pass: identify nodes needing elaboration and create recipe proposals.
 ///
 /// Parameters:
 /// - kind: "Intrinsic" or "Saturation" - labels the resulting RecipeSet
@@ -92,4 +94,3 @@ let fanOut
             ReplacementMap = replacementMap
             Diagnostics = diagnostics
         }
-

@@ -13,7 +13,7 @@
 /// type-argument tuple found at its use sites, substitutes the type arguments into every
 /// node type (and into the types embedded in patterns and lambda parameters), renames the
 /// clone (`name__monoN`), repoints the use sites at their clone, replaces the generic
-/// original in its ModuleDef, and drops it from the graph.
+/// original in its ModuleDef, and retires its execution while retaining derivation evidence.
 ///
 /// The pass runs on the resolved node map (after substitutions are applied, before
 /// reachability and Baker), so cloned bodies are ordinary monomorphic code for every
@@ -233,6 +233,10 @@ let internal cloneSubtreeWithOrigins
     let ids = collectSubtree nodes rootId
     let mapping = ids |> List.map (fun id -> (id, NodeId.fresh())) |> Map.ofList
     let remap (id: NodeId) = match Map.tryFind id mapping with Some n -> n | None -> id
+    let declaration id =
+        match nodes[rootId].Parent, newParent with
+        | Some original, Some replacement when id = original -> replacement
+        | _ -> remap id
     let cloned =
         ids |> List.map (fun id ->
             let node = nodes.[id]
@@ -243,6 +247,12 @@ let internal cloneSubtreeWithOrigins
                 Id = remap id
                 Kind = mapKind remap f node.Kind
                 Type = f node.Type
+                Metadata = node.Metadata |> Map.map (fun key value ->
+                    match value with
+                    | MetadataValue.Type ty -> MetadataValue.Type(f ty)
+                    | MetadataValue.NodeId id when key = SchemeMetadata.Definition || key = SchemeMetadata.ImplementationDeclaration ->
+                        MetadataValue.NodeId(declaration id)
+                    | _ -> value)
                 Children = node.Children |> List.map remap
                 Parent = parent })
     (remap rootId, cloned, mapping)
@@ -280,6 +290,7 @@ let private bareLibraryOperation (nodes: Map<NodeId, SemanticNode>) id =
 let private isBareLibraryOperation nodes id = bareLibraryOperation nodes id |> Option.isSome
 
 let private isGenericFunctionBinding (nodes: Map<NodeId, SemanticNode>) (node: SemanticNode) : (TypeParam list * NativeType * NodeId) option =
+    if not node.IsReachable then None else
     match node.Kind, node.Type with
     | SemanticKind.Binding (_, isMutable, false, None), NativeType.TForall (typars, body) ->
         match node.Children with
@@ -317,9 +328,199 @@ let private replaceBindingMembership (bindingId: NodeId) (replacements: NodeId l
                         Children = replace node.Children }
         | _ -> node)
 
-/// Run monomorphization over the resolved node map. Returns the updated node map.
-let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
+/// Capture once, before any later rewrite or checker substitution can change
+/// the printed input/output. These records are not consumed by admission.
+let private snapshot (node: SemanticNode) : SpecializationNodeSnapshot =
+    { Kind = sprintf "%A" node.Kind; Type = formatType node.Type
+      Children = node.Children; Parent = node.Parent }
+
+let private recordDerivation sourceDeclaration cloneDeclaration parameters arguments requests
+                             (before: Map<NodeId, SemanticNode>) (mapping: Map<NodeId, NodeId>)
+                             (after: Map<NodeId, SemanticNode>) =
+    let scheme = formatType (NativeType.TForall(parameters, before[sourceDeclaration].Type |> function NativeType.TForall(_, body) -> body | ty -> ty))
+    mapping |> Map.fold (fun ((nodes: Map<NodeId, SemanticNode>), edges) source clone ->
+        let trace = {
+            SourceDeclaration = sourceDeclaration; SourceNode = source
+            CloneDeclaration = cloneDeclaration; CloneNode = clone
+            Scheme = scheme; Parameters = parameters |> List.map (fun parameter -> parameter.Id, string parameter.Kind)
+            CodeArguments = arguments |> List.map formatType
+            Requests = requests; RetiresSource = true
+            Input = snapshot before[source]; Output = snapshot after[clone] }
+        let node = nodes[clone]
+        let node = { node with Metadata = node.Metadata.Add(SchemeMetadata.Specialization, MetadataValue.Specialization trace) }
+        let edge = {
+            Class = EdgeClass.Provenance; Role = EdgeRole.SchemeSpecialization; Ordinal = 0
+            Sources = [sourceDeclaration; source; cloneDeclaration; clone] @ (requests |> List.map fst)
+            Target = clone }
+        nodes.Add(clone, node), edge :: edges) (after, [])
+
+/// Recursive declarations are specialized together: reserve each requested
+/// declaration before visiting its body, then redirect self/peer references
+/// through that reservation. No partially rewritten component is installed.
+let rec private specializeRecursiveComponents (nodes: Map<NodeId, SemanticNode>) =
+    let declarations =
+        nodes |> Map.toList |> List.choose (fun (id, node) ->
+            match node.Kind, node.Children with
+            | SemanticKind.Binding(_, false, true, None), [body] when node.IsReachable ->
+                match nodes.TryFind body with
+                | Some { Kind = SemanticKind.Lambda _ } -> Some(id, (node, body))
+                | _ -> None
+            | _ -> None) |> Map.ofList
+    let members = declarations.Keys |> Set.ofSeq
+    let bodies = declarations |> Map.map (fun _ (_, body) -> collectSubtree nodes body |> Set.ofList)
+    let dependencies = bodies |> Map.map (fun _ body ->
+        body |> Seq.choose (fun id ->
+            match nodes[id].Kind with
+            | SemanticKind.VarRef(_, Some target) when members.Contains target -> Some target
+            | _ -> None) |> Set.ofSeq)
+    let reachable root =
+        let rec walk seen id =
+            if Set.contains id seen then seen else
+            dependencies[id] |> Set.fold walk (Set.add id seen)
+        walk Set.empty root
+    let closure = members |> Seq.map (fun id -> id, reachable id) |> Map.ofSeq
+    let mutable remaining = members
     let mutable current = nodes
+    let mutable evidence = []
+    while not remaining.IsEmpty do
+        let first = Set.minElement remaining
+        let group = closure[first] |> Set.filter (fun id -> closure[id].Contains first)
+        remaining <- Set.difference remaining group
+        let schemes = group |> Seq.map (fun id ->
+            let node, _ = declarations[id]
+            let parameters, body =
+                match node.Type with NativeType.TForall(parameters, body) -> parameters, body | ty -> [], ty
+            let parameters = parameters |> List.map (find >> fst) |> List.distinctBy _.Id
+            id, (parameters, canonicalizeVars body)) |> Map.ofSeq
+        let present = group |> Seq.forall (fun id -> current.ContainsKey id && current.ContainsKey (snd declarations[id]))
+        let hasKeyMaterial = schemes.Values |> Seq.exists (fun (parameters, _) -> parameters |> List.exists (fun parameter -> parameter.Kind <> TypeParamKind.Measure))
+        if present && hasKeyMaterial then
+            let inside = group |> Seq.map (fun id -> bodies[id]) |> Set.unionMany
+            let uses = current.Values |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.VarRef(_, Some target) when node.IsReachable && group.Contains target && not (inside.Contains node.Id) -> Some(node, target)
+                | _ -> None) |> Seq.toList
+            if not uses.IsEmpty then
+                let reserved = System.Collections.Generic.Dictionary<NodeId * string, NodeId * string>()
+                let requests = System.Collections.Generic.Dictionary<NodeId, ResizeArray<NodeId * string>>()
+                let pending = System.Collections.Generic.Queue<NodeId * Map<int, NativeType> * NodeId * string>()
+                let mutable valid = true
+                let request occurrence declaration actual =
+                    let parameters, body = schemes[declaration]
+                    match matchTypeArgs parameters body (canonicalizeVars actual) with
+                    | Some substitution when parameters |> List.forall (fun parameter ->
+                        parameter.Kind = TypeParamKind.Measure ||
+                        (substitution.TryFind parameter.Id |> Option.exists (hasUnboundVars >> not))) ->
+                        let key = declaration, instanceKey parameters substitution
+                        let id =
+                            match reserved.TryGetValue key with
+                            | true, (id, _) -> id
+                            | _ ->
+                                let original, _ = declarations[declaration]
+                                let name = match original.Kind with SemanticKind.Binding(name, _, _, _) -> name | _ -> invalidOp "Recursive declaration required"
+                                let id = NodeId.fresh()
+                                let symbol = sprintf "%s__rec_mono%d" name (reserved.Count + 1)
+                                reserved.Add(key, (id, symbol))
+                                requests.Add(id, ResizeArray())
+                                pending.Enqueue(declaration, substitution, id, symbol)
+                                id
+                        requests[id].Add(occurrence, formatType actual)
+                        id
+                    | _ -> valid <- false; declaration
+                let redirects = uses |> List.map (fun (node, target) -> node.Id, request node.Id target node.Type) |> Map.ofList
+                let mutable created = Map.empty
+                let mutable replacements = Map.empty<NodeId, NodeId list>
+                let mutable derivations = []
+                while valid && pending.Count > 0 do
+                    let originalId, substitution, bindingId, symbol = pending.Dequeue()
+                    let original, lambda = declarations[originalId]
+                    let parameters, body = schemes[originalId]
+                    let arguments = parameters |> List.map (fun parameter ->
+                        match substitution.TryFind parameter.Id with
+                        | Some value -> value
+                        | None -> NativeType.TMeasure(Dimension.ofVar (measureVarOf parameter)))
+                    let substitute ty = instantiate parameters arguments (canonicalizeVars ty)
+                    let root, cloned, mapping = cloneSubtreeWithOrigins current lambda substitute (Some bindingId)
+                    let peers = cloned |> List.choose (fun node ->
+                        match node.Kind with
+                        | SemanticKind.VarRef(_, Some target) when group.Contains target -> Some(target, request node.Id target node.Type)
+                        | _ -> None)
+                    let peerGroups = peers |> List.groupBy fst
+                    if peerGroups |> List.exists (fun (_, targets) -> targets |> List.map snd |> List.distinct |> List.length <> 1) then valid <- false
+                    let peerMap = peers |> Map.ofList
+                    let remap id = peerMap.TryFind id |> Option.defaultValue id
+                    let metadata values = values |> Map.map (fun key value ->
+                        match value with
+                        | MetadataValue.NodeId id when key = SchemeMetadata.Definition || key = SchemeMetadata.ImplementationDeclaration -> MetadataValue.NodeId(remap id)
+                        | _ -> value)
+                    for node in cloned do
+                        created <- created.Add(node.Id, { node with Kind = mapKind remap id node.Kind; Metadata = metadata node.Metadata })
+                    let binding =
+                        { original with Id = bindingId; Kind = SemanticKind.Binding(symbol, false, true, None)
+                                        Type = substitute body; Children = [root] }
+                    created <- created.Add(bindingId, binding)
+                    derivations <- (originalId, bindingId, parameters, arguments, mapping.Add(originalId, bindingId)) :: derivations
+                    replacements <- replacements.Add(originalId, (replacements.TryFind originalId |> Option.defaultValue []) @ [bindingId])
+                if valid then
+                    for original, clone, parameters, arguments, mapping in derivations do
+                        let updated, edges = recordDerivation original clone parameters arguments (requests[clone] |> Seq.distinct |> Seq.toList) current mapping created
+                        created <- updated
+                        evidence <- edges @ evidence
+                    let retired = Set.union group inside
+                    // Flattened source applications outside the executable
+                    // subtree can still cite these original identities. Keep
+                    // the source graph closed while retiring its execution.
+                    current <- current |> Map.map (fun id node ->
+                        if retired.Contains id then
+                            { node with IsReachable = false; Metadata = node.Metadata.Add(SchemeMetadata.HistoricalOnly, MetadataValue.Bool true) }
+                        else node)
+                    for KeyValue(id, node) in created do current <- current.Add(id, node)
+                    for node, original in uses do
+                        let target = redirects[node.Id]
+                        let metadata =
+                            match node.Metadata.TryFind SchemeMetadata.Definition with
+                            | Some(MetadataValue.NodeId id) when id = original -> node.Metadata.Add(SchemeMetadata.Definition, MetadataValue.NodeId target)
+                            | _ -> node.Metadata
+                        let name = match node.Kind with SemanticKind.VarRef(name, _) -> name | _ -> invalidOp "Recursive use required"
+                        current <- current.Add(node.Id, { node with Kind = SemanticKind.VarRef(name, Some target); Metadata = metadata })
+                    for original in group do
+                        current <- replaceBindingMembership original (replacements.TryFind original |> Option.defaultValue []) true current
+    if obj.ReferenceEquals(nodes, current) then current, evidence
+    else
+        let result, subsequent = specializeRecursiveComponents current
+        result, evidence @ subsequent
+
+type Result = { Nodes: Map<NodeId, SemanticNode>; Derivations: Hyperedge list }
+
+/// Run specialization and retain its applied derivations for initial F.
+let runWithEvidence (nodes: Map<NodeId, SemanticNode>) : Result =
+    // Preserve the checked binders and their actual implementation ownership.
+    // Measures do not split native bodies, but their occurrence substitutions
+    // remain source facts; erasing TForall must not erase that authority.
+    let mutable current = nodes
+    for KeyValue(id, node) in nodes do
+        match node.Kind, node.Type with
+        | SemanticKind.Binding(_, false, _, _), (NativeType.TForall(parameters, body) as scheme) ->
+            match applySubst body with
+            | NativeType.TFun _ ->
+                let metadata = node.Metadata.Add(SchemeMetadata.Declaration, MetadataValue.Type scheme)
+                let ty = if parameters |> List.forall (fun parameter -> parameter.Kind = TypeParamKind.Measure) then body else node.Type
+                current <- current.Add(id, { node with Type = ty; Metadata = metadata })
+                match node.Children with
+                | [value] ->
+                    match current.TryFind value with
+                    | Some ({ Kind = SemanticKind.Lambda _ } as implementation) ->
+                        let metadata = implementation.Metadata
+                                           .Add(SchemeMetadata.Declaration, MetadataValue.Type scheme)
+                                           .Add(SchemeMetadata.ImplementationDeclaration, MetadataValue.NodeId id)
+                        current <- current.Add(value, { implementation with Metadata = metadata })
+                    | _ -> ()
+                | _ -> ()
+            | _ -> ()
+        | _ -> ()
+    let recursiveNodes, recursiveEvidence = specializeRecursiveComponents current
+    current <- recursiveNodes
+    let mutable evidence = recursiveEvidence
     let mutable progress = true
     let mutable rounds = 0
     // Clones can reference other generic functions at new instantiations, so iterate to a fixpoint.
@@ -336,7 +537,6 @@ let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
             |> List.sortByDescending (fun (_, _, _, _, value) ->
                 bareLibraryOperation current value |> Option.map snd |> Option.defaultValue 0)
         for (bindingId, bindingNode, rawTypars, rawSchemeBody, lambdaId) in generics do
-            let localLibraryAlias = isBareLibraryOperation current lambdaId
             // Re-root the scheme: unions since generalization may have moved a parameter's root.
             let typars = rawTypars |> List.map (fun tp -> fst (find tp)) |> List.distinctBy (fun tp -> tp.Id)
             let schemeBody = canonicalizeVars rawSchemeBody
@@ -354,15 +554,18 @@ let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
                     |> Map.toList
                     |> List.choose (fun (id, node) ->
                         match node.Kind with
-                        | SemanticKind.VarRef (_, Some def) when def = bindingId -> Some (id, node)
+                        | SemanticKind.VarRef (_, Some def) when node.IsReachable && def = bindingId -> Some (id, node)
                         | _ -> None)
                 if List.isEmpty useSites then
-                    // No instantiation anywhere: nothing to compile. Remove the generic original so no
-                    // body with unbound type variables reaches emission.
+                    // No live instantiation: retire execution without erasing
+                    // earlier derivation participants or source navigation.
                     progress <- true
-                    current <- replaceBindingMembership bindingId [] localLibraryAlias current
+                    current <- replaceBindingMembership bindingId [] true current
+                    let retained = evidence |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList
                     for id in collectSubtree current bindingId do
-                        current <- Map.remove id current
+                        if retained.Contains id then
+                            current <- current.Add(id, { current[id] with IsReachable = false; Metadata = current[id].Metadata.Add(SchemeMetadata.HistoricalOnly, MetadataValue.Bool true) })
+                        else current <- current.Remove id
                 else
                     // Recover the type arguments at every use site. A use site whose type cannot be
                     // matched against the scheme leaves this binding as it is (shared-variable
@@ -397,7 +600,8 @@ let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
                         let substitute (ty: NativeType) = Clef.Compiler.NativeTypedTree.NativeTypes.instantiate typars args (canonicalizeVars ty)
                         let cloneName = sprintf "%s__mono%d" bindingName (gi + 1)
                         let newBindingId = NodeId.fresh()
-                        let (newLambdaId, clonedNodes) = cloneSubtree current lambdaId substitute (Some newBindingId)
+                        let before = current
+                        let (newLambdaId, clonedNodes, mapping) = cloneSubtreeWithOrigins current lambdaId substitute (Some newBindingId)
                         let newBinding =
                             { bindingNode with
                                 Id = newBindingId
@@ -406,6 +610,10 @@ let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
                                 Children = [newLambdaId] }
                         for n in clonedNodes do current <- Map.add n.Id n current
                         current <- Map.add newBindingId newBinding current
+                        let requests = members |> List.map (fun (_, _, useId) -> useId, formatType before[useId].Type)
+                        let updated, edges = recordDerivation bindingId newBindingId typars args requests before (mapping.Add(bindingId, newBindingId)) current
+                        current <- updated
+                        evidence <- edges @ evidence
                         cloneIds <- cloneIds @ [newBindingId]
                         for (_, _, useId) in members do redirect <- Map.add useId newBindingId redirect)
                     // Repoint use sites at their clone
@@ -415,9 +623,12 @@ let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
                             let name = match useNode.Kind with SemanticKind.VarRef (n, _) -> n | _ -> bindingName
                             current <- Map.add useId { useNode with Kind = SemanticKind.VarRef (name, Some target) } current
                         | None -> ()
-                    // Replace the generic original in its ModuleDef by the clones, and drop it
-                    current <- replaceBindingMembership bindingId cloneIds localLibraryAlias current
-                    // Drop the generic original and its subtree
+                    // Replace execution membership; keep source participants.
+                    current <- replaceBindingMembership bindingId cloneIds true current
+                    // Retired source is evidence, never an executable root.
                     for id in collectSubtree current bindingId do
-                        current <- Map.remove id current
-    current
+                        current <- current.Add(id, { current[id] with IsReachable = false; Metadata = current[id].Metadata.Add(SchemeMetadata.HistoricalOnly, MetadataValue.Bool true) })
+    { Nodes = current; Derivations = evidence }
+
+/// Compatibility for callers that only need the executable node rewrite.
+let run nodes = (runWithEvidence nodes).Nodes

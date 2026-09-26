@@ -132,6 +132,8 @@ type private Program = {
     Effects: Map<NodeId, WriteEffect>
     LoopRecognition: LoopRecipes.Recognition
     LoopAccumulations: Map<NodeId, LoopRecipes.Accumulation>
+    LoopLinear: Map<NodeId, LoopRecipes.LinearRecurrence * int>
+    LazyEffects: Map<NodeId, LazyEffectRanges.Bound>
     /// Complete owner-local payload incidence for a certified current read.
     /// Missing/unknown origin alternatives deliberately have no entry.
     SequenceElements: Map<NodeId, NodeId * NodeId list>
@@ -1122,8 +1124,10 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Parents = parents
         Callees = Map.empty
         Effects = Map.empty
-        LoopRecognition = { Accumulations = []; Edges = [] }
+        LoopRecognition = { Accumulations = []; Linear = []; Edges = [] }
         LoopAccumulations = Map.empty
+        LoopLinear = Map.empty
+        LazyEffects = Map.empty
         SequenceElements = sequenceElements graph
         SequencePullBodies = sequencePulls
         SequenceInitializations = sequenceInitializations
@@ -1514,7 +1518,11 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             DeclaredParameters = declaredParameters
             ElementStores = elementStores
             ElementSeeds = elementSeeds }
-    let program = { program with Effects = effectsOf program }
+    let lazyEffects = LazyEffectRanges.recognize graph
+    let lazyTargets = lazyEffects |> List.collect (fun bound ->
+        (bound.Cell, bound) :: (bound.Contributions |> List.map (fun contribution -> contribution.Value, bound))) |> Map.ofList
+    let program =
+        { program with Effects = effectsOf program; LazyEffects = lazyTargets }
     let inputs: LoopRecipes.Inputs = {
         Operators = program.Callees |> Map.toList |> List.choose (fun (id, (callee, arguments)) ->
             match callee with
@@ -1526,7 +1534,8 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     let program = { program with
                         Graph = graph
                         LoopRecognition = loops
-                        LoopAccumulations = loops.Accumulations |> List.collect (fun item -> [item.Cell, item; item.Update, item]) |> Map.ofList }
+                        LoopAccumulations = loops.Accumulations |> List.collect (fun item -> [item.Cell, item; item.Update, item]) |> Map.ofList
+                        LoopLinear = loops.Linear |> List.collect (fun item -> item.Targets |> List.map (fun (id, index) -> id, (item, index))) |> Map.ofList }
     { program with Refinements = refinementsOf program }
 
 //-------------------------------------------------------------------------
@@ -1844,7 +1853,18 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
             | Result.Ok result -> Some(ValueRange.meet range (ValueRange.Bounded(result.Invariant.Lower, result.Invariant.Upper)))
             | Result.Error _ -> Some range
         | _ -> computed
+    let computed =
+        match computed, program.LoopLinear.TryFind node.Id with
+        | Some range, Some(recurrence, index) ->
+            match LoopRecipes.saturateLinear (current state) recurrence with
+            | Result.Ok result ->
+                Some(ValueRange.meet range (ValueRange.Bounded(result.Invariant.Lower[index], result.Invariant.Upper[index])))
+            | Result.Error _ -> Some range
+        | _ -> computed
     match computed with
+    | Some range when program.LazyEffects.ContainsKey node.Id ->
+        let bound = program.LazyEffects[node.Id]
+        Some(ValueRange.meet range (ValueRange.Bounded(bound.Lower, bound.Upper)))
     | Some r when isIntegerNode node && isSource program node -> Some (boundByCarrier program node r)
     | other -> other
 
@@ -2504,8 +2524,19 @@ let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph
         |> Set.toList
         |> List.choose (fun key -> typeOfKey key |> Option.map (fun elem -> key, elementRange program state elem))
         |> Map.ofList
-    let diagnostics = unobservableDiagnostics program state @ coverageDiagnostics program state @ boundaryDiagnostics program state @ declaredDiagnostics program state @ spelledDiagnostics program state
+    let resourceDiagnostics = program.LoopRecognition.Linear |> List.choose (fun recurrence ->
+        match LoopRecipes.saturateLinear (current state) recurrence with
+        | Result.Error LoopRangeResidual.ProofResources ->
+            let node = graph.Nodes[recurrence.Cells.Head]
+            Some { Severity = if context.IsSome then NativeDiagnosticSeverity.Error else NativeDiagnosticSeverity.Info
+                   Code = DiagnosticCodes.CCS8011_UnobservableRange
+                   Message = sprintf "The finite recurrence proof exceeded its %s-bit aggregate certificate-work budget; numeric range remains pending. This compiler analysis limit supplies no runtime representation or width." (string LoopRecipes.defaultCertificateBits)
+                   Range = node.Range; RelatedNodes = LoopRecipes.linearSources recurrence
+                   Reachability = ReachabilityContext.Reachable }
+        | _ -> None)
+    let diagnostics = unobservableDiagnostics program state @ coverageDiagnostics program state @ boundaryDiagnostics program state @ declaredDiagnostics program state @ spelledDiagnostics program state @ resourceDiagnostics
     let graph = { graph with Nodes = nodes; FieldRanges = lazy fieldRanges; ElementRanges = lazy elementRanges; Escaping = lazy program.EscapingLambdas }
+    let graph = LazyEffectRanges.settle (program.LazyEffects.Values |> Seq.distinctBy _.Cell |> Seq.toList) graph
     (LoopRanges.saturate (current state) program.LoopRecognition graph, diagnostics)
 
 //-------------------------------------------------------------------------

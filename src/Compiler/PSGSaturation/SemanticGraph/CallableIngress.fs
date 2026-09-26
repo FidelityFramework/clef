@@ -20,7 +20,13 @@ type Evidence = {
     Uses: Map<NodeId, Hyperedge list>
     Calls: Call list
 }
-type Reading = private { Evidence: Map<NodeId, Evidence> }
+type Access = { Source: NodeId; Participants: Set<NodeId> }
+type Reading = private {
+    Evidence: Map<NodeId, Evidence>
+    RetainedEvidence: Map<NodeId, Evidence>
+    Access: NodeId -> Access option
+    Correspondence: NodeId -> NodeId -> Set<NodeId> option
+}
 type private Closed = { Dependencies: Set<NodeId>; Callers: Set<NodeId>; Participants: Set<NodeId>; Calls: Call list; Valid: bool }
 
 let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) =
@@ -247,19 +253,22 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                     Calls = List.distinct (left.Calls @ right.Calls) }
     let continuationRows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ContinuationSlotAccess) |> List.groupBy _.Target |> Map.ofList
     let originalRows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ContinuationValue) |> List.groupBy _.Target |> Map.ofList
+    let checkedInstance = SchemeInstances.reader graph
     let rec originalIdentity seen id =
         if Set.contains id seen then None else
         match graph.Nodes.TryFind id with
         | None | Some { Kind = SemanticKind.Binding(_, true, _, _) } -> None
         | Some node ->
             let next =
-                match node.Kind, node.Children with
-                | SemanticKind.Binding(_, false, _, _), [value]
-                | SemanticKind.VarRef(_, Some value), _ | SemanticKind.TypeAnnotation(value, _), _ -> Some value
+                match checkedInstance id, node.Kind, node.Children with
+                | Some instance, _, _ -> Some instance.Declaration
+                | _, SemanticKind.Binding(_, false, _, _), [value]
+                | _, SemanticKind.VarRef(_, Some value), _ | _, SemanticKind.TypeAnnotation(value, _), _ -> Some value
                 | _ -> None
             match next with
             | None -> Some(id, Set.singleton id)
-            | Some value when graph.Nodes.TryFind value |> Option.exists (fun child -> applySubst child.Type = applySubst node.Type) ->
+            | Some value when (checkedInstance id |> Option.exists (fun instance -> instance.Declaration = value)) ||
+                              (graph.Nodes.TryFind value |> Option.exists (fun child -> applySubst child.Type = applySubst node.Type)) ->
                 originalIdentity (Set.add id seen) value |> Option.map (fun (source, participants) -> source, Set.add id participants)
             | _ -> None
     // A retained source name is insufficient after continuation realization:
@@ -386,17 +395,17 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
         | Some source, Some value when applySubst source.Type = applySubst value.Type ->
             if expected = actual then Some(Set.singleton actual) else
             match source.Kind, source.Children, value.Kind, value.Children with
+            | _, _, SemanticKind.FrameRead _, _ ->
+                continuationSource pending actual |> Option.bind (fun (original, participants) ->
+                    match originalIdentity Set.empty expected, originalIdentity Set.empty original with
+                    | Some(left, before), Some(right, after) when left = right -> Some(Set.unionMany [participants; before; after])
+                    | _ -> None) |> add
             | SemanticKind.Binding(_, false, _, _), [child], _, _
             | SemanticKind.VarRef(_, Some child), _, _, _
             | SemanticKind.TypeAnnotation(child, _), _, _, _ -> corresponds pending seen child actual |> add
             | _, _, SemanticKind.Binding(_, false, _, _), [child]
             | _, _, SemanticKind.VarRef(_, Some child), _
             | _, _, SemanticKind.TypeAnnotation(child, _), _ -> corresponds pending seen expected child |> add
-            | _, _, SemanticKind.FrameRead _, _ ->
-                continuationSource pending actual |> Option.bind (fun (original, participants) ->
-                    match originalIdentity Set.empty expected, originalIdentity Set.empty original with
-                    | Some(left, before), Some(right, after) when left = right -> Some(Set.unionMany [participants; before; after])
-                    | _ -> None) |> add
             | _ ->
                 // A cloned callable-producing expression may have rewritten
                 // structural operands, but its operation and every operand
@@ -470,8 +479,30 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                 if leaves.IsEmpty then None else
                 Some(id, { proof with Uses = proof.Participants |> Set.toList |> List.map (fun participant -> participant, observedUses participant) |> Map.ofList }))
         | _ -> None) |> Map.ofList
-    { Evidence = evidence }
+    let accesses = Dictionary<NodeId, Access option>()
+    let access id =
+        match accesses.TryGetValue id with
+        | true, value -> value
+        | _ ->
+            let value = continuationSource Set.empty id |> Option.map (fun (source, participants) ->
+                { Source = source; Participants = Set.add id participants })
+            accesses.Add(id, value)
+            value
+    let retained = evidence |> Map.toList |> List.choose (fun (id, _) ->
+        match nodes[id].Kind with
+        | SemanticKind.FrameRead _ ->
+            access id |> Option.bind (fun current ->
+                occurrence true Set.empty current.Source |> Option.map (fun (proof, _) ->
+                    current.Source, { proof with Participants = Set.union proof.Participants current.Participants }))
+        | _ -> None) |> Map.ofList
+    { Evidence = evidence; RetainedEvidence = retained; Access = access
+      Correspondence = fun source current -> corresponds Set.empty Set.empty source current }
 
 let analyze graph = analyzeWith graph (CallableOrigins.resolve graph)
 let tryEvidence reading occurrence = reading.Evidence.TryFind occurrence
+/// Retained logical values are readable only through a validated current access;
+/// they remain absent from executable occurrence admission.
+let tryRetainedEvidence reading occurrence = reading.RetainedEvidence.TryFind occurrence
+let tryAccess reading occurrence = reading.Access occurrence
+let tryCorrespondence reading source current = reading.Correspondence source current
 let allowsOccurrence reading occurrence = reading.Evidence.ContainsKey occurrence

@@ -31,7 +31,7 @@ module NR = Clef.Compiler.NativeTypedTree.NameResolution
 
 type private IdentifierResolution =
     | IntrinsicNode of IntrinsicInfo * NativeType
-    | BindingNode of string * NativeType * NodeId option
+    | BindingNode of string * NativeType * NodeId option * (NativeType * NativeType list) option
     | LiteralSubstitution of NativeLiteral * NativeType
     | UnionCaseNode of string * NativeType * NR.UnionCaseInfo
     | MemberAccessNode of baseBinding: NR.ResolvedBinding * baseName: string * memberPath: string list * resultTypes: NativeType list
@@ -90,8 +90,8 @@ let rec private resolveIdentifierCore
                         UnionCaseNode (name, instantiateTForall binding.Type range, caseInfo)
                     | None ->
                         // Regular binding - instantiate TForall for polymorphism
-                        let actualType = instantiateTForall binding.Type range
-                        BindingNode (name, actualType, binding.NodeId)
+                        let actualType, instance = instantiateTForallWithArguments binding.Type range
+                        BindingNode (name, actualType, binding.NodeId, instance)
             | None ->
                 // 2e. Library schemes (abs, sign, min, max, clamp, sqrt, atan2, floor, ceiling,
                 // round, truncate): after binding lookup, so a user's binding of the same name wins.
@@ -135,8 +135,8 @@ and private resolveBinding (parts: string list) (fullName: string) (env: TypeEnv
             | Some caseInfo ->
                 UnionCaseNode (fullName, instantiateTForall binding.Type range, caseInfo)
             | None ->
-                let actualType = instantiateTForall binding.Type range
-                BindingNode (fullName, actualType, binding.NodeId)
+                let actualType, instance = instantiateTForallWithArguments binding.Type range
+                BindingNode (fullName, actualType, binding.NodeId, instance)
     | None ->
         // PARSER AMBIGUITY: LongIdent might be member access on a binding.
         // The parser produces LongIdent ["r"; "Length"] or ["Spaces"; "rodata"; "Name"]
@@ -218,12 +218,20 @@ let resolveIdentifier
             range,
             arena = env.CurrentArena)
 
-    | BindingNode (name, ty, nodeId) ->
-        builder.Create(
+    | BindingNode (name, ty, nodeId, instance) ->
+        let node = builder.Create(
             SemanticKind.VarRef(name, nodeId),
             ty,
             range,
             arena = env.CurrentArena)
+        match nodeId, instance with
+        | Some declaration, Some(scheme, arguments) ->
+            builder.SetMetadata(node.Id, SchemeMetadata.Definition, MetadataValue.NodeId declaration) |> ignore
+            builder.SetMetadata(node.Id, SchemeMetadata.Declaration, MetadataValue.Type scheme) |> ignore
+            for ordinal, argument in arguments |> List.indexed do
+                builder.SetMetadata(node.Id, SchemeMetadata.argument ordinal, MetadataValue.Type argument) |> ignore
+            builder.Nodes[node.Id]
+        | _ -> node
 
     | LiteralSubstitution (litVal, ty) ->
         builder.Create(

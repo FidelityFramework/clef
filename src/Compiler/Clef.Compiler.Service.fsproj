@@ -322,6 +322,7 @@
     <Compile Include="Baker\Ingredients\Suspensions.fs" />
     <Compile Include="Baker\Ingredients\Evaluation.fs" />
     <Compile Include="Baker\Ingredients\Continuations.fs" />
+    <Compile Include="Baker\Ingredients\Memoization.fs" />
     <Compile Include="Baker\Ingredients\ProgramInitialization.fs" />
     <Compile Include="Baker\Ingredients\AggregateCopies.fs" />
     <!-- Baker Recipes - HOF decomposition templates (PRD-13a) -->
@@ -331,7 +332,9 @@
     <Compile Include="PSGSaturation\SemanticGraph\CallableOrigins.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DirectCaptures.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ClosureEnvironments.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\SchemeInstances.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableIngress.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\CallableInstantiations.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ScopedCallbacks.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableDispatch.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\LazyContracts.fs" />
@@ -396,6 +399,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\DeviceAccess.fs" />
     <!-- The range pass: every integer's analysed range as a coeffect on the node, CCS8011 (CS-10) -->
     <Compile Include="PSGSaturation\SemanticGraph\StringByteStorage.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\LazyEffectRanges.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\RangeAnalysis.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableFlows.fs" />
     <Compile Include="Baker\Recipes\StringByteStorageRecipes.fs" />
@@ -403,6 +407,7 @@
     <!-- Obligation recipes observe the range pass's selection; they do not select again. -->
     <Compile Include="Nanopass\ObligationElaboration.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Placement.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\ProgramStorageAuthority.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Roots.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Escape.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Curry.fs" />
@@ -412,12 +417,14 @@
 
     <Compile Include="Nanopass\SequenceFactoryResults.fs" />
     <Compile Include="Nanopass\SequenceFamilies.fs" />
+    <Compile Include="Nanopass\SequenceProgramInstances.fs" />
     <Compile Include="Nanopass\SequenceRegions.fs" />
     <Compile Include="Nanopass\SequenceAggregateValues.fs" />
     <Compile Include="Nanopass\SequenceRuntime.fs" />
     <Compile Include="Nanopass\EnvironmentFactoryResults.fs" />
     <Compile Include="Nanopass\ClosureEnvironmentSettlement.fs" />
     <Compile Include="Nanopass\LazyRuntime.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\ProgramStorage.fs" />
     <Compile Include="NativeTypedTree\NativeService.fs" />
 
     <!-- Project - Unified project loading and checking (DRY - single source of truth) -->

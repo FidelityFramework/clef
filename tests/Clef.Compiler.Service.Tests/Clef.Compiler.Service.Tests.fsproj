@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="DimensionalCases.fs" />
+    <Compile Include="DimensionalInferenceCases.fs" />
     <Compile Include="EagerGraphCases.fs" />
     <Compile Include="PhaseProjectionCases.fs" />
     <Compile Include="CallableTestContracts.fs" />
@@ -34,6 +35,7 @@
     <Compile Include="EagerSyntaxCases.fs" />
     <Compile Include="FoldInReferenceCases.fs" />
     <Compile Include="DirectCaptureCases.fs" />
+    <Compile Include="CallableInstantiationCases.fs" />
     <Compile Include="OptionOperationCases.fs" />
     <Compile Include="OptionClosureCases.fs" />
     <Compile Include="OptionValueCases.fs" />
@@ -58,6 +60,7 @@
     <Compile Include="SequenceApplicationCases.fs" />
     <Compile Include="SequenceOriginCases.fs" />
     <Compile Include="SequenceFamilyCases.fs" />
+    <Compile Include="SequenceProgramCases.fs" />
     <Compile Include="NestedMatchCases.fs" />
     <Compile Include="MatchDecisionCases.fs" />
     <Compile Include="RequirementCases.fs" />
@@ -68,7 +71,11 @@
     <Compile Include="MutableCallableStorageCases.fs" />
     <Compile Include="LazyValueCases.fs" />
     <Compile Include="LazyResidenceCases.fs" />
+    <Compile Include="CallableInstanceContinuationCases.fs" />
+    <Compile Include="RecursiveInstantiationCases.fs" />
+    <Compile Include="SpecializationTraceCases.fs" />
     <Compile Include="LazyRangeCases.fs" />
+    <Compile Include="LazyEffectRangeCases.fs" />
     <Compile Include="EnvironmentFactoryResultsCases.fs" />
     <Compile Include="SequenceEvaluationCases.fs" />
     <Compile Include="SequenceControlCases.fs" />

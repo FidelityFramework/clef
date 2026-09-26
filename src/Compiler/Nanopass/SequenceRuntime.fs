@@ -340,6 +340,10 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
         let families, familyEvidence, familyResiduals = Families.settle rewritten familyPlan frames flows
         let rewritten = ObligationElaboration.foldIn familyEvidence rewritten
         let residences = snapshots.Residences |> Map.fold (fun facts id site -> Map.add id site facts) residence.Sites
+        let programInputs: SequenceProgramInstances.Inputs = {
+            Frames = frames; Families = families; Flows = flows
+            Initializers = initializers; Destinations = prepared.Destinations }
+        let rewritten, residences = SequenceProgramInstances.prepare rewritten programInputs prepared.FactoryCalls residences
         let copies, copyEvidence, copyResiduals = Families.copies rewritten families flows residences regions initializers prepared.Destinations
         let rewritten = ObligationElaboration.foldIn copyEvidence rewritten
         let diagnostics = diagnostics @ (familyResiduals @ copyResiduals |> List.map (fun pending -> residual rewritten.Nodes[pending.Site] [] pending.Reason))

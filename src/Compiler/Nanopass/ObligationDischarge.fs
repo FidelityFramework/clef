@@ -59,6 +59,75 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
           sprintf "  (=> (and (<= 0 recurrence_k) (<= recurrence_k %s)) (and (<= %s (recurrence_lo recurrence_k)) (<= (recurrence_hi recurrence_k) %s)))" count lower upper
           sprintf "  (=> (and (<= 0 recurrence_k) (< recurrence_k %s) (<= (recurrence_lo recurrence_k) recurrence_value) (<= recurrence_value (recurrence_hi recurrence_k)) (<= %s recurrence_delta) (<= recurrence_delta %s)) (and (<= (recurrence_lo (+ recurrence_k 1)) (+ recurrence_value recurrence_delta)) (<= (+ recurrence_value recurrence_delta) (recurrence_hi (+ recurrence_k 1))))))))" count dlo dhi
           sprintf "(assert (not %s))" id ]
+    | ObligationBody.FiniteAdditiveEffects(initial, contributions, lower, upper) ->
+        let terms = contributions |> List.mapi (fun index (count, delta) ->
+            sprintf "effect_count_%d" index, count, delta)
+        let domain = terms |> List.collect (fun (name, count, _) -> [sprintf "(<= 0 %s)" name; sprintf "(<= %s %s)" name (integer count)])
+        let increments = terms |> List.map (fun (name, _, delta) -> sprintf "(* %s %s)" name (integer delta))
+        let total = sprintf "(+ %s %s)" (integer initial) (if increments.IsEmpty then "0" else String.concat " " increments)
+        let counts = terms |> List.map (fun (_, count, _) -> sprintf "(>= %s 0)" (integer count))
+        let premise = if domain.IsEmpty then "true" else sprintf "(and %s)" (String.concat " " domain)
+        (terms |> List.map (fun (name, _, _) -> sprintf "(declare-const %s Int)" name)) @
+        [ sprintf "(assert (= %s (and %s (=> %s (and (<= %s %s) (<= %s %s))))))"
+              id (String.concat " " counts) premise (integer lower) total total (integer upper)
+          sprintf "(assert (not %s))" id ]
+    | ObligationBody.FiniteLinearRecurrence model ->
+        let dimension = model.InitialLower.Length
+        let vectorShape values = List.length values = dimension
+        let matrixShape rows = List.length rows = dimension && List.forall vectorShape rows
+        let wellShaped =
+            (dimension = 1 || dimension = 2) && vectorShape model.InitialUpper &&
+            vectorShape model.Lower && vectorShape model.Upper &&
+            matrixShape model.CoefficientLower && matrixShape model.CoefficientUpper &&
+            (model.Powers |> List.forall (fun step -> matrixShape step.Matrix))
+        if not wellShaped then
+            [ sprintf "(assert (= %s false))" id; sprintf "(assert (not %s))" id ]
+        else
+            let vector values = values |> List.map integer |> List.toArray
+            let matrix rows = rows |> List.map vector |> List.toArray
+            let dot (left: string array) (right: string array) =
+                match Array.map2 (fun a b -> sprintf "(* %s %s)" a b) left right with
+                | [| product |] -> product
+                | products -> products |> String.concat " " |> sprintf "(+ %s)"
+            let multiply (left: string array array) (right: string array array) =
+                Array.init dimension (fun row ->
+                    Array.init dimension (fun column ->
+                        dot left.[row] (Array.init dimension (fun k -> right.[k].[column]))))
+            let initialLo, initialHi = vector model.InitialLower, vector model.InitialUpper
+            let coefficientLo, coefficientHi = matrix model.CoefficientLower, matrix model.CoefficientUpper
+            let lower, upper = vector model.Lower, vector model.Upper
+            let clauses = ResizeArray<string>()
+            clauses.Add(sprintf "(>= %s 0)" (integer model.MaximumIterations))
+            for row in 0 .. dimension - 1 do
+                clauses.Add(sprintf "(<= 0 %s)" initialLo.[row])
+                clauses.Add(sprintf "(<= %s %s)" initialLo.[row] initialHi.[row])
+                clauses.Add(sprintf "(<= %s 0)" lower.[row])
+                // A nonnegative matrix preserves this initial upper-vector order,
+                // so the checked final power encloses every earlier prefix too.
+                clauses.Add(sprintf "(<= %s %s)" initialHi.[row] (dot coefficientHi.[row] initialHi))
+                for column in 0 .. dimension - 1 do
+                    clauses.Add(sprintf "(<= 0 %s)" coefficientLo.[row].[column])
+                    clauses.Add(sprintf "(<= %s %s)" coefficientLo.[row].[column] coefficientHi.[row].[column])
+            let mutable previousExponent = "0"
+            let mutable previousMatrix =
+                Array.init dimension (fun row -> Array.init dimension (fun column -> if row = column then "1" else "0"))
+            for step in model.Powers do
+                let squared = multiply previousMatrix previousMatrix
+                let expected = if step.Odd then multiply squared coefficientHi else squared
+                let supplied = matrix step.Matrix
+                clauses.Add(sprintf "(= %s (+ (* 2 %s) %d))" (integer step.Exponent) previousExponent (if step.Odd then 1 else 0))
+                for row in 0 .. dimension - 1 do
+                    for column in 0 .. dimension - 1 do
+                        clauses.Add(sprintf "(= %s %s)" supplied.[row].[column] expected.[row].[column])
+                previousExponent <- integer step.Exponent
+                previousMatrix <- supplied
+            clauses.Add(sprintf "(= %s %s)" previousExponent (integer model.MaximumIterations))
+            for row in 0 .. dimension - 1 do
+                clauses.Add(sprintf "(<= %s %s)" (dot previousMatrix.[row] initialHi) upper.[row])
+            // These are conclusion clauses, never contradictory global premises.
+            // Transcribe the supplied certificate; do not repair a bad power.
+            [ sprintf "(assert (= %s (and %s)))" id (String.concat " " clauses)
+              sprintf "(assert (not %s))" id ]
     | ObligationBody.MappedElementSpan model ->
         [ "(declare-const mapped_base Int)"
           "(declare-const mapped_bytes Int)"

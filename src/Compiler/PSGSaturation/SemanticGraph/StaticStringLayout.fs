@@ -3,6 +3,7 @@ module Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout
 
 open System.Text
 open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
@@ -85,3 +86,44 @@ let literalEvidence (graph: SemanticGraph) : Map<NodeId, NodeId list> =
             let participants = authority @ literals |> List.distinct
             literals |> List.map (fun id -> id, id :: participants |> List.distinct) |> Map.ofList
         | _ -> Map.empty
+
+/// Trace a retained immutable string descriptor to its declared program backing.
+/// Additional inputs are supplied by the owning callable/lazy reader only after
+/// it has checked the exact formal/actual or capture relation. Every alternative
+/// must have backing; dependencies are retained for the enclosing storage joint.
+/// This establishes backing lifetime, not evaluation demand or environment scope.
+let retainedViews (graph: SemanticGraph)
+                  (additionalInputs: SemanticNode -> (NodeId list * NodeId list) option) =
+    let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
+    let backing = lazy (literalEvidence graph)
+    let isString ty = Types.tryGetNTUKind (applySubst ty) = Some NTUKind.NTUstring
+    let rec trace seen id =
+        if Set.contains id seen then None else
+        let seen = Set.add id seen
+        let follow source = trace seen source |> Option.map (fun dependencies -> id :: dependencies)
+        match nodes.TryFind id with
+        | Some node when isString node.Type ->
+            match node.Kind with
+            | SemanticKind.Literal(NativeLiteral.String _) -> backing.Value.TryFind id
+            | SemanticKind.VarRef(_, Some source) when node.Children.IsEmpty ->
+                match graph.Edges |> List.filter (fun edge -> edge.Target = id && edge.Role = EdgeRole.Definition) with
+                // Kind carries the canonical reference even before its derived
+                // incidence is materialized. Resident rows must agree with it.
+                | [] -> follow source
+                | [{ Class = EdgeClass.Reference; Sources = [actual]; Ordinal = 0 }] when actual = source -> follow source
+                | _ -> None
+            | SemanticKind.TypeAnnotation(source, declared) when isString declared && node.Children = [source] -> follow source
+            | SemanticKind.EagerExpr source when ExplicitDemand.operand graph id = Some source -> follow source
+            | SemanticKind.Binding(_, false, _, _) when node.Children.Length = 1 -> follow node.Children.Head
+            | SemanticKind.Sequential values when node.Children = values -> List.tryLast values |> Option.bind follow
+            | SemanticKind.IfThenElse(condition, left, Some right) when node.Children = [condition; left; right] ->
+                match trace seen left, trace seen right with
+                | Some left, Some right -> Some(id :: condition :: (left @ right))
+                | _ -> None
+            | _ ->
+                additionalInputs node |> Option.bind (fun (dependencies, inputs) ->
+                    if inputs.IsEmpty || not (List.forall nodes.ContainsKey dependencies) then None else
+                    inputs |> List.fold (fun result input ->
+                        Option.map2 (@) result (trace seen input)) (Some(id :: dependencies)))
+        | _ -> None
+    fun value -> trace Set.empty value |> Option.map List.distinct

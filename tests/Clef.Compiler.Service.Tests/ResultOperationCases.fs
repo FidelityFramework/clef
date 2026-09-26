@@ -297,11 +297,19 @@ let main _ =
 """
         let graph = result.Graph
         for original in ["moduleChoose"; "localChoose"] do
+            let retired = graph.Nodes.Values |> Seq.filter (fun node ->
+                match node.Kind with SemanticKind.Binding (name, _, _, _) -> name = original | _ -> false) |> Assert.Single
+            Assert.False(retired.IsReachable)
             Assert.DoesNotContain(graph.Nodes.Values, fun node ->
-                match node.Kind with SemanticKind.Binding (name, _, _, _) -> name = original | _ -> false)
+                node.IsReachable &&
+                (match node.Kind with
+                 | SemanticKind.ModuleDef(_, members) | SemanticKind.Sequential members -> List.contains retired.Id members
+                 | _ -> false))
             let clones = graph.Nodes.Values |> Seq.filter (fun node ->
                 match node.Kind with SemanticKind.Binding (name, _, _, _) -> name.StartsWith(original + "__mono") | _ -> false) |> Seq.toList
             Assert.Equal(2, clones.Length)
+            for clone in clones do
+                Assert.Contains(graph.Edges, fun edge -> edge.Role = EdgeRole.SchemeSpecialization && edge.Target = clone.Id && edge.Sources.Head = retired.Id)
             let cloneIds = clones |> List.map (fun node -> node.Id) |> Set.ofList
             let uses = graph.Nodes.Values |> Seq.choose (fun node ->
                 match node.Kind with

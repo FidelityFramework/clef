@@ -12,6 +12,7 @@ open Clef.Compiler.Baker.Ingredients.Closures
 open Clef.Compiler.Baker.Recipes.Decomposition
 module Lazy = Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues
 module C = Clef.Compiler.Baker.Ingredients.Continuations
+module Memoization = Clef.Compiler.Baker.Ingredients.Memoization
 
 type Expansion = { Structure: Result; Edges: Hyperedge list }
 
@@ -94,34 +95,28 @@ let force (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) (contract
     let operand = match source.Kind with SemanticKind.LazyForce operand -> operand | _ -> invalidArg "source" "Lazy.force requires its source force occurrence."
     let state = SaturationState.create ctx.SourceRange ctx.OriginalHOF ctx.ExpansionId source.Id graph.Platform
     let outcome, nodes = run state (saturation {
-        let! actualEnvironment = C.create (SemanticKind.LazyEnvironmentReference operand) Lazy.environmentType [operand]
-        let! environmentBinding = letBind "__lazy_force_environment" actualEnvironment Lazy.environmentType
-        let environmentRef () = varRef "__lazy_force_environment" (Some environmentBinding) Lazy.environmentType
-        let! conditionEnvironment = environmentRef ()
-        let! condition = C.create (SemanticKind.LazyRead(conditionEnvironment, contract.Computed)) Types.boolType [conditionEnvironment]
-        let! cachedEnvironment = environmentRef ()
-        let! cachedRead = C.create (SemanticKind.LazyRead(cachedEnvironment, contract.Cached)) contract.ElementType [cachedEnvironment]
-        let! code = varRef "__lazy_thunk" (Some contract.Thunk) (NativeType.TFun(Lazy.environmentType, contract.ElementType))
-        let! invocationEnvironment = environmentRef ()
-        let! invocation = app code [invocationEnvironment] contract.ElementType
-        let! resultBinding = letBind "__lazy_first_result" invocation contract.ElementType
-        let! storedResult = varRef "__lazy_first_result" (Some resultBinding) contract.ElementType
-        let! storeEnvironment = environmentRef ()
-        let! store = C.create (SemanticKind.LazyWrite(storeEnvironment, contract.Cached, storedResult)) Types.unitType [storeEnvironment; storedResult]
-        let! published = boolLit true
-        let! publishEnvironment = environmentRef ()
-        let! publication = C.create (SemanticKind.LazyWrite(publishEnvironment, contract.Computed, published)) Types.unitType [publishEnvironment; published]
-        let! result = varRef "__lazy_first_result" (Some resultBinding) contract.ElementType
-        let! uncached = C.block [resultBinding; store; publication; result] contract.ElementType
-        let! conditional = ifThenElse condition cachedRead uncached contract.ElementType
-        do! enrich source (SemanticKind.Sequential [environmentBinding; conditional]) source.Type
-                        [environmentBinding; conditional] source.EmissionStrategy false
-        return environmentBinding, condition, cachedRead, invocation, resultBinding, store, publication, uncached, conditional
+        let invoke environment = saturation {
+            let! code = varRef "__lazy_thunk" (Some contract.Thunk) (NativeType.TFun(Lazy.environmentType, contract.ElementType))
+            return! app code [environment] contract.ElementType
+        }
+        let! forced = Memoization.force {
+            NamePrefix = "__lazy_"; EnvironmentType = Lazy.environmentType; ResultType = contract.ElementType
+            Environment = C.create (SemanticKind.LazyEnvironmentReference operand) Lazy.environmentType [operand]
+            ReadComputed = fun environment -> C.create (SemanticKind.LazyRead(environment, contract.Computed)) Types.boolType [environment]
+            ReadCached = fun environment -> C.create (SemanticKind.LazyRead(environment, contract.Cached)) contract.ElementType [environment]
+            Invoke = invoke
+            StoreCached = fun environment value -> C.create (SemanticKind.LazyWrite(environment, contract.Cached, value)) Types.unitType [environment; value]
+            PublishComputed = fun environment value -> C.create (SemanticKind.LazyWrite(environment, contract.Computed, value)) Types.unitType [environment; value]
+        }
+        let body = [forced.EnvironmentBinding; forced.Conditional]
+        do! enrich source (SemanticKind.Sequential body) source.Type body source.EmissionStrategy false
+        return forced
     })
     match outcome with
-    | Matched(environmentBinding, condition, cachedRead, invocation, resultBinding, store, publication, uncached, conditional) ->
+    | Matched forced ->
         let evidence =
             { Class = EdgeClass.Provenance; Role = EdgeRole.LazyMemoization; Ordinal = 0; Target = source.Id
-              Sources = [contract.Formation; operand; environmentBinding; condition; cachedRead; invocation; resultBinding; store; publication; uncached; conditional] }
+              Sources = [contract.Formation; operand; forced.EnvironmentBinding; forced.Condition; forced.CachedRead
+                         forced.Invocation; forced.ResultBinding; forced.Store; forced.Publication; forced.UncachedBranch; forced.Conditional] }
         finish graph source.Id nodes [evidence]
     | NoMatch reason -> invalidOp ("Lazy force saturation failed: " + reason)

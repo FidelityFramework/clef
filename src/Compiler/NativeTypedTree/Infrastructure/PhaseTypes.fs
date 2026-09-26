@@ -13,6 +13,7 @@
 module Clef.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
 
 open System
+open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
 /// Identifies a phase in the nanopass pipeline
 ///
@@ -186,6 +187,8 @@ type PhaseNodeOutput = {
     ElaborationFor: string option
     /// Links related nodes from the same elaboration expansion
     ElaborationId: int option
+    /// Frozen applied specialization; distinct from this node's current state.
+    Specialization: SpecializationTrace option
 }
 
 /// Phase output structure for JSON emission

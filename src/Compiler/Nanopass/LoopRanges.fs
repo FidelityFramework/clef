@@ -6,10 +6,11 @@ module Clef.Compiler.Nanopass.LoopRanges
 
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.Baker.Ingredients.Obligations
 module Recipes = Clef.Compiler.Baker.Recipes.LoopRangeRecipes
 
 let private isOurs = function
-    | SemanticKind.Obligation { Body = ObligationBody.FiniteLoopTrip _ | ObligationBody.AdditiveLoopInvariant _ } -> true
+    | SemanticKind.Obligation { Body = ObligationBody.FiniteLoopTrip _ | ObligationBody.AdditiveLoopInvariant _ | ObligationBody.FiniteLinearRecurrence _ } -> true
     | _ -> false
 
 let recognize inputs (graph: SemanticGraph) =
@@ -32,7 +33,15 @@ let saturate range (recognition: Recipes.Recognition) (graph: SemanticGraph) =
         | Error reason ->
             let edge = { Class = EdgeClass.Range; Role = EdgeRole.LoopRangePending reason; Sources = [item.Induction.Owner; item.Induction.Loop]; Target = item.Cell; Ordinal = 0 }
             settled, edge :: residuals) ([], [])
-    let enrichment = Recipes.obligations graph settled
+    let linear, linearResiduals = recognition.Linear |> List.fold (fun (settled, residuals) item ->
+        match Recipes.saturateLinear range item with
+        | Ok result -> result :: settled, residuals
+        | Error reason ->
+            let pending = item.Cells |> List.map (fun cell ->
+                { Class = EdgeClass.Range; Role = EdgeRole.LoopRangePending reason
+                  Sources = Recipes.linearSources item; Target = cell; Ordinal = 0 })
+            settled, pending @ residuals) ([], [])
+    let enrichment = Enrichment.combine (Recipes.obligations graph settled) (Recipes.linearObligations graph linear)
     let anchors = enrichment.NewNodes |> List.choose (fun node -> match node.Kind with SemanticKind.Obligation info -> Some(node.Id, info.Id) | _ -> None) |> Map.ofList
     let annotations =
         enrichment.NewEdges |> List.collect (fun edge ->
@@ -43,4 +52,4 @@ let saturate range (recognition: Recipes.Recognition) (graph: SemanticGraph) =
     graph
     |> SemanticGraph.addNodes annotations
     |> SemanticGraph.addNodes enrichment.NewNodes
-    |> SemanticGraph.addEdges (enrichment.NewEdges @ residuals)
+    |> SemanticGraph.addEdges (enrichment.NewEdges @ residuals @ linearResiduals)

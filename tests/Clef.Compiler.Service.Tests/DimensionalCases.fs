@@ -628,10 +628,20 @@ let second: Pending<int, bool, int> = { Second = 7; Desired = false; Committed =
         | other -> failwithf "Generic record instance remained unplaced: %A" other
 
     "shared record labels preserve measure parameter kinds", fun () ->
-        let result = check "type Earlier<[<Measure>] 'u> = { Value: float<'u> }\ntype Later<[<Measure>] 'u> = { Value: float<'u> }\nlet distance = { Value = 1.0<m> }\nlet duration = { Value = 2.0<s> }\nlet length = distance.Value\nlet time = duration.Value\n"
+        let declarations = "type Earlier<[<Measure>] 'u> = { Value: float<'u> }\ntype Later<[<Measure>] 'u> = { Value: float<'u> }\n"
+        // The source selects the nominal owner; the measure arguments remain
+        // inferred. Identical complete owners cannot be selected by order.
+        let result = check (declarations + "let distance = { Earlier.Value = 1.0<m> }\nlet duration = { Later.Value = 2.0<s> }\nlet length = distance.Value\nlet time = duration.Value\n")
         noErrors result
         same (measured metre) (bindingType "length" result)
         same (measured second) (bindingType "time" result)
+        for name, expected in ["distance", "Earlier"; "duration", "Later"] do
+            match bindingType name result with
+            | NativeType.TApp(owner, [NativeType.TMeasure _]) when owner.Name = expected -> ()
+            | other -> failwithf "Lost nominal owner or measure-kind argument: %A" other
+        let ambiguous = check (declarations + "let value = { Value = 1.0<m> }\n")
+        if not (ambiguous.Diagnostics |> List.exists (fun diagnostic -> diagnostic.Code = "CCS8704" && diagnostic.Severity = NativeDiagnosticSeverity.Error)) then
+            failwith "Ambiguous complete record owners were selected by declaration order"
 
     "record updates preserve dimensions", fun () ->
         let valid = check "type Quantity<[<Measure>] 'u> = { mutable Value: float<'u> }\nlet distance: Quantity<m> = { Value = 1.0<m> }\ndistance.Value <- 2.0<m>\nlet copy = { distance with Value = 3.0<m> }\nlet value = copy.Value\n"

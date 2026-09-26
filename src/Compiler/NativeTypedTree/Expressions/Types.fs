@@ -25,13 +25,16 @@ module NR = Clef.Compiler.NativeTypedTree.NameResolution
 /// This is critical for proper polymorphic type checking:
 /// each use of a polymorphic binding must get FRESH type variables,
 /// not the same ones (which would cause all uses to share one type).
-let instantiateTForall (ty: NativeType) (range: SourceRange) : NativeType =
+let instantiateTForallWithArguments (ty: NativeType) (range: SourceRange) : NativeType * (NativeType * NativeType list) option =
     match ty with
     | NativeType.TForall(typars, body) ->
         // Fresh variables of each parameter's kind (design b.4 step 4), from the one minting place.
         let freshVars = typars |> List.map (fun tp -> freshInstanceOf tp range)
-        NativeTypes.instantiate typars freshVars body
-    | _ -> ty
+        NativeTypes.instantiate typars freshVars body, Some(ty, freshVars)
+    | _ -> ty, None
+
+let instantiateTForall (ty: NativeType) (range: SourceRange) : NativeType =
+    instantiateTForallWithArguments ty range |> fst
 
 //-------------------------------------------------------------------------
 // Clef Diagnostic Codes (FS8xxx series)
@@ -657,12 +660,12 @@ let tryResolveRecordFieldType (ty: NativeType) (fieldName: string) (env: TypeEnv
     | NativeType.TApp(tycon, typeArgs) ->
         // Try to find this type in RecordDefs
         match tryLookupRecordDef tycon.Name env with
-        | Some recordInfo ->
+        | Some recordInfo when recordInfo.TypeCon.Module = tycon.Module && recordInfo.TypeParameters.Length = typeArgs.Length ->
             // Look up the field in the record's field list
             recordInfo.Fields
             |> List.tryFind (fun (name, _) -> name = fieldName)
             |> Option.map (fun (_, fieldType) -> instantiate recordInfo.TypeParameters typeArgs fieldType)
-        | None -> None
+        | _ -> None
     | _ -> None
 
 /// Look up field labels (all record types that have a field with this name)
@@ -772,12 +775,9 @@ let resolveRecordTypeFromFields
                     Result.Error((DiagnosticCodes.CCS8090_InternalInvariant,
                            sprintf "Internal error: field labels reference record type '%s' but it is not in RecordDefs" typeName))
             | _ ->
-                // Multiple record types have all these fields. A fresh record expression must
-                // set every field of its type, so a candidate with more fields than the
-                // expression names is not admissible ({ Name; Count } is never an F when F also
-                // has Extra). Among the exact matches, "last definition wins" (standard F#
-                // behavior: the most recently defined/opened type takes precedence).
-                // addRecordDef prepends new FieldRefs, so List.head = most recently defined
+                // Completeness is a real source constraint for a fresh literal.
+                // It can remove an owner with additional required fields, but
+                // declaration order does not resolve multiple complete owners.
                 let exactMatches =
                     intersection
                     |> Set.filter (fun typeName ->
@@ -785,18 +785,13 @@ let resolveRecordTypeFromFields
                         | Some info -> List.length info.Fields = List.length fieldNames
                         | None -> false)
                 let admissible = if Set.isEmpty exactMatches then intersection else exactMatches
-                let lastTypeName =
-                    candidateSets
-                    |> List.head |> snd
-                    |> List.filter (fun fr -> Set.contains fr.RecordType.Name admissible)
-                    |> List.head
-                    |> fun fr -> fr.RecordType.Name
-                match Map.tryFind lastTypeName env.RecordDefs with
-                | Some recordInfo ->
+                match Set.toList admissible with
+                | [typeName] ->
+                    let recordInfo = env.RecordDefs[typeName]
                     let freshArgs = recordInfo.TypeParameters |> List.map (fun parameter -> freshInstanceOf parameter _range)
                     Result.Ok (NativeType.TApp(recordInfo.TypeCon, freshArgs))
-                | None ->
-                    let typeNames = intersection |> Set.toList |> String.concat ", "
+                | _ ->
+                    let typeNames = admissible |> Set.toList |> String.concat ", "
                     Result.Error((DiagnosticCodes.CCS8704_AmbiguousFields,
                            sprintf "Field labels are ambiguous; could be any of: %s. Use type annotation or qualified field access." typeNames))
 
@@ -868,10 +863,42 @@ let resolveFieldType (baseType: NativeType) (fieldName: string) (env: TypeEnv) (
         match tryResolveRecordFieldType resolvedType fieldName env with
         | Some fieldType -> fieldType
         | None ->
-            // 3. Fall back to SRTP constraint for generic types
-            let ty = freshTypeVar range
-            addConstraint (Constraint.HasMember(baseType, fieldName, ty, range)) env
-            ty
+            let pending () =
+                let ty = freshTypeVar range
+                addConstraint (Constraint.HasMember(baseType, fieldName, ty, range)) env
+                ty
+            // Resolve a nominal label before generalization. Otherwise the
+            // receiver and result escape as unrelated quantified variables,
+            // losing the record's field (including its measure) relationship.
+            match resolvedType with
+            | NativeType.TVar _ ->
+                let candidates =
+                    lookupFieldLabels fieldName env
+                    |> List.distinctBy (fun field -> field.RecordType.Name, field.RecordType.Module)
+                match candidates with
+                | [field] ->
+                    match tryLookupRecordDef field.RecordType.Name env with
+                    | Some record when record.TypeCon.Module = field.RecordType.Module ->
+                        let arguments = record.TypeParameters |> List.map (fun parameter -> freshInstanceOf parameter range)
+                        let receiver = NativeType.TApp(record.TypeCon, arguments)
+                        match tryResolveRecordFieldType receiver fieldName env with
+                        | Some result ->
+                            addConstraint (Constraint.Equals(baseType, receiver, range)) env
+                            result
+                        | None -> pending ()
+                    | _ -> pending ()
+                | [] -> pending ()
+                | _ ->
+                    addDiagnostic {
+                        Severity = NativeDiagnosticSeverity.Error
+                        Code = DiagnosticCodes.CCS8704_AmbiguousFields
+                        Message = sprintf "Field '%s' belongs to multiple visible record types; qualify the receiver type." fieldName
+                        Range = range
+                        RelatedNodes = []
+                        Reachability = ReachabilityContext.Unknown
+                    } env
+                    pending ()
+            | _ -> pending ()
 
 //-------------------------------------------------------------------------
 // Attribute Helpers

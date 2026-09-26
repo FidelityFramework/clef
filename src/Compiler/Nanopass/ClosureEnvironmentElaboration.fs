@@ -9,7 +9,7 @@ open Clef.Compiler.Baker.Recipes.Decomposition
 open Clef.Compiler.Baker.Recipes.ClosureEnvironmentRecipes
 open Clef.Compiler.Nanopass.Recipe
 
-let rec normalize (graph: SemanticGraph) =
+let rec private elaborate (graph: SemanticGraph) =
     match plans graph |> List.tryHead with
     | None -> graph
     | Some plan ->
@@ -20,4 +20,13 @@ let rec normalize (graph: SemanticGraph) =
             RecipeCreated { OriginalNodeId = node.Id; NewNodes = result.Structure.NewNodes
                             ReplacementRootId = node.Id; ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = name }
         let folded = FoldIn.foldIn (FanOut.fanOut name (fun node -> node.Id = plan.Source.Id) create graph) graph
-        normalize { folded with Edges = result.Edges }
+        elaborate { folded with Edges = result.Edges }
+
+let normalize (graph: SemanticGraph) =
+    let rewritten = elaborate graph
+    // EnvironmentWrite replaces the former Set target with the actual
+    // environment and value operands. Retain the old nodes and provenance,
+    // but refresh executable reachability at this owning rewrite boundary.
+    // Open library graphs have no executable roots authorizing that cut.
+    if obj.ReferenceEquals(graph, rewritten) || rewritten.DeclarationRoots.IsEmpty then rewritten
+    else Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable rewritten

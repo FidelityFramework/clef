@@ -165,6 +165,30 @@ let private serializeSummary (pretty: bool) (summary: PhaseSummary) : string =
     ]
     buildJsonObject pretty 1 pairs
 
+let private serializeSpecialization pretty indent (trace: SpecializationTrace) =
+    let ids values = buildJsonArray false 0 (values |> List.map (NodeId.value >> string))
+    let snapshot (value: SpecializationNodeSnapshot) =
+        buildJsonObject pretty (indent + 1) ([
+            "kind", escapeJsonString value.Kind
+            "type", escapeJsonString value.Type
+            "children", ids value.Children ] @
+            (value.Parent |> Option.map (fun id -> ["parent", string (NodeId.value id)]) |> Option.defaultValue []))
+    buildJsonObject pretty indent [
+        "meaning", escapeJsonString "applied-specialization-snapshot"
+        "sourceDeclaration", string (NodeId.value trace.SourceDeclaration)
+        "sourceNode", string (NodeId.value trace.SourceNode)
+        "cloneDeclaration", string (NodeId.value trace.CloneDeclaration)
+        "cloneNode", string (NodeId.value trace.CloneNode)
+        "scheme", escapeJsonString trace.Scheme
+        "retiresSource", if trace.RetiresSource then "true" else "false"
+        "parameters", buildJsonArray pretty (indent + 1) (trace.Parameters |> List.map (fun (id, kind) ->
+            buildJsonObject false 0 ["id", string id; "kind", escapeJsonString kind]))
+        "codeArguments", buildJsonArray false 0 (trace.CodeArguments |> List.map escapeJsonString)
+        "requests", buildJsonArray pretty (indent + 1) (trace.Requests |> List.map (fun (id, ty) ->
+            buildJsonObject false 0 ["occurrence", string (NodeId.value id); "type", escapeJsonString ty]))
+        "input", snapshot trace.Input
+        "output", snapshot trace.Output ]
+
 /// Serialize a PhaseNodeOutput to JSON
 /// Only emits fields with meaningful values - no "null" clutter
 let private serializeNode (pretty: bool) (indent: int) (node: PhaseNodeOutput) : string =
@@ -189,6 +213,7 @@ let private serializeNode (pretty: bool) (indent: int) (node: PhaseNodeOutput) :
             node.ElaborationKind |> Option.map (fun k -> ("elaborationKind", escapeJsonString k))
             node.ElaborationFor |> Option.map (fun f -> ("elaborationFor", escapeJsonString f))
             node.ElaborationId |> Option.map (fun id -> ("elaborationId", string id))
+            node.Specialization |> Option.map (fun trace -> ("specialization", serializeSpecialization pretty (indent + 1) trace))
         ]
         |> List.choose id
     buildJsonObject pretty indent (requiredPairs @ optionalPairs)
@@ -317,7 +342,15 @@ let createNodeOutput
         ElaborationKind = None
         ElaborationFor = None
         ElaborationId = None
+        Specialization = None
     }
+
+/// Only the actual historical clone owns this snapshot. Metadata copied by a
+/// later recipe cannot silently become a new specialization event.
+let specializationSnapshot (node: SemanticNode) =
+    match node.Metadata.TryFind SchemeMetadata.Specialization with
+    | Some(MetadataValue.Specialization trace) when trace.CloneNode = node.Id -> Some trace
+    | _ -> None
 
 /// Add optional fields to a node output
 let withRange (range: string) (node: PhaseNodeOutput) =

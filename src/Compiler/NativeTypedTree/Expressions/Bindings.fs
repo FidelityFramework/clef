@@ -6,6 +6,8 @@
 module Clef.Compiler.NativeTypedTree.Expressions.Bindings
 
 open Clef.Compiler.Syntax
+open Clef.Compiler.SyntaxTrivia
+open Clef.Compiler.Xml
 open Clef.Compiler.NativeTypedTree.NativeTypes
 
 open Clef.Compiler.NativeTypedTree.UnionFind
@@ -151,6 +153,44 @@ let getHeadPattern (binding: SynBinding) : SynPat =
 // Function Parameter Extraction
 //-------------------------------------------------------------------------
 
+/// Keep a tuple pattern at one declared argument boundary. Its projections are
+/// ordinary local bindings, so an unused component is not demanded by this
+/// elaboration. The same body is retained for later inline instantiation.
+let private lowerTupleParameters (headPat: SynPat) (body: SynExpr) =
+    let rec isTuple = function
+        | SynPat.Tuple _ -> true
+        | SynPat.Paren(inner, _) | SynPat.Typed(inner, _, _) -> isTuple inner
+        | _ -> false
+    match headPat with
+    | SynPat.LongIdent(name, extra, parameters, SynArgPats.Pats arguments, accessibility, range) ->
+        let arguments, projections =
+            arguments |> List.map (fun pattern ->
+                if isTuple pattern then
+                    let name = sprintf "__tuple_argument_%d" (NodeId.value (NodeId.fresh()))
+                    let ident = Ident(name, pattern.Range)
+                    let formal = SynPat.Named(SynIdent(ident, None), false, None, pattern.Range)
+                    formal, Some(pattern, ident)
+                else pattern, None)
+            |> List.unzip
+        let body =
+            (projections |> List.choose id, body)
+            ||> List.foldBack (fun (pattern, ident) body ->
+                let binding =
+                    SynBinding(None, SynBindingKind.Normal, false, false, [], PreXmlDoc.Empty,
+                        SynValData(None, SynValInfo([], SynArgInfo([], false, None)), None),
+                        pattern, None, SynExpr.Ident ident, pattern.Range,
+                        DebugPointAtBinding.NoneAtInvisible, SynBindingTrivia.Zero)
+                SynExpr.LetOrUse {
+                    IsRecursive = false
+                    Bindings = [binding]
+                    Body = body
+                    Range = body.Range
+                    Trivia = SynLetOrUseTrivia.Zero
+                    IsFromSource = false
+                })
+        SynPat.LongIdent(name, extra, parameters, SynArgPats.Pats arguments, accessibility, range), body
+    | _ -> headPat, body
+
 /// Extract function parameters from a LongIdent pattern
 /// Each parameter retains its own identifier range for graph navigation and diagnostics.
 /// For `let x = body`, returns None
@@ -234,6 +274,26 @@ let private isGeneralizableValue (env: TypeEnv) (builder: NodeBuilder) source (n
         | SynExpr.Paren(inner, _, _, _) | SynExpr.TypeApp(inner, _, _, _, _, _, _) -> unionConstructor inner
         | SynExpr.App(_, _, constructor, argument, _) -> unionConstructor constructor && sourceValue argument
         | _ -> false
+    // An application below an actual declared boundary retains arguments in
+    // a residual callable; it does not execute the callable body. In
+    // particular, result arrows of a fully applied factory are not formals.
+    let rec remaining seen id =
+        if Set.contains id seen then None
+        else
+            let seen = Set.add id seen
+            match builder.Nodes.TryGetValue id with
+            | true, value ->
+                match value.Kind with
+                | SemanticKind.Lambda(parameters, _, _, _, _) -> Some parameters.Length
+                | SemanticKind.Binding(_, false, _, _) ->
+                    match value.Children with [body] -> remaining seen body | _ -> None
+                | SemanticKind.VarRef(_, Some definition) -> remaining seen definition
+                | SemanticKind.TypeAnnotation(inner, _) -> remaining seen inner
+                | SemanticKind.Application(callee, arguments) ->
+                    remaining seen callee |> Option.bind (fun count ->
+                        if arguments.Length < count then Some(count - arguments.Length) else None)
+                | _ -> None
+            | _ -> None
     let rec safe id =
         let node = builder.Nodes.[id]
         match node.Kind with
@@ -255,8 +315,29 @@ let private isGeneralizableValue (env: TypeEnv) (builder: NodeBuilder) source (n
             match builder.Nodes.[thunk].Kind with
             | SemanticKind.Lambda(_, body, _, _, _) -> safe body
             | _ -> false
+        | SemanticKind.Application(callee, arguments) ->
+            remaining Set.empty id |> Option.exists (fun count -> count > 0)
+            && safe callee && List.forall safe arguments
         | _ -> false
-    sourceValue source && safe node.Id
+    // Read the original source callee as well: inline expansion may produce
+    // a Lambda (or partial application) from a fully invoked factory body.
+    // That resulting shape does not establish a partial source invocation.
+    let rec sourceResidual supplied = function
+        | SynExpr.App(_, _, callee, argument, _) ->
+            sourceValue argument && sourceResidual (supplied + 1) callee
+        | SynExpr.Paren(inner, _, _, _) | SynExpr.TypeApp(inner, _, _, _, _, _, _) -> sourceResidual supplied inner
+        | SynExpr.Ident ident -> sourceCallee supplied ident.idText
+        | SynExpr.LongIdent(_, SynLongIdent(idents, _, _), _, _) ->
+            sourceCallee supplied (idents |> List.map _.idText |> String.concat ".")
+        | _ -> false
+    and sourceCallee supplied name =
+        tryLookupBinding name env
+        |> Option.filter (fun binding -> not binding.IsMutable)
+        |> Option.bind _.NodeId
+        |> Option.bind (remaining Set.empty)
+        |> Option.exists (fun count -> supplied > 0 && supplied < count)
+    (sourceValue source || sourceResidual 0 source)
+    && safe node.Id
 
 /// Preserve the source identifier and RHS boundary before graph rewriting.
 /// Substituted inline/literal bindings need separate use tracking and remain
@@ -317,6 +398,7 @@ let private checkBindingInScope
             | None -> []
         let names = (annotations headPat @ returnAnnotation) |> List.collect (measureVariableNames env)
         withMeasureScope env names
+    let headPat, expr = lowerTupleParameters headPat expr
     let declRoot =
         if hasEntryPointAttribute attrs then Some DeclRoot.EntryPoint
         elif hasHardwareModuleAttribute attrs then Some DeclRoot.HardwareModule
@@ -345,17 +427,42 @@ let private checkBindingInScope
     //   let b = TupleGet(__tuple_N, 1)
     //-------------------------------------------------------------------------
     let checkTupleDestructure () =
-        // Extract element names from the tuple pattern
-        let elementInfo = extractTupleElements (getHeadPattern binding)
+        // Retain tuple nesting, annotations, and each declaration's range.
+        // Flattening names would change one tuple argument into unrelated
+        // parameters and erase the relations inferred for measured fields.
+        let rec describe (pattern: SynPat) =
+            let patternRange = rangeToSourceRange pattern.Range
+            match pattern with
+            | SynPat.Paren(inner, _) -> describe inner
+            | SynPat.Typed(inner, annotation, _) ->
+                let ty, leaves = describe inner
+                let annotated = resolveSynType env annotation
+                addConstraint (Constraint.Equals(ty, annotated, patternRange)) env
+                annotated, leaves
+            | SynPat.Tuple(isStruct, elements, _, _) ->
+                let elements = elements |> List.map describe
+                let types = elements |> List.map fst
+                let leaves =
+                    elements |> List.mapi (fun index (ty, leaves) ->
+                        leaves |> List.map (fun (name, wildcard, leafType, leafRange, path) ->
+                            name, wildcard, leafType, leafRange, (index, ty) :: path))
+                    |> List.concat
+                NativeType.TTuple(types, isStruct), leaves
+            | SynPat.Named(SynIdent(ident, _), _, _, _) ->
+                let ty = freshTypeVar patternRange
+                ty, [ident.idText, false, ty, rangeToSourceRange ident.idRange, []]
+            | SynPat.Wild _ ->
+                let ty = freshTypeVar patternRange
+                ty, ["_", true, ty, patternRange, []]
+            | SynPat.Const(SynConst.Unit, _) ->
+                Types.unitType, ["_", true, Types.unitType, patternRange, []]
+            | other -> failwith ("Unsupported pattern in tuple destructuring: " + other.GetType().Name)
+        let expectedTupleType, elementInfo = describe (getHeadPattern binding)
 
         // Check the RHS expression - this gives us the tuple value
         let tupleExprNode = checkExpr env builder expr
 
-        // Create fresh type variables for each tuple element
-        let elementTypes = elementInfo |> List.map (fun (_, _) -> freshTypeVar range)
-
-        // Constrain the RHS to be a tuple of the correct arity (reference tuple, not struct)
-        let expectedTupleType = NativeType.TTuple(elementTypes, false)
+        // Constrain the complete tuple shape, including nested tuple kinds.
         addConstraint (Constraint.Equals(tupleExprNode.Type, expectedTupleType, range)) env
 
         // Create a hidden binding for the tuple
@@ -370,30 +477,28 @@ let private checkBindingInScope
 
         // Create TupleGet nodes and bindings for each element
         let elementBindings =
-            elementInfo |> List.mapi (fun i (elemName, isWildcard) ->
-                let elemType = elementTypes.[i]
-
+            elementInfo |> List.mapi (fun i (elemName, isWildcard, elemType, elemRange, path) ->
                 // Create VarRef to the hidden tuple
                 let tupleRef = builder.Create(
                     SemanticKind.VarRef(hiddenName, Some hiddenBinding.Id),
                     tupleExprNode.Type,
-                    range,
+                    elemRange,
                     arena = env.CurrentArena)
 
-                // Create TupleGet node
-                let tupleGetNode = builder.Create(
-                    SemanticKind.TupleGet(tupleRef.Id, i),
-                    elemType,
-                    range,
-                    children = [tupleRef.Id])
-                builder.SetParent(tupleRef.Id, tupleGetNode.Id)
+                let tupleGetNode =
+                    path |> List.fold (fun (value: SemanticNode) (index, ty) ->
+                        let projection = builder.Create(
+                            SemanticKind.TupleGet(value.Id, index), ty, elemRange,
+                            children = [value.Id])
+                        builder.SetParent(value.Id, projection.Id)
+                        projection) tupleRef
 
                 // Create binding for the element (unless wildcard)
                 let bindingName = if isWildcard then sprintf "_discard_%d" i else elemName
                 let elemBinding = builder.Create(
                     SemanticKind.Binding(bindingName, isMutable, false, None),
                     elemType,
-                    range,
+                    elemRange,
                     children = [tupleGetNode.Id])
                 builder.SetParent(tupleGetNode.Id, elemBinding.Id)
 

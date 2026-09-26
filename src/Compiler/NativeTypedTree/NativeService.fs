@@ -687,7 +687,8 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
                   // Elaboration fields (unified - source-based nodes have None)
                   PhaseTypes.PhaseNodeOutput.ElaborationKind = elaborationKind
                   PhaseTypes.PhaseNodeOutput.ElaborationFor = elaborationFor
-                  PhaseTypes.PhaseNodeOutput.ElaborationId = elaborationId })
+                  PhaseTypes.PhaseNodeOutput.ElaborationId = elaborationId
+                  PhaseTypes.PhaseNodeOutput.Specialization = PhaseEmitter.specializationSnapshot node })
         
         let summary =
             if phase.Number >= 4 then
@@ -963,10 +964,11 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // the map is copied per instantiation; from here the node map is immutable (I2).
     let residual = saturationResidual builder resolvedNodes diagnostics
     let sourceNodes = resolvedNodes
+    // Applied specialization has historical source/clone correspondence before
+    // ordinary saturation starts; seed those derivations in initial F.
+    let specialization = Monomorphization.runWithEvidence resolvedNodes
     let resolvedNodes =
-        resolvedNodes
-        // Generic (TForall) top-level functions are compiled once per instantiation.
-        |> Monomorphization.run
+        specialization.Nodes
         // `+` resolved at the string kind carries the concat intrinsic (design c.3, D5).
         |> dispatchStringAddition
 
@@ -988,8 +990,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         StaticStringPool = None
         Escaping = lazy Map.empty
         Codata = lazy Codata.empty
-        // F is empty at construction; enrichment mints into it at saturation.
-        Edges = []
+        Edges = specialization.Derivations
     }
 
     // Compute source diagnostics before generated activation changes ownership.
@@ -1094,6 +1095,11 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // Iterator invocation effects remain linked to their exact possible source
     // bodies. The effect/range fixed points consume these dependencies jointly.
     let finalGraph = Clef.Compiler.Nanopass.SequenceEffects.normalize finalGraph
+    // Recurrence admission consumes current local demand/order evidence. These
+    // relations precede numeric analysis; they do not establish final segments,
+    // dominance or continuation frames. Later structural rewrites refresh them.
+    let finalGraph = Clef.Compiler.Nanopass.SequenceEvaluation.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.EagerDemand.normalize finalGraph
 
     //=========================================================================
     // Pass 5: Obligation Elaboration -- the declared platform, cross-compiled
@@ -1131,7 +1137,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // resident byte-read evidence supplies the exact input enclosure.
     let finalGraph, rangeDiagnostics =
         if obj.ReferenceEquals(finalGraph, byteGraph) then finalGraph, rangeDiagnostics
-        else RangeAnalysis.run platformContext byteGraph
+        else
+            let byteGraph = Clef.Compiler.Nanopass.SequenceEvaluation.normalize byteGraph
+            let byteGraph = Clef.Compiler.Nanopass.EagerDemand.normalize byteGraph
+            RangeAnalysis.run platformContext byteGraph
 
     //=========================================================================
     // Placement (CS-11 slice 0, Dimensional_Range_Design.md ruling 2): every
@@ -1281,7 +1290,13 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 Pins = PlatformBindings.pins settled
                 DeclarationRootLambdas = Roots.declarationRootLambdas settled
                 FunctionPointers = functionPointers
-                Mmio = mmio } }
+                Mmio = mmio
+                ProgramStorage = ProgramStorageInventory.empty } }
+
+    let programInventory = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramStorage.settle finalGraph
+    let finalGraph =
+        let facts = finalGraph.Codata.Value
+        { finalGraph with Codata = lazy { facts with ProgramStorage = programInventory } }
 
     let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
     let quotationErrors = quotationDiagnostics finalGraph
