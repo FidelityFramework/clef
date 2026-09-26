@@ -937,6 +937,13 @@ let private unusedBindingDiagnostics (ownedSources: Set<string>) (graph: Semanti
 /// Build a CheckResult from builder state and diagnostics
 /// platformContext: Optional platform context for freestanding builds (enables entry point elaboration)
 let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list) (modulePaths: Map<ModulePath, NodeId list>) (diagnostics: Diagnostic list) (platformContext: PlatformContext option) (ownedSources: Set<string>) : CheckResult =
+    // Host-only diagnosis of source settlement; never changes the graph or
+    // supplies semantic evidence. Disabled unless explicitly requested.
+    let phaseTimer = System.Diagnostics.Stopwatch.StartNew()
+    let tracePhase name =
+        if System.Environment.GetEnvironmentVariable("CLEF_PHASE_TIMING") = "1" then
+            System.Console.Error.WriteLine("[CCS phase] {0} {1:F3}s", name, phaseTimer.Elapsed.TotalSeconds)
+    tracePhase "source-input"
     let declRoots = findDeclarationRoots builder.Nodes topLevelNodes
 
     // CRITICAL: Apply type substitutions to resolve type variables after constraint solving.
@@ -1122,6 +1129,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // thresholds) and before the declaration is checked.
     //=========================================================================
     let finalGraph, rangeDiagnostics = RangeAnalysis.run platformContext finalGraph
+    tracePhase "ranges"
     let byteGraph, stringByteDiagnostics = Clef.Compiler.Nanopass.StringByteStorage.normalize finalGraph
     // New copy loops and their read/write dependencies participate in the same
     // range fixed point. Replace preliminary diagnostics and invalidated tables;
@@ -1153,6 +1161,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // declaration roots' lambdas. Composer reads Codata and computes none of it.
     //=========================================================================
     let finalGraph, curry = Curry.normalize finalGraph
+    tracePhase "curry"
     // Local evaluation contracts cite the final body/operand identities after
     // structural normalization. They do not yet establish suspension segments,
     // dominance or a frame that Alex could witness.
@@ -1200,10 +1209,13 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // before proving residence, so no preliminary missing-lifetime diagnostic
     // survives after its owning relationship has been supplied.
     let preparedSequences = Clef.Compiler.Nanopass.SequenceRuntime.prepareWhenSourceAdmitted sourceAdmitted finalGraph curry
+    tracePhase "sequence-preparation"
     let finalGraph = preparedSequences.Graph
     let finalGraph, environments = Clef.Compiler.Nanopass.ClosureEnvironmentSettlement.settlePreparedWhenSourceAdmitted sourceAdmitted
                                     preparedSequences.Destinations preparedSequences.FactoryCalls finalGraph
+    tracePhase "environment-settlement"
     let finalGraph, sequences = Clef.Compiler.Nanopass.SequenceRuntime.normalizePreparedWhenSourceAdmitted sourceAdmitted { preparedSequences with Graph = finalGraph }
+    tracePhase "sequence-settlement"
     let curry = sequences.Curry
     // Representation nanopasses can clone or retire marked occurrences. Demand
     // belongs to the current marker/operand/frontier incidence, not the earlier
@@ -1215,7 +1227,9 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // supplies the physical omission convention before callable projection.
     let finalGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize finalGraph
     let finalGraph, lazies = Clef.Compiler.Nanopass.LazyRuntime.settleWhenSourceAdmitted sourceAdmitted finalGraph
+    tracePhase "lazy-settlement"
     ObligationDischarge.emit finalGraph  // Includes settled continuation frame obligations.
+    tracePhase "obligations"
     let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
     let mmio, mmioDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess.settle (diagnostics @ residual @ rangeDiagnostics) finalGraph
     let environmentOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.origins finalGraph
@@ -1231,6 +1245,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
               Message = "Callable boundary requires further settlement: " + pending.Reason
               Range = finalGraph.Nodes[pending.Occurrence].Range; RelatedNodes = [pending.Occurrence]
               Reachability = ReachabilityContext.Reachable })
+    tracePhase "callable-carriers"
     let mutableCallables =
         Clef.Compiler.PSGSaturation.SemanticGraph.MutableCallableStorage.settle callableCarriers environments.Layouts finalGraph
     let callableFlows, callableFlowResiduals =
@@ -1243,6 +1258,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
               Message = "Callable value flow requires further settlement: " + pending.Reason
               Range = finalGraph.Nodes[pending.Occurrence].Range; RelatedNodes = [pending.Occurrence]
               Reachability = ReachabilityContext.Reachable })
+    tracePhase "callable-flows"
     let allocationResidences =
         Escape.analyze finalGraph
         |> fun facts -> environments.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
@@ -1252,6 +1268,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // emission traversal must not invoke a use census or inference through a
     // lazily evaluated codata member.
     let ordinaryDemand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.project finalGraph
+    tracePhase "ordinary-demand"
     let finalGraph =
         let settled = finalGraph
         { finalGraph with
@@ -1277,9 +1294,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 CallableJoins = mutableCallables.Joins
                 CallableFlows = callableFlows
                 MutableCallableStorage = mutableCallables.Storage
-                CallableEmission = CallableEmissionProjection.empty
                 OrdinaryDemand = ordinaryDemand
-                StorageWitness = StorageWitnessProjection.empty
+                WitnessEmission = None
                 ContinuationFrames = sequences.Frames
                 SequenceOrigins = sequences.Origins
                 SequenceFlows = sequences.Flows
@@ -1298,6 +1314,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 ProgramStorage = ProgramStorageInventory.empty } }
 
     let programInventory = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramStorage.settle finalGraph
+    tracePhase "program-storage"
     let finalGraph =
         let facts = finalGraph.Codata.Value
         { finalGraph with Codata = lazy { facts with ProgramStorage = programInventory } }
@@ -1322,6 +1339,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                       RelatedNodes = Set.toList failure.Participants; Reachability = ReachabilityContext.Reachable }))
 
     let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
+    tracePhase "witness-publication"
     let quotationErrors = quotationDiagnostics finalGraph
 
     // Phase 5: Emit final result

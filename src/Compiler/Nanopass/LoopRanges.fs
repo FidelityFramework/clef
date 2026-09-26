@@ -10,7 +10,8 @@ open Clef.Compiler.Baker.Ingredients.Obligations
 module Recipes = Clef.Compiler.Baker.Recipes.LoopRangeRecipes
 
 let private isOurs = function
-    | SemanticKind.Obligation { Body = ObligationBody.FiniteLoopTrip _ | ObligationBody.AdditiveLoopInvariant _ | ObligationBody.FiniteLinearRecurrence _ } -> true
+    | SemanticKind.Obligation { Body = ObligationBody.FiniteLoopTrip _ | ObligationBody.AdditiveLoopInvariant _ } -> true
+    | SemanticKind.Obligation { Body = ObligationBody.FiniteLinearRecurrence _; Kind = "finite-linear-recurrence" } -> true
     | _ -> false
 
 let recognize inputs (graph: SemanticGraph) =

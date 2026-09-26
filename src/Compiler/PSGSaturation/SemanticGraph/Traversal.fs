@@ -282,8 +282,10 @@ let foldWithSCFRegions
 let map (f: SemanticNode -> SemanticNode) (graph: SemanticGraph) : SemanticGraph =
     { graph with
         Nodes = graph.Nodes |> Map.map (fun _ node -> f node) }
+    |> SemanticGraph.invalidateWitness
 
 /// Filter nodes
 let filter (predicate: SemanticNode -> bool) (graph: SemanticGraph) : SemanticGraph =
     { graph with
         Nodes = graph.Nodes |> Map.filter (fun _ node -> predicate node) }
+    |> SemanticGraph.invalidateWitness

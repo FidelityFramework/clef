@@ -280,30 +280,3 @@ let projectValidated graph : Result<OrdinaryDemandProjection, WitnessProjectionF
                     Reason = "Ordinary-demand source relations do not match the current complete use proof."
                     Participants = (expectedAt @ actualAt) |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList })
         Error failures
-
-let private emissionSeals =
-    System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, OrdinaryDemandProjection>()
-
-/// Seal the exact completed graph after all source graph copies and codata
-/// settlement. A rejected or missing joint cannot masquerade as a valid empty
-/// projection. Re-sealing the same unchanged graph preserves its authority.
-let sealEmission graph : Result<unit, string> =
-    let reject message =
-        emissionSeals.Remove graph |> ignore
-        Error message
-    match projectValidated graph with
-    | Error failures -> reject (failures |> List.map _.Reason |> String.concat " ")
-    | Ok projection ->
-        if graph.Codata.Value.OrdinaryDemand <> projection then
-            reject "Ordinary-demand emission projection differs from the settled source proof."
-        else
-            let admitted = emissionSeals.GetValue(graph, fun _ -> projection)
-            if admitted = projection then Ok ()
-            else reject "Ordinary-demand authority was revised after this graph was sealed."
-
-/// Emission performs an exact graph-reference lookup only: no edge scan, origin
-/// discovery, type inference, demand analysis or fallback proof is permitted.
-let tryEmission graph : Result<OrdinaryDemandProjection, string> =
-    match emissionSeals.TryGetValue graph with
-    | true, projection -> Ok projection
-    | _ -> Error "The current graph has no sealed ordinary-demand emission projection."

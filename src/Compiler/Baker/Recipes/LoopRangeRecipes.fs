@@ -446,16 +446,20 @@ let private finiteTrip range (induction: Induction) =
 let defaultCertificateBits = 1048576I
 exception private RecurrenceBudgetExceeded
 
-/// Only current numeric premises feed the certificate. In particular no prior
-/// cell/update conclusion may supply its own seed or transition coefficient.
-let saturateLinearWithBudget maximumBits range (item: LinearRecurrence) : Result<LinearSaturated, LoopRangeResidual> =
-    let bounded id = match range id with ValueRange.Bounded(lo, hi) when 0I <= lo && lo <= hi -> Some(lo, hi) | _ -> None
-    let seeds = item.Initials |> List.map bounded
-    let coefficients = item.Coefficients |> List.map (List.map (function Constant value when value >= 0I -> Some(value, value) | Value id -> bounded id | _ -> None))
-    match finiteTrip range item.Induction with
-    | Error reason -> Error reason
-    | Ok _ when (seeds |> List.exists Option.isNone) || (coefficients |> List.exists (List.exists Option.isNone)) -> Error LoopRangeResidual.MissingBound
-    | Ok trip ->
+/// Check a finite nonnegative numeric enclosure. The caller separately proves
+/// the source transition and activation bound; no loop or storage fact follows
+/// merely from this literal certificate.
+let certifyLinearWithBudget maximumBits maximumIterations
+                            (lower: bigint list) (upper: bigint list)
+                            (matrixLower: bigint list list) (matrixUpper: bigint list list)
+                            : Result<FiniteLinearRecurrenceModel * bigint, LoopRangeResidual> =
+    let size = upper.Length
+    let square (matrix: bigint list list) = matrix.Length = size && matrix |> List.forall (fun row -> row.Length = size)
+    if (size <> 1 && size <> 2) || lower.Length <> size || not (square matrixLower && square matrixUpper) ||
+       maximumIterations < 0I || not (List.forall2 (fun lo hi -> 0I <= lo && lo <= hi) lower upper) ||
+       not (List.forall2 (List.forall2 (fun lo hi -> 0I <= lo && lo <= hi)) matrixLower matrixUpper) then
+        Error LoopRangeResidual.MissingBound
+    else
       try
         let mutable used = 0I
         let charge bits =
@@ -473,34 +477,46 @@ let saturateLinearWithBudget maximumBits range (item: LinearRecurrence) : Result
         let multiply left right =
             let columns = List.transpose right
             left |> List.map (fun row -> columns |> List.map (dot row))
-        let lower, upper = seeds |> List.choose (fun value -> value) |> List.unzip
-        let coefficients = coefficients |> List.map (List.choose (fun value -> value))
-        let matrixLower = coefficients |> List.map (List.map fst)
-        let matrixUpper = coefficients |> List.map (List.map snd)
-        [trip.InitialLower; trip.LimitUpper; trip.MinimumStep; trip.MaximumIterations] @
+        [maximumIterations] @
             lower @ upper @ List.concat matrixLower @ List.concat matrixUpper |> List.iter retain
         let project matrix = matrix |> List.map (fun row -> dot row upper)
         if not (List.forall2 (<=) upper (project matrixUpper)) then Error LoopRangeResidual.NonAdditive else
-        let size = upper.Length
         let identity = List.init size (fun row -> List.init size (fun column -> if row = column then 1I else 0I))
         let rec exponentBits value acc =
             if value = 0I then acc else
             charge (bits value + 1I)
             exponentBits (value / 2I) ((value % 2I = 1I) :: acc)
         let _, power, steps =
-            exponentBits trip.MaximumIterations [] |> List.fold (fun (exponent, power, steps) odd ->
+            exponentBits maximumIterations [] |> List.fold (fun (exponent, power, steps) odd ->
                 let squared = multiply power power
                 let next = if odd then multiply squared matrixUpper else squared
                 let exponent = add (product 2I exponent) (if odd then 1I else 0I)
                 exponent :: List.concat next |> List.iter retain
                 exponent, next, { Odd = odd; Exponent = exponent; Matrix = next } :: steps) (0I, identity, [])
         let model = {
-            MaximumIterations = trip.MaximumIterations; InitialLower = lower; InitialUpper = upper
+            MaximumIterations = maximumIterations; InitialLower = lower; InitialUpper = upper
             CoefficientLower = matrixLower; CoefficientUpper = matrixUpper; Powers = List.rev steps
             Lower = List.replicate size 0I; Upper = project power }
         model.Lower @ model.Upper |> List.iter retain
-        Ok { Recurrence = item; Trip = trip; Invariant = model; WorkBits = used }
+        Ok(model, used)
       with RecurrenceBudgetExceeded -> Error LoopRangeResidual.ProofResources
+
+/// Only current numeric premises feed the certificate. In particular no prior
+/// cell/update conclusion may supply its own seed or transition coefficient.
+let saturateLinearWithBudget maximumBits range (item: LinearRecurrence) : Result<LinearSaturated, LoopRangeResidual> =
+    let bounded id = match range id with ValueRange.Bounded(lo, hi) when 0I <= lo && lo <= hi -> Some(lo, hi) | _ -> None
+    let seeds = item.Initials |> List.map bounded
+    let coefficients = item.Coefficients |> List.map (List.map (function Constant value when value >= 0I -> Some(value, value) | Value id -> bounded id | _ -> None))
+    match finiteTrip range item.Induction with
+    | Error reason -> Error reason
+    | Ok _ when (seeds |> List.exists Option.isNone) || (coefficients |> List.exists (List.exists Option.isNone)) -> Error LoopRangeResidual.MissingBound
+    | Ok trip ->
+        let lower, upper = seeds |> List.choose id |> List.unzip
+        let coefficients = coefficients |> List.map (List.choose id)
+        let matrixLower = coefficients |> List.map (List.map fst)
+        let matrixUpper = coefficients |> List.map (List.map snd)
+        certifyLinearWithBudget maximumBits trip.MaximumIterations lower upper matrixLower matrixUpper
+        |> Result.map (fun (model, used) -> { Recurrence = item; Trip = trip; Invariant = model; WorkBits = used })
 
 let saturateLinear range item = saturateLinearWithBudget defaultCertificateBits range item
 

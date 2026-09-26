@@ -247,7 +247,12 @@ own checked rules. See the NFT companion and bidirectional composition plan.
 
 **Nets (INet).** The interaction-net rule system as hyperedge structure — the $k$-ary generalization of the binary active pair, where $k$ is set by the domain's algebra.
 
-**Blocker to settle before this phase starts.** `Alex/Pipeline/MLIRNanopass.fs:1-18` is an MLIR→MLIR transformation pass **already running post-witness in the middle end**, and its roadmap states the intent to add *"DCont lowering (sequential/effectful patterns → stack-based async)"* and *"Inet lowering (parallel/pure patterns → graph reduction)"* **there**. That is the opposite of this plan and of the stated requirement that both be fully elaborated in the PHG. It collides with `Thin_Middle_End_Design.md:22` and `:30`, and with `Single_Flattening_Design.md:38` and `:52` ("The count is one"). Two live documents plan opposite futures for the same file; the plan takes the graph side, and `MLIRNanopass.fs`'s roadmap should be retired in writing before Phase 3 code begins.
+**Source ownership.** Suspension and any admitted interaction-net semantics are
+elaborated and saturated in CCS/Baker through ingredients and recipes. The audit
+recorded a post-witness middle-end transformation in `MLIRNanopass.fs`; that is
+a boundary violation, not a second implementation direction. Alex passively
+witnesses settled graph structure. Target-specific transformations belong to
+Composer's backend; custom MLIR plugins and their compatibility paths are retired.
 
 ## Phase 4 — Cross-apply, and the two dispatches
 
@@ -263,7 +268,10 @@ Retires HelloProof's `read_bound`/`read_copy_bound` leaks, deletes `pSysReadline
 
 This is not deferred work at the end; it is what each phase above *is*, seen from the other side. Every hyperedge family that lands in the graph removes a corresponding computation from Alex. The target end state: Alex holds nothing but transcription, and `XDCTransfer.fs` is what every transfer looks like.
 
-**The doctrinal contradiction gets resolved in the graph's favor.** `NativeTypes.fs:655-656` says *"CCS preserves type identity; **Alex resolves to concrete size**"*; `CCS_Architecture.md:205` says Alex *"does not compute, infer, or decide."* These are irreconcilable as written. The plan takes the second: layout is settled in the PHG, and those `NativeTypes.fs` comments are corrected as Phase 2 lands.
+CCS/Baker settles layout in the PSG from source identities, selected declarations
+and complete ordered premises. Alex consumes that settlement without inference
+or layout computation. Vestigial notes assigning size resolution to Alex have
+no authority.
 
 The inventory to move, with its destination:
 
@@ -273,7 +281,7 @@ The inventory to move, with its destination:
 | `ClosureLayout` construction (`SSAAssignment.fs:202-320`) | Baker recipe | Phase 2 |
 | Record field offsets (`RecordPatterns.fs:28`), option repr (`OptionWitness.fs:38`), DU layout incl. the `tryHead` bug (`TypeMapping.fs:368-396`), tuple/lazy/seq offsets (`TypeMapping.fs:422-470`) | layout hyperedges; one size model replaces three | Phase 2 |
 | Seq/async state machine (`YieldStateIndices.fs`) | suspension recipe | Phase 3 |
-| DCont + INet lowering (planned for `MLIRNanopass.fs`) | Baker recipes — **never built in the middle end** | Phase 3 |
+| Suspension and admitted interaction-net semantics | CCS/Baker ingredients and recipes; passive Alex witnessing; target realization in the backend | Phase 3 |
 | `1024L` readln buffer + unconditional `-1` newline trim (`PlatformPatterns.fs:305,313,326`) | platform-declaration cross-apply | Phase 4 |
 | SysV struct-classification ABI (`PlatformPatterns.fs:422-430`, duplicated `:693`) | target coeffect on the graph | Phase 4 |
 | Escape-kind defaulting (`EscapeAnalysis.fs:291` → `StackScoped` when absent) | required annotation; absence becomes a diagnostic | Phase 5 |
@@ -330,7 +338,6 @@ Two independent correctness checks fall out of Phase 2 and are worth asserting a
 ## Open items
 
 - **Tier 1 boundary.** The callsheet names an FPGA width/interval "Tier 1/2 seam" but does not enumerate Tier 1 families the way it does Tier 2's thirteen. Worth pinning before Phase 4 wires dispatch.
-- **`MLIRNanopass.fs` roadmap** must be retired in writing before Phase 3 — see the blocker note there.
 - **`SeqSaturation` consumer.** Nothing in clef reads it; confirm the out-of-tree consumer before Phase 3 replaces the type.
 - **The `Thin_Middle_End_Design.md` §5 vocabulary is asserted but never enumerated**, so "additions to that vocabulary are additions to this document first" is unenforceable — and has not held (`hw`, `comb`, `seq`, `smt`, `aie`, `builtin`, `ffi.`). Enumerate it as part of Phase 0 so the drain has a fixed target.
 - Three architecture docs are cited by code but absent: `docs/PSG_Elaboration_Fold_Architecture.md`, `docs/Coeffect_Analysis_Architecture.md` (clef-side), and the "Serena memory" references in `Recipe.fs:8`, `FanOut.fs:14`, `FoldIn.fs:11`.

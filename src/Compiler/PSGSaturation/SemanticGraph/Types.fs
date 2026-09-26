@@ -885,6 +885,9 @@ type EdgeRole =
     /// Exact invocation/formal/actual correspondence for an omitted physical
     /// operand. Direct explicit eager demand remains independently required.
     | OrdinaryUnusedActual
+    /// Complete rooted activation census and typed affine transitions for a
+    /// finite program cell. The arithmetic certificate supplies no lifetime.
+    | FiniteCellRange
 
 /// One directed relation. Sources retain ordered participant occurrences;
 /// structural projections may be single-source while joint facts are n-ary.
@@ -1868,7 +1871,10 @@ type CallableEmissionProjection = {
     FunctionBindings: Set<NodeId>
     DefinitionOnlyBindings: Set<NodeId>
     DefinitionOnlyLambdas: Set<NodeId>
-    Arguments: Map<NodeId, int>
+    /// Physical components of each logical formal, indexed by its actual code
+    /// declaration. Empty components mean source-proven omitted transport.
+    /// A shared formal can occupy different positions in different occurrences.
+    Arguments: Map<NodeId, Map<NodeId, int list>>
     AliasTargets: Map<NodeId, NodeId>
     TakesEnvironment: Set<NodeId>
     UnitNodes: Set<NodeId>
@@ -1952,6 +1958,14 @@ module StorageWitnessProjection =
         LiteralPoolAnchors = []
     }
 
+/// Complete emission-domain facts published by their source owners. Absence is
+/// distinct from a valid publication whose domain maps happen to be empty.
+type WitnessEmissionProjection = {
+    Ordinary: OrdinaryDemandProjection
+    Callable: CallableEmissionProjection
+    Storage: StorageWitnessProjection
+}
+
 /// The codata the graph carries for emission, settled once at the end of saturation.
 type Codata = {
     Escapes: Map<NodeId, EscapeKind>
@@ -1973,9 +1987,8 @@ type Codata = {
     CallableJoins: Map<NodeId, CallableJoin>
     CallableFlows: Map<NodeId, CallableFlow>
     MutableCallableStorage: Map<NodeId, MutableCallableStorage>
-    CallableEmission: CallableEmissionProjection
     OrdinaryDemand: OrdinaryDemandProjection
-    StorageWitness: StorageWitnessProjection
+    WitnessEmission: WitnessEmissionProjection option
     ContinuationFrames: Map<NodeId, ContinuationFrame>
     /// A unique sequence constructor at a use, established in Baker. This
     /// evidence permits elision of the known function half of (fn, env).
@@ -2000,6 +2013,15 @@ type Codata = {
     Mmio: Map<NodeId, MmioAccessEvidence>
     ProgramStorage: ProgramStorageInventory
 }
+with
+    member this.CallableEmission =
+        match this.WitnessEmission with
+        | Some facts -> facts.Callable
+        | None -> invalidOp "Callable witnessing requires source-published codata."
+    member this.StorageWitness =
+        match this.WitnessEmission with
+        | Some facts -> facts.Storage
+        | None -> invalidOp "Storage witnessing requires source-published codata."
 
 module Codata =
     let empty : Codata = {
@@ -2019,9 +2041,8 @@ module Codata =
         CallableJoins = Map.empty
         CallableFlows = Map.empty
         MutableCallableStorage = Map.empty
-        CallableEmission = CallableEmissionProjection.empty
         OrdinaryDemand = OrdinaryDemandProjection.empty
-        StorageWitness = StorageWitnessProjection.empty
+        WitnessEmission = None
         ContinuationFrames = Map.empty
         SequenceOrigins = Map.empty
         SequenceFlows = Map.empty

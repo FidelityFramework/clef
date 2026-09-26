@@ -80,7 +80,9 @@
     <Compile Include="SpecializationTraceCases.fs" />
     <Compile Include="LazyRangeCases.fs" />
     <Compile Include="LazyEffectRangeCases.fs" />
+    <Compile Include="FiniteCellRangeCases.fs" />
     <Compile Include="OrdinaryDemandCases.fs" />
+    <Compile Include="CallableEmissionCases.fs" />
     <Compile Include="StorageWitnessCases.fs" />
     <Compile Include="EnvironmentFactoryResultsCases.fs" />
     <Compile Include="SequenceEvaluationCases.fs" />

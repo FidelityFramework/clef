@@ -161,13 +161,19 @@ module SemanticGraph =
         Edges = []
     }
 
+    /// Source graph edits invalidate witness publication while preserving the
+    /// old snapshot. Re-publication belongs to source settlement.
+    let invalidateWitness (graph: SemanticGraph) : SemanticGraph =
+        let previous = graph.Codata
+        { graph with Codata = lazy { previous.Value with WitnessEmission = None } }
+
     /// Set the platform context on a graph
     let withPlatform (platform: PlatformContext) (graph: SemanticGraph) : SemanticGraph =
-        { graph with Platform = Some platform }
+        { graph with Platform = Some platform } |> invalidateWitness
 
     /// Add a node to the graph
     let addNode (node: SemanticNode) (graph: SemanticGraph) : SemanticGraph =
-        { graph with Nodes = Map.add node.Id node graph.Nodes }
+        { graph with Nodes = Map.add node.Id node graph.Nodes } |> invalidateWitness
 
     /// Get a node by ID
     let tryGetNode (id: NodeId) (graph: SemanticGraph) : SemanticNode option =
@@ -194,7 +200,7 @@ module SemanticGraph =
 
     /// Add a declaration root
     let addDeclarationRoot (id: NodeId) (root: DeclRoot) (graph: SemanticGraph) : SemanticGraph =
-        { graph with DeclarationRoots = (id, root) :: graph.DeclarationRoots }
+        { graph with DeclarationRoots = (id, root) :: graph.DeclarationRoots } |> invalidateWitness
 
     /// Get all nodes of a given kind
     let nodesOfKind (predicate: SemanticKind -> bool) (graph: SemanticGraph) : SemanticNode list =
@@ -214,11 +220,11 @@ module SemanticGraph =
 
     /// Add nodes to V.
     let addNodes (nodes: SemanticNode list) (graph: SemanticGraph) : SemanticGraph =
-        { graph with Nodes = nodes |> List.fold (fun acc n -> Map.add n.Id n acc) graph.Nodes }
+        { graph with Nodes = nodes |> List.fold (fun acc n -> Map.add n.Id n acc) graph.Nodes } |> invalidateWitness
 
     /// Add hyperedges to F.
     let addEdges (edges: Hyperedge list) (graph: SemanticGraph) : SemanticGraph =
-        { graph with Edges = graph.Edges @ edges }
+        { graph with Edges = graph.Edges @ edges } |> invalidateWitness
 
     /// Edges whose target is `id`: what produces or constrains this node.
     let edgesInto (id: NodeId) (graph: SemanticGraph) : Hyperedge list =

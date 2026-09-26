@@ -195,12 +195,18 @@ let prepareWhenSourceAdmitted sourceAdmitted (graph: SemanticGraph) (curry: Curr
     { prepared with Graph = graph }
 
 let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactoryResults.Preparation) =
+    let timer = System.Diagnostics.Stopwatch.StartNew()
+    let trace name =
+        if System.Environment.GetEnvironmentVariable("CLEF_PHASE_TIMING") = "1" then
+            System.Console.Error.WriteLine("[CCS sequence] {0} {1:F3}s", name, timer.Elapsed.TotalSeconds)
+    trace "begin"
     let graph = prepared.Graph
     let realize = sourceAdmitted && graph.Platform.IsSome
     let curry = prepared.Curry
     let origins, _ = Origins.settle graph curry
     let graph = if realize then emptyConsumers graph origins else graph
     let admitted, currentEdges = SequenceCurrentAdmission.certify graph
+    trace "current-admission"
     let snapshots =
         if realize then SequenceAggregateValues.prepare graph admitted currentEdges
         else { SequenceAggregateValues.Graph = graph; Reads = admitted; Certificates = currentEdges; Residences = Map.empty; Unresolved = [] }
@@ -209,6 +215,7 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
     let graph = { snapshots.Graph with Edges = (snapshots.Graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.IteratorCurrentAdmitted)) @ currentEdges }
     let graph = if snapshotsChanged then SequenceEvaluation.normalize graph else graph
     let origins, originFacts = Origins.settle graph curry
+    trace "origins-and-snapshots"
     if not realize then graph, { empty with Origins = origins; Flows = Origins.describe graph originFacts; CurrentReads = admitted; Curry = curry }
     else
         let currentDiagnostics =
@@ -221,6 +228,7 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
                     | _ -> None
                 | _ -> None) |> Seq.toList
         let residence = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceResidence.analyzeWithRegions graph prepared.Destinations prepared.FactoryCalls
+        trace "residence"
         let graph = ObligationElaboration.foldIn { Enrichment.empty with NewEdges = residence.Evidence } graph
         let residenceDiagnostics = residence.Unresolved |> List.map (fun pending ->
             residual graph.Nodes[pending.Site] [] (sprintf "Allocation residence is unresolved: %A" pending.Reason))
@@ -230,6 +238,7 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
                 match Control.forOwner graph node with Ok control -> Some(node.Id, control) | Result.Error _ -> None
             | _ -> None) |> Map.ofSeq
         let familyPlan = Families.plan graph (Origins.describe graph originFacts) controls
+        trace "family-plan"
         let planned =
             graph.Nodes.Values |> Seq.choose (fun node ->
                 match node.Kind with
@@ -238,6 +247,7 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
                     Some (framePlan graph family node)
                 | _ -> None) |> Seq.toList
         let plans = planned |> List.choose (function Ok plan -> Some plan | _ -> None)
+        trace "frame-plan"
         let regionPlan = SequenceRegions.settleWithFamilies graph
                             (plans |> List.map (fun (_, frame, _, _) -> frame.Owner, frame) |> Map.ofList)
                             residence.Regions origins familyPlan.ByOwner
@@ -259,6 +269,7 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
         let evidence = realized |> List.choose (function
             | Ok (_, machine, proof) -> Some { proof with NewEdges = machine.AggregateEvidence @ proof.NewEdges }
             | _ -> None) |> Enrichment.concat
+        trace "machine-evidence"
         let diagnostics = diagnostics @ (realized |> List.choose (function Result.Error error -> Some error | _ -> None))
         let machines = realized |> List.choose (function Ok (frame, machine, _) -> Some (frame, machine) | _ -> None)
         let byGenerator = machines |> List.map (fun (frame, machine) -> frame.Generator, machine) |> Map.ofList
@@ -338,6 +349,7 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
         let flows = Origins.describe rewritten propagatedFacts
         let frames = plans |> List.map (fun (_, frame, _, _) -> frame.Owner, frame) |> Map.ofList
         let families, familyEvidence, familyResiduals = Families.settle rewritten familyPlan frames flows
+        trace "family-settlement"
         let rewritten = ObligationElaboration.foldIn familyEvidence rewritten
         let residences = snapshots.Residences |> Map.fold (fun facts id site -> Map.add id site facts) residence.Sites
         let programInputs: SequenceProgramInstances.Inputs = {
@@ -345,6 +357,7 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
             Initializers = initializers; Destinations = prepared.Destinations }
         let rewritten, residences = SequenceProgramInstances.prepare rewritten programInputs prepared.FactoryCalls residences
         let copies, copyEvidence, copyResiduals = Families.copies rewritten families flows residences regions initializers prepared.Destinations
+        trace "program-storage-and-copies"
         let rewritten = ObligationElaboration.foldIn copyEvidence rewritten
         let diagnostics = diagnostics @ (familyResiduals @ copyResiduals |> List.map (fun pending -> residual rewritten.Nodes[pending.Site] [] pending.Reason))
         rewritten, {

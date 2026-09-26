@@ -138,6 +138,7 @@ type private Program = {
     LoopAccumulations: Map<NodeId, LoopRecipes.Accumulation>
     LoopLinear: Map<NodeId, LoopRecipes.LinearRecurrence * int>
     LazyEffects: Map<NodeId, LazyEffectRanges.Bound>
+    FiniteCells: Map<NodeId, FiniteCellRanges.Bound>
     /// Complete owner-local payload incidence for a certified current read.
     /// Missing/unknown origin alternatives deliberately have no entry.
     SequenceElements: Map<NodeId, NodeId * NodeId list>
@@ -1135,6 +1136,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         LoopAccumulations = Map.empty
         LoopLinear = Map.empty
         LazyEffects = Map.empty
+        FiniteCells = Map.empty
         SequenceElements = sequenceElements graph
         SequencePullBodies = sequencePulls
         SequenceInitializations = sequenceInitializations
@@ -1527,8 +1529,11 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     let lazyEffects = LazyEffectRanges.recognize graph
     let lazyTargets = lazyEffects |> List.collect (fun bound ->
         (bound.Cell, bound) :: (bound.Contributions |> List.map (fun contribution -> contribution.Value, bound))) |> Map.ofList
+    let finiteCells = FiniteCellRanges.recognize graph
+    let finiteTargets = finiteCells |> List.collect (fun bound ->
+        (bound.Cell, bound) :: (bound.Writes |> List.map (fun write -> write.Value, bound))) |> Map.ofList
     let program =
-        { program with Effects = effectsOf program; LazyEffects = lazyTargets }
+        { program with Effects = effectsOf program; LazyEffects = lazyTargets; FiniteCells = finiteTargets }
     let inputs: LoopRecipes.Inputs = {
         Operators = program.Callees |> Map.toList |> List.choose (fun (id, (callee, arguments)) ->
             match callee with
@@ -1868,6 +1873,8 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
             | Result.Error _ -> Some range
         | _ -> computed
     match computed with
+    | Some range when program.FiniteCells.ContainsKey node.Id ->
+        Some(ValueRange.meet range (FiniteCellRanges.range program.FiniteCells[node.Id]))
     | Some range when program.LazyEffects.ContainsKey node.Id ->
         let bound = program.LazyEffects[node.Id]
         Some(ValueRange.meet range (ValueRange.Bounded(bound.Lower, bound.Upper)))
@@ -2548,6 +2555,7 @@ let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph
     let diagnostics = unobservableDiagnostics program state @ coverageDiagnostics program state @ boundaryDiagnostics program state @ declaredDiagnostics program state @ spelledDiagnostics program state @ resourceDiagnostics
     let graph = { graph with Nodes = nodes; FieldRanges = lazy fieldRanges; ElementRanges = lazy elementRanges; Escaping = lazy program.EscapingLambdas }
     let graph = LazyEffectRanges.settle (program.LazyEffects.Values |> Seq.distinctBy _.Cell |> Seq.toList) graph
+    let graph = FiniteCellRanges.settle (program.FiniteCells.Values |> Seq.distinctBy _.Cell |> Seq.toList) graph
     (LoopRanges.saturate (current state) program.LoopRecognition graph, diagnostics)
 
 //-------------------------------------------------------------------------

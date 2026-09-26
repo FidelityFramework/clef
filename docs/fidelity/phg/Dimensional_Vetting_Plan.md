@@ -14,17 +14,12 @@ Dimensions are part of type identity and are never erased by the checker. CCS in
 and resolves the platform-dependent ones against the platform description at saturation, per
 program-graph section; the resolved values ride on the PSG as annotations, Alex reads them, and they are
 dropped only at native emission, where they become debug metadata and never touch the instruction stream
-(DTS/DMM §1.1, §2.3). This is the same rule that settled closures, obligations and layout: the graph
-decides, the witness observes. One text in the corpus still says otherwise and is corrected as part of
-this plan (step 6): `ntu-types.md` §1 ("type WIDTH is an erased assumption"; "resolved by Alex via
-`PlatformContext`"), §1.1, §3.2, §3.3, §7.1 and §9.2 place resolution below the witness boundary, against
-that chapter's own §2.1 and §5.1. `ntu-dimensional-architecture.md` §4.3 and §5.2 and the
-`NativeTypes.fs:69-72` comment already state the rule (both corrected 2026-09-04); the plan's earlier
-citation of them as inverting the design is withdrawn, while `NativeTypes.fs:658` and `:663` ("Alex
-resolves to concrete size via platform quotations") still invert it. The platform description is always
-present (there is no target-free compilation), so cross-apply at saturation is always available;
-`PlatformContext.resolveWidth` already lives in CCS (`NativeTypes.fs:443-448`), and the layout literals
-depend on it.
+(DTS/DMM §1.1, §2.3). CCS/Baker owns numeric selection, declaration settlement,
+widths and layout under the selected platform contract. It preserves complete
+ordered premises through nanopass ingredients, recipes and the rewrite record.
+Alex reads the published facts through passive Huet Element/Pattern/Witness
+composition. Vestigial notes assigning dimension or size resolution to Alex are
+removed; they do not define an alternative design.
 
 ## 1. The dimension families and their normative sources
 

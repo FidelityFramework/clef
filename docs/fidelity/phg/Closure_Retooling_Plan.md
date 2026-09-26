@@ -1,10 +1,9 @@
 # The Flat Closure in the PSG — Retooling Plan
 
-> Increment 2. The flat closure moves from an MLIR plugin below the boundary
-> into PSG elaboration and saturation, so Alex witnesses `func`/`memref`/`arith`
-> and stock `mlir-opt` lowers it. This is the microcosm of the whole program:
-> one representation, retooled from "settled below the graph and re-derived at
-> lowering" to "settled in the graph and witnessed out."
+> CCS/Baker settles the flat closure in the PSG through nanopass ingredients
+> and recipes. Alex passively composes its admitted physical form through Huet
+> Elements/Patterns/Witnesses. Target lowering belongs to Composer's backend.
+> All custom MLIR plugins and compatibility dependencies are retired immediately.
 >
 > The plan is written to be **structurally incapable of drift**: every step
 > cites the design section that decides it; every step lands through fan-out /
@@ -39,7 +38,7 @@ retain the actual acceptance boundaries and coordinated revisions.
 | Placement by the four-point lifetime lattice: stack / region / static / heap; no heap on a heapless target is a compile error | spec §3.3, §10.8 |
 | Nested named functions pass captures as parameters — no struct | spec §8, §10.11–12 |
 | Packing into words is a boundary event only, under the §6.7 contract | C-01 §14.2 "Fence packing is not a form"; §6.7 |
-| The plugins are "interim… superseded when per-obligation correspondence lands" | `Thin_Middle_End` §3; `mlir-plugins/ROADMAP.md` |
+| All custom MLIR plugins, conditional loaders and compatibility dependencies are retired; removal does not wait for consumer migration or a passing gate | Owner architecture requirements; C-series acceptance §1.1 |
 | Hyperedges: `(S_f, t_f, λ_f)`, fire when all sources are elaborated; consequence reaches emission as α or as a reified attribute, never by querying F | PHG paper §2.1–2.4 |
 | The witnessed vocabulary is fixed and additions go through the document first | `Thin_Middle_End` §22, §5 |
 
@@ -111,9 +110,9 @@ closure is the gate for all five. 13 is an SSA-assignment collision in the same
 not in the manifest and were not measured; the List surface is
 `Surface_Gaps` §Deferred.
 
-## 2. The microcosm, measured — sample 11 today
+## 2. The microcosm — historical September 4 sample 11 measurement
 
-Compiled fresh with the rebuilt compiler, `07_output.mlir`:
+The September 4 compiler's `07_output.mlir` contained:
 
 | | count |
 |---|---|
@@ -123,8 +122,9 @@ Compiled fresh with the rebuilt compiler, `07_output.mlir`:
 
 Every one of the 28 casts is a fact settled below the graph — "what a function
 value is as data, what a buffer is as data" — that the `flat-closure-lowering`
-plugin resolves after standard lowering. Remove the plugin today and the build
-fails at `--reconcile-unrealized-casts`. And the values it produces are wrong.
+plugin resolved after standard lowering. The recorded build failed without that
+plugin, and the resulting values were wrong. This failure is evidence of missing
+source settlement; it grants no permission to retain or restore the plugin.
 
 The path that produces this, per the witness-boundary audit: `ClosureLayout`
 built in Composer's `SSAAssignment.fs:202-320` with ~7 vestigial fields
@@ -160,19 +160,14 @@ func.func private @makeAdder_lambda(%env: memref<4xi8>, %x: i32) -> i32 {
 No cast anywhere. `--convert-func-to-llvm` lowers `func.constant` and
 `call_indirect`; `--finalize-memref-to-llvm` lowers the views. Stock passes.
 
-**The one open design decision, named.** Two SSA values cover binding, passing,
-returning, and HOF arguments — every case in sample 11. They do not by
-themselves cover a closure **stored as data**: captured by another closure, or
-carried as a DU payload (spec §8.1 calls that an escape point). A `memref`
-cannot hold a function-typed element, and function→data with no cast has no
-standard form. §14.2 is where this resolves: form 2 *Unmaterialized* when the
-callee is statically known at every site (a lambda literal captured by a
-lambda — the outer environment stores the inner *environment*, and the inner
-code is re-materialized by symbol); a materialized function field only when the
-callee is genuinely unknown (a closure *parameter* captured by a lambda). The
-second case is the `makeScaledAdder` / PAP territory `Partial_Application_
-Closure_Reification` records as an open gap. **Step 6 below writes that
-decision down before any code touches it.** Nothing in steps 1–5 depends on it.
+**Stored callable obligations.** Capturing a callable or carrying it through a
+union retains its implementation and actual environment instance under C-01/C-02.
+CCS/Baker establishes complete uses, typed components, placement and covering
+residence before publishing the form. Known-callee elision requires those source
+premises; equal layout or one code symbol cannot identify an environment instance.
+Missing stored-callable coverage remains an implementation obligation at its
+owning source contract. It does not reopen the canonical separate
+function/environment form or authorize packing, cast repair or analysis in Alex.
 
 ## 4. The mechanism — and only this mechanism
 
@@ -223,21 +218,26 @@ defaults when absent.
 
 | Removed | Why | Cited |
 |---|---|---|
-| `flat-closure-lowering` from `BackEnd/LLVM/Lowering.fs` pipeline (`resolve-closure-casts`) | nothing left to resolve | §14.3 |
+| All custom MLIR plugins, loaders, pass injection and compatibility paths, including closure and FFI reconciliation | Source semantics and declaration/ABI settlement belong to CCS/Baker; target realization belongs to the backend | Owner architecture requirements; C-series acceptance §1.1 |
 | `MemRefOp.IndexToMemRef`/`MemRefToIndex`, `FuncOp.IndexToFunc`/`FuncToIndex` and their `unrealized_conversion_cast` serialization | the cast constructors | `Thin_Middle_End` §3 |
 | `ClosureLayout` (`Coeffects.fs:72-133`) and `buildClosureLayout` (`SSAAssignment.fs:202-320`) | layout is the hyperedge's λ_f, settled in CCS | spec §9 |
 | offset computation in `LambdaWitness.fs:317-327, 546-632` and `ClosurePatterns.fs:226-268` | the witness reads | `Closure_Nanopass` §5 |
-| `V (10000 + tempIdx)` minting (`LambdaWitness:617`, `ClosurePatterns:103`) | SSAs are pre-assigned | Learning to Walk |
+| `V (10000 + tempIdx)` minting (`LambdaWitness:617`, `ClosurePatterns:103`) | Physical SSA identities derive from settled graph roles and block arguments; no preassignment pass | Current Alex composition contract |
 | `pFlatClosure`, `pNamedFunctionAsClosure` thunk synthesis | dead / synthesized below the graph | audit §4g |
 | the packed `memref<2xindex>` pair everywhere it is constructed or read | replaced by multi-value | §14.3 |
 
-`reconcile-ffi-externs` stays for now: it is the `ffi.` fence, and the fence
-becomes a boundary hyperedge under §6.7 — a later increment.
+Foreign declaration identity, typed signatures, ABI commitments and joint
+lifetime premises settle in CCS/Baker under §6.7. Alex witnesses their published
+forms; the backend realizes the selected ABI. No FFI reconciliation plugin is
+retained as an interim dependency.
 
 ## 6. Steps, gated
 
-Each step lands only when its gate is green. RoundTrip and the HelloProof
-harness run at every step and must not move.
+The steps below retain the original implementation sequence as historical
+context. The current C-series PRDs and checkpoint own dependency order and
+acceptance. Preserve each failing form, exact result and source owner during
+architectural correction. Plugin retirement is immediate and is not conditional
+on a green gate; subsequent source-contract repairs retain the valid oracles.
 
 1. **Measure** (§1 table). Gate: per-sample compile/run verdicts recorded;
    this is the baseline every later step is diffed against.
@@ -252,16 +252,15 @@ harness run at every step and must not move.
 4. **Fold-in**: form selection, layout onto α, VCs as obligations. Gate:
    `06a` gains the closure families (callsheet 8, 9, 11); `cvc5` unsat on all;
    HelloProof unchanged (it has no capturing lambda that materializes).
-5. **The witness reads; the casts go; the plugin goes.** `LambdaWitness` /
-   `ClosurePatterns` rewritten; cast constructors deleted; `Lowering.fs`
-   pipeline loses `resolve-closure-casts`. Gate: sample 11 **prints its
+5. **The witness reads the settled form.** `LambdaWitness` /
+   `ClosurePatterns` compose the published facts; cast constructors are removed
+   with the immediately retired plugin paths. Gate: sample 11 **prints its
    expected output** (C-01 §8.2, the first time); `grep -c
    unrealized_conversion_cast 07_output.mlir` = **0** on every sample that
    compiles; `Lowering.fs` has no `--load-pass-plugin` for closures.
-6. **The stored-closure decision.** A design note (`Closure_As_Data.md`)
-   deciding §14.2 form selection for a closure captured by a closure and for
-   DU payloads, citing spec §8.1 and `Partial_Application_Closure_Reification`
-   Option A. Then `makeScaledAdder` returns to sample 11 and prints. Gate:
+6. **Stored callable settlement.** Preserve actual callable components and their
+   source-owned form, layout, use and residence premises through captures and
+   DU payloads under C-01/C-02. Then `makeScaledAdder` returns to sample 11 and prints. Gate:
    sample 11's TODO is gone and it passes; sample 12 passes.
 7. **Spec leads — done 2026-09-04.** The spec moved ahead of the code rather
    than following it: `closure-representation` §2.1/§6.3, `backend-lowering`
@@ -271,7 +270,7 @@ harness run at every step and must not move.
    have a normative target to conform to, and the code is the gap until they
    land. The consequence drawn there — no `code_ptr` word in any environment,
    captures from `[0]` (closure) and `[2]` (lazy, seq) — is recorded in the
-   register's *Open* item for veto.
+   register's settled callable contract.
 
 8. **Supersede the stale design claims — done 2026-09-04.** The full
    classified inventory is `Design_Supersession_Register.md`, executed across
@@ -282,16 +281,16 @@ harness run at every step and must not move.
 
 ## 7. The drift gates — checked in CI, not remembered
 
-These are the structural guarantees. Each is a grep or an assertion; each is
-seeded green (or seeded with today's known violations as a warning list that
-must only shrink) and becomes an error when its list empties.
+These are structural requirements. The historical lint implementation and its
+warning lists do not establish their acceptance or authorize any retired path.
+Retain exact violations and their owners while architectural repairs proceed.
 
 | Gate | Rule | Enforces |
 |---|---|---|
 | **Dialect register** | every op prefix in `07_output.mlir` ∈ {`func`, `memref`, `arith`, `scf`, `index`} ∪ the admitted list in `Thin_Middle_End` §5; anything else fails | `Thin_Middle_End` §22, §5. **Admitting `affine` (or any dialect) = a row in the register, a design citation, and the sample that needs it.** Step-wise by construction. |
-| **Retired vocabulary** | `docs/fidelity/phg/drift-gate.sh` exits 0: no `cont.*`/`dcont.*` surface, no DCont/Inet dialect, no `unrealized_conversion_cast`, no `memref<2xindex>`, no `code_ptr`, no `flattenSequentials`, no `resolve-closure-casts`, no seven-dialect list, anywhere in the corpus except the superseding designs and the *scheduled* code rows (which only shrink) | `Design_Supersession_Register` |
-| **No deferred casts** | `unrealized_conversion_cast` count in witnessed MLIR = 0 | §14.3 | — today a *scheduled* row in `drift-gate.sh` (`Alex/`, `PSGElaboration/`, `tests/`, `samples/`); removing the row turns this gate on
-| **No plugins** | `Lowering.fs` contains no `--load-pass-plugin` for closure resolution | `Thin_Middle_End` §3 | — today a *scheduled* row (`BackEnd/LLVM/Lowering.fs`, `mlir-plugins/`)
+| **Retired vocabulary** | Documentation contains no prescriptions for Alex-owned semantic construction or custom-plugin dependencies; audit observations and explicit prohibitions retain their evidence | `Design_Supersession_Register` |
+| **No deferred casts** | `unrealized_conversion_cast` count in witnessed MLIR = 0; a scheduled-list exemption grants no acceptance | §14.3 |
+| **No plugins** | No custom MLIR plugin loading, pass injection or compatibility dependencies; no migration exemption | Owner architecture requirements; C-series acceptance §1.1 |
 | **Witnesses read** | no `sizeOf`, `mlirTypeSize*`, mutable byte-offset accumulator, or `V (10000 +` in `Alex/Witnesses/` or `Alex/Patterns/` | spec §9; audit §4d/4f |
 | **No F in the witness** | no reference to `graph.Edges` / `SemanticGraph.edges*` under `Alex/` | PHG §2.4 (I4) |
 | **I1 — enumerated sources** | in-tree assertion at fold-in: every hyperedge has ≥1 source, every source ∈ V, every closure hyperedge's sources = exactly the lambda's `CaptureInfo` list | finiteness lemma |
@@ -314,10 +313,10 @@ in, so the demarcation is checkable too.
 
 ## 8. What this does not do
 
-- The FFI fence (`reconcile-ffi-externs`, the `ffi.` namespace, callback tiers
-  A/B/C). That is the §6.7 boundary hyperedge — its own increment, after this
-  one, because it packs closures into words *at the fence* and needs the
-  interior form settled first. Its two acceptance programs already exist:
+- Foreign callback tiers A/B/C retain their §6.7 joint source, ABI and lifetime
+  contract. General adapter acceptance is separate from interior closure
+  acceptance; it supplies no exception to immediate plugin retirement. The
+  named acceptance consumers are:
   **HelloWayland** (the listener shape — registration, invocations, and release
   as one lifetime claim; Tier B) and **WrenHello** (the WREN stack's WebView in
   a native application — the host-operation surface, the script-message

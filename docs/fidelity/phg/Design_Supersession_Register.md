@@ -7,12 +7,12 @@
 > what was done. Inventoried 2026-09-04 across clef, Composer, clef-lang-spec,
 > clef-lang-site, ship-of-theseus, and the papers; **executed 2026-09-04**.
 >
-> The register is enforced by [`drift-gate.sh`](./drift-gate.sh): the retired
-> vocabulary below is a lint failure anywhere in the corpus unless the line
-> marks it as superseded, the file is one of the superseding designs, or the
-> file is on the *scheduled* list (code whose replacement is a
-> `Closure_Retooling_Plan` deliverable, reported but not failing, removed from
-> the list as each lands).
+> The historical inventory records retired forms and their replacements.
+> Existing warning lists in [`drift-gate.sh`](./drift-gate.sh) are not architectural
+> permission or acceptance evidence. CCS/Baker owns all source analysis and
+> settlement; Alex passively witnesses the published PSG through Huet
+> Elements/Patterns/Witnesses. All custom MLIR plugins and compatibility paths
+> are retired immediately, without a scheduled-migration exception.
 
 ## The settled position, in one table
 
@@ -95,7 +95,11 @@ example requires valid placement or a diagnostic. See `behavior-classification`,
 
 ## Sample applications are corpus
 
-Sample applications that "express" a capability (Composer `samples/`, the FidelityHello set, HelloProof and the rest of ship-of-theseus) are swept by the gate on the same terms as the spec. A sample that teaches the retired shape — a cast-plugin closure path, a two-shape seq, a doc line promising a dialect — is revised, not preserved as an exhibit. Sample intermediates and expectations that pin the cast form are on the scheduled list and move with the witness.
+Sample applications that express a capability retain their independent source
+and behavioral oracles. Documentation teaching an Alex-owned algorithm or a
+custom-plugin path is removed. An expectation that encodes a retired physical
+form is reconciled with the governing source contract; implementation failures
+remain recorded and never justify weakening a valid oracle.
 
 ## Waypoint — interaction-net annihilation
 
@@ -198,7 +202,12 @@ Decisions for you, carried in the contract: the JSIR reactive surface (whether t
 
 The measured state and the plan are in [Dimensional_Vetting_Plan.md](Dimensional_Vetting_Plan.md). The finding, from primary sources: units of measure are parsed and then discarded (`Literals.fs:42-46`, `Types.fs:948`), cannot be represented on the numeric kinds (arity 0), and never fail unification (`Unify.fs:251-286`, `HasMeasure` a no-op); arithmetic is typed `'T -> 'T -> 'T` with no numeric constraint and no dimension polymorphism; memory space and access kind ride the same unchecked path and no access-kind diagnostic exists, although the collections chapters cite `CCS8020`; the code's diagnostic series is `FS8xxx` against the spec's `CCS8xxx`; and two texts (`ntu-dimensional-architecture.md` §4.3/§5.2, `NativeTypes.fs:69-70`) place dimension resolution in Alex. The user ruled the dropping of units vestigial: units are integral to the NTU, and the correction is structural (representation and operator types), not a missing branch. Retired vocabulary added to the gate: "resolved by Alex", "erased metadata".
 
-## Scheduled (code; reported, not failing)
+## Historical migration inventory
+
+These September 4 entries record the sites and original sequence identified
+then; they are not a current source inventory or permission to retain retired
+machinery. Current C-series contracts govern repair at the owning source
+boundary. All custom plugins and compatibility paths are retired immediately.
 
 | Site | Replacement | Plan step |
 |---|---|---|
@@ -206,7 +215,7 @@ The measured state and the plan are in [Dimensional_Vetting_Plan.md](Dimensional
 | `Composer/src/MiddleEnd/PSGElaboration/YieldStateIndices.fs` | retired with the recognizer | Phase 3 |
 | `Composer/src/MiddleEnd/PSGElaboration/` (`ClosureLayout`, closure-pair coeffects) | closure hyperedge in CCS | Closure_Retooling steps 1–3 |
 | `Composer/src/MiddleEnd/Alex/` (cast sites, `memref<2xindex>`) | witness rewrite | steps 4–5 |
-| `Composer/src/BackEnd/LLVM/Lowering.fs`, `mlir-plugins/` | plugin removal | step 5 |
+| `Composer/src/BackEnd/LLVM/Lowering.fs`, `mlir-plugins/` | Remove all custom plugins, loading and compatibility paths | Immediate; independent of consumer migration |
 | `Composer/tests/`, `Composer/samples/` expectations pinning the cast form | move with the witness | step 5 |
 | `Composer/docs/PRDs/` (`code_ptr`, `nativeptr` rows only; bannered) | move with the code | steps 1–5 |
 | `clef/src/Compiler/` (`nativeptr` only; `TNativePtr` internal) | confirm `NativePtr.*` intrinsic recognition is gone | — |
@@ -218,6 +227,10 @@ The measured state and the plan are in [Dimensional_Vetting_Plan.md](Dimensional
 
 `Closure_Nanopass_Architecture.md` §3 (pair form; interim indices noted), `Alex_Architecture_Overview.md` lazy sketch, `Partial_Application_Closure_Reification.md` (two lines), `PH2-04-Bootstrap-Options.md` ISR wording, clef `Layout_As_Joint_Constraint.md` prefix shapes (`CodePtr` case removed); site `why-lazy-is-hard.md`, `seqing-simplicity.md`, `gaining-closure.md` diagrams and tables.
 
-## Open
+## Settled callable ownership
 
-- `closure-representation.md` §2.1's consequence — no `code_ptr` word in any environment — was drawn from C-01 §14.3 (a closure value is two SSA values, no packing) and closure-rep §7 (a seq/lazy value is a flat closure first). It changes the lazy and seq layouts and their normative field indices. If you want the environment to carry a code component for memory-resident closures, that is `Closure_Retooling_Plan`'s open decision and the chapters revert on that point only.
+CCS/Baker settles the canonical separate function/environment form, including
+captures, typed application, layout, placement and joint lifetime premises.
+Lazy and sequence forms extend the environment with their own source-owned
+protocols. Alex reads these settled facts; neither code-address packing nor a
+plugin may supply missing semantic or representation evidence.

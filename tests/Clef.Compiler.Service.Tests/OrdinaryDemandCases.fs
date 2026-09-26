@@ -323,7 +323,7 @@ let main _ = discard (1<m> + 2<s>)
         Assert.Equal<Map<NodeId, bool>>(graph.Nodes |> Map.map (fun _ node -> node.IsReachable), next.Nodes |> Map.map (fun _ node -> node.IsReachable))
 
     [<Fact>]
-    member _.``Emission receives the sealed projection and no same-shaped graph copy authority`` () =
+    member _.``Emission reads graph-owned projection across unchanged graph copies`` () =
         let graph = OrdinaryDemandFixture.witnessSource ()
         let expected = DemandProjection.project graph
         Assert.False expected.Parameters.IsEmpty
@@ -333,9 +333,7 @@ let main _ = discard (1<m> + 2<s>)
         Assert.Equal(Result.Ok (), WitnessInput.admit graph)
         Assert.Equal(Result.Ok expected, WitnessInput.tryOrdinary graph)
         let copy = { graph with Nodes = graph.Nodes }
-        match WitnessInput.tryRead copy with
-        | Result.Error _ -> ()
-        | Result.Ok _ -> failwith "A different graph reference inherited an emission seal"
+        Assert.Equal(WitnessInput.tryRead graph, WitnessInput.tryRead copy)
         Assert.Equal(Result.Ok (), WitnessInput.admit copy)
         Assert.Equal(Result.Ok expected, WitnessInput.tryOrdinary copy)
 
@@ -343,7 +341,7 @@ let main _ = discard (1<m> + 2<s>)
     [<InlineData("missing row")>]
     [<InlineData("duplicate row")>]
     [<InlineData("wrong projection")>]
-    member _.``Invalid source authority cannot seal even an empty fallback projection`` defect =
+    member _.``Source validation rejects invalid proof rows and mismatched held projections`` defect =
         let graph = OrdinaryDemandFixture.witnessSource ()
         let changed =
             match defect with
@@ -355,9 +353,13 @@ let main _ = discard (1<m> + 2<s>)
             | _ -> { graph with Nodes = graph.Nodes }
         let facts = changed.Codata.Value
         let changed = { changed with Codata = lazy { facts with OrdinaryDemand = OrdinaryDemandProjection.empty } }
-        match WitnessInput.admit changed, WitnessInput.tryRead changed with
-        | Result.Error _, Result.Error _ -> ()
-        | result -> failwithf "Invalid source/projection pair acquired emission authority: %A" result
+        match WitnessInput.admit changed with
+        | Result.Error _ -> ()
+        | result -> failwithf "Invalid source/projection pair passed source validation: %A" result
+        let draft = WitnessInput.invalidate changed
+        match WitnessInput.tryRead draft with
+        | Result.Error _ -> ()
+        | result -> failwithf "An edited source draft retained publication: %A" result
         Assert.Equal(Result.Ok graph.Codata.Value.OrdinaryDemand, WitnessInput.tryOrdinary graph)
 
     [<Fact>]
@@ -368,3 +370,26 @@ let main _ = discard (1<m> + 2<s>)
         match WitnessInput.tryRead graph with
         | Result.Error _ -> ()
         | Result.Ok _ -> failwith "A target-free source check acquired physical emission authority."
+
+    [<Theory>]
+    [<InlineData("node")>]
+    [<InlineData("edges")>]
+    [<InlineData("root")>]
+    [<InlineData("platform")>]
+    [<InlineData("map")>]
+    [<InlineData("filter")>]
+    member _.``Source edit APIs invalidate publication without revoking the old snapshot`` edit =
+        let graph = OrdinaryDemandFixture.witnessSource ()
+        let original = WitnessInput.tryRead graph
+        Assert.True(Result.isOk original)
+        let node = graph.Nodes.Values |> Seq.head
+        let changed =
+            match edit with
+            | "node" -> Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.addNode node graph
+            | "edges" -> Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.addEdges [] graph
+            | "root" -> Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.addDeclarationRoot node.Id DeclRoot.EntryPoint graph
+            | "platform" -> Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withPlatform graph.Platform.Value graph
+            | "map" -> Clef.Compiler.PSGSaturation.SemanticGraph.Traversal.map id graph
+            | _ -> Clef.Compiler.PSGSaturation.SemanticGraph.Traversal.filter (fun _ -> true) graph
+        Assert.True(Result.isError(WitnessInput.tryRead changed))
+        Assert.Equal(original, WitnessInput.tryRead graph)

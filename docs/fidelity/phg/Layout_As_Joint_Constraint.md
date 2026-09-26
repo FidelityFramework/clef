@@ -4,10 +4,11 @@
 > Phase 2) and `Composer/docs/Witness_Boundary_Audit.md` (which measures the
 > state this replaces).
 
-## 1. The problem, stated as it actually is
+## 1. Historical audit findings
 
-Layout is computed in Alex, at final witnessing to emission as MLIR, by five unrelated pieces of code that
-disagree with each other.
+The witness-boundary audit recorded five independent layout computations in
+Alex, with inconsistent results. These are defects recorded by that audit,
+not an authorized layout model or a fresh inspection of the implementation.
 
 | Site | What it decides | Model |
 |---|---|---|
@@ -195,12 +196,10 @@ fact, not a byte count. `TypeLayout.PlatformWord` and `FatPointer` are already
 written that way; `Inline(size, align)` computed against a hardcoded 8 is the
 anomaly, not the rule.
 
-That resolves the contradiction the audit found. `NativeTypes.fs:655-656` says
-*"CCS preserves type identity; Alex resolves to concrete size"*;
-`CCS_Architecture.md:205` says Alex does not compute or decide. Both can hold
-once the resolution point is named: **CCS preserves identity at type-check time
-and resolves size at saturation, because that is where the platform is.** Alex
-resolves nothing. The `NativeTypes.fs` comments are corrected as this lands.
+CCS preserves source identity during type checking and settles concrete layout
+at saturation from the selected declarations and complete joint premises.
+Alex reads the published placement through Huet Element/Pattern/Witness
+composition. It performs no size inference, layout analysis or semantic repair.
 
 ## 4. The two dispatches
 

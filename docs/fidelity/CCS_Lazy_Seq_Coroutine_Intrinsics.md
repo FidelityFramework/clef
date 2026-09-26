@@ -39,16 +39,15 @@ This document specifies the **semantic contracts** for computation expression ty
 
 ## Architectural Principle
 
-```
-CCS (This Document)              Alex (Implementation)
-─────────────────────             ────────────────────────
-Semantic contracts                Strategy: StateMachine
-Type signatures                   Strategy: DCont (future)
-Behavioral laws                   Strategy: ... (extensible)
-Coeffect interactions
-```
+| Owner | Responsibility |
+|---|---|
+| CCS/Baker | Source semantics, type and demand contracts, captures, control, layout, lifetime, declaration/ABI settlement and proof premises. Elaborate and saturate the PSG through nanopass ingredients and recipes, preserving ordered joint participants and the intermediate rewrite record. |
+| Alex | Passively witness the settled PSG at its actual Huet occurrence, composing Patterns and Elements through Witnesses into admitted portable MLIR. |
+| Composer backend | Realize the settled contract on the selected target and check the affected artifact correspondence. |
 
-CCS defines **what** these types mean. Alex provides **how** to compile them. This separation allows implementation strategies to evolve without changing the language semantics.
+Missing semantic facts fail at their CCS/Baker owner. Alex does not analyze,
+infer, reconstruct a computation, or repair semantics through an MLIR pass.
+All custom MLIR plugins and their compatibility dependencies are retired.
 
 ---
 
@@ -131,7 +130,9 @@ A `Seq<'T>` supports iteration via an abstract protocol:
 - **Current**: Access current element (valid after successful advance)
 - **Reset**: Restart iteration from beginning
 
-The concrete representation of this protocol is strategy-dependent.
+CCS/Baker settles the protocol, storage and current-read premises in the PSG.
+Alex witnesses the resulting admitted physical form; target realization belongs
+to the backend.
 
 ### Coeffect Interaction
 
@@ -152,7 +153,8 @@ seq {
 }
 ```
 
-Desugars to Seq operations. Implementation strategy determines compilation.
+CCS/Baker elaborates the sequence through reusable ingredients and recipes,
+then settles control, suspension, demand, storage and proof premises before Alex.
 
 ---
 
@@ -199,7 +201,8 @@ async {
 }
 ```
 
-Desugars to Async.Bind chains. Implementation strategy determines suspension mechanism.
+CCS/Baker elaborates the admitted suspension and resumption contract into the
+PSG. Backend realization preserves the settled control, storage and effect facts.
 
 ### Coeffect Interaction
 
@@ -607,52 +610,34 @@ A function marked `Concurrent + Mutable` requires explicit synchronization (mute
 
 ---
 
-## 9. What This Document Does NOT Specify
+## 9. Owning Representation and Execution Contracts
 
-The following are **implementation concerns**, not semantic contracts:
+CCS/Baker owns memoization transitions, sequence and suspension control, capture
+identity, frame structure, layout, lifetime, typed call conventions and their
+joint proof premises. The corresponding language specifications and C-series
+PRDs define their acceptance requirements. Ordinary demand and explicit Lazy
+memoization retain distinct source contracts even when they share ingredients.
 
-- Memory layout of types (struct fields, sizes)
-- State machine encoding for seq/async
-- LLVM/MLIR emission patterns
-- Coroutine frame structure
-- MoveNext function signatures
-- **Message queue implementation (lock-free vs mutex)**
-- **Thread pool vs dedicated thread strategy**
-- **Platform-specific thread APIs (pthread vs Win32)**
-- **Actor supervision and restart policies** (Olivier/Prospero concern)
+Threading, queues, scheduling, region allocation and actor lifecycle retain their
+own source and platform contracts. CCS/Baker settles the required execution,
+storage, publication and progress premises; Alex consumes them through its
+passive Huet Element/Pattern/Witness composition. Target APIs and target-specific
+lowering belong to Composer's backend. Neither an Alex strategy selector nor a
+custom MLIR plugin supplies missing source semantics.
 
-These belong in Alex implementation strategy documentation.
-
----
-
-## 10. Implementation Strategy Overview
-
-While CCS defines semantics, Alex provides multiple implementation strategies:
-
-| Feature | Foundational Strategy | Future Strategy |
-|---------|----------------------|-----------------|
-| `Lazy<'T>` | Struct with flag + value | (stable) |
-| `Seq<'T>` | MoveNext state machine (LLVM coro) | DCont generators |
-| `Async<'T>` | State machine (LLVM coro) | DCont |
-| `Region` | OS pages (mmap/VirtualAlloc) | Page pool, static arena |
-| `MailboxProcessor` | OS thread + mutex queue (LLVM coro for loop) | Olivier (arena per actor) |
-| Threading | Direct syscalls (pthread/Win32) | RTOS mapping (embedded) |
-
-**Foundational Strategy** uses only upstream MLIR dialects and LLVM intrinsics.
-This is the production target for embedded/MCU/unikernel deployments.
-
-**Future Strategies** may use custom dialects (DCont, Inet) or platform-specific optimizations.
+This ownership contract does not establish implementation or acceptance of the
+feature inventories above. Their owning PRDs retain the actual delivery scope
+and recorded evidence.
 
 
 ---
 
 ## Related Documentation
 
-**Semantic (CCS)**:
+**Source and representation contracts**:
 - `clef-lang-spec/spec/lazy-representation.md`, `seq-representation.md`, `seq-operations-representation.md`
-- `/home/hhh/repos/clef/.serena/memories/coeffect_compilation_strategy.md`
-
-**Implementation (Alex)**:
+- [Baker saturation architecture](Baker_Saturation_Architecture.md)
+- [C-series acceptance](../../../Composer/docs/PRDs/C-Series-Acceptance.md)
 
 **WRENStack**:
 - `Composer/docs/WRENStack_Roadmap.md`
