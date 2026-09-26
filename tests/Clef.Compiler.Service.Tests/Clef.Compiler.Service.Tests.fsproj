@@ -46,11 +46,14 @@
     <Compile Include="SequenceCurrentAdmissionCases.fs" />
     <Compile Include="SequenceConsumerCases.fs" />
     <Compile Include="SequenceSelectionCases.fs" />
+    <Compile Include="SequenceApplicationCases.fs" />
+    <Compile Include="SequenceOriginCases.fs" />
     <Compile Include="NestedMatchCases.fs" />
     <Compile Include="SequencePullEffectCases.fs" />
     <Compile Include="LoopRangeCases.fs" />
     <Compile Include="ClosureEnvironmentRangeCases.fs" />
     <Compile Include="ClosureEnvironmentCases.fs" />
+    <Compile Include="EnvironmentFactoryResultsCases.fs" />
     <Compile Include="SequenceEvaluationCases.fs" />
     <Compile Include="SequenceControlCases.fs" />
     <Compile Include="SequenceContinuationEvidenceCases.fs" />

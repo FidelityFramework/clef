@@ -32,12 +32,21 @@ type private Call = {
     CalleeNodes: Set<NodeId>
 }
 
+type private RequiredCapture = {
+    Call: NodeId
+    Slot: NodeId
+    Initializer: NodeId
+    Formal: NodeId
+    ArgumentIndex: int
+}
+
 type private Plan = {
     Binding: SemanticNode
     Lambda: SemanticNode
     Owner: SemanticNode
     Calls: Call list
     Borrows: Hyperedge list
+    RequiredCaptures: RequiredCapture list
     ResultPath: NodeId list
 }
 
@@ -100,22 +109,71 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                 | _ -> None
             | _ -> None
         | _ -> None
+    // Preparing the result destination precedes its complete-use residence
+    // proof. A retained Seq/callable view must come from an exact input formal
+    // (directly, or through the materialized environment's immutable slot).
+    // This records the remaining requirement; it grants no storage lifetime.
+    let captureRequirement lambda (owner: SemanticNode) (call: Call) (capture: CaptureInfo) =
+        let view =
+            not capture.IsMutable &&
+            match applySubst capture.Type with NativeType.TSeq _ | NativeType.TFun _ -> true | _ -> false
+        match view, capture.SourceNodeId, Environments.sequenceInitializers graph owner, nodes.TryFind lambda with
+        | true, Some slot, Some initializers, Some { Kind = SemanticKind.Lambda(parameters, _, [], _, _) } ->
+            let initializer = initializers |> List.tryFind (fst >> (=) slot) |> Option.map snd
+            let rec formalReference seen value =
+                if Set.contains value seen then None
+                elif parameters |> List.exists (fun (_, _, id) -> id = value) then Some value
+                else
+                    let seen = Set.add value seen
+                    match nodes.TryFind value with
+                    | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [inner] }
+                    | Some { Kind = SemanticKind.VarRef(_, Some inner) }
+                    | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } -> formalReference seen inner
+                    | _ -> None
+            let rec sourceFormal seen value =
+                if Set.contains value seen then None else
+                let seen = Set.add value seen
+                match formalReference Set.empty value with
+                | Some formal -> Some formal
+                | None ->
+                    match nodes.TryFind value with
+                    | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [inner] }
+                    | Some { Kind = SemanticKind.VarRef(_, Some inner) }
+                    | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } -> sourceFormal seen inner
+                    | Some { Kind = SemanticKind.EnvironmentRead(environment, _) } ->
+                        formalReference Set.empty environment |> Option.filter (fun formal ->
+                            graph.Edges |> List.exists (fun edge ->
+                                edge.Role = EdgeRole.EnvironmentFormal && edge.Target = formal &&
+                                List.tryLast edge.Sources = Some lambda))
+                    | _ -> None
+            let formal = initializer |> Option.bind (sourceFormal Set.empty)
+            formal |> Option.bind (fun formal ->
+                parameters |> List.tryFindIndex (fun (_, _, id) -> id = formal)
+                |> Option.filter (fun index -> index < call.Arguments.Length)
+                |> Option.map (fun index ->
+                    { Call = call.Site.Id; Slot = slot; Initializer = initializer.Value
+                      Formal = formal; ArgumentIndex = index }))
+        | _ -> None
     let captureResidual lambda (owner: SemanticNode) calls =
         match owner.Kind with
         | SemanticKind.SeqExpr(_, captures) ->
             captures |> List.tryFind (fun capture ->
                 requiresStorageLifetime capture &&
-                not (calls |> List.forall (fun call -> captureBorrow lambda owner call capture |> Option.isSome))) |> Option.map (fun capture ->
+                not (calls |> List.forall (fun call ->
+                    (captureBorrow lambda owner call capture |> Option.isSome) ||
+                    (captureRequirement lambda owner call capture |> Option.isSome)))) |> Option.map (fun capture ->
                 let local = capture.SourceNodeId |> Option.exists (fun source -> (enclosingFunctions source).Contains lambda)
                 if local then
                     sprintf "Factory-local capture '%s' refers to storage in the returning activation; a covering caller/program region is not established." capture.Name
                 else
                     sprintf "Reference capture '%s' has no established storage region covering the caller-owned result." capture.Name)
         | _ -> None
-    let rec resultType ty =
-        match applySubst ty with
-        | NativeType.TForall(_, body) | NativeType.TFun(_, body) -> resultType body
-        | result -> result
+    let rec resultType remaining ty =
+        match remaining, applySubst ty with
+        | _, NativeType.TForall(_, body) -> resultType remaining body
+        | 0, result -> Some result
+        | _, NativeType.TFun(_, body) -> resultType (remaining - 1) body
+        | _ -> None
     let rec functionReference seen id =
         if Set.contains id seen then None else
         match nodes.TryFind id with
@@ -153,8 +211,13 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
             when binding.Metadata.TryFind ElaborationMetadata.For <> Some (MetadataValue.String "Seq.factoryResult") ->
             match nodes.TryFind lambdaId with
             | Some ({ Kind = SemanticKind.Lambda(parameters, body, captures, _, LambdaContext.RegularClosure) } as lambda) ->
-                match resultType lambda.Type with
-                | NativeType.TSeq _ ->
+                // A callable-returning front is an environment factory, even
+                // when the returned callable ultimately produces a sequence.
+                // Only this invocation's actual declared boundary can select
+                // the sequence-result destination protocol.
+                match resultType parameters.Length lambda.Type, nodes.TryFind body with
+                | Some (NativeType.TSeq _), Some result when
+                    (match applySubst result.Type with NativeType.TSeq _ -> true | _ -> false) ->
                     let calls = allCalls |> List.choose (fun (target, call) -> if target = binding.Id then Some call else None)
                     let rec finalExpression seen id =
                         if Set.contains id seen then None else
@@ -175,7 +238,7 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                     let permittedUse edge =
                         (edge.Role = EdgeRole.Callee && usedSpine.Contains edge.Target)
                         || (edge.Role = EdgeRole.Operand && (usedCallees.Contains edge.Target || usedSpine.Contains edge.Target))
-                    let isClosed =
+                    let directlyClosed =
                         not calls.IsEmpty && Set.isSubset refs usedCallees
                         && (Set.union usedCallees (usedSpine |> Set.filter (fun id -> calls |> List.forall (fun call -> call.Site.Id <> id)))
                             |> Set.forall (fun id -> users.TryFind id |> Option.defaultValue [] |> List.forall permittedUse))
@@ -184,6 +247,38 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                                        | SemanticKind.Lambda(_, _, values, _, _) | SemanticKind.SeqExpr(_, values) | SemanticKind.LazyExpr(_, values) -> values
                                        | _ -> []
                             held |> List.exists (fun capture -> capture.SourceNodeId = Some binding.Id)))
+                    // Captureless code promotion retains the original source
+                    // callable as a value read before the rewritten direct call.
+                    // Follow only immutable value transport and discarded reads;
+                    // returned, captured, partial and opaque uses stay residual.
+                    let rec closedCodeValue seen id =
+                        if Set.contains id seen then false else
+                        let seen = Set.add id seen
+                        let directUses = users.TryFind id |> Option.defaultValue [] |> List.forall (fun edge ->
+                            match nodes[edge.Target].Kind with
+                            | SemanticKind.Application _ -> edge.Role = EdgeRole.Callee && usedSpine.Contains edge.Target
+                            | SemanticKind.Binding(_, false, _, _) | SemanticKind.TypeAnnotation _ -> closedCodeValue seen edge.Target
+                            | SemanticKind.Sequential values -> List.tryLast values <> Some id || closedCodeValue seen edge.Target
+                            | _ -> false)
+                        let referenceUses =
+                            incidence |> List.filter (fun edge ->
+                                edge.Class = EdgeClass.Reference && List.contains id edge.Sources)
+                            |> List.forall (fun edge ->
+                                match nodes.TryFind edge.Target with
+                                | Some { Kind = SemanticKind.VarRef(_, Some source) } when source = id -> closedCodeValue seen edge.Target
+                                | _ -> false)
+                        let captured = nodes.Values |> Seq.exists (fun node ->
+                            let captures =
+                                match node.Kind with
+                                | SemanticKind.Lambda(_, _, captures, _, _) | SemanticKind.SeqExpr(_, captures)
+                                | SemanticKind.LazyExpr(_, captures) -> captures
+                                | _ -> []
+                            captures |> List.exists (fun capture -> capture.SourceNodeId = Some id))
+                        directUses && referenceUses && not captured
+                    let isClosed =
+                        directlyClosed ||
+                        (lambda.Metadata.ContainsKey ClosureMetadata.SourceSignature &&
+                         not calls.IsEmpty && (refs |> Set.forall (closedCodeValue Set.empty)))
                     let named =
                         captures.IsEmpty
                         && ([ClosureMetadata.LambdaExpression; ClosureMetadata.RequiresClosurePair]
@@ -219,8 +314,11 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                             | None when uniqueFinal Set.empty owner.Id && not containing.IsEmpty ->
                                 let borrowed = match owner.Kind with SemanticKind.SeqExpr(_, captures) -> captures |> List.filter requiresStorageLifetime | _ -> []
                                 let borrows = calls |> List.collect (fun call -> borrowed |> List.choose (captureBorrow lambda.Id owner call))
+                                let required = calls |> List.collect (fun call -> borrowed |> List.choose (fun capture ->
+                                    if captureBorrow lambda.Id owner call capture |> Option.isSome then None
+                                    else captureRequirement lambda.Id owner call capture))
                                 Some { Binding = binding; Lambda = lambda; Owner = owner; Calls = calls; Borrows = borrows
-                                       ResultPath = lambda.Id :: finalPath.Value }
+                                       RequiredCaptures = required; ResultPath = lambda.Id :: finalPath.Value }
                             | None -> refuse binding.Id "Result constructor is shared or repeated outside its single final position."; None
                         | _ -> refuse binding.Id "Factory requires one concrete, uniquely known final SeqExpr constructor."; None
                 | _ -> None
@@ -247,15 +345,27 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
         let destinationType = applySubst plan.Owner.Type
         let destination = fresh plan.Lambda (SemanticKind.PatternBinding "__sequence_result") destinationType [] None |> add
         destinations <- destinations.Add(plan.Owner.Id, destination.Id)
-        let rec prepend ty =
-            match ty with
-            | NativeType.TForall(parameters, body) -> NativeType.TForall(parameters, prepend body)
-            | _ -> NativeType.TFun(destinationType, ty)
-        let factoryType = prepend plan.Binding.Type
         let parameters, body, captures, enclosing, context =
             match plan.Lambda.Kind with SemanticKind.Lambda(a,b,c,d,e) -> a,b,c,d,e | _ -> failwith "Expected factory Lambda"
-        let parameters = ("__sequence_result", destinationType, destination.Id) :: parameters
-        signature plan.Lambda (prepend plan.Lambda.Type) (SemanticKind.Lambda(parameters, body, captures, enclosing, context))
+        // A materialized closure's environment remains the first argument
+        // (closure spec §6.1). Ordinary named factories have no such formal.
+        let destinationIndex =
+            match parameters with
+            | (_, ty, formal) :: _ when
+                ty = Environments.environmentType &&
+                (graph.Edges |> List.exists (fun edge ->
+                    edge.Role = EdgeRole.EnvironmentFormal && edge.Target = formal &&
+                    List.tryLast edge.Sources = Some plan.Lambda.Id)) -> 1
+            | _ -> 0
+        let rec insertDestination index ty =
+            match ty with
+            | NativeType.TForall(parameters, body) -> NativeType.TForall(parameters, insertDestination index body)
+            | NativeType.TFun(argument, result) when index > 0 -> NativeType.TFun(argument, insertDestination (index - 1) result)
+            | _ when index = 0 -> NativeType.TFun(destinationType, ty)
+            | _ -> invalidOp "A materialized factory needs its environment-first signature"
+        let factoryType = insertDestination destinationIndex plan.Binding.Type
+        let parameters = List.insertAt destinationIndex ("__sequence_result", destinationType, destination.Id) parameters
+        signature plan.Lambda (insertDestination destinationIndex plan.Lambda.Type) (SemanticKind.Lambda(parameters, body, captures, enclosing, context))
             ((parameters |> List.map (fun (_,_,id) -> id)) @ [body]) |> add |> ignore
         signature plan.Binding factoryType plan.Binding.Kind plan.Binding.Children |> add |> ignore
         extraEdges <- { Sources = plan.ResultPath; Target = destination.Id
@@ -277,11 +387,18 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                 let source = nodes[calleeId]
                 let kind = match source.Kind with SemanticKind.TypeAnnotation(inner, _) -> SemanticKind.TypeAnnotation(inner, factoryType) | _ -> source.Kind
                 signature source factoryType kind source.Children |> add |> ignore
-            let arguments = destinationActual.Id :: (snapshots |> List.map snd)
+            let arguments = List.insertAt destinationIndex destinationActual.Id (snapshots |> List.map snd)
             let actual = fresh call.Site (SemanticKind.Application(callee.Id, arguments)) call.Site.Type (callee.Id :: arguments) call.Site.ValueRange |> add
             for proof in plan.Borrows do
                 if List.contains call.Site.Id proof.Sources then
                     extraEdges <- { proof with Sources = proof.Sources @ plan.ResultPath @ [destination.Id; allocation.Id; destinationActual.Id; actual.Id] } :: extraEdges
+            for required in plan.RequiredCaptures |> List.filter (fun required -> required.Call = call.Site.Id) do
+                let supplied = snapshots[required.ArgumentIndex] |> snd
+                extraEdges <- { Sources = [required.Slot; required.Initializer; plan.Lambda.Id; required.Formal;
+                                           actual.Id; supplied; destinationActual.Id; allocation.Id]
+                                Target = plan.Owner.Id; Class = EdgeClass.Provenance
+                                Role = EdgeRole.SequenceResultCapture
+                                Ordinal = required.ArgumentIndex + (if required.ArgumentIndex >= destinationIndex then 1 else 0) } :: extraEdges
             factoryCalls <- factoryCalls.Add(actual.Id, allocation.Id)
             let sequence = (snapshots |> List.map fst) @ [allocationBinding.Id; actual.Id]
             { call.Site with Kind = SemanticKind.Sequential sequence; Children = sequence }

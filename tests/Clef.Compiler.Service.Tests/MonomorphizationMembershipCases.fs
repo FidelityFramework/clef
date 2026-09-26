@@ -2,7 +2,9 @@ namespace Clef.Compiler.Service.Tests
 
 open Xunit
 open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+open Clef.Compiler.PSGSaturation.SemanticGraph.NodeBuilder
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
 module private MonomorphizationMembership =
@@ -31,6 +33,43 @@ module private MonomorphizationMembership =
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "MonomorphizationMembership")>]
 type MonomorphizationMembershipTests() =
+    [<Fact>]
+    member _.``Bare operation alias clones preserve definition links at each concrete use``() =
+        let builder = NodeBuilder()
+        let range = { File = "operation-alias.clef"; Start = { Line = 3; Column = 4 }; End = { Line = 3; Column = 24 } }
+        let sourceParameter = freshTypeParam "'source" TypeParamKind.Type range
+        let aliasParameter = freshTypeParam "'alias" TypeParamKind.Type range
+        let signature element = NativeType.TFun(NativeType.TSeq element, NativeType.TApp(Types.optionTyCon, [element]))
+        let sourceType = signature (NativeType.TVar sourceParameter)
+        let aliasType = signature (NativeType.TVar aliasParameter)
+        let operation = builder.Create(SemanticKind.Intrinsic {
+            Module = IntrinsicModule.Seq; Operation = "tryHead"; Category = IntrinsicCategory.Pure; FullName = "Seq.tryHead" }, sourceType, range)
+        let original = builder.Create(SemanticKind.Binding("operation", false, false, None), NativeType.TForall([sourceParameter], sourceType), range, children = [operation.Id])
+        let alias = builder.Create(SemanticKind.VarRef("operation", Some original.Id), aliasType, range)
+        let stored = builder.Create(SemanticKind.Binding("stored", false, false, None), NativeType.TForall([aliasParameter], aliasType), range, children = [alias.Id])
+        let uses = [Types.intType; Types.boolType] |> List.map (fun element ->
+            builder.Create(SemanticKind.VarRef("stored", Some stored.Id), signature element, range))
+        builder.Create(SemanticKind.ModuleDef("Aliases", [original.Id; stored.Id]), Types.unitType, range) |> ignore
+        let before = builder.Build []
+        let after = Clef.Compiler.Nanopass.Monomorphization.run before.Nodes
+        Assert.Equal(SemanticKind.VarRef("operation", Some original.Id), before.Nodes[alias.Id].Kind)
+        for useSite in uses do
+            let concrete =
+                match after[useSite.Id].Kind with
+                | SemanticKind.VarRef(_, Some definition) -> after[definition]
+                | kind -> failwithf "Lost specialized alias reference: %A" kind
+            Assert.False(hasUnboundVars concrete.Type)
+            DimensionalCases.same useSite.Type concrete.Type
+            let forwarded = after[Assert.Single concrete.Children]
+            Assert.Equal(range, forwarded.Range)
+            match forwarded.Kind with
+            | SemanticKind.VarRef("operation", Some definition) ->
+                DimensionalCases.same useSite.Type after[definition].Type
+                match after[Assert.Single after[definition].Children].Kind with
+                | SemanticKind.Intrinsic info -> Assert.Equal("tryHead", info.Operation)
+                | kind -> failwithf "Lost concrete bare operation: %A" kind
+            | kind -> failwithf "Specialization erased the source alias definition link: %A" kind
+
     [<Fact>]
     member _.``Specialized declarations replace their generic module member before parent linkage``() =
         let result = DimensionalCases.check """

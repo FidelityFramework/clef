@@ -27,6 +27,7 @@ module Clef.Compiler.Baker.Recipes.SeqRecipes
 
 open XParsec.Parsers
 open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.UnionFind
 
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Baker.Recipes.Decomposition
@@ -838,90 +839,170 @@ let private seqMaxByRecipe
     }
 
 //=============================================================================
-// PUBLIC API: tryDecompose
+// OPERATION BODIES AND RETAINED APPLICATION FRONTIERS
 //=============================================================================
 
-/// Try to decompose a Seq operation.
-/// Returns Some Result if the operation can be decomposed, None for primitives.
-let tryDecompose
-    (ctx: Context)
+/// Direct applications and retained operations compose the same body in one
+/// saturation firing; a residual must not leave a fresh Seq HOF for Alex.
+let private operationRecipe
     (operation: string)
     (args: NodeId list)
     (elemType: NativeType)
     (outputElemType: NativeType option)
     (stateType: NativeType option)
     (enclosingFunction: string option)
-    : Result option =
+    : SaturationParser<NodeId> option =
 
     match operation, args with
     // Producers
     | "map", [mapper; xs] ->
         let outElem = outputElemType |> Option.defaultValue elemType
-        Some (runSaturation ctx (transformRecipe "map" mapper xs elemType outElem enclosingFunction))
+        Some (transformRecipe "map" mapper xs elemType outElem enclosingFunction)
 
     | "filter", [predicate; xs] ->
-        Some (runSaturation ctx (transformRecipe "filter" predicate xs elemType elemType enclosingFunction))
+        Some (transformRecipe "filter" predicate xs elemType elemType enclosingFunction)
 
     | "collect", [mapper; xs] ->
         let outElem = outputElemType |> Option.defaultValue elemType
-        Some (runSaturation ctx (transformRecipe "collect" mapper xs elemType outElem enclosingFunction))
+        Some (transformRecipe "collect" mapper xs elemType outElem enclosingFunction)
 
     | "append", [xs; ys] ->
-        Some (runSaturation ctx (seqAppendRecipe xs ys elemType enclosingFunction))
+        Some (seqAppendRecipe xs ys elemType enclosingFunction)
 
     | "take", [count; xs] ->
-        Some (runSaturation ctx (seqTakeRecipe count xs elemType enclosingFunction))
+        Some (seqTakeRecipe count xs elemType enclosingFunction)
 
     // Consumers
     | "iter", [action; xs] ->
-        Some (runSaturation ctx (seqIterRecipe action xs elemType))
+        Some (seqIterRecipe action xs elemType)
 
     | "toList", [xs] ->
-        Some (runSaturation ctx (seqToListRecipe xs elemType))
+        Some (seqToListRecipe xs elemType)
 
     | "toArray", [xs] ->
-        Some (runSaturation ctx (seqToArrayRecipe xs elemType))
+        Some (seqToArrayRecipe xs elemType)
 
     | "fold", [folder; state; xs] ->
-        stateType |> Option.map (fun stTy -> runSaturation ctx (seqFoldRecipe folder state xs elemType stTy))
+        stateType |> Option.map (fun stTy -> seqFoldRecipe folder state xs elemType stTy)
 
     | "exists", [predicate; xs] ->
-        Some (runSaturation ctx (seqExistsRecipe predicate xs elemType))
+        Some (seqExistsRecipe predicate xs elemType)
 
     | "forall", [predicate; xs] ->
-        Some (runSaturation ctx (seqForallRecipe predicate xs elemType))
+        Some (seqForallRecipe predicate xs elemType)
 
     | "length", [xs] ->
-        Some (runSaturation ctx (seqLengthRecipe xs elemType))
+        Some (seqLengthRecipe xs elemType)
 
     | "isEmpty", [xs] ->
-        Some (runSaturation ctx (seqIsEmptyRecipe xs elemType))
+        Some (seqIsEmptyRecipe xs elemType)
 
     | "head", [xs] ->
-        Some (runSaturation ctx (seqHeadRecipe xs elemType))
+        Some (seqHeadRecipe xs elemType)
 
     | "tryHead", [xs] ->
-        Some (runSaturation ctx (seqTryHeadRecipe xs elemType))
+        Some (seqTryHeadRecipe xs elemType)
 
     | "tryPick", [chooser; xs] ->
-        outputElemType |> Option.map (fun outElem -> runSaturation ctx (seqTryPickRecipe chooser xs elemType outElem))
+        outputElemType |> Option.map (fun outElem -> seqTryPickRecipe chooser xs elemType outElem)
 
     | "max", [xs] ->
-        Some (runSaturation ctx (seqMaxRecipe xs elemType))
+        Some (seqMaxRecipe xs elemType)
 
     | "min", [xs] ->
-        Some (runSaturation ctx (seqMinRecipe xs elemType))
+        Some (seqMinRecipe xs elemType)
 
     | "minBy", [projection; xs] ->
         let keyType = stateType |> Option.defaultValue elemType
-        Some (runSaturation ctx (seqMinByRecipe projection xs elemType keyType))
+        Some (seqMinByRecipe projection xs elemType keyType)
 
     | "maxBy", [projection; xs] ->
         let keyType = stateType |> Option.defaultValue elemType
-        Some (runSaturation ctx (seqMaxByRecipe projection xs elemType keyType))
+        Some (seqMaxByRecipe projection xs elemType keyType)
 
     // Primitives - Alex witnesses directly
     | "empty", _
     | "getEnumerator", _ -> None
 
     | _ -> None
+
+/// Existing fully supplied forms keep their operation-specific ingredients.
+let tryDecompose ctx operation args elemType outputElemType stateType enclosingFunction : Result option =
+    operationRecipe operation args elemType outputElemType stateType enclosingFunction
+    |> Option.map (runSaturation ctx)
+
+/// These are source operation boundaries, not the length of a callable type.
+/// In particular a fold state or a mapped element may itself be a function.
+let private parameterNames = function
+    | "map" | "filter" | "collect" | "exists" | "forall" | "iter" | "tryPick" ->
+        Some ["__callback"; "__sequence"]
+    | "append" -> Some ["__first"; "__sequence"]
+    | "take" -> Some ["__count"; "__sequence"]
+    | "fold" -> Some ["__folder"; "__state"; "__sequence"]
+    | "tryHead" -> Some ["__sequence"]
+    | _ -> None
+
+/// Consume precisely the declared operands of the instantiated source scheme.
+/// The final sequence domain and checked result retain independent dimensions.
+let private operationShape operation functionType =
+    let rec consume names ty =
+        match names, applySubst ty with
+        | [], result -> Some ([], result)
+        | name :: rest, NativeType.TFun (domain, result) ->
+            consume rest result |> Option.map (fun (parameters, finalType) -> (name, domain) :: parameters, finalType)
+        | _ -> None
+    parameterNames operation |> Option.bind (fun names ->
+        consume names functionType |> Option.bind (fun (parameters, resultType) ->
+            match parameters |> List.last |> snd |> applySubst with
+            | NativeType.TSeq elemType ->
+                let outputElemType =
+                    match operation, applySubst resultType with
+                    | "tryPick", NativeType.TApp (constructor, [payload]) when constructor = Types.optionTyCon -> Some payload
+                    | _, NativeType.TSeq payload -> Some payload
+                    | _ -> None
+                let stateType = if operation = "fold" then Some (snd parameters[1]) else None
+                if (operation = "map" || operation = "collect" || operation = "tryPick") && outputElemType.IsNone then None
+                else Some (parameters, elemType, outputElemType, stateType, resultType)
+            | _ -> None))
+
+/// Snapshot supplied values at each formation frontier. Later invocations use
+/// local capture references, never replay the original supplied expressions.
+/// One parameter per closure preserves both retained fold frontiers.
+let rec private partialRecipe (ctx: Context) operation supplied parameters elemType outputElemType stateType resultType enclosing =
+    saturation {
+        let! snapshots =
+            supplied |> List.mapi (fun index (value, valueType) -> saturation {
+                let name = sprintf "__seq_partial_%d_%d_%d" ctx.ExpansionId supplied.Length index
+                let! binding = letBind name value valueType
+                return binding, { Name = name; Type = valueType; IsMutable = false; SourceNodeId = Some binding }
+            }) |> sequence
+        match parameters with
+        | (name, parameterType) :: remaining ->
+            let residualType = List.foldBack (fun (_, ty) result -> NativeType.TFun (ty, result)) remaining resultType
+            let body arguments captures =
+                let suppliedValues = List.zip captures (List.map snd supplied) @ List.zip arguments [parameterType]
+                if List.isEmpty remaining then
+                    operationRecipe operation (List.map fst suppliedValues) elemType outputElemType stateType enclosing |> Option.get
+                else
+                    partialRecipe ctx operation suppliedValues remaining elemType outputElemType stateType resultType enclosing
+            let! value = closure [(name, parameterType)] (List.map snd snapshots) enclosing body residualType
+            if List.isEmpty snapshots then return value
+            else return! evaluateBefore (List.map fst snapshots) value (NativeType.TFun (parameterType, residualType))
+        | [] ->
+            return! operationRecipe operation (List.map fst supplied) elemType outputElemType stateType enclosing |> Option.get
+    }
+
+/// Partial applications retain checked operand values and a typed next frontier.
+let tryDecomposePartial ctx operation supplied residualType enclosing : Result option =
+    let functionType = List.foldBack (fun (_, ty) result -> NativeType.TFun (ty, result)) supplied residualType
+    operationShape operation functionType |> Option.bind (fun (parameters, elemType, outputElemType, stateType, resultType) ->
+        if List.isEmpty supplied || supplied.Length >= parameters.Length then None
+        else
+            partialRecipe ctx operation supplied (List.skip supplied.Length parameters) elemType outputElemType stateType resultType enclosing
+            |> runSaturation ctx |> Some)
+
+/// Bare operation values share the same staged construction as stored partials.
+let tryReifyValue ctx operation functionType enclosing : Result option =
+    operationShape operation functionType |> Option.map (fun (parameters, elemType, outputElemType, stateType, resultType) ->
+        partialRecipe ctx operation [] parameters elemType outputElemType stateType resultType enclosing
+        |> runSaturation ctx)

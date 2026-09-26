@@ -45,6 +45,68 @@ module private ActivationFixture =
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ProgramActivation")>]
 type ProgramActivationCases() =
+    [<Fact>]
+    member _.``Prepared immutable environment snapshots preserve complete call coverage``() =
+        let graph = ActivationFixture.check """
+let mapper =
+    let offset = 1
+    fun (input: seq<int>) -> seq { for value in input do yield value + offset }
+[<EntryPoint>]
+let main _ =
+    let input = seq { yield 1 }
+    let output = mapper input
+    for value in output do ignore value
+    0
+"""
+        let implementation = EntryEnvironments.tryImplementation graph (ActivationFixture.binding "mapper" graph).Id |> Option.get
+        let prepared = Clef.Compiler.Nanopass.SequenceFactoryResults.prepare graph graph.Codata.Value.Curry
+        Assert.Empty prepared.Unresolved
+        Assert.NotEmpty prepared.FactoryCalls
+        let graph = prepared.Graph
+        let covering = (StartupFacts.read graph).Value.SourceLambda
+        Assert.True((Activation.coverage (Activation.analyze graph) covering implementation).IsSome)
+        let call = prepared.FactoryCalls.Keys |> Assert.Single
+        let ordinal, actual = (EntryEnvironments.callEnvironments graph)[call]
+        let arguments = match graph.Nodes[call].Kind with SemanticKind.Application(_, arguments) -> arguments | _ -> failwith "Expected prepared call"
+        Assert.Equal(actual, arguments[ordinal])
+        let snapshot =
+            match graph.Nodes[actual].Kind with
+            | SemanticKind.VarRef(_, Some snapshot) -> snapshot
+            | kind -> failwithf "Expected immutable environment snapshot reference, got %A" kind
+        match graph.Nodes[snapshot].Kind with
+        | SemanticKind.Binding(_, false, _, _) -> ()
+        | kind -> failwithf "Expected immutable environment snapshot, got %A" kind
+        let changed =
+            { graph with Edges = Hyperedge.edge1 EdgeClass.Reference EdgeRole.Symbol 0 snapshot covering :: graph.Edges }
+        Assert.True((Activation.coverage (Activation.analyze changed) covering implementation).IsNone)
+
+    [<Fact>]
+    member _.``A local covering activation requires every exact incoming call``() =
+        let graph = ActivationFixture.check """
+let consume (input: seq<bool>) =
+    for value in input do ignore value
+[<EntryPoint>]
+let main _ =
+    let input = seq { yield true }
+    consume input
+    consume input
+    0
+"""
+        let implementation name =
+            EntryEnvironments.tryImplementation graph (ActivationFixture.binding name graph).Id |> Option.get
+        let covering, consumer = implementation "main", implementation "consume"
+        let reading = Activation.analyze graph
+        let coverage = Activation.coverage reading covering consumer |> Option.get
+        Assert.NotEqual((StartupFacts.read graph).Value.EntryLambda, covering)
+        Assert.Empty coverage.Dependencies
+        let calls = coverage.Evidence |> List.filter (fun edge -> edge.Role = EdgeRole.ProgramActivationCall && List.last edge.Sources = consumer)
+        Assert.Equal(2, calls.Length)
+        Assert.All(calls, fun edge -> Assert.Equal(covering, List.head edge.Sources))
+        let original = graph.Nodes[calls.Head.Target]
+        let detached = { original with Id = NodeId.fresh(); Parent = None }
+        let changed = { graph with Nodes = graph.Nodes.Add(detached.Id, detached) }
+        Assert.True((Activation.coverage (Activation.analyze changed) covering consumer).IsNone)
+
     [<Theory>]
     [<InlineData(false)>]
     [<InlineData(true)>]

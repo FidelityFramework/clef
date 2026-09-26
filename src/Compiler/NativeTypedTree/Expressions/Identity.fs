@@ -206,11 +206,11 @@ let resolveIdentifier
 
     match resolveIdentifierCore parts env range with
     | IntrinsicNode (info, ty) ->
-        // An Option or Result operation is also a first-class library value. Its occurrence
+        // An Option, Result or Seq operation is also a first-class library value. Its occurrence
         // participates in the surrounding constraints; the declared scheme remains
         // in the intrinsic resolver for explicit type application.
         let occurrenceType =
-            if info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result then instantiateTForall ty range
+            if info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result || info.Module = IntrinsicModule.Seq then instantiateTForall ty range
             else ty
         builder.Create(
             SemanticKind.Intrinsic info,

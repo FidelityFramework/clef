@@ -22,8 +22,171 @@ module private Residence =
             node.IsReachable && match node.Kind with SemanticKind.Binding(actual, _, _, _) -> actual = name | _ -> false)
         |> Assert.Single
 
+    let activated source =
+        let graph = check source
+        let owner = graph.Nodes.Values |> Seq.filter (fun node ->
+            match node.Kind with SemanticKind.ModuleDef("Residence", _) -> true | _ -> false) |> Assert.Single
+        let graph, diagnostics = Clef.Compiler.Nanopass.ProgramInitialization.normalize [owner.Id] graph
+        Assert.Empty diagnostics
+        Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable graph
+
+    let preparedBorrow () =
+        let graph = activated """
+let retain (input: seq<bool>) = seq { yield! input }
+[<EntryPoint>]
+let main _ =
+    let input = seq { yield true; yield false }
+    let held = retain input
+    for value in held do ignore value
+    0
+"""
+        let prepared = Clef.Compiler.Nanopass.SequenceFactoryResults.prepare graph graph.Codata.Value.Curry
+        Assert.Empty prepared.Unresolved
+        Assert.NotEmpty prepared.FactoryCalls
+        prepared
+
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceResidence")>]
 type SequenceResidenceCases() =
+    [<Fact>]
+    member _.``Returned sequence and callable environments share the complete deferred use proof``() =
+        let graph = Residence.activated """
+[<EntryPoint>]
+let main _ =
+    let offset = 7
+    let callback = fun value -> value + offset
+    let storedMap = Seq.map callback
+    let first = storedMap (seq { yield 1 })
+    let mapOperation = Seq.map
+    let second = mapOperation callback (seq { yield 2 })
+    for value in first do ignore value
+    for value in second do ignore value
+    0
+"""
+        let graph, curry = Clef.Compiler.Nanopass.EnvironmentFactoryResults.prepare graph graph.Codata.Value.Curry
+        Assert.Contains(graph.Edges, fun edge -> edge.Role = EdgeRole.EnvironmentResultCall)
+        let prepared = Clef.Compiler.Nanopass.SequenceFactoryResults.prepare graph curry
+        Assert.Empty prepared.Unresolved
+        Assert.Equal(2, prepared.FactoryCalls.Count)
+        let graph = prepared.Graph
+        let reading = SequenceResidence.analyzeWithRegions graph prepared.Destinations prepared.FactoryCalls
+        Assert.Empty reading.Unresolved
+        Assert.All(prepared.FactoryCalls.Values, fun allocation -> Assert.True(reading.Sites.ContainsKey allocation))
+        let callableRequirements = graph.Edges |> List.filter (fun edge ->
+            edge.Role = EdgeRole.SequenceResultCapture &&
+            match graph.Nodes[edge.Sources[0]].Type with NativeType.TFun _ -> true | _ -> false)
+        Assert.Equal(2, callableRequirements.Length)
+        let requirement = callableRequirements.Head
+        let slot, allocation = requirement.Sources[0], requirement.Sources[7]
+        let changed =
+            { graph with Edges = Hyperedge.edge1 EdgeClass.Reference EdgeRole.Symbol 0 slot requirement.Target :: graph.Edges }
+        let refused = SequenceResidence.analyzeWithRegions changed prepared.Destinations prepared.FactoryCalls
+        Assert.False(refused.Sites.ContainsKey allocation)
+        Assert.Contains(refused.Unresolved, fun item -> item.Site = allocation)
+
+    [<Fact>]
+    member _.``Known callable input retains its environment through complete formal consumption``() =
+        let graph = Residence.activated """
+let prepare (callback: int -> int) = Seq.map callback
+[<EntryPoint>]
+let main _ =
+    let offset = 7
+    let callback = fun value -> value + offset
+    let mapped = prepare callback (seq { yield 1 })
+    for value in mapped do ignore value
+    0
+"""
+        let graph, curry = Clef.Compiler.Nanopass.EnvironmentFactoryResults.prepare graph graph.Codata.Value.Curry
+        let prepared = Clef.Compiler.Nanopass.SequenceFactoryResults.prepare graph curry
+        Assert.Empty prepared.Unresolved
+        let graph = prepared.Graph
+        let reading = SequenceResidence.analyzeEnvironmentsPrepared graph prepared.Destinations prepared.FactoryCalls
+        Assert.NotEmpty reading.Sites
+        Assert.Empty reading.Unresolved
+        let borrows = reading.Evidence |> List.filter (fun edge ->
+            edge.Role = EdgeRole.SequenceInputBorrow &&
+            match graph.Nodes[edge.Sources[2]].Type with NativeType.TFun _ -> true | _ -> false)
+        let borrow = Assert.Single borrows
+        let allocation, formal = borrow.Sources[0], borrow.Sources[3]
+        Assert.True(reading.Sites.ContainsKey allocation)
+        let changed =
+            { graph with Edges = Hyperedge.edge1 EdgeClass.Reference EdgeRole.Symbol 0 formal borrow.Target :: graph.Edges }
+        let refused = SequenceResidence.analyzeEnvironmentsPrepared changed prepared.Destinations prepared.FactoryCalls
+        Assert.False(refused.Sites.ContainsKey allocation)
+        Assert.Contains(refused.Unresolved, fun item -> item.Site = allocation)
+
+    [<Fact>]
+    member _.``Complete ordinary inputs carry actual regions through all formal uses``() =
+        let graph = Residence.activated """
+let consume (input: seq<bool>) =
+    for value in input do ignore value
+[<EntryPoint>]
+let main _ =
+    let supplied = seq { yield true; yield false }
+    consume supplied
+    consume supplied
+    0
+"""
+        let graph = { graph with Nodes = graph.Nodes |> Map.map (fun _ node -> { node with Parent = None }) }
+        let reading = SequenceResidence.analyzeWithRegions graph Map.empty Map.empty
+        Assert.Empty reading.Unresolved
+        let borrows = reading.Evidence |> List.filter (fun edge -> edge.Role = EdgeRole.SequenceInputBorrow)
+        Assert.Equal(2, borrows.Length)
+        for edge in borrows do
+            match edge.Sources, graph.Nodes[edge.Target].Kind with
+            | [allocation; covering; actual; formal; implementation], SemanticKind.Application(_, arguments) ->
+                Assert.True(reading.Sites.ContainsKey allocation)
+                Assert.Contains(actual, arguments)
+                let parameters = match graph.Nodes[implementation].Kind with SemanticKind.Lambda(parameters, _, _, _, _) -> parameters | _ -> failwith "Missing called activation"
+                let ordinal = parameters |> List.findIndex (fun (_, _, parameter) -> parameter = formal)
+                Assert.Equal(actual, arguments[ordinal])
+                Assert.NotEqual(covering, implementation)
+            | other -> failwithf "Incomplete input borrow: %A" other
+        let formal = borrows.Head.Sources[3]
+        let consumer = graph.Nodes.Values |> Seq.find (fun node -> node.IsReachable && match node.Kind with SemanticKind.Literal _ -> true | _ -> false)
+        let changed = { graph with Edges = Hyperedge.edge1 EdgeClass.Reference EdgeRole.Symbol 0 formal consumer.Id :: graph.Edges }
+        let refused = SequenceResidence.analyzeWithRegions changed Map.empty Map.empty
+        Assert.Contains(refused.Unresolved, fun item -> item.Reason = SequenceResidence.ResidualReason.UnsupportedConsumer consumer.Id)
+        Assert.DoesNotContain(refused.Evidence, fun edge -> edge.Role = EdgeRole.SequenceInputBorrow)
+
+    [<Fact>]
+    member _.``Returned sequence borrow requires caller destination and complete input lifetime``() =
+        let prepared = Residence.preparedBorrow ()
+        let graph = { prepared.Graph with Nodes = prepared.Graph.Nodes |> Map.map (fun _ node -> { node with Parent = None }) }
+        let reading = SequenceResidence.analyzeWithRegions graph prepared.Destinations prepared.FactoryCalls
+        Assert.Empty reading.Unresolved
+        Assert.All(prepared.FactoryCalls.Values, fun allocation -> Assert.True(reading.Sites.ContainsKey allocation))
+        Assert.Contains(reading.Evidence, fun edge -> edge.Role = EdgeRole.SequenceInputBorrow)
+        Assert.Contains(reading.Evidence, fun edge -> edge.Role = EdgeRole.SequenceTemplateBorrow && prepared.Destinations.ContainsKey edge.Target)
+
+    [<Theory>]
+    [<InlineData("missing")>]
+    [<InlineData("actual")>]
+    [<InlineData("formal")>]
+    [<InlineData("allocation")>]
+    [<InlineData("unrelated-proof")>]
+    member _.``Prepared result capture requirements are revalidated before lifetime admission`` damage =
+        let prepared = Residence.preparedBorrow ()
+        let requirement = prepared.Graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.SequenceResultCapture) |> Assert.Single
+        let allocation = requirement.Sources[7]
+        let replacement =
+            match damage with
+            | "actual" -> Some { requirement with Sources = requirement.Sources |> List.mapi (fun i value -> if i = 5 then requirement.Sources[6] else value) }
+            | "formal" -> Some { requirement with Sources = requirement.Sources |> List.mapi (fun i value -> if i = 3 then prepared.Destinations[requirement.Target] else value) }
+            | "allocation" -> Some { requirement with Sources = requirement.Sources |> List.mapi (fun i value -> if i = 7 then requirement.Target else value) }
+            | _ -> None
+        let identity (edge: Hyperedge) = edge.Class, edge.Role, edge.Sources, edge.Target, edge.Ordinal
+        let edges = prepared.Graph.Edges |> List.filter (fun edge -> identity edge <> identity requirement)
+        let edges = Option.toList replacement @ edges
+        let edges =
+            if damage = "unrelated-proof" then
+                { requirement with Role = EdgeRole.SequenceInputBorrow; Sources = [allocation; allocation; allocation; allocation; allocation] } :: edges
+            else edges
+        let graph = { prepared.Graph with Edges = edges }
+        let reading = SequenceResidence.analyzeWithRegions graph prepared.Destinations prepared.FactoryCalls
+        Assert.False(reading.Sites.ContainsKey allocation)
+        Assert.Contains(reading.Unresolved, fun item ->
+            item.Site = allocation && match item.Reason with SequenceResidence.ResidualReason.MissingResultCapture _ -> true | _ -> false)
+
     [<Fact>]
     member _.``Literal sequence and two local enumerators have one bounded ordinary activation``() =
         let graph = Residence.check """

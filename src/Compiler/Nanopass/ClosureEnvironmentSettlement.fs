@@ -14,19 +14,20 @@ module Proof = Clef.Compiler.Baker.Recipes.ContinuationObligationRecipes
 
 type Settlement = {
     Layouts: Map<NodeId, EnvironmentLayout>
+    Destinations: Map<NodeId, NodeId>
     Residences: Map<NodeId, EscapeKind>
     Diagnostics: Diagnostic list
 }
 
-let settleWhenSourceAdmitted admitted (graph: SemanticGraph) =
-    let empty = { Layouts = Map.empty; Residences = Map.empty; Diagnostics = [] }
+let settlePreparedWhenSourceAdmitted admitted destinations factoryCalls (graph: SemanticGraph) =
+    let empty = { Layouts = Map.empty; Destinations = Map.empty; Residences = Map.empty; Diagnostics = [] }
     if not admitted || graph.Platform.IsNone then graph, empty else
     let residual site related reason =
         { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8403"
           Message = "Captured callable environment requires further settlement: " + reason
           Range = graph.Nodes[site].Range; RelatedNodes = site :: related
           Reachability = ReachabilityContext.Unknown }
-    let residence = Residence.analyzeEnvironments graph
+    let residence = Residence.analyzeEnvironmentsPrepared graph destinations factoryCalls
     let residenceErrors = residence.Unresolved |> List.map (fun pending -> residual pending.Site [] (sprintf "%A" pending.Reason))
     let regionErrors = residence.Regions |> Map.toList |> List.map (fun (site, generator) ->
         residual site [generator] "A generator-local callback needs a settled owned environment region; activation-local backing storage cannot survive a suspension.")
@@ -36,10 +37,16 @@ let settleWhenSourceAdmitted admitted (graph: SemanticGraph) =
             let captures = Environments.captures graph owner.Id
             let shape =
                 match graph.Nodes.TryFind implementation, graph.Nodes.TryFind environment with
-                | Some { Kind = SemanticKind.Lambda((_, formalType, formal) :: _, _, [], _, _) },
+                | Some { Kind = SemanticKind.Lambda(parameters, _, [], _, _) },
                   Some { Kind = SemanticKind.EnvironmentCreate(actual, initializers) }
-                    when actual = owner.Id && formalType = Environments.environmentType && initializers.Length = captures.Length
-                         && (List.map fst initializers = (captures |> List.choose _.SourceNodeId)) -> Some formal
+                    when actual = owner.Id && initializers.Length = captures.Length
+                         && (List.map fst initializers = (captures |> List.choose _.SourceNodeId)) ->
+                    let formals = graph.Edges |> List.choose (fun edge ->
+                        if edge.Class = EdgeClass.Provenance && edge.Role = EdgeRole.EnvironmentFormal
+                           && edge.Sources = [owner.Id; implementation]
+                           && (parameters |> List.exists (fun (_, ty, formal) -> formal = edge.Target && ty = Environments.environmentType))
+                        then Some edge.Target else None)
+                    match formals with [formal] -> Some formal | _ -> None
                 | _ -> None
             match shape with
             | None -> Some (Result.Error (residual owner.Id [implementation; environment] "Formation, exact capture incidence and the real environment formal disagree."))
@@ -64,7 +71,18 @@ let settleWhenSourceAdmitted admitted (graph: SemanticGraph) =
     let proofs = placed |> List.choose (function Ok(_, proof) -> Some proof | _ -> None) |> Enrichment.concat
     let proofs = { proofs with NewEdges = proofs.NewEdges @ residence.Evidence }
     let graph = ObligationElaboration.foldIn proofs graph
-    graph, { Layouts = layouts; Residences = residence.Sites
+    let destinations =
+      graph.Edges |> List.choose (fun edge ->
+        match edge.Class, edge.Role, edge.Sources, graph.Nodes.TryFind edge.Target with
+        | EdgeClass.Provenance, EdgeRole.EnvironmentResultDestination, [implementation; owner; formal],
+          Some { Kind = SemanticKind.EnvironmentCreate(actual, _) } when actual = owner && layouts.ContainsKey owner ->
+            match graph.Nodes.TryFind implementation with
+            | Some { Kind = SemanticKind.Lambda(parameters, _, _, _, _) }
+                when parameters |> List.exists (fun (_, ty, id) -> id = formal && ty = Environments.environmentType) -> Some(edge.Target, formal)
+            | _ -> None
+        | _ -> None) |> Map.ofList
+    graph, { Layouts = layouts; Destinations = destinations; Residences = residence.Sites
              Diagnostics = residenceErrors @ regionErrors @ (placed |> List.choose (function Result.Error diagnostic -> Some diagnostic | _ -> None)) }
 
+let settleWhenSourceAdmitted admitted graph = settlePreparedWhenSourceAdmitted admitted Map.empty Map.empty graph
 let settle graph = settleWhenSourceAdmitted true graph

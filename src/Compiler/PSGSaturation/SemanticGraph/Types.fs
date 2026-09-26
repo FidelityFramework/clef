@@ -384,6 +384,9 @@ type SemanticKind =
     /// Formation snapshots already evaluated captures at this occurrence.
     /// Slot identities are provenance, never demands to reevaluate declarations.
     | EnvironmentCreate of owner: NodeId * initializers: (NodeId * NodeId) list
+    /// Caller-owned storage for one returned callable environment; initialization
+    /// remains at the original formation frontier in the factory.
+    | EnvironmentAllocate of owner: NodeId
     | EnvironmentReference of callable: NodeId
     | EnvironmentRead of environment: NodeId * slot: NodeId
     | EnvironmentBorrow of environment: NodeId * slot: NodeId
@@ -632,10 +635,13 @@ type EdgeRole =
     | ProgramValueIntent
     /// Runtime value intent joined with the exact writable program designation.
     | ProgramValue
-    /// [startup; caller activation; callee occurrence; implementation] -> call.
+    /// [covering activation; caller activation; callee occurrence; implementation] -> call.
     | ProgramActivationCall
-    /// Startup and complete finite callable uses cover the implementation.
+    /// A covering activation and complete finite callable uses cover the implementation.
     | ProgramActivationCoverage
+    /// [allocation; covering activation; actual argument; formal; callee lambda]
+    /// -> exact complete call. Full formal use remains inside the covering region.
+    | SequenceInputBorrow
     /// An elaborated expression's distinct mutually exclusive branch occurrence.
     /// Sources retain the original expression and its original branch body.
     | BranchOccurrence
@@ -650,12 +656,23 @@ type EdgeRole =
     | EnvironmentFormal
     /// Complete-use covering activation and retained source cells.
     | EnvironmentResidence
+    /// Required caller destination: [factory implementation; closure owner;
+    /// destination formal] -> exact EnvironmentCreate constructor.
+    | EnvironmentResultDestination
+    /// Exact prepared invocation: [factory implementation; constructor;
+    /// destination formal; allocation; actual destination] -> call.
+    | EnvironmentResultCall
     /// Exact source closure, implementation and formal supplying a child constructor.
     | SequenceCaptureFormation
     /// Original child slot and its eager value/cell initializer; never a new slot identity.
     | SequenceCaptureInitializer of isMutable: bool
     /// Joint environment coverage, actual call and caller-owned child destination.
     | SequenceEnvironmentBorrow
+    /// A pending retained-view requirement, never a residence proof. Ordered
+    /// [slot; initializer; factory lambda; formal; call; actual;
+    /// destination actual; allocation] target the returned sequence constructor.
+    /// The call's actual is an eager snapshot at the formal's exact position.
+    | SequenceResultCapture
     /// Ordered sources [sequence owner; its generator] constrain the target
     /// Yield/YieldBang site. Ordinal is zero, not a resumption state number.
     | Delimiter
@@ -728,6 +745,9 @@ type EdgeRole =
     | Resides
     /// The structure an obligation constrains -> the obligation node.
     | Constrains
+    /// [source declaration; promoted code binding] retains the original
+    /// definition of one rewritten callable reference occurrence.
+    | CallableReferenceOrigin
 
 /// One directed relation. Sources retain ordered participant occurrences;
 /// structural projections may be single-source while joint facts are n-ary.
@@ -816,6 +836,7 @@ let kindEdges (target: NodeId) (kind: SemanticKind) : Hyperedge list =
         [ st EdgeRole.Subject frame; Hyperedge.edge1 EdgeClass.Provenance EdgeRole.FrameSlot 0 slot target; st EdgeRole.AssignValue value ]
     | SemanticKind.ContinuationStorage owner
     | SemanticKind.ContinuationAllocate owner
+    | SemanticKind.EnvironmentAllocate owner
     | SemanticKind.AggregateStorage owner ->
         [ Hyperedge.edge1 EdgeClass.Provenance EdgeRole.Definition 0 owner target ]
     | SemanticKind.ClosureValue (implementation, environment) ->
@@ -1260,6 +1281,31 @@ type EnvironmentLayout = {
 /// always the value at the queried occurrence, including aliases/frame reads.
 type KnownCallable = { Implementation: NodeId; EnvironmentOwner: NodeId }
 
+/// The environment portion of a settled callable convention. The layout stays
+/// in EnvironmentLayouts; this relation identifies its actual leading formal.
+type CallableEnvironment = { Owner: NodeId; Formal: NodeId }
+
+/// A physical boundary retains each value participant. Callable components
+/// refer to that occurrence's settled carrier, so code/environment expansion
+/// cannot be guessed from the source type or a different formation's layout.
+[<RequireQualifiedAccess>]
+type CallableValueShape = Data of NodeId | Callable of NodeId
+
+/// One callable occurrence's settled physical boundary. Parameter identities,
+/// rather than the source type's arrow count, determine native arity. SourceType
+/// remains the public type; hidden formals belong only to Parameters.
+/// None denotes code alone, never an invented empty environment.
+type CallableCarrier = {
+    Occurrence: NodeId
+    SourceType: NativeType
+    Implementation: NodeId
+    Parameters: (string * NativeType * NodeId) list
+    ParameterShapes: CallableValueShape list
+    Result: NodeId
+    ResultShape: CallableValueShape
+    Environment: CallableEnvironment option
+}
+
 /// Source construction, fresh enumeration and generator access share this
 /// single settled frame contract. The callable identity is separate from its
 /// storage; no slot carries a function address.
@@ -1378,8 +1424,10 @@ type Codata = {
     ReturnMeets: Map<NodeId, Meet>
     Closures: Map<NodeId, ClosurePlacement>
     EnvironmentLayouts: Map<NodeId, EnvironmentLayout>
+    EnvironmentDestinations: Map<NodeId, NodeId>
     EnvironmentOrigins: Map<NodeId, NodeId>
     KnownCallables: Map<NodeId, KnownCallable>
+    CallableCarriers: Map<NodeId, CallableCarrier>
     ContinuationFrames: Map<NodeId, ContinuationFrame>
     /// A unique sequence constructor at a use, established in Baker. This
     /// evidence permits elision of the known function half of (fn, env).
@@ -1408,8 +1456,10 @@ module Codata =
         ReturnMeets = Map.empty
         Closures = Map.empty
         EnvironmentLayouts = Map.empty
+        EnvironmentDestinations = Map.empty
         EnvironmentOrigins = Map.empty
         KnownCallables = Map.empty
+        CallableCarriers = Map.empty
         ContinuationFrames = Map.empty
         SequenceOrigins = Map.empty
         ContinuationStorage = Map.empty

@@ -106,6 +106,7 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] ClefExpr =
     /// Capture declarations and already evaluated initializers retain their
     /// graph identities; projecting formation must not revisit their bodies.
     | EnvironmentCreate of owner: NodeId * initializers: (NodeId * NodeId) list * ty: NativeType
+    | EnvironmentAllocate of owner: NodeId * ty: NativeType
     | EnvironmentReference of callable: ClefExpr * ty: NativeType
     | EnvironmentRead of environment: ClefExpr * slot: NodeId * ty: NativeType
     | EnvironmentBorrow of environment: ClefExpr * slot: NodeId * ty: NativeType
@@ -408,6 +409,7 @@ module ClefExpr =
                 ClefExpr.ClosureValue(implementation, fromNode graph environment, node.Type)
             | SemanticKind.EnvironmentCreate(owner, initializers) ->
                 ClefExpr.EnvironmentCreate(owner, initializers, node.Type)
+            | SemanticKind.EnvironmentAllocate owner -> ClefExpr.EnvironmentAllocate(owner, node.Type)
             | SemanticKind.EnvironmentReference callable ->
                 ClefExpr.EnvironmentReference(fromNode graph callable, node.Type)
             | SemanticKind.EnvironmentRead(environment, slot) ->
@@ -869,6 +871,7 @@ module ClefExpr =
 
         | ClefExpr.EnvironmentReference(callable, _ty) ->
             sprintf "%sEnvironmentReference(%s)" pad (prettyPrint 0 callable)
+        | ClefExpr.EnvironmentAllocate(owner, _) -> sprintf "%sEnvironmentAllocate(owner=%d)" pad (NodeId.value owner)
 
         | ClefExpr.EnvironmentRead(environment, slot, _ty) ->
             sprintf "%sEnvironmentRead(%s, slot=%d)" pad (prettyPrint 0 environment) (NodeId.value slot)
@@ -932,6 +935,7 @@ module ClefExpr =
         | ClefExpr.ClosureValue(implementation, _, _) -> sprintf "ClosureValue(code=%d)" (NodeId.value implementation)
         | ClefExpr.EnvironmentCreate(owner, captures, _) -> sprintf "EnvironmentCreate(owner=%d, %d captures)" (NodeId.value owner) captures.Length
         | ClefExpr.EnvironmentReference _ -> "EnvironmentReference"
+        | ClefExpr.EnvironmentAllocate _ -> "EnvironmentAllocate"
         | ClefExpr.EnvironmentRead(_, slot, _) -> sprintf "EnvironmentRead(slot=%d)" (NodeId.value slot)
         | ClefExpr.EnvironmentBorrow(_, slot, _) -> sprintf "EnvironmentBorrow(slot=%d)" (NodeId.value slot)
         | ClefExpr.EnvironmentWrite(_, slot, _, _) -> sprintf "EnvironmentWrite(slot=%d)" (NodeId.value slot)

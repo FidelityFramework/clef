@@ -328,6 +328,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\CallableOrigins.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DirectCaptures.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ClosureEnvironments.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\CallableCarriers.fs" />
     <Compile Include="Baker\Recipes\ClosureRecipes.fs" />
     <Compile Include="Baker\Recipes\ClosureEnvironmentRecipes.fs" />
     <Compile Include="Baker\Recipes\ApplicationRecipes.fs" />
@@ -396,6 +397,7 @@
     <Compile Include="Nanopass\SequenceRegions.fs" />
     <Compile Include="Nanopass\SequenceAggregateValues.fs" />
     <Compile Include="Nanopass\SequenceRuntime.fs" />
+    <Compile Include="Nanopass\EnvironmentFactoryResults.fs" />
     <Compile Include="Nanopass\ClosureEnvironmentSettlement.fs" />
     <Compile Include="NativeTypedTree\NativeService.fs" />
 

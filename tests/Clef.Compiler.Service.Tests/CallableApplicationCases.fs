@@ -215,3 +215,43 @@ let main _ = if observed = 7 then 0 else 1
             Assert.Equal(2, arguments.Length)
             CallableApplication.sameType Types.intType graph.Nodes[observed.Id].Type
         | kind -> failwithf "An opaque %s cannot establish a staged callable boundary: %A" carrier kind
+
+    [<Fact>]
+    member _.``An immutable callable alias range excludes unrelated compatible functions``() =
+        let graph = CallableApplication.check """
+[<EntryPoint>]
+let main _ =
+    let increment = fun value -> value + 1
+    let unrelated = fun value -> value + 1000
+    let selected = increment
+    let observed = selected 7
+    let other = unrelated 3000
+    ignore other
+    observed
+"""
+        Assert.Equal(Some(ValueRange.point 8I), (CallableApplication.binding "observed" graph).ValueRange)
+        Assert.Equal(Some(ValueRange.point 4000I), (CallableApplication.binding "other" graph).ValueRange)
+
+    [<Fact>]
+    member _.``Returned callable supplies retain both actual parameter frontiers``() =
+        let graph = CallableApplication.check """
+let make initial = fun increment -> initial + increment
+[<EntryPoint>]
+let main _ =
+    let next = make 7
+    let observed = next 300
+    observed
+"""
+        Assert.Equal(Some(ValueRange.point 307I), (CallableApplication.binding "observed" graph).ValueRange)
+
+    [<Fact>]
+    member _.``A known callable beside an opaque input cannot establish a bounded result``() =
+        let graph = CallableApplication.check """
+let consume (opaque: int -> int) flag =
+    let selected = if flag then opaque else (fun value -> value + 1)
+    let observed = selected 7
+    observed
+[<EntryPoint>]
+let main _ = ignore consume; 0
+"""
+        Assert.Equal(Some ValueRange.Unbounded, (CallableApplication.binding "observed" graph).ValueRange)

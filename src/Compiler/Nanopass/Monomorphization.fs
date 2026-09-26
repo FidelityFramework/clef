@@ -144,6 +144,7 @@ let private mapKind (r: NodeId -> NodeId) (f: NativeType -> NativeType) (kind: S
     | SemanticKind.ContinuationAllocate owner -> SemanticKind.ContinuationAllocate (r owner)
     | SemanticKind.ClosureValue(implementation, environment) -> SemanticKind.ClosureValue(r implementation, r environment)
     | SemanticKind.EnvironmentCreate(owner, initializers) -> SemanticKind.EnvironmentCreate(r owner, initializers |> List.map (fun (slot, value) -> r slot, r value))
+    | SemanticKind.EnvironmentAllocate owner -> SemanticKind.EnvironmentAllocate(r owner)
     | SemanticKind.EnvironmentReference value -> SemanticKind.EnvironmentReference(r value)
     | SemanticKind.EnvironmentRead(environment, slot) -> SemanticKind.EnvironmentRead(r environment, r slot)
     | SemanticKind.EnvironmentBorrow(environment, slot) -> SemanticKind.EnvironmentBorrow(r environment, r slot)
@@ -248,12 +249,26 @@ let internal cloneSubtree nodes rootId substitute newParent =
 /// A generic function declaration or immutable bare library operation alias.
 /// Bare operations have no captured evaluation to duplicate; Baker reifies each
 /// specialized intrinsic later. Existing function-value references remain values.
-let rec private isBareLibraryOperation (nodes: Map<NodeId, SemanticNode>) id =
-    match Map.tryFind id nodes with
-    | Some { Kind = SemanticKind.Intrinsic info } ->
-        info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result
-    | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> isBareLibraryOperation nodes inner
-    | _ -> false
+/// An immutable alias of a bare operation has no supplied operands or captured
+/// evaluation. Keep its own typed occurrence as the specialization frontier:
+/// specializing the upstream alias against this still-generic reference would
+/// otherwise manufacture an open monotype before the final call supplies types.
+let private bareLibraryOperation (nodes: Map<NodeId, SemanticNode>) id =
+    let rec operation seen depth id =
+        if Set.contains id seen then None else
+        let seen = Set.add id seen
+        match Map.tryFind id nodes with
+        | Some { Kind = SemanticKind.Intrinsic info } when
+            info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result || info.Module = IntrinsicModule.Seq -> Some (info, depth)
+        | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> operation seen depth inner
+        | Some { Kind = SemanticKind.VarRef (_, Some definition) } ->
+            match Map.tryFind definition nodes with
+            | Some { Kind = SemanticKind.Binding (_, false, false, None); Children = [value] } -> operation seen (depth + 1) value
+            | _ -> None
+        | _ -> None
+    operation Set.empty 0 id
+
+let private isBareLibraryOperation nodes id = bareLibraryOperation nodes id |> Option.isSome
 
 let private isGenericFunctionBinding (nodes: Map<NodeId, SemanticNode>) (node: SemanticNode) : (TypeParam list * NativeType * NodeId) option =
     match node.Kind, node.Type with
@@ -307,6 +322,10 @@ let run (nodes: Map<NodeId, SemanticNode>) : Map<NodeId, SemanticNode> =
             |> Map.toList
             |> List.choose (fun (id, node) ->
                 isGenericFunctionBinding current node |> Option.map (fun (tps, body, lambdaId) -> (id, node, tps, body, lambdaId)))
+            // Instantiate the final alias first. Its retirement removes generic
+            // forwarding references before upstream declarations discover uses.
+            |> List.sortByDescending (fun (_, _, _, _, value) ->
+                bareLibraryOperation current value |> Option.map snd |> Option.defaultValue 0)
         for (bindingId, bindingNode, rawTypars, rawSchemeBody, lambdaId) in generics do
             let localLibraryAlias = isBareLibraryOperation current lambdaId
             // Re-root the scheme: unions since generalization may have moved a parameter's root.

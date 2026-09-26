@@ -13,6 +13,8 @@
 
 ## 0. The design that decides this
 
+The [shared closure settlement contract](../../../../Composer/docs/Closure_Settlement_Contract.md) makes formation, actual callable boundaries, capture identity, covering residence and retraction obligations explicit across the implementation. C-series completion requires delivery of these forms and their gates. Historical baseline tables below retain their dates and are not current acceptance results.
+
 **2026-09-20 planning synchronization.** The current
 [backend standard](../../../../clef-lang-spec/spec/backend-lowering-architecture.md#211-operation-and-pathway-admission)
 and [Composer M-01](../../../../Composer/docs/PRDs/M-01-DialectAdmission.md)
@@ -28,7 +30,7 @@ retain the actual acceptance boundaries and coordinated revisions.
 
 | Decision | Cited by |
 |---|---|
-| Flat closure is the finiteness lemma; enumerated capture set = the hyperedge's source set | `Closure_Nanopass_Architecture` §4; spec `closure-representation` §11; DTS/DMM §3.2.1 |
+| Flat closure supplies a finite direct slot-obligation frontier; transitive reference lifetime and sharing retain separate premises | `Closure_Nanopass_Architecture` §4; spec `closure-representation` §11; DTS/DMM §3.2.1 |
 | The environment node is the general object: closure env, DCont frame, actor cell share one fold-in rule | C-01 §14.1 |
 | Seven forms, selected by a condition decidable at saturation; forms 1–2 materialize nothing | C-01 §14.2 |
 | Every interior form is `func` + `memref` + `arith`; the closure value is **two SSA values, no packing, no casts** | C-01 §14.3 |

@@ -255,7 +255,19 @@ type SequenceEvaluationCases() =
             Assert.Equal(current, Evaluation.suspend graph owner.Id yielded)
             let demands = graph.Edges |> List.filter (fun edge ->
                 edge.Class = EdgeClass.Evaluation && edge.Role = EdgeRole.EvaluationOperand EvaluationAccess.Value && edge.Sources = [owner.Id; current])
-            Assert.Equal<Set<NodeId>>(Set.ofList [body; predicate; yielded], demands |> List.map _.Target |> Set.ofList)
+            let invocation =
+                match Evaluation.sequential graph owner.Id predicate with
+                | [callee; invocation] ->
+                    match graph.Nodes[invocation].Kind with
+                    | SemanticKind.Application (code, [argument]) ->
+                        Assert.Equal(current, argument)
+                        let implementation = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.tryImplementation graph
+                        Assert.Equal(implementation callee, implementation code)
+                        Assert.True((implementation code).IsSome)
+                        invocation
+                    | kind -> failwithf "Filter lost its code-only callback invocation: %A" kind
+                | inputs -> failwithf "Filter did not preserve callee evaluation before invocation: %A" inputs
+            Assert.Equal<Set<NodeId>>(Set.ofList [body; invocation; yielded], demands |> List.map _.Target |> Set.ofList)
         | other -> failwithf "Current binding does not dominate its local uses: %A" other
 
     [<Fact>]

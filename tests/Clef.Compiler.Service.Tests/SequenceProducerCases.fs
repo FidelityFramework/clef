@@ -62,7 +62,20 @@ type SequenceProducerCases() =
                 | kind -> failwithf "Public producer lost its immutable operand snapshot: %A" kind
             match result.Graph.Nodes[owner].Kind with
             | SemanticKind.SeqExpr (generator, captures) ->
-                Assert.Equal<Set<NodeId>>(Set.ofList [first; second], captures |> List.choose _.SourceNodeId |> Set.ofList)
+                let stored = if operation = "append" then [first; second] else [second]
+                Assert.Equal<Set<NodeId>>(Set.ofList stored, captures |> List.choose _.SourceNodeId |> Set.ofList)
+                if operation <> "append" then
+                    // Stateless callbacks retain their eager snapshot but need
+                    // no environment field: the generator uses real named code.
+                    let implementation = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.tryImplementation result.Graph first |> Option.get
+                    match result.Graph.Nodes[implementation].Kind with
+                    | SemanticKind.Lambda (_, _, [], _, _) -> ()
+                    | kind -> failwithf "Stateless callback lost its code-only implementation: %A" kind
+                    Assert.Contains(result.Graph.Nodes.Values, fun node ->
+                        node.IsReachable && node.Id <> first &&
+                        match node.Kind with
+                        | SemanticKind.VarRef (_, Some definition) -> result.Graph.Nodes[definition].Children = [implementation]
+                        | _ -> false)
                 match result.Graph.Nodes[generator].Kind with
                 | SemanticKind.Lambda ([_], _, _, _, LambdaContext.SeqGenerator) -> ()
                 | kind -> failwithf "Public producer did not create a generator: %A" kind

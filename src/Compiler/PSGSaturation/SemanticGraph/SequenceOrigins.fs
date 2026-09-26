@@ -16,50 +16,28 @@ type Origin = Known of NodeId | Unknown of NodeId
 let private sequenceType ty =
     match applySubst ty with NativeType.TSeq _ | NativeType.TSeqEnumerator _ -> true | _ -> false
 
-let settle (graph: SemanticGraph) (curry: CurryInfo) =
+let settle (graph: SemanticGraph) (_curry: CurryInfo) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
-    // Read the same declaration-currying boundary as Curry.normalize, before
-    // that later pass has physically flattened its lambdas/applications.
-    let isFunctionValue (node: SemanticNode) =
-        [ClosureMetadata.LambdaExpression; ClosureMetadata.RequiresClosurePair]
-        |> List.exists (fun key -> node.Metadata.TryFind key = Some (MetadataValue.Bool true))
-    let rec declarationChain seen parameters body =
-        if Set.contains body seen then parameters, body else
-        match nodes.TryFind body with
-        | Some ({ Kind = SemanticKind.Lambda (more, next, _, _, _) } as node) when not (isFunctionValue node) ->
-            declarationChain (Set.add body seen) (parameters @ more) next
-        | _ -> parameters, body
-    let rec callable seen id =
-        if Set.contains id seen then None else
-        let seen = Set.add id seen
-        match nodes.TryFind id with
-        | Some { Kind = SemanticKind.Lambda (parameters, body, _, _, _) } -> Some (declarationChain seen parameters body)
-        | Some { Kind = SemanticKind.VarRef (_, Some definition) } -> callable seen definition
-        | Some { Kind = SemanticKind.Binding _; Children = [value] } -> callable seen value
-        | Some { Kind = SemanticKind.TypeAnnotation (value, _) } -> callable seen value
-        | _ -> None
-    let rec applicationChain seen callee arguments =
-        if Set.contains callee seen then callee, arguments else
-        let seen = Set.add callee seen
-        match nodes.TryFind callee with
-        | Some { Kind = SemanticKind.Application (inner, earlier) } -> applicationChain seen inner (earlier @ arguments)
-        | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> applicationChain seen inner arguments
-        | _ -> callee, arguments
-    let calls = nodes |> Map.toList |> List.choose (fun (id, node) ->
-        match node.Kind with
-        | SemanticKind.Application (callee, arguments) ->
-            let callee, arguments =
-                match curry.SaturatedCalls.TryFind id with
-                | Some call -> call.TargetBindingId, call.AllArgNodes
-                | None -> applicationChain Set.empty callee arguments
-            callable Set.empty callee |> Option.bind (fun (parameters, body) ->
-                if parameters.Length = arguments.Length then Some (id, parameters, arguments, body) else None)
-        | _ -> None)
+    // Actual callable boundaries own formal/actual and returned-value flow.
+    // Earlier supplies in declaration partials remain inputs, while a returned
+    // callable is a separate invocation; its arguments are not flattened into
+    // the first call. Opaque alternatives remain visible beside known targets.
+    let calls = CallableOrigins.resolve graph
     let parameterInputs =
-        calls |> List.collect (fun (_, parameters, arguments, _) ->
-            List.zip parameters arguments |> List.map (fun ((_, _, parameter), argument) -> parameter, argument))
-        |> List.groupBy fst |> Map.ofList |> Map.map (fun _ pairs -> List.map snd pairs)
-    let callResults = calls |> List.map (fun (id, _, _, body) -> id, body) |> Map.ofList
+        calls.ParameterInputs |> Map.map (fun _ inputs -> inputs |> List.map snd |> List.distinct)
+    let environmentInputs =
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Class, edge.Role, edge.Sources, nodes.TryFind edge.Target with
+            | EdgeClass.Provenance, EdgeRole.EnvironmentCapture false, [owner; slot; value],
+              Some { Kind = SemanticKind.EnvironmentCreate(actual, initializers) }
+                when owner = actual && List.contains (slot, value) initializers -> Some((owner, slot), value)
+            | _ -> None)
+        |> List.groupBy fst |> Map.ofList
+        |> Map.map (fun _ rows -> rows |> List.map snd |> List.distinct)
+    let environmentInput environment slot =
+        ClosureEnvironments.tryEnvironmentOwner graph environment
+        |> Option.bind (fun owner ->
+            match environmentInputs.TryFind (owner, slot) with Some [value] -> Some value | _ -> None)
     let mutations =
         nodes |> Map.toList |> List.choose (fun (_, node) ->
             match node.Kind with
@@ -79,6 +57,12 @@ let settle (graph: SemanticGraph) (curry: CurryInfo) =
     let rec fixedPoint (facts: Map<NodeId, Set<Origin>>) =
         let read id = facts.TryFind id |> Option.defaultValue Set.empty
         let union ids = ids |> List.fold (fun values id -> Set.union values (read id)) Set.empty
+        let callResult id =
+            match calls.Calls.TryFind id with
+            | Some call ->
+                let known = call.Targets |> List.map _.Body |> union
+                if call.Unknown then Set.add (Origin.Unknown id) known else known
+            | None -> Set.singleton (Origin.Unknown id)
         let next = tracked |> Map.map (fun id node ->
             let unknown () = Set.singleton (Origin.Unknown id)
             let produced =
@@ -89,6 +73,8 @@ let settle (graph: SemanticGraph) (curry: CurryInfo) =
                 | SemanticKind.VarRef (_, Some declaration) -> read declaration
                 | SemanticKind.PatternBinding _ ->
                     match parameterInputs.TryFind id with Some arguments -> union arguments | None -> unknown ()
+                | SemanticKind.EnvironmentRead(environment, slot) ->
+                    environmentInput environment slot |> Option.map read |> Option.defaultWith unknown
                 | SemanticKind.TypeAnnotation (value, _) -> read value
                 | SemanticKind.Sequential values -> values |> List.tryLast |> Option.map read |> Option.defaultWith unknown
                 | SemanticKind.IfThenElse (_, yes, Some no) -> union [yes; no]
@@ -102,8 +88,8 @@ let settle (graph: SemanticGraph) (curry: CurryInfo) =
                                 | Origin.Known owner -> yielded.TryFind owner |> Option.map union |> Option.defaultWith unknown
                                 | Origin.Unknown site -> Set.singleton (Origin.Unknown site)
                             Set.union values current) Set.empty
-                    | _ -> callResults.TryFind id |> Option.map read |> Option.defaultWith unknown
-                | SemanticKind.Application _ -> callResults.TryFind id |> Option.map read |> Option.defaultWith unknown
+                    | _ -> callResult id
+                | SemanticKind.Application _ -> callResult id
                 | _ -> unknown ()
             let assigned = mutations.TryFind id |> Option.map union |> Option.defaultValue Set.empty
             Set.union (read id) (Set.union produced assigned))

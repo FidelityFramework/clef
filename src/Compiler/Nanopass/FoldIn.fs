@@ -60,6 +60,7 @@ let remapKindReferences (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKin
     | SemanticKind.ClosureValue (implementation, environment) -> SemanticKind.ClosureValue (update implementation, update environment)
     | SemanticKind.EnvironmentCreate (owner, initializers) ->
         SemanticKind.EnvironmentCreate (update owner, initializers |> List.map (fun (slot, value) -> update slot, update value))
+    | SemanticKind.EnvironmentAllocate owner -> SemanticKind.EnvironmentAllocate(update owner)
     | SemanticKind.EnvironmentReference value -> SemanticKind.EnvironmentReference (update value)
     | SemanticKind.EnvironmentRead (environment, slot) -> SemanticKind.EnvironmentRead (update environment, update slot)
     | SemanticKind.EnvironmentBorrow (environment, slot) -> SemanticKind.EnvironmentBorrow (update environment, update slot)

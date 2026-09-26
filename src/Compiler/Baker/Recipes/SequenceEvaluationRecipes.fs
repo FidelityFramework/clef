@@ -44,14 +44,18 @@ let private local (graph: SemanticGraph) owner generator (node: SemanticNode) =
     | SemanticKind.EnvironmentCreate(_, initializers) ->
         let declarations = initializers |> List.map snd
         if List.forall resident declarations then
-            (declarations |> List.mapi (E.capture owner node.Id)) @ E.ordered owner node.Id [] EvaluationTransfer.Continue, []
+            // Nested formation may attach explicit outer-environment reads.
+            // Evaluate those operands here; source declarations remain capture
+            // references and are never replayed by environment construction.
+            let ordering, operands = eager node.Children
+            (declarations |> List.mapi (E.capture owner node.Id)) @ ordering, operands
         else pending EvaluationResidual.MissingOperand declarations
     | SemanticKind.Binding _ ->
         match node.Children with
         | [] | [_] -> eager node.Children
         | _ -> pending EvaluationResidual.InvalidShape node.Children
     | SemanticKind.Intrinsic _ -> eager node.Children
-    | SemanticKind.Literal _ | SemanticKind.VarRef _
+    | SemanticKind.Literal _ | SemanticKind.VarRef _ | SemanticKind.EnvironmentAllocate _
     | SemanticKind.PatternBinding _ | SemanticKind.PlatformBinding _ -> eager []
     | SemanticKind.SeqExpr _ ->
         match Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.sequenceInitializers graph node with

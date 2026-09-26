@@ -1107,12 +1107,27 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     let escapingLambdas =
         candidates
         |> List.fold (fun acc c -> if Map.containsKey c.LambdaId acc then acc else Map.add c.LambdaId c.Escape acc) Map.empty
+    let callableFlow = CallableOrigins.resolve graph
     let callees =
         ordered
         |> List.fold (fun acc node ->
             match node.Kind with
             | SemanticKind.Application (funcId, args) ->
-                match resolveCallee reachableNodes candidates poisons funcId args with
+                let resolved =
+                    match resolveCallee reachableNodes candidates poisons funcId args with
+                    // Direct boundaries retain their formal identity for ABI
+                    // reference seeds and their unsupplied-argument frontier.
+                    | Some (Callee.Intrinsic _, _) as intrinsic -> intrinsic
+                    | Some (Callee.Direct _, _) as direct -> direct
+                    | fallback ->
+                        match callableFlow.Calls.TryFind node.Id with
+                        | Some actual when actual.Unknown || not actual.Targets.IsEmpty ->
+                            let targets = actual.Targets |> List.map (fun target ->
+                                { LambdaId = target.Lambda; Parameters = target.Parameters; Body = target.Body
+                                  Offset = 0; Escape = escapeOf reachableNodes parents target.Lambda })
+                            Some(Callee.Value(targets, actual.Unknown), args)
+                        | _ -> fallback
+                match resolved with
                 | Some resolved -> Map.add node.Id resolved acc
                 | None -> acc
             | _ -> acc) Map.empty
@@ -1163,7 +1178,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                                     match List.tryItem nIndex args with
                                     | Some nId -> (calls, supply paramId callId nId seeds)
                                     | None -> (calls, seeds)
-                                | RangeSources.Seed.Unknown -> (calls, seeds)) (calls, seeds)) (calls, seeds)) (calls, seeds)) (Map.empty, Map.empty)
+                                | RangeSources.Seed.Unknown -> (calls, seeds)) (calls, seeds)) (calls, seeds)) (calls, seeds)) (callableFlow.ParameterInputs, Map.empty)
     // A parameter an intrinsic hands a value the pass does not model (a sequence or list
     // element): named as such when nothing else supplies it.
     let unknownSupplied =

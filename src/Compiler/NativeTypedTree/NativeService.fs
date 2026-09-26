@@ -1177,15 +1177,37 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         (taggedDiagnostics @ programInitializationDiagnostics) |> List.exists (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error) |> not
     let finalGraph, programStorageDiagnostics = Clef.Compiler.Nanopass.ProgramInitialization.settleValueAuthority sourceAdmitted finalGraph
     let sourceAdmitted = sourceAdmitted && programStorageDiagnostics.IsEmpty
-    let finalGraph, environments = Clef.Compiler.Nanopass.ClosureEnvironmentSettlement.settleWhenSourceAdmitted sourceAdmitted finalGraph
-    let finalGraph, sequences = Clef.Compiler.Nanopass.SequenceRuntime.normalizeWhenSourceAdmitted sourceAdmitted finalGraph curry
+    let finalGraph, curry =
+        if sourceAdmitted && finalGraph.Platform.IsSome then
+            Clef.Compiler.Nanopass.EnvironmentFactoryResults.prepare finalGraph curry
+        else finalGraph, curry
+    // Destinations describe where results will be formed. Prepare both families
+    // before proving residence, so no preliminary missing-lifetime diagnostic
+    // survives after its owning relationship has been supplied.
+    let preparedSequences = Clef.Compiler.Nanopass.SequenceRuntime.prepareWhenSourceAdmitted sourceAdmitted finalGraph curry
+    let finalGraph = preparedSequences.Graph
+    let finalGraph, environments = Clef.Compiler.Nanopass.ClosureEnvironmentSettlement.settlePreparedWhenSourceAdmitted sourceAdmitted
+                                    preparedSequences.Destinations preparedSequences.FactoryCalls finalGraph
+    let finalGraph, sequences = Clef.Compiler.Nanopass.SequenceRuntime.normalizePreparedWhenSourceAdmitted sourceAdmitted { preparedSequences with Graph = finalGraph }
     let curry = sequences.Curry
     ObligationDischarge.emit finalGraph  // Includes settled continuation frame obligations.
     let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
     let mmio, mmioDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess.settle (diagnostics @ residual @ rangeDiagnostics) finalGraph
+    let environmentOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.origins finalGraph
+    let knownCallables = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.knownCallables finalGraph
+    let callableCarriers, callableCarrierResiduals =
+        if sourceAdmitted && finalGraph.Platform.IsSome then
+            Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.settle
+                { Layouts = environments.Layouts; Origins = environmentOrigins; Known = knownCallables } finalGraph
+        else Map.empty, []
+    let callableCarrierDiagnostics =
+        callableCarrierResiduals |> List.map (fun pending ->
+            { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8403"
+              Message = "Callable boundary requires further settlement: " + pending.Reason
+              Range = finalGraph.Nodes[pending.Occurrence].Range; RelatedNodes = [pending.Occurrence]
+              Reachability = ReachabilityContext.Reachable })
     let finalGraph =
         let settled = finalGraph
-        let environmentOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.origins settled
         { finalGraph with
             Codata = lazy {
                 Escapes = sequences.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts)
@@ -1198,8 +1220,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 ReturnMeets = Meets.returns platformContext settled
                 Closures = Placement.closures platformContext settled
                 EnvironmentLayouts = environments.Layouts
+                EnvironmentDestinations = environments.Destinations
                 EnvironmentOrigins = environmentOrigins
-                KnownCallables = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.knownCallables settled
+                KnownCallables = knownCallables
+                CallableCarriers = callableCarriers
                 ContinuationFrames = sequences.Frames
                 SequenceOrigins = sequences.Origins
                 ContinuationStorage = sequences.Storage
@@ -1230,7 +1254,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ callableCarrierDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 

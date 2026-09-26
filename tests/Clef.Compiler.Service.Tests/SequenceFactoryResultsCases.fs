@@ -165,6 +165,61 @@ let main _ =
         Assert.Equal(formatType factory.Type, formatType prepared.Graph.Nodes[factory.Id].Type)
 
     [<Fact>]
+    member _.``Sequence input retained by a factory records an exact pending caller-result view requirement``() =
+        let graph = Factories.check """
+let make (input: seq<int<m>>) = seq { yield! input }
+[<EntryPoint>]
+let main _ =
+    let input = seq { yield 1<m> }
+    let values = make input
+    for value in values do ignore value
+    0
+"""
+        let implementation = Factories.lambda graph "make"
+        let formal =
+            match implementation.Kind with
+            | SemanticKind.Lambda([(_, _, formal)], _, [], _, _) -> formal
+            | kind -> failwithf "Expected the original single sequence input: %A" kind
+        let originalCall = Factories.calls graph |> List.find (fun node ->
+            match node.Kind with
+            | SemanticKind.Application(callee, _) ->
+                match graph.Nodes[callee].Kind with
+                | SemanticKind.VarRef(_, Some binding) -> binding = (Factories.binding "make" graph).Id
+                | _ -> false
+            | _ -> false)
+        let originalArgument =
+            match originalCall.Kind with SemanticKind.Application(_, arguments) -> Assert.Single arguments | _ -> failwith "No factory call"
+        let prepared = Factories.prepare graph
+        Assert.Empty prepared.Unresolved
+        let requirement = prepared.Graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.SequenceResultCapture) |> Assert.Single
+        Assert.Equal(EdgeClass.Provenance, requirement.Class)
+        match requirement.Sources with
+        | [slot; initializer; factory; captureFormal; call; actual; destinationActual; allocation] ->
+            Assert.Equal(formal, slot)
+            Assert.Equal(slot, initializer)
+            Assert.Equal(implementation.Id, factory)
+            Assert.Equal(formal, captureFormal)
+            Assert.Equal(allocation, prepared.FactoryCalls[call])
+            Assert.Equal(requirement.Target, prepared.AllocationOrigins[allocation])
+            let arguments =
+                match prepared.Graph.Nodes[call].Kind with SemanticKind.Application(_, arguments) -> arguments | _ -> failwith "Missing prepared invocation"
+            Assert.Equal(destinationActual, arguments.Head)
+            Assert.Equal(actual, arguments[requirement.Ordinal])
+            let snapshot =
+                match prepared.Graph.Nodes[actual].Kind with SemanticKind.VarRef(_, Some binding) -> binding | _ -> failwith "Input lost its eager snapshot"
+            Assert.Equal(originalArgument, Assert.Single prepared.Graph.Nodes[snapshot].Children)
+            match prepared.Graph.Nodes[originalCall.Id].Kind with
+            | SemanticKind.Sequential values ->
+                Assert.Equal(snapshot, values.Head)
+                Assert.Equal(call, List.last values)
+            | kind -> failwithf "Factory call lost its eager formation order: %A" kind
+            Assert.True(prepared.Destinations.ContainsKey requirement.Target)
+        | participants -> failwithf "Incomplete pending view requirement: %A" participants
+        // Preparation establishes representation and demand for proof. The
+        // owning residence analysis must still establish every retained view.
+        Assert.DoesNotContain(prepared.Graph.Edges, fun edge -> edge.Role = EdgeRole.SequenceInputBorrow)
+
+    [<Fact>]
     member _.``Factory-local mutable capture cannot outlive its cell merely by moving the result frame``() =
         let graph = Factories.check """
 let make (seed: int) =

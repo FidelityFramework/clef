@@ -105,12 +105,15 @@ let private framePlan (graph: SemanticGraph) (owner: SemanticNode) =
                 let obligations = Enrichment.concat [
                     layout (sprintf "seq_%d_frame" (NodeId.value owner.Id)) slots bytes alignment
                     layout (sprintf "seq_%d_activation" (NodeId.value owner.Id)) scratchSlots scratchBytes scratchAlignment ]
+                let resultCalls = graph.Edges |> List.choose (fun edge ->
+                    if edge.Target = owner.Id && edge.Role = EdgeRole.SequenceResultCapture then List.tryItem 4 edge.Sources else None) |> Set.ofList
                 let constructionParticipants = graph.Edges |> List.collect (fun edge ->
                     if edge.Target = owner.Id then
                         match edge.Role with
                         | EdgeRole.SequenceCaptureFormation | EdgeRole.SequenceCaptureInitializer _
-                        | EdgeRole.SequenceEnvironmentBorrow -> edge.Sources
+                        | EdgeRole.SequenceEnvironmentBorrow | EdgeRole.SequenceResultCapture -> edge.Sources
                         | _ -> []
+                    elif edge.Role = EdgeRole.SequenceInputBorrow && resultCalls.Contains edge.Target then edge.Sources
                     else [])
                 let constructionEdges = obligations.NewEdges |> List.map (fun edge ->
                     { edge with Sources = List.distinct (edge.Sources @ constructionParticipants) })
@@ -168,13 +171,20 @@ let rec private emptyConsumers (graph: SemanticGraph) origins =
         |> SequenceEvaluation.normalize
         |> fun rewritten -> emptyConsumers rewritten origins
 
-let normalizeWhenSourceAdmitted sourceAdmitted (graph: SemanticGraph) (curry: CurryInfo) =
+/// Representation preparation can precede environment residence/placement.
+/// Pending capture requirements remain in the graph for final owning admission.
+let prepareWhenSourceAdmitted sourceAdmitted (graph: SemanticGraph) (curry: CurryInfo) =
     let realize = sourceAdmitted && graph.Platform.IsSome
     let prepared =
         if realize then SequenceFactoryResults.prepare graph curry
         else { SequenceFactoryResults.Graph = graph; Curry = curry; Destinations = Map.empty
                AllocationOrigins = Map.empty; FactoryCalls = Map.empty; Unresolved = [] }
     let graph = if prepared.Destinations.IsEmpty then prepared.Graph else SequenceEvaluation.normalize prepared.Graph
+    { prepared with Graph = graph }
+
+let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactoryResults.Preparation) =
+    let graph = prepared.Graph
+    let realize = sourceAdmitted && graph.Platform.IsSome
     let curry = prepared.Curry
     let origins, _ = Origins.settle graph curry
     let graph = if realize then emptyConsumers graph origins else graph
@@ -272,4 +282,8 @@ let normalizeWhenSourceAdmitted sourceAdmitted (graph: SemanticGraph) (curry: Cu
             CurrentReads = currentReads; Destinations = prepared.Destinations; Curry = curry; Residences = snapshots.Residences |> Map.fold (fun facts id site -> Map.add id site facts) residence.Sites; Diagnostics = diagnostics @ residenceDiagnostics @ currentDiagnostics }
 
 /// Standalone graph callers supply an already admitted source graph.
+let normalizeWhenSourceAdmitted sourceAdmitted graph curry =
+    prepareWhenSourceAdmitted sourceAdmitted graph curry
+    |> normalizePreparedWhenSourceAdmitted sourceAdmitted
+
 let normalize graph curry = normalizeWhenSourceAdmitted true graph curry

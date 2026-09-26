@@ -13,7 +13,7 @@ open Clef.Compiler.Baker.Ingredients.Primitives
 open Clef.Compiler.Baker.Recipes.Decomposition
 
 let stage (ctx: Context) (source: SemanticNode) (callee: NodeId) (arguments: NodeId list) (stages: Stage list) =
-    let rec calls current stages =
+    let rec calls current (stages: Stage list) =
         saturation {
             match stages with
             | [] -> return current

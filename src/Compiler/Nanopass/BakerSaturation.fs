@@ -191,7 +191,7 @@ let private needsSaturationBasic (node: SemanticNode) : bool =
     | SemanticKind.UnionCase _ -> true  // DU construction needs lowering to DUConstruct
     | SemanticKind.Application _ -> true  // May or may not need decomposition, checked in recipe creation
     | SemanticKind.Intrinsic info when
-        (info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result) && shouldDecomposeIntrinsic info -> true
+        (info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result || info.Module = IntrinsicModule.Seq) && shouldDecomposeIntrinsic info -> true
     | SemanticKind.Lambda(_, _, captures, _, LambdaContext.RegularClosure)
         when List.isEmpty captures -> true  // Zero-capture lambda may need closure pair (checked in recipe)
     | SemanticKind.VarRef (_, Some _) -> true  // A named function in value position is elaborated (checked in recipe)
@@ -294,27 +294,36 @@ let private applyIntrinsicRecipe
                 (enclosingFunctionName graph ctx.InspiringNode)
 
     | IntrinsicModule.Seq ->
-        let seqArgType =
-            args
-            |> List.tryLast
-            |> Option.bind (fun argId -> SemanticGraph.tryGetNode argId graph)
-            |> Option.map (fun n -> n.Type)
-            |> Option.bind extractSeqElementType
+        let supplied = args |> List.choose (fun id ->
+            SemanticGraph.tryGetNode id graph |> Option.map (fun node -> id, node.Type))
+        let enclosing = enclosingFunctionName graph ctx.InspiringNode
+        let partial =
+            if supplied.Length <> args.Length then None
+            else SeqRecipes.tryDecomposePartial ctx info.Operation supplied returnType enclosing
+        match partial with
+        | Some result -> Some result
+        | None ->
+            let seqArgType =
+                args
+                |> List.tryLast
+                |> Option.bind (fun argId -> SemanticGraph.tryGetNode argId graph)
+                |> Option.map (fun n -> n.Type)
+                |> Option.bind extractSeqElementType
 
-        match seqArgType with
-        | Some elemType ->
-            let outputElemType =
-                if info.Operation = "tryPick" then extractOptionInnerType returnType
-                else extractSeqElementType returnType
-            let stateType =
-                if info.Operation = "fold" then
-                    args |> List.tryItem 1
-                    |> Option.bind (fun id -> SemanticGraph.tryGetNode id graph)
-                    |> Option.map _.Type
-                else None
-            SeqRecipes.tryDecompose ctx info.Operation args elemType outputElemType stateType
-                (enclosingFunctionName graph ctx.InspiringNode)
-        | None -> None
+            match seqArgType with
+            | Some elemType ->
+                let outputElemType =
+                    if info.Operation = "tryPick" then extractOptionInnerType returnType
+                    else extractSeqElementType returnType
+                let stateType =
+                    if info.Operation = "fold" then
+                        args |> List.tryItem 1
+                        |> Option.bind (fun id -> SemanticGraph.tryGetNode id graph)
+                        |> Option.map _.Type
+                    else None
+                SeqRecipes.tryDecompose ctx info.Operation args elemType outputElemType stateType
+                    (enclosingFunctionName graph ctx.InspiringNode)
+            | None -> None
 
     | IntrinsicModule.String ->
         // String operations decompose to memory primitives
@@ -345,8 +354,13 @@ let private toRecipe (originalNodeId: NodeId) (source: string) (result: Result) 
 /// RecipeCreator signature: SemanticNode -> SemanticGraph -> RecipeCreationResult
 let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) : RecipeCreationResult =
     match node.Kind with
+    | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Seq && not node.IsReachable ->
+        // Flattening retains obsolete partial-call heads for source history.
+        // They are not bare value occurrences and must not synthesize deferred
+        // sequence bodies whose cuts have no live delimiter.
+        NotApplicable "Unreachable Seq intrinsic has no live value occurrence"
     | SemanticKind.Intrinsic info when
-        (info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result) && shouldDecomposeIntrinsic info ->
+        (info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result || info.Module = IntrinsicModule.Seq) && shouldDecomposeIntrinsic info ->
         // A call head is consumed by its application's recipe. Only value occurrences
         // need reification; explicit TypeApp may put a TypeAnnotation between the two.
         let rec isHead candidate =
@@ -363,7 +377,11 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
         else
             let name = sprintf "%A.%s" info.Module info.Operation
             let ctx = mkContext node.Range node.Type graph.Platform name node.Id
-            let reify = if info.Module = IntrinsicModule.Option then OptionRecipes.tryReifyValue else ResultRecipes.tryReifyValue
+            let reify =
+                match info.Module with
+                | IntrinsicModule.Option -> OptionRecipes.tryReifyValue
+                | IntrinsicModule.Result -> ResultRecipes.tryReifyValue
+                | _ -> SeqRecipes.tryReifyValue
             match reify ctx info.Operation node.Type (enclosingFunctionName graph node.Id) with
             | Some result -> RecipeCreated (toRecipe node.Id name result)
             | None -> NotApplicable "Library value has no settled callable instance"
@@ -380,6 +398,11 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                 | _ -> funcNode.Kind
 
             match unwrappedKind with
+            | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Seq && not node.IsReachable ->
+                // The live flattened call owns its supplied values. Retain an
+                // obsolete partial application without materializing another
+                // closure and sequence producer for an unexecuted frontier.
+                NotApplicable "Unreachable Seq application has no live formation frontier"
             | SemanticKind.Intrinsic info when shouldDecomposeIntrinsic info ->
                 let hofName = sprintf "%A.%s" info.Module info.Operation
                 let ctx = mkContext node.Range Types.unitType graph.Platform hofName node.Id

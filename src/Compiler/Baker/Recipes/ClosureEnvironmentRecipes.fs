@@ -15,11 +15,79 @@ module C = Clef.Compiler.Baker.Ingredients.Continuations
 
 type Expansion = { Structure: Result; Edges: Hyperedge list }
 
+/// A stateless callable is plain named code. Immutable aliases carry no
+/// environment value, so deferred uses name the declaration directly rather
+/// than allocating a zero-byte environment or retaining a spurious slot.
+let private plain (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
+    let source = plan.Source
+    let read = tryImplementation graph
+    let sourceDeclaration = trySourceDeclaration graph
+    let referenceOrigins = ResizeArray<Hyperedge>()
+    let aliases = graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
+        if node.IsReachable && read id = Some source.Id then Some id else None) |> Set.ofList
+    let implementation, binding = NodeId.fresh(), NodeId.fresh()
+    let name = sprintf "__closure_code_%d" (NodeId.value source.Id)
+    let state = SaturationState.create { source.Range with End = source.Range.Start }
+                    ctx.OriginalHOF ctx.ExpansionId source.Id graph.Platform
+    let result, nodes = run state (saturation {
+        let code =
+            { source with Id = implementation; Parent = Some binding
+                          Range = { source.Range with End = source.Range.Start }
+                          Metadata = source.Metadata.Remove(ClosureMetadata.RequiresClosurePair).Remove(ClosureMetadata.LambdaExpression)
+                                        .Add(ClosureMetadata.SourceSignature, MetadataValue.Type source.Type) }
+        do! emit code
+        do! emit { code with Id = binding; Kind = SemanticKind.Binding(name, false, false, None); Children = [implementation]; Parent = None }
+        do! enrich source (SemanticKind.VarRef(name, Some binding)) source.Type [] source.EmissionStrategy false
+        for node in graph.Nodes.Values do
+            if node.IsReachable && node.Id <> source.Id then
+                let trim captures = captures |> List.filter (fun capture ->
+                    capture.IsMutable || not (capture.SourceNodeId |> Option.exists aliases.Contains))
+                match node.Kind with
+                | SemanticKind.VarRef(sourceName, Some declaration) when aliases.Contains declaration ->
+                    let original = sourceDeclaration node.Id |> Option.defaultValue declaration
+                    referenceOrigins.Add {
+                        Sources = [original; binding]; Target = node.Id
+                        Class = EdgeClass.Provenance; Role = EdgeRole.CallableReferenceOrigin; Ordinal = 0 }
+                    do! enrich node (SemanticKind.VarRef(sourceName, Some binding)) node.Type [] node.EmissionStrategy false
+                | SemanticKind.Lambda(parameters, body, captures, enclosing, context) when trim captures <> captures ->
+                    do! enrich node (SemanticKind.Lambda(parameters, body, trim captures, enclosing, context)) node.Type node.Children node.EmissionStrategy false
+                | SemanticKind.SeqExpr(generator, captures) when trim captures <> captures ->
+                    do! enrich node (SemanticKind.SeqExpr(generator, trim captures)) node.Type node.Children node.EmissionStrategy false
+                | _ -> do! preturn ()
+            else do! preturn ()
+        for callId in plan.Calls do
+            let call = graph.Nodes[callId]
+            match call.Kind with
+            | SemanticKind.Application(originalCallee, arguments) ->
+                let! callee = varRef name (Some binding) source.Type
+                let! invocation = C.create (SemanticKind.Application(callee, arguments)) call.Type (callee :: arguments)
+                // Code identity removes storage, not source evaluation. A
+                // callee expression can have effects before yielding this code.
+                do! enrich call (SemanticKind.Sequential [originalCallee; invocation]) call.Type
+                                [originalCallee; invocation] call.EmissionStrategy false
+            | _ -> invalidOp "A plain callable plan must identify complete applications."
+        return source.Id
+    })
+    match result with
+    | Matched _ ->
+        let key (edge: Hyperedge) = edge.Target, edge.Class, edge.Role, edge.Ordinal, edge.Sources
+        let replaced = nodes |> List.choose (fun node -> graph.Nodes.TryFind node.Id)
+                       |> List.collect structuralIncidence |> List.map key |> Set.ofList
+        let references = referenceOrigins |> Seq.map _.Target |> Set.ofSeq
+        { Structure = mkResultNoShadow nodes source.Id []
+          Edges = (graph.Edges |> List.filter (fun edge ->
+                      not (replaced.Contains (key edge)) &&
+                      not (edge.Role = EdgeRole.CallableReferenceOrigin && references.Contains edge.Target)))
+                  @ (nodes |> List.collect structuralIncidence) @ List.ofSeq referenceOrigins }
+    | NoMatch reason -> invalidOp ("Plain callable saturation failed: " + reason)
+
 let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
+    if plan.Captures.IsEmpty then plain ctx graph plan else
     let source = plan.Source
     let state = SaturationState.create { source.Range with End = source.Range.Start }
                     ctx.OriginalHOF ctx.ExpansionId source.Id graph.Platform
     let formations = ResizeArray<Hyperedge>()
+    let forwarded = ResizeArray<NodeId * Hyperedge list>()
     let outcome, nodes = run state (saturation {
         let parameters, body, enclosing, context =
             match source.Kind with
@@ -49,6 +117,34 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
         for id in bodyNodes do
             let node = graph.Nodes[id]
             match node.Kind with
+            | SemanticKind.EnvironmentCreate(owner, _) ->
+                // A nested closure keeps its original slot identities. Its
+                // formation reads this activation's environment values/cells;
+                // it never reevaluates the outer source declarations.
+                match capturedInitializers graph owner with
+                | Some initializers when initializers |> List.exists (fun (slot, value, _) -> slot = value && captures.ContainsKey slot) ->
+                    let! initializers = initializers |> C.collect (fun (slot, value, mutableCell) -> saturation {
+                        if slot = value && captures.ContainsKey slot then
+                            let capture = captures[slot]
+                            let! env = varRef "__closure_environment" (Some formal) environmentType
+                            let kind, ty =
+                                if mutableCell then SemanticKind.EnvironmentBorrow(env, slot), NativeType.TByref(capture.Type, ByrefKind.InOut)
+                                else SemanticKind.EnvironmentRead(env, slot), capture.Type
+                            let! held = C.create kind ty [env]
+                            return slot, held, mutableCell
+                        else return slot, value, mutableCell
+                    })
+                    let eager = initializers |> List.choose (fun (slot, value, _) ->
+                        if slot <> value && captures.ContainsKey slot then Some value else None)
+                    let children = List.distinct (node.Children @ eager)
+                    do! enrich node (SemanticKind.EnvironmentCreate(owner, initializers |> List.map (fun (slot, value, _) -> slot, value)))
+                                    node.Type children node.EmissionStrategy false
+                    let rows = initializers |> List.mapi (fun ordinal (slot, value, mutableCell) ->
+                        { Sources = [owner; slot; value]; Target = node.Id; Class = EdgeClass.Provenance
+                          Role = EdgeRole.EnvironmentCapture mutableCell; Ordinal = ordinal })
+                    forwarded.Add(node.Id, rows)
+                    do! preturn ()
+                | _ -> do! preturn ()
             | SemanticKind.SeqExpr(generator, nested) when nested |> List.exists (fun capture -> capture.SourceNodeId |> Option.exists captures.ContainsKey) ->
                 let! initializers = nested |> C.collect (fun capture -> saturation {
                     let declaration = capture.SourceNodeId.Value
@@ -116,7 +212,11 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
               Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentCapture capture.IsMutable; Ordinal = ordinal })
         let signature = { Sources = [source.Id; implementation]; Target = formal
                           Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentFormal; Ordinal = 0 }
+        let forwarded = Map.ofSeq forwarded
         { Structure = mkResultNoShadow nodes source.Id []
-          Edges = (graph.Edges |> List.filter (fun edge -> not (replaced.Contains (key edge))))
-                  @ (nodes |> List.collect structuralIncidence) @ captures @ [signature] @ List.ofSeq formations }
+          Edges = (graph.Edges |> List.filter (fun edge ->
+                    not (replaced.Contains (key edge)) &&
+                    not (forwarded.ContainsKey edge.Target && (match edge.Role with EdgeRole.EnvironmentCapture _ -> true | _ -> false))))
+                  @ (nodes |> List.collect structuralIncidence) @ captures @ [signature] @ List.ofSeq formations
+                  @ (forwarded |> Map.toList |> List.collect snd) }
     | NoMatch reason -> invalidOp ("Closure environment saturation failed: " + reason)

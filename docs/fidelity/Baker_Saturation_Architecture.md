@@ -24,6 +24,14 @@ applicable representation and lifetime obligations. Baker makes these structures
 explicit in the graph. Alex witnesses the settled structures; it cannot infer a
 missing source algorithm, fabricate a carrier, or repair missing proof premises.
 
+The [closure settlement contract](../../../Composer/docs/Closure_Settlement_Contract.md)
+specifies this boundary for callable values and retained sequence callbacks.
+Capture slots retain their exact formation initializers; invocation retains the
+actual environment instance; prepared result destinations participate in residence
+settlement before continuation construction. Code identity alone establishes
+neither the environment instance nor its lifetime. These relationships survive
+fan-out/fold-in and form dependencies for scope-aware invalidation and retraction.
+
 An older PRD may specify the behavior without naming the hypergraph relationships
 needed to establish it. A fact whose validity is local can remain a node coeffect.
 When a conclusion depends jointly on several participants, the recipe retains

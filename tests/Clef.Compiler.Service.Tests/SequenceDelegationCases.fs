@@ -275,19 +275,17 @@ let outer = seq {
         let inner = Delegation.iterations graph action |> Assert.Single
         Assert.DoesNotContain(inner.Binding, Delegation.scope graph outer.Binding)
         match graph.Nodes[inner.Input].Kind with
-        | SemanticKind.Application (callee, [environment; argument]) ->
-            Assert.Equal(current, argument)
-            // The callback's source operand is still current. Its additional
-            // implementation formal receives this occurrence's environment.
-            let callback =
-                match graph.Nodes[environment].Kind with
-                | SemanticKind.EnvironmentReference callback -> callback
-                | kind -> failwithf "Collect lost the callback environment occurrence: %A" kind
-            let owner = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.tryEnvironmentOwner graph callback |> Option.get
-            match graph.Nodes[owner].Kind, graph.Nodes[callee].Kind with
-            | SemanticKind.ClosureValue(implementation, _), SemanticKind.VarRef(_, Some binding) ->
-                Assert.Equal<NodeId list>([implementation], graph.Nodes[binding].Children)
-            | kinds -> failwithf "Collect lost the callback implementation identity: %A" kinds
+        | SemanticKind.Sequential [callback; invocation] ->
+            match graph.Nodes[invocation].Kind with
+            | SemanticKind.Application (callee, [argument]) ->
+                Assert.Equal(current, argument)
+                let implementation = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.tryImplementation graph
+                let code = implementation callback |> Option.get
+                Assert.Equal(Some code, implementation callee)
+                match graph.Nodes[code].Kind with
+                | SemanticKind.Lambda (_, _, [], _, _) -> ()
+                | kind -> failwithf "Collect's stateless callback acquired an environment: %A" kind
+            | kind -> failwithf "Collect lost its code-only callback call: %A" kind
         | kind -> failwithf "Collect lost its per-current callback: %A" kind
         Assert.DoesNotContain(inner.Input, Delegation.scope graph inner.Loop)
         let current, action = Delegation.assertPull graph inner
