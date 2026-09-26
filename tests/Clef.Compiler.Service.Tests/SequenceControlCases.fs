@@ -136,14 +136,60 @@ type SequenceControlCases() =
         let seed = Control.binding "seed" graph
         for formation in [inner; value "callback"; value "delayed"] do
             let step = control.Steps.Values |> Seq.filter (fun step -> step.Instruction = SequenceControl.Instruction.Evaluate formation.Id) |> Assert.Single
-            Assert.Contains(seed.Id, step.Uses)
             let body =
                 match formation.Kind with
-                | SemanticKind.SeqExpr(body, _) | SemanticKind.LazyExpr(body, _) | SemanticKind.Lambda(_, body, _, _, _) -> body
+                | SemanticKind.SeqExpr(body, _) ->
+                    Assert.Contains(seed.Id, step.Uses)
+                    body
+                | SemanticKind.Lambda(_, body, captures, _, _) | SemanticKind.LazyExpr(body, captures) ->
+                    Assert.Contains(captures, fun capture -> capture.SourceNodeId = Some seed.Id && not capture.IsMutable)
+                    Assert.Contains(seed.Id, step.Uses)
+                    body
+                | SemanticKind.ClosureValue(code, environment) ->
+                    let values = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.capturedInitializers graph formation.Id |> Option.get
+                    Assert.Contains(values, fun (slot, initializer, mutableCell) -> slot = seed.Id && initializer = seed.Id && not mutableCell)
+                    Assert.Contains(environment, step.Uses)
+                    let construction = control.Steps.Values |> Seq.filter (fun step -> step.Instruction = SequenceControl.Instruction.Evaluate environment) |> Assert.Single
+                    Assert.Contains(seed.Id, construction.Uses)
+                    match graph.Nodes[code].Kind with SemanticKind.Lambda(_, body, _, _, _) -> body | _ -> failwith "Missing closure implementation"
+                | SemanticKind.LazyValue(thunk, environment) ->
+                    let instance = Clef.Compiler.PSGSaturation.SemanticGraph.LazyContracts.instance graph formation.Id |> Option.get
+                    Assert.Contains(environment, step.Uses)
+                    let construction = control.Steps.Values |> Seq.filter (fun step -> step.Instruction = SequenceControl.Instruction.Evaluate environment) |> Assert.Single
+                    Assert.Contains(seed.Id, construction.Uses)
+                    match graph.Nodes[environment].Kind with
+                    | SemanticKind.LazyEnvironment(_, values) -> Assert.Contains(values, fun (slot, initializer) -> slot = seed.Id && initializer = seed.Id)
+                    | kind -> failwithf "Missing retained lazy capture: %A" kind
+                    Assert.Equal(thunk, instance.Thunk)
+                    match graph.Nodes[thunk].Kind with SemanticKind.Lambda(_, body, _, _, _) -> body | _ -> failwith "Missing lazy thunk"
                 | kind -> failwithf "Expected deferred value: %A" kind
             Assert.DoesNotContain(control.Steps.Values, fun step -> step.Origin = body)
         let nested = Control.compose graph inner
         Assert.NotEqual(control.Owner, nested.Owner)
+
+    [<Fact>]
+    member _.``Canonical lazy formation keeps its original captured binding live across an earlier suspension``() =
+        let graph = Control.check "let produce () = seq {\n    let seed = 17\n    yield 1\n    let delayed = lazy seed\n    yield Lazy.force delayed\n}\nlet outer = produce ()"
+        let owner = Control.owners graph |> Assert.Single
+        let control = Control.compose graph owner
+        let seed = Control.binding "seed" graph
+        let formation = graph.Nodes[Assert.Single (Control.binding "delayed" graph).Children]
+        let instance = Clef.Compiler.PSGSaturation.SemanticGraph.LazyContracts.instance graph formation.Id |> Option.get
+        Assert.Contains(instance.Captured, fun (slot, initializer, mutableCell) -> slot = seed.Id && initializer = seed.Id && not mutableCell)
+        let construction = control.Steps.Values |> Seq.filter (fun step ->
+            step.Instruction = SequenceControl.Instruction.Evaluate instance.Environment) |> Assert.Single
+        Assert.Contains(seed.Id, construction.Uses)
+        let cut = Control.cutWithLiteral graph control 1L
+        Assert.Contains(seed.Id, control.LiveAcross[cut.Label])
+        Assert.DoesNotContain(control.Steps.Values, fun step -> step.Origin = instance.ThunkBody)
+        Assert.Contains(instance.Thunk, control.AssignedAtEntry[control.Entry])
+        Assert.DoesNotContain(instance.Environment, control.AssignedAtEntry[control.Entry])
+        Assert.DoesNotContain(instance.Cached, control.AssignedAtEntry[control.Entry])
+        let missing =
+            { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.LazyInstance || edge.Target <> formation.Id) }
+        match SequenceControl.forOwner missing owner with
+        | Error residual -> Assert.Contains("definite initialization", residual.Reason)
+        | Ok _ -> failwith "An unvalidated lazy code identity became available at sequence entry"
 
     [<Theory>]
     [<InlineData(false)>]

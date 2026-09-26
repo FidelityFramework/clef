@@ -17,8 +17,12 @@ type Settlement = {
     Unresolved: Residual list
 }
 
-let settle (graph: SemanticGraph) (frames: Map<NodeId, ContinuationFrame>)
-           (sites: Map<NodeId, NodeId>) (origins: Map<NodeId, NodeId>) =
+let settleWithFamilies (graph: SemanticGraph) (frames: Map<NodeId, ContinuationFrame>)
+                       (sites: Map<NodeId, NodeId>) (origins: Map<NodeId, NodeId>)
+                       (familyOf: Map<NodeId, NodeId>) =
+    let family owner = familyOf.TryFind owner |> Option.defaultValue owner
+    let groups = frames |> Map.toList |> List.groupBy (fst >> family) |> Map.ofList
+    let members owner = groups[family owner] |> List.map fst
     let owners = frames.Values |> Seq.map (fun frame -> frame.Generator, frame.Owner) |> Map.ofSeq
     let requests, errors = sites |> Map.toList |> List.fold (fun (requests, errors) (site, generator) ->
         match owners.TryFind generator, origins.TryFind site with
@@ -29,8 +33,13 @@ let settle (graph: SemanticGraph) (frames: Map<NodeId, ContinuationFrame>)
     let rec rounds (remaining: Map<NodeId, ContinuationFrame>) (completed: Map<NodeId, ContinuationFrame>) (regions: Map<NodeId, ContinuationRegion>) evidence errors =
         if Map.isEmpty remaining then { Frames = completed; Regions = regions; Evidence = evidence; Unresolved = errors }
         else
+            // A family becomes available as one unit. A child allocated in a
+            // parent's storage must already have its family's complete extent;
+            // a dependency within the same family is a finite-layout cycle.
             let ready = remaining |> Map.filter (fun owner _ ->
-                requests.TryFind owner |> Option.defaultValue [] |> List.forall (fun (_, child) -> Map.containsKey child completed))
+                members owner |> List.forall (fun memberOwner ->
+                    requests.TryFind memberOwner |> Option.defaultValue []
+                    |> List.forall (fun (_, child) -> Map.containsKey child completed)))
             if ready.IsEmpty then
                 let unresolved = remaining |> Map.toList |> List.map (fun (owner, _) ->
                     { Site = owner; Reason = "Continuation region dependencies are recursive; a finite owned extent has not been established." })
@@ -72,5 +81,39 @@ let settle (graph: SemanticGraph) (frames: Map<NodeId, ContinuationFrame>)
                                 Map.fold (fun all site region -> Map.add site region all) regions newRegions,
                                 Enrichment.combine evidence { proof with NewEdges = proof.NewEdges @ relationships }, errors)
                         (completed, regions, evidence, errors)
+                let completed, evidence, errors =
+                    ready |> Map.toList |> List.groupBy (fst >> family)
+                    |> List.fold (fun (completed: Map<NodeId, ContinuationFrame>, evidence, errors) (_, group) ->
+                        if group.Length < 2 then completed, evidence, errors
+                        else
+                            let memberFrames = group |> List.map (fun (owner, _) -> completed[owner])
+                            let alignment = memberFrames |> List.map _.Alignment |> List.max
+                            let extent = memberFrames |> List.map (fun frame -> int64 frame.Bytes) |> List.max
+                                         |> fun bytes -> roundUp bytes (int64 alignment)
+                            if extent > int64 System.Int32.MaxValue then
+                                completed, evidence,
+                                { Site = (List.head memberFrames).Owner; Reason = "The common sequence family extent exceeds the representable layout bound." } :: errors
+                            else
+                                memberFrames |> List.fold (fun (completed, evidence, errors) frame ->
+                                    let fields =
+                                        (frame.Slots |> List.map (fun slot -> slot.Source, slot.Field.Offset.Value, slot.Field.Size.Value, slot.Field.Align.Value))
+                                        @ (regions |> Map.toList |> List.choose (fun (site, region) ->
+                                            if region.ParentOwner = frame.Owner then Some(site, region.Offset, region.Bytes, region.Alignment) else None))
+                                        |> List.sortBy (fun (_, offset, _, _) -> offset)
+                                    let finish = fields |> List.fold (fun ending (_, offset, bytes, _) -> max ending (offset + bytes)) 0
+                                    // The explicit reserved tail is representation padding,
+                                    // never a current/local source value or initializer.
+                                    let fields = if finish < int extent then fields @ [frame.Owner, finish, int extent - finish, 1] else fields
+                                    let proof = LayoutProof.layout (NodeId.value frame.Owner) (sprintf "seq_%d_family_envelope" (NodeId.value frame.Owner))
+                                                    graph.Nodes[frame.Owner] fields (int extent) alignment
+                                    let dependencies = memberFrames |> List.collect (fun memberFrame -> memberFrame.Owner :: memberFrame.Obligations)
+                                    let edges = proof.NewEdges |> List.map (fun edge -> { edge with Sources = List.distinct (edge.Sources @ dependencies) })
+                                    let proof = { proof with NewEdges = edges }
+                                    let frame = { frame with Bytes = int extent; Alignment = alignment
+                                                             Obligations = frame.Obligations @ (proof.NewNodes |> List.map _.Id) }
+                                    Map.add frame.Owner frame completed, Enrichment.combine evidence proof, errors)
+                                    (completed, evidence, errors)) (completed, evidence, errors)
                 rounds (remaining |> Map.filter (fun owner _ -> not (ready.ContainsKey owner))) completed regions evidence errors
     rounds frames Map.empty Map.empty Enrichment.empty errors
+
+let settle graph frames sites origins = settleWithFamilies graph frames sites origins Map.empty

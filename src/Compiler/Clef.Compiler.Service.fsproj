@@ -257,7 +257,9 @@
     <Compile Include="PSGSaturation\SemanticGraph\Elaboration.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Core.fs" />
     <Compile Include="NativeTypedTree\UnionFind.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\ExplicitDemand.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\RecordInstances.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\Requirements.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\AggregateValues.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\PlatformResolution.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ProgramInitialization.fs" />
@@ -267,11 +269,12 @@
     <Compile Include="PSGSaturation\SemanticGraph\Mmio.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\BorrowedViews.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\MappedSpans.fs" />
-    <Compile Include="PSGSaturation\SemanticGraph\ScopedCallbacks.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\ScopedDeclarations.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\NodeBuilder.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Reachability.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Traversal.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Diagnostics.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\StaticStringLayout.fs" />
 
     <!-- NativeTypedTree - Native Type Checker (BCL-free, unified representation) -->
     <!-- NativeTypes.fs moved earlier - foundational types needed by TypedTree -->
@@ -328,9 +331,17 @@
     <Compile Include="PSGSaturation\SemanticGraph\CallableOrigins.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DirectCaptures.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ClosureEnvironments.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\CallableIngress.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\ScopedCallbacks.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\CallableDispatch.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\LazyContracts.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableCarriers.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\MutableCallableStorage.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\LazyValues.fs" />
     <Compile Include="Baker\Recipes\ClosureRecipes.fs" />
     <Compile Include="Baker\Recipes\ClosureEnvironmentRecipes.fs" />
+    <Compile Include="Baker\Recipes\CallableDispatchRecipes.fs" />
+    <Compile Include="Baker\Recipes\LazyRecipes.fs" />
     <Compile Include="Baker\Recipes\ApplicationRecipes.fs" />
     <Compile Include="Baker\Recipes\SeqRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceConsumptionRecipes.fs" />
@@ -338,11 +349,13 @@
     <Compile Include="Baker\Recipes\SequenceOwnershipRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceDelegationRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceEvaluationRecipes.fs" />
+    <Compile Include="Baker\Recipes\EagerDemandRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceControlRecipes.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\SequenceOrigins.fs" />
     <Compile Include="Baker\Recipes\SequenceElementRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceEffectRecipes.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ProgramActivation.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\LazyResidence.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\SequenceResidence.fs" />
     <Compile Include="Baker\Recipes\ContinuationObligationRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceMachineRecipes.fs" />
@@ -365,6 +378,9 @@
     <Compile Include="Nanopass\CallableApplications.fs" />
     <Compile Include="Nanopass\ClosureElaboration.fs" />
     <Compile Include="Nanopass\ClosureEnvironmentElaboration.fs" />
+    <Compile Include="Nanopass\CallableDispatchElaboration.fs" />
+    <Compile Include="Nanopass\LazyElaboration.fs" />
+    <Compile Include="Nanopass\LazyFactoryResults.fs" />
     <Compile Include="Nanopass\SequenceConsumption.fs" />
     <Compile Include="Nanopass\SequenceCurrentAdmission.fs" />
     <Compile Include="Nanopass\SequenceElements.fs" />
@@ -372,6 +388,7 @@
     <Compile Include="Nanopass\SequenceOwnership.fs" />
     <Compile Include="Nanopass\SequenceDelegation.fs" />
     <Compile Include="Nanopass\SequenceEvaluation.fs" />
+    <Compile Include="Nanopass\EagerDemand.fs" />
     <Compile Include="Nanopass\ObligationDischarge.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
     <!-- The declared platform fills the context at saturation; sealed sites are checked against it (CS-7b) -->
@@ -380,12 +397,12 @@
     <!-- The range pass: every integer's analysed range as a coeffect on the node, CCS8011 (CS-10) -->
     <Compile Include="PSGSaturation\SemanticGraph\StringByteStorage.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\RangeAnalysis.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\CallableFlows.fs" />
     <Compile Include="Baker\Recipes\StringByteStorageRecipes.fs" />
     <Compile Include="Nanopass\StringByteStorage.fs" />
     <!-- Obligation recipes observe the range pass's selection; they do not select again. -->
     <Compile Include="Nanopass\ObligationElaboration.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Placement.fs" />
-    <Compile Include="PSGSaturation\SemanticGraph\StaticStringLayout.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Roots.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Escape.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Curry.fs" />
@@ -394,11 +411,13 @@
     <Compile Include="PSGSaturation\SemanticGraph\PlatformBindings.fs" />
 
     <Compile Include="Nanopass\SequenceFactoryResults.fs" />
+    <Compile Include="Nanopass\SequenceFamilies.fs" />
     <Compile Include="Nanopass\SequenceRegions.fs" />
     <Compile Include="Nanopass\SequenceAggregateValues.fs" />
     <Compile Include="Nanopass\SequenceRuntime.fs" />
     <Compile Include="Nanopass\EnvironmentFactoryResults.fs" />
     <Compile Include="Nanopass\ClosureEnvironmentSettlement.fs" />
+    <Compile Include="Nanopass\LazyRuntime.fs" />
     <Compile Include="NativeTypedTree\NativeService.fs" />
 
     <!-- Project - Unified project loading and checking (DRY - single source of truth) -->

@@ -4,6 +4,7 @@ open Xunit
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+module StagedEnvironments = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments
 
 module private CallableApplication =
     let check source =
@@ -36,9 +37,8 @@ module private CallableApplication =
 
     let lambda (graph: SemanticGraph) (binding: SemanticNode) =
         let node = value graph binding.Id
-        match node.Kind with
-        | SemanticKind.Lambda (parameters, body, _, _, _) -> node, parameters, body
-        | kind -> failwithf "Expected a resident lambda, got %A" kind
+        let code, parameters, body, _ = CallableTestContracts.shape graph node.Id
+        code, parameters, body
 
     // Assert two actual calls, with the first call's function result as the
     // second callee. A matching final source type alone cannot establish this.
@@ -46,6 +46,18 @@ module private CallableApplication =
         let outer = value graph root
         match outer.Kind with
         | SemanticKind.Application (intermediate, finalArguments) ->
+            let intermediate, finalArguments =
+                match StagedEnvironments.callEnvironments graph |> Map.tryFind outer.Id with
+                | Some(ordinal, environment) ->
+                    Assert.Equal(environment, finalArguments[ordinal])
+                    let source =
+                        match graph.Nodes[environment].Kind with
+                        | SemanticKind.EnvironmentReference source -> source
+                        | kind -> failwithf "A staged captured call lost its actual result environment: %A" kind
+                    let carrier = StagedEnvironments.tryKnown graph source |> Option.get
+                    Assert.Equal(Some carrier.Implementation, StagedEnvironments.tryImplementation graph intermediate)
+                    source, finalArguments |> List.indexed |> List.choose (fun (index, argument) -> if index = ordinal then None else Some argument)
+                | None -> intermediate, finalArguments
             let finalArgument = Assert.Single finalArguments
             sameType finalResult outer.Type
             let inner = value graph intermediate
@@ -58,9 +70,7 @@ module private CallableApplication =
         | kind -> failwithf "Expected application of the returned function, got %A" kind
 
     let referenceTo (graph: SemanticGraph) expected id =
-        match (value graph id).Kind with
-        | SemanticKind.VarRef (_, Some definition) -> Assert.Equal(expected, definition)
-        | kind -> failwithf "Expected a reference to resident binding %A, got %A" expected kind
+        CallableTestContracts.referenceTo graph expected (value graph id).Id
 
     let namedCall (graph: SemanticGraph) expected id =
         match (value graph id).Kind with
@@ -144,7 +154,7 @@ let main _ = if observed = 5 then 0 else 1
         CallableApplication.sameType Types.intType graph.Nodes[payloadArgument].Type
 
     [<Fact>]
-    member _.``Supplied expressions are evaluated in order before either staged call``() =
+    member _.``Staged calls preserve each original supplied computation and the returned callable identity``() =
         let graph = CallableApplication.check """
 let mutable trace: int = 0
 let makeMapper () : int -> bool =
@@ -163,20 +173,103 @@ let main _ = if Option.get observed && trace = 12 then 0 else 1
         let residual = NativeType.TFun(CallableApplication.option Types.intType, CallableApplication.option Types.boolType)
         let outer, inner, original, mapperArgument, optionArgument =
             CallableApplication.stages graph root.Id residual (CallableApplication.option Types.boolType)
-        match root.Kind with
-        | SemanticKind.Sequential ordered ->
-            Assert.Equal(outer.Id, List.last ordered)
-            let prefix = ordered |> List.take (ordered.Length - 1)
-            let mapperPosition = prefix |> List.findIndex ((=) mapperArgument)
-            let optionPosition = prefix |> List.findIndex ((=) optionArgument)
-            Assert.True(mapperPosition < optionPosition, "Supplied expressions changed order")
-            Assert.Equal(1, prefix |> List.filter ((=) mapperArgument) |> List.length)
-            Assert.Equal(1, prefix |> List.filter ((=) optionArgument) |> List.length)
-            Assert.DoesNotContain(inner.Id, prefix)
-            Assert.True(prefix |> List.contains original, "The callee must be evaluated before application")
-            CallableApplication.namedCall graph "makeMapper" mapperArgument
-            CallableApplication.namedCall graph "makeOption" optionArgument
-        | kind -> failwithf "The staged calls have no eager supplied-expression prefix: %A" kind
+        Assert.Equal(outer.Id, root.Id)
+        Assert.Equal<NodeId list>([original; mapperArgument], inner.Children)
+        match outer.Kind, StagedEnvironments.callEnvironments graph |> Map.tryFind outer.Id with
+        | SemanticKind.Application(code, arguments), Some(ordinal, environment) ->
+            Assert.Equal<NodeId list>(code :: arguments, outer.Children)
+            Assert.Equal(environment, arguments[ordinal])
+            Assert.Equal(SemanticKind.EnvironmentReference inner.Id, graph.Nodes[environment].Kind)
+            Assert.Equal<NodeId list>([inner.Id], graph.Nodes[environment].Children)
+            let known = StagedEnvironments.tryKnown graph inner.Id |> Option.get
+            Assert.Equal(Some known.Implementation, StagedEnvironments.tryImplementation graph code)
+            Assert.Equal<NodeId list>([optionArgument], arguments |> List.indexed |> List.choose (fun (index, value) -> if index = ordinal then None else Some value))
+        | SemanticKind.Application _, None -> Assert.Equal<NodeId list>([inner.Id; optionArgument], outer.Children)
+        | _ -> failwith "The returned callable must retain its actual call and source result environment"
+        CallableApplication.referenceTo graph (CallableApplication.binding "map" graph).Id original
+        for name, argument in ["makeMapper", mapperArgument; "makeOption", optionArgument] do
+            CallableApplication.namedCall graph name argument
+            let declaration = CallableApplication.binding name graph
+            let calls = graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable &&
+                match node.Kind with
+                | SemanticKind.Application(callee, _) ->
+                    match graph.Nodes[callee].Kind with
+                    | SemanticKind.VarRef(_, Some target) -> target = declaration.Id
+                    | _ -> false
+                | _ -> false) |> Seq.toList
+            Assert.Equal(argument, (Assert.Single calls).Id)
+        // Ordinary arguments retain shared computation identities. This gate
+        // does not authorize forcing them before either application boundary;
+        // the owning default-demand/explicit-eager gates establish demand.
+        Assert.DoesNotContain(graph.Nodes.Values, fun node ->
+            node.IsReachable &&
+            match node.Kind with
+            | SemanticKind.Sequential ids -> List.contains mapperArgument ids || List.contains optionArgument ids
+            | _ -> false)
+
+    [<Fact>]
+    member _.``Eager actuals to a returned callable cannot precede formation of that callable``() =
+        let graph = CallableApplication.check """
+let mutable trace: int = 0
+let mark value = trace <- trace * 10 + value; value
+let make first =
+    trace <- trace * 10 + 2
+    fun second -> first + second
+[<EntryPoint>]
+let main _ = make (eager (mark 1)) (eager (mark 3))
+"""
+        let entry = CallableApplication.binding "main" graph
+        let _, _, body = CallableApplication.lambda graph entry
+        let outer, inner, _, first, second =
+            CallableApplication.stages graph body (NativeType.TFun(Types.intType, Types.intType)) Types.intType
+        let demand owner =
+            graph.Edges
+            |> List.filter (fun edge ->
+                edge.Target = owner && edge.Class = EdgeClass.Demand && edge.Role = EdgeRole.EagerDemand EagerFrontier.Actual)
+            |> Assert.Single
+        let firstDemand, secondDemand = demand inner.Id, demand outer.Id
+        Assert.Equal(first, firstDemand.Sources.Head)
+        Assert.Equal(second, secondDemand.Sources.Head)
+        Assert.Equal(inner.Id, List.last secondDemand.Sources)
+        Assert.Equal(0, secondDemand.Ordinal)
+        let environmentOrdinal, environment = StagedEnvironments.callEnvironments graph |> Map.find outer.Id
+        let physicalCallee, physicalArguments =
+            match outer.Kind with SemanticKind.Application(callee, arguments) -> callee, arguments | _ -> failwith "Expected settled outer call"
+        Assert.Equal(environment, physicalArguments[environmentOrdinal])
+        Assert.Equal(SemanticKind.EnvironmentReference inner.Id, graph.Nodes[environment].Kind)
+        let known = StagedEnvironments.tryKnown graph inner.Id |> Option.get
+        let convention =
+            graph.Edges |> List.filter (fun edge ->
+                edge.Role = EdgeRole.EnvironmentFormal && edge.Sources = [known.EnvironmentOwner; known.Implementation]) |> Assert.Single
+        for participant in [physicalCallee; environment; inner.Id; known.EnvironmentOwner; convention.Target] do
+            Assert.Contains(participant, secondDemand.Sources)
+        Assert.DoesNotContain(second, firstDemand.Sources)
+        Assert.DoesNotContain(graph.Nodes.Values, fun node ->
+            node.IsReachable &&
+            match node.Kind with
+            | SemanticKind.Sequential ids -> List.contains first ids || List.contains second ids
+            | _ -> false)
+        for defect in ["missing-convention"; "environment-type"; "environment-incidence"; "environment-origin"] do
+            let changed =
+                match defect with
+                | "missing-convention" ->
+                    let edges =
+                        graph.Edges |> List.filter (fun edge ->
+                            not (edge.Role = EdgeRole.EnvironmentFormal && edge.Target = convention.Target))
+                    { graph with Edges = edges }
+                | _ ->
+                    let current = graph.Nodes[environment]
+                    let changed =
+                        match defect with
+                        | "environment-type" -> { current with Type = Types.boolType }
+                        | "environment-incidence" -> { current with Children = [] }
+                        | _ -> { current with Kind = SemanticKind.EnvironmentReference physicalCallee; Children = [physicalCallee] }
+                    { graph with Nodes = graph.Nodes.Add(environment, changed) }
+            let refreshed = Clef.Compiler.Nanopass.EagerDemand.normalize changed
+            Assert.DoesNotContain(refreshed.Edges, fun edge ->
+                edge.Target = outer.Id && edge.Role = EdgeRole.EagerDemand EagerFrontier.Actual)
+            Assert.Contains(refreshed.Edges, fun edge -> edge.Target = outer.Id && edge.Role = EdgeRole.EagerDemandPending)
 
     [<Theory>]
     [<InlineData("option", "Some staged", "Option.get chosen")>]

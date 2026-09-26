@@ -47,6 +47,40 @@ module private RegionFixture =
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceRegions")>]
 type SequenceRegionCases() =
     [<Fact>]
+    member _.``Parent regions use the completed common child family extent``() =
+        let builder = NodeBuilder()
+        let parent, small, wide = RegionFixture.frame builder false, RegionFixture.frame builder false, RegionFixture.frame builder true
+        let site = RegionFixture.site builder
+        let frames = [parent; small; wide] |> List.map (fun frame -> frame.Owner, frame) |> Map.ofList
+        let familyOf = Map.ofList [small.Owner, small.Owner; wide.Owner, small.Owner]
+        let result = RegionSettlement.settleWithFamilies (builder.Build []) frames
+                        (Map.ofList [site, parent.Generator]) (Map.ofList [site, small.Owner]) familyOf
+        Assert.Empty result.Unresolved
+        Assert.Equal(8, result.Frames[small.Owner].Bytes)
+        Assert.Equal(8, result.Frames[wide.Owner].Bytes)
+        Assert.Equal(4, result.Frames[small.Owner].Alignment)
+        Assert.Equal(8, result.Regions[site].Bytes)
+        Assert.Equal(4, result.Regions[site].Offset)
+        Assert.Equal(12, result.Frames[parent.Owner].Bytes)
+        Assert.Equal<ContinuationSlot list>(small.Slots, result.Frames[small.Owner].Slots)
+        Assert.Equal<(NodeId * NodeId) list>(small.Initializers, result.Frames[small.Owner].Initializers)
+
+    [<Fact>]
+    member _.``An owned region inside its own representation family is a finite extent cycle``() =
+        let builder = NodeBuilder()
+        let parent, child = RegionFixture.frame builder false, RegionFixture.frame builder true
+        let site = RegionFixture.site builder
+        let result = RegionSettlement.settleWithFamilies (builder.Build [])
+                        (Map.ofList [parent.Owner, parent; child.Owner, child])
+                        (Map.ofList [site, parent.Generator]) (Map.ofList [site, child.Owner])
+                        (Map.ofList [parent.Owner, parent.Owner; child.Owner, parent.Owner])
+        Assert.NotEmpty result.Unresolved
+        Assert.Empty result.Regions
+        Assert.Empty result.Evidence.NewNodes
+        Assert.Equal(parent.Bytes, result.Frames[parent.Owner].Bytes)
+        Assert.Equal(child.Bytes, result.Frames[child.Owner].Bytes)
+
+    [<Fact>]
     member _.``Distinct acquisition identities for one child owner receive disjoint complete backing regions``() =
         let builder = NodeBuilder()
         let parent, child = RegionFixture.frame builder false, RegionFixture.frame builder true

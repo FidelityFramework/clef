@@ -6,6 +6,8 @@ open Clef.Compiler.NativeService
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
+module ValueEnvironments = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments
+
 module private ClosureValues =
     let check source =
         match parseAndCheck ("module ClosureValues\n" + source) "closure-values.clef" with
@@ -29,12 +31,19 @@ module private ClosureValues =
         match value.Kind with
         | SemanticKind.VarRef (name, Some _) -> Assert.True(name = sourceName || name.EndsWith("." + sourceName))
         | kind -> failwithf "A function alias must snapshot the referenced value, got %A" kind
+        let promotedSource = ValueEnvironments.trySourceDeclaration result.Graph
+        let sourceDefinition id =
+            let occurrence = valueNode result id
+            promotedSource occurrence.Id |> Option.orElseWith (fun () ->
+                match occurrence.Kind with SemanticKind.VarRef (_, Some target) -> Some target | _ -> None)
+        let source = sourceDefinition value.Id |> Option.get
+        match result.Graph.Nodes[source].Kind with
+        | SemanticKind.Binding (name, _, _, _) | SemanticKind.PatternBinding name ->
+            Assert.True(name = sourceName || name.EndsWith("." + sourceName))
+        | kind -> failwithf "Alias lost its source declaration: %A" kind
         let calls = result.Graph.Nodes |> Map.values |> Seq.choose (fun node ->
             match node.Kind with
-            | SemanticKind.Application (funcId, args) when node.IsReachable ->
-                match (valueNode result funcId).Kind with
-                | SemanticKind.VarRef (_, Some bindingId) when bindingId = saved.Id -> Some args
-                | _ -> None
+            | SemanticKind.Application (funcId, args) when node.IsReachable && sourceDefinition funcId = Some saved.Id -> Some args
             | _ -> None) |> Seq.toList
         Assert.Single calls |> ignore
         Assert.Equal(2, calls.Head.Length)
@@ -55,6 +64,30 @@ module private ClosureValues =
         for node in lambdas do
             Assert.True(layouts.ContainsKey node.Id, $"Anonymous function {node.Id} has no closure placement")
             Assert.Equal(EscapeKind.EscapesViaReturn, result.Graph.Codata.Value.Escapes[node.Id])
+
+    let plainCode name expectedArity (result: CheckResult) =
+        let binding = bindingNamed name result
+        let value = valueNode result (Assert.Single binding.Children)
+        let implementation = ValueEnvironments.tryImplementation result.Graph value.Id |> Option.get
+        let code = result.Graph.Nodes[implementation]
+        Assert.Equal(None, ValueEnvironments.tryKnown result.Graph value.Id)
+        Assert.Equal(Some (MetadataValue.Type binding.Type), code.Metadata.TryFind ClosureMetadata.SourceSignature)
+        Assert.NotEqual(Some (MetadataValue.Bool true), code.Metadata.TryFind ClosureMetadata.RequiresClosurePair)
+        Assert.NotEqual(Some (MetadataValue.Bool true), code.Metadata.TryFind ClosureMetadata.LambdaExpression)
+        Assert.False(result.Graph.Codata.Value.Closures.ContainsKey code.Id)
+        Assert.False(result.Graph.Codata.Value.Closures.ContainsKey value.Id)
+        let declarations = ValueEnvironments.implementationBindings result.Graph
+        Assert.Contains(code.Parent |> Option.get, declarations)
+        match code.Kind with
+        | SemanticKind.Lambda (parameters, body, [], _, _) ->
+            Assert.Equal(expectedArity, parameters.Length)
+            Assert.Equal<NodeId list>((parameters |> List.map (fun (_, _, id) -> id)) @ [body], code.Children)
+            for _, ty, formal in parameters do
+                Assert.Equal(Some code.Id, result.Graph.Nodes[formal].Parent)
+                DimensionalCases.same ty result.Graph.Nodes[formal].Type
+                Assert.Equal(None, ValueEnvironments.tryEnvironmentOwner result.Graph formal)
+            code, parameters, body
+        | kind -> failwithf "Expected a capture-free code declaration: %A" kind
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ClosureValues")>]
 type ClosureValueTests() =
@@ -173,7 +206,7 @@ let main _ =
         | other -> failwithf "Expected a fully placed function/boolean record, got %A" other
 
     [<Fact>]
-    member _.``Annotated zero-capture function values receive closure pairs``() =
+    member _.``Annotated zero-capture function values retain plain code and real arity``() =
         let result = ClosureValues.check """
 let emptyWork: int -> int -> int = fun _lo _hi -> 0
 let emptyRetirement: unit -> unit = fun () -> ()
@@ -182,17 +215,23 @@ let main _ =
     emptyRetirement ()
     emptyWork 0 1
 """
-        ClosureValues.assertPairs result
+        ClosureValues.plainCode "emptyWork" 2 result |> ignore
+        ClosureValues.plainCode "emptyRetirement" 1 result |> ignore
+        Assert.DoesNotContain(result.Graph.Nodes.Values, fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.ClosureValue _ | SemanticKind.EnvironmentCreate _ -> true | _ -> false)
 
     [<Fact>]
-    member _.``Locally bound anonymous values are not mistaken for nested declarations``() =
+    member _.``Locally bound zero-capture values retain their promoted code boundary``() =
         let result = ClosureValues.check """
 [<EntryPoint>]
 let main _ =
     let failWork = fun (_lo: int) (_hi: int) -> 77
     failWork 0 1
 """
-        ClosureValues.assertPairs result
+        let _, _, body = ClosureValues.plainCode "failWork" 2 result
+        Assert.Equal(Some (ValueRange.point 77I), result.Graph.Nodes[body].ValueRange)
+        Assert.DoesNotContain(result.Graph.Nodes.Values, fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.ClosureValue _ | SemanticKind.EnvironmentCreate _ -> true | _ -> false)
 
     [<Fact>]
     member _.``Returned zero-capture lambdas retain a live pair``() =
@@ -281,14 +320,31 @@ let main _ =
             // function is the escaping value, rather than a partial call of make.
             Assert.Equal(None, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.escapes result.Graph factoryLambda.Id)
             let returned = result.Graph.Nodes[body]
-            Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.escapes result.Graph returned.Id |> Option.isSome)
             match returned.Kind with
-            | SemanticKind.Lambda (returnedParameters, _, captures, _, _) ->
-                let _, deltaType, delta = Assert.Single returnedParameters
+            | SemanticKind.ClosureValue (implementation, environment) ->
+                let code = result.Graph.Nodes[implementation]
+                let returnedParameters =
+                    match code.Kind with
+                    | SemanticKind.Lambda (parameters, _, [], _, _) -> parameters
+                    | kind -> failwithf "Returned value lost its physical implementation: %A" kind
+                Assert.Equal(2, returnedParameters.Length)
+                let _, _, formal = List.head returnedParameters
+                Assert.Equal(Some returned.Id, ValueEnvironments.tryEnvironmentOwner result.Graph formal)
+                Assert.Equal(Some returned.Id, ValueEnvironments.tryEnvironmentOwner result.Graph environment)
+                Assert.Equal(Some (MetadataValue.Type returned.Type), code.Metadata.TryFind ClosureMetadata.SourceSignature)
+                let _, deltaType, delta = Assert.Single (List.tail returnedParameters)
                 Assert.Equal(Some (ValueRange.point 7I), result.Graph.Nodes[delta].ValueRange)
-                let capture = Assert.Single captures
+                let capture = ValueEnvironments.captures result.Graph returned.Id |> Assert.Single
                 Assert.Equal(Some seed, capture.SourceNodeId)
                 Assert.Equal(formatType deltaType, formatType capture.Type)
+                Assert.False capture.IsMutable
+                Assert.Equal<(NodeId * NodeId * bool) list>([(seed, seed, false)],
+                    ValueEnvironments.capturedInitializers result.Graph returned.Id |> Option.get)
+                let actual = ClosureValues.bindingNamed "actual" result
+                let call = Assert.Single actual.Children
+                let ordinal, actualEnvironment = ValueEnvironments.callEnvironments result.Graph |> Map.find call
+                Assert.Equal(0, ordinal)
+                Assert.Equal(Some returned.Id, ValueEnvironments.tryEnvironmentOwner result.Graph actualEnvironment)
             | kind -> failwithf "Factory result lost its callable boundary: %A" kind
         | kind -> failwithf "Expected a closure factory: %A" kind
 
@@ -368,7 +424,7 @@ let main _ =
         ClosureValues.assertAlias "callback" result
 
     [<Fact>]
-    member _.``A named declaration alias gets a pair with a saturated direct call``() =
+    member _.``A named declaration alias retains plain code with a saturated direct call``() =
         let result = ClosureValues.check """
 let add (a: int) (b: int) = a + b
 [<EntryPoint>]
@@ -376,17 +432,19 @@ let main _ =
     let saved = add
     saved 40 2
 """
-        let saved = ClosureValues.bindingNamed "saved" result
-        let value = ClosureValues.valueNode result saved.Children.Head
-        Assert.Equal(Some (MetadataValue.Bool true), Map.tryFind ClosureMetadata.RequiresClosurePair value.Metadata)
-        match value.Kind with
-        | SemanticKind.Lambda (parameters, body, captures, _, _) ->
-            Assert.Equal(2, parameters.Length)
-            Assert.Empty captures
-            match (ClosureValues.valueNode result body).Kind with
-            | SemanticKind.Application (_, arguments) -> Assert.Equal(2, arguments.Length)
-            | kind -> failwithf "Expected saturated declaration call, got %A" kind
-        | kind -> failwithf "Expected declaration closure pair, got %A" kind
+        let _, parameters, body = ClosureValues.plainCode "saved" 2 result
+        let add = ClosureValues.bindingNamed "add" result
+        match (ClosureValues.valueNode result body).Kind with
+        | SemanticKind.Application (callee, arguments) ->
+            match (ClosureValues.valueNode result callee).Kind with
+            | SemanticKind.VarRef (_, Some declaration) -> Assert.Equal(add.Id, declaration)
+            | kind -> failwithf "Expected the original declaration identity: %A" kind
+            Assert.Equal(2, arguments.Length)
+            List.zip parameters arguments |> List.iter (fun ((_, _, formal), argument) ->
+                match result.Graph.Nodes[argument].Kind with
+                | SemanticKind.VarRef (_, Some actual) -> Assert.Equal(formal, actual)
+                | kind -> failwithf "Expected the original formal in source order: %A" kind)
+        | kind -> failwithf "Expected saturated declaration call, got %A" kind
 
     [<Fact>]
     member _.``Indirect curried callbacks receive actual argument ranges through a mutable slot``() =

@@ -6,6 +6,8 @@ open Clef.Compiler.NativeService
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
+module DirectEnvironments = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments
+
 module private DirectCapture =
     let check source =
         match parseAndCheck ("module DirectCapture\n" + source) "direct-capture.clef" with
@@ -31,6 +33,30 @@ module private DirectCapture =
         match node.Kind with
         | SemanticKind.Lambda (parameters, body, captures, _, _) -> parameters, body, captures
         | other -> failwithf "Expected Lambda, got %A" other
+
+    /// Read source formals and captures through the resident environment
+    /// relation, while checking the additional physical formal separately.
+    let sourceShape (result: CheckResult) node =
+        match node.Kind with
+        | SemanticKind.ClosureValue (implementation, environment) ->
+            let code = result.Graph.Nodes[implementation]
+            let parameters, body, captures = shape code
+            Assert.Empty captures
+            let relation = result.Graph.Edges |> List.filter (fun edge ->
+                edge.Class = EdgeClass.Provenance && edge.Role = EdgeRole.EnvironmentFormal &&
+                edge.Sources = [node.Id; implementation]) |> Assert.Single
+            let _, environmentType, formal = List.head parameters
+            Assert.Equal(relation.Target, formal)
+            DimensionalCases.same DirectEnvironments.environmentType environmentType
+            Assert.Equal(Some node.Id, DirectEnvironments.tryEnvironmentOwner result.Graph formal)
+            Assert.Equal(Some node.Id, DirectEnvironments.tryEnvironmentOwner result.Graph environment)
+            Assert.Equal(Some (MetadataValue.Type node.Type), code.Metadata.TryFind ClosureMetadata.SourceSignature)
+            let initializers = DirectEnvironments.capturedInitializers result.Graph node.Id |> Option.get
+            Assert.NotEmpty initializers
+            for slot, value, _ in initializers do
+                Assert.Equal(slot, value)
+            List.tail parameters, body, DirectEnvironments.captures result.Graph node.Id
+        | _ -> shape node
 
     let descendants (result: CheckResult) root =
         let rec visit seen id =
@@ -66,7 +92,7 @@ module private DirectCapture =
 
     let unchanged name result =
         let node = lambda name result
-        let _, _, captures = shape node
+        let _, _, captures = sourceShape result node
         Assert.NotEmpty captures
         Assert.NotEqual(Some (MetadataValue.String "DirectCapture"), node.Metadata.TryFind ElaborationMetadata.For)
 
@@ -227,7 +253,7 @@ let main _ =
         Assert.Equal(2, parameters.Length)
         let _, _, formal = parameters.Head
         let inner = result.Graph.Nodes[body]
-        let innerParameters, _, captures = DirectCapture.shape inner
+        let innerParameters, _, captures = DirectCapture.sourceShape result inner
         Assert.Single innerParameters |> ignore
         let capture = Assert.Single captures
         Assert.Equal(Some formal, capture.SourceNodeId)
@@ -286,7 +312,7 @@ let main _ =
         Assert.True(result.Graph.Nodes.ContainsKey formal)
 
     [<Fact>]
-    member _.``Annotated callees and two eager explicit arguments retain source ordering``() =
+    member _.``Annotated callees retain explicit operands in source order``() =
         let result = DirectCapture.check """
 [<EntryPoint>]
 let main _ =
@@ -300,9 +326,15 @@ let main _ =
         Assert.Equal(3, parameters.Length)
         let _, args = Assert.Single (DirectCapture.calls "work" result)
         Assert.Equal(3, args.Length)
+        let emit = DirectCapture.lambda "emit" result
+        let implementation = DirectEnvironments.tryImplementation result.Graph emit.Id |> Option.get
+        let environments = DirectEnvironments.callEnvironments result.Graph
         let explicit = args.Tail |> List.map (fun id ->
             match result.Graph.Nodes[id].Kind with
-            | SemanticKind.Application (_, [value]) ->
+            | SemanticKind.Application (callee, [environment; value]) ->
+                Assert.Equal(Some implementation, DirectEnvironments.tryImplementation result.Graph callee)
+                Assert.Equal(Some (0, environment), environments.TryFind id)
+                Assert.Equal(Some emit.Id, DirectEnvironments.tryEnvironmentOwner result.Graph environment)
                 match result.Graph.Nodes[value].Kind with
                 | SemanticKind.Literal (NativeLiteral.Int (value, _)) -> value
                 | other -> failwithf "Expected supplied literal, got %A" other
@@ -349,7 +381,7 @@ let main _ =
         DirectCapture.unchanged "work" result
 
     [<Fact>]
-    member _.``A mixed mutable frontier is left wholly unconverted``() =
+    member _.``A mixed mutable frontier retains its cell and value captures``() =
         let result = DirectCapture.check """
 [<EntryPoint>]
 let main _ =
@@ -359,9 +391,12 @@ let main _ =
     work 3
 """
         DirectCapture.unchanged "work" result
-        let _, _, captures = DirectCapture.shape (DirectCapture.lambda "work" result)
-        Assert.Contains(captures, fun capture -> capture.IsMutable)
-        Assert.Contains(captures, fun capture -> not capture.IsMutable)
+        let _, _, captures = DirectCapture.sourceShape result (DirectCapture.lambda "work" result)
+        Assert.Equal(2, captures.Length)
+        let state = DirectCapture.binding "state" result
+        let offset = DirectCapture.binding "offset" result
+        Assert.Contains(captures, fun capture -> capture.IsMutable && capture.SourceNodeId = Some state.Id)
+        Assert.Contains(captures, fun capture -> not capture.IsMutable && capture.SourceNodeId = Some offset.Id)
 
     [<Fact>]
     member _.``A source dimension mismatch cannot become successful through direct capture saturation``() =

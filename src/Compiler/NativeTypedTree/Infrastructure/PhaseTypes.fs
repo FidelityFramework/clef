@@ -199,9 +199,23 @@ type PhaseEdgeOutput = {
     Ordinal: int
 }
 
+/// A diagnostic view never rewrites the source graph's incidence. References
+/// crossing the view boundary are listed explicitly instead of being erased.
+type PhaseGraphView = {
+    Mode: string
+    SourceNodeCount: int
+    SourceEdgeCount: int
+    EmittedNodeCount: int
+    EmittedEdgeCount: int
+    RetainedUnreachableNodeCount: int
+    ExternalNodeIds: int list
+    MissingNodeIds: int list
+}
+
 type PhaseOutput = {
     /// Phase summary information
     Summary: PhaseSummary
+    View: PhaseGraphView
     /// All nodes in the graph
     Nodes: PhaseNodeOutput list
     /// Entry point node IDs

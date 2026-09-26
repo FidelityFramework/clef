@@ -17,6 +17,70 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.PSGSaturation.SemanticGraph.NodeBuilder
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
+type GraphView = {
+    Nodes: Map<NodeId, SemanticNode>
+    Edges: Hyperedge list
+    Metadata: PhaseGraphView
+}
+
+/// Select before formatting kinds and types: discarded nodes incur no JSON
+/// rendering work. Non-containment evidence is a joint relation, so touching
+/// any participant retains the entire relation transitively. Ordinary graph
+/// incidence may cross this diagnostic boundary and is reported explicitly.
+/// Neither reachability flags nor the compiler's graph are changed.
+let selectGraphView mode (graph: SemanticGraph) : GraphView =
+    let selectedNodes, selectedEdges =
+        match mode with
+        | GraphArtifactMode.Full -> graph.Nodes, graph.Edges
+        | GraphArtifactMode.Pruned ->
+            let retained = System.Collections.Generic.HashSet<NodeId>()
+            let pending = System.Collections.Generic.Queue<NodeId>()
+            let retain id = if retained.Add id then pending.Enqueue id
+            for node in graph.Nodes.Values do if node.IsReachable then retain node.Id
+            for id, _ in graph.DeclarationRoots do retain id
+            let joint = graph.Edges |> List.filter (fun edge ->
+                edge.Class <> EdgeClass.Structural && edge.Class <> EdgeClass.Reference) |> List.toArray
+            let incidence = System.Collections.Generic.Dictionary<NodeId, ResizeArray<int>>()
+            for index in 0 .. joint.Length - 1 do
+                for id in joint[index].Target :: joint[index].Sources do
+                    match incidence.TryGetValue id with
+                    | true, rows -> rows.Add index
+                    | _ -> incidence[id] <- ResizeArray<int>([index])
+            let visited = System.Collections.Generic.HashSet<int>()
+            while pending.Count > 0 do
+                match incidence.TryGetValue(pending.Dequeue()) with
+                | true, rows ->
+                    for index in rows do
+                        if visited.Add index then
+                            for id in joint[index].Target :: joint[index].Sources do retain id
+                | _ -> ()
+            graph.Nodes |> Map.filter (fun id _ -> retained.Contains id),
+            graph.Edges |> List.filter (fun edge ->
+                retained.Contains edge.Target || edge.Sources |> List.exists retained.Contains)
+    let referenced =
+        seq {
+            for node in selectedNodes.Values do
+                yield! node.Children
+                yield! Option.toList node.Parent
+                for edge in kindEdges node.Id node.Kind do
+                    yield edge.Target
+                    yield! edge.Sources
+            for edge in selectedEdges do
+                yield edge.Target
+                yield! edge.Sources
+            yield! graph.DeclarationRoots |> List.map fst
+        } |> Set.ofSeq
+    let outside = referenced |> Set.filter (fun id -> not (selectedNodes.ContainsKey id))
+    let existing, missing = outside |> Set.partition graph.Nodes.ContainsKey
+    { Nodes = selectedNodes; Edges = selectedEdges
+      Metadata = {
+        Mode = match mode with GraphArtifactMode.Full -> "full" | GraphArtifactMode.Pruned -> "pruned-with-evidence"
+        SourceNodeCount = graph.Nodes.Count; SourceEdgeCount = graph.Edges.Length
+        EmittedNodeCount = selectedNodes.Count; EmittedEdgeCount = selectedEdges.Length
+        RetainedUnreachableNodeCount = selectedNodes.Values |> Seq.filter (fun node -> not node.IsReachable) |> Seq.length
+        ExternalNodeIds = existing |> Set.toList |> List.map NodeId.value
+        MissingNodeIds = missing |> Set.toList |> List.map NodeId.value } }
+
 // ═══════════════════════════════════════════════════════════════════════════
 // JSON Serialization (minimal, no external dependencies)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -162,8 +226,20 @@ let serializePhaseOutput (output: PhaseOutput) : string =
                 ("ordinal", string e.Ordinal) ])
         |> buildJsonArray pretty 1
 
+    let view = output.View
+    let viewJson = buildJsonObject pretty 1 [
+        "mode", escapeJsonString view.Mode
+        "sourceNodeCount", string view.SourceNodeCount
+        "sourceEdgeCount", string view.SourceEdgeCount
+        "emittedNodeCount", string view.EmittedNodeCount
+        "emittedEdgeCount", string view.EmittedEdgeCount
+        "retainedUnreachableNodeCount", string view.RetainedUnreachableNodeCount
+        "externalNodeIds", buildJsonArray false 0 (view.ExternalNodeIds |> List.map string)
+        "missingNodeIds", buildJsonArray false 0 (view.MissingNodeIds |> List.map string)
+    ]
     let pairs = [
         ("summary", summaryJson)
+        ("view", viewJson)
         ("nodes", nodesJson)
         ("edges", edgesJson)
         ("entryPoints", entryPointsJson)

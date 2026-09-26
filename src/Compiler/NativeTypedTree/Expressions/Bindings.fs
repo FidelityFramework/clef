@@ -211,7 +211,8 @@ let tryGetFunctionParams
 let private isGeneralizableValue (env: TypeEnv) (builder: NodeBuilder) source (node: SemanticNode) =
     let rec sourceValue = function
         | SynExpr.Const _ | SynExpr.Ident _ | SynExpr.LongIdent _ | SynExpr.Lambda _ -> true
-        | SynExpr.Paren(inner, _, _, _) | SynExpr.Typed(inner, _, _) | SynExpr.Lazy(inner, _) -> sourceValue inner
+        | SynExpr.Paren(inner, _, _, _) | SynExpr.Typed(inner, _, _)
+        | SynExpr.Lazy(inner, _) | SynExpr.Eager(inner, _) -> sourceValue inner
         | SynExpr.Tuple(_, items, _, _) | SynExpr.ArrayOrList(false, items, _) -> List.forall sourceValue items
         | SynExpr.ArrayOrListComputed(false, body, _) ->
             Clef.Compiler.NativeTypedTree.Expressions.Collections.tryLiteralCollectionElements body
@@ -238,7 +239,7 @@ let private isGeneralizableValue (env: TypeEnv) (builder: NodeBuilder) source (n
         match node.Kind with
         | SemanticKind.Literal _ | SemanticKind.VarRef _ | SemanticKind.Lambda _ -> true
         | SemanticKind.Intrinsic _ when node.Children.IsEmpty -> true
-        | SemanticKind.TypeAnnotation(inner, _) -> safe inner
+        | SemanticKind.TypeAnnotation(inner, _) | SemanticKind.EagerExpr inner -> safe inner
         | SemanticKind.TupleExpr items | SemanticKind.ListExpr items -> List.forall safe items
         | SemanticKind.UnionCase(_, _, payload) -> payload |> Option.forall safe
         | SemanticKind.RecordExpr(fields, copied) ->

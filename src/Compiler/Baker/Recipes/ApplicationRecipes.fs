@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 /// Actual callable boundaries are settled by the PSG; this recipe only composes
-/// the corresponding calls and preserves eager source operand evaluation.
+/// the corresponding calls. Each call retains its own actuals: resolving a
+/// returned callable must precede demand at that callable's actual frontier.
 module Clef.Compiler.Baker.Recipes.ApplicationRecipes
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
@@ -12,7 +13,7 @@ open Clef.Compiler.Baker.Ingredients.SaturationCombinators
 open Clef.Compiler.Baker.Ingredients.Primitives
 open Clef.Compiler.Baker.Recipes.Decomposition
 
-let stage (ctx: Context) (source: SemanticNode) (callee: NodeId) (arguments: NodeId list) (stages: Stage list) =
+let stage (ctx: Context) (source: SemanticNode) (callee: NodeId) (stages: Stage list) =
     let rec calls current (stages: Stage list) =
         saturation {
             match stages with
@@ -24,8 +25,7 @@ let stage (ctx: Context) (source: SemanticNode) (callee: NodeId) (arguments: Nod
     let state = SaturationState.create ctx.SourceRange ctx.OriginalHOF ctx.ExpansionId ctx.InspiringNode ctx.Platform
     let result, nodes = run state (saturation {
         let! result = calls callee stages
-        let! value = evaluateBefore (callee :: arguments) result (List.last stages).ResultType
-        return! inheritContext source value
+        return! inheritContext source result
     })
     match result with
     | Matched root -> mkResultNoShadow nodes root []

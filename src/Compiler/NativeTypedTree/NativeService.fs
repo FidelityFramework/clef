@@ -632,9 +632,10 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
         let (reachable, _unreachable) =
             if phase.Number >= 4 then getReachabilityStats graph
             else (Map.count graph.Nodes, 0)
+        let view = PhaseEmitter.selectGraphView (PhaseConfig.getConfig()).GraphMode graph
         
         let nodeOutputs =
-            graph.Nodes
+            view.Nodes
             |> Map.toList
             |> List.map (fun (id, node) ->
                 let kindStr = node.Kind |> sprintf "%A" |> truncateKind
@@ -700,11 +701,12 @@ let private emitPhaseIfEnabled (phase: PhaseTypes.PhaseId) (graph: SemanticGraph
         
         let output : PhaseTypes.PhaseOutput = {
             Summary = summaryWithDiags
+            View = view.Metadata
             Nodes = nodeOutputs
             EntryPoints = graph.DeclarationRoots |> List.map (fun (id, _) -> NodeId.value id)
             Diagnostics = diagStrings
             Edges =
-                graph.Edges |> List.map (fun e ->
+                view.Edges |> List.map (fun e ->
                     { PhaseTypes.PhaseEdgeOutput.Sources = e.Sources |> List.map NodeId.value
                       Target = NodeId.value e.Target
                       Class = sprintf "%A" e.Class
@@ -990,9 +992,12 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         Edges = []
     }
 
-    // Phase 1: Emit structural construction result
+    // Compute source diagnostics before generated activation changes ownership.
     let unusedBindings = unusedBindingDiagnostics ownedSources { graph with Nodes = sourceNodes } (diagnostics @ residual)
-    emitPhaseIfEnabled PhaseTypes.PhaseId.Structural graph diagnostics
+
+    // Artifact 01 is PSG₀ after reachability, emitted below. Writing a second
+    // pre-reachability graph to the same path formats every library node and
+    // immediately discards that output, even when pruned artifacts are selected.
 
     // Declared closed adapters become ordinary module entries before either
     // pruning or Baker can discard their source template or factory body.
@@ -1071,6 +1076,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // explicit parameters. Mutable capture storage remains a separate contract.
     let finalGraph = Clef.Compiler.Nanopass.ClosureElaboration.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.ClosureEnvironmentElaboration.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.CallableDispatchElaboration.normalize finalGraph
+    // Explicit lazy values own their source guard/store/publication algorithm.
+    // Normalize before ranges inspect the thunk result and guarded cache reads.
+    let finalGraph = Clef.Compiler.Nanopass.LazyElaboration.normalize finalGraph
 
     // Source and recipe-produced suspension sites retain their exact delimiter
     // after the preceding identity rewrites. Ownership is not segmentation,
@@ -1147,6 +1156,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // structural normalization. They do not yet establish suspension segments,
     // dominance or a frame that Alex could witness.
     let finalGraph = Clef.Compiler.Nanopass.SequenceEvaluation.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.EagerDemand.normalize finalGraph
     // Source admission precedes native continuation construction. Tag the
     // source graph before representation rewrites retire its evaluation spine.
     // Strategy: Build a (file, line) → IsReachable index from the graph.
@@ -1181,6 +1191,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         if sourceAdmitted && finalGraph.Platform.IsSome then
             Clef.Compiler.Nanopass.EnvironmentFactoryResults.prepare finalGraph curry
         else finalGraph, curry
+    let finalGraph, curry =
+        if sourceAdmitted && finalGraph.Platform.IsSome then
+            Clef.Compiler.Nanopass.LazyFactoryResults.prepare finalGraph curry
+        else finalGraph, curry
     // Destinations describe where results will be formed. Prepare both families
     // before proving residence, so no preliminary missing-lifetime diagnostic
     // survives after its owning relationship has been supplied.
@@ -1190,6 +1204,11 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                                     preparedSequences.Destinations preparedSequences.FactoryCalls finalGraph
     let finalGraph, sequences = Clef.Compiler.Nanopass.SequenceRuntime.normalizePreparedWhenSourceAdmitted sourceAdmitted { preparedSequences with Graph = finalGraph }
     let curry = sequences.Curry
+    let finalGraph, lazies = Clef.Compiler.Nanopass.LazyRuntime.settleWhenSourceAdmitted sourceAdmitted finalGraph
+    // Representation nanopasses can clone or retire marked occurrences. Demand
+    // belongs to the current marker/operand/frontier incidence, not the earlier
+    // node identities or the mere presence of a previous projection.
+    let finalGraph = Clef.Compiler.Nanopass.EagerDemand.normalize finalGraph
     ObligationDischarge.emit finalGraph  // Includes settled continuation frame obligations.
     let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
     let mmio, mmioDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess.settle (diagnostics @ residual @ rangeDiagnostics) finalGraph
@@ -1206,26 +1225,53 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
               Message = "Callable boundary requires further settlement: " + pending.Reason
               Range = finalGraph.Nodes[pending.Occurrence].Range; RelatedNodes = [pending.Occurrence]
               Reachability = ReachabilityContext.Reachable })
+    let mutableCallables =
+        Clef.Compiler.PSGSaturation.SemanticGraph.MutableCallableStorage.settle callableCarriers environments.Layouts finalGraph
+    let callableFlows, callableFlowResiduals =
+        Clef.Compiler.PSGSaturation.SemanticGraph.CallableFlows.settle
+            { Carriers = callableCarriers; Joins = mutableCallables.Joins; Layouts = environments.Layouts
+              SequenceFlows = sequences.Flows; SequenceFamilies = sequences.Families } finalGraph
+    let callableFlowDiagnostics =
+        callableFlowResiduals |> List.map (fun pending ->
+            { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8403"
+              Message = "Callable value flow requires further settlement: " + pending.Reason
+              Range = finalGraph.Nodes[pending.Occurrence].Range; RelatedNodes = [pending.Occurrence]
+              Reachability = ReachabilityContext.Reachable })
+    let allocationResidences =
+        Escape.analyze finalGraph
+        |> fun facts -> environments.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
+        |> fun facts -> sequences.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
+        |> fun facts -> lazies.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
     let finalGraph =
         let settled = finalGraph
         { finalGraph with
             Codata = lazy {
-                Escapes = sequences.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts)
-                            (environments.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) (Escape.analyze settled))
+                Escapes = allocationResidences
                 Curry = curry
-                Meets = Meets.continuations sequences.Frames sequences.Origins sequences.Storage settled
+                Meets = Meets.continuations sequences.Frames sequences.Origins sequences.Storage sequences.Initializers settled
                         |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) (Meets.derive platformContext settled curry)
                         |> fun facts -> Meets.environments environments.Layouts environmentOrigins settled
+                                        |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) facts
+                        |> fun facts -> Meets.lazies lazies.Layouts lazies.Origins settled
                                         |> Map.fold (fun facts id meets -> Map.add id (meets @ (Map.tryFind id facts |> Option.defaultValue [])) facts) facts
                 ReturnMeets = Meets.returns platformContext settled
                 Closures = Placement.closures platformContext settled
                 EnvironmentLayouts = environments.Layouts
                 EnvironmentDestinations = environments.Destinations
                 EnvironmentOrigins = environmentOrigins
+                LazyLayouts = lazies.Layouts
+                LazyOrigins = lazies.Origins
+                LazyDestinations = lazies.Destinations
                 KnownCallables = knownCallables
                 CallableCarriers = callableCarriers
+                CallableJoins = mutableCallables.Joins
+                CallableFlows = callableFlows
+                MutableCallableStorage = mutableCallables.Storage
                 ContinuationFrames = sequences.Frames
                 SequenceOrigins = sequences.Origins
+                SequenceFlows = sequences.Flows
+                SequenceFamilies = sequences.Families
+                SequenceTemplateCopies = sequences.TemplateCopies
                 ContinuationStorage = sequences.Storage
                 ContinuationRegions = sequences.Regions
                 SequenceInitializers = sequences.Initializers
@@ -1254,7 +1300,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ callableCarrierDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 
@@ -1564,6 +1610,10 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     //---------------------------------------------------------------------
     | SynExpr.Lazy(innerExpr, _) ->
         Collections.checkLazy checkExpr Applications.computeCaptures env builder innerExpr range
+
+    | SynExpr.Eager(innerExpr, _) ->
+        let operand = checkExpr env builder innerExpr
+        builder.Create(SemanticKind.EagerExpr operand.Id, operand.Type, range, children = [operand.Id])
 
     //---------------------------------------------------------------------
     // Assert: assert expr

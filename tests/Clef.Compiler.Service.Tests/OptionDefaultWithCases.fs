@@ -295,12 +295,7 @@ let main _ =
     if stored None = 9<m> && stored (Some 4<m>) = 4<m> then 0 else 1
 """
         let seed = OptionDefaultWith.binding "seed" result
-        Assert.Contains(result.Graph.Nodes.Values, fun node ->
-            node.IsReachable &&
-            match node.Kind with
-            | SemanticKind.Lambda (_, _, captures, _, _) ->
-                captures |> List.exists (fun capture -> capture.IsMutable && capture.SourceNodeId = Some seed.Id)
-            | _ -> false)
+        CallableTestContracts.assertMutableCapture result.Graph seed.Id
 
     [<Fact>]
     member _.``Bare aliases and stored fields retain independently specialized composition``() =

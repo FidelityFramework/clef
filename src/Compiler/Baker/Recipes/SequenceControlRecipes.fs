@@ -78,6 +78,11 @@ let private instructionFacts (graph: SemanticGraph) operands instruction =
         | SemanticKind.Lambda (_, _, captures, _, _)
         | SemanticKind.LazyExpr (_, captures) | SemanticKind.SeqExpr (_, captures) ->
             captures |> List.choose _.SourceNodeId |> values, values [id]
+        | SemanticKind.EnvironmentCreate(_, initializers) | SemanticKind.LazyEnvironment(_, initializers) ->
+            // Capture references are live identities even when they are not
+            // value-demand operands. Keeping them across a suspension does
+            // not authorize executing a captured computation or deferred body.
+            (uses @ (initializers |> List.map snd)) |> values, values [id]
         | _ -> values uses, values [id]
 
 let private add origin port instruction successors uses defines state =
@@ -170,7 +175,19 @@ let private definiteAssignment (graph: SemanticGraph) (owner: SemanticNode) entr
             | Some { Kind = SemanticKind.Binding _; IsReachable = true } -> true
             | _ -> false)
     let implementations = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.implementationBindings graph
-    let initial = seq { yield! captures; yield! declared; yield! implementations } |> Seq.filter (isUnit graph >> not) |> Set.ofSeq
+    // Baker's force names the actual validated thunk directly. Its code is a
+    // declaration, independent of the later environment formation; this grants
+    // no availability to its captures, cache or deferred result.
+    let lazyImplementations =
+        let mentioned =
+            steps.Values |> Seq.collect _.Uses |> Seq.filter (fun id ->
+                match graph.Nodes.TryFind id with
+                | Some { Kind = SemanticKind.Lambda(_, _, _, _, LambdaContext.LazyThunk) } -> true
+                | _ -> false) |> Set.ofSeq
+        if mentioned.IsEmpty then Seq.empty else
+        Clef.Compiler.PSGSaturation.SemanticGraph.LazyContracts.instances graph
+        |> Map.values |> Seq.map _.Thunk |> Seq.filter mentioned.Contains
+    let initial = seq { yield! captures; yield! declared; yield! implementations; yield! lazyImplementations } |> Seq.filter (isUnit graph >> not) |> Set.ofSeq
     let universe = steps.Values |> Seq.fold (fun all step -> Set.union all step.Defines) initial
     let assigned = mustFacts steps entry initial universe (fun step -> step.Defines) (backedgeScope steps scopes)
     let missing = steps.Values |> Seq.tryPick (fun step ->

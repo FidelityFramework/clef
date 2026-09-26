@@ -44,6 +44,7 @@ let remapKindReferences (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKin
         SemanticKind.VarRef (name, Option.map update definition)
     | SemanticKind.IfThenElse (guard, thenBr, elseBrOpt) ->
         SemanticKind.IfThenElse (update guard, update thenBr, Option.map update elseBrOpt)
+    | SemanticKind.Require(condition, diagnostic) -> SemanticKind.Require(update condition, diagnostic)
     | SemanticKind.Sequential nodes ->
         SemanticKind.Sequential (List.map update nodes)
     | SemanticKind.WhileLoop (guard, body) ->
@@ -75,6 +76,16 @@ let remapKindReferences (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKin
         SemanticKind.TryFinally (update body, update cleanup)
     | SemanticKind.LazyExpr (body, captures) ->
         SemanticKind.LazyExpr (update body, updateCaptures captures)
+    | SemanticKind.LazyForce value -> SemanticKind.LazyForce(update value)
+    | SemanticKind.EagerExpr operand -> SemanticKind.EagerExpr(update operand)
+    | SemanticKind.LazyValue (thunk, environment) -> SemanticKind.LazyValue(update thunk, update environment)
+    | SemanticKind.LazyEnvironment (owner, initializers) ->
+        SemanticKind.LazyEnvironment(update owner, initializers |> List.map (fun (slot, value) -> update slot, update value))
+    | SemanticKind.LazyEnvironmentReference value -> SemanticKind.LazyEnvironmentReference(update value)
+    | SemanticKind.LazyAllocate owner -> SemanticKind.LazyAllocate(update owner)
+    | SemanticKind.LazyRead (environment, slot) -> SemanticKind.LazyRead(update environment, update slot)
+    | SemanticKind.LazyBorrow (environment, slot) -> SemanticKind.LazyBorrow(update environment, update slot)
+    | SemanticKind.LazyWrite (environment, slot, value) -> SemanticKind.LazyWrite(update environment, update slot, update value)
     | SemanticKind.SeqExpr (body, captures) ->
         SemanticKind.SeqExpr (update body, updateCaptures captures)
     | SemanticKind.Match (scrutinee, cases) ->
@@ -148,8 +159,6 @@ let remapKindReferences (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKin
             | InterpolatedPart.ExprPart nodeId -> InterpolatedPart.ExprPart (update nodeId)
             | other -> other)
         SemanticKind.InterpolatedString updatedParts
-    | SemanticKind.LazyForce lazyValue ->
-        SemanticKind.LazyForce (update lazyValue)
     | SemanticKind.Yield value ->
         SemanticKind.Yield (update value)
     | SemanticKind.YieldBang seq ->

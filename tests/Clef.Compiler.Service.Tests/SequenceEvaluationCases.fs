@@ -223,18 +223,35 @@ type SequenceEvaluationCases() =
         Evaluation.root graph owner |> ignore
         Evaluation.root graph inner |> ignore
         for node in [inner; formation "callback"; formation "delayed"] do
-            Evaluation.linear graph owner.Id node.Id []
-            Evaluation.flow graph owner.Id node.Id EvaluationPort.Ready EvaluationPort.Exit EvaluationTransfer.Continue
-            let body, captures =
+            let body, capturedAt, captures =
                 match node.Kind with
-                | SemanticKind.SeqExpr(body, captures) | SemanticKind.LazyExpr(body, captures) -> body, captures
-                | SemanticKind.Lambda(_, body, captures, _, _) -> body, captures
+                | SemanticKind.SeqExpr(body, _) ->
+                    Evaluation.linear graph owner.Id node.Id []
+                    let values = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.sequenceInitializers graph node |> Option.get
+                    body, node.Id, values |> List.map snd
+                | SemanticKind.Lambda(_, body, captures, _, _) | SemanticKind.LazyExpr(body, captures) ->
+                    Evaluation.linear graph owner.Id node.Id []
+                    body, node.Id, captures |> List.map (fun capture -> Option.get capture.SourceNodeId)
+                | SemanticKind.ClosureValue(code, environment) ->
+                    Evaluation.linear graph owner.Id node.Id [environment]
+                    Evaluation.linear graph owner.Id environment graph.Nodes[environment].Children
+                    let body = match graph.Nodes[code].Kind with SemanticKind.Lambda(_, body, _, _, _) -> body | _ -> failwith "Missing closure implementation"
+                    let values = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.capturedInitializers graph node.Id |> Option.get
+                    body, environment, values |> List.map (fun (_, value, _) -> value)
+                | SemanticKind.LazyValue(thunk, environment) ->
+                    Clef.Compiler.PSGSaturation.SemanticGraph.LazyContracts.instance graph node.Id |> Option.get |> ignore
+                    Evaluation.linear graph owner.Id node.Id [environment]
+                    Evaluation.linear graph owner.Id environment graph.Nodes[environment].Children
+                    let body = match graph.Nodes[thunk].Kind with SemanticKind.Lambda(_, body, _, _, _) -> body | _ -> failwith "Missing lazy thunk"
+                    let values = match graph.Nodes[environment].Kind with SemanticKind.LazyEnvironment(_, values) -> values | _ -> failwith "Missing lazy environment"
+                    body, environment, values |> List.map snd
                 | kind -> failwithf "Expected deferred source value: %A" kind
+            Evaluation.flow graph owner.Id node.Id EvaluationPort.Ready EvaluationPort.Exit EvaluationTransfer.Continue
             Assert.NotEmpty captures
             Assert.Empty(Evaluation.relations graph owner.Id body)
             for index, capture in List.indexed captures do
-                let captureEdge = Evaluation.relations graph owner.Id node.Id |> List.filter (fun edge -> edge.Role = EdgeRole.EvaluationCapture && edge.Ordinal = index) |> Assert.Single
-                Assert.Equal<NodeId list>([owner.Id; Option.get capture.SourceNodeId], captureEdge.Sources)
+                let captureEdge = Evaluation.relations graph owner.Id capturedAt |> List.filter (fun edge -> edge.Role = EdgeRole.EvaluationCapture && edge.Ordinal = index) |> Assert.Single
+                Assert.Equal<NodeId list>([owner.Id; capture], captureEdge.Sources)
 
     [<Fact>]
     member _.``Filter consumers demand the same bound current value without scheduling another initializer``() =
@@ -256,17 +273,19 @@ type SequenceEvaluationCases() =
             let demands = graph.Edges |> List.filter (fun edge ->
                 edge.Class = EdgeClass.Evaluation && edge.Role = EdgeRole.EvaluationOperand EvaluationAccess.Value && edge.Sources = [owner.Id; current])
             let invocation =
-                match Evaluation.sequential graph owner.Id predicate with
-                | [callee; invocation] ->
-                    match graph.Nodes[invocation].Kind with
-                    | SemanticKind.Application (code, [argument]) ->
-                        Assert.Equal(current, argument)
-                        let implementation = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.tryImplementation graph
-                        Assert.Equal(implementation callee, implementation code)
-                        Assert.True((implementation code).IsSome)
-                        invocation
-                    | kind -> failwithf "Filter lost its code-only callback invocation: %A" kind
-                | inputs -> failwithf "Filter did not preserve callee evaluation before invocation: %A" inputs
+                match graph.Nodes[predicate].Kind with
+                | SemanticKind.Application (callee, [argument]) ->
+                    Assert.Equal(current, argument)
+                    Evaluation.linear graph owner.Id predicate [callee; current]
+                    let source = CallableTestContracts.sourceDefinition graph callee
+                    let implementation = CallableTestContracts.implementation graph
+                    let code, parameters, _, captures = CallableTestContracts.shape graph source
+                    Assert.Equal(Some code.Id, implementation callee)
+                    Assert.Single parameters |> ignore
+                    Assert.Empty captures
+                    Assert.Equal(None, CallableTestContracts.known graph callee)
+                    predicate
+                | kind -> failwithf "Filter lost its code-only callback invocation: %A" kind
             Assert.Equal<Set<NodeId>>(Set.ofList [body; invocation; yielded], demands |> List.map _.Target |> Set.ofList)
         | other -> failwithf "Current binding does not dominate its local uses: %A" other
 

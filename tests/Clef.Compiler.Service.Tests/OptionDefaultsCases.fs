@@ -253,21 +253,17 @@ let main _ =
             | SemanticKind.Binding (_, false, false, _) -> ()
             | kind -> failwithf "Partial did not snapshot its fallback: %A" kind
             Assert.NotEqual((OptionDefaults.binding "fallback" result).Id, snapshot)
-            match graph.Nodes[closure].Kind with
-            | SemanticKind.Lambda (parameters, body, captures, _, _) ->
-                let _, domain, _ = Assert.Single parameters
-                DimensionalCases.same (OptionDefaults.option payloadType) domain
-                let capture = Assert.Single captures
-                Assert.Equal(Some snapshot, capture.SourceNodeId)
-                Assert.False capture.IsMutable
-                DimensionalCases.same payloadType capture.Type
-                match graph.Nodes[body].Kind with
-                | SemanticKind.IfThenElse (_, _, Some fallbackReference) ->
-                    match graph.Nodes[fallbackReference].Kind with
-                    | SemanticKind.VarRef (_, Some source) -> Assert.Equal(snapshot, source)
-                    | kind -> failwithf "Residual lost snapshot identity: %A" kind
-                | kind -> failwithf "Residual is not an option selection: %A" kind
-            | kind -> failwithf "Partial did not become a closure: %A" kind
+            let _, parameters, body, captures = CallableTestContracts.shape graph closure
+            let _, domain, _ = Assert.Single parameters
+            DimensionalCases.same (OptionDefaults.option payloadType) domain
+            let capture = Assert.Single captures
+            Assert.Equal(Some snapshot, capture.SourceNodeId)
+            Assert.False capture.IsMutable
+            DimensionalCases.same payloadType capture.Type
+            match graph.Nodes[body].Kind with
+            | SemanticKind.IfThenElse (_, _, Some fallbackReference) ->
+                CallableTestContracts.referenceTo graph snapshot fallbackReference
+            | kind -> failwithf "Residual is not an option selection: %A" kind
         | kind -> failwithf "Partial did not evaluate its fallback at formation: %A" kind
 
     [<Fact>]

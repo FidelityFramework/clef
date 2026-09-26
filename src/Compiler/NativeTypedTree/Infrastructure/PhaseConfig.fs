@@ -47,6 +47,9 @@ let artifactFilename (id: int) : string =
     | 8 -> "08_output.ll"
     | n -> sprintf "%02d_unknown.json" n
 
+[<RequireQualifiedAccess>]
+type GraphArtifactMode = Full | Pruned
+
 /// Global configuration for artifact emission
 type ArtifactConfig = {
     /// Master switch for intermediate emission
@@ -63,6 +66,8 @@ type ArtifactConfig = {
     PrettyPrint: bool
     /// Log file writes to stdout
     Verbose: bool
+    /// Diagnostic projection only; the compiler retains its complete graph.
+    GraphMode: GraphArtifactMode
 }
 
 /// Default configuration - all emission disabled
@@ -74,6 +79,7 @@ let defaultConfig : ArtifactConfig = {
     IncludeRanges = true
     PrettyPrint = true
     Verbose = false
+    GraphMode = GraphArtifactMode.Full
 }
 
 /// Global mutable configuration
@@ -91,6 +97,10 @@ let isVerbose () = currentConfig.Verbose
 /// Enable verbose logging for intermediate file writes
 let enableVerbose () =
     currentConfig <- { currentConfig with Verbose = true }
+
+/// Keep live nodes together with every participant in their joint evidence.
+let enablePrunedGraphArtifacts () =
+    currentConfig <- { currentConfig with GraphMode = GraphArtifactMode.Pruned }
 
 /// Check if a specific artifact should be emitted
 let shouldEmitArtifact (id: int) =
@@ -140,6 +150,7 @@ let enableAllCcsArtifacts (outputDir: string) =
         IncludeRanges = true
         PrettyPrint = true
         Verbose = currentConfig.Verbose
+        GraphMode = currentConfig.GraphMode
     }
 
 /// Enable all artifacts including Alex (1-8)
@@ -152,6 +163,7 @@ let enableAllArtifacts (outputDir: string) =
         IncludeRanges = true
         PrettyPrint = true
         Verbose = currentConfig.Verbose
+        GraphMode = currentConfig.GraphMode
     }
 
 // Legacy compatibility
@@ -167,6 +179,7 @@ let enableArtifacts (outputDir: string) (ids: int list) =
         IncludeRanges = true
         PrettyPrint = true
         Verbose = currentConfig.Verbose
+        GraphMode = currentConfig.GraphMode
     }
 
 // Legacy compatibility

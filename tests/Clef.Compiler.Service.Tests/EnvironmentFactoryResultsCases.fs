@@ -52,12 +52,75 @@ let main _ =
         let resolved = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
         resolved.Calls |> Map.toList |> List.choose (fun (id, call) ->
             match call.Targets, graph.Nodes[id].Kind with
-            | [target], SemanticKind.Application(callee, arguments) when not call.Unknown && target.Lambda = implementation ->
+            | [target], SemanticKind.Application(callee, arguments) when call.Complete && not call.Unknown && target.Lambda = implementation ->
                 Some(graph.Nodes[id], callee, arguments)
             | _ -> None)
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "EnvironmentFactoryResults")>]
 type EnvironmentFactoryResultsCases() =
+    [<Theory>]
+    [<InlineData(true, false)>]
+    [<InlineData(false, true)>]
+    [<InlineData(true, true)>]
+    member _.``Explicit eager factory boundaries retain their marker identity and caller residence`` (eagerResult: bool, eagerCallee: bool) =
+        let result = if eagerResult then "eager (fun value -> value + seed)" else "fun value -> value + seed"
+        let callee = if eagerCallee then "(eager make)" else "make"
+        let template = """
+let make (seed: int) = __RESULT__
+[<EntryPoint>]
+let main _ =
+    let first = __CALLEE__ (eager 7)
+    let second = __CALLEE__ 8
+    ignore (first 1)
+    ignore (second 2)
+    0
+"""
+        let source = template.Replace("__RESULT__", result).Replace("__CALLEE__", callee)
+        let original = EnvironmentFactories.check source
+        let implementation = EnvironmentFactories.implementation "make" original
+        let originalCalls = EnvironmentFactories.calls implementation original
+        Assert.Equal(2, originalCalls.Length)
+        let markers = original.Nodes.Values |> Seq.filter (fun node -> node.IsReachable && match node.Kind with SemanticKind.EagerExpr _ -> true | _ -> false) |> Seq.toList
+        Assert.NotEmpty markers
+        let prepared, _ = EnvironmentFactories.prepare original
+        let calls = EnvironmentFactories.relations EdgeRole.EnvironmentResultCall prepared
+        Assert.Equal(2, calls.Length)
+        Assert.Equal(2, calls |> List.map (fun row -> row.Sources[3]) |> List.distinct |> List.length)
+        for marker in markers do
+            Assert.Equal(marker.Kind, prepared.Nodes[marker.Id].Kind)
+            Assert.Equal<NodeId list>(marker.Children, prepared.Nodes[marker.Id].Children)
+        for call, callee, arguments in originalCalls do
+            let invocation =
+                match prepared.Nodes[call.Id].Kind with
+                | SemanticKind.Sequential [_; actual] -> prepared.Nodes[actual]
+                | kind -> failwithf "Expected destination-only factory prefix, got %A" kind
+            match invocation.Kind with
+            | SemanticKind.Application(actualCallee, _ :: actuals) ->
+                Assert.Equal(callee, actualCallee)
+                Assert.Equal<NodeId list>(arguments, actuals)
+            | kind -> failwithf "Expected preserved factory invocation, got %A" kind
+        let reading = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceResidence.analyzeEnvironments prepared
+        Assert.Empty reading.Unresolved
+        for row in calls do Assert.True(reading.Sites.ContainsKey row.Sources[3])
+        if eagerResult then
+            let marker = markers |> List.find (fun marker ->
+                match marker.Kind with
+                | SemanticKind.EagerExpr value -> match original.Nodes[value].Kind with SemanticKind.ClosureValue _ -> true | _ -> false
+                | _ -> false)
+            for row in calls do
+                Assert.Contains(reading.Evidence, fun proof ->
+                    proof.Role = EdgeRole.EnvironmentResidence && List.contains row.Sources[3] proof.Sources && List.contains marker.Id proof.Sources)
+            let malformed = { prepared with Nodes = prepared.Nodes.Add(marker.Id, { prepared.Nodes[marker.Id] with Children = [] }) }
+            let retracted = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceResidence.analyzeEnvironments malformed
+            for row in calls do Assert.False(retracted.Sites.ContainsKey row.Sources[3])
+            Assert.NotEmpty retracted.Unresolved
+        if eagerCallee then
+            let marker = markers |> List.find (fun marker ->
+                originalCalls |> List.exists (fun (_, callee, _) -> callee = marker.Id))
+            let malformed = { original with Nodes = original.Nodes.Add(marker.Id, { marker with Children = [] }) }
+            let retracted, _ = EnvironmentFactories.prepare malformed
+            Assert.Empty(EnvironmentFactories.relations EdgeRole.EnvironmentResultDestination retracted)
+
     [<Fact>]
     member _.``Bare map front gives each captured callback result distinct caller storage and exact formation incidence`` () =
         let original = EnvironmentFactories.check EnvironmentFactories.bareSource
@@ -97,7 +160,7 @@ type EnvironmentFactoryResultsCases() =
         Assert.DoesNotContain(graph.Edges, fun edge -> edge.Role = EdgeRole.EnvironmentResidence)
 
     [<Fact>]
-    member _.``Environment factory arguments retain one eager source-order snapshot and their public signature`` () =
+    member _.``Environment factory preparation inserts only result storage and retains ordinary argument demand frontiers`` () =
         let original = EnvironmentFactories.check EnvironmentFactories.bareSource
         let implementation = EnvironmentFactories.implementation "bareMap" original
         let calls = EnvironmentFactories.calls implementation original
@@ -105,16 +168,14 @@ type EnvironmentFactoryResultsCases() =
         let graph, _ = EnvironmentFactories.prepare original
         for call, callee, arguments in calls do
             let ordered =
-                match graph.Nodes[call.Id].Kind with SemanticKind.Sequential values -> values | kind -> failwithf "Missing eager frontier: %A" kind
-            Assert.Equal(arguments.Length + 2, ordered.Length)
-            let snapshots = ordered |> List.take arguments.Length
-            Assert.Equal<NodeId list>(arguments, snapshots |> List.map (fun id -> Assert.Single graph.Nodes[id].Children))
+                match graph.Nodes[call.Id].Kind with SemanticKind.Sequential values -> values | kind -> failwithf "Missing destination preparation: %A" kind
+            Assert.Equal(2, ordered.Length)
+            match graph.Nodes[ordered.Head].Kind, graph.Nodes[Assert.Single graph.Nodes[ordered.Head].Children].Kind with
+            | SemanticKind.Binding(_, false, false, None), SemanticKind.EnvironmentAllocate _ -> ()
+            | kinds -> failwithf "Preparation added something other than caller result storage: %A" kinds
             let actuals =
                 match graph.Nodes[List.last ordered].Kind with SemanticKind.Application(_, supplied) -> supplied.Tail | kind -> failwithf "Missing invocation: %A" kind
-            for snapshot, actual in List.zip snapshots actuals do
-                match graph.Nodes[actual].Kind with
-                | SemanticKind.VarRef(_, Some held) -> Assert.Equal(snapshot, held)
-                | kind -> failwithf "Supplied value would be reevaluated: %A" kind
+            Assert.Equal<NodeId list>(arguments, actuals)
             for argument in arguments do
                 let evaluations = graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable && List.contains argument node.Children)
                 Assert.Single evaluations |> ignore
@@ -125,6 +186,49 @@ type EnvironmentFactoryResultsCases() =
             Assert.Equal(call.Range, graph.Nodes[call.Id].Range)
         let writes graph = graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable && (match node.Kind with SemanticKind.Set _ -> true | _ -> false)) |> Seq.map _.Id |> Set.ofSeq
         Assert.Equal<Set<NodeId>>(writes original, writes graph)
+
+    [<Fact>]
+    member _.``A stored factory alias preserves its formation and original callee while receiving distinct result storage`` () =
+        let original = EnvironmentFactories.check """
+let mutable formations = 0
+[<EntryPoint>]
+let main _ =
+    let stored = (formations <- formations + 1; fun (offset: int) -> fun value -> value + offset)
+    let first = stored 3
+    let second = stored 4
+    if first 5 = second 4 then formations else 1
+"""
+        let stored = EnvironmentFactories.binding "stored" original
+        let formation = original.Nodes[Assert.Single stored.Children]
+        match formation.Kind with
+        | SemanticKind.Sequential values -> Assert.Equal(2, values.Length)
+        | kind -> failwithf "Expected the original deferred formation: %A" kind
+        let implementation = EnvironmentFactories.implementation "stored" original
+        let calls = EnvironmentFactories.calls implementation original
+        Assert.Equal(2, calls.Length)
+        let graph, _ = EnvironmentFactories.prepare original
+        let destinations = EnvironmentFactories.relations EdgeRole.EnvironmentResultCall graph
+        Assert.Equal(2, destinations.Length)
+        Assert.Equal(2, destinations |> List.map (fun row -> row.Sources[3]) |> Set.ofList |> Set.count)
+        Assert.Equal<NodeId list>(stored.Children, graph.Nodes[stored.Id].Children)
+        Assert.Equal<NodeId list>(formation.Children, graph.Nodes[formation.Id].Children)
+        for call, callee, arguments in calls do
+            let invocation =
+                match graph.Nodes[call.Id].Kind with
+                | SemanticKind.Sequential [storage; invocation] ->
+                    match graph.Nodes[Assert.Single graph.Nodes[storage].Children].Kind with
+                    | SemanticKind.EnvironmentAllocate _ -> ()
+                    | kind -> failwithf "Unexpected preparation operand: %A" kind
+                    graph.Nodes[invocation]
+                | kind -> failwithf "Factory alias lost destination-only preparation: %A" kind
+            match invocation.Kind with
+            | SemanticKind.Application(actualCallee, actualArguments) ->
+                Assert.Equal(callee, actualCallee)
+                Assert.Equal<NodeId list>(arguments, actualArguments.Tail)
+                match graph.Nodes[callee].Kind with
+                | SemanticKind.VarRef(_, Some declaration) -> Assert.Equal(stored.Id, declaration)
+                | kind -> failwithf "Alias demand identity changed: %A" kind
+            | kind -> failwithf "Missing original invocation: %A" kind
 
     [<Fact>]
     member _.``A capturing factory keeps its own environment first and inserts result storage before source arguments`` () =
@@ -155,7 +259,8 @@ let main _ =
             match graph.Nodes[invocation.Target].Kind with SemanticKind.Application(_, arguments) -> arguments | _ -> failwith "Missing prepared call"
         Assert.Equal(List.last invocation.Sources, supplied[1])
         let ordered = match graph.Nodes[call.Id].Kind with SemanticKind.Sequential values -> values | _ -> failwith "Missing frontier"
-        Assert.Equal<NodeId list>(originalArguments, ordered |> List.take originalArguments.Length |> List.map (fun id -> Assert.Single graph.Nodes[id].Children))
+        Assert.Equal(2, ordered.Length)
+        Assert.Equal<NodeId list>(originalArguments, supplied.Head :: List.skip 2 supplied)
         Assert.Equal(Some(0, supplied[0]), (EnvironmentValues.callEnvironments graph).TryFind invocation.Target)
         Assert.Equal(formatType (EnvironmentFactories.sourceSignature original.Nodes[implementation]),
                      formatType (EnvironmentFactories.sourceSignature graph.Nodes[implementation]))

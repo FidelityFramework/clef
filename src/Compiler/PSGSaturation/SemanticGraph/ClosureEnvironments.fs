@@ -77,6 +77,7 @@ let rec private followUsing<'T when 'T: equality>
             match node.Kind with
             | SemanticKind.VarRef(_, Some source) | SemanticKind.TypeAnnotation(source, _)
             | SemanticKind.EnvironmentReference source -> follow terminal seen source
+            | SemanticKind.EagerExpr source when ExplicitDemand.operand graph id = Some source -> follow terminal seen source
             | SemanticKind.Binding(_, false, _, _) ->
                 match node.Children with [value] -> follow terminal seen value | _ -> None
             | SemanticKind.Sequential values -> List.tryLast values |> Option.bind (follow terminal seen)
@@ -85,7 +86,7 @@ let rec private followUsing<'T when 'T: equality>
                 same [yes; no]
             | SemanticKind.Application _ ->
                 resolution.Value.Calls.TryFind id |> Option.bind (fun call ->
-                    if call.Unknown then None else same (call.Targets |> List.map _.Body))
+                    if call.Unknown || not call.Complete then None else same (call.Targets |> List.map _.Body))
             | SemanticKind.PatternBinding _ ->
                 resolution.Value.ParameterInputs.TryFind id |> Option.bind (List.map snd >> same)
             | SemanticKind.EnvironmentRead(environment, slot) ->
@@ -263,6 +264,25 @@ let tryCapturedValue graph =
         environmentOwner environment |> Option.bind (capturedInitializers graph) |> Option.bind (fun values ->
             values |> List.tryPick (fun (source, value, mutableCell) -> if source = slot && not mutableCell then Some value else None))
 
+/// Project only an actual source reference preserved by environment
+/// materialization. A generated capture initializer can read the same slot,
+/// but does not thereby become a source VarRef or a navigation anchor.
+let tryCapturedSourceReference (graph: SemanticGraph) =
+    let environmentOwner = environmentReader graph
+    let origins = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.CaptureReferenceOrigin)
+                  |> List.groupBy _.Target |> Map.ofList
+    fun occurrence ->
+        match graph.Nodes.TryFind occurrence, origins.TryFind occurrence with
+        | Some ({ Kind = SemanticKind.EnvironmentRead(environment, slot); Children = [actual] } as value),
+          Some [{ Class = EdgeClass.Provenance; Ordinal = 0; Sources = [owner; declaration] }]
+            when actual = environment && slot = declaration && environmentOwner environment = Some owner ->
+            match graph.Nodes.TryFind declaration, capturedInitializers graph owner with
+            | Some ({ Kind = SemanticKind.Binding _ | SemanticKind.PatternBinding _ } as source), Some captures
+                when applySubst value.Type = applySubst source.Type &&
+                     (captures |> List.exists (fun (captured, _, _) -> captured = declaration)) -> Some declaration
+            | _ -> None
+        | _ -> None
+
 type Plan = { Source: SemanticNode; Captures: CaptureInfo list; Calls: NodeId list }
 
 /// A child constructor's explicit formation relation is complete or residual.
@@ -298,7 +318,7 @@ let sequenceInitializers (graph: SemanticGraph) (owner: SemanticNode) =
         | _ -> None
     | _ -> None
 
-/// Sequence callables include their retained higher-order formation frontiers.
+/// Ordinary callables include their retained higher-order formation frontiers.
 /// Every invocation must have an exact complete callable boundary. Materializing
 /// its value does not prove the environment's residence or a returned lifetime.
 let plans (graph: SemanticGraph) =
@@ -308,18 +328,10 @@ let plans (graph: SemanticGraph) =
     let lambda id =
         resolution.Lambdas.TryFind id
         |> Option.orElseWith (fun () -> known.TryFind id |> Option.map _.Implementation)
-    let isSequence ty = match applySubst ty with NativeType.TSeq _ -> true | _ -> false
     let seeds =
         nodes.Values |> Seq.collect (fun node ->
             match node.Kind with
-            | SemanticKind.SeqExpr(_, captures) ->
-                captures |> List.choose (fun capture ->
-                    match applySubst capture.Type, capture.SourceNodeId with
-                    | NativeType.TFun _, Some source when not capture.IsMutable -> lambda source
-                    | _ -> None)
-            | SemanticKind.Lambda(parameters, body, _, _, LambdaContext.RegularClosure)
-                when (parameters |> List.exists (fun (_, ty, _) -> isSequence ty)) ||
-                     (nodes.TryFind body |> Option.exists (fun body -> isSequence body.Type)) -> [node.Id]
+            | SemanticKind.Lambda(_, _, _, _, LambdaContext.RegularClosure) -> [node.Id]
             | _ -> []) |> Set.ofSeq
     // The closure family follows typed value flow, not operation names. A
     // retained front may return another front and capture a callable argument.
@@ -378,7 +390,7 @@ let plans (graph: SemanticGraph) =
             let mutable rejected = unsupportedNested || (captures |> List.exists (fun capture -> capture.SourceNodeId.IsNone || not (supportedCapture capture)))
             let calls = resolution.Calls |> Map.toList |> List.choose (fun (call, resolved) ->
                 match resolved.Targets with
-                | [target] when not resolved.Unknown && target.Lambda = id &&
+                | [target] when resolved.Complete && not resolved.Unknown && target.Lambda = id &&
                                (captures.IsEmpty || target.Parameters = parameters) -> Some call
                 | _ -> None)
             for node in nodes.Values do
@@ -386,14 +398,14 @@ let plans (graph: SemanticGraph) =
                              |> List.append node.Children |> List.distinct |> List.filter aliases.Contains
                 for input in inputs do
                     match node.Kind with
-                    | SemanticKind.Binding(_, false, _, _) | SemanticKind.TypeAnnotation _ -> ()
+                    | SemanticKind.Binding(_, false, _, _) | SemanticKind.TypeAnnotation _ | SemanticKind.EagerExpr _ -> ()
                     | SemanticKind.Sequential _ -> ()
                     | SemanticKind.Application(callee, _) when callee = input && List.contains node.Id calls -> ()
                     | SemanticKind.Application(_, arguments) when List.contains input arguments ->
                         // An actual callable argument must feed an exact known
                         // formal; opaque higher-order consumers remain residual.
                         match resolution.Calls.TryFind node.Id with
-                        | Some { Targets = [target]; Unknown = false } when candidates.Contains target.Lambda -> ()
+                        | Some { Targets = [target]; Unknown = false; Complete = true } when candidates.Contains target.Lambda -> ()
                         | _ -> rejected <- true
                     | SemanticKind.Lambda(formals, body, _, _, _) when
                         (formals |> List.exists (fun (_, _, formal) -> formal = input)) ||
@@ -409,7 +421,10 @@ let plans (graph: SemanticGraph) =
                 | SemanticKind.LazyExpr(_, nested) ->
                     if nested |> List.exists (fun capture -> capture.SourceNodeId |> Option.exists aliases.Contains) then rejected <- true
                 | _ -> ()
-            if rejected || calls.IsEmpty then None
+            // Stateless promotion supplies a named declaration; it rewrites no
+            // invocation and needs no singleton direct call. A higher-order
+            // formal can legitimately receive several such code alternatives.
+            if rejected || (not captures.IsEmpty && calls.IsEmpty) then None
             else Some { Source = source; Captures = captures; Calls = calls }
         | _ -> None)
     // Plain code has no runtime environment. Settle these declarations before

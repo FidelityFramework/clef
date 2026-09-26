@@ -165,20 +165,17 @@ let main _ =
             | SemanticKind.Binding (_, false, false, _), SemanticKind.VarRef (_, Some definition) ->
                 Assert.Equal((ResultElimination.binding "supplied" result).Id, definition)
             | kinds -> failwithf "Partial lost its immutable snapshot: %A" kinds
-            match graph.Nodes[closure].Kind with
-            | SemanticKind.Lambda ([(_, _, formal)], body, [capture], _, _) ->
-                Assert.False capture.IsMutable
-                Assert.Equal(Some snapshot, capture.SourceNodeId)
-                match graph.Nodes[body].Kind with
-                | SemanticKind.Sequential [first; input; choice] ->
-                    match graph.Nodes[first].Kind, graph.Nodes[input].Kind with
-                    | SemanticKind.VarRef (_, Some source), SemanticKind.VarRef (_, Some parameter) ->
-                        Assert.Equal(snapshot, source)
-                        Assert.Equal(formal, parameter)
-                    | kinds -> failwithf "Residual references lost their resolved participants: %A" kinds
-                    ResultElimination.assertChoice operation result first input choice
-                | kind -> failwithf "Residual operands do not precede branch selection: %A" kind
-            | kind -> failwithf "Partial lost its one-result-parameter closure: %A" kind
+            let _, parameters, body, captures = CallableTestContracts.shape graph closure
+            let _, _, formal = Assert.Single parameters
+            let capture = Assert.Single captures
+            Assert.False capture.IsMutable
+            Assert.Equal(Some snapshot, capture.SourceNodeId)
+            match graph.Nodes[body].Kind with
+            | SemanticKind.Sequential [first; input; choice] ->
+                CallableTestContracts.referenceTo graph snapshot first
+                CallableTestContracts.referenceTo graph formal input
+                ResultElimination.assertChoice operation result first input choice
+            | kind -> failwithf "Residual operands do not precede branch selection: %A" kind
         | kind -> failwithf "Partial lost formation sequencing: %A" kind
         if operation <> "defaultValue" then
             let calls = ResultElimination.binding "calls" result

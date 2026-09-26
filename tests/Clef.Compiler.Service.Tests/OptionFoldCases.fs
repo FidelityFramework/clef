@@ -280,10 +280,12 @@ let main _ =
             graph.Nodes.Values
             |> Seq.choose (fun node ->
                 match node.Kind with
-                | SemanticKind.Lambda ([(name, _, formal)], body, captures, _, _)
-                    when node.IsReachable && captures.Length = 2 &&
-                         name = (if operation = "fold" then "__option" else "__state") ->
-                    Some (formal, body, captures)
+                | SemanticKind.Lambda _ | SemanticKind.ClosureValue _ when node.IsReachable ->
+                    let _, parameters, body, captures = CallableTestContracts.shape graph node.Id
+                    match parameters with
+                    | [(name, _, formal)] when name = (if operation = "fold" then "__option" else "__state") ->
+                        Some (formal, body, captures)
+                    | _ -> None
                 | _ -> None)
             |> Seq.toList
         Assert.NotEmpty residuals
@@ -293,14 +295,37 @@ let main _ =
                 let operands = [folder; second; third]
                 let state, input = if operation = "fold" then second, third else third, second
                 OptionFolds.assertFold operation result folder state input choice
-                // These references belong to this residual scope. Their definitions
-                // retain the two captured snapshots and its final logical formal.
-                let definitions = captures |> List.map (fun capture -> capture.SourceNodeId |> Option.get)
-                List.iter2 (fun operand definition ->
+                // Both supplied snapshots retain their source identities. A
+                // stateless folder may use its proven code directly; it must
+                // not fabricate an environment slot or replay its initializer.
+                let supplied = [folder; second]
+                let definitions = supplied |> List.map (fun operand ->
                     match graph.Nodes[operand].Kind with
-                    | SemanticKind.VarRef (_, Some actual) -> Assert.Equal(definition, actual)
-                    | kind -> failwithf "Residual operand lost its resolved local reference: %A" kind)
-                    operands (definitions @ [formal])
+                    | SemanticKind.VarRef _ -> CallableTestContracts.sourceDefinition graph operand
+                    | SemanticKind.EnvironmentRead (_, slot) -> slot
+                    | kind -> failwithf "Residual lost a supplied snapshot reference: %A" kind)
+                Assert.Equal(2, Set.ofList definitions |> Set.count)
+                List.iter2 (fun operand definition ->
+                    CallableTestContracts.referenceTo graph definition operand
+                    match graph.Nodes[definition].Kind with
+                    | SemanticKind.Binding (_, false, false, _) -> ()
+                    | kind -> failwithf "Supplied value lost its immutable snapshot binding: %A" kind
+                    match captures |> List.tryFind (fun capture -> capture.SourceNodeId = Some definition) with
+                    | Some capture -> Assert.False capture.IsMutable
+                    | None ->
+                        Assert.Equal(folder, operand)
+                        let code, _, _, nestedCaptures = CallableTestContracts.shape graph definition
+                        Assert.Empty nestedCaptures
+                        Assert.Equal(None, CallableTestContracts.known graph definition)
+                        Assert.Equal(Some code.Id, CallableTestContracts.implementation graph operand)
+                        Assert.False(graph.Codata.Value.Closures.ContainsKey code.Id)) supplied definitions
+                Assert.Equal<Set<NodeId>>(Set.ofList definitions,
+                    Set.union (captures |> List.choose _.SourceNodeId |> Set.ofList)
+                        (supplied |> List.choose (fun operand ->
+                            match graph.Nodes[operand].Kind with
+                            | SemanticKind.VarRef _ when operand = folder -> Some (CallableTestContracts.sourceDefinition graph operand)
+                            | _ -> None) |> Set.ofList))
+                CallableTestContracts.referenceTo graph formal third
                 Assert.DoesNotContain(operands, fun id ->
                     match graph.Nodes[id].Kind with
                     | SemanticKind.Application _ | SemanticKind.DUEliminate _ -> true
@@ -378,9 +403,28 @@ let main _ = if observed = 3<m/s> then 0 else 1
         DimensionalCases.same (NativeType.TFun(second, speed)) (DimensionalCases.bindingType "withDistance" result)
         DimensionalCases.same speed (DimensionalCases.bindingType "observed" result)
         for name, calleeName in ["withDistance", "chosen"; "observed", "withDistance"] do
-            match (OptionFolds.value name result).Kind with
-            | SemanticKind.Application (callee, [_]) ->
-                match result.Graph.Nodes[callee].Kind with
+            let graph = result.Graph
+            let call = OptionFolds.value name result
+            match call.Kind with
+            | SemanticKind.Application (callee, actuals) ->
+                Assert.Equal<NodeId list>(callee :: actuals, call.Children)
+                let logical, arguments =
+                    match Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.callEnvironments graph |> Map.tryFind call.Id with
+                    | Some(ordinal, environment) ->
+                        Assert.Equal(environment, actuals[ordinal])
+                        let source =
+                            match graph.Nodes[environment].Kind with
+                            | SemanticKind.EnvironmentReference source ->
+                                Assert.Equal<NodeId list>([source], graph.Nodes[environment].Children)
+                                source
+                            | kind -> failwithf "Stored state call lost its actual environment: %A" kind
+                        let known = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.tryKnown graph source |> Option.get
+                        Assert.Equal(Some known.Implementation, Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.tryImplementation graph callee)
+                        source, actuals |> List.indexed |> List.choose (fun (index, value) -> if index = ordinal then None else Some value)
+                    | None -> callee, actuals
+                let argument = Assert.Single arguments
+                DimensionalCases.same (if name = "withDistance" then metre else second) graph.Nodes[argument].Type
+                match graph.Nodes[logical].Kind with
                 | SemanticKind.VarRef (_, Some definition) -> Assert.Equal((OptionFolds.binding calleeName result).Id, definition)
                 | kind -> failwithf "Stored state stage lost producing binding: %A" kind
             | kind -> failwithf "A function-valued state stage lost its own call: %A" kind

@@ -62,6 +62,41 @@ let main _ =
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ClosureEnvironments")>]
 type ClosureEnvironmentCases() =
     [<Fact>]
+    member _.``Ordinary callbacks settle the same callable formation as deferred consumers`` () =
+        let graph = EnvironmentFixture.check """
+[<EntryPoint>]
+let main _ =
+    let mutable visited = 0
+    let visit = fun value -> visited <- (visited + value) % 100
+    Seq.iter visit (seq { yield 1; yield 2 })
+    let folder = fun state value -> (state + value) % 100
+    let folded = Seq.fold folder 0 (seq { yield 3; yield 4 })
+    let observe = fun value -> visited + value
+    observe folded
+"""
+        let known = Environments.knownCallables graph
+        for name in ["visit"; "observe"] do
+            let binding = EnvironmentFixture.binding name graph
+            let callable = known.TryFind binding.Id |> Option.defaultWith (fun () -> failwithf "%s lacks ordinary environment formation" name)
+            let captures = Environments.captures graph callable.EnvironmentOwner
+            let captured = Assert.Single captures
+            Assert.True(captured.IsMutable)
+            Assert.Equal(Some (EnvironmentFixture.binding "visited" graph).Id, captured.SourceNodeId)
+            match graph.Nodes[callable.Implementation].Kind with
+            | SemanticKind.Lambda(parameters, _, [], _, _) ->
+                let _, _, formal = List.head parameters
+                Assert.Equal(Some callable.EnvironmentOwner, Environments.tryEnvironmentOwner graph formal)
+            | kind -> failwithf "Unsettled captured implementation: %A" kind
+        let folder = EnvironmentFixture.binding "folder" graph
+        let implementation = Environments.tryImplementation graph folder.Id |> Option.get
+        Assert.False(known.ContainsKey folder.Id)
+        match graph.Nodes[implementation].Kind with
+        | SemanticKind.Lambda(_, _, [], _, _) ->
+            Assert.True(graph.Nodes[implementation].Metadata.ContainsKey ClosureMetadata.SourceSignature)
+            Assert.False(graph.Nodes[implementation].Metadata.ContainsKey ClosureMetadata.RequiresClosurePair)
+        | kind -> failwithf "Stateless eager callback is not plain code: %A" kind
+
+    [<Fact>]
     member _.``Stateless promotion retains each source alias name and exact declaration`` () =
         let graph = EnvironmentFixture.check """
 [<EntryPoint>]
@@ -101,7 +136,7 @@ let main _ =
                 Assert.Equal(None, Environments.trySourceDeclaration malformed reference.Id)
 
     [<Fact>]
-    member _.``Stateless stored callbacks use plain code while supplied effects stay at formation`` () =
+    member _.``Stored callbacks preserve the shared identity of an effectful supplied computation`` () =
         let graph = EnvironmentFixture.check """
 [<EntryPoint>]
 let main _ =
@@ -113,13 +148,36 @@ let main _ =
     for value in second do ignore value
     formations
 """
-        Assert.DoesNotContain(graph.Nodes.Values, fun node ->
-            node.IsReachable && (match node.Kind with SemanticKind.ClosureValue _ | SemanticKind.EnvironmentCreate _ -> true | _ -> false))
         let stored = EnvironmentFixture.binding "stored" graph
-        let implementation = Environments.tryImplementation graph stored.Id |> Option.defaultWith (fun () -> failwith "Stateless operation lost its direct code")
+        let retained = Environments.tryKnown graph stored.Id |> Option.defaultWith (fun () -> failwith "Effectful callback computation lost its retained identity")
+        let implementation = retained.Implementation
+        let captured = Environments.capturedInitializers graph retained.EnvironmentOwner |> Option.defaultWith (fun () -> failwith "Missing exact callback capture") |> Assert.Single
+        let slot, initializer, mutableCell = captured
+        Assert.False mutableCell
+        Assert.Equal(slot, initializer)
+        let supplied = graph.Nodes[slot]
+        match supplied.Kind with
+        | SemanticKind.Binding(_, false, _, _) -> ()
+        | kind -> failwithf "The original supplied computation has no shared binding: %A" kind
+        let formation = graph.Nodes[Assert.Single supplied.Children]
+        match formation.Kind with
+        | SemanticKind.Sequential [effect; callback] ->
+            match graph.Nodes[effect].Kind with
+            | SemanticKind.Set _ -> ()
+            | kind -> failwithf "The original effect was erased: %A" kind
+            let code = Environments.tryImplementation graph callback |> Option.defaultWith (fun () -> failwith "Callback lost its actual code")
+            match graph.Nodes[code].Kind with
+            | SemanticKind.Lambda(_, _, captures, _, _) -> Assert.Empty captures
+            | kind -> failwithf "Callback is not stateless code: %A" kind
+        | kind -> failwithf "Code identity erased the original supplied computation: %A" kind
+        let reads = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && (match node.Kind with SemanticKind.EnvironmentRead(_, source) -> source = slot | _ -> false)) |> Seq.toList
+        Assert.NotEmpty reads
+        for read in reads do
+            Assert.Equal(Environments.tryImplementation graph initializer, Environments.tryImplementation graph read.Id)
         match graph.Nodes[implementation].Kind with
         | SemanticKind.Lambda(_, _, captures, _, _) -> Assert.Empty captures
-        | kind -> failwithf "Expected plain named code: %A" kind
+        | kind -> failwithf "Expected explicit environment implementation: %A" kind
         Assert.False(graph.Nodes[implementation].Metadata.ContainsKey ClosureMetadata.RequiresClosurePair)
         let declarations = Environments.implementationBindings graph
         let declaration = graph.Nodes[implementation].Parent.Value
@@ -132,13 +190,18 @@ let main _ =
                 | Ok control -> Assert.True(Set.isSubset declarations control.AssignedAtEntry[control.Entry])
                 | Error pending -> failwithf "Stateless code must remain definitely available across suspension: %A" pending
             | _ -> ()
-        let code = graph.Nodes[implementation]
+        let callbackImplementation = Environments.tryImplementation graph formation.Children[1] |> Option.get
+        let code = graph.Nodes[callbackImplementation]
         let unprepared = { code with Metadata = code.Metadata.Add(ClosureMetadata.RequiresClosurePair, MetadataValue.Bool true) }
-        let changed = { graph with Nodes = graph.Nodes.Add(implementation, unprepared) }
-        Assert.DoesNotContain(declaration, Environments.implementationBindings changed)
+        let changed = { graph with Nodes = graph.Nodes.Add(callbackImplementation, unprepared) }
+        Assert.DoesNotContain(code.Parent.Value, Environments.implementationBindings changed)
         let writes = graph.Nodes.Values |> Seq.filter (fun node ->
             node.IsReachable && (match node.Kind with SemanticKind.Set _ -> true | _ -> false)) |> Seq.toList
         let write = Assert.Single writes
+        Assert.Equal(write.Id, formation.Children.Head)
+        // This graph contract preserves one shared source computation. Its
+        // body is demanded according to ordinary call-by-need; retaining its
+        // capture is not permission to execute the effect at formation.
         let main = EnvironmentFixture.binding "main" graph
         let mainLambda = Assert.Single main.Children
         let rec contains seen id =
@@ -344,6 +407,59 @@ let main _ =
         Assert.Equal(Some EscapeKind.StackScoped, (Residence.analyzeEnvironments graph).Sites.TryFind environment)
 
     [<Fact>]
+    member _.``Complete higher order invocation borrows the actual environment across all callable alternatives`` () =
+        let graph = EnvironmentFixture.check """
+let twice (f: int -> int) (value: int) = f (f value)
+[<EntryPoint>]
+let main _ =
+    let offset = 7
+    let addOffset = fun (value: int) -> value + offset
+    let direct = addOffset 1
+    let captured = twice addOffset direct
+    let plain = twice (fun (value: int) -> value * 2) 3
+    captured + plain
+"""
+        let owner = EnvironmentFixture.callable graph
+        let environment = match owner.Kind with SemanticKind.ClosureValue(_, environment) -> environment | _ -> failwith "Missing environment"
+        let origins = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
+        let calls = origins.Calls |> Map.toList |> List.filter (fun (_, call) -> call.Targets.Length = 2)
+        Assert.Equal(2, calls.Length)
+        let reading = Residence.analyzeEnvironments graph
+        Assert.Empty reading.Unresolved
+        Assert.Equal(Some EscapeKind.StackScoped, reading.Sites.TryFind environment)
+        for call, targets in calls do
+            Assert.True targets.Complete
+            let evidence = reading.Evidence |> List.filter (fun edge ->
+                edge.Role = EdgeRole.CallableInvocationBorrow && edge.Target = call) |> Assert.Single
+            Assert.Contains(environment, evidence.Sources)
+            for target in targets.Targets do
+                Assert.Contains(target.Lambda, evidence.Sources)
+                Assert.Contains(target.Body, evidence.Sources)
+                for _, _, formal in target.Parameters do Assert.Contains(formal, evidence.Sources)
+                for actual in target.Arguments do Assert.Contains(actual, evidence.Sources)
+        // A complete invocation cannot be inferred from the other known
+        // alternative after one input becomes opaque.
+        let plain = EnvironmentFixture.binding "plain" graph
+        let plainCall = graph.Nodes[Assert.Single plain.Children]
+        let actual = match plainCall.Kind with SemanticKind.Application(_, argument :: _) -> argument | kind -> failwithf "Missing plain actual: %A" kind
+        let opaque = { graph.Nodes[actual] with Kind = SemanticKind.VarRef("opaque", None); Children = [] }
+        let changed = { graph with Nodes = graph.Nodes.Add(actual, opaque); Edges = graph.Edges |> List.filter (fun edge -> edge.Target <> actual) }
+        let refused = Residence.analyzeEnvironments changed
+        Assert.False(refused.Sites.ContainsKey environment)
+        Assert.Contains(refused.Unresolved, fun pending ->
+            pending.Site = environment && (calls |> List.exists (fun (call, _) -> pending.Reason = Residence.ResidualReason.UnsupportedConsumer call)))
+        // Removing an actual makes this occurrence a retained partial value;
+        // it must lose the consumption proof even though all code is known.
+        let call, _ = List.head calls
+        let node = graph.Nodes[call]
+        let callee = match node.Kind with SemanticKind.Application(callee, _) -> callee | _ -> failwith "Missing invocation"
+        let partial = { node with Kind = SemanticKind.Application(callee, []); Children = [callee] }
+        let changed = { graph with Nodes = graph.Nodes.Add(call, partial) }
+        let refused = Residence.analyzeEnvironments changed
+        Assert.False(refused.Sites.ContainsKey environment)
+        Assert.Contains(refused.Unresolved, fun pending -> pending.Site = environment && pending.Reason = Residence.ResidualReason.UnsupportedConsumer call)
+
+    [<Fact>]
     member _.``Factory destination insertion preserves the exact callback environment formal and call argument`` () =
         let graph, prepared = EnvironmentFixture.preparedCollect ()
         let source = EnvironmentFixture.callable graph
@@ -459,3 +575,46 @@ let main _ =
 """
         let prepared = Clef.Compiler.Nanopass.SequenceFactoryResults.prepare graph graph.Codata.Value.Curry
         Assert.Contains(prepared.Unresolved, fun pending -> pending.Reason.Contains("Factory-local capture 'local'") && pending.Reason.Contains("returning activation"))
+
+    [<Fact>]
+    member _.``Captured source references retain exact occurrence authority and retract malformed projections`` () =
+        let graph = EnvironmentFixture.check EnvironmentFixture.ordinary
+        let rows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.CaptureReferenceOrigin)
+        Assert.NotEmpty rows
+        let read = Environments.tryCapturedSourceReference graph
+        for row in rows do Assert.Equal(Some row.Sources[1], read row.Target)
+        let row = rows.Head
+        let source = graph.Nodes[row.Target]
+        let environment, slot =
+            match source.Kind with
+            | SemanticKind.EnvironmentRead(environment, slot) -> environment, slot
+            | kind -> failwithf "Source reference was not materialized: %A" kind
+        let without = graph.Edges |> List.filter (fun edge -> not (edge.Target = row.Target && edge.Role = EdgeRole.CaptureReferenceOrigin))
+        let withoutCapture =
+            graph.Edges |> List.filter (fun edge ->
+                match edge.Role, edge.Sources with
+                | EdgeRole.EnvironmentCapture _, [owner; declaration; _] -> owner <> row.Sources.Head || declaration <> slot
+                | _ -> true)
+        let environmentNode = graph.Nodes[environment]
+        let malformed =
+            [ "missing source occurrence", { graph with Edges = without }
+              "duplicate source occurrence", { graph with Edges = row :: graph.Edges }
+              "wrong source owner", { graph with Edges = { row with Sources = [slot; slot] } :: without }
+              "missing actual child", { graph with Nodes = graph.Nodes.Add(source.Id, { source with Children = [] }) }
+              "changed source type", { graph with Nodes = graph.Nodes.Add(source.Id, { source with Type = Types.unitType }) }
+              "missing captured slot authority", { graph with Edges = withoutCapture }
+              "unrelated environment reference", { graph with Nodes = graph.Nodes.Add(environment, { environmentNode with Kind = SemanticKind.VarRef("unrelated", Some slot) }) } ]
+        for name, changed in malformed do
+            Assert.True((Environments.tryCapturedSourceReference changed row.Target).IsNone, "Source reference did not retract: " + name)
+        // Navigation needs exact value identity, not the physical ABI marker.
+        // Complete actuals still identify the same environment when that
+        // redundant formal-to-owner relation is absent.
+        let withoutFormal = { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.EnvironmentFormal) }
+        Assert.Equal(Some row.Sources.Head, Environments.tryEnvironmentOwner withoutFormal environment)
+        Assert.Equal(Some slot, Environments.tryCapturedSourceReference withoutFormal row.Target)
+        // Matching range, slot and environment do not invent source identity
+        // for a new compiler-generated read with no occurrence relation.
+        let generated = { source with Id = NodeId.fresh(); Kind = SemanticKind.EnvironmentRead(environment, slot) }
+        let additional = { graph with Nodes = graph.Nodes.Add(generated.Id, generated) }
+        Assert.Equal(None, Environments.tryCapturedSourceReference additional generated.Id)
+        Assert.Equal(Some slot, read row.Target)

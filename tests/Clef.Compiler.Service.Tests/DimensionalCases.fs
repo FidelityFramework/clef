@@ -705,14 +705,20 @@ let second: Pending<int, bool, int> = { Second = 7; Desired = false; Committed =
             if measure <> metre then failwith "Lambda metadata retained an unresolved or incorrect dimension"
         | ty -> failwithf "Unresolved lambda metadata crossed the checker boundary: %s" (formatType ty)
 
-    "match metadata carries resolved dimensions", fun () ->
+    "selected match payload and source binding carry resolved dimensions", fun () ->
         let result = check "type Quantity<[<Measure>] 'u> = Quantity of float<'u>\nlet length = match Quantity 1.0<m> with Quantity value -> value\n"
         noErrors result
-        let payloadType = result.Graph.Nodes.Values |> Seq.pick (fun node ->
-            match node.Kind with
-            | SemanticKind.Match(_, [{ Pattern = Pattern.Union(_, _, Some(Pattern.Tuple [Pattern.Var(_, ty)]), _) }]) -> Some ty
-            | SemanticKind.CaseElimination(_, [{ Pattern = Pattern.Union(_, _, Some(Pattern.Tuple [Pattern.Var(_, ty)]), _) }]) -> Some ty
+        let binding, payloadType = result.Graph.Nodes.Values |> Seq.pick (fun node ->
+            match node.Kind, node.Children with
+            | SemanticKind.Binding("value", false, _, _), [payload] ->
+                match result.Graph.Nodes[payload].Kind with
+                | SemanticKind.DUEliminate(_, _, "Quantity", ty) -> Some(node, ty)
+                | _ -> None
             | _ -> None)
+        same binding.Type payloadType
+        if not (result.Graph.Nodes.Values |> Seq.exists (fun node ->
+            match node.Kind with SemanticKind.VarRef("value", Some definition) -> definition = binding.Id | _ -> false)) then
+            failwith "Selected match lost the original pattern variable definition"
         match payloadType with
         | NativeType.TNum(_, measure) ->
             if measure <> metre then failwith "Pattern metadata retained an unresolved measure variable"

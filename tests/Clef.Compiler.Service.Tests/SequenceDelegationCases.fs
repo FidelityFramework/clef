@@ -275,17 +275,17 @@ let outer = seq {
         let inner = Delegation.iterations graph action |> Assert.Single
         Assert.DoesNotContain(inner.Binding, Delegation.scope graph outer.Binding)
         match graph.Nodes[inner.Input].Kind with
-        | SemanticKind.Sequential [callback; invocation] ->
-            match graph.Nodes[invocation].Kind with
-            | SemanticKind.Application (callee, [argument]) ->
-                Assert.Equal(current, argument)
-                let implementation = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.tryImplementation graph
-                let code = implementation callback |> Option.get
-                Assert.Equal(Some code, implementation callee)
-                match graph.Nodes[code].Kind with
-                | SemanticKind.Lambda (_, _, [], _, _) -> ()
-                | kind -> failwithf "Collect's stateless callback acquired an environment: %A" kind
-            | kind -> failwithf "Collect lost its code-only callback call: %A" kind
+        | SemanticKind.Application (callee, [argument]) ->
+            Assert.Equal(current, argument)
+            let source = CallableTestContracts.sourceDefinition graph callee
+            let implementation = CallableTestContracts.implementation graph
+            let code, parameters, _, captures = CallableTestContracts.shape graph source
+            Assert.Equal(Some code.Id, implementation callee)
+            Assert.Single parameters |> ignore
+            Assert.Empty captures
+            Assert.Equal(None, CallableTestContracts.known graph callee)
+            Assert.False(graph.Codata.Value.Closures.ContainsKey code.Id)
+            Assert.Equal<NodeId list>([callee; current], graph.Nodes[inner.Input].Children)
         | kind -> failwithf "Collect lost its per-current callback: %A" kind
         Assert.DoesNotContain(inner.Input, Delegation.scope graph inner.Loop)
         let current, action = Delegation.assertPull graph inner

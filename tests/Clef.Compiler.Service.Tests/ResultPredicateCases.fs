@@ -153,12 +153,14 @@ let main _ = ignore first; ignore second; ignore explicit; ignore third; 0
                 | SemanticKind.TypeAnnotation (value, _) -> withoutAnnotation result.Graph.Nodes[value]
                 | _ -> node
             withoutAnnotation (ResultPredicates.value "bound" result)
-        match bound.Kind with
-        | SemanticKind.Lambda ([_], body, [], _, _) ->
-            match result.Graph.Nodes[body].Kind with
-            | SemanticKind.Sequential [input; comparison] -> ResultPredicates.assertTagOnly operation result input comparison
-            | kind -> failwithf "Bare predicate lost its local input boundary: %A" kind
-        | kind -> failwithf "Typed predicate value is not an ordinary unary closure: %A" kind
+        let code, parameters, body, captures = CallableTestContracts.shape result.Graph bound.Id
+        Assert.Single parameters |> ignore
+        Assert.Empty captures
+        Assert.Equal(None, CallableTestContracts.known result.Graph bound.Id)
+        Assert.False(result.Graph.Codata.Value.Closures.ContainsKey code.Id)
+        match result.Graph.Nodes[body].Kind with
+        | SemanticKind.Sequential [input; comparison] -> ResultPredicates.assertTagOnly operation result input comparison
+        | kind -> failwithf "Bare predicate lost its local input boundary: %A" kind
         let site = ResultPredicates.value "third" result
         match site.Kind with
         | SemanticKind.Application (callee, arguments) ->
@@ -166,7 +168,9 @@ let main _ = ignore first; ignore second; ignore explicit; ignore third; 0
                 node.Range = site.Range &&
                 match node.Kind with SemanticKind.Obligation { Body = ObligationBody.ApplicationDimensions _ } -> true | _ -> false)
             let edge = result.Graph.Edges |> List.find (fun edge -> edge.Target = obligation.Id)
-            Assert.Equal<Set<NodeId>>(Set.ofList ((ResultPredicates.binding "bound" result).Id :: site.Id :: callee :: arguments), Set.ofList edge.Sources)
+            Assert.Equal(Some (ResultPredicates.binding "bound" result).Id, CallableTestContracts.sourceDeclaration result.Graph callee)
+            let definition = match result.Graph.Nodes[callee].Kind with SemanticKind.VarRef (_, Some target) -> target | kind -> failwithf "Lost code reference: %A" kind
+            Assert.Equal<Set<NodeId>>(Set.ofList (definition :: site.Id :: callee :: arguments), Set.ofList edge.Sources)
         | kind -> failwithf "Stored predicate lost its ordinary application and participants: %A" kind
 
     [<Theory>]

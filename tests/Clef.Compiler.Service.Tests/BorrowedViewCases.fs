@@ -109,12 +109,92 @@ let main _ = withView (fun view -> let saved = retain view in saved ())
         Assert.Contains(scopes.Findings, fun f -> f.Message.Contains("escapes its mapping scope"))
 
     [<Fact>]
-    member _.``Unknown function consumer cannot receive a borrowed capture``() =
+    member _.``Exactly resolved synchronous consumer retains borrowed capture scope``() =
         let result = BorrowedViewCases.source """
 let forward (unknown: (unit -> int) -> int) (view: BorrowedView<Pixel>) =
     unknown (fun () -> BorrowedView.length view)
 [<EntryPoint>]
 let main _ = withView (fun view -> forward (fun callback -> callback ()) view)
+"""
+        Assert.Empty((ScopedCallbacks.read result.Graph).Findings)
+
+    [<Theory>]
+    [<InlineData("declaration")>]
+    [<InlineData("parameter")>]
+    [<InlineData("root")>]
+    [<InlineData("external")>]
+    member _.``Synchronous callback activation retracts when its declaring or incoming authority changes`` defect =
+        let result = BorrowedViewCases.source """
+let forward (unknown: (unit -> int) -> int) (view: BorrowedView<Pixel>) =
+    unknown (fun () -> BorrowedView.length view)
+[<EntryPoint>]
+let main _ = withView (fun view -> forward (fun callback -> callback ()) view)
+"""
+        let graph = result.Graph
+        Assert.Empty((ScopedCallbacks.read graph).Findings)
+        let forward = graph.Nodes.Values |> Seq.find (fun node ->
+            match node.Kind with SemanticKind.Binding("forward", _, _, _) -> true | _ -> false)
+        let contract = graph.Nodes.Values |> Seq.find (fun node ->
+            match node.Kind with SemanticKind.Binding("viewScope", _, _, _) -> true | _ -> false)
+        let formal = graph.Nodes.Values |> Seq.find (fun node ->
+            match node.Kind with SemanticKind.PatternBinding "unknown" -> true | _ -> false)
+        let proof = CallableIngress.tryEvidence (CallableIngress.analyze graph) formal.Id |> Option.get
+        Assert.Contains(contract.Id, proof.Participants)
+        let changed =
+            match defect with
+            | "declaration" ->
+                { graph with Nodes = graph.Nodes.Add(contract.Id, { contract with Kind = SemanticKind.PatternBinding "removedContract"; Children = [] }) }
+            | "parameter" ->
+                let parameterName = graph.Nodes.Values |> Seq.find (fun node ->
+                    match node.Kind with SemanticKind.Literal(NativeLiteral.String "work") -> true | _ -> false)
+                { graph with Nodes = graph.Nodes.Add(parameterName.Id, { parameterName with Kind = SemanticKind.Literal(NativeLiteral.String "missing") }) }
+            | "root" ->
+                { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.ProgramInitialization) }
+            | _ ->
+                { graph with DeclarationRoots = (forward.Id, DeclRoot.KernelModule) :: graph.DeclarationRoots }
+        Assert.False(CallableIngress.allowsOccurrence (CallableIngress.analyze changed) formal.Id)
+        Assert.Contains((ScopedCallbacks.read changed).Findings, fun finding -> finding.Message.Contains("escapes its mapping scope"))
+        Assert.True(CallableIngress.allowsOccurrence (CallableIngress.analyze graph) formal.Id)
+
+    [<Fact>]
+    member _.``A factory declaration cannot grant scope to a returned function parameter``() =
+        let text = BorrowedViewCases.prefix + """
+let factory seed = fun (callback: int -> int) -> callback seed
+let returnedScope: Expr<ScopedCallbackDescriptor> = <@ { Binding = "BorrowedViewTests.factory"; Parameter = "callback" } @>
+[<EntryPoint>]
+let main _ = factory 0 (fun value -> value)
+"""
+        let result =
+            match parseAndCheck text "borrowed-returned-contract.clef" with
+            | Success result | CheckFailure result -> result
+            | ParseFailure errors -> failwithf "Parse failed: %A" errors
+        let reading = ScopedDeclarations.read result.Graph
+        Assert.Contains(reading.Findings, fun finding -> finding.Message.Contains("missing from the declared callable boundary"))
+        for node in result.Graph.Nodes.Values do
+            match node.Kind with
+            | SemanticKind.PatternBinding "callback" -> Assert.DoesNotContain(node.Id, reading.Parameters)
+            | _ -> ()
+
+    [<Fact>]
+    member _.``Unknown function consumer cannot receive a borrowed capture``() =
+        let result = BorrowedViewCases.source """
+let opaque () : (unit -> int) -> int = NativeDefault.zeroed ()
+let forward (unknown: (unit -> int) -> int) (view: BorrowedView<Pixel>) =
+    unknown (fun () -> BorrowedView.length view)
+[<EntryPoint>]
+let main _ = withView (fun view -> forward (opaque ()) view)
+"""
+        Assert.Contains((ScopedCallbacks.read result.Graph).Findings, fun f -> f.Message.Contains("escapes its mapping scope"))
+
+    [<Fact>]
+    member _.``One synchronous actual does not hide a retaining consumer alternative``() =
+        let result = BorrowedViewCases.source """
+let mutable saved: unit -> int = fun () -> 0
+let retain callback = saved <- callback; 0
+let forward (unknown: (unit -> int) -> int) (view: BorrowedView<Pixel>) =
+    unknown (fun () -> BorrowedView.length view)
+[<EntryPoint>]
+let main _ = withView (fun view -> forward (fun callback -> callback ()) view; forward retain view)
 """
         Assert.Contains((ScopedCallbacks.read result.Graph).Findings, fun f -> f.Message.Contains("escapes its mapping scope"))
 

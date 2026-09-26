@@ -908,6 +908,7 @@ let rec synExprContainsError inpExpr =
         | SynExpr.InferredUpcast(e, _)
         | SynExpr.InferredDowncast(e, _)
         | SynExpr.Lazy(e, _)
+        | SynExpr.Eager(e, _)
         | SynExpr.TraitCall(_, _, e, _)
         | SynExpr.YieldOrReturn(_, e, _, _)
         | SynExpr.YieldOrReturnFrom(_, e, _, _)

@@ -46,6 +46,67 @@ module private Factories =
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceFactoryResults")>]
 type SequenceFactoryResultsCases() =
+    [<Theory>]
+    [<InlineData(true, false)>]
+    [<InlineData(false, true)>]
+    [<InlineData(true, true)>]
+    member _.``Explicit eager sequence factory boundaries preserve demand markers and destination proofs`` (eagerResult: bool, eagerCallee: bool) =
+        let result = if eagerResult then "eager (seq { yield seed })" else "seq { yield seed }"
+        let callee = if eagerCallee then "(eager make)" else "make"
+        let template = """
+let make (seed: int<m>) = __RESULT__
+[<EntryPoint>]
+let main _ =
+    let first = __CALLEE__ (eager 7<m>)
+    let second = __CALLEE__ 8<m>
+    for value in first do ignore value
+    for value in second do ignore value
+    0
+"""
+        let source = template.Replace("__RESULT__", result).Replace("__CALLEE__", callee)
+        let original = Factories.check source
+        let originalCalls = Factories.calls original
+        Assert.Equal(2, originalCalls.Length)
+        let markers = original.Nodes.Values |> Seq.filter (fun node -> node.IsReachable && match node.Kind with SemanticKind.EagerExpr _ -> true | _ -> false) |> Seq.toList
+        let prepared = Factories.prepare original
+        Assert.Empty prepared.Unresolved
+        Assert.Single prepared.Destinations |> ignore
+        Assert.Equal(2, prepared.FactoryCalls.Count)
+        Assert.Equal(2, prepared.FactoryCalls.Values |> Set.ofSeq |> Set.count)
+        for marker in markers do
+            Assert.Equal(marker.Kind, prepared.Graph.Nodes[marker.Id].Kind)
+            Assert.Equal<NodeId list>(marker.Children, prepared.Graph.Nodes[marker.Id].Children)
+        for call in originalCalls do
+            let callee, arguments = match call.Kind with SemanticKind.Application(callee, arguments) -> callee, arguments | _ -> failwith "Expected call"
+            let invocation =
+                match prepared.Graph.Nodes[call.Id].Kind with
+                | SemanticKind.Sequential [_; actual] -> prepared.Graph.Nodes[actual]
+                | kind -> failwithf "Expected destination-only prefix, got %A" kind
+            match invocation.Kind with
+            | SemanticKind.Application(actualCallee, _ :: actuals) ->
+                Assert.Equal(callee, actualCallee)
+                Assert.Equal<NodeId list>(arguments, actuals)
+            | kind -> failwithf "Expected preserved invocation, got %A" kind
+        let reading = FactoryResidence.analyzePrepared prepared.Graph prepared.Destinations prepared.FactoryCalls
+        Assert.Empty reading.Unresolved
+        for allocation in prepared.FactoryCalls.Values do Assert.True(reading.Sites.ContainsKey allocation)
+        if eagerResult then
+            let owner = Factories.owner original
+            let marker = markers |> List.find (fun marker -> marker.Kind = SemanticKind.EagerExpr owner.Id)
+            Assert.Contains(prepared.Graph.Edges, fun edge ->
+                edge.Target = prepared.Destinations[owner.Id] && List.contains marker.Id edge.Sources && List.contains owner.Id edge.Sources)
+            let malformed = { prepared.Graph with Nodes = prepared.Graph.Nodes.Add(marker.Id, { marker with Children = [] }) }
+            let retracted = FactoryResidence.analyzePrepared malformed prepared.Destinations prepared.FactoryCalls
+            for allocation in prepared.FactoryCalls.Values do Assert.False(retracted.Sites.ContainsKey allocation)
+            Assert.NotEmpty retracted.Unresolved
+        if eagerCallee then
+            let marker = markers |> List.find (fun marker ->
+                originalCalls |> List.exists (fun call -> match call.Kind with SemanticKind.Application(callee, _) -> callee = marker.Id | _ -> false))
+            let malformed = { original with Nodes = original.Nodes.Add(marker.Id, { marker with Children = [] }) }
+            let retracted = Factories.prepare malformed
+            Assert.Empty retracted.Destinations
+            Assert.NotEmpty retracted.Unresolved
+
     [<Fact>]
     member _.``Direct captured scalar factory receives a caller-owned destination without changing its capture identity``() =
         let graph = Factories.check """
@@ -82,7 +143,7 @@ let main _ =
         Assert.False(destination.Metadata.ContainsKey ClosureMetadata.SourceSignature)
 
     [<Fact>]
-    member _.``Unstored curried operands are snapshotted once in source order before allocating the destination``() =
+    member _.``Destination preparation preserves ordinary argument identities without introducing operand demand``() =
         let graph = Factories.check """
 let mutable trace = 0
 let first () = trace <- trace * 10 + 1; 7
@@ -98,21 +159,16 @@ let main _ =
         let arguments = Factories.arguments graph call.Id
         let prepared = Factories.prepare graph
         Assert.Empty prepared.Unresolved
-        let ordered = match prepared.Graph.Nodes[call.Id].Kind with SemanticKind.Sequential ordered -> ordered | kind -> failwithf "No eager frontier: %A" kind
-        Assert.Equal(4, ordered.Length)
-        let snapshots = ordered |> List.take 2 |> List.map (fun id -> prepared.Graph.Nodes[id])
-        Assert.Equal<NodeId list>(arguments, snapshots |> List.map (fun node -> Assert.Single node.Children))
-        let allocationBinding = prepared.Graph.Nodes[ordered[2]]
+        let ordered = match prepared.Graph.Nodes[call.Id].Kind with SemanticKind.Sequential ordered -> ordered | kind -> failwithf "No result storage preparation: %A" kind
+        Assert.Equal(2, ordered.Length)
+        let allocationBinding = prepared.Graph.Nodes[ordered.Head]
         let allocation = prepared.Graph.Nodes[Assert.Single allocationBinding.Children]
         Assert.True(prepared.AllocationOrigins.ContainsKey allocation.Id)
-        let actualCall = ordered[3]
+        let actualCall = List.last ordered
         Assert.Equal(allocation.Id, prepared.FactoryCalls[actualCall])
         let actualArguments = prepared.Curry.SaturatedCalls[actualCall].AllArgNodes
         Assert.Equal(3, actualArguments.Length)
-        for snapshot, argument in List.zip snapshots actualArguments.Tail do
-            match prepared.Graph.Nodes[argument].Kind with
-            | SemanticKind.VarRef(_, Some source) -> Assert.Equal(snapshot.Id, source)
-            | kind -> failwithf "An operand would be evaluated again: %A" kind
+        Assert.Equal<NodeId list>(arguments, actualArguments.Tail)
         for argument in arguments do
             let uses = prepared.Graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable && List.contains argument node.Children) |> Seq.toList
             Assert.Single uses |> ignore
@@ -154,7 +210,55 @@ let main _ =
             Assert.Equal(pair.Value, Assert.Single prepared.Graph.Nodes[binding].Children)
 
     [<Fact>]
-    member _.``Stored partial remains residual instead of moving an earlier eager snapshot into each call``() =
+    member _.``Immutable factory aliases retain their original formation and each invocation receives distinct storage``() =
+        let graph = Factories.check """
+let mutable formations = 0
+[<EntryPoint>]
+let main _ =
+    let stored = (formations <- formations + 1; fun (seed: int) -> seq { yield seed })
+    let first = stored 3
+    let second = stored 4
+    for value in first do ignore value
+    for value in second do ignore value
+    formations
+"""
+        let stored = Factories.binding "stored" graph
+        let formation = graph.Nodes[Assert.Single stored.Children]
+        match formation.Kind with
+        | SemanticKind.Sequential values -> Assert.Equal(2, values.Length)
+        | kind -> failwithf "Expected the original deferred formation: %A" kind
+        let calls = Factories.calls graph |> List.choose (fun call ->
+            match call.Kind with
+            | SemanticKind.Application(callee, arguments) ->
+                match graph.Nodes[callee].Kind with
+                | SemanticKind.VarRef(_, Some declaration) when declaration = stored.Id -> Some(call, callee, arguments)
+                | _ -> None
+            | _ -> None)
+        Assert.Equal(2, calls.Length)
+        let prepared = Factories.prepare graph
+        Assert.Empty prepared.Unresolved
+        Assert.Equal(2, prepared.FactoryCalls.Count)
+        Assert.Equal(2, prepared.FactoryCalls.Values |> Set.ofSeq |> Set.count)
+        Assert.Equal<NodeId list>(stored.Children, prepared.Graph.Nodes[stored.Id].Children)
+        Assert.Equal<NodeId list>(formation.Children, prepared.Graph.Nodes[formation.Id].Children)
+        for original, callee, arguments in calls do
+            let actual =
+                match prepared.Graph.Nodes[original.Id].Kind with
+                | SemanticKind.Sequential [allocation; invocation] ->
+                    Assert.True(prepared.AllocationOrigins.ContainsKey(Assert.Single prepared.Graph.Nodes[allocation].Children))
+                    prepared.Graph.Nodes[invocation]
+                | kind -> failwithf "Alias invocation lost destination-only preparation: %A" kind
+            match actual.Kind with
+            | SemanticKind.Application(actualCallee, actualArguments) ->
+                Assert.Equal(callee, actualCallee)
+                Assert.Equal<NodeId list>(arguments, actualArguments.Tail)
+                match prepared.Graph.Nodes[actualCallee].Kind with
+                | SemanticKind.VarRef(_, Some declaration) -> Assert.Equal(stored.Id, declaration)
+                | kind -> failwithf "Alias demand identity changed: %A" kind
+            | kind -> failwithf "Missing original invocation: %A" kind
+
+    [<Fact>]
+    member _.``Stored partial remains residual instead of moving an earlier formation into each call``() =
         let graph = Factories.check "let make (left: int) (right: int) = seq { yield left + right }\n[<EntryPoint>]\nlet main _ =\n    let partial = make 3\n    let values = partial 4\n    ignore values\n    0\n"
         let factory = Factories.binding "make" graph
         let prepared = Factories.prepare graph
@@ -205,14 +309,13 @@ let main _ =
                 match prepared.Graph.Nodes[call].Kind with SemanticKind.Application(_, arguments) -> arguments | _ -> failwith "Missing prepared invocation"
             Assert.Equal(destinationActual, arguments.Head)
             Assert.Equal(actual, arguments[requirement.Ordinal])
-            let snapshot =
-                match prepared.Graph.Nodes[actual].Kind with SemanticKind.VarRef(_, Some binding) -> binding | _ -> failwith "Input lost its eager snapshot"
-            Assert.Equal(originalArgument, Assert.Single prepared.Graph.Nodes[snapshot].Children)
+            Assert.Equal(originalArgument, actual)
             match prepared.Graph.Nodes[originalCall.Id].Kind with
             | SemanticKind.Sequential values ->
-                Assert.Equal(snapshot, values.Head)
+                Assert.Equal(2, values.Length)
+                Assert.Equal(allocation, Assert.Single prepared.Graph.Nodes[values.Head].Children)
                 Assert.Equal(call, List.last values)
-            | kind -> failwithf "Factory call lost its eager formation order: %A" kind
+            | kind -> failwithf "Factory call lost result storage preparation: %A" kind
             Assert.True(prepared.Destinations.ContainsKey requirement.Target)
         | participants -> failwithf "Incomplete pending view requirement: %A" participants
         // Preparation establishes representation and demand for proof. The

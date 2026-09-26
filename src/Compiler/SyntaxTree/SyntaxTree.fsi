@@ -775,6 +775,9 @@ type SynExpr =
 
     /// F# syntax: lazy expr
     | Lazy of expr: SynExpr * range: range
+    /// An explicit shallow demand at the nearest activated binding, argument
+    /// or construction frontier. Enclosing deferred scopes remain boundaries.
+    | Eager of expr: SynExpr * range: range
 
     /// F# syntax: expr; expr
     ///

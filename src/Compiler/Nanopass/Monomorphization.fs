@@ -152,6 +152,7 @@ let private mapKind (r: NodeId -> NodeId) (f: NativeType -> NativeType) (kind: S
     | SemanticKind.ForLoop (v, s, e, up, b) -> SemanticKind.ForLoop (v, r s, r e, up, r b)
     | SemanticKind.ForEach (v, p, c, b) -> SemanticKind.ForEach (v, r p, r c, r b)
     | SemanticKind.IfThenElse (g, t, e) -> SemanticKind.IfThenElse (r g, r t, ro e)
+    | SemanticKind.Require(condition, diagnostic) -> SemanticKind.Require(r condition, diagnostic)
     | SemanticKind.TryWith (b, h) -> SemanticKind.TryWith (r b, r h)
     | SemanticKind.TryFinally (b, c) -> SemanticKind.TryFinally (r b, r c)
     | SemanticKind.RecordExpr (fields, copyFrom) -> SemanticKind.RecordExpr (fields |> List.map (fun (n, id) -> (n, r id)), ro copyFrom)
@@ -191,6 +192,14 @@ let private mapKind (r: NodeId -> NodeId) (f: NativeType -> NativeType) (kind: S
     | SemanticKind.LazyExpr (b, captures) ->
         SemanticKind.LazyExpr (r b, captures |> List.map (fun c -> { c with Type = f c.Type; SourceNodeId = ro c.SourceNodeId }))
     | SemanticKind.LazyForce v -> SemanticKind.LazyForce (r v)
+    | SemanticKind.EagerExpr v -> SemanticKind.EagerExpr (r v)
+    | SemanticKind.LazyValue(thunk, environment) -> SemanticKind.LazyValue(r thunk, r environment)
+    | SemanticKind.LazyEnvironment(owner, initializers) -> SemanticKind.LazyEnvironment(r owner, initializers |> List.map (fun (slot, value) -> r slot, r value))
+    | SemanticKind.LazyEnvironmentReference value -> SemanticKind.LazyEnvironmentReference(r value)
+    | SemanticKind.LazyAllocate owner -> SemanticKind.LazyAllocate(r owner)
+    | SemanticKind.LazyRead(environment, slot) -> SemanticKind.LazyRead(r environment, r slot)
+    | SemanticKind.LazyBorrow(environment, slot) -> SemanticKind.LazyBorrow(r environment, r slot)
+    | SemanticKind.LazyWrite(environment, slot, value) -> SemanticKind.LazyWrite(r environment, r slot, r value)
     | SemanticKind.SeqExpr (b, captures) ->
         SemanticKind.SeqExpr (r b, captures |> List.map (fun c -> { c with Type = f c.Type; SourceNodeId = ro c.SourceNodeId }))
     | SemanticKind.Yield v -> SemanticKind.Yield (r v)

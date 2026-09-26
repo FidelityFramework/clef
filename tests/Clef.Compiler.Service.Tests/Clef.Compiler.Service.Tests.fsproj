@@ -6,7 +6,14 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="DimensionalCases.fs" />
+    <Compile Include="EagerGraphCases.fs" />
+    <Compile Include="PhaseProjectionCases.fs" />
+    <Compile Include="CallableTestContracts.fs" />
     <Compile Include="CallableApplicationCases.fs" />
+    <Compile Include="CallableIngressCases.fs" />
+    <Compile Include="ContinuationIngressCases.fs" />
+    <Compile Include="CallableFlowCases.fs" />
+    <Compile Include="CallableDispatchCases.fs" />
     <Compile Include="DimensionalTests.fs" />
     <Compile Include="ApplicationObligationCases.fs" />
     <Compile Include="IntegerObligationCases.fs" />
@@ -17,12 +24,14 @@
     <Compile Include="ProgramInitializationSelectionCases.fs" />
     <Compile Include="ProgramInitializationCases.fs" />
     <Compile Include="ContinuationPlacementCases.fs" />
+    <Compile Include="UnionPlacementCases.fs" />
     <Compile Include="SequenceAggregateCases.fs" />
     <Compile Include="ContinuationObligationCases.fs" />
     <Compile Include="FunctionPointerCases.fs" />
     <Compile Include="ClosedCallbackCases.fs" />
     <Compile Include="ClosureValueCases.fs" />
     <Compile Include="UnitLambdaCases.fs" />
+    <Compile Include="EagerSyntaxCases.fs" />
     <Compile Include="FoldInReferenceCases.fs" />
     <Compile Include="DirectCaptureCases.fs" />
     <Compile Include="OptionOperationCases.fs" />
@@ -48,11 +57,18 @@
     <Compile Include="SequenceSelectionCases.fs" />
     <Compile Include="SequenceApplicationCases.fs" />
     <Compile Include="SequenceOriginCases.fs" />
+    <Compile Include="SequenceFamilyCases.fs" />
     <Compile Include="NestedMatchCases.fs" />
+    <Compile Include="MatchDecisionCases.fs" />
+    <Compile Include="RequirementCases.fs" />
     <Compile Include="SequencePullEffectCases.fs" />
     <Compile Include="LoopRangeCases.fs" />
     <Compile Include="ClosureEnvironmentRangeCases.fs" />
     <Compile Include="ClosureEnvironmentCases.fs" />
+    <Compile Include="MutableCallableStorageCases.fs" />
+    <Compile Include="LazyValueCases.fs" />
+    <Compile Include="LazyResidenceCases.fs" />
+    <Compile Include="LazyRangeCases.fs" />
     <Compile Include="EnvironmentFactoryResultsCases.fs" />
     <Compile Include="SequenceEvaluationCases.fs" />
     <Compile Include="SequenceControlCases.fs" />

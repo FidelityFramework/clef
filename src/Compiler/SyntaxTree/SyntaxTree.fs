@@ -644,6 +644,7 @@ type SynExpr =
         trivia: SynExprTryFinallyTrivia
 
     | Lazy of expr: SynExpr * range: range
+    | Eager of expr: SynExpr * range: range
 
     | Sequential of
         debugPoint: DebugPointAtSequential *
@@ -820,6 +821,7 @@ type SynExpr =
         | SynExpr.InferredDowncast(range = m)
         | SynExpr.Null(range = m)
         | SynExpr.Lazy(range = m)
+        | SynExpr.Eager(range = m)
         | SynExpr.TraitCall(range = m)
         | SynExpr.ImplicitZero(range = m)
         | SynExpr.YieldOrReturn(range = m)

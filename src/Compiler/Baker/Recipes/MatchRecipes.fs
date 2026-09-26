@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 /// Baker match recipes construct typed decisions and source variable bindings.
-/// Nested constructor tests and guarded extraction are explicit PSG structure;
-/// the witness consumes shallow CaseElimination nodes. The earlier tuple-match
-/// decomposition path remains separate.
+/// Pattern tests, guarded extraction and fallthrough are explicit PSG structure;
+/// the witness consumes shallow, guard-free CaseElimination nodes.
 ///
 /// See: docs/fidelity/Baker_Saturation_Architecture.md
 /// See: clef-lang-spec/spec/patterns.md
@@ -13,6 +12,7 @@ open XParsec.Parsers
 open XParsec.Combinators
 open Clef.Compiler.NativeTypedTree.DimensionAlgebra
 open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.UnionFind
 
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Baker.Recipes.Decomposition
@@ -43,507 +43,8 @@ let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Re
     | NoMatch reason ->
         failwithf "Saturation failed: %s" reason
 
-//=============================================================================
-// PATTERN BINDING ELABORATION
-//=============================================================================
-
-/// Create let bindings for pattern-bound variables
-/// Returns the bound value node ID for use in the body
-let private bindPatternVar (name: string) (valueId: NodeId) (ty: NativeType) : SaturationParser<NodeId> =
-    saturation {
-        let! bindingId = letBind name valueId ty
-        return bindingId
-    }
-
-//=============================================================================
-// PATTERN COMPILATION
-//=============================================================================
-
-/// Extract bindings from a pattern WITHOUT creating guard condition.
-/// Used for the last case in exhaustive matching where we know it will match.
-/// Returns just the new binding NodeIds.
-let rec private extractPatternBindings
-    (scrutineeId: NodeId)
-    (pattern: Pattern)
-    (patternBindings: NodeId list)
-    : SaturationParser<NodeId list> =
-
-    match pattern with
-    | Pattern.Wildcard | Pattern.Var _ | Pattern.Null ->
-        // No bindings to extract
-        saturation { return patternBindings }
-
-    | Pattern.Union (caseName, tagIndex, payload, _unionType) ->
-        // Extract payload bindings, reusing original PatternBinding NodeIds
-        match payload with
-        | Some (Pattern.Var (name, ty)) ->
-            saturation {
-                let! payloadId = duEliminate scrutineeId caseName tagIndex ty
-                let originalBindingId = List.head patternBindings
-                let! bindingId = letBindAt originalBindingId name payloadId ty
-                return [bindingId]
-            }
-        | Some (Pattern.Wildcard) ->
-            // Wildcard payload (e.g., | Error _ ->) — no bindings needed
-            saturation { return [] }
-        | Some (Pattern.Tuple [Pattern.Var (name, ty)]) ->
-            // Single-element tuple - treat as direct value
-            saturation {
-                let! payloadId = duEliminate scrutineeId caseName tagIndex ty
-                let originalBindingId = List.head patternBindings
-                let! bindingId = letBindAt originalBindingId name payloadId ty
-                return [bindingId]
-            }
-        | Some (Pattern.Tuple elements) when elements |> List.forall (fun e -> match e with Pattern.Wildcard -> true | _ -> false) ->
-            // All-wildcard tuple (e.g., | Case (_, _) ->) — no bindings needed
-            saturation { return [] }
-        | Some (Pattern.Tuple elements) ->
-            saturation {
-                let elementTypes =
-                    elements
-                    |> List.map (fun elem ->
-                        match elem with
-                        | Pattern.Var (_, ty) -> ty
-                        | Pattern.Wildcard -> Types.unitType
-                        | _ -> failwithf "Unsupported tuple element pattern in DU payload")
-                let tuplePayloadType = NativeType.TTuple (elementTypes, false)
-                let! tuplePayloadId = duEliminate scrutineeId caseName tagIndex tuplePayloadType
-
-                // Only bind Var elements, skip Wildcards; track binding index separately
-                let mutable bindingIdx = 0
-                let! bindings =
-                    elements
-                    |> List.mapi (fun index elem ->
-                        match elem with
-                        | Pattern.Var (name, ty) ->
-                            saturation {
-                                let! elementId = createWithChildren (SemanticKind.TupleGet (tuplePayloadId, index)) ty [tuplePayloadId]
-                                let originalBindingId = patternBindings.[bindingIdx]
-                                bindingIdx <- bindingIdx + 1
-                                let! bindingId = letBindAt originalBindingId name elementId ty
-                                return Some bindingId
-                            }
-                        | Pattern.Wildcard ->
-                            saturation { return None }
-                        | other ->
-                            failwithf "Unsupported tuple element pattern: %A" other)
-                    |> sequence
-                return bindings |> List.choose id
-            }
-        | None ->
-            saturation { return [] }
-        | Some other ->
-            failwithf "extractPatternBindings: Unsupported union payload pattern: %A" other
-
-    | Pattern.Tuple elements ->
-        // Top-level tuple pattern: extract each element via TupleGet + letBindAt.
-        // Mirrors union payload tuple handling (lines 99-125): create TupleGet,
-        // then replace PatternBinding with Binding that has TupleGet as child.
-        saturation {
-            let! allBindings =
-                elements
-                |> List.mapi (fun index elem ->
-                    match elem with
-                    | Pattern.Var (name, ty) ->
-                        saturation {
-                            let! elementId = createWithChildren (SemanticKind.TupleGet (scrutineeId, index)) ty [scrutineeId]
-                            let originalBindingId = patternBindings.[index]
-                            let! bindingId = letBindAt originalBindingId name elementId ty
-                            return [bindingId]
-                        }
-                    | nested ->
-                        saturation {
-                            let elemType = getPatternType nested
-                            let! elemId = createWithChildren (SemanticKind.TupleGet (scrutineeId, index)) elemType [scrutineeId]
-                            let elemBindings = getElementPatternBindings index patternBindings elements
-                            return! extractPatternBindings elemId nested elemBindings
-                        })
-                |> sequence
-            return List.concat allBindings
-        }
-
-    | Pattern.Const _ ->
-        // Constant patterns don't create bindings
-        saturation { return patternBindings }
-
-    | Pattern.Record (fields, recordType) ->
-        // Record pattern: extract each field and create bindings.
-        // For each field: create FieldGet, then Binding (or recurse for nested patterns).
-        // Wildcards skip FieldGet creation to avoid orphaned nodes.
-        let expectedFieldCount =
-            match recordType with
-            | NativeType.TApp(tycon, _) -> tycon.FieldCount
-            | _ -> 0
-        if expectedFieldCount > 0 && List.length fields > expectedFieldCount then
-            failwithf "Record pattern has %d fields but record type %A only has %d fields"
-                (List.length fields) recordType expectedFieldCount
-        saturation {
-            let! bindings =
-                fields
-                |> List.mapi (fun index (fieldName, fieldPattern) ->
-                    saturation {
-                        match fieldPattern with
-                        | Pattern.Wildcard ->
-                            // Wildcard - no binding needed, don't create FieldGet (would be orphaned)
-                            return []
-
-                        | Pattern.Var (name, ty) ->
-                            // Direct variable binding - create FieldGet then bind it
-                            let! fieldId = createWithChildren (SemanticKind.FieldGet (scrutineeId, fieldName)) ty [scrutineeId]
-                            if index < List.length patternBindings then
-                                let originalBindingId = patternBindings.[index]
-                                let! bindingId = letBindAt originalBindingId name fieldId ty
-                                return [bindingId]
-                            else
-                                // No original PatternBinding - create new binding
-                                let! bindingId = letBind name fieldId ty
-                                return [bindingId]
-
-                        | nestedPattern ->
-                            // Nested pattern (Record, Tuple, etc.) - create FieldGet and recurse
-                            let fieldType = getPatternType nestedPattern
-                            let! fieldId = createWithChildren (SemanticKind.FieldGet (scrutineeId, fieldName)) fieldType [scrutineeId]
-                            let nestedBindings =
-                                if index < List.length patternBindings then
-                                    let nestedCount = countPatternBindings nestedPattern
-                                    patternBindings |> List.skip index |> List.truncate nestedCount
-                                else []
-                            return! extractPatternBindings fieldId nestedPattern nestedBindings
-                    })
-                |> sequence
-            return List.concat bindings
-        }
-
-    | unsupported ->
-        // HARD ERROR: Unsupported pattern type - do not silently fall through
-        failwithf "extractPatternBindings: Unsupported pattern type: %A. This is a compiler bug - please report." unsupported
-
-/// Compile a single pattern case to a conditional expression.
-/// Returns (guard expression, body, new binding NodeIds).
-/// The new binding NodeIds replace the old PatternBinding NodeIds - they have
-/// proper value sources (e.g., FieldGet for DU payload extraction).
-and private compilePattern
-    (scrutineeId: NodeId)
-    (pattern: Pattern)
-    (patternBindings: NodeId list)
-    (guard: NodeId option)
-    (body: NodeId)
-    (_resultType: NativeType)
-    : SaturationParser<NodeId * NodeId * NodeId list> =
-
-    match pattern with
-    | Pattern.Wildcard ->
-        // Wildcard always matches - guard is "true", body is unchanged
-        // No new bindings - use original PatternBindings
-        // CRITICAL: Only create boolLit when no guard, to avoid orphaned nodes
-        saturation {
-            match guard with
-            | Some guardId -> return (guardId, body, patternBindings)
-            | None ->
-                let! trueId = boolLit true
-                return (trueId, body, patternBindings)
-        }
-
-    | Pattern.Var (_name, _ty) ->
-        // Variable pattern: bind scrutinee to name, always matches
-        // No new bindings - use original PatternBindings
-        // CRITICAL: Only create boolLit when no guard, to avoid orphaned nodes
-        saturation {
-            match guard with
-            | Some guardId -> return (guardId, body, patternBindings)
-            | None ->
-                let! trueId = boolLit true
-                return (trueId, body, patternBindings)
-        }
-
-    | Pattern.Const literal ->
-        // Constant pattern: compare scrutinee to literal
-        // No new bindings - use original PatternBindings
-        saturation {
-            let literalType = literalToType literal
-            let! literalId = createAndEmit (SemanticKind.Literal literal) literalType
-            let! compareId = compareEq scrutineeId literalId literalType
-            match guard with
-            | Some guardId ->
-                let! combinedGuard = andAlso compareId guardId
-                return (combinedGuard, body, patternBindings)
-            | None ->
-                return (compareId, body, patternBindings)
-        }
-
-    | Pattern.Union (caseName, tagIndex, payload, unionType) ->
-        // Union pattern: compare tag, then extract and bind payload
-        // Use letBindAt to create Bindings AT THE SAME NodeIds as PatternBindings
-        // This way VarRefs in the body continue to resolve correctly
-        saturation {
-            // Use DUGetTag for type-safe tag extraction
-            let! tagId = duGetTag scrutineeId unionType
-            let! tagLitId = int8Lit tagIndex
-            let! tagMatches = compareEq tagId tagLitId Types.int8Type
-
-            // Extract and bind payload, reusing original PatternBinding NodeIds
-            let! newBindings =
-                match payload with
-                | Some (Pattern.Var (name, ty)) ->
-                    // Single variable binding - reuse the PatternBinding's NodeId
-                    saturation {
-                        let! payloadId = duEliminate scrutineeId caseName tagIndex ty
-                        // Use letBindAt to create Binding at the original PatternBinding's NodeId
-                        let originalBindingId = List.head patternBindings
-                        let! bindingId = letBindAt originalBindingId name payloadId ty
-                        return [bindingId]
-                    }
-                | Some (Pattern.Wildcard) ->
-                    // Wildcard payload (e.g., | Error _ ->) — no bindings needed
-                    saturation { return [] }
-                | Some (Pattern.Tuple [Pattern.Var (name, ty)]) ->
-                    // Single-element tuple - F# represents `Case of T` as a 1-tuple
-                    // Treat this as a direct value, not a tuple
-                    saturation {
-                        let! payloadId = duEliminate scrutineeId caseName tagIndex ty
-                        let originalBindingId = List.head patternBindings
-                        let! bindingId = letBindAt originalBindingId name payloadId ty
-                        return [bindingId]
-                    }
-                | Some (Pattern.Tuple elements) when elements |> List.forall (fun e -> match e with Pattern.Wildcard -> true | _ -> false) ->
-                    // All-wildcard tuple (e.g., | Case (_, _) ->) — no bindings needed
-                    saturation { return [] }
-                | Some (Pattern.Tuple elements) ->
-                    // Multi-field tuple payload like `SomeCase of int * float`:
-                    // Each element reuses its corresponding PatternBinding NodeId
-                    saturation {
-                        // Build the tuple type from element types
-                        let elementTypes =
-                            elements
-                            |> List.map (fun elem ->
-                                match elem with
-                                | Pattern.Var (_, ty) -> ty
-                                | Pattern.Wildcard -> Types.unitType
-                                | _ -> failwithf "Unsupported tuple element pattern in DU payload")
-                        let tuplePayloadType = NativeType.TTuple (elementTypes, false)
-
-                        // Extract the whole tuple payload
-                        let! tuplePayloadId = duEliminate scrutineeId caseName tagIndex tuplePayloadType
-
-                        // Extract and bind each element, reusing original PatternBinding NodeIds
-                        // Only bind Var elements, skip Wildcards; track binding index separately
-                        let mutable bindingIdx = 0
-                        let! bindings =
-                            elements
-                            |> List.mapi (fun index elem ->
-                                match elem with
-                                | Pattern.Var (name, ty) ->
-                                    saturation {
-                                        // TupleGet extracts element at index from the tuple
-                                        let! elementId = createWithChildren (SemanticKind.TupleGet (tuplePayloadId, index)) ty [tuplePayloadId]
-                                        // Reuse the original PatternBinding's NodeId
-                                        let originalBindingId = patternBindings.[bindingIdx]
-                                        bindingIdx <- bindingIdx + 1
-                                        let! bindingId = letBindAt originalBindingId name elementId ty
-                                        return Some bindingId
-                                    }
-                                | Pattern.Wildcard ->
-                                    saturation { return None }
-                                | other ->
-                                    failwithf "Unsupported tuple element pattern: %A" other)
-                            |> sequence
-                        return bindings |> List.choose id
-                    }
-                | None ->
-                    // No payload - no bindings needed (nullary case like None)
-                    saturation { return [] }
-                | Some other ->
-                    failwithf "Unsupported union payload pattern: %A" other
-
-            match guard with
-            | Some guardId ->
-                let! combinedGuard = andAlso tagMatches guardId
-                return (combinedGuard, body, newBindings)
-            | None ->
-                return (tagMatches, body, newBindings)
-        }
-
-    | Pattern.Tuple elements ->
-        // Tuple pattern: extract all elements and wrap in Sequential to ensure
-        // TupleGets are emitted BEFORE any control flow from guard combination.
-        // Structure: Sequential([TupleGet0; TupleGet1; ...; actualGuard])
-        saturation {
-            // Phase 1: Extract ALL tuple elements
-            let! extractedElems =
-                elements
-                |> List.mapi (fun index elemPattern ->
-                    saturation {
-                        let elemType = getPatternType elemPattern
-                        let! elemId = createWithChildren (SemanticKind.TupleGet (scrutineeId, index)) elemType [scrutineeId]
-                        return (elemId, elemPattern)
-                    })
-                |> sequence
-
-            let tupleGetIds = extractedElems |> List.map fst
-
-            // Phase 2: Compile each element pattern using pre-extracted values
-            let! results =
-                extractedElems
-                |> List.mapi (fun index (elemId, elemPattern) ->
-                    saturation {
-                        let elemBindings = getElementPatternBindings index patternBindings elements
-                        return! compilePattern elemId elemPattern elemBindings None body _resultType
-                    })
-                |> sequence
-
-            // Combine all guards with AND
-            let guards = results |> List.map (fun (g, _, _) -> g)
-            let combineGuards accParser g =
-                saturation {
-                    let! acc = accParser
-                    return! andAlso acc g
-                }
-            let! combinedGuard =
-                match guards with
-                | [] -> boolLit true
-                | [g] -> saturation { return g }
-                | g :: rest -> rest |> List.fold combineGuards (saturation { return g })
-
-            // Wrap TupleGets + guard in Sequential to hoist TupleGets before control flow
-            // Sequential visits children in order, so TupleGets emit before guard's scf.if
-            let! hoistedGuard =
-                createWithChildren
-                    (SemanticKind.Sequential (tupleGetIds @ [combinedGuard]))
-                    Types.boolType
-                    (tupleGetIds @ [combinedGuard])
-
-            // Collect all bindings
-            let allBindings = results |> List.collect (fun (_, _, bindings) -> bindings)
-
-            // Apply optional outer guard
-            match guard with
-            | Some guardId ->
-                let! finalGuard = andAlso hoistedGuard guardId
-                return (finalGuard, body, allBindings)
-            | None ->
-                return (hoistedGuard, body, allBindings)
-        }
-
-    | Pattern.Null ->
-        // Null pattern: check if value is null (for reference types)
-        // In native F#, this is rare - most types are non-nullable
-        // CRITICAL: Only create boolLit when no guard, to avoid orphaned nodes
-        saturation {
-            match guard with
-            | Some guardId -> return (guardId, body, patternBindings)
-            | None ->
-                let! trueId = boolLit true  // Simplified - treat as always match for now
-                return (trueId, body, patternBindings)
-        }
-
-    | Pattern.Record (fields, recordType) ->
-        // Record patterns always match structurally (no runtime tag check).
-        // Extract each field and create bindings inline, like Union.
-        // NOTE: Field count validation is OUTSIDE the saturation {} block.
-        // An 'if ... then failwithf' without 'else' inside a CE calls Zero() = pzero,
-        // causing a silent Message "" failure even when the condition is false.
-        let expectedFieldCount =
-            match recordType with
-            | NativeType.TApp(tycon, _) -> tycon.FieldCount
-            | _ -> 0
-        if expectedFieldCount > 0 && List.length fields > expectedFieldCount then
-            failwithf "Record pattern has %d fields but record type %A only has %d fields"
-                (List.length fields) recordType expectedFieldCount
-        saturation {
-            // Extract and bind each field
-            let! newBindings =
-                fields
-                |> List.mapi (fun index (fieldName, fieldPattern) ->
-                    saturation {
-                        match fieldPattern with
-                        | Pattern.Wildcard ->
-                            // Wildcard - no binding needed, skip FieldGet to avoid orphaned nodes
-                            return []
-
-                        | Pattern.Var (name, ty) ->
-                            // Direct variable binding - create FieldGet then bind it
-                            let! fieldId = createWithChildren (SemanticKind.FieldGet (scrutineeId, fieldName)) ty [scrutineeId]
-                            if index < List.length patternBindings then
-                                let originalBindingId = patternBindings.[index]
-                                let! bindingId = letBindAt originalBindingId name fieldId ty
-                                return [bindingId]
-                            else
-                                let! bindingId = letBind name fieldId ty
-                                return [bindingId]
-
-                        | nestedPattern ->
-                            // Nested pattern - create FieldGet and recurse
-                            let fieldType = getPatternType nestedPattern
-                            let! fieldId = createWithChildren (SemanticKind.FieldGet (scrutineeId, fieldName)) fieldType [scrutineeId]
-                            let nestedBindings =
-                                if index < List.length patternBindings then
-                                    let nestedCount = countPatternBindings nestedPattern
-                                    patternBindings |> List.skip index |> List.truncate nestedCount
-                                else []
-                            return! extractPatternBindings fieldId nestedPattern nestedBindings
-                    })
-                |> sequence
-
-            let allBindings = List.concat newBindings
-
-            match guard with
-            | Some guardId -> return (guardId, body, allBindings)
-            | None ->
-                let! trueId = boolLit true
-                return (trueId, body, allBindings)
-        }
-
-    | unsupported ->
-        // HARD ERROR: Unsupported pattern type - do not silently fall through
-        // This surfaces missing pattern support immediately rather than causing
-        // cryptic "unbound type variable" errors downstream
-        failwithf "compilePattern: Unsupported pattern type: %A. This is a compiler bug - please report." unsupported
-
-/// The type of a numeric literal: its carrier, read from the one carrier table by the literal's
-/// NTUKind (Types.tryNumericTyConOfKind), at the dimensionless measure (design a.4: an
-/// unannotated literal is `one`). No inverse kind -> type table is kept here.
-and private numericLiteralType (kind: NTUKind) : NativeType =
-    match Types.tryNumericTyConOfKind kind with
-    | Some carrier -> NativeType.TNum(CarrierRef.Carrier carrier, Dimension.one)
-    | None -> failwithf "numericLiteralType: no numeric carrier has kind %A" kind
-
-/// Read the literal's source type, preserving its numeric carrier
-and private literalToType (lit: NativeLiteral) : NativeType =
-    match lit with
-    | NativeLiteral.Int (_, kind) -> numericLiteralType kind
-    | NativeLiteral.UInt (_, kind) -> numericLiteralType kind
-    | NativeLiteral.Float (_, kind) -> numericLiteralType kind
-    | NativeLiteral.Bool _ -> Types.boolType
-    | NativeLiteral.Char _ -> Types.charType
-    | NativeLiteral.String _ -> Types.stringType
-    | NativeLiteral.Unit -> Types.unitType
-    | NativeLiteral.Decimal _ -> Types.decimalType
-    | NativeLiteral.ByteArray _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint8Type])
-    | NativeLiteral.UInt16Array _ -> NativeType.TApp(Types.arrayTyCon, [Types.uint16Type])
-
-/// Get the type from a pattern (uses literalToType for Const patterns)
-and private getPatternType (pattern: Pattern) : NativeType =
-    match pattern with
-    | Pattern.Var (_, ty) -> ty
-    | Pattern.Union (_, _, _, ty) -> ty
-    | Pattern.Tuple elements ->
-        NativeType.TTuple (elements |> List.map getPatternType, false)
-    | Pattern.Const lit -> literalToType lit
-    | Pattern.Wildcard -> Types.unitType
-    | Pattern.Null -> Types.unitType
-    | Pattern.Record (_, recordType) -> recordType
-    | Pattern.Array elements ->
-        match elements with
-        | [] -> NativeType.TApp(Types.arrayTyCon, [Types.unitType])
-        | first :: _ -> NativeType.TApp(Types.arrayTyCon, [getPatternType first])
-    | Pattern.And (left, _) -> getPatternType left
-    | Pattern.Or (left, _) -> getPatternType left
-    | Pattern.As (inner, _) -> getPatternType inner
-    | Pattern.IsType ty -> ty
-    | Pattern.Exception (exnType, _) -> exnType
-
 /// Count bindings in a pattern (recursive for nested patterns)
-and private countPatternBindings (pattern: Pattern) : int =
+let rec private countPatternBindings (pattern: Pattern) : int =
     match pattern with
     | Pattern.Var _ -> 1
     | Pattern.Union (_, _, Some payload, _) -> countPatternBindings payload
@@ -558,128 +59,42 @@ and private countPatternBindings (pattern: Pattern) : int =
     | Pattern.Exception (_, bindName) -> if Option.isSome bindName then 1 else 0
     | Pattern.Wildcard | Pattern.Null | Pattern.Const _ | Pattern.IsType _ -> 0
 
-/// Get pattern bindings for a specific tuple element.
-/// Partitions the flat patternBindings list based on each element's binding count.
-and private getElementPatternBindings
-    (index: int)
-    (patternBindings: NodeId list)
-    (elements: Pattern list)
-    : NodeId list =
-    let bindingsPerElement = elements |> List.map countPatternBindings
-    let offset = bindingsPerElement |> List.take index |> List.sum
-    let count = bindingsPerElement.[index]
-    patternBindings |> List.skip offset |> List.take count
-
-//=============================================================================
-// MATCH DECOMPOSITION
-//=============================================================================
-
-/// Wrap a body with pattern bindings in a Sequential if there are bindings.
-/// PatternBinding nodes already exist in the graph; we just need to include
-/// them in the control flow so they're walked during SSA traversal.
-let private wrapWithPatternBindings
-    (patternBindings: NodeId list)
-    (bodyId: NodeId)
-    (resultType: NativeType)
-    : SaturationParser<NodeId> =
-    
-    match patternBindings with
-    | [] -> 
-        // No bindings - just return the body
-        saturation { return bodyId }
-    | bindings ->
-        // Wrap: Sequential([binding1; binding2; ...; body])
-        // The PatternBinding nodes already exist; we create a Sequential that references them
-        let elements = bindings @ [bodyId]
-        let seqKind = SemanticKind.Sequential elements
-        createWithChildren seqKind resultType elements
-
-/// Decompose a Match expression into nested IfThenElse chains.
-///
-/// match scrutinee with
-/// | Pattern1 -> body1
-/// | Pattern2 when guard2 -> body2
-/// | _ -> defaultBody
-///
-/// Becomes:
-/// if (pattern1Matches) then Sequential([patternBindings...; body1])
-/// elif (pattern2Matches && guard2) then Sequential([patternBindings...; body2])
-/// else defaultBody
-///
-/// CRITICAL: PatternBindings MUST be included in the then-branch structure.
-/// After Match saturation, the IfThenElse replaces the Match node. The original
-/// PatternBinding nodes exist in the graph but are orphaned if not referenced
-/// by the IfThenElse structure. Wrapping them in a Sequential with the body
-/// ensures they're walked during SSA traversal.
-let matchDecomposeParser
-    (scrutineeId: NodeId)
-    (cases: MatchCase list)
-    (resultType: NativeType)
-    : SaturationParser<NodeId> =
-
-    let rec buildDecisionTree (remainingCases: MatchCase list) : SaturationParser<NodeId> =
-        match remainingCases with
-        | [] ->
-            // No more cases - this shouldn't happen with exhaustive patterns
-            // Return unit or error value
-            createAndEmit (SemanticKind.Literal NativeLiteral.Unit) Types.unitType
-
-        | [lastCase] ->
-            // Last case - assuming exhaustive matching, this case WILL match.
-            // Only extract bindings, don't create guard nodes (they'd be orphaned).
-            // CRITICAL: Use extractPatternBindings, NOT compilePattern, to avoid
-            // creating unused tag-check nodes that become orphans after fold-in.
-            saturation {
-                let! newBindings = extractPatternBindings scrutineeId lastCase.Pattern lastCase.PatternBindings
-                return! wrapWithPatternBindings newBindings lastCase.Body resultType
-            }
-
-        | case :: rest ->
-            saturation {
-                // Compile this case's pattern to a guard condition
-                // compilePattern returns (guard, body, newBindings)
-                // newBindings replaces case.PatternBindings with properly-sourced Binding nodes
-                let! (guardExpr, _body, newBindings) =
-                    compilePattern scrutineeId case.Pattern case.PatternBindings case.Guard case.Body resultType
-
-                // Build the else branch (rest of the cases)
-                let! elseResult = buildDecisionTree rest
-
-                // CRITICAL (January 2026): Guard expressions may reference pattern bindings.
-                // When there's a guard, pattern bindings must be hoisted BEFORE the IfThenElse
-                // so VarRefs in the guard can resolve. Without a guard, bindings stay inside
-                // the then-branch (only evaluated if pattern matches).
-                //
-                // With guard:    Sequential([bindings..., IfThenElse(guard, body, else)])
-                // Without guard: IfThenElse(patternCheck, Sequential([bindings..., body]), else)
-                match case.Guard with
-                | Some _ ->
-                    // Guard may reference pattern bindings - hoist them BEFORE IfThenElse
-                    let! ifResult = ifThenElse guardExpr case.Body elseResult resultType
-                    return! wrapWithPatternBindings newBindings ifResult resultType
-                | None ->
-                    // No guard - bindings can stay inside the then-branch
-                    let! bodyWithBindings = wrapWithPatternBindings newBindings case.Body resultType
-                    return! ifThenElse guardExpr bodyWithBindings elseResult resultType
-            }
-
-    buildDecisionTree cases
-
-//=============================================================================
-// PUBLIC API: Match Decomposition Entry Point
-//=============================================================================
-
-/// Decompose a Match node to IfThenElse decision tree.
-/// This is called from HOFDecomposition when encountering SemanticKind.Match.
-let decomposeMatch
-    (ctx: Context)
-    (scrutineeId: NodeId)
-    (cases: MatchCase list)
-    (resultType: NativeType)
-    : Result =
-    
-    let parser = matchDecomposeParser scrutineeId cases resultType
-    runSaturation ctx parser
+/// Read actual union payload fields, including wildcard positions. A wildcard
+/// contains no type; substituting unit would corrupt the physical tuple shape.
+let private payloadType (graph: SemanticGraph) unionType tag =
+    let packed fields =
+        match fields with
+        | [] -> None
+        | [field] -> Some(applySubst field)
+        | fields -> Some(NativeType.TTuple(List.map applySubst fields, false))
+    match applySubst unionType with
+    | NativeType.TApp(constructor, [element]) when (constructor.Name = "option" || constructor.Name = "voption") && tag = 1 -> Some element
+    | NativeType.TApp(constructor, [ok; error]) when constructor.Name = "Result" || constructor.Name = "result" ->
+        match tag with 0 -> Some ok | 1 -> Some error | _ -> None
+    | NativeType.TUnion(_, cases) ->
+        cases |> List.tryFind (fun case -> case.Index = tag) |> Option.bind (fun case -> packed (List.map snd case.Fields))
+    | NativeType.TApp(constructor, arguments) ->
+        let definition = graph.Nodes.Values |> Seq.tryFind (fun node ->
+            match node.Kind, applySubst node.Type with
+            | SemanticKind.TypeDef(_, TypeDefKind.UnionDef _, _), NativeType.TApp(declared, _) ->
+                declared.Name = constructor.Name && declared.Module = constructor.Module
+            | _ -> false)
+        definition |> Option.bind (fun node ->
+            match node.Kind, canonicalizeVars node.Type with
+            | SemanticKind.TypeDef(_, TypeDefKind.UnionDef cases, _), NativeType.TApp(_, parameters) ->
+                let parameter = function
+                    | NativeType.TVar value | NativeType.TNum(CarrierRef.CVar value, _) -> value
+                    | NativeType.TMeasure dimension when dimension.Bases.IsEmpty ->
+                        match Map.toList dimension.Vars with
+                        | [variable, 1] -> measureCellOf variable
+                        | _ -> failwith "Union declaration has a non-parameter measure"
+                    | _ -> failwith "Union declaration has a non-parameter type argument"
+                let parameters = List.map parameter parameters
+                if parameters.Length <> arguments.Length then None else
+                cases |> List.tryItem tag |> Option.bind (fun (_, fields) ->
+                    fields |> List.map (fun (_, field) -> instantiate parameters arguments (canonicalizeVars field)) |> packed)
+            | _ -> None)
+    | _ -> None
 
 /// A constructor's argument list wraps a single payload in Pattern.Tuple.
 /// That wrapper does not introduce a tuple value in the union representation.
@@ -687,33 +102,54 @@ let private singlePayload = function
     | Pattern.Tuple [payload] -> payload
     | payload -> payload
 
-let rec private hasNestedUnion pattern =
-    let rec containsUnion = function
-        | Pattern.Union _ -> true
-        | Pattern.Tuple patterns -> List.exists containsUnion patterns
-        | Pattern.Record(fields, _) -> fields |> List.exists (snd >> containsUnion)
-        | _ -> false
-    match pattern with
-    | Pattern.Union(_, _, Some payload, _) -> containsUnion payload
-    | Pattern.Tuple patterns -> List.exists hasNestedUnion patterns
-    | Pattern.Record(fields, _) -> fields |> List.exists (snd >> hasNestedUnion)
-    | _ -> false
-
 /// A decision consumes only one pattern test. Refutable payload patterns become
 /// further decisions in its selected body, never implicit work for the witness.
-let private caseDecision scrutinee pattern selected fallback resultType =
+let private caseDecision (evidence: ResizeArray<Hyperedge>) diagnostic original inputType pattern selected fallback resultType = saturation {
     let arm pattern body : CaseArm =
         { Pattern = pattern; Bindings = []; Guard = None; Body = body }
+    let! scrutinee =
+        match fallback with
+        | Some _ -> preturn original
+        | None -> createWithChildren (SemanticKind.TypeAnnotation(original, inputType)) inputType [original]
     let arms = arm pattern selected :: (fallback |> Option.toList |> List.map (arm Pattern.Wildcard))
-    createWithChildren (SemanticKind.CaseElimination(scrutinee, arms)) resultType
-        (scrutinee :: (arms |> List.map _.Body))
+    let! decision =
+        createWithChildren (SemanticKind.CaseElimination(scrutinee, arms)) resultType
+            (scrutinee :: (arms |> List.map _.Body))
+    match fallback with
+    | Some _ -> return decision
+    | None ->
+        let! yes = boolLit true
+        let! no = boolLit false
+        let tests = [arm pattern yes; arm Pattern.Wildcard no]
+        let! test = createWithChildren (SemanticKind.CaseElimination(scrutinee, tests)) Types.boolType [scrutinee; yes; no]
+        let! required = createWithChildren (SemanticKind.Require(test, diagnostic)) Types.unitType [test]
+        let! frontier = evaluateBefore [required] decision resultType
+        evidence.Add { Class = EdgeClass.Provenance; Role = EdgeRole.MatchRequirement; Ordinal = 0
+                       Sources = [required; test; decision; scrutinee; yes; no; selected; original]; Target = frontier }
+        return frontier
+  }
+
+/// A terminal boolean condition has no result on failure. This is shared by
+/// source guards and semantic literal equality; its continuation is already
+/// inside the selected pattern scope.
+let private requireThen (evidence: ResizeArray<Hyperedge>) diagnostic condition selected resultType = saturation {
+    let! required = createWithChildren (SemanticKind.Require(condition, diagnostic)) Types.unitType [condition]
+    let! frontier = evaluateBefore [required] selected resultType
+    evidence.Add { Class = EdgeClass.Provenance; Role = EdgeRole.MatchRequirement; Ordinal = 1
+                   Sources = [required; condition; selected]; Target = frontier }
+    return frontier
+  }
 
 /// Compile a constructor chain with the original later cases as its failure
 /// continuation. Every payload read and source guard remains inside the branch
 /// whose pattern facts admit it. Source variable definitions retain their IDs.
-let private nestedMatchParser (graph: SemanticGraph) (scrutinee: NodeId) (cases: MatchCase list) (resultType: NativeType) =
+let private decisionParser (evidence: ResizeArray<Hyperedge>) (graph: SemanticGraph) (scrutinee: NodeId) (cases: MatchCase list) (resultType: NativeType) =
     let scrutineeType = graph.Nodes[scrutinee].Type
-    let rec compile (input: NodeId) (pattern: Pattern) (bindings: NodeId list) (success: NodeId) (fallback: NodeId option) : SaturationParser<NodeId> =
+    let range = graph.Nodes[scrutinee].Range
+    let diagnostic = sprintf "Pattern match failed at %s:%d:%d" range.File range.Start.Line range.Start.Column
+    let rec compile (input: NodeId) (inputType: NativeType) (pattern: Pattern) (bindings: NodeId list) (success: NodeId) (fallback: NodeId option) : SaturationParser<NodeId> =
+        if bindings.Length <> countPatternBindings pattern then
+            failwithf "Pattern requires %d exact source bindings, got %d" (countPatternBindings pattern) bindings.Length
         match pattern with
         | Pattern.Wildcard -> saturation { return success }
         | Pattern.Var(name, ty) ->
@@ -728,16 +164,55 @@ let private nestedMatchParser (graph: SemanticGraph) (scrutinee: NodeId) (cases:
                 match payload |> Option.map singlePayload with
                 | None | Some Pattern.Wildcard -> preturn success
                 | Some payloadPattern -> saturation {
-                    let payloadType = getPatternType payloadPattern
+                    let payloadType = payloadType graph unionType tag |> Option.defaultWith (fun () ->
+                        failwithf "Match payload lacks its instantiated type: %A tag %d" unionType tag)
                     let! value = duEliminate input name tag payloadType
-                    return! compile value payloadPattern bindings success fallback
+                    return! compile value payloadType payloadPattern bindings success fallback
                   }
             let shallow = Pattern.Union(name, tag, payload |> Option.map (fun _ -> Pattern.Wildcard), unionType)
-            return! caseDecision input shallow selected fallback resultType
+            return! caseDecision evidence diagnostic input inputType shallow selected fallback resultType
           }
-        | Pattern.Const _ -> caseDecision input pattern success fallback resultType
+        | Pattern.Const constant -> saturation {
+            // The literal retains the input's checked dimensional type. Its
+            // hosted payload kind does not choose a source width or equality
+            // algorithm; the ordinary typed operation owns those semantics.
+            let! literal = createWithChildren (SemanticKind.Literal constant) inputType []
+            let! equal = compareEq input literal inputType
+            match fallback with
+            | Some later -> return! ifThenElse equal success later resultType
+            | None -> return! requireThen evidence diagnostic equal success resultType
+          }
+        | Pattern.Tuple elements ->
+            match applySubst inputType with
+            | NativeType.TTuple(types, _) when types.Length = elements.Length ->
+                let components = List.zip elements types |> List.mapi (fun index (pattern, ty) ->
+                    pattern, ty, fun () -> createWithChildren (SemanticKind.TupleGet(input, index)) ty [input])
+                compileComponents components bindings success fallback
+            | _ -> failwithf "Tuple match disagrees with its actual input type: %A" inputType
+        | Pattern.Record(fields, recordType) ->
+            let declared =
+                match applySubst recordType with
+                | NativeType.TAnon(fields, _) -> Some fields
+                | _ -> Clef.Compiler.PSGSaturation.SemanticGraph.RecordInstances.tryFields recordType graph
+            let declared = declared |> Option.defaultWith (fun () -> failwithf "Record match lacks its instantiated fields: %A" recordType)
+            let components = fields |> List.map (fun (name, pattern) ->
+                let ty = declared |> List.tryFind (fst >> (=) name) |> Option.map snd |> Option.defaultWith (fun () -> failwithf "Undeclared record pattern field '%s'" name)
+                pattern, ty, fun () -> createWithChildren (SemanticKind.FieldGet(input, name)) ty [input])
+            compileComponents components bindings success fallback
         | unsupported ->
-            failwithf "Nested match requires an elaborated constructor, variable, wildcard, or constant pattern; got %A" unsupported
+            failwithf "Match requires further source pattern elaboration: %A" unsupported
+    and compileComponents components bindings success fallback : SaturationParser<NodeId> =
+        match components with
+        | [] -> preturn success
+        | (pattern, ty, project) :: rest -> saturation {
+            let own, remaining = List.splitAt (countPatternBindings pattern) bindings
+            let! selected = compileComponents rest remaining success fallback
+            match pattern with
+            | Pattern.Wildcard -> return selected
+            | _ ->
+                let! value = project ()
+                return! compile value ty pattern own selected fallback
+          }
     let rec remaining (input: NodeId) (cases: MatchCase list) : SaturationParser<NodeId> =
         match cases with
         | [] -> failwith "A nested match requires a terminal case"
@@ -753,8 +228,8 @@ let private nestedMatchParser (graph: SemanticGraph) (scrutinee: NodeId) (cases:
                 match case.Guard, fallback with
                 | None, _ -> preturn case.Body
                 | Some guard, Some later -> ifThenElse guard case.Body later resultType
-                | Some _, None -> failwith "A guarded terminal nested match requires an explicit fallthrough case"
-            return! compile input case.Pattern case.PatternBindings success fallback
+                | Some guard, None -> requireThen evidence diagnostic guard case.Body resultType
+            return! compile input scrutineeType case.Pattern case.PatternBindings success fallback
           }
     saturation {
         let! expansion = getExpansionId
@@ -765,42 +240,18 @@ let private nestedMatchParser (graph: SemanticGraph) (scrutinee: NodeId) (cases:
         return! evaluateBefore [snapshot] decision resultType
     }
 
-/// Enrich a Match into CaseElimination decisions. Flat cases retain their
-/// established form. Nested constructor tests are Baker-owned branch structure;
-/// Alex only witnesses the resulting shallow decisions and guarded bodies.
-let enrichMatch
+/// Every match uses the same ordered, selected-scope source algorithm.
+/// Bindings and guards live in selected bodies, never in arm metadata.
+let enrichMatchWithEvidence
     (graph: SemanticGraph)
     (ctx: Context)
     (scrutineeId: NodeId)
     (cases: MatchCase list)
     (resultType: NativeType)
-    : Result =
+    : Result * Hyperedge list =
 
-    let parser =
-        if cases |> List.exists (fun case -> hasNestedUnion case.Pattern) then
-            nestedMatchParser graph scrutineeId cases resultType
-        else
-            saturation {
-                let! arms =
-                    cases |> List.map (fun case ->
-                        saturation {
-                            let! bindings = extractPatternBindings scrutineeId case.Pattern case.PatternBindings
-                            return { Pattern = case.Pattern
-                                     Bindings = bindings
-                                     Guard = case.Guard
-                                     Body = case.Body } : CaseArm
-                        }) |> sequence
-
-                let children =
-                    scrutineeId :: (arms |> List.collect (fun arm ->
-                        arm.Bindings
-                        @ (match arm.Guard with Some g -> [g] | None -> [])
-                        @ [arm.Body]))
-
-                return! createWithChildren
-                    (SemanticKind.CaseElimination (scrutineeId, arms))
-                    resultType children
-            }
+    let evidence = ResizeArray<Hyperedge>()
+    let parser = decisionParser evidence graph scrutineeId cases resultType
     let result = runSaturation ctx parser
     // Replacing PatternBinding at its source identity also preserves its source
     // range and any existing provenance; generated enrichment labels are added.
@@ -811,4 +262,10 @@ let enrichMatch
                 { node with Range = original.Range
                             Metadata = node.Metadata |> Map.fold (fun metadata key value -> Map.add key value metadata) original.Metadata }
             | None -> node)
-    { result with NewNodes = nodes }
+    { result with NewNodes = nodes }, List.ofSeq evidence
+
+let enrichMatch graph ctx scrutinee cases resultType =
+    enrichMatchWithEvidence graph ctx scrutinee cases resultType |> fst
+
+/// Legacy tuple entry point shares the same selected-scope protocol.
+let decomposeMatch graph ctx scrutinee cases resultType = enrichMatch graph ctx scrutinee cases resultType

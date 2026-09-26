@@ -22,7 +22,8 @@ type private Use =
 type Reading = { Parameters: Set<NodeId>; StackLambdas: Set<NodeId>; Findings: DeclarationFinding list }
 
 let private readUncached (graph: SemanticGraph) =
-    let mutable findings = (MappedBindings.read graph).Findings
+    let declarations = ScopedDeclarations.read graph
+    let mutable findings = declarations.Findings
     let finding (node: SemanticNode) message =
         findings <- { Node = node.Id; Range = node.Range; Defect = DeclarationDefect.Invalid; Message = message } :: findings
     let rec target seen id =
@@ -32,45 +33,20 @@ let private readUncached (graph: SemanticGraph) =
             match SemanticGraph.tryGetNode id graph with
             | Some { Kind = SemanticKind.VarRef (_, Some other) }
             | Some { Kind = SemanticKind.TypeAnnotation (other, _) } -> target seen other
-            | Some { Kind = SemanticKind.Binding _; Children = children } -> List.tryLast children |> Option.bind (target seen)
+            | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> target seen value
             | other -> other
-    // Curry normalization runs after some readers. Retain the full source
-    // lambda chain so argument positions have the same meaning in both forms.
-    let parameters fn =
-        let rec collect seen id =
-            match target seen id with
-            | Some { Id = lambda; Kind = SemanticKind.Lambda (parameters, body, _, _, _) } ->
-                parameters @ collect (Set.add lambda seen) body
-            | _ -> []
-        collect Set.empty fn
-    let mutable declared = (MappedBindings.read graph).Mappings |> List.map (fun m -> m.CallbackParameter) |> Set.ofList
-    let annotatedScope ty =
-        match applySubst ty with
-        | NativeType.TApp (quote, [NativeType.TApp (descriptor, _)]) when quote.Name = "Expr" ->
-            descriptor.Name.Split('.') |> Array.last = "ScopedCallbackDescriptor"
-        | _ -> false
-    for node in graph.Nodes.Values do
-        match node.Kind, List.tryLast node.Children with
-        | SemanticKind.Binding _, Some body ->
-            match recordOf graph body with
-            | Some (descriptor, fields) when typeName descriptor = Some "ScopedCallbackDescriptor" ->
-                match field "Binding" fields |> Option.bind (stringOf graph), field "Parameter" fields |> Option.bind (stringOf graph) with
-                | Some bindingName, Some parameterName ->
-                    let matching = graph.Nodes.Values |> Seq.filter (fun n -> MappedBindings.qualifiedBindingName graph n = bindingName) |> Seq.toList
-                    match matching with
-                    | [binding] ->
-                        match parameters binding.Id |> List.tryFind (fun (name, _, _) -> name = parameterName) with
-                        | Some (_, ty, id) ->
-                            match applySubst ty with
-                            | NativeType.TFun _ -> declared <- Set.add id declared
-                            | _ -> finding descriptor "A ScopedCallbackDescriptor must name a function-valued parameter."
-                        | None -> finding descriptor (sprintf "Scoped callback parameter '%s.%s' is missing." bindingName parameterName)
-                    | _ -> finding descriptor (sprintf "Scoped callback binding '%s' is missing or ambiguous." bindingName)
-                | _ -> finding descriptor "ScopedCallbackDescriptor requires literal Binding and Parameter names."
-            | _ when annotatedScope node.Type ->
-                finding node "ScopedCallbackDescriptor requires a well-typed quoted record body; check that its record fields are in scope."
-            | _ -> ()
-        | _ -> ()
+    let declared = declarations.Parameters
+    let resolution = lazy (CallableOrigins.resolve graph)
+    let ingress = lazy (CallableIngress.analyzeWith graph resolution.Value)
+    let promoted = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.CallableReferenceOrigin) |> List.map _.Target |> Set.ofList
+    let rec directParameters seen id =
+        if Set.contains id seen || Set.contains id promoted then None else
+        let seen = Set.add id seen
+        match graph.Nodes.TryFind id with
+        | Some { Kind = SemanticKind.Lambda(parameters, _, _, _, _) } -> Some parameters
+        | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] }
+        | Some { Kind = SemanticKind.VarRef(_, Some value) | SemanticKind.TypeAnnotation(value, _) } -> directParameters seen value
+        | _ -> None
 
     let mutable users: Map<NodeId, Use list> = Map.empty
     let useValue source usage = users <- Map.add source (usage :: (Map.tryFind source users |> Option.defaultValue [])) users
@@ -138,7 +114,26 @@ let private readUncached (graph: SemanticGraph) =
         | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.BorrowedView } } -> index = 0
         | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Operators; Operation = "ignore" } } -> true
         | _ -> false
-    let parameterAt fn index = parameters fn |> List.tryItem index |> Option.map (fun (_, _, id) -> id)
+    // A higher-order callee's observed implementation is not enough: every
+    // incoming use must be accounted for, including declared callback activation.
+    // Retaining or opaque alternatives never inherit a synchronous summary from
+    // one known actual. Exact call targets supply the current parameter ordinal.
+    let parametersAt fn index application =
+        match directParameters Set.empty fn, graph.Nodes.TryFind application with
+        | Some parameters, Some { Kind = SemanticKind.Application(callee, arguments) }
+            when callee = fn && arguments.Length = max 1 parameters.Length ->
+            // A direct declaration's body supplies its universal use summary;
+            // no whole-graph origin search is needed for this ordinary case.
+            parameters |> List.tryItem index |> Option.map (fun (_, _, parameter) -> [parameter])
+        | _ ->
+            if not (CallableIngress.allowsOccurrence ingress.Value fn) then None else
+            resolution.Value.Calls.TryFind application |> Option.bind (fun call ->
+                if call.Unknown || not call.Complete || call.Targets.IsEmpty then None else
+                let parameters = call.Targets |> List.map (fun target ->
+                    target.Parameters |> List.tryItem index |> Option.map (fun (_, _, id) -> id))
+                if parameters |> List.exists Option.isNone then None else Some(List.choose id parameters))
+    let acceptedParameter accepted fn index application =
+        parametersAt fn index application |> Option.exists (List.forall (fun parameter -> Set.contains parameter accepted))
     // Callable staging preserves an explicit returned `fun` as a separate
     // application. Follow only an immediate result-as-callee chain: aliases,
     // stores and unknown consumers of an intermediate result are not completion.
@@ -194,7 +189,7 @@ let private readUncached (graph: SemanticGraph) =
                 | ReturnedFunction callable -> immediatelyCompleted callable
                 | Argument (fn, index, application) ->
                     callCompletes application && (intrinsicArgument fn index ||
-                        (parameterAt fn index |> Option.exists (fun p -> Set.contains p scoped)))
+                        acceptedParameter scoped fn index application)
                 | Declaration _ | Escape -> false)
     let candidates =
         graph.Nodes.Values |> Seq.collect (fun node ->
@@ -217,7 +212,7 @@ let private readUncached (graph: SemanticGraph) =
                 | Alias other -> reachesDeclared seen other
                 | Argument (fn, index, application) ->
                     callCompletes application &&
-                    (parameterAt fn index |> Option.exists (fun p -> Set.contains p declared))
+                    acceptedParameter declared fn index application
                 | _ -> false)
     let rec capturesView seen id =
         if Set.contains id seen then false
@@ -249,7 +244,7 @@ let private readUncached (graph: SemanticGraph) =
                 | ReturnedFunction callable when not (immediatelyCompleted callable) ->
                     Some (sprintf "returned function %A is not immediately completed at every use" value)
                 | Argument (_, index, application) when not (callCompletes application) -> Some (sprintf "argument %d enters a function whose returned value is not immediately completed" index)
-                | Argument (fn, index, _) when not (intrinsicArgument fn index || (parameterAt fn index |> Option.exists (fun p -> Set.contains p scoped))) ->
+                | Argument (fn, index, application) when not (intrinsicArgument fn index || acceptedParameter scoped fn index application) ->
                     let name = match SemanticGraph.tryGetNode fn graph with Some { Kind = SemanticKind.VarRef (name, _) } -> name | _ -> string fn
                     Some (sprintf "argument %d enters '%s', whose callback lifetime is not proved synchronous" index name)
                 | Declaration _ | Escape -> Some (sprintf "value %A is stored or returned" value)

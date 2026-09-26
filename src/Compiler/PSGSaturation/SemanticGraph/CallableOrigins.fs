@@ -22,11 +22,31 @@ type CallTarget = {
     Arguments: NodeId list
     Body: NodeId
 }
-type ResolvedCall = { Targets: CallTarget list; Unknown: bool }
+type ResolvedCall = {
+    Targets: CallTarget list
+    Unknown: bool
+    /// Every alternative is an exact complete invocation. Unknown alone does
+    /// not imply this: a known partial origin deliberately is not opaque.
+    Complete: bool
+}
+/// The first declared boundary, including known partial applications. Complete
+/// CallTargets alone omit partials and cannot authorize all supplied actuals.
+type FirstBoundaryTarget = {
+    Lambda: NodeId
+    Parameters: (string * NativeType * NodeId) list
+    Offset: int
+    Remaining: int
+}
+type FirstBoundary = {
+    Callee: NodeId
+    Targets: FirstBoundaryTarget list
+    UnknownOrigins: Set<NodeId>
+}
 type Resolution = {
     Calls: Map<NodeId, ResolvedCall>
     ParameterInputs: Map<NodeId, (NodeId * NodeId) list>
     Lambdas: Map<NodeId, NodeId>
+    FirstBoundaries: Map<NodeId, FirstBoundary>
 }
 
 type private Origin = NodeId * int
@@ -105,6 +125,7 @@ let private analyze (graph: SemanticGraph) =
             | Some { Kind = SemanticKind.VarRef(_, Some value) | SemanticKind.TypeAnnotation(value, _)
                            | SemanticKind.EnvironmentReference value } -> environmentOwner seen value
             | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> environmentOwner seen value
+            | Some { Kind = SemanticKind.EagerExpr value } when ExplicitDemand.operand graph id = Some value -> environmentOwner seen value
             | Some { Kind = SemanticKind.Sequential values } -> List.tryLast values |> Option.bind (environmentOwner seen)
             | _ -> None
     let inputs = Dictionary<NodeId, Set<NodeId * NodeId>>()
@@ -164,6 +185,7 @@ let private analyze (graph: SemanticGraph) =
                 | SemanticKind.Binding _ -> union node.Children
                 | SemanticKind.VarRef (_, Some definition) -> read definition
                 | SemanticKind.TypeAnnotation (value, _) -> read value
+                | SemanticKind.EagerExpr value when ExplicitDemand.operand graph id = Some value -> read value
                 | SemanticKind.Sequential expressions -> expressions |> List.tryLast |> Option.map read |> Option.defaultValue Set.empty
                 | SemanticKind.IfThenElse (_, yes, no) -> union (yes :: Option.toList no)
                 | SemanticKind.Match (_, cases) -> union (cases |> List.map (fun arm -> arm.Body))
@@ -248,13 +270,37 @@ let resolve (graph: SemanticGraph) : Resolution =
                 match shapes.TryFind lambda with
                 | Some (parameters, _) when offset >= 0 -> arguments.Length > max 1 parameters.Length - offset
                 | _ -> true))
-            Some(id, { Targets = targets; Unknown = unknown })
+            let complete = not origins.IsEmpty && (origins |> Set.forall (fun (lambda, offset) ->
+                match shapes.TryFind lambda with
+                | Some (parameters, _) when offset >= 0 -> max 1 parameters.Length - offset = arguments.Length
+                | _ -> false))
+            Some(id, { Targets = targets; Unknown = unknown; Complete = complete })
         | _ -> None) |> Map.ofList
     let lambdas = facts |> Map.toList |> List.choose (fun (id, origins) ->
         match Set.toList origins with
         | [lambda, 0] when shapes.ContainsKey lambda -> Some(id, lambda)
         | _ -> None) |> Map.ofList
-    { Calls = calls; ParameterInputs = inputs; Lambdas = lambdas }
+    let boundaries =
+        nodes
+        |> Map.toList
+        |> List.choose (fun (id, node) ->
+            match node.Kind with
+            | SemanticKind.Application(callee, _) ->
+                let origins = read callee
+                let targets, unknown =
+                    origins |> Set.fold (fun (targets, unknown) (lambda, offset) ->
+                        match shapes.TryFind lambda with
+                        | Some (parameters, _) when offset >= 0 && offset < (max 1 parameters.Length) ->
+                            let target =
+                                { Lambda = lambda; Parameters = parameters; Offset = offset
+                                  Remaining = max 1 parameters.Length - offset }
+                            target :: targets, unknown
+                        | _ -> targets, Set.add lambda unknown) ([], Set.empty)
+                let unknown = if origins.IsEmpty then Set.singleton callee else unknown
+                Some(id, { Callee = callee; Targets = List.rev targets; UnknownOrigins = unknown })
+            | _ -> None)
+        |> Map.ofList
+    { Calls = calls; ParameterInputs = inputs; Lambdas = lambdas; FirstBoundaries = boundaries }
 
 let resolveCalls graph = (resolve graph).Calls
 let knownLambdas graph = (resolve graph).Lambdas

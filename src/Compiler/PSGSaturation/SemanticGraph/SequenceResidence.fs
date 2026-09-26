@@ -34,6 +34,7 @@ type Reading = {
 type private Use =
     | Alias of NodeId
     | Consumed of NodeId
+    | Invocation of call: NodeId * participants: NodeId list
     | Captured of owner: NodeId * generator: NodeId * declaration: NodeId
     | Argument of call: NodeId * actual: NodeId * targets: (NodeId * NodeId) list
     | EnvironmentCaptured of environment: NodeId * slot: NodeId * value: NodeId
@@ -44,6 +45,7 @@ type private PreparedResult = {
     Constructor: NodeId
     Implementation: NodeId
     Formal: NodeId
+    FinalPath: NodeId list
     Calls: (NodeId * NodeId * NodeId) list // call, actual destination, allocation
 }
 
@@ -104,9 +106,27 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
     let environmentOwner = ClosureEnvironments.tryEnvironmentOwner graph
     let programActivations = lazy (ProgramActivation.analyze graph)
     let callableOrigins = lazy (CallableOrigins.resolve graph)
+    let invocationParticipants call callee arguments =
+        callableOrigins.Value.Calls.TryFind call |> Option.bind (fun resolved ->
+            if not resolved.Complete || resolved.Targets.IsEmpty then None else
+            let targets = resolved.Targets |> List.map (fun target ->
+                let formals = target.Parameters |> List.map (fun (_, _, formal) -> formal)
+                let resident = target.Lambda :: target.Body :: (formals @ arguments)
+                let typesAgree =
+                    target.Parameters.Length = arguments.Length &&
+                    List.forall2 (fun (_, ty, formal) actual ->
+                        match nodes.TryFind formal, nodes.TryFind actual with
+                        | Some { Kind = SemanticKind.PatternBinding _; Type = declared }, Some argument ->
+                            applySubst declared = applySubst ty && applySubst argument.Type = applySubst ty
+                        | _ -> false) target.Parameters arguments
+                if target.Arguments = arguments && typesAgree &&
+                   resident |> List.forall nodes.ContainsKey then Some resident else None)
+            if targets |> List.forall Option.isSome then
+                Some(callee :: (List.choose id targets |> List.concat) |> List.distinct)
+            else None)
     let argumentTargets call ordinal =
         callableOrigins.Value.Calls.TryFind call |> Option.bind (fun resolved ->
-            if resolved.Unknown || resolved.Targets.IsEmpty then None else
+            if not resolved.Complete || resolved.Targets.IsEmpty then None else
             let targets = resolved.Targets |> List.map (fun target ->
                 List.tryItem ordinal target.Parameters |> Option.map (fun (_, _, formal) -> formal, target.Lambda))
             if targets |> List.forall Option.isSome then Some(List.choose id targets |> List.distinct) else None)
@@ -136,17 +156,22 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
         match nodes.TryFind id with
         | Some { Kind = SemanticKind.ContinuationAllocate _ | SemanticKind.EnvironmentAllocate _ } -> Some id
         | Some { Kind = SemanticKind.VarRef(_, Some source) | SemanticKind.TypeAnnotation(source, _) } -> storageSource seen source
+        | Some { Kind = SemanticKind.EagerExpr source } when ExplicitDemand.operand graph id = Some source -> storageSource seen source
         | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> storageSource seen value
         | _ -> None
-    let rec finalConstructor seen id =
+    let rec finalPath seen id =
         if Set.contains id seen then None else
         let seen = Set.add id seen
         match nodes.TryFind id with
-        | Some { Kind = SemanticKind.SeqExpr _ } -> Some id
-        | Some { Kind = SemanticKind.ClosureValue(_, environment) } -> Some environment
-        | Some { Kind = SemanticKind.Sequential values } -> List.tryLast values |> Option.bind (finalConstructor seen)
-        | Some { Kind = SemanticKind.TypeAnnotation(value, _) } -> finalConstructor seen value
+        | Some { Kind = SemanticKind.SeqExpr _ } -> Some [id]
+        | Some { Kind = SemanticKind.ClosureValue(_, environment) } -> Some [id; environment]
+        | Some { Kind = SemanticKind.Sequential values } ->
+            List.tryLast values |> Option.bind (finalPath seen) |> Option.map (fun path -> id :: path)
+        | Some { Kind = SemanticKind.TypeAnnotation(value, _) } -> finalPath seen value |> Option.map (fun path -> id :: path)
+        | Some { Kind = SemanticKind.EagerExpr value } when ExplicitDemand.operand graph id = Some value ->
+            finalPath seen value |> Option.map (fun path -> id :: path)
         | _ -> None
+    let finalConstructor seen id = finalPath seen id |> Option.bind List.tryLast
     let rec uniqueFinal seen factory body id =
         if Set.contains id seen then false else
         let seen = Set.add id seen
@@ -158,6 +183,8 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
             | Some { Kind = SemanticKind.ClosureValue(_, environment) } when environment = id -> uniqueFinal seen factory body edge.Target
             | Some { Kind = SemanticKind.Sequential values } when List.tryLast values = Some id -> uniqueFinal seen factory body edge.Target
             | Some { Kind = SemanticKind.TypeAnnotation(value, _) } when value = id -> uniqueFinal seen factory body edge.Target
+            | Some { Kind = SemanticKind.EagerExpr value } when value = id && ExplicitDemand.operand graph edge.Target = Some id ->
+                uniqueFinal seen factory body edge.Target
             | _ -> false
         | _ -> false
     let prepareResult constructor formal expectedCalls =
@@ -172,7 +199,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                 let calls = expectedCalls |> List.map (fun (call, allocation, expectedActual) ->
                     match ordinal, nodes.TryFind call, callableOrigins.Value.Calls.TryFind call, nodes.TryFind allocation with
                     | Some ordinal, Some { Kind = SemanticKind.Application(_, arguments) },
-                      Some { Targets = [target]; Unknown = false }, Some allocationNode
+                      Some { Targets = [target]; Unknown = false; Complete = true }, Some allocationNode
                         when target.Lambda = factory && arguments.Length = parameters.Length ->
                         let matches =
                             match allocationNode.Kind, nodes[constructor].Kind with
@@ -197,7 +224,8 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                 let supplied = expectedCalls |> List.map (fun (call, _, _) -> call) |> Set.ofList
                 if calls.IsEmpty || calls.Length <> supplied.Count || allCalls <> supplied ||
                    not (List.forall Option.isSome calls) then None
-                else Some { Constructor = constructor; Implementation = factory; Formal = formal; Calls = List.choose id calls }
+                else Some { Constructor = constructor; Implementation = factory; Formal = formal
+                            FinalPath = finalPath Set.empty body |> Option.defaultValue []; Calls = List.choose id calls }
             | _ -> None
     // Preparation is a requirement, not lifetime evidence. Recheck its actual
     // signature, constructor, allocation and complete call set before using it.
@@ -276,6 +304,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
         | Some { Kind = SemanticKind.ClosureValue(_, environment) | SemanticKind.EnvironmentReference environment } -> sourceAllocations seen environment
         | Some { Kind = SemanticKind.Lambda(_, _, [], _, LambdaContext.RegularClosure) } -> Some Set.empty
         | Some { Kind = SemanticKind.VarRef(_, Some source) | SemanticKind.TypeAnnotation(source, _) } -> sourceAllocations seen source
+        | Some { Kind = SemanticKind.EagerExpr source } when ExplicitDemand.operand graph id = Some source -> sourceAllocations seen source
         | Some { Kind = SemanticKind.FrameRead(_, source) } -> sourceAllocations seen source
         | Some { Kind = SemanticKind.EnvironmentRead(environment, slot) } ->
             capturedValue environment slot |> Option.bind (sourceAllocations seen)
@@ -299,6 +328,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                     | SemanticKind.Binding(_, false, _, _), _ -> Alias node.Id
                     | SemanticKind.Binding _, _ -> Refused (ResidualReason.StoredAt node.Id)
                     | SemanticKind.TypeAnnotation _, _ -> Alias node.Id
+                    | SemanticKind.EagerExpr value, _ when value = source && ExplicitDemand.operand graph node.Id = Some source -> Alias node.Id
                     | SemanticKind.ClosureValue(_, environment), _ when source = environment -> Alias node.Id
                     | SemanticKind.EnvironmentReference _, _ -> Alias node.Id
                     | SemanticKind.EnvironmentCreate(owner, initializers), EdgeRole.Attached ->
@@ -324,6 +354,10 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                         match finalConstructor Set.empty source |> Option.bind (fun constructor -> results.TryFind constructor) with
                         | Some result when result.Implementation = node.Id -> ResultDestination result.Constructor
                         | _ -> Refused (ResidualReason.ReturnsFrom node.Id)
+                    | SemanticKind.Application(callee, arguments), EdgeRole.Callee when source = callee ->
+                        match invocationParticipants node.Id callee arguments with
+                        | Some participants -> Invocation(node.Id, participants)
+                        | None -> Refused (ResidualReason.UnsupportedConsumer node.Id)
                     | SemanticKind.Application _, EdgeRole.Argument
                         when resultCalls.TryFind node.Id |> Option.exists (fun (actual, allocation) ->
                             actual = source && storageSource Set.empty source = Some allocation) -> Alias node.Id
@@ -501,6 +535,11 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
             | Argument(call, actual, targets) -> argumentBorrow allocation covering proving seen call actual targets
             | EnvironmentCaptured(environment, slot, value) -> environmentBorrow allocation covering proving environment slot value
             | ResultDestination constructor -> resultBorrow covering proving seen constructor
+            | Invocation(call, participants) ->
+                scopeUse allocation covering proving call |> Result.map (fun evidence ->
+                    { Class = EdgeClass.Provenance; Role = EdgeRole.CallableInvocationBorrow
+                      Sources = List.distinct (allocation :: covering :: participants)
+                      Target = call; Ordinal = 0 } :: evidence)
             | Consumed consumer -> scopeUse allocation covering proving consumer
             | Alias other -> combine (scopeUse allocation covering proving other) (fun () -> bounded allocation covering proving seen other))) (Ok [])
     // The iterator's input must have a source allocation, with complete bounded
@@ -520,6 +559,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                 else combine (scopeUse id sourceActivation (Set.singleton id) useSite) (fun () ->
                     bounded id sourceActivation (Set.singleton id) Set.empty id))
         | Some { Kind = SemanticKind.VarRef(_, Some source) | SemanticKind.TypeAnnotation(source, _) } -> inputRegion owner useSite seen source
+        | Some { Kind = SemanticKind.EagerExpr source } when ExplicitDemand.operand graph id = Some source -> inputRegion owner useSite seen source
         | Some { Kind = SemanticKind.FrameRead(_, source) } -> inputRegion owner useSite seen source
         | Some { Kind = SemanticKind.EnvironmentRead(environment, slot) } ->
             match capturedValue environment slot with
@@ -550,6 +590,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
         | None ->
             match nodes.TryFind id with
             | Some { Kind = SemanticKind.VarRef(_, Some source) | SemanticKind.TypeAnnotation(source, _) } -> actualValue result call seen source
+            | Some { Kind = SemanticKind.EagerExpr source } when ExplicitDemand.operand graph id = Some source -> actualValue result call seen source
             | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> actualValue result call seen value
             | Some { Kind = SemanticKind.EnvironmentRead(environment, slot) } ->
                 actualValue result call seen environment |> Option.bind (fun actual -> capturedValue actual slot)
@@ -565,6 +606,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
         match nodes.TryFind id with
         | Some { Kind = SemanticKind.PatternBinding _ } -> Some id
         | Some { Kind = SemanticKind.VarRef(_, Some source) | SemanticKind.TypeAnnotation(source, _) } -> inputFormal seen source
+        | Some { Kind = SemanticKind.EagerExpr source } when ExplicitDemand.operand graph id = Some source -> inputFormal seen source
         | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> inputFormal seen value
         | Some { Kind = SemanticKind.EnvironmentRead(environment, _) } -> inputFormal seen environment
         | _ -> None
@@ -681,7 +723,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                 | SemanticKind.EnvironmentAllocate layout ->
                     let prepared, call, destination = resultAllocations[id]
                     let initializers = ClosureEnvironments.capturedInitializers graph layout |> Option.defaultValue []
-                    { Sources = List.distinct (id :: owner :: prepared.Constructor :: call :: destination ::
+                    { Sources = List.distinct ((id :: owner :: prepared.Constructor :: call :: destination :: prepared.FinalPath) @
                                     (initializers |> List.collect (fun (slot, value, _) -> [slot; value])))
                       Target = layout; Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResidence; Ordinal = 0 } :: evidence
                 | SemanticKind.EnvironmentCreate(layout, initializers) ->

@@ -68,8 +68,9 @@ let rec checkPattern
     | SynPat.Paren(innerPat, _) ->
         checkPattern env innerPat expectedTy range
 
-    | SynPat.Null _ ->
-        (Pattern.Null, [])
+    | SynPat.Null sourceRange ->
+        addNullError sourceRange env
+        (Pattern.Wildcard, [])
 
     | SynPat.LongIdent(SynLongIdent(idents, _, _), _, _, argPats, _, _) ->
         // Constructor or identifier pattern

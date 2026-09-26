@@ -63,3 +63,25 @@ let settle (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
                       SpaceAlignment = declared.Alignment; Granularity = declared.Granularity; DeclarationNode = declared.Node }
                 { graph with StaticStringPool = Some pool }, []
     | _ -> graph, []
+
+/// A retained string view may cite immutable program backing only while the
+/// current literals and selected declaration still establish this exact pool.
+/// Rebuilding the source plan validates bytes, sentinels, bounds, alignment and
+/// capacity through the same BAREWire authority used by native emission.
+let literalEvidence (graph: SemanticGraph) : Map<NodeId, NodeId list> =
+    match graph.StaticStringPool with
+    | None -> Map.empty
+    | Some actual ->
+        let expected, diagnostics = settle graph
+        let declaration = Declaration.read graph
+        match expected.StaticStringPool, declaration.Platform with
+        | Some expected, Some platform
+            when diagnostics.IsEmpty && declaration.Findings.IsEmpty && expected = actual ->
+            let authority = Declaration.immutableProgramAuthority platform
+            if authority.IsEmpty then Map.empty else
+            // Other literal lengths determine this allocation's plan too.
+            // Keep all of those source premises in the dependent storage joint.
+            let literals = actual.Entries |> List.collect _.NodeIds
+            let participants = authority @ literals |> List.distinct
+            literals |> List.map (fun id -> id, id :: participants |> List.distinct) |> Map.ofList
+        | _ -> Map.empty

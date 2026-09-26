@@ -15,10 +15,10 @@ let normalize (graph: SemanticGraph) =
     let plans = applicationStages graph
     let create (node: SemanticNode) (graph: SemanticGraph) =
         match node.Kind, plans.TryFind node.Id with
-        | SemanticKind.Application (callee, arguments), Some stages ->
+        | SemanticKind.Application (callee, _), Some stages ->
             let name = "CallableApplication"
             let ctx = mkContext node.Range node.Type graph.Platform name node.Id
-            let result = stage ctx node callee arguments stages
+            let result = stage ctx node callee stages
             RecipeCreated {
                 OriginalNodeId = node.Id
                 NewNodes = result.NewNodes @ result.AuxFunctions

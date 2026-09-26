@@ -304,7 +304,9 @@ let main _ =
             Assert.Equal(2, clones.Length)
             let cloneIds = clones |> List.map (fun node -> node.Id) |> Set.ofList
             let uses = graph.Nodes.Values |> Seq.choose (fun node ->
-                match node.Kind with SemanticKind.VarRef (name, Some definition) when name = original -> Some definition | _ -> None) |> Seq.toList
+                match node.Kind with
+                | SemanticKind.VarRef (name, Some _) when name = original -> Some (CallableTestContracts.sourceDefinition graph node.Id)
+                | _ -> None) |> Seq.toList
             Assert.Equal<Set<NodeId>>(cloneIds, Set.ofList uses)
             for clone in clones do
                 Assert.Contains(graph.Nodes.Values, fun node ->

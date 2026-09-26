@@ -431,22 +431,10 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
 
     | SemanticKind.Match (scrutineeId, cases) ->
         let ctx = mkContext node.Range node.Type graph.Platform "Match" node.Id
-        // Tuple matches require nested tag extraction (multiple DU scrutinees).
-        // Use enrichMatch (CaseElimination) for single-DU matches;
-        // fall back to decomposeMatch (IfThenElse chain) for tuple matches.
-        let isTupleMatch =
-            match SemanticGraph.tryGetNode scrutineeId graph with
-            | Some scrutineeNode ->
-                match scrutineeNode.Kind with
-                | SemanticKind.TupleExpr _ -> true
-                | _ -> false
-            | None -> false
-        let result =
-            if isTupleMatch then
-                MatchRecipes.decomposeMatch ctx scrutineeId cases node.Type
-            else
-                MatchRecipes.enrichMatch graph ctx scrutineeId cases node.Type
-        RecipeCreated (toRecipe node.Id "Match" result)
+        // Every pattern uses the selected-scope source protocol. Alex never
+        // chooses guard ordering or extracts payloads ahead of selection.
+        let result, evidence = MatchRecipes.enrichMatchWithEvidence graph ctx scrutineeId cases node.Type
+        RecipeCreated { toRecipe node.Id "Match" result with NewEdges = evidence }
 
     | SemanticKind.UnionCase (caseName, caseIndex, payload) ->
         // Transform UnionCase to DUConstruct (lowered form for Alex)
@@ -545,17 +533,27 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                 | _ -> None
             | _ -> None
         let inCallPosition =
-            let isFuncChildOf (childId: NodeId) (parentId: NodeId) =
-                match SemanticGraph.tryGetNode parentId graph with
-                | Some { Kind = SemanticKind.Application (funcId, _) } -> funcId = childId
-                | _ -> false
-            match node.Parent with
-            | Some parentId ->
-                isFuncChildOf node.Id parentId ||
-                match SemanticGraph.tryGetNode parentId graph with
-                 | Some { Kind = SemanticKind.TypeAnnotation _; Parent = Some grandId } -> isFuncChildOf parentId grandId
-                 | _ -> false
-            | None -> true  // no parent: not a use
+            // Grouping and shallow explicit demand do not create another
+            // callable activation. Preserve each wrapper and its frontier;
+            // only suppress unnecessary eta reification of the named callee.
+            let rec calleeUse seen (child: SemanticNode) =
+                if Set.contains child.Id seen then false else
+                let seen = Set.add child.Id seen
+                match child.Parent with
+                | None -> true // no parent: not a use
+                | Some parentId ->
+                    match SemanticGraph.tryGetNode parentId graph with
+                    | Some { Kind = SemanticKind.Application(funcId, _) } -> funcId = child.Id
+                    | Some ({ Kind = SemanticKind.TypeAnnotation(inner, declared) } as parent)
+                        when inner = child.Id && parent.Children = [child.Id] &&
+                             Clef.Compiler.NativeTypedTree.UnionFind.applySubst parent.Type = Clef.Compiler.NativeTypedTree.UnionFind.applySubst declared &&
+                             Clef.Compiler.NativeTypedTree.UnionFind.applySubst declared = Clef.Compiler.NativeTypedTree.UnionFind.applySubst child.Type ->
+                        calleeUse seen parent
+                    | Some ({ Kind = SemanticKind.EagerExpr _ } as parent)
+                        when Clef.Compiler.PSGSaturation.SemanticGraph.ExplicitDemand.operand graph parent.Id = Some child.Id ->
+                        calleeUse seen parent
+                    | _ -> false
+            calleeUse Set.empty node
         // A field of a [<HardwareModule>] binding's Design record (Step = step) is a declaration
         // read structurally by the witness (hw.instance of the named module), not a closure.
         let rec inHardwareModuleDeclaration (nodeId: NodeId) =
@@ -572,6 +570,12 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                 | _, Some bound -> resolved bound
                 | _ -> ty
             | _ -> ty
+        let rec signature count ty =
+            if count = 0 then Some([], resolved ty) else
+            match resolved ty with
+            | NativeType.TFun(domain, result) ->
+                signature (count - 1) result |> Option.map (fun (domains, remaining) -> domain :: domains, remaining)
+            | _ -> None
         match definitionArity with
         | None ->
             NotApplicable "Reference is not to a capture-free named function"
@@ -580,8 +584,8 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
         | Some _ when node.Parent |> Option.map inHardwareModuleDeclaration |> Option.defaultValue false ->
             NotApplicable "Declaration field of a hardware module Design"
         | Some arity ->
-            match resolved node.Type with
-            | NativeType.TFun _ as funcType ->
+            match resolved node.Type, signature arity node.Type with
+            | (NativeType.TFun _ as funcType), Some(domains, resultType) ->
                 let ctx = mkContext node.Range funcType graph.Platform "FunctionValue" node.Id
                 let mk (kind: SemanticKind) (ty: NativeType) (children: NodeId list) : SemanticNode =
                     { Id = NodeId.fresh()
@@ -598,39 +602,19 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                       EmissionStrategy = node.EmissionStrategy
                       ValueRange = None }
                     |> markBaker "FunctionValue" ctx.ExpansionId
-                // One parameter per currying level of the reference's type
-                let rec parameters (ty: NativeType) (acc: (string * NativeType * SemanticNode) list) (i: int) =
-                    match resolved ty with
-                    | NativeType.TFun (domainTy, rangeTy) ->
-                        let paramName = sprintf "_eta%d" i
-                        parameters rangeTy ((paramName, domainTy, mk (SemanticKind.PatternBinding paramName) domainTy []) :: acc) (i + 1)
-                    | _ -> List.rev acc
-                let parameterNodes = parameters funcType [] 0
+                // Reification preserves the declaration's real boundary. A
+                // function-valued result stays a result, rather than becoming
+                // extra wrapper parameters with earlier actual demand.
+                let parameterNodes = domains |> List.mapi (fun i domainTy ->
+                    let paramName = sprintf "_eta%d" i
+                    paramName, domainTy, mk (SemanticKind.PatternBinding paramName) domainTy [])
                 let lambdaParams = parameterNodes |> List.map (fun (paramName, domainTy, param) -> (paramName, domainTy, param.Id))
                 let paramRefs =
                     parameterNodes |> List.map (fun (paramName, domainTy, param) -> mk (SemanticKind.VarRef (paramName, Some param.Id)) domainTy [])
-                // The type after applying k arguments
-                let rec typeAfter (ty: NativeType) (k: int) =
-                    if k = 0 then resolved ty
-                    else
-                        match resolved ty with
-                        | NativeType.TFun (_, rangeTy) -> typeAfter rangeTy (k - 1)
-                        | other -> other
-                // The body: a direct call saturating the definition's arity (the flat application
-                // every direct call is), then one application per remaining currying level
-                // when that declaration returns another function.
                 let funcRef = mk (SemanticKind.VarRef (name, Some defId)) funcType []
-                let direct = min arity paramRefs.Length
-                let directArgs = paramRefs |> List.take direct |> List.map (fun r -> r.Id)
-                let call = mk (SemanticKind.Application (funcRef.Id, directArgs)) (typeAfter funcType direct) (funcRef.Id :: directArgs)
-                let applications =
-                    paramRefs |> List.skip direct
-                    |> List.fold (fun (apps: SemanticNode list) (r: SemanticNode) ->
-                        let prev = List.last apps
-                        apps @ [ mk (SemanticKind.Application (prev.Id, [r.Id])) (typeAfter prev.Type 1) [prev.Id; r.Id] ]) [call]
-                // The outermost application is the lambda's body, its own function
-                let body = { List.last applications with EmissionStrategy = EmissionStrategy.SeparateFunction 0 }
-                let applications = (applications |> List.take (applications.Length - 1)) @ [body]
+                let directArgs = paramRefs |> List.map _.Id
+                let call = mk (SemanticKind.Application (funcRef.Id, directArgs)) resultType (funcRef.Id :: directArgs)
+                let body = { call with EmissionStrategy = EmissionStrategy.SeparateFunction 0 }
                 // The enclosing function's name, as the checker records it for a written lambda
                 let rec enclosingName (nodeId: NodeId) =
                     match SemanticGraph.tryGetNode nodeId graph with
@@ -646,7 +630,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                 let lambda0 = mk (SemanticKind.Lambda (lambdaParams, body.Id, [], enclosing, LambdaContext.RegularClosure)) funcType (paramIds @ [body.Id])
                 let lambda = { lambda0 with Metadata = lambda0.Metadata |> Map.add ClosureMetadata.RequiresClosurePair (MetadataValue.Bool true) }
                 let paramBindings = parameterNodes |> List.map (fun (_, _, param) -> param)
-                let result = mkResultNoShadow (paramBindings @ paramRefs @ [funcRef] @ applications @ [lambda]) lambda.Id []
+                let result = mkResultNoShadow (paramBindings @ paramRefs @ [funcRef; body; lambda]) lambda.Id []
                 RecipeCreated (toRecipe node.Id "FunctionValue" result)
             | _ ->
                 NotApplicable "Function reference without a function type"

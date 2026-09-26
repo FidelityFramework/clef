@@ -174,6 +174,28 @@ let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId>
         (MappedBindings.read graph).Mappings
         |> List.map (fun mapping -> mapping.Binding, [mapping.AcquireBinding; mapping.ReleaseBinding])
         |> Map.ofList
+    // Lazy cache/guard declarations have no value initializer. Retain the
+    // exact declarations named by their source formation, without making
+    // either a computation or a cache value into a structural child. This
+    // liveness projection grants no memoization, layout or storage authority;
+    // the owning readers still validate the complete joint relation.
+    let lazyDeclarations =
+        graph.Edges
+        |> List.filter (fun edge -> edge.Role = EdgeRole.LazyInstance)
+        |> List.groupBy _.Target
+        |> List.choose (fun (owner, rows) ->
+            match graph.Nodes.TryFind owner, rows with
+            | Some { Kind = SemanticKind.LazyValue(thunk, environment) },
+              [{ Class = EdgeClass.Provenance; Ordinal = 0
+                 Sources = [actualThunk; _; actualEnvironment; _; computed; cached; _] }]
+                when thunk = actualThunk && environment = actualEnvironment && computed <> cached ->
+                let declaration id =
+                    match graph.Nodes.TryFind id with
+                    | Some { Kind = SemanticKind.PatternBinding _; Children = [] } -> true
+                    | _ -> false
+                if declaration computed && declaration cached then Some(owner, [computed; cached]) else None
+            | _ -> None)
+        |> Map.ofList
 
     let rec walk (visited: Set<NodeId>) (nodeId: NodeId) =
         if Set.contains nodeId visited then
@@ -202,7 +224,8 @@ let computeReachable (graph: SemanticGraph) (entries: NodeId list) : Set<NodeId>
                     // Its placeholder body is not executable Clef; the actual
                     // acquisition/release bindings above remain dependencies.
                     ((if Map.containsKey node.Id mappedReferences then [] else node.Children)
-                     @ refs @ typeRefs @ intrinsicRef @ symbolRef)
+                     @ refs @ typeRefs @ intrinsicRef @ symbolRef
+                     @ (lazyDeclarations.TryFind node.Id |> Option.defaultValue []))
                     |> List.distinct
                     |> List.filter (fun r ->
                         match node.Kind with

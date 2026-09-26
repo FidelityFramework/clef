@@ -22,9 +22,39 @@ let private plain (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion
     let source = plan.Source
     let read = tryImplementation graph
     let sourceDeclaration = trySourceDeclaration graph
+    let resolution = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
+    let ingress = Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.analyzeWith graph resolution
+    // Code identity is not demand authority. In particular, an immutable
+    // binding may contain a factory call that returns this stateless lambda.
+    // Redirecting its reads to code would erase the demanded factory occurrence.
+    // Only transparent immutable references to this original leaf can disappear.
+    let rec leafAlias seen id =
+        if id = source.Id then true
+        elif Set.contains id seen then false
+        else
+            let seen = Set.add id seen
+            match graph.Nodes.TryFind id with
+            | Some { Kind = SemanticKind.VarRef(_, Some value) | SemanticKind.TypeAnnotation(value, _) } -> leafAlias seen value
+            | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> leafAlias seen value
+            | Some { Kind = SemanticKind.PatternBinding _ } ->
+                let supplied = resolution.ParameterInputs.TryFind id |> Option.defaultValue []
+                not supplied.IsEmpty &&
+                (supplied |> List.forall (fun (call, actual) ->
+                    match resolution.Calls.TryFind call with
+                    | Some invocation when invocation.Complete && not invocation.Unknown &&
+                                           not invocation.Targets.IsEmpty ->
+                        let selected = invocation.Targets |> List.filter (fun target ->
+                            target.Parameters.Length = target.Arguments.Length &&
+                            (List.zip target.Parameters target.Arguments |> List.exists (fun ((_, _, formal), argument) ->
+                                formal = id && argument = actual)))
+                        not selected.IsEmpty && leafAlias seen actual
+                    | _ -> false))
+            | _ -> false
     let referenceOrigins = ResizeArray<Hyperedge>()
     let aliases = graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
-        if node.IsReachable && read id = Some source.Id then Some id else None) |> Set.ofList
+        if node.IsReachable && read id = Some source.Id && leafAlias Set.empty id &&
+           Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.allowsOccurrence ingress id
+        then Some id else None) |> Set.ofList
     let implementation, binding = NodeId.fresh(), NodeId.fresh()
     let name = sprintf "__closure_code_%d" (NodeId.value source.Id)
     let state = SaturationState.create { source.Range with End = source.Range.Start }
@@ -43,7 +73,9 @@ let private plain (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion
                 let trim captures = captures |> List.filter (fun capture ->
                     capture.IsMutable || not (capture.SourceNodeId |> Option.exists aliases.Contains))
                 match node.Kind with
-                | SemanticKind.VarRef(sourceName, Some declaration) when aliases.Contains declaration ->
+                | SemanticKind.VarRef(sourceName, Some declaration)
+                    when aliases.Contains declaration &&
+                         Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.allowsOccurrence ingress node.Id ->
                     let original = sourceDeclaration node.Id |> Option.defaultValue declaration
                     referenceOrigins.Add {
                         Sources = [original; binding]; Target = node.Id
@@ -55,17 +87,10 @@ let private plain (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion
                     do! enrich node (SemanticKind.SeqExpr(generator, trim captures)) node.Type node.Children node.EmissionStrategy false
                 | _ -> do! preturn ()
             else do! preturn ()
-        for callId in plan.Calls do
-            let call = graph.Nodes[callId]
-            match call.Kind with
-            | SemanticKind.Application(originalCallee, arguments) ->
-                let! callee = varRef name (Some binding) source.Type
-                let! invocation = C.create (SemanticKind.Application(callee, arguments)) call.Type (callee :: arguments)
-                // Code identity removes storage, not source evaluation. A
-                // callee expression can have effects before yielding this code.
-                do! enrich call (SemanticKind.Sequential [originalCallee; invocation]) call.Type
-                                [originalCallee; invocation] call.EmissionStrategy false
-            | _ -> invalidOp "A plain callable plan must identify complete applications."
+        // Plain promotion changes code identity, not the actual parameter
+        // boundary. Keep each existing application and its callee evaluation:
+        // aliases above now resolve to this code, and effectful callee expressions
+        // retain their own ordered children. No second invocation is constructed.
         return source.Id
     })
     match result with
@@ -169,6 +194,9 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
             | SemanticKind.VarRef(_, Some declaration) when captures.ContainsKey declaration ->
                 let! env = varRef "__closure_environment" (Some formal) environmentType
                 do! enrich node (SemanticKind.EnvironmentRead(env, declaration)) node.Type [env] node.EmissionStrategy false
+                formations.Add { Sources = [source.Id; declaration]; Target = node.Id
+                                 Class = EdgeClass.Provenance; Role = EdgeRole.CaptureReferenceOrigin; Ordinal = 0 }
+                do! preturn ()
             | SemanticKind.Set(target, value) when sourceOf target |> Option.exists (fun declaration -> captures[declaration].IsMutable) ->
                 let declaration = (sourceOf target).Value
                 let! env = varRef "__closure_environment" (Some formal) environmentType

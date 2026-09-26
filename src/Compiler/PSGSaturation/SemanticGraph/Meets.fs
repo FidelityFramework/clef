@@ -353,6 +353,17 @@ let private environmentSlotWrite (graph: SemanticGraph) (node: SemanticNode) val
             (SemanticGraph.tryGetNode value graph |> Option.bind (realWidth graph)) real
        |> Option.toList)
 
+/// Formation copies scalar capture values into their placed representation.
+/// A cell/view initializer copies its descriptor identity, not its payload.
+let private captureInitializers graph node (slots: ContinuationSlot list) initializers =
+    initializers |> List.collect (fun (source, value) ->
+        slots |> List.tryFind (fun slot -> slot.Source = source && slot.IsCapture)
+        |> Option.map (fun slot ->
+            match slot.Holds with
+            | CaptureSlotKind.Scalar _ -> environmentSlotWrite graph node value slot
+            | _ -> [])
+        |> Option.defaultValue [])
+
 /// Continuation storage meets use the same range/representation selections as
 /// ordinary cells. The maps are explicit because Codata is being constructed:
 /// forcing graph.Codata here would recurse into that unfinished construction.
@@ -360,6 +371,7 @@ let private environmentSlotWrite (graph: SemanticGraph) (node: SemanticNode) val
 let continuations (frames: Map<NodeId, ContinuationFrame>)
                   (origins: Map<NodeId, NodeId>)
                   (storage: Map<NodeId, NodeId>)
+                  (initializers: Map<NodeId, (NodeId * NodeId) list>)
                   (graph: SemanticGraph) : Map<NodeId, Meet list> =
     let frameSlots frameId =
         match Map.tryFind frameId storage with
@@ -372,6 +384,10 @@ let continuations (frames: Map<NodeId, ContinuationFrame>)
         frameSlots frameId |> Option.bind (fun (_, slots) -> slots |> List.tryFind (fun slot -> slot.Source = slotId))
     let forNode (node: SemanticNode) =
         match node.Kind with
+        | SemanticKind.SeqExpr _ ->
+            match origins.TryFind node.Id |> Option.bind frames.TryFind, initializers.TryFind node.Id with
+            | Some frame, Some values -> captureInitializers graph node frame.Slots values
+            | _ -> []
         | SemanticKind.FrameRead(frame, slot) -> slotAt frame slot |> Option.map (environmentSlotRead graph node) |> Option.defaultValue []
         | SemanticKind.FrameWrite(frame, slot, value) -> slotAt frame slot |> Option.map (environmentSlotWrite graph node value) |> Option.defaultValue []
         | SemanticKind.Application(callee, [enumerator]) ->
@@ -407,8 +423,29 @@ let environments (layouts: Map<NodeId, EnvironmentLayout>) (origins: Map<NodeId,
     graph.Nodes |> Map.toList |> List.choose (fun (_, node) ->
         let meets =
             match node.Kind with
+            | SemanticKind.EnvironmentCreate(owner, values) ->
+                layouts.TryFind owner |> Option.map (fun layout -> captureInitializers graph node layout.Slots values) |> Option.defaultValue []
             | SemanticKind.EnvironmentRead(environment, slot) -> slotAt environment slot |> Option.map (environmentSlotRead graph node) |> Option.defaultValue []
             | SemanticKind.EnvironmentWrite(environment, slot, value) -> slotAt environment slot |> Option.map (environmentSlotWrite graph node value) |> Option.defaultValue []
+            | _ -> []
+        if not node.IsReachable || meets.IsEmpty then None else Some(node.Id, meets)) |> Map.ofList
+
+/// Lazy cache/capture access uses the same source-selected scalar and cell
+/// representations as other typed storage. A width meet never initializes the
+/// cache, forces a captured value or changes the original mutable-cell identity.
+let lazies (layouts: Map<NodeId, LazyLayout>) (origins: Map<NodeId, NodeId>)
+           (graph: SemanticGraph) : Map<NodeId, Meet list> =
+    let slotAt environment slot =
+        origins.TryFind environment |> Option.bind layouts.TryFind
+        |> Option.bind (fun layout -> layout.Slots |> List.tryFind (fun field -> field.Source = slot))
+    if onFabric graph.Platform then Map.empty else
+    graph.Nodes |> Map.toList |> List.choose (fun (_, node) ->
+        let meets =
+            match node.Kind with
+            | SemanticKind.LazyEnvironment(owner, values) ->
+                layouts.TryFind owner |> Option.map (fun layout -> captureInitializers graph node layout.Slots values) |> Option.defaultValue []
+            | SemanticKind.LazyRead(environment, slot) -> slotAt environment slot |> Option.map (environmentSlotRead graph node) |> Option.defaultValue []
+            | SemanticKind.LazyWrite(environment, slot, value) -> slotAt environment slot |> Option.map (environmentSlotWrite graph node value) |> Option.defaultValue []
             | _ -> []
         if not node.IsReachable || meets.IsEmpty then None else Some(node.Id, meets)) |> Map.ofList
 

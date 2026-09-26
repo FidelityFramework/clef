@@ -123,7 +123,7 @@ let analyze (graph: SemanticGraph) : Reading =
                         | SemanticKind.Lambda(_, body, [], _, LambdaContext.RegularClosure), EdgeRole.Body
                             when body = alias &&
                                  (resolved.Calls.Values |> Seq.exists (fun call ->
-                                     not call.Unknown && call.Targets |> List.exists (fun callee ->
+                                     call.Complete && call.Targets |> List.exists (fun callee ->
                                          callee.Lambda = target.Id && aliasSet.Contains callee.Body))) ->
                             // A returned value has no lexical lifetime. Its
                             // producing function must itself have complete uses;
@@ -135,13 +135,13 @@ let analyze (graph: SemanticGraph) : Reading =
                         | SemanticKind.Application(callee, arguments), EdgeRole.Callee
                             when callee = alias && arguments.Length = arity &&
                                  (resolved.Calls.TryFind target.Id |> Option.exists (fun call ->
-                                     not call.Unknown && not call.Targets.IsEmpty &&
+                                     call.Complete && not call.Targets.IsEmpty &&
                                      call.Targets |> List.forall (fun callee -> callee.Lambda = implementation))) &&
                                  (not (closureImplementations.Contains implementation) || environmentCalls.ContainsKey target.Id) ->
                             calls <- { Site = target.Id; Callee = callee; Caller = activation target.Id } :: calls
                         | SemanticKind.Application _, EdgeRole.Argument ->
                             match resolved.Calls.TryFind target.Id with
-                            | Some call when not call.Unknown && not call.Targets.IsEmpty &&
+                            | Some call when call.Complete && not call.Targets.IsEmpty &&
                                              (call.Targets |> List.forall (fun callee ->
                                                  List.tryItem edge.Ordinal callee.Parameters
                                                  |> Option.exists (fun (_, _, formal) -> aliasSet.Contains formal))) ->

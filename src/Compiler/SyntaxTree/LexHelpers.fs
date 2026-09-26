@@ -336,6 +336,7 @@ module Keywords =
             ALWAYS, "downto", DOWNTO
             FSHARP, "elif", ELIF
             ALWAYS, "else", ELSE
+            ALWAYS, "eager", EAGER
             ALWAYS, "end", END
             ALWAYS, "exception", EXCEPTION
             FSHARP, "extern", EXTERN

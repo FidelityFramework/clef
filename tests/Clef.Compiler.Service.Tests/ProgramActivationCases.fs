@@ -46,7 +46,7 @@ module private ActivationFixture =
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ProgramActivation")>]
 type ProgramActivationCases() =
     [<Fact>]
-    member _.``Prepared immutable environment snapshots preserve complete call coverage``() =
+    member _.``Destination preparation preserves the original environment actual and complete call coverage``() =
         let graph = ActivationFixture.check """
 let mapper =
     let offset = 1
@@ -59,6 +59,11 @@ let main _ =
     0
 """
         let implementation = EntryEnvironments.tryImplementation graph (ActivationFixture.binding "mapper" graph).Id |> Option.get
+        let originalCall, (originalOrdinal, originalActual) =
+            EntryEnvironments.callEnvironments graph |> Map.toList |> List.filter (fun (call, _) ->
+                match graph.Nodes[call].Kind with
+                | SemanticKind.Application(callee, _) -> EntryEnvironments.tryImplementation graph callee = Some implementation
+                | _ -> false) |> Assert.Single
         let prepared = Clef.Compiler.Nanopass.SequenceFactoryResults.prepare graph graph.Codata.Value.Curry
         Assert.Empty prepared.Unresolved
         Assert.NotEmpty prepared.FactoryCalls
@@ -69,15 +74,17 @@ let main _ =
         let ordinal, actual = (EntryEnvironments.callEnvironments graph)[call]
         let arguments = match graph.Nodes[call].Kind with SemanticKind.Application(_, arguments) -> arguments | _ -> failwith "Expected prepared call"
         Assert.Equal(actual, arguments[ordinal])
-        let snapshot =
-            match graph.Nodes[actual].Kind with
-            | SemanticKind.VarRef(_, Some snapshot) -> snapshot
-            | kind -> failwithf "Expected immutable environment snapshot reference, got %A" kind
-        match graph.Nodes[snapshot].Kind with
-        | SemanticKind.Binding(_, false, _, _) -> ()
-        | kind -> failwithf "Expected immutable environment snapshot, got %A" kind
+        Assert.Equal(originalOrdinal, ordinal)
+        Assert.Equal(originalActual, actual)
+        match graph.Nodes[originalCall].Kind with
+        | SemanticKind.Sequential [storage; invocation] ->
+            Assert.Equal(call, invocation)
+            match graph.Nodes[Assert.Single graph.Nodes[storage].Children].Kind with
+            | SemanticKind.ContinuationAllocate _ -> ()
+            | kind -> failwithf "Preparation demanded an ordinary operand: %A" kind
+        | kind -> failwithf "Missing destination-only preparation: %A" kind
         let changed =
-            { graph with Edges = Hyperedge.edge1 EdgeClass.Reference EdgeRole.Symbol 0 snapshot covering :: graph.Edges }
+            { graph with Edges = Hyperedge.edge1 EdgeClass.Reference EdgeRole.Symbol 0 actual covering :: graph.Edges }
         Assert.True((Activation.coverage (Activation.analyze changed) covering implementation).IsNone)
 
     [<Fact>]

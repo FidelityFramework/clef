@@ -37,11 +37,15 @@ let private local (graph: SemanticGraph) owner generator (node: SemanticNode) =
     | SemanticKind.Sequential ids | SemanticKind.TupleExpr ids
     | SemanticKind.ArrayExpr ids | SemanticKind.ListExpr ids -> eager ids
     | SemanticKind.Application (callee, args) -> eager (callee :: args)
-    | SemanticKind.ClosureValue(_, environment) -> eager [environment]
-    | SemanticKind.EnvironmentReference value -> eager [value]
-    | SemanticKind.EnvironmentRead(environment, _) | SemanticKind.EnvironmentBorrow(environment, _) -> eager [environment]
-    | SemanticKind.EnvironmentWrite(environment, _, value) -> eager [environment; value]
-    | SemanticKind.EnvironmentCreate(_, initializers) ->
+    // The false path terminates the activation; only successful requirements
+    // return to the following source operation. Never treat one as a value.
+    | SemanticKind.Require(condition, _) -> eager [condition]
+    | SemanticKind.ClosureValue(_, environment) | SemanticKind.LazyValue(_, environment) -> eager [environment]
+    | SemanticKind.EnvironmentReference value | SemanticKind.LazyEnvironmentReference value -> eager [value]
+    | SemanticKind.EnvironmentRead(environment, _) | SemanticKind.EnvironmentBorrow(environment, _)
+    | SemanticKind.LazyRead(environment, _) | SemanticKind.LazyBorrow(environment, _) -> eager [environment]
+    | SemanticKind.EnvironmentWrite(environment, _, value) | SemanticKind.LazyWrite(environment, _, value) -> eager [environment; value]
+    | SemanticKind.EnvironmentCreate(_, initializers) | SemanticKind.LazyEnvironment(_, initializers) ->
         let declarations = initializers |> List.map snd
         if List.forall resident declarations then
             // Nested formation may attach explicit outer-environment reads.
@@ -55,7 +59,7 @@ let private local (graph: SemanticGraph) owner generator (node: SemanticNode) =
         | [] | [_] -> eager node.Children
         | _ -> pending EvaluationResidual.InvalidShape node.Children
     | SemanticKind.Intrinsic _ -> eager node.Children
-    | SemanticKind.Literal _ | SemanticKind.VarRef _ | SemanticKind.EnvironmentAllocate _
+    | SemanticKind.Literal _ | SemanticKind.VarRef _ | SemanticKind.EnvironmentAllocate _ | SemanticKind.LazyAllocate _
     | SemanticKind.PatternBinding _ | SemanticKind.PlatformBinding _ -> eager []
     | SemanticKind.SeqExpr _ ->
         match Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.sequenceInitializers graph node with
@@ -108,7 +112,8 @@ let private local (graph: SemanticGraph) owner generator (node: SemanticNode) =
     | SemanticKind.DUGetTag (value, _) | SemanticKind.DUEliminate (value, _, _, _)
     | SemanticKind.TupleGet (value, _) | SemanticKind.FieldGet (value, _)
     | SemanticKind.TypeAnnotation (value, _) | SemanticKind.Deref value
-    | SemanticKind.LazyForce value | SemanticKind.TraitCall (_, _, value) -> eager [value]
+    | SemanticKind.LazyForce value | SemanticKind.EagerExpr value
+    | SemanticKind.TraitCall (_, _, value) -> eager [value]
     | SemanticKind.FieldSet (value, _, assigned) | SemanticKind.IndexGet (value, assigned) -> eager [value; assigned]
     | SemanticKind.IndexSet (value, index, assigned)
     | SemanticKind.NamedIndexedPropertySet (value, _, index, assigned) -> eager [value; index; assigned]

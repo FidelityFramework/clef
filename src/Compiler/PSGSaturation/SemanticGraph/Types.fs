@@ -394,6 +394,9 @@ type SemanticKind =
     | ForLoop of var: string * start: NodeId * finish: NodeId * isUp: bool * body: NodeId
     | ForEach of var: string * formal: NodeId * collection: NodeId * body: NodeId
     | IfThenElse of guard: NodeId * thenBranch: NodeId * elseBranch: NodeId option
+    /// Always-active source invariant. The reached condition is demanded once;
+    /// false terminates with this diagnostic, rather than returning a value.
+    | Require of condition: NodeId * diagnostic: string
     | TryWith of body: NodeId * handler: NodeId
     | TryFinally of body: NodeId * cleanup: NodeId
     | RecordExpr of fields: (string * NodeId) list * copyFrom: NodeId option
@@ -431,6 +434,22 @@ type SemanticKind =
     | PatternBinding of name: string
     | LazyExpr of body: NodeId * captures: CaptureInfo list
     | LazyForce of lazyValue: NodeId
+    /// Explicit shallow demand. Owning elaboration retains the activated
+    /// frontier and sharing identity; this is not a recursive force operation.
+    | EagerExpr of operand: NodeId
+    /// Canonical explicit lazy value: code and the actual memoization instance
+    /// remain separate. The environment never contains a function address.
+    | LazyValue of thunk: NodeId * environment: NodeId
+    /// Only computed=false and exact capture inputs are initialized here.
+    /// The typed cached-result declaration has no initial value.
+    | LazyEnvironment of owner: NodeId * initializers: (NodeId * NodeId) list
+    /// Caller-owned raw storage. The constructor initializes computed/captures;
+    /// allocation alone supplies neither initialization nor lifetime evidence.
+    | LazyAllocate of owner: NodeId
+    | LazyEnvironmentReference of lazyValue: NodeId
+    | LazyRead of environment: NodeId * slot: NodeId
+    | LazyBorrow of environment: NodeId * slot: NodeId
+    | LazyWrite of environment: NodeId * slot: NodeId * value: NodeId
     | SeqExpr of body: NodeId * captures: CaptureInfo list
     | Yield of value: NodeId
     | YieldBang of seq: NodeId
@@ -504,6 +523,15 @@ type EvaluationAccess =
     | Value
     | Storage
 
+/// Explicit demand is conditional on activation of this exact frontier.
+/// These cases do not mark an enclosing deferred computation as a root.
+[<RequireQualifiedAccess>]
+type EagerFrontier =
+    | Binding
+    | Actual
+    | Component
+    | Expression
+
 /// Explicitly unsettled local contracts; these are not source diagnostics or
 /// permission for a witness to reconstruct missing control semantics.
 [<RequireQualifiedAccess>]
@@ -549,6 +577,9 @@ type EdgeClass =
     /// Baker's local evaluation contracts. Composition, dominance and frame
     /// liveness require further saturation; this is not a flattened CFG.
     | Evaluation
+    /// Source activation and sharing relations, independent of sequence-local
+    /// control composition and of target scheduling or representation.
+    | Demand
     /// Joint numeric premises and their recurrence dependency, distinct from
     /// the local interval annotation resulting from range saturation.
     | Range
@@ -558,6 +589,12 @@ type EdgeClass =
 /// handed to a callback and discarded instead of being stored.
 [<RequireQualifiedAccess>]
 type EdgeRole =
+    /// [marker; operand; transparent wrapper path; first-boundary alternatives
+    /// and their real formals; callee for Actual] -> the activated frontier.
+    /// Ordinal identifies the component/actual in that current owning node.
+    | EagerDemand of EagerFrontier
+    /// A malformed local marker/wrapper retains its owning unresolved premise.
+    | EagerDemandPending
     /// [conversion; input; allocation; complete alias/write/value premises]
     /// -> exact array occurrence. Byte units, not UTF-8 sequence validity.
     | StringByteStorage of lower: bigint * upper: bigint * representation: string
@@ -642,6 +679,10 @@ type EdgeRole =
     /// [allocation; covering activation; actual argument; formal; callee lambda]
     /// -> exact complete call. Full formal use remains inside the covering region.
     | SequenceInputBorrow
+    /// [allocation; covering activation; callee; every complete target's
+    /// implementation, formals, actuals and body] -> invocation. This proves
+    /// bounded callee consumption, not a physical calling convention.
+    | CallableInvocationBorrow
     /// An elaborated expression's distinct mutually exclusive branch occurrence.
     /// Sources retain the original expression and its original branch body.
     | BranchOccurrence
@@ -654,6 +695,24 @@ type EdgeRole =
     | EnvironmentCapture of isMutable: bool
     | EnvironmentInitializer
     | EnvironmentFormal
+    /// [thunk; body; environment; formal; computed; cache; false] -> formation.
+    /// This proves source structure, not residence or concurrent force safety.
+    | LazyInstance
+    /// [formation; captured declaration; actual initializer] -> environment.
+    | LazyCapture of isMutable: bool
+    /// Exact force participants, validated against the real conditional and
+    /// invocation/store/publication sequence before any cached read is admitted.
+    | LazyMemoization
+    /// [factory; lazy formation; destination formal] -> environment constructor.
+    | LazyResultDestination
+    /// [factory; constructor; formal; allocation; actual destination] -> call.
+    | LazyResultCall
+    /// Actual allocation, covering activation, complete uses and retained inputs
+    /// jointly cover one lazy instance's storage. Layout remains a separate proof.
+    | LazyResidence
+    /// Joint source instance, exact slot placement and complete storage uses.
+    /// The thunk remains a function value; it is not an environment field.
+    | LazyLayout
     /// Complete-use covering activation and retained source cells.
     | EnvironmentResidence
     /// Required caller destination: [factory implementation; closure owner;
@@ -698,6 +757,15 @@ type EdgeRole =
     /// [sequence operand; source owner; generator] establishes fresh iterator
     /// formation without invoking that deferred body at the target acquisition.
     | SequenceInitialize
+    /// Exact family members, generator/formal/field identities and layout
+    /// obligations establish one shared invocation/current-access convention.
+    | SequenceFamilyLayout
+    /// Source payloads and their owner current identities constrain the common
+    /// current representation; this does not admit a current read.
+    | SequenceFamilyCurrent
+    /// Exact source template and fresh acquisition preserve capture identities
+    /// and the uninitialized status of current/internal representation bytes.
+    | SequenceTemplateCopy
     /// [operand; unresolved origin site] prevents a closed effect summary for
     /// the target iterator operation, even alongside other known origins.
     | SequenceEffectUnknown
@@ -725,10 +793,20 @@ type EdgeRole =
     /// [owner; resident related sites] constrains an unsettled local contract.
     | EvaluationPending of EvaluationResidual
     | ContinuationCase of int
+    /// Ordered match requirement frontier. Ordinal 0 retains the exact boolean
+    /// pattern test and selected decision; ordinal 1 retains a terminal boolean
+    /// condition (a source guard or a typed literal equality).
+    | MatchRequirement
     | ContinuationDefault
     | FrameSlot
     /// Exact source-value identity retained by continuation realization.
     | ContinuationValue
+    /// [owner; generator; actual storage root; source slot; writer; value; ...]
+    /// authorizes a generated FrameRead, including its complete slot writer set.
+    /// The root is the generator formal or its exact activation-local storage;
+    /// immutable captures have no writers. Current storage uses and each actual
+    /// writer's value correspondence must validate before retaining identity.
+    | ContinuationSlotAccess
     | ContinuationRegion
     | ContinuationBorrow
     /// Source value, destination, discriminant and selected case initialization.
@@ -748,6 +826,10 @@ type EdgeRole =
     /// [source declaration; promoted code binding] retains the original
     /// definition of one rewritten callable reference occurrence.
     | CallableReferenceOrigin
+    /// [owning captured value; original declaration] -> the same source VarRef
+    /// occurrence rewritten to environment access. Generated initializer/cache
+    /// accesses do not carry this source-navigation relation.
+    | CaptureReferenceOrigin
 
 /// One directed relation. Sources retain ordered participant occurrences;
 /// structural projections may be single-source while joint facts are n-ary.
@@ -827,6 +909,7 @@ let kindEdges (target: NodeId) (kind: SemanticKind) : Hyperedge list =
 
     | SemanticKind.Sequential nodes -> sts EdgeRole.Element nodes
     | SemanticKind.WhileLoop (guard, body) -> [ st EdgeRole.Guard guard; st EdgeRole.Body body ]
+    | SemanticKind.Require(condition, _) -> [st EdgeRole.Guard condition]
     | SemanticKind.ContinuationDispatch (selector, cases, otherwise) ->
         st EdgeRole.Scrutinee selector :: st EdgeRole.ContinuationDefault otherwise
         :: (cases |> List.map (fun (state, body) -> st (EdgeRole.ContinuationCase state) body))
@@ -837,6 +920,7 @@ let kindEdges (target: NodeId) (kind: SemanticKind) : Hyperedge list =
     | SemanticKind.ContinuationStorage owner
     | SemanticKind.ContinuationAllocate owner
     | SemanticKind.EnvironmentAllocate owner
+    | SemanticKind.LazyAllocate owner
     | SemanticKind.AggregateStorage owner ->
         [ Hyperedge.edge1 EdgeClass.Provenance EdgeRole.Definition 0 owner target ]
     | SemanticKind.ClosureValue (implementation, environment) ->
@@ -910,6 +994,18 @@ let kindEdges (target: NodeId) (kind: SemanticKind) : Hyperedge list =
 
     | SemanticKind.LazyExpr (body, _) -> [ st EdgeRole.Body body ]
     | SemanticKind.LazyForce lazyValue -> [ st EdgeRole.Subject lazyValue ]
+    | SemanticKind.EagerExpr operand -> [ st EdgeRole.Subject operand ]
+    | SemanticKind.LazyValue (thunk, environment) ->
+        [ st EdgeRole.Body thunk; st EdgeRole.Subject environment ]
+    | SemanticKind.LazyEnvironment (owner, initializers) ->
+        Hyperedge.edge1 EdgeClass.Provenance EdgeRole.Definition 0 owner target ::
+        (initializers |> List.mapi (fun ordinal (_, value) -> Hyperedge.edge1 EdgeClass.Reference EdgeRole.EnvironmentInitializer ordinal value target))
+    | SemanticKind.LazyEnvironmentReference value -> [ st EdgeRole.Subject value ]
+    | SemanticKind.LazyRead (environment, slot)
+    | SemanticKind.LazyBorrow (environment, slot) ->
+        [ st EdgeRole.Subject environment; Hyperedge.edge1 EdgeClass.Provenance EdgeRole.FrameSlot 0 slot target ]
+    | SemanticKind.LazyWrite (environment, slot, value) ->
+        [ st EdgeRole.Subject environment; Hyperedge.edge1 EdgeClass.Provenance EdgeRole.FrameSlot 0 slot target; st EdgeRole.AssignValue value ]
     | SemanticKind.SeqExpr (body, _) -> [ st EdgeRole.Body body ]
     | SemanticKind.Yield value -> [ st EdgeRole.Operand value ]
     | SemanticKind.YieldBang seq -> [ st EdgeRole.Operand seq ]
@@ -1277,6 +1373,22 @@ type EnvironmentLayout = {
     Obligations: NodeId list
 }
 
+/// One explicit lazy schema's typed storage. Each runtime formation/allocation
+/// retains its own environment operand; a shared schema never shares a cache.
+/// The computed bit and cached result are source declarations, and the cache
+/// is uninitialized until the admitted force stores a result before publication.
+type LazyLayout = {
+    Owner: NodeId
+    Thunk: NodeId
+    Formal: NodeId
+    Computed: NodeId
+    Cached: NodeId
+    Slots: ContinuationSlot list
+    Bytes: int
+    Alignment: int
+    Obligations: NodeId list
+}
+
 /// This proves only the function half and layout. The environment itself is
 /// always the value at the queried occurrence, including aliases/frame reads.
 type KnownCallable = { Implementation: NodeId; EnvironmentOwner: NodeId }
@@ -1289,7 +1401,7 @@ type CallableEnvironment = { Owner: NodeId; Formal: NodeId }
 /// refer to that occurrence's settled carrier, so code/environment expansion
 /// cannot be guessed from the source type or a different formation's layout.
 [<RequireQualifiedAccess>]
-type CallableValueShape = Data of NodeId | Callable of NodeId
+type CallableValueShape = Data of NodeId | Callable of NodeId | Sequence of NodeId | Lazy of NodeId
 
 /// One callable occurrence's settled physical boundary. Parameter identities,
 /// rather than the source type's arrow count, determine native arity. SourceType
@@ -1304,6 +1416,57 @@ type CallableCarrier = {
     Result: NodeId
     ResultShape: CallableValueShape
     Environment: CallableEnvironment option
+}
+
+/// A finite source dispatch retains every possible callable, rather than
+/// assigning a representative implementation to a mutable read. Read identifies
+/// the snapshot frontier; aliases retain that frontier after later writes.
+type CallableJoin = {
+    Occurrence: NodeId
+    SourceType: NativeType
+    Storage: NodeId
+    Read: NodeId
+    Alternatives: NodeId list
+}
+
+/// A complete semantic invocation retains every formal/actual participant.
+/// This row is value-flow evidence, not a physical code/environment choice.
+type CallableFlowCall = {
+    Call: NodeId
+    Implementation: NodeId
+    Parameters: NodeId list
+    Arguments: NodeId list
+    Result: NodeId
+}
+
+/// Ordinary callable transport across formals, results and immutable aliases.
+/// Unlike CallableJoin it has no mutable storage or read-snapshot frontier.
+type CallableFlow = {
+    Occurrence: NodeId
+    SourceType: NativeType
+    Alternatives: NodeId list
+    Dependencies: Map<NodeId, NodeId list>
+    Calls: CallableFlowCall list
+}
+
+/// A write updates the finite alternative discriminator and the actual
+/// environment descriptor together. The discriminator is not a code address.
+type MutableCallableWrite = { Site: NodeId; Destination: NodeId; Value: NodeId; Alternative: int }
+
+/// Source-owned mutable callable protocol. Code remains a function value, never
+/// a cell field. Captures name the original shared cell; this semantic protocol
+/// does not itself prove its allocation or any retained environment's lifetime.
+type MutableCallableStorage = {
+    Binding: NodeId
+    SourceType: NativeType
+    Initializer: MutableCallableWrite
+    Writes: MutableCallableWrite list
+    Reads: Set<NodeId>
+    Alternatives: NodeId list
+    AlternativeCarriers: CallableCarrier list
+    EnvironmentBytes: int option
+    Captures: Set<NodeId>
+    Borrows: Set<NodeId>
 }
 
 /// Source construction, fresh enumeration and generator access share this
@@ -1333,6 +1496,72 @@ type ContinuationFrame = {
     Initializers: (NodeId * NodeId) list
     ResumeStates: int list
     Obligations: NodeId list
+}
+
+/// Complete source alternatives at one sequence value occurrence. This is
+/// flow evidence, not permission to substitute an environment instance or an
+/// admitted common physical carrier. Unknown alternatives prevent elision.
+type SequenceFlow = {
+    Occurrence: NodeId
+    ElementType: NativeType
+    IsEnumerator: bool
+    Owners: Set<NodeId>
+    Unknown: Set<NodeId>
+}
+
+/// One member of a source-settled sequence transport family. Every field keeps
+/// its own source identity; a common byte extent does not select a generator.
+type SequenceFamilyMember = {
+    Generator: NodeId
+    Formal: NodeId
+    Signature: NativeType
+    State: NodeId
+    Current: NodeId option
+    Slots: ContinuationSlot list
+    Captures: Set<NodeId>
+    Uninitialized: Set<NodeId>
+    Obligations: NodeId list
+}
+
+/// A finite, connected set of exact sequence alternatives with one physical
+/// invocation/current-access convention. Code and the actual environment are
+/// still separate values. Empty members supply no current success premise.
+type SequenceFamily = {
+    Identity: NodeId
+    ElementType: NativeType
+    Participants: Set<NodeId>
+    Members: Map<NodeId, SequenceFamilyMember>
+    Bytes: int
+    Alignment: int
+    StateField: SettledField
+    CurrentField: SettledField option
+    CurrentRepresentation: (NativeType * CaptureSlotKind) option
+}
+
+/// A fresh enumeration copies representation from this exact template. Capture
+/// identities can themselves retain deferred computations; copying never forces
+/// them or grants source definite assignment or a successful-current premise.
+type SequenceTemplateCopy = {
+    Family: NodeId
+    Template: NodeId
+    SourceAcquisition: NodeId
+    StorageSite: NodeId
+    Residence: EscapeKind
+    Region: ContinuationRegion option
+    Bytes: int
+    Alignment: int
+    AddressSpace: NTUMemorySpace
+    /// Exhaustive actual backing allocations for each possible constructor.
+    /// The fresh destination is proved disjoint from every one of these.
+    TemplateStorage: Map<NodeId, Set<NodeId>>
+    /// Snapshot/deferred value identities are retained; copying cannot invoke
+    /// an initializer or clone a referenced mutable cell.
+    Initializers: Map<NodeId, (NodeId * NodeId) list>
+    /// Owned child regions have no live interior views in the template. Their
+    /// contents become meaningful only under the generator's later stores.
+    UninitializedRegions: Map<NodeId, NodeId list>
+    Captures: Map<NodeId, Set<NodeId>>
+    Uninitialized: Map<NodeId, Set<NodeId>>
 }
 
 /// Where a union's values live on a core: a heterogeneous union in the arena, a homogeneous one
@@ -1426,12 +1655,23 @@ type Codata = {
     EnvironmentLayouts: Map<NodeId, EnvironmentLayout>
     EnvironmentDestinations: Map<NodeId, NodeId>
     EnvironmentOrigins: Map<NodeId, NodeId>
+    LazyLayouts: Map<NodeId, LazyLayout>
+    /// Schema origin only, never equality of actual lazy instances.
+    LazyOrigins: Map<NodeId, NodeId>
+    LazyDestinations: Map<NodeId, NodeId>
     KnownCallables: Map<NodeId, KnownCallable>
     CallableCarriers: Map<NodeId, CallableCarrier>
+    CallableJoins: Map<NodeId, CallableJoin>
+    CallableFlows: Map<NodeId, CallableFlow>
+    MutableCallableStorage: Map<NodeId, MutableCallableStorage>
     ContinuationFrames: Map<NodeId, ContinuationFrame>
     /// A unique sequence constructor at a use, established in Baker. This
     /// evidence permits elision of the known function half of (fn, env).
     SequenceOrigins: Map<NodeId, NodeId>
+    /// Complete alternatives survive even when no unique origin can be elided.
+    SequenceFlows: Map<NodeId, SequenceFlow>
+    SequenceFamilies: Map<NodeId, SequenceFamily>
+    SequenceTemplateCopies: Map<NodeId, SequenceTemplateCopy>
     /// Transient activation allocation/reference -> owning continuation.
     ContinuationStorage: Map<NodeId, NodeId>
     /// Exact allocation occurrence -> owned byte region within a parent frame.
@@ -1458,10 +1698,19 @@ module Codata =
         EnvironmentLayouts = Map.empty
         EnvironmentDestinations = Map.empty
         EnvironmentOrigins = Map.empty
+        LazyLayouts = Map.empty
+        LazyOrigins = Map.empty
+        LazyDestinations = Map.empty
         KnownCallables = Map.empty
         CallableCarriers = Map.empty
+        CallableJoins = Map.empty
+        CallableFlows = Map.empty
+        MutableCallableStorage = Map.empty
         ContinuationFrames = Map.empty
         SequenceOrigins = Map.empty
+        SequenceFlows = Map.empty
+        SequenceFamilies = Map.empty
+        SequenceTemplateCopies = Map.empty
         ContinuationStorage = Map.empty
         ContinuationRegions = Map.empty
         SequenceInitializers = Map.empty

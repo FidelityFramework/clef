@@ -237,16 +237,19 @@ let private tile (p: Placer) (fields: (string * SettledSlot) list) : SettledLayo
         |> List.map (fun ((name, slot), extent) -> name, slot, Option.get extent)
         |> tileExtents
 
-/// A union's layout: one byte of tag at offset zero, the payload slot of the widest case at
-/// offset one, alignment one (the leg's byte-buffer realisation, its payloads read through typed
-/// views). A case with several fields carries them as one tuple payload.
+/// A union has one byte of tag at zero, followed by storage aligned for every
+/// declared payload. The whole extent includes tail padding at that alignment.
+/// A case with several fields carries them as one tuple payload.
 let private union (p: Placer) (cases: (string * SettledSlot option) list) : SettledLayout =
     let payloads = cases |> List.choose snd
     let extents = payloads |> List.map (extentOf p)
     if extents |> List.exists Option.isNone then SettledLayout.Union (cases, None, None, None)
     else
-        let widest = extents |> List.choose id |> List.map fst |> List.fold max 0
-        SettledLayout.Union (cases, Some 1, Some (1 + widest), Some 1)
+        let extents = extents |> List.choose id
+        let widest = extents |> List.map fst |> List.fold max 0
+        let alignment = extents |> List.map snd |> List.fold max 1
+        let offset = alignUp 1 alignment
+        SettledLayout.Union (cases, Some offset, Some (alignUp (offset + widest) alignment), Some alignment)
 
 /// The range a field or position of the bare integer kind holds; Empty where nothing constructs it.
 let private fieldRange (p: Placer) (typeName: string) (field: string) : ValueRange =
@@ -424,7 +427,7 @@ let private captureSlot (p: Placer) (capture: CaptureInfo) : CaptureSlotKind * i
 //-------------------------------------------------------------------------
 
 [<RequireQualifiedAccess>]
-type ContinuationRole = State | Current | Capture | LiveAcross | Local
+type ContinuationRole = State | Current | Capture | LiveAcross | Local | Computed | Cached
 
 type ContinuationField = {
     Source: NodeId
@@ -450,6 +453,7 @@ let private placeContinuationFields (graph: SemanticGraph)
                                     (prefix: (ContinuationRole * NodeId) list)
                                     (captures: CaptureInfo list)
                                     (suffix: (ContinuationRole * NodeId) list)
+                                    (storageRanges: Map<NodeId, ValueRange>)
                                     : Result<SettledLayout * ContinuationField list, ContinuationPlacementError> =
     let error id reason = Error (ContinuationPlacementError.UnsettledField(id, reason))
     let source id =
@@ -488,10 +492,15 @@ let private placeContinuationFields (graph: SemanticGraph)
                 extent node.Id slot alignmentKind |> Result.map (fun size -> slot, size)
             match Types.tryGetNTUKind ty with
             | Some (NTUKind.NTUint _ | NTUKind.NTUuint _) ->
-                match node.ValueRange, RangeAnalysis.selectedRepresentation graph node.Id with
+                let representation =
+                    match storageRanges.TryFind node.Id with
+                    | Some required -> RangeAnalysis.selectedRepresentationOf graph required
+                    | None -> RangeAnalysis.selectedRepresentation graph node.Id
+                match node.ValueRange, representation with
                 | Some range, Some representation when ValueRange.isObservable range ->
                     match RangeSources.declaredRange representation with
-                    | Some declared when ValueRange.contains declared range ->
+                    | Some declared when ValueRange.contains declared range &&
+                                         (storageRanges.TryFind node.Id |> Option.forall (ValueRange.contains declared)) ->
                         settled (SettledSlot.Integer(representation.Bits, Some representation.Name))
                                 (NTUKind.NTUint (NTUWidth.Fixed representation.Bits))
                     | _ -> error node.Id "The selected integer representation does not cover the field range"
@@ -512,7 +521,7 @@ let private placeContinuationFields (graph: SemanticGraph)
         match ty with
         | NativeType.TSeq _ | NativeType.TSeqEnumerator _ -> true
         | _ ->
-            Types.tryGetNTUKind ty = Some NTUKind.NTUarray
+            (match Types.tryGetNTUKind ty with Some NTUKind.NTUarray | Some NTUKind.NTUstring -> true | _ -> false)
             || (RecordInstances.tryFields ty graph |> Option.isSome)
     let view role id holds =
         let slot = SettledSlot.Pointer ViewWords
@@ -580,29 +589,58 @@ let private placeContinuationFields (graph: SemanticGraph)
 /// Place Baker's persistent frame after platform and range settlement. No code
 /// pointer is a frame field. Captured cells and buffer values retain typed views;
 /// unsupported aggregate scalar fields remain explicit residuals.
-let placeContinuation (graph: SemanticGraph) (state: NodeId) (current: NodeId)
-                      (captures: CaptureInfo list) (liveAcross: NodeId list)
-                      : Result<SettledLayout * ContinuationField list, ContinuationPlacementError> =
+let placeContinuationWithRanges (graph: SemanticGraph) (state: NodeId) (current: NodeId)
+                                (captures: CaptureInfo list) (liveAcross: NodeId list)
+                                (storageRanges: Map<NodeId, ValueRange>)
+                                : Result<SettledLayout * ContinuationField list, ContinuationPlacementError> =
     placeContinuationFields graph
         [ContinuationRole.State, state; ContinuationRole.Current, current] captures
-        (liveAcross |> List.map (fun id -> ContinuationRole.LiveAcross, id))
+        (liveAcross |> List.map (fun id -> ContinuationRole.LiveAcross, id)) storageRanges
+
+let placeContinuation graph state current captures liveAcross =
+    placeContinuationWithRanges graph state current captures liveAcross Map.empty
 
 /// A region without cuts never has an in-flight payload. Its logical element
 /// type remains on the sequence; no invented value or payload storage is needed.
-let placeEmptyContinuation (graph: SemanticGraph) (state: NodeId) (captures: CaptureInfo list) =
-    placeContinuationFields graph [ContinuationRole.State, state] captures []
+let placeEmptyContinuationWithRanges (graph: SemanticGraph) (state: NodeId) (captures: CaptureInfo list)
+                                    (storageRanges: Map<NodeId, ValueRange>) =
+    placeContinuationFields graph [ContinuationRole.State, state] captures [] storageRanges
+
+let placeEmptyContinuation graph state captures = placeEmptyContinuationWithRanges graph state captures Map.empty
 
 /// Place one activation's transient values, separately from the persistent frame.
 /// The caller must establish every store-before-read relation; no initial value
 /// or persistent lifetime is implied by this storage layout.
 let placeContinuationLocals (graph: SemanticGraph) (locals: NodeId list)
                             : Result<SettledLayout * ContinuationField list, ContinuationPlacementError> =
-    placeContinuationFields graph [] [] (locals |> List.map (fun id -> ContinuationRole.Local, id))
+    placeContinuationFields graph [] [] (locals |> List.map (fun id -> ContinuationRole.Local, id)) Map.empty
 
 /// Closure environments share exact slot selection/tiling with continuation
 /// frames but have no state/current prefix and no code-address field.
 let placeEnvironment (graph: SemanticGraph) (captures: CaptureInfo list) =
-    placeContinuationFields graph [] captures []
+    placeContinuationFields graph [] captures [] Map.empty
+
+/// The memoization prefix is ordinary typed storage, with no code-address
+/// field. A cached-result range constrains its eventual representation; it is
+/// not an initializer or permission to read before the source force guard.
+let placeLazyEnvironment (graph: SemanticGraph) owner =
+    match LazyValues.instance graph owner with
+    | None -> Error (ContinuationPlacementError.UnsettledField(owner, "Lazy formation lacks its exact typed instance contract"))
+    | Some contract ->
+        let captures = contract.Captured |> List.map (fun (slot, _, mutableCell) ->
+            { Name = sprintf "lazy_capture_%d" (NodeId.value slot); Type = graph.Nodes[slot].Type
+              IsMutable = mutableCell; SourceNodeId = Some slot })
+        // A source callable must retain a separately admitted callable storage
+        // protocol. Numeric function addresses cannot fill a lazy cache field.
+        let unsupported = contract.Cached :: (captures |> List.choose _.SourceNodeId)
+                          |> List.tryFind (fun id ->
+                              match applySubst graph.Nodes[id].Type with NativeType.TFun _ -> true | _ -> false)
+        match unsupported with
+        | Some id -> Error (ContinuationPlacementError.UnsupportedField(id, "A callable lazy field requires its source-owned code/environment storage protocol"))
+        | None ->
+            placeContinuationFields graph
+                [ContinuationRole.Computed, contract.Computed; ContinuationRole.Cached, contract.Cached]
+                captures [] Map.empty
 
 let private requiresClosurePair (node: SemanticNode) : bool =
     node.Metadata
@@ -661,12 +699,14 @@ let closures (context: PlatformContext option) (graph: SemanticGraph) : Map<Node
             PointerBytes = context |> Option.bind (fun ctx -> PlatformContext.pointerSize ctx |> Result.toOption)
             TupleRanges = Map.empty
         }
+        let lazyThunks = LazyContracts.instances graph |> Map.toSeq |> Seq.map (fun (_, instance) -> instance.Thunk) |> Set.ofSeq
         graph.Nodes
         |> Map.toList
         |> List.choose (fun (_, node) ->
             match node.Kind with
             | SemanticKind.Lambda (_, bodyId, captures, enclosing, context) when node.IsReachable ->
-                if isNestedNamedFunction graph node enclosing then None
+                if context = LambdaContext.LazyThunk && lazyThunks.Contains node.Id then None
+                elif isNestedNamedFunction graph node enclosing then None
                 elif List.isEmpty captures && not (requiresClosurePair node) then None
                 else Some (node.Id, placeClosure placer node bodyId captures context)
             | _ -> None)

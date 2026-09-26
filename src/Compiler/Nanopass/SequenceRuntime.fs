@@ -17,10 +17,14 @@ module Placement = Clef.Compiler.PSGSaturation.SemanticGraph.Placement
 module Origins = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins
 module Evidence = Clef.Compiler.Baker.Recipes.SequenceContinuationEvidence
 module LayoutProof = Clef.Compiler.Baker.Recipes.ContinuationObligationRecipes
+module Families = Clef.Compiler.Nanopass.SequenceFamilies
 
 type Settlement = {
     Frames: Map<NodeId, ContinuationFrame>
     Origins: Map<NodeId, NodeId>
+    Flows: Map<NodeId, SequenceFlow>
+    Families: Map<NodeId, SequenceFamily>
+    TemplateCopies: Map<NodeId, SequenceTemplateCopy>
     Storage: Map<NodeId, NodeId>
     Regions: Map<NodeId, ContinuationRegion>
     Initializers: Map<NodeId, (NodeId * NodeId) list>
@@ -32,7 +36,7 @@ type Settlement = {
 }
 
 let private empty = {
-    Frames = Map.empty; Origins = Map.empty; Storage = Map.empty; Regions = Map.empty
+    Frames = Map.empty; Origins = Map.empty; Flows = Map.empty; Families = Map.empty; TemplateCopies = Map.empty; Storage = Map.empty; Regions = Map.empty
     Initializers = Map.empty; CurrentReads = Set.empty; Destinations = Map.empty; Curry = Codata.empty.Curry; Residences = Map.empty; Diagnostics = [] }
 
 let private residual (node: SemanticNode) related reason = {
@@ -46,7 +50,7 @@ let private slotNode (owner: SemanticNode) name ty range =
                  Type = ty; ValueRange = range; Children = []; Parent = None
                  Metadata = Map.empty; SRTPResolution = None }
 
-let private framePlan (graph: SemanticGraph) (owner: SemanticNode) =
+let private framePlan (graph: SemanticGraph) (family: Families.Plan option) (owner: SemanticNode) =
     match Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.sequenceInitializers graph owner, Control.forOwner graph owner with
     | None, _ -> Result.Error (residual owner [] "The child capture initializer incidence is missing or contradictory.")
     | _, Result.Error pending -> Result.Error (residual graph.Nodes[pending.Site] [owner.Id] pending.Reason)
@@ -66,6 +70,14 @@ let private framePlan (graph: SemanticGraph) (owner: SemanticNode) =
                 else None
             let current = slotNode owner "__continuation_current" item currentRange
             let graph = { graph with Nodes = graph.Nodes.Add(state.Id, state).Add(current.Id, current) }
+            // Logical discriminants and per-owner yielded ranges stay exact.
+            // Only their stored representations cover the complete family.
+            let storageRanges =
+                match family with
+                | Some family ->
+                    let ranges = Map.ofList [state.Id, family.StateRange]
+                    family.CurrentRange |> Option.map (fun range -> ranges.Add(current.Id, range)) |> Option.defaultValue ranges
+                | None -> Map.empty
             let captures = captures |> List.filter (fun capture ->
                 capture.SourceNodeId |> Option.forall (Machine.isSymbolic graph Set.empty >> not))
             let captured = captures |> List.choose _.SourceNodeId |> Set.ofList
@@ -88,8 +100,8 @@ let private framePlan (graph: SemanticGraph) (owner: SemanticNode) =
             let live = control.LiveAcross.Values |> Seq.fold Set.union Set.empty |> Set.union retained |> Set.intersect required |> fun ids -> Set.difference ids captured
             let transient = Set.difference required (Set.union captured live)
             let persistentPlacement =
-                if cuts = 0 then Placement.placeEmptyContinuation graph state.Id captures
-                else Placement.placeContinuation graph state.Id current.Id captures (Set.toList live)
+                if cuts = 0 then Placement.placeEmptyContinuationWithRanges graph state.Id captures storageRanges
+                else Placement.placeContinuationWithRanges graph state.Id current.Id captures (Set.toList live) storageRanges
             match persistentPlacement,
                   Placement.placeContinuationLocals graph (Set.toList transient) with
             | Ok (SettledLayout.Record(_, Some bytes, Some alignment), slots),
@@ -196,8 +208,8 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
     let admitted, currentEdges = snapshots.Reads, snapshots.Certificates
     let graph = { snapshots.Graph with Edges = (snapshots.Graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.IteratorCurrentAdmitted)) @ currentEdges }
     let graph = if snapshotsChanged then SequenceEvaluation.normalize graph else graph
-    let origins, _ = Origins.settle graph curry
-    if not realize then graph, { empty with Origins = origins; CurrentReads = admitted; Curry = curry }
+    let origins, originFacts = Origins.settle graph curry
+    if not realize then graph, { empty with Origins = origins; Flows = Origins.describe graph originFacts; CurrentReads = admitted; Curry = curry }
     else
         let currentDiagnostics =
             graph.Nodes.Values |> Seq.choose (fun node ->
@@ -212,17 +224,28 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
         let graph = ObligationElaboration.foldIn { Enrichment.empty with NewEdges = residence.Evidence } graph
         let residenceDiagnostics = residence.Unresolved |> List.map (fun pending ->
             residual graph.Nodes[pending.Site] [] (sprintf "Allocation residence is unresolved: %A" pending.Reason))
+        let controls = graph.Nodes.Values |> Seq.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.SeqExpr _ when node.IsReachable ->
+                match Control.forOwner graph node with Ok control -> Some(node.Id, control) | Result.Error _ -> None
+            | _ -> None) |> Map.ofSeq
+        let familyPlan = Families.plan graph (Origins.describe graph originFacts) controls
         let planned =
             graph.Nodes.Values |> Seq.choose (fun node ->
-                match node.Kind with SemanticKind.SeqExpr _ when node.IsReachable -> Some (framePlan graph node) | _ -> None) |> Seq.toList
+                match node.Kind with
+                | SemanticKind.SeqExpr _ when node.IsReachable ->
+                    let family = familyPlan.ByOwner.TryFind node.Id |> Option.map (fun id -> familyPlan.Plans[id])
+                    Some (framePlan graph family node)
+                | _ -> None) |> Seq.toList
         let plans = planned |> List.choose (function Ok plan -> Some plan | _ -> None)
-        let regionPlan = SequenceRegions.settle graph
+        let regionPlan = SequenceRegions.settleWithFamilies graph
                             (plans |> List.map (fun (_, frame, _, _) -> frame.Owner, frame) |> Map.ofList)
-                            residence.Regions origins
+                            residence.Regions origins familyPlan.ByOwner
         let plans = plans |> List.map (fun (control, frame, slots, proof) -> control, regionPlan.Frames[frame.Owner], slots, proof)
         let diagnostics =
             (snapshots.Unresolved |> List.map (fun (site, consumer) -> residual graph.Nodes[site] [consumer] "The Option current snapshot lacks a finite covering activation for every use."))
             @ (regionPlan.Unresolved |> List.map (fun pending -> residual graph.Nodes[pending.Site] [] pending.Reason))
+            @ (familyPlan.Unresolved |> List.map (fun pending -> residual graph.Nodes[pending.Site] [] pending.Reason))
             @ (planned |> List.choose (function Result.Error diagnostic -> Some diagnostic | _ -> None))
             @ (prepared.Unresolved |> List.map (fun pending -> residual graph.Nodes[pending.Factory] [] pending.Reason))
         let graph = plans |> List.fold (fun graph (_, _, slots, obligations) ->
@@ -254,10 +277,46 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
         let edges = values |> List.map (fun (value, source) -> {
             Sources = [source]; Target = value; Class = EdgeClass.Provenance
             Role = EdgeRole.ContinuationValue; Ordinal = 0 })
+        let accesses = machines |> List.collect (fun (frame, machine) ->
+            let generated = machine.Nodes |> List.map (fun node -> node.Id, node) |> Map.ofList
+            let rec storage seen id =
+                if Set.contains id seen then None else
+                let seen = Set.add id seen
+                if id = frame.Formal then Some id else
+                match generated.TryFind id with
+                | Some { Kind = SemanticKind.ContinuationStorage owner } when owner = frame.Owner -> Some id
+                | Some { Kind = SemanticKind.VarRef(_, Some value) | SemanticKind.TypeAnnotation(value, _) }
+                | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> storage seen value
+                | _ -> None
+            let writers =
+                machine.Nodes |> List.choose (fun node ->
+                    match node.Kind with
+                    | SemanticKind.FrameWrite(actual, slot, value) ->
+                        storage Set.empty actual |> Option.map (fun root -> (root, slot), (node.Id, value))
+                    | _ -> None)
+                |> List.groupBy fst
+                |> Map.ofList
+                |> Map.map (fun _ rows -> rows |> List.map snd |> List.sortBy fst |> List.collect (fun (writer, value) -> [writer; value]))
+            machine.Nodes |> List.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.FrameRead(actual, source) ->
+                    storage Set.empty actual |> Option.bind (fun root ->
+                        let slots = if root = frame.Formal then frame.Slots else frame.ScratchSlots
+                        match slots |> List.filter (fun slot -> slot.Source = source) with
+                        | [slot] when slot.ValueType = node.Type && graph.Nodes[source].Type = node.Type ->
+                            Some { Sources = [frame.Owner; frame.Generator; root; source] @ (writers.TryFind(root, source) |> Option.defaultValue []); Target = node.Id
+                                   Class = EdgeClass.Provenance; Role = EdgeRole.ContinuationSlotAccess; Ordinal = 0 }
+                        | _ -> None)
+                | _ -> None))
         let propagated = values |> List.fold (fun (facts: Map<NodeId, NodeId>) (value, source) ->
             match origins.TryFind source with Some owner -> facts.Add(value, owner) | None -> facts) origins
         let propagated = machines |> List.fold (fun facts (frame, machine) ->
             machine.PersistentReferences |> List.fold (fun (facts: Map<NodeId, NodeId>) id -> facts.Add(id, frame.Owner)) facts) propagated
+        let propagatedFacts = values |> List.fold (fun (facts: Map<NodeId, Set<Origins.Origin>>) (value, source) ->
+            match originFacts.TryFind source with Some alternatives -> facts.Add(value, alternatives) | None -> facts) originFacts
+        let propagatedFacts = machines |> List.fold (fun facts (frame, machine) ->
+            machine.PersistentReferences |> List.fold (fun (facts: Map<NodeId, Set<Origins.Origin>>) id ->
+                facts.Add(id, Set.singleton (Origins.Origin.Known frame.Owner))) facts) propagatedFacts
         let storage = machines |> List.collect (fun (frame, machine) -> machine.ScratchReferences |> List.map (fun id -> id, frame.Owner)) |> Map.ofList
         let regions = values |> List.fold (fun (facts: Map<NodeId, ContinuationRegion>) (value, source) ->
             match regionPlan.Regions.TryFind source with Some region -> facts.Add(value, region) | None -> facts) regionPlan.Regions
@@ -272,14 +331,23 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
                     Some { proof with Target = value; Sources = List.distinct (source :: proof.Sources @ arguments) }
                 | _ -> None)
         let currentReads = liftedCurrent |> List.fold (fun ids edge -> Set.add edge.Target ids) admitted
-        let rewritten = { rewritten with Edges = rewritten.Edges @ edges @ liftedCurrent } |> ObligationElaboration.foldIn evidence
+        let rewritten = { rewritten with Edges = rewritten.Edges @ edges @ accesses @ liftedCurrent } |> ObligationElaboration.foldIn evidence
         let rewritten =
             if List.isEmpty machines then rewritten
             else Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable rewritten
+        let flows = Origins.describe rewritten propagatedFacts
+        let frames = plans |> List.map (fun (_, frame, _, _) -> frame.Owner, frame) |> Map.ofList
+        let families, familyEvidence, familyResiduals = Families.settle rewritten familyPlan frames flows
+        let rewritten = ObligationElaboration.foldIn familyEvidence rewritten
+        let residences = snapshots.Residences |> Map.fold (fun facts id site -> Map.add id site facts) residence.Sites
+        let copies, copyEvidence, copyResiduals = Families.copies rewritten families flows residences regions initializers prepared.Destinations
+        let rewritten = ObligationElaboration.foldIn copyEvidence rewritten
+        let diagnostics = diagnostics @ (familyResiduals @ copyResiduals |> List.map (fun pending -> residual rewritten.Nodes[pending.Site] [] pending.Reason))
         rewritten, {
-            Frames = plans |> List.map (fun (_, frame, _, _) -> frame.Owner, frame) |> Map.ofList
-            Origins = propagated; Storage = storage; Regions = regions; Initializers = initializers
-            CurrentReads = currentReads; Destinations = prepared.Destinations; Curry = curry; Residences = snapshots.Residences |> Map.fold (fun facts id site -> Map.add id site facts) residence.Sites; Diagnostics = diagnostics @ residenceDiagnostics @ currentDiagnostics }
+            Frames = frames
+            Origins = propagated; Flows = flows; Families = families; TemplateCopies = copies
+            Storage = storage; Regions = regions; Initializers = initializers
+            CurrentReads = currentReads; Destinations = prepared.Destinations; Curry = curry; Residences = residences; Diagnostics = diagnostics @ residenceDiagnostics @ currentDiagnostics }
 
 /// Standalone graph callers supply an already admitted source graph.
 let normalizeWhenSourceAdmitted sourceAdmitted graph curry =

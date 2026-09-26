@@ -2220,11 +2220,11 @@ type LexFilterImpl (
             pushCtxtSeqBlock tokenTup AddBlockEnd
             returnToken tokenLexbufState token
 
-        | (LAZY | ASSERT), _ ->
+        | (LAZY | EAGER | ASSERT), _ ->
             if isControlFlowOrNotSameLine() then
-                if debug then dprintf "LAZY/ASSERT, pushing CtxtSeqBlock\n"
+                if debug then dprintf "LAZY/EAGER/ASSERT, pushing CtxtSeqBlock\n"
                 pushCtxtSeqBlock tokenTup AddBlockEnd
-                returnToken tokenLexbufState (match token with LAZY -> OLAZY | _ -> OASSERT)
+                returnToken tokenLexbufState (match token with LAZY -> OLAZY | EAGER -> OEAGER | _ -> OASSERT)
             else
                 returnToken tokenLexbufState token
 

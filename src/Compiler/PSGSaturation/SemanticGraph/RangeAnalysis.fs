@@ -142,6 +142,13 @@ type private Program = {
     /// Original captured declaration -> mode and exact formation initializer reads.
     /// Shared cells retain source storage identity; immutable slots retain snapshots.
     EnvironmentCaptures: Map<NodeId, bool * (NodeId * NodeId) list>
+    /// Exact cache declaration/read -> the validated instance's thunk result.
+    /// This is an enclosure across dynamic instances, never instance equality.
+    LazyResults: Map<NodeId, NodeId>
+    /// Exact lazy capture access -> original slot, mode, formation and initializer.
+    LazyCaptures: Map<NodeId, NodeId * bool * NodeId * NodeId>
+    /// Guarded internal cache/publication writes do not mutate source cells.
+    LazyPrivateWrites: Set<NodeId>
     /// A Lambda parameter node -> (the call node, the argument node) at every reachable call that
     /// supplies it, directly or through a function value; the parameter reads the argument as the
     /// call does.
@@ -469,6 +476,8 @@ let private readDefinition (program: Program) (id: NodeId) =
     match program.Reachable.TryFind id with
     | Some { Kind = SemanticKind.VarRef(_, Some source) } -> Some source
     | Some { Kind = SemanticKind.EnvironmentRead(_, slot) } when program.EnvironmentCaptures.ContainsKey slot -> Some slot
+    | Some { Kind = SemanticKind.LazyRead _ } ->
+        program.LazyCaptures.TryFind id |> Option.map (fun (slot, _, _, _) -> slot)
     | _ -> None
 
 let private isLiteralBool (program: Program) (id: NodeId) (value: bool) : bool =
@@ -545,13 +554,20 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
                     joinWrites acc effect) initial
     let transfer effects (node: SemanticNode) =
         match node.Kind with
-        | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.SeqExpr _
+        | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.LazyValue _ | SemanticKind.SeqExpr _
         | SemanticKind.VarRef _ | SemanticKind.Quote _ -> noWrites
         | SemanticKind.EnvironmentRead _ | SemanticKind.EnvironmentBorrow _ -> union effects node.Children
         | SemanticKind.EnvironmentWrite(_, slot, value) ->
             let store =
                 match program.EnvironmentCaptures.TryFind slot with
                 | Some (true, _) -> { noWrites with Definitions = Set.singleton slot }
+                | _ -> unknownWrites
+            joinWrites (union effects node.Children) (joinWrites (read effects value) store)
+        | SemanticKind.LazyWrite(_, _, value) ->
+            let store =
+                match program.LazyCaptures.TryFind node.Id with
+                | Some(slot, true, _, _) -> { noWrites with Definitions = Set.singleton slot }
+                | _ when program.LazyPrivateWrites.Contains node.Id -> noWrites
                 | _ -> unknownWrites
             joinWrites (union effects node.Children) (joinWrites (read effects value) store)
         | SemanticKind.Set (target, value) ->
@@ -758,6 +774,10 @@ let private boundsOn (program: Program) (bounds: (Compared * Refinement) list) (
         match Map.tryFind operand program.Reachable with
         | Some { Kind = SemanticKind.VarRef (_, Some defId) } -> [ Compared.Definition defId ]
         | Some { Kind = SemanticKind.EnvironmentRead(_, slot) } when program.EnvironmentCaptures.ContainsKey slot -> [ Compared.Definition slot ]
+        | Some { Kind = SemanticKind.LazyRead _ } ->
+            match program.LazyCaptures.TryFind operand with
+            | Some(slot, _, _, _) -> [ Compared.Definition slot ]
+            | None -> [ Compared.Node operand ]
         | Some { Kind = SemanticKind.Binding _ } | Some { Kind = SemanticKind.PatternBinding _ } -> [ Compared.Definition operand; Compared.Node operand ]
         | _ -> [ Compared.Node operand ]
     bounds |> List.filter (fun (k, _) -> List.contains k keys) |> List.map snd
@@ -802,10 +822,15 @@ let private refineEdges (program: Program) (rootId: NodeId) (excluded: Set<NodeI
                 | SemanticKind.EnvironmentRead(environment, slot) ->
                     let assigned, edges = operand (assigned, edges) environment
                     assigned, record assigned edges slot
+                | SemanticKind.LazyRead(environment, _) ->
+                    let assigned, edges = operand (assigned, edges) environment
+                    match program.LazyCaptures.TryFind id with
+                    | Some(slot, _, _, _) -> assigned, record assigned edges slot
+                    | None -> assigned, edges
                 | SemanticKind.Set (_, value) ->
                     let assigned, edges = operand (assigned, edges) value
                     invalidate assigned (effectAt program id), edges
-                | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.SeqExpr _ ->
+                | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.LazyValue _ | SemanticKind.SeqExpr _ ->
                     // Constructing a delayed value does not execute its body.
                     // Immutable observations can still refine its later reads.
                     let _, edges = node.Children |> List.fold (walk true) (assigned, edges)
@@ -1045,6 +1070,42 @@ let private environmentCaptureSources (graph: SemanticGraph) =
         | _ -> None)
     |> Map.ofSeq
 
+/// A cache is not an uninitialized integer source and not a fresh read of its
+/// captures. Only Baker's complete formation/guard/store protocol establishes
+/// that every readable cached value came from this exact thunk result. A
+/// malformed lazy access leaves the projection unavailable, never guessed.
+let private lazyRangeSources (graph: SemanticGraph) =
+    if not (graph.Edges |> List.exists (fun edge -> edge.Role = EdgeRole.LazyInstance)) then
+        Map.empty, Map.empty, Set.empty
+    else
+        let settled = LazyValues.settle graph
+        if not settled.Residuals.IsEmpty then Map.empty, Map.empty, Set.empty
+        else
+            let ownerOf = LazyValues.tryOwner graph
+            let results =
+                settled.Instances.Values
+                |> Seq.map (fun instance -> instance.Cached, instance.ThunkBody)
+                |> Map.ofSeq
+            let results =
+                settled.Forces.Values |> Seq.fold (fun sources force ->
+                    sources |> Map.add force.CachedRead settled.Instances[force.Formation].ThunkBody) results
+            let captures =
+                graph.Nodes.Values |> Seq.choose (fun node ->
+                    let environmentAndSlot =
+                        match node.Kind with
+                        | SemanticKind.LazyRead(environment, slot) | SemanticKind.LazyBorrow(environment, slot)
+                        | SemanticKind.LazyWrite(environment, slot, _) when node.IsReachable -> Some(environment, slot)
+                        | _ -> None
+                    environmentAndSlot |> Option.bind (fun (environment, slot) ->
+                        ownerOf environment |> Option.bind settled.Instances.TryFind |> Option.bind (fun instance ->
+                            instance.Captured |> List.tryFind (fun (source, _, _) -> source = slot)
+                            |> Option.map (fun (_, value, mutableCell) ->
+                                node.Id, (slot, mutableCell, instance.Environment, value)))))
+                |> Map.ofSeq
+            let privateWrites =
+                settled.Forces.Values |> Seq.collect (fun force -> [force.ResultStore; force.Publication]) |> Set.ofSeq
+            results, captures, privateWrites
+
 let private readProgram (context: PlatformContext option) (graph: SemanticGraph) : Program =
     let reachableNodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let ordered = reachableNodes |> Map.toList |> List.map snd
@@ -1052,6 +1113,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     let candidates = escapingOf reachableNodes ordered parents
     let poisons = poisoningOf reachableNodes ordered
     let sequencePulls, sequenceInitializations, sequenceCurrentReads = sequenceEffectSources graph
+    let lazyResults, lazyCaptures, lazyPrivateWrites = lazyRangeSources graph
     let baseProgram = {
         Graph = graph
         Context = context
@@ -1067,6 +1129,9 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         SequenceInitializations = sequenceInitializations
         SequenceCurrentReads = sequenceCurrentReads
         EnvironmentCaptures = environmentCaptureSources graph
+        LazyResults = lazyResults
+        LazyCaptures = lazyCaptures
+        LazyPrivateWrites = lazyPrivateWrites
         CallArguments = Map.empty
         IndexSeeds = Map.empty
         Escaping = Map.empty
@@ -1214,6 +1279,12 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             | SemanticKind.EnvironmentWrite(_, slot, value) when baseProgram.EnvironmentCaptures.TryFind slot |> Option.exists fst ->
                 let existing = Map.tryFind slot acc |> Option.defaultValue []
                 Map.add slot (value :: existing) acc
+            | SemanticKind.LazyWrite(_, _, value) ->
+                match baseProgram.LazyCaptures.TryFind node.Id with
+                | Some(slot, true, _, _) ->
+                    let existing = Map.tryFind slot acc |> Option.defaultValue []
+                    Map.add slot (value :: existing) acc
+                | _ -> acc
             | _ -> acc) Map.empty
     let constructions =
         ordered
@@ -1686,6 +1757,10 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
         | _ when not ranged -> None
         // a node a binding descriptor declares (an extern's parameter, its result): the declaration binds
         | _ when Map.containsKey node.Id program.BoundarySeeds -> Map.tryFind node.Id program.BoundarySeeds
+        | _ when program.LazyResults.ContainsKey node.Id ->
+            // Read the thunk's whole result enclosure. A guard on a mutable
+            // capture at this later force cannot refine an earlier cached value.
+            Some (current state program.LazyResults[node.Id])
         | SemanticKind.Literal (NativeLiteral.Int (v, _)) -> Some (ValueRange.point (bigint v))
         | SemanticKind.Literal (NativeLiteral.UInt (v, _)) -> Some (ValueRange.point (bigint v))
         | SemanticKind.Literal (NativeLiteral.Bool _) -> Some ValueRange.boolean
@@ -1701,6 +1776,12 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
                 initializers |> List.fold (fun range (formation, value) ->
                     let valueRange = if program.Reachable.ContainsKey value then read program state formation value else fallback
                     ValueRange.join range valueRange) ValueRange.Empty |> Some
+            | _ -> Some fallback
+        | SemanticKind.LazyRead _ ->
+            match program.LazyCaptures.TryFind node.Id with
+            | Some(slot, true, _, _) when program.Reachable.ContainsKey slot -> Some (get slot)
+            | Some(_, false, formation, value) when program.Reachable.ContainsKey value ->
+                Some (read program state formation value)
             | _ -> Some fallback
         | SemanticKind.PatternBinding _ when Set.contains node.Id program.Parameters ->
             // a parameter is the join of the arguments at every call that supplies it, directly or
@@ -1739,6 +1820,7 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
         | SemanticKind.CaseElimination (_, arms) ->
             Some (arms |> List.fold (fun acc a -> ValueRange.join acc (get a.Body)) ValueRange.Empty)
         | SemanticKind.TypeAnnotation (inner, _)
+        | SemanticKind.EagerExpr inner
         | SemanticKind.Upcast (inner, _)
         | SemanticKind.Downcast (inner, _) -> Some (get inner)
         | SemanticKind.FieldGet (exprId, field) ->

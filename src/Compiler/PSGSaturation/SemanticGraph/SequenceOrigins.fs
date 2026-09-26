@@ -76,6 +76,7 @@ let settle (graph: SemanticGraph) (_curry: CurryInfo) =
                 | SemanticKind.EnvironmentRead(environment, slot) ->
                     environmentInput environment slot |> Option.map read |> Option.defaultWith unknown
                 | SemanticKind.TypeAnnotation (value, _) -> read value
+                | SemanticKind.EagerExpr value when ExplicitDemand.operand graph id = Some value -> read value
                 | SemanticKind.Sequential values -> values |> List.tryLast |> Option.map read |> Option.defaultWith unknown
                 | SemanticKind.IfThenElse (_, yes, Some no) -> union [yes; no]
                 | SemanticKind.Application (callee, [argument]) ->
@@ -98,3 +99,30 @@ let settle (graph: SemanticGraph) (_curry: CurryInfo) =
     let unique = facts |> Map.toList |> List.choose (fun (id, origins) ->
         match Set.toList origins with [Origin.Known owner] -> Some (id, owner) | _ -> None) |> Map.ofList
     unique, facts
+
+/// Retain the actual typed occurrence and every alternative. Representation
+/// rewrites may supply their explicit source-to-value facts before publication;
+/// no origin is selected from equal types, frame extents or symbol names.
+let describe (graph: SemanticGraph) (facts: Map<NodeId, Set<Origin>>) : Map<NodeId, SequenceFlow> =
+    graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
+        let value =
+            match applySubst node.Type with
+            | NativeType.TSeq element -> Some(element, false)
+            | NativeType.TSeqEnumerator element -> Some(element, true)
+            | _ -> None
+        match node.IsReachable, value with
+        | true, Some(element, iterator) ->
+            let origins = facts.TryFind id |> Option.defaultValue Set.empty
+            let owners, unknown = origins |> Set.fold (fun (owners, unknown) origin ->
+                match origin with
+                | Origin.Known owner -> Set.add owner owners, unknown
+                | Origin.Unknown site -> owners, Set.add site unknown) (Set.empty, Set.empty)
+            // A cycle with no constructor seed is not a complete empty family.
+            let unknown = if origins.IsEmpty then Set.singleton id else unknown
+            Some(id, { Occurrence = id; ElementType = element; IsEnumerator = iterator
+                       Owners = owners; Unknown = unknown })
+        | _ -> None) |> Map.ofList
+
+let settleFlows graph curry =
+    let _, facts = settle graph curry
+    describe graph facts

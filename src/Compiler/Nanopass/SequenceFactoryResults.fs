@@ -13,6 +13,7 @@ module Incidence = Clef.Compiler.Baker.Ingredients.Closures
 module Origins = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins
 module Environments = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments
 module Residence = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceResidence
+module ExplicitDemand = Clef.Compiler.PSGSaturation.SemanticGraph.ExplicitDemand
 
 type Residual = { Factory: NodeId; Reason: string }
 type Preparation = {
@@ -129,6 +130,8 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                     | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [inner] }
                     | Some { Kind = SemanticKind.VarRef(_, Some inner) }
                     | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } -> formalReference seen inner
+                    | Some { Kind = SemanticKind.EagerExpr inner } when ExplicitDemand.operand graph value = Some inner ->
+                        formalReference seen inner
                     | _ -> None
             let rec sourceFormal seen value =
                 if Set.contains value seen then None else
@@ -140,6 +143,8 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                     | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [inner] }
                     | Some { Kind = SemanticKind.VarRef(_, Some inner) }
                     | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } -> sourceFormal seen inner
+                    | Some { Kind = SemanticKind.EagerExpr inner } when ExplicitDemand.operand graph value = Some inner ->
+                        sourceFormal seen inner
                     | Some { Kind = SemanticKind.EnvironmentRead(environment, _) } ->
                         formalReference Set.empty environment |> Option.filter (fun formal ->
                             graph.Edges |> List.exists (fun edge ->
@@ -176,13 +181,28 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
         | _ -> None
     let rec functionReference seen id =
         if Set.contains id seen then None else
+        let seen = Set.add id seen
         match nodes.TryFind id with
-        | Some { Kind = SemanticKind.VarRef(_, Some binding) } -> Some(binding, Set.singleton id)
+        | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } ->
+            match nodes.TryFind value with
+            | Some { Kind = SemanticKind.Lambda _ } -> Some(id, Set.empty)
+            | _ -> functionReference seen value |> Option.map (fun (binding, refs) -> binding, Set.add id refs)
+        | Some { Kind = SemanticKind.VarRef(_, Some value) } ->
+            functionReference seen value |> Option.map (fun (binding, refs) -> binding, Set.add id refs)
         | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } ->
-            functionReference (Set.add id seen) inner |> Option.map (fun (binding, refs) -> binding, Set.add id refs)
+            functionReference seen inner |> Option.map (fun (binding, refs) -> binding, Set.add id refs)
+        | Some { Kind = SemanticKind.EagerExpr inner } when ExplicitDemand.operand graph id = Some inner ->
+            functionReference seen inner |> Option.map (fun (binding, refs) -> binding, Set.add id refs)
+        | Some { Kind = SemanticKind.Sequential values } ->
+            // Resolve the resulting code identity without deleting this
+            // formation's prefix or moving it into each invocation. The actual
+            // callee stays the original value expression below.
+            List.tryLast values |> Option.bind (functionReference seen)
+            |> Option.map (fun (binding, refs) -> binding, Set.add id refs)
         | _ -> None
-    // An unstored application chain has one eager frontier. A stored partial
-    // has an earlier frontier and must not move its operands into each use.
+    // Resolve an unstored application chain without changing its argument
+    // identities. A stored partial has an earlier formation boundary and
+    // must not move its operands into each use.
     let rec callSpine seen id =
         if Set.contains id seen then None else
         let seen = Set.add id seen
@@ -227,6 +247,8 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                             List.tryLast values |> Option.bind (finalExpression (Set.add id seen)) |> Option.map (fun path -> id :: path)
                         | Some { Kind = SemanticKind.TypeAnnotation(value, _) } ->
                             finalExpression (Set.add id seen) value |> Option.map (fun path -> id :: path)
+                        | Some { Kind = SemanticKind.EagerExpr value } when ExplicitDemand.operand graph id = Some value ->
+                            finalExpression (Set.add id seen) value |> Option.map (fun path -> id :: path)
                         | _ -> None
                     let finalPath = finalExpression Set.empty body
                     let owner = finalPath |> Option.bind List.tryLast |> Option.bind nodes.TryFind |> Option.filter (fun node ->
@@ -247,10 +269,10 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                                        | SemanticKind.Lambda(_, _, values, _, _) | SemanticKind.SeqExpr(_, values) | SemanticKind.LazyExpr(_, values) -> values
                                        | _ -> []
                             held |> List.exists (fun capture -> capture.SourceNodeId = Some binding.Id)))
-                    // Captureless code promotion retains the original source
-                    // callable as a value read before the rewritten direct call.
-                    // Follow only immutable value transport and discarded reads;
-                    // returned, captured, partial and opaque uses stay residual.
+                    // Follow the complete immutable transport of named code,
+                    // retaining every original callee expression and its demand
+                    // identity. Returned, captured, partial and opaque uses
+                    // stay residual.
                     let rec closedCodeValue seen id =
                         if Set.contains id seen then false else
                         let seen = Set.add id seen
@@ -258,6 +280,8 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                             match nodes[edge.Target].Kind with
                             | SemanticKind.Application _ -> edge.Role = EdgeRole.Callee && usedSpine.Contains edge.Target
                             | SemanticKind.Binding(_, false, _, _) | SemanticKind.TypeAnnotation _ -> closedCodeValue seen edge.Target
+                            | SemanticKind.EagerExpr value when value = id && ExplicitDemand.operand graph edge.Target = Some id ->
+                                closedCodeValue seen edge.Target
                             | SemanticKind.Sequential values -> List.tryLast values <> Some id || closedCodeValue seen edge.Target
                             | _ -> false)
                         let referenceUses =
@@ -277,8 +301,7 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                         directUses && referenceUses && not captured
                     let isClosed =
                         directlyClosed ||
-                        (lambda.Metadata.ContainsKey ClosureMetadata.SourceSignature &&
-                         not calls.IsEmpty && (refs |> Set.forall (closedCodeValue Set.empty)))
+                        (not calls.IsEmpty && (refs |> Set.forall (closedCodeValue Set.empty)))
                     let named =
                         captures.IsEmpty
                         && ([ClosureMetadata.LambdaExpression; ClosureMetadata.RequiresClosurePair]
@@ -286,7 +309,7 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                     let storedPartial = curry.PartialApplications |> Map.exists (fun id partial ->
                         partial.TargetBindingId = binding.Id && not (usedSpine.Contains id))
                     if not named then refuse binding.Id "Factory requires a named direct callable with settled capture formals."; None
-                    elif storedPartial then refuse binding.Id "Stored partial application requires its earlier eager snapshot frontier."; None
+                    elif storedPartial then refuse binding.Id "Stored partial application requires its earlier formation frontier."; None
                     elif not isClosed then refuse binding.Id "Factory uses are not a closed set of direct complete application chains."; None
                     elif calls |> List.exists (fun call -> call.Arguments.Length <> parameters.Length) then
                         refuse binding.Id "Factory call arity does not match the settled complete formal list."; None
@@ -307,6 +330,8 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                                         match nodes[edge.Target].Kind with
                                         | SemanticKind.Sequential values when List.tryLast values = Some id -> uniqueFinal (Set.add id seen) edge.Target
                                         | SemanticKind.TypeAnnotation(value, _) when value = id -> uniqueFinal (Set.add id seen) edge.Target
+                                        | SemanticKind.EagerExpr value when value = id && ExplicitDemand.operand graph edge.Target = Some id ->
+                                            uniqueFinal (Set.add id seen) edge.Target
                                         | _ -> false
                                     | _ -> false
                             match captureResidual lambda.Id owner calls with
@@ -371,12 +396,6 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
         extraEdges <- { Sources = plan.ResultPath; Target = destination.Id
                         Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0 } :: extraEdges
         for call in plan.Calls do
-            let snapshots = call.Arguments |> List.mapi (fun index argument ->
-                let value = nodes[argument]
-                let name = sprintf "__sequence_argument_%d_%d" (NodeId.value call.Site.Id) index
-                let binding = fresh value (SemanticKind.Binding(name, false, false, None)) value.Type [argument] value.ValueRange |> add
-                let reference = fresh value (SemanticKind.VarRef(name, Some binding.Id)) value.Type [] value.ValueRange |> add
-                binding.Id, reference.Id)
             let allocation = fresh call.Site (SemanticKind.ContinuationAllocate plan.Owner.Id) destinationType [] None |> add
             allocationOrigins <- allocationOrigins.Add(allocation.Id, plan.Owner.Id)
             let allocationName = sprintf "__sequence_destination_%d" (NodeId.value call.Site.Id)
@@ -387,30 +406,33 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                 let source = nodes[calleeId]
                 let kind = match source.Kind with SemanticKind.TypeAnnotation(inner, _) -> SemanticKind.TypeAnnotation(inner, factoryType) | _ -> source.Kind
                 signature source factoryType kind source.Children |> add |> ignore
-            let arguments = List.insertAt destinationIndex destinationActual.Id (snapshots |> List.map snd)
+            let arguments = List.insertAt destinationIndex destinationActual.Id call.Arguments
             let actual = fresh call.Site (SemanticKind.Application(callee.Id, arguments)) call.Site.Type (callee.Id :: arguments) call.Site.ValueRange |> add
             for proof in plan.Borrows do
                 if List.contains call.Site.Id proof.Sources then
                     extraEdges <- { proof with Sources = proof.Sources @ plan.ResultPath @ [destination.Id; allocation.Id; destinationActual.Id; actual.Id] } :: extraEdges
             for required in plan.RequiredCaptures |> List.filter (fun required -> required.Call = call.Site.Id) do
-                let supplied = snapshots[required.ArgumentIndex] |> snd
+                let supplied = call.Arguments[required.ArgumentIndex]
                 extraEdges <- { Sources = [required.Slot; required.Initializer; plan.Lambda.Id; required.Formal;
                                            actual.Id; supplied; destinationActual.Id; allocation.Id]
                                 Target = plan.Owner.Id; Class = EdgeClass.Provenance
                                 Role = EdgeRole.SequenceResultCapture
                                 Ordinal = required.ArgumentIndex + (if required.ArgumentIndex >= destinationIndex then 1 else 0) } :: extraEdges
             factoryCalls <- factoryCalls.Add(actual.Id, allocation.Id)
-            let sequence = (snapshots |> List.map fst) @ [allocationBinding.Id; actual.Id]
+            // Destination preparation grants no ordinary argument demand. The
+            // original actuals, their sharing and earlier formation frontiers
+            // remain the invocation's inputs.
+            let sequence = [allocationBinding.Id; actual.Id]
             { call.Site with Kind = SemanticKind.Sequential sequence; Children = sequence }
             |> markBaker "Seq.factoryResult" (NodeId.value call.Site.Id) |> add |> ignore
             let obsolete = call.Spine.Remove call.Site.Id
             for id in obsolete do { nodes[id] with IsReachable = false } |> add |> ignore
             retired <- Set.union retired obsolete
             let rewrittenMeets =
-                List.zip call.Arguments (snapshots |> List.map snd) |> List.collect (fun (original, replacement) ->
+                call.Arguments |> List.collect (fun original ->
                     call.Spine |> Set.toList |> List.collect (fun id -> meets.TryFind id |> Option.defaultValue [])
                     |> List.filter (fun meet -> meet.Operand = original)
-                    |> List.map (fun meet -> { meet with Consumer = actual.Id; Operand = replacement }))
+                    |> List.map (fun meet -> { meet with Consumer = actual.Id }))
             for id in call.Spine do meets <- meets.Remove id
             if not rewrittenMeets.IsEmpty then meets <- meets.Add(actual.Id, rewrittenMeets)
             let removedPartials = updatedCurry.PartialApplications |> Map.filter (fun id _ -> call.Spine.Contains id)

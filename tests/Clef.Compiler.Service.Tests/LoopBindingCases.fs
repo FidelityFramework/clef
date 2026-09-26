@@ -11,6 +11,8 @@ open Clef.Compiler.NativeTypedTree.Infrastructure
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 
+module LoopEnvironments = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments
+
 module private LoopBindings =
     let prelude = "module LoopBindings\n"
 
@@ -93,7 +95,43 @@ module private LoopBindings =
         match result.Graph.Nodes[Assert.Single binding.Children].Kind with
         | SemanticKind.Lambda (_, _, captures, _, _) ->
             captures |> List.filter (fun capture -> capture.Name = "index") |> Assert.Single
+        | SemanticKind.ClosureValue (implementation, environment) ->
+            let owner = Assert.Single binding.Children
+            Assert.Equal(Some owner, LoopEnvironments.tryEnvironmentOwner result.Graph environment)
+            let initializers = LoopEnvironments.capturedInitializers result.Graph owner |> Option.get
+            let source, value, mutableCell = Assert.Single initializers
+            Assert.Equal(source, value)
+            Assert.False mutableCell
+            match result.Graph.Nodes[source].Kind with
+            | SemanticKind.Binding ("index", false, false, _) -> ()
+            | kind -> failwithf "Iteration capture lost its immutable source binding: %A" kind
+            match result.Graph.Nodes[implementation].Kind with
+            | SemanticKind.Lambda ((_, _, formal) :: parameters, _, [], _, _) ->
+                Assert.Equal(Some owner, LoopEnvironments.tryEnvironmentOwner result.Graph formal)
+                let _, ty, _ = Assert.Single parameters
+                DimensionalCases.same Types.unitType ty
+            | kind -> failwithf "Iteration closure lost its environment and unit formals: %A" kind
+            LoopEnvironments.captures result.Graph owner |> Assert.Single
         | kind -> failwithf "Expected a source closure retaining its iteration value: %A" kind
+
+    /// Saturation replaces the read at its original occurrence. Compare every
+    /// raw source read, so a dropped or redirected read cannot evade this gate.
+    let iterationReads (result: CheckResult) (raw: Map<int, JsonElement>) =
+        let reads = raw |> Map.toList |> List.choose (fun (id, node) ->
+            let kind = node.GetProperty("kind").GetString()
+            if kind.StartsWith("VarRef (\"index\",") then Some (NodeId id) else None)
+        Assert.NotEmpty reads
+        reads |> List.map (fun id ->
+            let source = NodeId (rawDefinition raw id)
+            match result.Graph.Nodes[id].Kind with
+            | SemanticKind.VarRef ("index", Some actual) -> Assert.Equal(source, actual)
+            | SemanticKind.EnvironmentRead (environment, slot) ->
+                Assert.Equal(source, slot)
+                Assert.Equal(Some source, LoopEnvironments.tryCapturedValue result.Graph environment slot)
+                let owner = LoopEnvironments.tryEnvironmentOwner result.Graph environment |> Option.get
+                Assert.Contains((source, source, false), LoopEnvironments.capturedInitializers result.Graph owner |> Option.get)
+            | kind -> failwithf "Source iteration read lost its binding identity: %A" kind
+            id, source)
 
     let reject (marked: string) =
         let start, finish = marked.IndexOf('«'), marked.IndexOf('»')
@@ -135,9 +173,7 @@ let main _ =
         let loop = nodes.Values |> Seq.filter (fun node ->
             node.IsReachable && match node.Kind with SemanticKind.WhileLoop _ -> true | _ -> false) |> Assert.Single
         let source, counter, body = LoopBindings.loopBinding result raw loop
-        let reads = nodes.Values |> Seq.choose (fun node ->
-            match node.Kind with SemanticKind.VarRef ("index", Some definition) -> Some (node.Id, definition) | _ -> None) |> Seq.toList
-        Assert.NotEmpty reads
+        let reads = LoopBindings.iterationReads result raw
         for id, definition in reads do
             Assert.Equal(source, definition)
             Assert.Equal(NodeId.value source, LoopBindings.rawDefinition raw id)
@@ -179,6 +215,8 @@ let main _ =
         for capture in [outerCapture; innerCapture] do
             Assert.False capture.IsMutable
             Assert.Contains(capture.SourceNodeId |> Option.get, sourceIds)
+        for _, definition in LoopBindings.iterationReads result raw do
+            Assert.Contains(definition, sourceIds)
         for node in nodes.Values do
             match node.Kind with
             | SemanticKind.VarRef ("index", Some definition) -> Assert.Contains(definition, sourceIds)

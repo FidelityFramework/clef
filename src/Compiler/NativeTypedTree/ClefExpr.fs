@@ -137,6 +137,9 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] ClefExpr =
         elseBranch: ClefExpr option *
         ty: NativeType
 
+    /// Always-active source requirement, separate from DEBUG assertion policy.
+    | Require of condition: ClefExpr * diagnostic: string
+
     /// Match expression: match scrutinee with | case1 -> ... | case2 -> ...
     | Match of
         scrutinee: ClefExpr *
@@ -145,6 +148,9 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] ClefExpr =
 
     /// Sequential expression: expr1; expr2; ...
     | Sequential of exprs: ClefExpr list * ty: NativeType
+
+    /// Explicit shallow demand retains its own semantic boundary in this view.
+    | Eager of operand: ClefExpr * ty: NativeType
 
     /// While loop: while guard do body
     | WhileLoop of
@@ -455,6 +461,8 @@ module ClefExpr =
                 let thenExpr = fromNode graph thenId
                 let elseExpr = elseIdOpt |> Option.map (fromNode graph)
                 ClefExpr.IfThenElse(guardExpr, thenExpr, elseExpr, node.Type)
+            | SemanticKind.Require(condition, diagnostic) ->
+                ClefExpr.Require(fromNode graph condition, diagnostic)
 
             // Match expression
             | SemanticKind.Match(scrutineeId, cases) ->
@@ -693,6 +701,36 @@ module ClefExpr =
                     [lazyExpr],
                     node.Type)
 
+            | SemanticKind.EagerExpr operand ->
+                ClefExpr.Eager(fromNode graph operand, node.Type)
+
+            // Internal lazy storage is a diagnostic expression view. Slot and
+            // owner identities remain names; do not recurse into declarations.
+            | SemanticKind.LazyValue(thunk, environment) ->
+                ClefExpr.Intrinsic(
+                    { Module = IntrinsicModule.Lazy; Operation = "value"; Category = IntrinsicCategory.Pure
+                      FullName = sprintf "Lazy.value[%d]" (NodeId.value thunk) }, [fromNode graph environment], node.Type)
+            | SemanticKind.LazyEnvironment(owner, _) ->
+                ClefExpr.Intrinsic(
+                    { Module = IntrinsicModule.Lazy; Operation = "environment"; Category = IntrinsicCategory.Memory
+                      FullName = sprintf "Lazy.environment[%d]" (NodeId.value owner) }, node.Children |> List.map (fromNode graph), node.Type)
+            | SemanticKind.LazyEnvironmentReference value ->
+                ClefExpr.Intrinsic(
+                    { Module = IntrinsicModule.Lazy; Operation = "environmentReference"; Category = IntrinsicCategory.Pure
+                      FullName = "Lazy.environmentReference" }, [fromNode graph value], node.Type)
+            | SemanticKind.LazyAllocate owner ->
+                ClefExpr.Intrinsic(
+                    { Module = IntrinsicModule.Lazy; Operation = "allocate"; Category = IntrinsicCategory.Memory
+                      FullName = sprintf "Lazy.allocate[%d]" (NodeId.value owner) }, [], node.Type)
+            | SemanticKind.LazyRead(environment, slot) | SemanticKind.LazyBorrow(environment, slot) ->
+                ClefExpr.Intrinsic(
+                    { Module = IntrinsicModule.Lazy; Operation = "read"; Category = IntrinsicCategory.Memory
+                      FullName = sprintf "Lazy.read[%d]" (NodeId.value slot) }, [fromNode graph environment], node.Type)
+            | SemanticKind.LazyWrite(environment, slot, value) ->
+                ClefExpr.Intrinsic(
+                    { Module = IntrinsicModule.Lazy; Operation = "write"; Category = IntrinsicCategory.Memory
+                      FullName = sprintf "Lazy.write[%d]" (NodeId.value slot) }, [fromNode graph environment; fromNode graph value], node.Type)
+
             // Seq expressions (PRD-15)
             | SemanticKind.SeqExpr(bodyId, _captures) ->
                 // Convert seq body (MoveNext thunk) to an expression
@@ -898,11 +936,17 @@ module ClefExpr =
             let exprsStr = exprs |> List.map (prettyPrint (indent + 1)) |> String.concat "\n"
             sprintf "%sSeq:\n%s" pad exprsStr
 
+        | ClefExpr.Eager(operand, _) ->
+            sprintf "%sEager:\n%s" pad (prettyPrint (indent + 1) operand)
+
         | ClefExpr.IfThenElse(guard, thenBr, elseBr, _ty) ->
             let guardStr = prettyPrint 0 guard
             let thenStr = prettyPrint (indent + 1) thenBr
             let elseStr = elseBr |> Option.map (prettyPrint (indent + 1)) |> Option.defaultValue ""
             sprintf "%sIf %s then\n%s%s" pad guardStr thenStr (if elseStr = "" then "" else sprintf "\n%selse\n%s" pad elseStr)
+
+        | ClefExpr.Require(condition, diagnostic) ->
+            sprintf "%sRequire %s (%s)" pad (prettyPrint 0 condition) diagnostic
 
         | ClefExpr.PlatformBinding(name, args, _ty) ->
             let argsStr = args |> List.map (prettyPrint 0) |> String.concat ", "
@@ -943,7 +987,9 @@ module ClefExpr =
         | ClefExpr.LetBinding(name, _, _, _, _) -> sprintf "Let(%s)" name
         | ClefExpr.LetRecBindings(bindings, _) -> sprintf "LetRec(%d bindings)" (List.length bindings)
         | ClefExpr.Sequential(exprs, _) -> sprintf "Seq(%d)" (List.length exprs)
+        | ClefExpr.Eager _ -> "Eager"
         | ClefExpr.IfThenElse(_, _, _, _) -> "IfThenElse"
+        | ClefExpr.Require _ -> "Require"
         | ClefExpr.Match(_, cases, _) -> sprintf "Match(%d cases)" (List.length cases)
         | ClefExpr.WhileLoop(_, _) -> "While"
         | ClefExpr.ForLoop(var, _, _, _, _) -> sprintf "For(%s)" var

@@ -10,6 +10,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration
 open Clef.Compiler.Nanopass.Recipe
 module Environments = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments
 module Incidence = Clef.Compiler.Baker.Ingredients.Closures
+module ExplicitDemand = Clef.Compiler.PSGSaturation.SemanticGraph.ExplicitDemand
 
 let prepare (graph: SemanticGraph) (curry: CurryInfo) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
@@ -20,8 +21,30 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) =
         | Some { Kind = SemanticKind.ClosureValue(_, environment) } -> Some(id, environment)
         | Some { Kind = SemanticKind.Sequential values } -> List.tryLast values |> Option.bind (finalClosure seen)
         | Some { Kind = SemanticKind.TypeAnnotation(value, _) } -> finalClosure seen value
+        | Some { Kind = SemanticKind.EagerExpr value } when ExplicitDemand.operand graph id = Some value ->
+            finalClosure seen value
         | _ -> None
     let resolved = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
+    // Recover a named implementation through immutable value transport while
+    // retaining the original callee expression. A stored application result
+    // is a distinct formation frontier and is not flattened here.
+    let rec functionReference seen id =
+        if Set.contains id seen then None else
+        let seen = Set.add id seen
+        match nodes.TryFind id with
+        | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } ->
+            match nodes.TryFind value with
+            | Some { Kind = SemanticKind.Lambda _ } -> Some(id, Set.empty)
+            | _ -> functionReference seen value |> Option.map (fun (binding, path) -> binding, Set.add id path)
+        | Some { Kind = SemanticKind.VarRef(_, Some value) }
+        | Some { Kind = SemanticKind.TypeAnnotation(value, _) } ->
+            functionReference seen value |> Option.map (fun (binding, path) -> binding, Set.add id path)
+        | Some { Kind = SemanticKind.Sequential values } ->
+            List.tryLast values |> Option.bind (functionReference seen)
+            |> Option.map (fun (binding, path) -> binding, Set.add id path)
+        | Some { Kind = SemanticKind.EagerExpr value } when ExplicitDemand.operand graph id = Some value ->
+            functionReference seen value |> Option.map (fun (binding, path) -> binding, Set.add id path)
+        | _ -> None
     let incidence = nodes.Values |> Seq.collect Incidence.structuralIncidence |> Seq.toList
     let users id = incidence |> List.filter (fun edge -> Hyperedge.isStructural edge && List.contains id edge.Sources)
     let plans = nodes.Values |> Seq.choose (fun binding ->
@@ -36,10 +59,12 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) =
                         match node.Kind with SemanticKind.VarRef(_, Some definition) when definition = binding.Id -> Some node.Id | _ -> None) |> Set.ofSeq
                     let calls = nodes.Values |> Seq.choose (fun node ->
                         match node.Kind, resolved.Calls.TryFind node.Id with
-                        | SemanticKind.Application(callee, arguments), Some { Targets = [target]; Unknown = false }
-                            when refs.Contains callee && target.Lambda = implementation && arguments.Length = parameters.Length -> Some(node, callee, arguments)
+                        | SemanticKind.Application(callee, arguments), Some { Targets = [target]; Unknown = false; Complete = true }
+                            when target.Lambda = implementation && arguments.Length = parameters.Length ->
+                            functionReference Set.empty callee |> Option.bind (fun (definition, path) ->
+                                if definition = binding.Id then Some(node, callee, arguments, path) else None)
                         | _ -> None) |> Seq.toList
-                    let callIds = calls |> List.map (fun (node, _, _) -> node.Id) |> Set.ofList
+                    let callIds = calls |> List.map (fun (node, _, _, _) -> node.Id) |> Set.ofList
                     let rec closedValue seen id =
                         if Set.contains id seen then false else
                         let seen = Set.add id seen
@@ -47,6 +72,8 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) =
                             match nodes[edge.Target].Kind with
                             | SemanticKind.Application _ -> edge.Role = EdgeRole.Callee && callIds.Contains edge.Target
                             | SemanticKind.Binding(_, false, _, _) | SemanticKind.TypeAnnotation _ -> closedValue seen edge.Target
+                            | SemanticKind.EagerExpr value when value = id && ExplicitDemand.operand graph edge.Target = Some id ->
+                                closedValue seen edge.Target
                             | SemanticKind.Sequential values -> List.tryLast values <> Some id || closedValue seen edge.Target
                             | _ -> false)
                         let references = graph.Edges |> List.filter (fun edge -> edge.Class = EdgeClass.Reference && List.contains id edge.Sources)
@@ -75,6 +102,8 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) =
                                 match nodes[edge.Target].Kind with
                                 | SemanticKind.Sequential values when List.tryLast values = Some id -> unique (Set.add id seen) edge.Target
                                 | SemanticKind.TypeAnnotation(value, _) when value = id -> unique (Set.add id seen) edge.Target
+                                | SemanticKind.EagerExpr value when value = id && ExplicitDemand.operand graph edge.Target = Some id ->
+                                    unique (Set.add id seen) edge.Target
                                 | _ -> false
                             | _ -> false
                     if closed && unique Set.empty owner then Some(binding, lambda, owner, constructor, calls) else None)
@@ -121,22 +150,24 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) =
         signature binding factoryType binding.Kind binding.Children |> add |> ignore
         edges <- { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResultDestination
                    Sources = [lambda.Id; owner; formal.Id]; Target = constructor; Ordinal = 0 } :: edges
-        for call, callee, arguments in calls do
-            let snapshots = arguments |> List.mapi (fun index argument ->
-                let source = nodes[argument]
-                let name = sprintf "__environment_argument_%d_%d" (NodeId.value call.Id) index
-                let snapshot = { fresh source (SemanticKind.Binding(name, false, false, None)) source.Type [argument] with ValueRange = source.ValueRange } |> add
-                let reference = { fresh source (SemanticKind.VarRef(name, Some snapshot.Id)) source.Type [] with ValueRange = source.ValueRange } |> add
-                snapshot.Id, reference.Id)
+        for call, callee, arguments, path in calls do
             let allocation = fresh call (SemanticKind.EnvironmentAllocate owner) ty [] |> add
             let name = sprintf "__environment_destination_%d" (NodeId.value call.Id)
             let stored = fresh call (SemanticKind.Binding(name, false, false, None)) ty [allocation.Id] |> add
             let destination = fresh call (SemanticKind.VarRef(name, Some stored.Id)) ty [] |> add
-            signature nodes[callee] factoryType nodes[callee].Kind nodes[callee].Children |> add |> ignore
-            let actuals = List.map snd snapshots
-            let arguments = List.take ordinal actuals @ [destination.Id] @ List.skip ordinal actuals
+            for id in path do
+                let source = nodes[id]
+                let kind =
+                    match source.Kind with
+                    | SemanticKind.TypeAnnotation(inner, _) -> SemanticKind.TypeAnnotation(inner, factoryType)
+                    | _ -> source.Kind
+                signature source factoryType kind source.Children |> add |> ignore
+            // This representation boundary only provides result storage.
+            // Ordinary actuals retain their existing demand/effect frontiers;
+            // copying them into a prefix would force previously deferred work.
+            let arguments = List.take ordinal arguments @ [destination.Id] @ List.skip ordinal arguments
             let invocation = { fresh call (SemanticKind.Application(callee, arguments)) call.Type (callee :: arguments) with ValueRange = call.ValueRange } |> add
-            let ordered = List.map fst snapshots @ [stored.Id; invocation.Id]
+            let ordered = [stored.Id; invocation.Id]
             { call with Kind = SemanticKind.Sequential ordered; Children = ordered } |> add |> ignore
             edges <- { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResultCall
                        Sources = [lambda.Id; constructor; formal.Id; allocation.Id; destination.Id]

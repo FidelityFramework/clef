@@ -56,6 +56,35 @@ module private ContinuationMeetFixture =
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceContinuationMeets")>]
 type SequenceContinuationMeetCases() =
     [<Theory>]
+    [<InlineData("sequence", false)>]
+    [<InlineData("sequence", true)>]
+    [<InlineData("closure", false)>]
+    [<InlineData("closure", true)>]
+    member _.``Formation meets scalar captures into placed slots without loading captured cells`` boundary cell =
+        let kind = if cell then CaptureSlotKind.CellView Types.intType else CaptureSlotKind.Scalar(SettledSlot.Integer(64, None))
+        let graph, frames, origins, storage, _, _, _, _, value =
+            ContinuationMeetFixture.build Types.intType (Some(ValueRange.Bounded(0I, 255I)))
+                Types.intType (Some(ValueRange.Bounded(0I, 255I))) Types.intType (Some(ValueRange.Bounded(0I, 255I))) kind kind
+        let owner, frame = frames |> Map.toList |> Assert.Single
+        let source = frame.Slots.Head.Source
+        let values = [source, value]
+        let original = graph.Nodes[owner]
+        let changed =
+            if boundary = "sequence" then { original with Kind = SemanticKind.SeqExpr(frame.Generator, []) }
+            else { original with Kind = SemanticKind.EnvironmentCreate(owner, values) }
+        let graph = { graph with Nodes = graph.Nodes.Add(owner, changed) }
+        let actual =
+            if boundary = "sequence" then
+                Meets.continuations frames (origins.Add(owner, owner)) storage (Map.ofList [owner, values]) graph
+            else
+                let layout: EnvironmentLayout =
+                    { Owner = owner; Implementation = frame.Generator; Formal = frame.Formal
+                      Slots = frame.Slots; Bytes = frame.Bytes; Alignment = frame.Alignment; Obligations = [] }
+                Meets.environments (Map.ofList [owner, layout]) Map.empty graph
+        if cell then Assert.False(actual.ContainsKey owner)
+        else ContinuationMeetFixture.one actual owner value 8 64 MeetKind.ExtendUnsigned
+
+    [<Theory>]
     [<InlineData(false)>]
     [<InlineData(true)>]
     member _.``Frame writes retain the operand sign and exact selected storage`` signed =
@@ -65,7 +94,7 @@ type SequenceContinuationMeetCases() =
             ContinuationMeetFixture.build Types.intType (Some range) Types.intType (Some range)
                 Types.intType (Some range) (scalar 64) (scalar 16)
         let originalNodes = graph.Nodes
-        let actual = Meets.continuations frames origins storage graph
+        let actual = Meets.continuations frames origins storage Map.empty graph
         Assert.Same(originalNodes, graph.Nodes)
         let adaptation = if signed then MeetKind.ExtendSigned else MeetKind.ExtendUnsigned
         ContinuationMeetFixture.one actual write value 8 64 adaptation
@@ -78,7 +107,7 @@ type SequenceContinuationMeetCases() =
             ContinuationMeetFixture.build Types.intType (Some(ValueRange.Bounded(0I, 255I)))
                 Types.intType (Some(ValueRange.Bounded(0I, (1I <<< 64) - 1I)))
                 Types.intType (Some(ValueRange.Bounded(0I, 255I))) scalar scalar
-        let actual = Meets.continuations frames origins storage graph
+        let actual = Meets.continuations frames origins storage Map.empty graph
         ContinuationMeetFixture.one actual read read 8 64 MeetKind.ExtendUnsigned
         ContinuationMeetFixture.one actual current current 8 64 MeetKind.ExtendUnsigned
 
@@ -89,7 +118,7 @@ type SequenceContinuationMeetCases() =
             ContinuationMeetFixture.build Types.intType (Some(ValueRange.Bounded(0I, 255I)))
                 Types.intType (Some(ValueRange.Bounded(0I, 255I)))
                 Types.intType (Some(ValueRange.Bounded(0I, 65535I))) cell cell
-        let actual = Meets.continuations frames origins storage graph
+        let actual = Meets.continuations frames origins storage Map.empty graph
         ContinuationMeetFixture.one actual write value 8 16 MeetKind.ExtendUnsigned
         ContinuationMeetFixture.one actual read read 16 8 MeetKind.Truncate
 
@@ -98,7 +127,7 @@ type SequenceContinuationMeetCases() =
         let graph, frames, origins, storage, read, write, _, current, value =
             ContinuationMeetFixture.build Types.floatType None Types.floatType None Types.floatType None
                 (CaptureSlotKind.Scalar(SettledSlot.Real 32)) (CaptureSlotKind.Scalar(SettledSlot.Real 64))
-        let actual = Meets.continuations frames origins storage graph
+        let actual = Meets.continuations frames origins storage Map.empty graph
         ContinuationMeetFixture.one actual write value 64 32 MeetKind.TruncateFloat
         ContinuationMeetFixture.one actual read read 32 64 MeetKind.ExtendFloat
         ContinuationMeetFixture.one actual current current 32 64 MeetKind.ExtendFloat
@@ -109,4 +138,4 @@ type SequenceContinuationMeetCases() =
         let view = CaptureSlotKind.ValueView native
         let graph, frames, origins, storage, _, _, _, _, _ =
             ContinuationMeetFixture.build native None native None native None view view
-        Assert.Empty(Meets.continuations frames origins storage graph)
+        Assert.Empty(Meets.continuations frames origins storage Map.empty graph)

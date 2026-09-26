@@ -12,6 +12,7 @@ module ExpressionTypes = Clef.Compiler.NativeTypedTree.Expressions.Types
 module Applications = Clef.Compiler.NativeTypedTree.Expressions.Applications
 module Bindings = Clef.Compiler.NativeTypedTree.Expressions.Bindings
 module Literals = Clef.Compiler.NativeTypedTree.Expressions.Literals
+module UnitEnvironments = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments
 
 module private UnitLambdas =
     let check source =
@@ -40,6 +41,25 @@ module private UnitLambdas =
         | _ -> node
 
     let same expected actual = Assert.Equal(formatType (applySubst expected), formatType (applySubst actual))
+
+    /// Inspect the settled implementation while retaining the source boundary.
+    /// A materialized environment adds one physical formal, never a source unit
+    /// argument. Captures are read from the owning formation's provenance.
+    let callable (result: CheckResult) (value: SemanticNode) =
+        let implementation =
+            UnitEnvironments.tryImplementation result.Graph value.Id
+            |> Option.defaultWith (fun () -> failwithf "No callable implementation for %A" value.Kind)
+        let node = result.Graph.Nodes[implementation]
+        match node.Kind with
+        | SemanticKind.Lambda(parameters, body, captures, _, _) ->
+            match (UnitEnvironments.knownCallables result.Graph).TryFind value.Id with
+            | Some carrier ->
+                let _, _, formal = List.head parameters
+                Assert.Equal(Some carrier.EnvironmentOwner, UnitEnvironments.tryEnvironmentOwner result.Graph formal)
+                Assert.Empty captures
+                node, List.tail parameters, body, UnitEnvironments.captures result.Graph carrier.EnvironmentOwner
+            | None -> node, parameters, body, captures
+        | kind -> failwithf "Callable implementation is not a lambda: %A" kind
 
     /// A logical formal is an actual graph participant. Consuming exactly those
     /// formals from the callable type must leave the body's type, even for unit.
@@ -112,15 +132,13 @@ let main _ = work (); calls - 1
 """
         UnitLambdas.assertSettled result
         let work = UnitLambdas.value result (UnitLambdas.binding "work" result).Id
-        match work.Kind with
-        | SemanticKind.Lambda (parameters, body, captures, _, _) ->
-            let _, parameterType, _ = Assert.Single parameters
-            UnitLambdas.same Types.unitType parameterType
-            Assert.Empty captures
-            match result.Graph.Nodes[body].Kind with
-            | SemanticKind.Set _ -> UnitLambdas.same Types.unitType result.Graph.Nodes[body].Type
-            | kind -> failwithf "Unit body was replaced rather than retaining the assignment: %A" kind
-        | kind -> failwithf "Unit function value lost its lambda: %A" kind
+        let _, parameters, body, captures = UnitLambdas.callable result work
+        let _, parameterType, _ = Assert.Single parameters
+        UnitLambdas.same Types.unitType parameterType
+        Assert.Empty captures
+        match result.Graph.Nodes[body].Kind with
+        | SemanticKind.Set _ -> UnitLambdas.same Types.unitType result.Graph.Nodes[body].Type
+        | kind -> failwithf "Unit body was replaced rather than retaining the assignment: %A" kind
 
     [<Fact>]
     member _.``Captured unit lambda distinguishes its formal from shared mutable storage``() =
@@ -134,15 +152,13 @@ let main _ =
 """
         UnitLambdas.assertSettled result
         let work = UnitLambdas.value result (UnitLambdas.binding "work" result).Id
-        match work.Kind with
-        | SemanticKind.Lambda (parameters, _, captures, _, _) ->
-            let _, parameterType, parameter = Assert.Single parameters
-            UnitLambdas.same Types.unitType parameterType
-            let capture = Assert.Single captures
-            Assert.True capture.IsMutable
-            Assert.Equal(Some (UnitLambdas.binding "calls" result).Id, capture.SourceNodeId)
-            Assert.NotEqual(Some parameter, capture.SourceNodeId)
-        | kind -> failwithf "Captured unit function lost its lambda: %A" kind
+        let _, parameters, _, captures = UnitLambdas.callable result work
+        let _, parameterType, parameter = Assert.Single parameters
+        UnitLambdas.same Types.unitType parameterType
+        let capture = Assert.Single captures
+        Assert.True capture.IsMutable
+        Assert.Equal(Some (UnitLambdas.binding "calls" result).Id, capture.SourceNodeId)
+        Assert.NotEqual(Some parameter, capture.SourceNodeId)
 
     [<Fact>]
     member _.``Named explicit and pattern unit parameters agree on logical arity``() =
@@ -157,11 +173,9 @@ let main _ = named (); anonymous (); typed (); combined () (); 0
         UnitLambdas.assertSettled result
         for name, arity in ["named", 1; "anonymous", 1; "typed", 1; "combined", 2] do
             let lambda = UnitLambdas.value result (UnitLambdas.binding name result).Id
-            match lambda.Kind with
-            | SemanticKind.Lambda (parameters, _, _, _, _) ->
-                Assert.Equal(arity, parameters.Length)
-                for _, parameterType, _ in parameters do UnitLambdas.same Types.unitType parameterType
-            | kind -> failwithf "Unit callable lost its lambda: %A" kind
+            let _, parameters, _, _ = UnitLambdas.callable result lambda
+            Assert.Equal(arity, parameters.Length)
+            for _, parameterType, _ in parameters do UnitLambdas.same Types.unitType parameterType
 
     [<Fact>]
     member _.``A unit callable returning another unit callable preserves both boundaries``() =
@@ -178,16 +192,13 @@ let main _ = work (); if calls = 12 then 0 else 1
         let make = UnitLambdas.value result (UnitLambdas.binding "make" result).Id
         let residual = NativeType.TFun(Types.unitType, Types.unitType)
         UnitLambdas.same (NativeType.TFun(Types.unitType, residual)) make.Type
-        match make.Kind with
-        | SemanticKind.Lambda (parameters, body, _, _, _) ->
-            Assert.Single parameters |> ignore
-            let returned = UnitLambdas.value result body
-            UnitLambdas.same residual returned.Type
-            match returned.Kind with
-            | SemanticKind.Lambda (parameters, _, _, _, _) -> Assert.Single parameters |> ignore
-            | kind -> failwithf "Returned unit callable was absorbed: %A" kind
-            Assert.False(result.Graph.Codata.Value.Curry.AbsorbedLambdas.Contains returned.Id)
-        | kind -> failwithf "Factory lost its unit callable: %A" kind
+        let _, parameters, body, _ = UnitLambdas.callable result make
+        Assert.Single parameters |> ignore
+        let returned = UnitLambdas.value result body
+        UnitLambdas.same residual returned.Type
+        let _, parameters, _, _ = UnitLambdas.callable result returned
+        Assert.Single parameters |> ignore
+        Assert.False(result.Graph.Codata.Value.Curry.AbsorbedLambdas.Contains returned.Id)
         let work = UnitLambdas.value result (UnitLambdas.binding "work" result).Id
         UnitLambdas.same residual work.Type
         match work.Kind with
