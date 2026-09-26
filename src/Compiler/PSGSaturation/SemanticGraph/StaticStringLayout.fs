@@ -12,10 +12,11 @@ module Declaration = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolutio
 /// BAREWire chooses the offsets. The compiler materializes exactly that plan;
 /// its immutable bytes and views then travel to both proof and native emission.
 let settle (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
+    let deferred = OrdinaryDemand.deferredOnly graph
     let graph = { graph with StaticStringPool = None }
     let literals =
         graph.Nodes |> Map.toList |> List.map snd
-        |> List.filter (fun node -> node.IsReachable)
+        |> List.filter (fun node -> node.IsReachable && not (deferred.Contains node.Id))
         |> List.choose (fun node ->
             match node.Kind with
             | SemanticKind.Literal (NativeLiteral.String content) -> Some (content, node)
@@ -83,7 +84,11 @@ let literalEvidence (graph: SemanticGraph) : Map<NodeId, NodeId list> =
             // Other literal lengths determine this allocation's plan too.
             // Keep all of those source premises in the dependent storage joint.
             let literals = actual.Entries |> List.collect _.NodeIds
-            let participants = authority @ literals |> List.distinct
+            let demand = OrdinaryDemand.read graph
+            let demandParticipants =
+                Seq.append (demand.Formals.Values |> Seq.map _.Participants) (demand.Calls.Values |> Seq.map _.Participants)
+                |> Set.unionMany |> Set.toList
+            let participants = authority @ literals @ demandParticipants |> List.distinct
             literals |> List.map (fun id -> id, id :: participants |> List.distinct) |> Map.ofList
         | _ -> Map.empty
 

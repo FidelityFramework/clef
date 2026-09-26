@@ -14,7 +14,7 @@ let scalarOption (graph: SemanticGraph) ty =
     let ty = applySubst ty
     match ty with
     | NativeType.TApp(constructor, [inner]) when constructor.Name = "option" && Set.isEmpty (freeTypeVars ty) ->
-        match graph.Layouts.Value.TryFind (formatType ty) with
+        match graph.Layouts.Value.TryFind (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType ty) with
         | Some (SettledLayout.Union(["None", None; "Some", Some payload], _, Some bytes, Some alignment))
             when bytes > 0 && alignment > 0 && (alignment &&& (alignment - 1)) = 0 ->
             match Types.tryGetNTUKind inner, payload with

@@ -748,10 +748,10 @@ let second: Pending<int, bool, int> = { Second = 7; Desired = false; Committed =
 
     "numeric type equality constraints enforce dimensions", fun () ->
         match solveConstraint (Constraint.Equals(measured metre, measured second, dummyRange)) with
-        | Result.Error(MeasureMismatch _) -> ()
+        | Failed [MeasureMismatch _] -> ()
         | _ -> failwith "Measure constraint silently ignored"
         match solveConstraint (Constraint.Equals(Types.stringType, measured metre, dummyRange)) with
-        | Result.Error(TypeMismatch _) -> ()
+        | Failed [TypeMismatch _] -> ()
         | _ -> failwith "Measure constraint accepted a nonnumeric type"
 
     "source numeric names do not select representations", fun () ->

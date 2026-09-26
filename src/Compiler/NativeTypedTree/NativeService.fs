@@ -316,36 +316,6 @@ let private errorsToDiagnostics (errors: UnificationError list) : Diagnostic lis
         }
     )
 
-/// Discharge member constraints against the record table. `resolveFieldType` defers `x.Field`
-/// to `HasMember(x, Field, result)` when the type of `x` is still a variable (the constraint
-/// that determines it has been accumulated but not solved); once the equality constraints are
-/// solved the base type is known and `result` is unified with the field's type. One discharge
-/// can resolve the base of another (`(Array.get xs i).Field.Other`), so this repeats until no
-/// constraint makes progress. A constraint whose base never resolves stays open, as before.
-let private dischargeMemberConstraints (env: TypeEnv) (constraints: Constraint list) : UnificationError list =
-    let memberOf (baseTy: NativeType) (name: string) : NativeType option =
-        match name with
-        | "Length" when isStringType baseTy || isArrayType baseTy -> Some Types.intType
-        | _ -> tryResolveRecordFieldType baseTy name env
-    let rec loop (pending: Constraint list) (errors: UnificationError list) =
-        let mutable progress = false
-        let mutable remaining = []
-        let mutable errs = errors
-        for c in pending do
-            match c with
-            | Constraint.HasMember (ty, name, resultTy, range) ->
-                match memberOf (applySubst ty) name with
-                | Some fieldTy ->
-                    progress <- true
-                    match tryUnify resultTy fieldTy range with
-                    | Result.Ok () -> ()
-                    | Result.Error e -> errs <- e :: errs
-                | None -> remaining <- c :: remaining
-            | _ -> ()
-        if progress && not (List.isEmpty remaining) then loop (List.rev remaining) errs
-        else List.rev errs
-    loop (constraints |> List.filter (function Constraint.HasMember _ -> true | _ -> false)) []
-
 /// Solve constraints and return diagnostics. Equality constraints first (they determine the
 /// base types), then the deferred member constraints against the environment's record table.
 let private solveAndGetDiagnostics (env: TypeEnv) (constraints: Constraint list) : Diagnostic list =
@@ -353,8 +323,27 @@ let private solveAndGetDiagnostics (env: TypeEnv) (constraints: Constraint list)
         match solveConstraints constraints with
         | Solved | Deferred _ -> []
         | Failed errors -> errors
-    let memberErrors = dischargeMemberConstraints env constraints
-    errorsToDiagnostics (solveErrors @ memberErrors)
+    let memberErrors, pending = dischargeMemberConstraints env constraints
+    let memberDiagnostics =
+        pending |> List.choose (fun constraint' ->
+            match constraint' with
+            | Constraint.HasMember(receiver, name, result, range) when not (isGeneralizedMemberConstraint env constraint') ->
+                match applySubst receiver with
+                | NativeType.TError _ -> None
+                | actual ->
+                    let unresolved = match actual with NativeType.TVar _ -> true | _ -> false
+                    Some {
+                        Severity = NativeDiagnosticSeverity.Error
+                        Code = if unresolved then DiagnosticCodes.CCS8711_UnsupportedConstraint else DiagnosticCodes.CCS8702_UndefinedField
+                        Message =
+                            if unresolved then $"Member constraint '{formatType actual}.{name}: {formatType (applySubst result)}' remains unresolved; supply receiver context or retain it in an inline member scheme."
+                            else $"Type '{formatType actual}' does not define member '{name}'."
+                        Range = range
+                        RelatedNodes = []
+                        Reachability = ReachabilityContext.Unknown
+                    }
+            | _ -> None)
+    errorsToDiagnostics (solveErrors @ memberErrors) @ memberDiagnostics
 
 //-------------------------------------------------------------------------
 // Let-polymorphism for top-level functions
@@ -446,7 +435,7 @@ let private generalizeTopLevelFunction (builder: NodeBuilder) (env: TypeEnv) (no
         // The environment is walked only when there is a measure or carrier variable to subtract.
         let envFree = if hasFreeMeasureOrCarrierVars resolved then envFreeMeasureAndCarrierIds builder node else Set.empty
         let captured = env.BindingTypes |> Map.toSeq |> Seq.map (snd >> applySubst >> freeTypeVars) |> Set.unionMany
-        let envFree = Set.union envFree captured
+        let envFree = Set.union envFree captured |> memberGeneralizationExclusions env false
         match generalizeType envFree resolved with
         | NativeType.TForall _ as scheme ->
             builder.SetType(node.Id, scheme)
@@ -1110,6 +1099,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // complete reachable literal set. Obligation nodes are off the emission
     // spine; the witness never sees them (PHG paper 2.4).
     //=========================================================================
+    let finalGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize finalGraph
     let finalGraph = ObligationElaboration.foldIn (ObligationElaboration.elaborate finalGraph) finalGraph
 
     //=========================================================================
@@ -1121,6 +1111,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     //=========================================================================
     let platformContext = PlatformDeclaration.fill platformContext finalGraph
     let finalGraph = { finalGraph with Platform = platformContext }
+    let finalGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize finalGraph
 
     //=========================================================================
     // The range pass (CS-10, Dimensional_Range_Design.md §1): every reachable
@@ -1140,6 +1131,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         else
             let byteGraph = Clef.Compiler.Nanopass.SequenceEvaluation.normalize byteGraph
             let byteGraph = Clef.Compiler.Nanopass.EagerDemand.normalize byteGraph
+            let byteGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize byteGraph
             RangeAnalysis.run platformContext byteGraph
 
     //=========================================================================
@@ -1213,11 +1205,16 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                                     preparedSequences.Destinations preparedSequences.FactoryCalls finalGraph
     let finalGraph, sequences = Clef.Compiler.Nanopass.SequenceRuntime.normalizePreparedWhenSourceAdmitted sourceAdmitted { preparedSequences with Graph = finalGraph }
     let curry = sequences.Curry
-    let finalGraph, lazies = Clef.Compiler.Nanopass.LazyRuntime.settleWhenSourceAdmitted sourceAdmitted finalGraph
     // Representation nanopasses can clone or retire marked occurrences. Demand
     // belongs to the current marker/operand/frontier incidence, not the earlier
-    // node identities or the mere presence of a previous projection.
+    // node identities or the mere presence of a previous projection. Settle it
+    // before lazy storage proofs: retained string backing records the current
+    // demand premises which determine the immutable program allocation.
     let finalGraph = Clef.Compiler.Nanopass.EagerDemand.normalize finalGraph
+    // Source logical arguments remain intact. A closed unused-formal proof
+    // supplies the physical omission convention before callable projection.
+    let finalGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize finalGraph
+    let finalGraph, lazies = Clef.Compiler.Nanopass.LazyRuntime.settleWhenSourceAdmitted sourceAdmitted finalGraph
     ObligationDischarge.emit finalGraph  // Includes settled continuation frame obligations.
     let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
     let mmio, mmioDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess.settle (diagnostics @ residual @ rangeDiagnostics) finalGraph
@@ -1251,6 +1248,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         |> fun facts -> environments.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
         |> fun facts -> sequences.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
         |> fun facts -> lazies.Residences |> Map.fold (fun facts id residence -> Map.add id residence facts) facts
+    // Materialize absence/demand consequences while CCS owns the graph. The
+    // emission traversal must not invoke a use census or inference through a
+    // lazily evaluated codata member.
+    let ordinaryDemand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.project finalGraph
     let finalGraph =
         let settled = finalGraph
         { finalGraph with
@@ -1276,6 +1277,9 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 CallableJoins = mutableCallables.Joins
                 CallableFlows = callableFlows
                 MutableCallableStorage = mutableCallables.Storage
+                CallableEmission = CallableEmissionProjection.empty
+                OrdinaryDemand = ordinaryDemand
+                StorageWitness = StorageWitnessProjection.empty
                 ContinuationFrames = sequences.Frames
                 SequenceOrigins = sequences.Origins
                 SequenceFlows = sequences.Flows
@@ -1298,6 +1302,25 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         let facts = finalGraph.Codata.Value
         { finalGraph with Codata = lazy { facts with ProgramStorage = programInventory } }
 
+    // Source identity, including complete membership, binds the projection to
+    // this exact graph. A copied or revised graph needs fresh source settlement.
+    let finalGraph, witnessEmissionDiagnostics =
+        // Target-free typechecking is a valid source/editor result. Physical
+        // publication uses the same readiness boundary as callable settlement;
+        // it must neither demand a target from that source query nor admit it
+        // to an emitter without declared physical facts.
+        if not sourceAdmitted || finalGraph.Platform.IsNone then finalGraph, []
+        else
+            match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare finalGraph with
+            | Result.Ok admitted -> admitted, []
+            | Result.Error failures ->
+                finalGraph,
+                (failures |> List.map (fun failure ->
+                    { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8403"
+                      Message = "Source settlement is required before witnessing: " + failure.Reason
+                      Range = failure.Occurrence |> Option.bind finalGraph.Nodes.TryFind |> Option.map _.Range |> Option.defaultValue dummyRange
+                      RelatedNodes = Set.toList failure.Participants; Reachability = ReachabilityContext.Reachable }))
+
     let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
     let quotationErrors = quotationDiagnostics finalGraph
 
@@ -1315,7 +1338,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ witnessEmissionDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 

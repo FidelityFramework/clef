@@ -466,22 +466,21 @@ type SolveResult =
     | Deferred of Constraint list
     | Failed of UnificationError list
 
-/// Solve a single constraint
-let solveConstraint (c: Constraint) : Result<unit, UnificationError> =
+/// Solve a single constraint while preserving premises requiring another owner.
+let solveConstraint (c: Constraint) : SolveResult =
+    let equality = function Ok () -> Solved | Error error -> Failed [error]
     match c with
     | Constraint.Equals(t1, t2, range) ->
-        tryUnify t1 t2 range
+        tryUnify t1 t2 range |> equality
     
-    | Constraint.HasMember(ty, name, signature, range) ->
-        // SRTP constraint - member lookup will be implemented in SRTPResolution module
-        // For now, record this as a deferred constraint
-        // The signature and range are kept for error reporting
-        ignore (ty, name, signature, range)
-        Ok ()
+    | Constraint.HasMember _ ->
+        // Equality cannot discharge lexical member lookup. Both the single and
+        // batch APIs retain this exact premise for the environment-owned reader.
+        Deferred [c]
 
     | Constraint.Subtype(sub, super, range) ->
         // Subtype constraint - for now, treat as equality
-        tryUnify sub super range
+        tryUnify sub super range |> equality
 
     | Constraint.LayoutCompatible(ty, layout, range) ->
         // Layout constraint: the two layouts are of one family. An identity comparison of the
@@ -489,24 +488,24 @@ let solveConstraint (c: Constraint) : Result<unit, UnificationError> =
         // settled at saturation (Placement). Opaque and PlatformWord defer to that settlement.
         let actualLayout = TypeLayout.baseLayout (layoutOf ty)
         match (actualLayout, TypeLayout.baseLayout layout) with
-        | TypeLayout.Opaque, _ -> Ok ()  // Unknown layout, defer check
-        | _, TypeLayout.Opaque -> Ok ()  // Any layout is compatible with opaque
-        | TypeLayout.Inline _, TypeLayout.Inline _ -> Ok ()
-        | TypeLayout.Record, TypeLayout.Record -> Ok ()
-        | TypeLayout.Union, TypeLayout.Union -> Ok ()
-        | TypeLayout.FatPointer, TypeLayout.FatPointer -> Ok ()
-        | TypeLayout.NTUCompound a, TypeLayout.NTUCompound b when a = b -> Ok ()
-        | TypeLayout.Reference _, TypeLayout.Reference _ -> Ok ()
-        | TypeLayout.PlatformWord, TypeLayout.PlatformWord -> Ok ()  // Platform word matches platform word
-        | TypeLayout.PlatformWord, _ -> Ok ()  // Platform word deferred to codegen
-        | _, TypeLayout.PlatformWord -> Ok ()  // Platform word deferred to codegen
+        | TypeLayout.Opaque, _ -> Solved  // Unknown layout, defer check
+        | _, TypeLayout.Opaque -> Solved  // Any layout is compatible with opaque
+        | TypeLayout.Inline _, TypeLayout.Inline _ -> Solved
+        | TypeLayout.Record, TypeLayout.Record -> Solved
+        | TypeLayout.Union, TypeLayout.Union -> Solved
+        | TypeLayout.FatPointer, TypeLayout.FatPointer -> Solved
+        | TypeLayout.NTUCompound a, TypeLayout.NTUCompound b when a = b -> Solved
+        | TypeLayout.Reference _, TypeLayout.Reference _ -> Solved
+        | TypeLayout.PlatformWord, TypeLayout.PlatformWord -> Solved  // Platform word matches platform word
+        | TypeLayout.PlatformWord, _ -> Solved  // Platform word deferred to codegen
+        | _, TypeLayout.PlatformWord -> Solved  // Platform word deferred to codegen
         | _ ->
             ignore range  // Would be used for error location
-            Ok ()  // For now, accept - codegen will validate
+            Solved  // For now, accept - codegen will validate
 
     | Constraint.OperandOf _ ->
         // Lives on a variable and fires in `unify` when that variable binds; never in the list.
-        Ok ()
+        Solved
 
     | Constraint.HasTypeArgs(forallTy, args, resultTy, range) ->
         // Type application constraint - forallTy should be generic and instantiate to resultTy
@@ -515,18 +514,18 @@ let solveConstraint (c: Constraint) : Result<unit, UnificationError> =
             if List.length typeParams = List.length args then
                 // Instantiate body with args and unify with result
                 let substituted = NativeTypes.instantiate typeParams args bodyType
-                tryUnify substituted resultTy range
+                tryUnify substituted resultTy range |> equality
             else
                 // Arity mismatch
-                Error (UnificationError.ArityMismatch(List.length typeParams, List.length args, range))
+                Failed [UnificationError.ArityMismatch(List.length typeParams, List.length args, range)]
         | NativeType.TVar _ ->
             // Type variable - cannot resolve yet, this is okay
-            Ok ()
+            Solved
         | _ ->
             // Non-forall type - this constraint will fail unless resolved later
             // For now, accept it; later constraint solving may refine
             ignore (args, resultTy, range)
-            Ok ()
+            Solved
 
 /// Solve a list of constraints, returning any that couldn't be solved immediately
 let solveConstraints (constraints: Constraint list) : SolveResult =
@@ -535,14 +534,9 @@ let solveConstraints (constraints: Constraint list) : SolveResult =
     
     for c in constraints do
         match solveConstraint c with
-        | Ok () -> ()
-        | Error e -> 
-            match c with
-            | Constraint.HasMember _ -> 
-                // SRTP constraints can be deferred
-                deferred <- c :: deferred
-            | _ ->
-                errors <- e :: errors
+        | Solved -> ()
+        | Deferred premises -> deferred <- List.rev premises @ deferred
+        | Failed failures -> errors <- List.rev failures @ errors
     
     if not (List.isEmpty errors) then
         Failed (List.rev errors)

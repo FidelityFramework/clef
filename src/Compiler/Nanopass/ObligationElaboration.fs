@@ -28,6 +28,7 @@ module Recipes = Clef.Compiler.Baker.Recipes.ObligationRecipes
 module RangeAnalysis = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis
 module MappedBindings = Clef.Compiler.PSGSaturation.SemanticGraph.MappedBindings
 module MappedSpans = Clef.Compiler.PSGSaturation.SemanticGraph.MappedSpans
+module DemandProjection = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
 
 //=============================================================================
 // SUBJECT DISCOVERY
@@ -37,6 +38,7 @@ module MappedSpans = Clef.Compiler.PSGSaturation.SemanticGraph.MappedSpans
 /// then library strings, distinct by content -- exactly the set the emission
 /// places.
 let private reachableLiterals (graph: SemanticGraph) : (string * SemanticNode) list =
+    let deferred = DemandProjection.deferredOnly graph
     let entryFile =
         match graph.DeclarationRoots with
         | (entryId, _) :: _ -> SemanticGraph.tryGetNode entryId graph |> Option.map (fun n -> n.Range.File) |> Option.defaultValue ""
@@ -44,7 +46,7 @@ let private reachableLiterals (graph: SemanticGraph) : (string * SemanticNode) l
     graph.Nodes
     |> Map.toList
     |> List.map snd
-    |> List.filter (fun n -> n.IsReachable)
+    |> List.filter (fun n -> n.IsReachable && not (deferred.Contains n.Id))
     |> List.choose (fun n ->
         match n.Kind with
         | SemanticKind.Literal (NativeLiteral.String s) -> Some (s, n)
@@ -65,10 +67,11 @@ let private literalOperand (graph: SemanticGraph) (id: NodeId) : (int * string) 
 
 /// Reachable applications of a named intrinsic, in source order.
 let private intrinsicSites (graph: SemanticGraph) (m: IntrinsicModule) (op: string) : (SemanticNode * NodeId list) list =
+    let deferred = DemandProjection.deferredOnly graph
     graph.Nodes
     |> Map.toList
     |> List.map snd
-    |> List.filter (fun n -> n.IsReachable)
+    |> List.filter (fun n -> n.IsReachable && not (deferred.Contains n.Id))
     |> List.choose (fun n ->
         match n.Kind with
         | SemanticKind.Application (funcId, args) ->
@@ -252,6 +255,7 @@ let elaborate (graph: SemanticGraph) : Enrichment =
 /// The integer range pass has already settled each literal's enclosure and
 /// selection. This observer consumes those facts and the selected declaration.
 let private elaborateIntegers (graph: SemanticGraph) (core: DeclaredCore option) (enrichId: int) : Enrichment * Diagnostic list =
+    let deferred = DemandProjection.deferredOnly graph
     let sites =
         graph.Nodes |> Map.toList |> List.map snd
         |> List.filter (fun node -> node.IsReachable && (Types.tryGetNTUKind node.Type |> Option.exists NTUKind.isInteger))
@@ -277,6 +281,7 @@ let private elaborateIntegers (graph: SemanticGraph) (core: DeclaredCore option)
                 else [error "CCS8012" (sprintf "The analysed range [%A, %A] does not contain integer literal %A." lower upper value)]
             let selected = RangeAnalysis.selectedRepresentation graph site.Id
             match selected, core with
+            | _ when deferred.Contains site.Id -> range, rangeErrors
             | None, None -> range, rangeErrors
             | None, Some _ when graph.Platform |> Option.exists (fun context -> PlatformContext.substrateKind context = SubstrateKind.FPGA) -> range, rangeErrors
             | None, Some _ -> range, rangeErrors @ [error "CCS8204" "No platform representation was selected for this analysed integer literal."]
@@ -303,6 +308,7 @@ let private elaborateIntegers (graph: SemanticGraph) (core: DeclaredCore option)
 /// current concrete literal representation; real-expression selection remains
 /// a separate range-analysis responsibility.
 let elaborateSettled (graph: SemanticGraph) : Enrichment * Diagnostic list =
+    let deferred = DemandProjection.deferredOnly graph
     let core = resolve graph |> Option.bind (fun platform -> platform.Core)
     let enrichId = freshId ()
     let sites =
@@ -321,6 +327,7 @@ let elaborateSettled (graph: SemanticGraph) : Enrichment * Diagnostic list =
                 { Severity = NativeDiagnosticSeverity.Error; Code = code; Message = message
                   Range = site.Range; RelatedNodes = [site.Id]; Reachability = ReachabilityContext.Reachable }
             match core with
+            | _ when deferred.Contains site.Id -> point, []
             | None -> point, [] // No representation commitment without a platform declaration.
             | Some core ->
                 let candidates = core.Representations |> List.filter (fun declared ->
@@ -345,7 +352,7 @@ let elaborateSettled (graph: SemanticGraph) : Enrichment * Diagnostic list =
     let mapped =
         graph.Nodes.Values |> Seq.choose (fun site ->
             match site.Kind with
-            | SemanticKind.Application (callee, arguments) when site.IsReachable ->
+            | SemanticKind.Application (callee, arguments) when site.IsReachable && not (deferred.Contains site.Id) ->
                 MappedBindings.tryFindCall graph callee |> Option.bind (fun mapping ->
                     if arguments.Length <> mapping.Parameters.Length then None
                     else

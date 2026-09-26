@@ -90,7 +90,7 @@ let rec private resolveIdentifierCore
                         UnionCaseNode (name, instantiateTForall binding.Type range, caseInfo)
                     | None ->
                         // Regular binding - instantiate TForall for polymorphism
-                        let actualType, instance = instantiateTForallWithArguments binding.Type range
+                        let actualType, instance = instantiateSchemeWithArguments env binding.Type range
                         BindingNode (name, actualType, binding.NodeId, instance)
             | None ->
                 // 2e. Library schemes (abs, sign, min, max, clamp, sqrt, atan2, floor, ceiling,
@@ -135,7 +135,7 @@ and private resolveBinding (parts: string list) (fullName: string) (env: TypeEnv
             | Some caseInfo ->
                 UnionCaseNode (fullName, instantiateTForall binding.Type range, caseInfo)
             | None ->
-                let actualType, instance = instantiateTForallWithArguments binding.Type range
+                let actualType, instance = instantiateSchemeWithArguments env binding.Type range
                 BindingNode (fullName, actualType, binding.NodeId, instance)
     | None ->
         // PARSER AMBIGUITY: LongIdent might be member access on a binding.

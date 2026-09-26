@@ -199,7 +199,7 @@ let checkRecord
             let resolved =
                 match expectedRecordType with
                 | Some (NativeType.TApp(owner, _) as expected)
-                    when Map.tryFind owner.Name env.RecordDefs
+                    when tryLookupRecordDef owner env
                          |> Option.exists (fun record -> record.TypeCon.Module = owner.Module) ->
                     let conflictingQualifier =
                         fieldNodes |> List.exists (fun (_, qualifier, _) ->
@@ -219,7 +219,7 @@ let checkRecord
                 match resolvedTy with
                 | NativeType.TApp(tyCon, _) ->
                     // Expected case: nominal record type like `Person` or `Record<'a>`
-                    match Map.tryFind tyCon.Name env.RecordDefs with
+                    match tryLookupRecordDef tyCon env with
                     | Some _ ->
                         // Add constraints: each field expression must match field type
                         for (fieldName, _, exprNode) in fieldNodes do

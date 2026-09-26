@@ -27,7 +27,8 @@ type private Declaration = {
     HandlerType: NativeType
 }
 
-let private sameType left right = formatType (applySubst left) = formatType (applySubst right)
+let private sameType left right =
+    Clef.Compiler.NativeTypedTree.TypeIdentities.ofType left = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType right
 
 let expand (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
     let mutable diagnostics = []
@@ -80,8 +81,9 @@ let expand (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
                 | [factory], [adapter] when closedDeclaration factory && closedDeclaration adapter ->
                     match lambdaOfBinding graph factory.Id, lambdaOfBinding graph adapter.Id, applySubst factory.Type with
                     | Some ([_], factoryBody), Some ((_, handlerType, handlerParameter) :: _, adapterBody), NativeType.TFun (factoryHandler, (NativeType.TApp (tc, _) as recordType)) when zeroedPlaceholder factoryBody ->
-                        let recordMatches = tc.Name = recordName || (not (recordName.Contains('.')) && (tc.Name.Split('.') |> Array.last) = recordName)
-                        let recordFields = SemanticGraph.tryGetRecordFields tc.Name graph
+                        let identity = NominalTypeIdentity.ofConstructor tc
+                        let recordMatches = NominalTypeIdentity.display identity = recordName || tc.Name = recordName || (not (recordName.Contains('.')) && (tc.Name.Split('.') |> Array.last) = recordName)
+                        let recordFields = Clef.Compiler.PSGSaturation.SemanticGraph.RecordInstances.tryFields recordType graph
                         match recordFields, applySubst adapter.Type, applySubst factoryHandler with
                         | Some [(actualField, (NativeType.TApp (pointer, [entryType]) as pointerType))], NativeType.TFun (_, adapterEntry), NativeType.TFun _
                             when recordMatches && actualField = fieldName && pointer.NTUKind = Some NTUKind.NTUfnptr

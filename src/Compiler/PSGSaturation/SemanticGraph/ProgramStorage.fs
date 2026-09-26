@@ -104,11 +104,7 @@ let settle (graph: SemanticGraph) : ProgramStorageInventory =
                             (Set.union instance.Participants (proofDependencies frame.Obligations))
                     | _ -> pending identity "The actual static continuation instance and its frame layout are not jointly established"
                 | SemanticKind.RecordExpr _ | SemanticKind.TupleExpr _ | SemanticKind.DUConstruct _ ->
-                    let key =
-                        match applySubst node.Type with
-                        | NativeType.TApp _ as ty when RecordInstances.tryFields ty graph |> Option.isSome -> RecordInstances.layoutKey ty
-                        | NativeType.TUnion(tc, _) -> tc.Name
-                        | ty -> formatType ty
+                    let key = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type
                     match graph.Layouts.Value.TryFind key with
                     | Some(SettledLayout.Record(_, Some bytes, Some alignment))
                     | Some(SettledLayout.Union(_, _, Some bytes, Some alignment)) ->

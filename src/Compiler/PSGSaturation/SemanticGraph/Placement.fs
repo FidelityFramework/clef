@@ -25,6 +25,7 @@
 module Clef.Compiler.PSGSaturation.SemanticGraph.Placement
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.TypeIdentities
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.NativeTypedTree.Expressions.Intrinsics
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
@@ -39,32 +40,26 @@ let [<Literal>] private ViewWords = 5
 /// The aggregate types the graph reaches, each with the key `Layouts` holds it under.
 [<RequireQualifiedAccess>]
 type private Aggregate =
-    | Record of key: string * name: string * fields: (string * NativeType) list
-    | Union of name: string * cases: (string * (string option * NativeType) list) list
-    | Tuple of key: string * elements: NativeType list
-    | Option of key: string * inner: NativeType
-    | Result of key: string * ok: NativeType * error: NativeType
+    | Record of key: TypeIdentity * name: NominalTypeIdentity * fields: (string * NativeType) list
+    | Union of key: TypeIdentity * cases: (string * (string option * NativeType) list) list
+    | Tuple of key: TypeIdentity * elements: NativeType list
+    | Option of key: TypeIdentity * inner: NativeType
+    | Result of key: TypeIdentity * ok: NativeType * error: NativeType
 
 /// What the pass reads of the graph once.
 type private Placer = {
-    Boundaries: Map<string, PlatformResolution.DeclaredLayout>
+    Boundaries: Map<NominalTypeIdentity, PlatformResolution.DeclaredLayout>
     Graph: SemanticGraph
     Context: PlatformContext option
     /// The declared Pointer width in bytes; None on fabric or where the description declares none.
     PointerBytes: int option
     /// Per tuple type (rendered), per position: the join of the element's range over every
     /// reachable construction of a tuple of that type; a position nothing constructs is Empty.
-    TupleRanges: Map<string, ValueRange list>
+    TupleRanges: Map<TypeIdentity, ValueRange list>
 }
 
 /// The rendered key of a type (as `ElementRanges` keys an element type).
-let private keyOf (ty: NativeType) : string = formatType (applySubst ty)
-
-/// The union cases a type constructor's definition declares, if it is a union.
-let private unionCasesOf (graph: SemanticGraph) (name: string) : (string * (string option * NativeType) list) list option =
-    match SemanticGraph.recallType name graph |> Option.bind (fun id -> SemanticGraph.tryGetNode id graph) with
-    | Some { Kind = SemanticKind.TypeDef (_, TypeDefKind.UnionDef cases, _) } -> Some cases
-    | _ -> None
+let private keyOf (ty: NativeType) : TypeIdentity = ofType ty
 
 /// The aggregate a type is, if it is one the pass places.
 let private aggregateOf (graph: SemanticGraph) (ty: NativeType) : Aggregate option =
@@ -74,16 +69,16 @@ let private aggregateOf (graph: SemanticGraph) (ty: NativeType) : Aggregate opti
     | NativeType.TApp (tycon, [ ok; err ]) as t when tycon.Name = "Result" || tycon.Name = "result" -> Some (Aggregate.Result (keyOf t, ok, err))
     | NativeType.TApp (tycon, _) as instance ->
         match RecordInstances.tryFields instance graph with
-        | Some fields -> Some (Aggregate.Record (RecordInstances.layoutKey instance, tycon.Name, fields))
+        | Some fields -> Some (Aggregate.Record (keyOf instance, NominalTypeIdentity.ofConstructor tycon, fields))
         | None ->
-            match unionCasesOf graph tycon.Name with
-            | Some cases -> Some (Aggregate.Union (tycon.Name, cases))
+            match RecordInstances.tryUnionCases instance graph with
+            | Some cases -> Some (Aggregate.Union (keyOf instance, cases))
             | None -> None
-    | NativeType.TUnion (tycon, cases) ->
-        Some (Aggregate.Union (tycon.Name, cases |> List.map (fun c -> c.Name, c.Fields)))
+    | NativeType.TUnion (_, cases) as instance ->
+        Some (Aggregate.Union (keyOf instance, cases |> List.map (fun c -> c.Name, c.Fields)))
     | _ -> None
 
-let private aggregateKey (a: Aggregate) : string =
+let private aggregateKey (a: Aggregate) : TypeIdentity =
     match a with
     | Aggregate.Record (key, _, _) -> key
     | Aggregate.Union (name, _) -> name
@@ -100,7 +95,7 @@ let private constituents (a: Aggregate) : NativeType list =
 
 /// Every aggregate a type mentions, itself included, through its arguments, fields, elements and
 /// payloads; keyed, so a recursive type is visited once.
-let rec private collect (graph: SemanticGraph) (acc: Map<string, Aggregate>) (ty: NativeType) : Map<string, Aggregate> =
+let rec private collect (graph: SemanticGraph) (acc: Map<TypeIdentity, Aggregate>) (ty: NativeType) : Map<TypeIdentity, Aggregate> =
     let ty = applySubst ty
     let acc =
         match aggregateOf graph ty with
@@ -252,13 +247,13 @@ let private union (p: Placer) (cases: (string * SettledSlot option) list) : Sett
         SettledLayout.Union (cases, Some offset, Some (alignUp (offset + widest) alignment), Some alignment)
 
 /// The range a field or position of the bare integer kind holds; Empty where nothing constructs it.
-let private fieldRange (p: Placer) (typeName: string) (field: string) : ValueRange =
+let private fieldRange (p: Placer) (typeName: NominalTypeIdentity) (field: string) : ValueRange =
     p.Graph.FieldRanges.Value
     |> Map.tryFind typeName
     |> Option.bind (Map.tryFind field)
     |> Option.defaultValue ValueRange.Empty
 
-let private tupleRange (p: Placer) (key: string) (index: int) : ValueRange =
+let private tupleRange (p: Placer) (key: TypeIdentity) (index: int) : ValueRange =
     Map.tryFind key p.TupleRanges
     |> Option.bind (List.tryItem index)
     |> Option.defaultValue ValueRange.Empty
@@ -307,7 +302,7 @@ let settle (context: PlatformContext option) (graph: SemanticGraph) : SemanticGr
     let reachable = graph.Nodes |> Map.toList |> List.map snd |> List.filter (fun n -> n.IsReachable)
     let tupleRanges =
         reachable
-        |> List.fold (fun (acc: Map<string, ValueRange list>) node ->
+        |> List.fold (fun (acc: Map<TypeIdentity, ValueRange list>) node ->
             match node.Kind, applySubst node.Type with
             | SemanticKind.TupleExpr elements, (NativeType.TTuple (elementTypes, _) as t) when elements.Length = elementTypes.Length ->
                 let key = keyOf t
@@ -372,11 +367,11 @@ let private valueBytes (p: Placer) (range: ValueRange) (ty: NativeType) : Settle
     | Some (Aggregate.Record (key, name, _)) ->
         match Map.tryFind key p.Graph.Layouts.Value with
         | Some (SettledLayout.Record (_, Some size, _)) -> SettledSlot.Pointer ViewWords, size
-        | _ -> failwithf "Placement: the record %s has no settled size to hold a lazy value in" name
+        | _ -> failwithf "Placement: the record %s has no settled size to hold a lazy value in" (NominalTypeIdentity.display name)
     | Some (Aggregate.Tuple (key, _)) ->
         match Map.tryFind key p.Graph.Layouts.Value with
         | Some (SettledLayout.Record (_, Some size, _)) -> SettledSlot.Pointer ViewWords, size
-        | _ -> failwithf "Placement: the tuple %s has no settled size to hold a lazy value in" key
+        | _ -> failwithf "Placement: the tuple %s has no settled size to hold a lazy value in" (formatType ty)
     | Some _ -> SettledSlot.Pointer ViewWords, ViewWords * ptr
     | None ->
         match slotOf p range ty with

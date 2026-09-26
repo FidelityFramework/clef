@@ -6,7 +6,11 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="DimensionalCases.fs" />
+    <Compile Include="NominalIdentityCases.fs" />
+    <Compile Include="MixedRecursiveSchemeCases.fs" />
+    <Compile Include="MixedSchemeSpecializationCases.fs" />
     <Compile Include="DimensionalInferenceCases.fs" />
+    <Compile Include="MemberInferenceCases.fs" />
     <Compile Include="EagerGraphCases.fs" />
     <Compile Include="PhaseProjectionCases.fs" />
     <Compile Include="CallableTestContracts.fs" />
@@ -76,6 +80,8 @@
     <Compile Include="SpecializationTraceCases.fs" />
     <Compile Include="LazyRangeCases.fs" />
     <Compile Include="LazyEffectRangeCases.fs" />
+    <Compile Include="OrdinaryDemandCases.fs" />
+    <Compile Include="StorageWitnessCases.fs" />
     <Compile Include="EnvironmentFactoryResultsCases.fs" />
     <Compile Include="SequenceEvaluationCases.fs" />
     <Compile Include="SequenceControlCases.fs" />

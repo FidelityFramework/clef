@@ -235,6 +235,7 @@ let settle (inputs: Inputs) (graph: SemanticGraph) : Map<NodeId, CallableCarrier
                     { Occurrence = node.Id; SourceType = sourceType node; Implementation = implementation
                       Parameters = parameters
                       ParameterShapes = parameters |> List.map (fun (_, _, id) -> valueShape graph graph.Nodes[id])
+                      OmittedParameters = OrdinaryDemand.parameters graph implementation
                       Result = body; ResultShape = valueShape graph graph.Nodes[body]
                       Environment = environment |> Option.map (fun known ->
                           { Owner = known.EnvironmentOwner; Formal = inputs.Layouts[known.EnvironmentOwner].Formal }) })

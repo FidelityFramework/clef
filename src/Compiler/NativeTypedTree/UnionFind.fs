@@ -774,11 +774,11 @@ let freshInstanceOf (tp: TypeParam) (range: SourceRange) : NativeType =
     match tp.Kind with
     | TypeParamKind.Type ->
         let fresh = freshTypeParamAuto TypeParamKind.Type range
-        fresh.Constraints <- tp.Constraints
+        fresh.Constraints <- tp.Constraints |> List.filter (function Constraint.HasMember _ -> false | _ -> true)
         NativeType.TVar fresh
     | TypeParamKind.Carrier ->
         let fresh = freshTypeParamAuto TypeParamKind.Carrier range
-        fresh.Constraints <- tp.Constraints
+        fresh.Constraints <- tp.Constraints |> List.filter (function Constraint.HasMember _ -> false | _ -> true)
         NativeType.TNum(CarrierRef.CVar fresh, Dimension.one)
     | TypeParamKind.Measure ->
         NativeType.TMeasure(Dimension.ofVar (freshMeasureVar None))

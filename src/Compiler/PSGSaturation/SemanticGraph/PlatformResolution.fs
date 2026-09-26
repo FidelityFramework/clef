@@ -815,7 +815,7 @@ type DeclaredPhysicalField = { Node: NodeId; Name: string; Repr: string; Offset:
 type DeclaredLayout = {
     Node: NodeId
     Name: string
-    RecordType: string option
+    RecordType: NominalTypeIdentity option
     Fields: DeclaredField list
     PhysicalFields: DeclaredPhysicalField list
     Size: int option
@@ -982,12 +982,17 @@ let private shortName (name: string) : string =
 
 /// The record types of the graph a descriptor's name denotes: the one whose qualified name is
 /// the name, or those whose last segment is.
-let private recordTypesNamed (graph: SemanticGraph) (name: string) : string list =
-    let types = graph.Types.Value |> Map.toList |> List.map fst
-                |> List.filter (fun name -> SemanticGraph.tryGetRecordFields name graph |> Option.isSome)
-    match types |> List.filter (fun t -> t = name) with
-    | [ exact ] -> [ exact ]
-    | _ -> types |> List.filter (fun t -> shortName t = name)
+let private recordTypesNamed (graph: SemanticGraph) (name: string) : NominalTypeIdentity list =
+    let types =
+        RecordInstances.definitions graph
+        |> Map.toList
+        |> List.choose (fun (identity, node) ->
+            match node.Kind with
+            | SemanticKind.TypeDef (_, TypeDefKind.RecordDef _, _) -> Some identity
+            | _ -> None)
+    let exact = types |> List.filter (fun identity -> NominalTypeIdentity.display identity = name || identity.Name = name)
+    if not exact.IsEmpty then exact
+    else types |> List.filter (fun identity -> shortName identity.Name = name)
 
 /// A layout descriptor (`StructDescriptor` or `PeripheralDescriptor`) at its declaring node,
 /// with its integer fields and the record type it seeds. A field the descriptor declares that
@@ -1011,16 +1016,19 @@ let private readLayout (graph: SemanticGraph) (node: SemanticNode) (fields: (str
             match recordTypesNamed graph name with
             | [] -> None, []
             | [ one ] ->
-                let recordFields = SemanticGraph.tryGetRecordFields one graph |> Option.defaultValue []
+                let recordFields =
+                    RecordInstances.tryDefinition one graph
+                    |> Option.bind (fun definition -> RecordInstances.tryFields definition.Type graph)
+                    |> Option.defaultValue []
                 let absent =
                     layoutFields
                     |> List.filter (fun f ->
                         match recordFields |> List.tryFind (fun (n, _) -> n = f.Name) with
                         | Some (_, ty) -> not (Types.isIntegerType ty || Types.tryGetNTUKind ty = Some NTUKind.NTUbool)
                         | None -> true)
-                    |> List.map (fun f -> findingAt (SemanticGraph.tryGetNode f.Node graph |> Option.defaultValue node) DeclarationDefect.Invalid (sprintf "the field '%s' is declared '%s' but the record '%s' carries no integer or boolean field of that name" f.Name f.Repr one))
+                    |> List.map (fun f -> findingAt (SemanticGraph.tryGetNode f.Node graph |> Option.defaultValue node) DeclarationDefect.Invalid (sprintf "the field '%s' is declared '%s' but the record '%s' carries no integer or boolean field of that name" f.Name f.Repr (NominalTypeIdentity.display one)))
                 Some one, absent
-            | many -> None, [ findingAt node DeclarationDefect.Ambiguous (sprintf "the descriptor '%s' names more than one record type of the program (%s); qualify the name" name (String.concat ", " many)) ]
+            | many -> None, [ findingAt node DeclarationDefect.Ambiguous (sprintf "the descriptor '%s' names more than one record type of the program (%s); qualify the name" name (many |> List.map NominalTypeIdentity.display |> String.concat ", ")) ]
         let physical, size, alignment =
             match field "Layout" fields |> Option.bind (recordOf graph) with
             | Some (_, body) ->
@@ -1105,8 +1113,8 @@ let readFunctionForBinding (graph: SemanticGraph) (binding: SemanticNode) (_bind
                             | _, true, Some _, _, _ -> invalid (sprintf "the pointer reference '%s' of '%s' requires a bounded option<CHandle<_>> array" declaredName cname)
                             | _, true, _, Some name, _ ->
                                 let declaredTypes = recordTypesNamed graph name
-                                let actual = match ty with NativeType.TApp (tc, _) -> Some tc.Name | _ -> None
-                                if actual |> Option.exists (fun actual -> declaredTypes |> List.exists (fun name -> name = actual || shortName name = shortName actual)) then
+                                let actual = match ty with NativeType.TApp (tc, _) -> Some (NominalTypeIdentity.ofConstructor tc) | _ -> None
+                                if actual |> Option.exists (fun actual -> declaredTypes = [actual]) then
                                     (paramId, None), None, None, Some (paramId, readOnly), None
                                 else invalid (sprintf "the reference '%s' of '%s' requires the declared record '%s'" declaredName cname name)
                             | Some d, false, _, _, _ when not (ranged ty) -> invalid (sprintf "the parameter '%s' of '%s' is declared an integer of %d bits, but the binding's parameter is not an integer" declaredName cname d.Bits)

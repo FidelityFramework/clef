@@ -207,12 +207,15 @@ type TypeEnv = {
     MeasureScope: Map<string, MeasureVar>
     /// Record type definitions with full field information
     /// Per spec: "Field order determines memory layout"
-    RecordDefs: Map<string, RecordTypeInfo>
+    RecordDefs: Map<NominalTypeIdentity, RecordTypeInfo>
     /// Field label table for record type inference
     /// Per spec (inference-procedures.md): "maps names to sets of field references"
     FieldLabels: Map<string, FieldRef list>
     /// Current constraints being collected (ref cell to share across record copies)
     Constraints: Constraint list ref
+    /// Exact declaration constraints retained by an inline quantified scheme.
+    /// Instantiated uses add fresh relations to Constraints; they are never templates.
+    GeneralizedMemberConstraints: Constraint list ref
     /// Accumulated diagnostics (errors, warnings) (ref cell to share across record copies)
     Diagnostics: Diagnostic list ref
     /// Current arena affinity
@@ -302,6 +305,7 @@ let createTypeEnv () : TypeEnv =
         RecordDefs = Map.empty
         FieldLabels = Map.empty
         Constraints = ref []
+        GeneralizedMemberConstraints = ref []
         Diagnostics = ref []
         CurrentArena = ArenaAffinity.CurrentActor
         ExpectedReturnType = None
@@ -401,16 +405,6 @@ let withDeclaredTypeParameters (declarations: SynTyparDecls option) (env: TypeEn
                 parameters <- Map.add ident.idText parameter parameters
                 parameter)) |> Option.defaultValue []
     { env with TypeParameters = ref parameters; MeasureScope = scope }, declared
-
-/// Generalization excludes every variable free in the surrounding bindings, including
-/// ordinary type variables that stand for captured mutable storage.
-let generalizeInEnv (env: TypeEnv) ty =
-    let excluded =
-        env.BindingTypes |> Map.toSeq |> Seq.map (fun (_, ty) ->
-            let ty = applySubst ty
-            Set.union (freeTypeVars ty) (freeMeasureVars ty |> List.map (fun variable -> variable.Id) |> Set.ofList))
-        |> Set.unionMany
-    generalizeType excluded ty
 
 /// Create and add a warning diagnostic with specific code
 let addNativeWarning (code: string) (r: range) (message: string) (env: TypeEnv) : unit =
@@ -622,7 +616,7 @@ let tryLookupTypeAbbrev (name: string) (env: TypeEnv) : NativeType option =
 /// This populates RecordDefs and (unless RequireQualifiedAccess) FieldLabels.
 let addRecordDef (info: RecordTypeInfo) (env: TypeEnv) : TypeEnv =
     // Add to RecordDefs
-    let env = { env with RecordDefs = Map.add info.TypeCon.Name info env.RecordDefs }
+    let env = { env with RecordDefs = Map.add (NominalTypeIdentity.ofConstructor info.TypeCon) info env.RecordDefs }
 
     // Add field labels unless RequireQualifiedAccess
     if info.RequireQualifiedAccess then
@@ -648,18 +642,19 @@ let addRecordDef (info: RecordTypeInfo) (env: TypeEnv) : TypeEnv =
 
         { env with FieldLabels = updatedLabels }
 
-/// Look up a record type definition by name
-let tryLookupRecordDef (name: string) (env: TypeEnv) : RecordTypeInfo option =
-    Map.tryFind name env.RecordDefs
+/// Look up the already-resolved nominal declaration, preserving its module.
+let tryLookupRecordDef (tycon: TypeConRef) (env: TypeEnv) : RecordTypeInfo option =
+    Map.tryFind (NominalTypeIdentity.ofConstructor tycon) env.RecordDefs
 
 /// Try to resolve a field's type from a record type.
 /// Returns Some(fieldType) if the type is a record with the given field, None otherwise.
 /// This is the canonical way to resolve record field types - no SRTP constraints needed.
 let tryResolveRecordFieldType (ty: NativeType) (fieldName: string) (env: TypeEnv) : NativeType option =
     match applySubst ty with
+    | NativeType.TAnon(fields, _) -> fields |> List.tryPick (fun (name, ty) -> if name = fieldName then Some ty else None)
     | NativeType.TApp(tycon, typeArgs) ->
         // Try to find this type in RecordDefs
-        match tryLookupRecordDef tycon.Name env with
+        match tryLookupRecordDef tycon env with
         | Some recordInfo when recordInfo.TypeCon.Module = tycon.Module && recordInfo.TypeParameters.Length = typeArgs.Length ->
             // Look up the field in the record's field list
             recordInfo.Fields
@@ -709,7 +704,7 @@ let resolveRecordTypeFromFields
                         // imported, including a RequireQualifiedAccess record.
                         match tryLookupTypeDef qualifier env with
                         | Some tycon ->
-                            match Map.tryFind tycon.Name env.RecordDefs with
+                            match tryLookupRecordDef tycon env with
                             | Some info ->
                                 info.Fields |> List.mapi (fun index (name, ty) ->
                                     { RecordType = tycon; FieldName = name; FieldType = ty; FieldIndex = index })
@@ -736,7 +731,7 @@ let resolveRecordTypeFromFields
                 candidateSets
                 |> List.map (fun (_, candidates) ->
                     candidates
-                    |> List.map (fun fieldRef -> fieldRef.RecordType.Name)
+                    |> List.map (fun fieldRef -> NominalTypeIdentity.ofConstructor fieldRef.RecordType)
                     |> Set.ofList)
 
             let intersection =
@@ -749,7 +744,7 @@ let resolveRecordTypeFromFields
                 match typeQualifier with
                 | Some qualifier ->
                     match tryLookupTypeDef qualifier env with
-                    | Some tycon -> intersection |> Set.filter ((=) tycon.Name)
+                    | Some tycon -> intersection |> Set.filter ((=) (NominalTypeIdentity.ofConstructor tycon))
                     | None -> Set.empty
                 | None -> intersection
 
@@ -773,7 +768,7 @@ let resolveRecordTypeFromFields
                     // INTERNAL ERROR: Field label resolution found this type name,
                     // so it MUST exist in RecordDefs.
                     Result.Error((DiagnosticCodes.CCS8090_InternalInvariant,
-                           sprintf "Internal error: field labels reference record type '%s' but it is not in RecordDefs" typeName))
+                           sprintf "Internal error: field labels reference record type '%s' but it is not in RecordDefs" (NominalTypeIdentity.display typeName)))
             | _ ->
                 // Completeness is a real source constraint for a fresh literal.
                 // It can remove an owner with additional required fields, but
@@ -791,7 +786,7 @@ let resolveRecordTypeFromFields
                     let freshArgs = recordInfo.TypeParameters |> List.map (fun parameter -> freshInstanceOf parameter _range)
                     Result.Ok (NativeType.TApp(recordInfo.TypeCon, freshArgs))
                 | _ ->
-                    let typeNames = admissible |> Set.toList |> String.concat ", "
+                    let typeNames = admissible |> Set.toList |> List.map NominalTypeIdentity.display |> String.concat ", "
                     Result.Error((DiagnosticCodes.CCS8704_AmbiguousFields,
                            sprintf "Field labels are ambiguous; could be any of: %s. Use type annotation or qualified field access." typeNames))
 
@@ -877,7 +872,7 @@ let resolveFieldType (baseType: NativeType) (fieldName: string) (env: TypeEnv) (
                     |> List.distinctBy (fun field -> field.RecordType.Name, field.RecordType.Module)
                 match candidates with
                 | [field] ->
-                    match tryLookupRecordDef field.RecordType.Name env with
+                    match tryLookupRecordDef field.RecordType env with
                     | Some record when record.TypeCon.Module = field.RecordType.Module ->
                         let arguments = record.TypeParameters |> List.map (fun parameter -> freshInstanceOf parameter range)
                         let receiver = NativeType.TApp(record.TypeCon, arguments)
@@ -899,6 +894,133 @@ let resolveFieldType (baseType: NativeType) (fieldName: string) (env: TypeEnv) (
                     } env
                     pending ()
             | _ -> pending ()
+
+/// Settle actual member relations without choosing a nominal owner for an unknown receiver.
+/// A result may become the receiver of another relation, hence the fixed point.
+let dischargeMemberConstraints (env: TypeEnv) (constraints: Constraint list) =
+    let memberOf ty name =
+        match name with
+        | "Length" when isStringType ty || isArrayType ty -> Some Types.intType
+        | _ -> tryResolveRecordFieldType ty name env
+    let rec loop pending errors =
+        let mutable progress = false
+        let mutable remaining = []
+        let mutable errors = errors
+        let mutable supports = []
+        for constraint' in pending do
+            match constraint' with
+            | Constraint.HasMember(receiver, name, result, range) ->
+                // One support type and member name denotes one field result, including
+                // while the receiver is still unknown. Two incompatible declarations
+                // of that result cannot be hidden in a quantified inline template.
+                let receiver = canonicalizeVars receiver
+                match supports |> List.tryPick (fun (previous, previousName, previousResult) ->
+                    if previous = receiver && previousName = name then Some previousResult else None) with
+                | Some previous ->
+                    match Clef.Compiler.NativeTypedTree.Unify.tryUnify previous result range with
+                    | Result.Ok () -> ()
+                    | Result.Error error -> errors <- error :: errors
+                | None -> supports <- (receiver, name, result) :: supports
+                match memberOf (applySubst receiver) name with
+                | Some actual ->
+                    progress <- true
+                    match Clef.Compiler.NativeTypedTree.Unify.tryUnify result actual range with
+                    | Result.Ok () -> ()
+                    | Result.Error error -> errors <- error :: errors
+                | None -> remaining <- constraint' :: remaining
+            | _ -> ()
+        if progress && not remaining.IsEmpty then loop (List.rev remaining) errors
+        else List.rev errors, List.rev remaining
+    loop (constraints |> List.filter (function Constraint.HasMember _ -> true | _ -> false)) []
+
+let isGeneralizedMemberConstraint (env: TypeEnv) constraint' =
+    env.GeneralizedMemberConstraints.Value |> List.exists (fun original -> obj.ReferenceEquals(original, constraint'))
+
+let private inferenceIds ty =
+    let ty = applySubst ty
+    Set.union (freeTypeVars ty) (freeMeasureVars ty |> List.map _.Id |> Set.ofList)
+
+let private memberTypes = function
+    | Constraint.HasMember(receiver, _, result, _) -> [receiver; result]
+    | _ -> []
+
+let private memberIds constraint' = memberTypes constraint' |> List.map inferenceIds |> Set.unionMany
+
+let private pendingMembers env =
+    dischargeMemberConstraints env env.Constraints.Value |> snd
+    |> List.filter (isGeneralizedMemberConstraint env >> not)
+
+/// Constraint-connected variables share the same generalization decision. Ordinary unresolved
+/// member lookup remains pending; inline schemes retain its complete receiver/result relation.
+let memberGeneralizationExclusions (env: TypeEnv) allowMembers excluded =
+    let pending = pendingMembers env
+    let initial = if allowMembers then excluded else Set.union excluded (pending |> List.map memberIds |> Set.unionMany)
+    let rec close current =
+        let next =
+            pending |> List.fold (fun current constraint' ->
+                let related = memberIds constraint'
+                if Set.intersect current related |> Set.isEmpty then current else Set.union current related) current
+        if next = current then current else close next
+    close initial
+
+let private generalizeWithMembers allowMembers (env: TypeEnv) ty =
+    let pending = pendingMembers env
+    let excluded =
+        env.BindingTypes |> Map.toSeq |> Seq.map (snd >> inferenceIds) |> Set.unionMany
+        |> memberGeneralizationExclusions env allowMembers
+    // A chained relation can contain an intermediate variable absent from the public arrow.
+    // It remains quantified with the relation rather than escaping as shared scratch state.
+    let rec relatedTo ids =
+        let related = pending |> List.filter (fun c -> not (Set.isEmpty (Set.intersect ids (memberIds c))))
+        let expanded = Set.union ids (related |> List.map memberIds |> Set.unionMany)
+        if expanded = ids then related else relatedTo expanded
+    let related = if allowMembers then relatedTo (inferenceIds ty) else []
+    let allTypes = ty :: (related |> List.collect memberTypes)
+    match generalizeType excluded (NativeType.TTuple(allTypes, false)) with
+    | NativeType.TForall(parameters, NativeType.TTuple(body :: _, false)) ->
+        let quantified = parameters |> List.map _.Id |> Set.ofList
+        for constraint' in related do
+            let ids = memberIds constraint'
+            let unknownReceiver =
+                match constraint' with
+                | Constraint.HasMember(receiver, _, _, _) ->
+                    match applySubst receiver with NativeType.TVar _ -> true | _ -> false
+                | _ -> false
+            if unknownReceiver && not ids.IsEmpty && Set.isSubset ids quantified then
+                let owner = parameters |> List.find (fun parameter -> Set.contains parameter.Id ids)
+                let retained =
+                    match constraint' with
+                    | Constraint.HasMember(receiver, name, result, range) ->
+                        Constraint.HasMember(canonicalizeVars receiver, name, canonicalizeVars result, range)
+                    | _ -> constraint'
+                owner.Constraints <- retained :: owner.Constraints
+                env.GeneralizedMemberConstraints.Value <- constraint' :: env.GeneralizedMemberConstraints.Value
+        NativeType.TForall(parameters, body)
+    | NativeType.TTuple(body :: _, false) -> body
+    | _ -> failwith "Generalization changed its aggregate type shape"
+
+let generalizeInEnv env ty = generalizeWithMembers false env ty
+let generalizeInlineInEnv env ty = generalizeWithMembers true env ty
+
+/// Instantiate every relational premise with the SAME argument substitution as the arrow.
+/// Copying each parameter's original constraints would retain declaration variables and couple uses.
+let instantiateMemberConstraints (env: TypeEnv) parameters arguments range =
+    parameters |> List.collect (fun (parameter: TypeParam) -> parameter.Constraints)
+    |> List.distinct
+    |> List.iter (function
+        | Constraint.HasMember(receiver, name, result, _) ->
+            let instantiate ty = NativeTypes.instantiate parameters arguments (canonicalizeVars ty)
+            addConstraint (Constraint.HasMember(instantiate receiver, name, instantiate result, range)) env
+        | _ -> ())
+
+let instantiateSchemeWithArguments env ty range =
+    let actual, instance = instantiateTForallWithArguments ty range
+    match instance with
+    | Some(NativeType.TForall(parameters, _), arguments) -> instantiateMemberConstraints env parameters arguments range
+    | _ -> ()
+    actual, instance
+
+let instantiateScheme env ty range = instantiateSchemeWithArguments env ty range |> fst
 
 //-------------------------------------------------------------------------
 // Attribute Helpers

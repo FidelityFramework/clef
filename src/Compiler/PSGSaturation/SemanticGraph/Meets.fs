@@ -48,30 +48,18 @@ let private nodeWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
     | Some node when Types.tryGetNTUKind node.Type |> Option.exists isWordInteger -> RangeAnalysis.heldWidth graph nodeId
     | _ -> None
 
-let private layoutKey (ty: NativeType) : string = formatType (applySubst ty)
+let private layoutKey = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType
 
-/// The settled layout of an aggregate type: a record by its CCS instance identity, a union
-/// by its constructor's name, a tuple, an option or a Result by its rendered form.
+/// Exact source instance identity, independent of lexical aliases and rendering.
 let private settledLayout (graph: SemanticGraph) (ty: NativeType) : SettledLayout option =
-    match applySubst ty with
-    | NativeType.TApp (tycon, _) as t when tycon.Name = "option" || tycon.Name = "voption" || tycon.Name = "Result" || tycon.Name = "result" ->
-        Map.tryFind (layoutKey t) graph.Layouts.Value
-    | NativeType.TApp (tycon, _) as t ->
-        match RecordInstances.tryFields t graph with
-        | Some _ -> Map.tryFind (RecordInstances.layoutKey t) graph.Layouts.Value
-        | None ->
-            match Map.tryFind tycon.Name graph.Layouts.Value with
-            | Some layout -> Some layout
-            | None -> Map.tryFind (layoutKey t) graph.Layouts.Value
-    | NativeType.TUnion (tycon, _) -> Map.tryFind tycon.Name graph.Layouts.Value
-    | t -> Map.tryFind (layoutKey t) graph.Layouts.Value
+    Map.tryFind (layoutKey ty) graph.Layouts.Value
 
 /// The width an array's word-integer elements are held at.
 let private elementWidth (graph: SemanticGraph) (elemTy: NativeType) : int =
     let range = Map.tryFind (layoutKey elemTy) graph.ElementRanges.Value |> Option.defaultValue ValueRange.Unbounded
     match RangeAnalysis.heldWidthOf graph range with
     | Some bits -> bits
-    | None -> failwithf "Meets: the element type %s has the range %s, which has no width on this substrate (CCS8011)" (layoutKey elemTy) (ValueRange.render range)
+    | None -> failwithf "Meets: the element type %s has the range %s, which has no width on this substrate (CCS8011)" (formatType elemTy) (ValueRange.render range)
 
 /// The last value a node evaluates to, through a block's last child and an annotation.
 let rec private lastValueOf (graph: SemanticGraph) (id: NodeId) : NodeId =

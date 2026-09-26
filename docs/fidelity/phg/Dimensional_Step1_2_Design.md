@@ -305,7 +305,24 @@ What Alex reads. To choose the MLIR type it reads the carrier and the settled wi
 
 ### d.3 The invariant carriage keeps
 
-Paper §2.3 line 106: "*dimensions never influence control flow or data layout in a way that could cause divergence between a dimensioned and undimensioned compilation of the same program.* The generated instructions are identical". Hence the monomorphisation key for a generalised function excludes measure variables. A measure-only instantiation is one body. Only carrier instantiations split bodies. The only route by which a dimension changes emitted code is representation selection at step 8, through the coeffect.
+The physical specialization key for a generalized function excludes its
+measure-kinded parameters. Uses that differ only in those arguments share a
+body. Ordinary type and carrier arguments retain their actual native identities
+in that key. Dimensional identity remains on every source occurrence; a
+representation consequence reaches emitted code through its settled coeffect.
+
+Mixed schemes retain that rule when ordinary type or carrier arguments require
+physical specialization. Grouping uses exact native type identity, including
+nominal ownership; printed type names are not grouping keys. A cloned
+implementation declares only its remaining measure binders, and each occurrence
+carries the corresponding projection of its checker-issued arguments. For a
+non-recursive group, a measure may become concrete only when every current
+request carries the same checked closed argument. This changes no code-group
+boundary. Differing or incompletely evidenced requests retain the measure
+binder. Recursive groups retain measure binders while discovering their complete
+request closure, including self and peer uses. The specialization tape preserves
+the original full scheme, all requests and each source-to-clone correspondence.
+These are source-owned substitutions; Alex receives their settled result.
 
 ### d.4 Pass-boundary witnessing, the build-time twin
 

@@ -50,7 +50,7 @@ let private readUncached (graph: SemanticGraph) =
 
     let mutable users: Map<NodeId, Use list> = Map.empty
     let useValue source usage = users <- Map.add source (usage :: (Map.tryFind source users |> Option.defaultValue [])) users
-    let moduleBinding node = node.Parent |> Option.bind (fun p -> SemanticGraph.tryGetNode p graph) |> Option.exists (fun p -> match p.Kind with SemanticKind.ModuleDef _ -> true | _ -> false)
+    let moduleBinding (node: SemanticNode) = node.Parent |> Option.bind (fun p -> SemanticGraph.tryGetNode p graph) |> Option.exists (fun p -> match p.Kind with SemanticKind.ModuleDef _ -> true | _ -> false)
     let namedDeclaration source =
         match SemanticGraph.tryGetNode source graph with
         | Some { Kind = SemanticKind.Lambda _; Metadata = metadata } ->

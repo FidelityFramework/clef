@@ -16,8 +16,9 @@
 /// original in its ModuleDef, and retires its execution while retaining derivation evidence.
 ///
 /// The pass runs on the resolved node map (after substitutions are applied, before
-/// reachability and Baker), so cloned bodies are ordinary monomorphic code for every
-/// later pass. Instantiations that leave a type argument unresolved are cloned as well;
+/// reachability and Baker). A physical clone retains only its residual measure
+/// scheme; all exact checker instances and the original scheme remain in the tape.
+/// Instantiations that leave a type argument unresolved are cloned as well;
 /// the unresolved variable then surfaces at emission, exactly as before this pass.
 module Clef.Compiler.Nanopass.Monomorphization
 
@@ -41,10 +42,9 @@ let private matchTypeArgs (typars: TypeParam list) (scheme: NativeType) (instanc
         if not ok then () else
         match s with
         | NativeType.TVar tp when Set.contains tp.Id paramIds ->
-            // A measure-kinded parameter is neither key material nor substituted at cloning
-            // (design note d.3, DTS/DMM §2.3: dimensions never change the emitted instructions,
-            // so a measure-only instantiation is one body). Only type-kinded parameters are
-            // learned here; later, carrier-kinded ones join them.
+            // A measure-kinded parameter is not physical key material. Its
+            // substitution authority comes from exact checker instances below,
+            // never from recovering a dimension by matching this result type.
             match tp.Kind with
             | TypeParamKind.Measure -> ()
             | _ ->
@@ -302,16 +302,69 @@ let private isGenericFunctionBinding (nodes: Map<NodeId, SemanticNode>) (node: S
         | _ -> None
     | _ -> None
 
-/// A printable key for a type-argument tuple (grouping instantiations). Measure-kinded parameters
-/// are not key material: two use sites that differ only in dimension share one body (d.3).
-let private instanceKey (typars: TypeParam list) (subst: Map<int, NativeType>) : string =
+/// Exact native type identity groups physical instances. Display names are not
+/// identities: distinct nominal owners can have the same printed type name.
+/// Measure-kinded parameters do not split physical bodies (d.3).
+let private instanceKey (typars: TypeParam list) (subst: Map<int, NativeType>) : NativeType option list =
     typars
     |> List.filter (fun tp -> tp.Kind <> TypeParamKind.Measure)
-    |> List.map (fun tp ->
-        match Map.tryFind tp.Id subst with
-        | Some ty -> formatType (applySubst ty)
-        | None -> "?")
-    |> String.concat ","
+    |> List.map (fun tp -> Map.tryFind tp.Id subst |> Option.map applySubst)
+
+/// Read the exact instance minted by the checker. Dimensions are not recovered
+/// by matching a result type: coupled/phantom parameters need their own facts.
+let private checkedArguments declaration (parameters: TypeParam list) body (node: SemanticNode) =
+    let expected = parameters |> List.indexed |> List.map (fun (ordinal, _) -> SchemeMetadata.argument ordinal) |> Set.ofList
+    let recorded = node.Metadata.Keys |> Seq.filter (fun key -> key.StartsWith("Scheme.Argument.", System.StringComparison.Ordinal)) |> Set.ofSeq
+    let arguments = parameters |> List.indexed |> List.map (fun (ordinal, _) ->
+        match node.Metadata.TryFind (SchemeMetadata.argument ordinal) with
+        | Some(MetadataValue.Type ty) -> Some(applySubst ty)
+        | _ -> None)
+    let declared =
+        match node.Metadata.TryFind SchemeMetadata.Definition, node.Metadata.TryFind SchemeMetadata.Declaration with
+        | Some(MetadataValue.NodeId id), Some(MetadataValue.Type(NativeType.TForall(actual, signature))) ->
+            id = declaration &&
+            List.map (fun (p: TypeParam) -> p.Id, p.Kind) actual = List.map (fun (p: TypeParam) -> p.Id, p.Kind) parameters &&
+            canonicalizeVars signature = body
+        | _ -> false
+    if not declared || expected <> recorded || arguments |> List.exists Option.isNone then None else
+    let arguments = List.choose id arguments
+    let lawfulKinds =
+        List.forall2 (fun (parameter: TypeParam) argument ->
+            match parameter.Kind, argument with
+            | TypeParamKind.Measure, NativeType.TMeasure _ -> true
+            | TypeParamKind.Carrier, NativeType.TNum(_, dimension) -> dimension = Dimension.one
+            | TypeParamKind.Type, NativeType.TMeasure _ -> false
+            | TypeParamKind.Type, _ -> true
+            | _ -> false) parameters arguments
+    if lawfulKinds && applySubst (instantiate parameters arguments body) = applySubst node.Type then Some arguments else None
+
+let private clearInstanceMetadata (metadata: Map<string, MetadataValue>) =
+    metadata |> Map.filter (fun key _ ->
+        key <> SchemeMetadata.Definition && key <> SchemeMetadata.Declaration &&
+        not (key.StartsWith("Scheme.Argument.", System.StringComparison.Ordinal)))
+
+/// A physical specialization can still be polymorphic in measures. Publish
+/// that residual source scheme, rather than retaining already specialized type
+/// binders or leaving its measure variables without declaration authority.
+let private residualMetadata declaration parameters signature metadata =
+    let metadata = clearInstanceMetadata metadata
+    if List.isEmpty parameters then metadata
+    else metadata.Add(SchemeMetadata.Declaration, MetadataValue.Type(NativeType.TForall(parameters, signature)))
+                 .Add(SchemeMetadata.ImplementationDeclaration, MetadataValue.NodeId declaration)
+
+/// Project an exact checked instance onto the binders retained by its shared
+/// implementation. An absent/invalid instance cannot mint new authority.
+let private projectInstanceMetadata target (parameters: TypeParam list) (residual: TypeParam list) signature actualArguments metadata =
+    let cleared = clearInstanceMetadata metadata
+    match residual, actualArguments with
+    | [], _ -> cleared
+    | _, Some actual ->
+        let arguments = List.zip parameters actual |> List.map (fun (parameter, value) -> parameter.Id, value) |> Map.ofList
+        residual |> List.indexed |> List.fold (fun metadata (ordinal, parameter) ->
+            Map.add (SchemeMetadata.argument ordinal) (MetadataValue.Type arguments[parameter.Id]) metadata)
+            (cleared.Add(SchemeMetadata.Definition, MetadataValue.NodeId target)
+                    .Add(SchemeMetadata.Declaration, MetadataValue.Type(NativeType.TForall(residual, signature))))
+    | _, None -> metadata
 
 /// Declaration membership is authoritative before parent navigation edges are linked.
 /// Replace module members, and pure local library aliases in their sequence, at the
@@ -401,9 +454,15 @@ let rec private specializeRecursiveComponents (nodes: Map<NodeId, SemanticNode>)
                 | SemanticKind.VarRef(_, Some target) when node.IsReachable && group.Contains target && not (inside.Contains node.Id) -> Some(node, target)
                 | _ -> None) |> Seq.toList
             if not uses.IsEmpty then
-                let reserved = System.Collections.Generic.Dictionary<NodeId * string, NodeId * string>()
+                let reserved = System.Collections.Generic.Dictionary<NodeId * NativeType option list, NodeId * string>()
                 let requests = System.Collections.Generic.Dictionary<NodeId, ResizeArray<NodeId * string>>()
                 let pending = System.Collections.Generic.Queue<NodeId * Map<int, NativeType> * NodeId * string>()
+                let cloneSchemes = System.Collections.Generic.Dictionary<NodeId, TypeParam list * TypeParam list * NativeType>()
+                let itself (parameter: TypeParam) =
+                    match parameter.Kind with
+                    | TypeParamKind.Type -> NativeType.TVar parameter
+                    | TypeParamKind.Carrier -> NativeType.TNum(CarrierRef.CVar parameter, Dimension.one)
+                    | TypeParamKind.Measure -> NativeType.TMeasure(Dimension.ofVar (measureVarOf parameter))
                 let mutable valid = true
                 let request occurrence declaration actual =
                     let parameters, body = schemes[declaration]
@@ -422,6 +481,10 @@ let rec private specializeRecursiveComponents (nodes: Map<NodeId, SemanticNode>)
                                 let symbol = sprintf "%s__rec_mono%d" name (reserved.Count + 1)
                                 reserved.Add(key, (id, symbol))
                                 requests.Add(id, ResizeArray())
+                                let arguments = parameters |> List.map (fun parameter -> substitution.TryFind parameter.Id |> Option.defaultValue (itself parameter))
+                                let signature = instantiate parameters arguments body
+                                let residual = parameters |> List.filter (fun parameter -> parameter.Kind = TypeParamKind.Measure)
+                                cloneSchemes.Add(id, (parameters, residual, signature))
                                 pending.Enqueue(declaration, substitution, id, symbol)
                                 id
                         requests[id].Add(occurrence, formatType actual)
@@ -435,29 +498,65 @@ let rec private specializeRecursiveComponents (nodes: Map<NodeId, SemanticNode>)
                     let originalId, substitution, bindingId, symbol = pending.Dequeue()
                     let original, lambda = declarations[originalId]
                     let parameters, body = schemes[originalId]
+                    let ownerIds = parameters |> List.map _.Id |> Set.ofList
                     let arguments = parameters |> List.map (fun parameter ->
                         match substitution.TryFind parameter.Id with
                         | Some value -> value
                         | None -> NativeType.TMeasure(Dimension.ofVar (measureVarOf parameter)))
                     let substitute ty = instantiate parameters arguments (canonicalizeVars ty)
                     let root, cloned, mapping = cloneSubtreeWithOrigins current lambda substitute (Some bindingId)
+                    let originalByClone = mapping |> Map.toList |> List.map (fun (original, clone) -> clone, original) |> Map.ofList
                     let peers = cloned |> List.choose (fun node ->
                         match node.Kind with
-                        | SemanticKind.VarRef(_, Some target) when group.Contains target -> Some(target, request node.Id target node.Type)
+                        | SemanticKind.VarRef(_, Some target) when group.Contains target ->
+                            Some(node.Id, target, request node.Id target node.Type)
                         | _ -> None)
-                    let peerGroups = peers |> List.groupBy fst
-                    if peerGroups |> List.exists (fun (_, targets) -> targets |> List.map snd |> List.distinct |> List.length <> 1) then valid <- false
-                    let peerMap = peers |> Map.ofList
+                    let peerGroups = peers |> List.groupBy (fun (_, target, _) -> target)
+                    if peerGroups |> List.exists (fun (_, targets) -> targets |> List.map (fun (_, _, clone) -> clone) |> List.distinct |> List.length <> 1) then valid <- false
+                    let peerMap = peers |> List.map (fun (_, target, clone) -> target, clone) |> Map.ofList
+                    let peerOccurrences = peers |> List.map (fun (occurrence, target, clone) -> occurrence, (target, clone)) |> Map.ofList
                     let remap id = peerMap.TryFind id |> Option.defaultValue id
                     let metadata values = values |> Map.map (fun key value ->
                         match value with
                         | MetadataValue.NodeId id when key = SchemeMetadata.Definition || key = SchemeMetadata.ImplementationDeclaration -> MetadataValue.NodeId(remap id)
                         | _ -> value)
                     for node in cloned do
-                        created <- created.Add(node.Id, { node with Kind = mapKind remap id node.Kind; Metadata = metadata node.Metadata })
+                        let mutable projected = metadata node.Metadata
+                        if node.Id = root then
+                            let _, residual, signature = cloneSchemes[bindingId]
+                            projected <- residualMetadata bindingId residual signature projected
+                        match peerOccurrences.TryFind node.Id with
+                        | Some(target, clone) when cloneSchemes.ContainsKey clone ->
+                            let targetParameters, targetBody = schemes[target]
+                            let originalUse = current[originalByClone[node.Id]]
+                            let checkedInstance = checkedArguments target targetParameters targetBody originalUse
+                            // Inferred recursion is checked monomorphically before group
+                            // generalization. Only exact same-component shared cells can
+                            // supply the identity instance when no scheme use was minted.
+                            let shared =
+                                let hasInstance = originalUse.Metadata |> Map.exists (fun key _ ->
+                                    key = SchemeMetadata.Definition || key = SchemeMetadata.Declaration ||
+                                    key.StartsWith("Scheme.Argument.", System.StringComparison.Ordinal))
+                                let present = Set.union (freeTypeVars originalUse.Type) (freeMeasureVars originalUse.Type |> List.map _.Id |> Set.ofList)
+                                let targetIds = targetParameters |> List.map _.Id |> Set.ofList
+                                match originalUse.Kind with
+                                | SemanticKind.VarRef(_, Some actual) when actual = target && not hasInstance &&
+                                    Set.isSubset targetIds ownerIds && Set.isSubset targetIds present &&
+                                    canonicalizeVars originalUse.Type = targetBody ->
+                                    Some(targetParameters |> List.map itself)
+                                | _ -> None
+                            let actual = checkedInstance |> Option.orElse shared |> Option.map (List.map (substitute >> applySubst))
+                            let targetParameters, residual, signature = cloneSchemes[clone]
+                            let actual = actual |> Option.filter (fun arguments ->
+                                applySubst (instantiate targetParameters arguments signature) = applySubst node.Type)
+                            projected <- projectInstanceMetadata clone targetParameters residual signature actual projected
+                        | _ -> ()
+                        created <- created.Add(node.Id, { node with Kind = mapKind remap id node.Kind; Metadata = projected })
+                    let _, residual, signature = cloneSchemes[bindingId]
                     let binding =
                         { original with Id = bindingId; Kind = SemanticKind.Binding(symbol, false, true, None)
-                                        Type = substitute body; Children = [root] }
+                                        Type = substitute body; Children = [root]
+                                        Metadata = residualMetadata bindingId residual signature original.Metadata }
                     created <- created.Add(bindingId, binding)
                     derivations <- (originalId, bindingId, parameters, arguments, mapping.Add(originalId, bindingId)) :: derivations
                     replacements <- replacements.Add(originalId, (replacements.TryFind originalId |> Option.defaultValue []) @ [bindingId])
@@ -477,10 +576,10 @@ let rec private specializeRecursiveComponents (nodes: Map<NodeId, SemanticNode>)
                     for KeyValue(id, node) in created do current <- current.Add(id, node)
                     for node, original in uses do
                         let target = redirects[node.Id]
-                        let metadata =
-                            match node.Metadata.TryFind SchemeMetadata.Definition with
-                            | Some(MetadataValue.NodeId id) when id = original -> node.Metadata.Add(SchemeMetadata.Definition, MetadataValue.NodeId target)
-                            | _ -> node.Metadata
+                        let parameters, body = schemes[original]
+                        let _, residual, signature = cloneSchemes[target]
+                        let actual = checkedArguments original parameters body node
+                        let metadata = projectInstanceMetadata target parameters residual signature actual node.Metadata
                         let name = match node.Kind with SemanticKind.VarRef(name, _) -> name | _ -> invalidOp "Recursive use required"
                         current <- current.Add(node.Id, { node with Kind = SemanticKind.VarRef(name, Some target); Metadata = metadata })
                     for original in group do
@@ -586,18 +685,35 @@ let runWithEvidence (nodes: Map<NodeId, SemanticNode>) : Result =
                         |> List.groupBy (fun (key, _, _) -> key)
                     let mutable cloneIds : NodeId list = []
                     let mutable redirect : Map<NodeId, NodeId> = Map.empty
+                    let mutable instanceMetadata : Map<NodeId, Map<string, MetadataValue>> = Map.empty
                     groups |> List.iteri (fun gi (_, members) ->
                         let (_, subst, _) = List.head members
-                        // A measure-kinded parameter never appears in `subst` (matchTypeArgs), so it
-                        // is carried as itself: the clone keeps the scheme's measure variables. A
-                        // parameter the use site left open is carried as itself too, in its kind's form.
+                        let checkedInstances = members |> List.map (fun (_, _, id) ->
+                            id, checkedArguments bindingId typars schemeBody current[id])
+                        // Code grouping remains measure-independent. A uniform
+                        // checked measure can specialize this existing group;
+                        // a differing/unknown request retains its measure binder.
+                        // The complete request set is retained in the tape below.
+                        let uniformMeasures =
+                            typars |> List.indexed |> List.choose (fun (ordinal, parameter) ->
+                                if parameter.Kind <> TypeParamKind.Measure then None else
+                                let values = checkedInstances |> List.map (fun (_, values) -> values |> Option.map (List.item ordinal))
+                                if List.exists Option.isNone values then None else
+                                match values |> List.choose id |> List.distinct with
+                                | [NativeType.TMeasure dimension as argument] when dimension.Vars.IsEmpty -> Some(parameter.Id, argument)
+                                | _ -> None) |> Map.ofList
                         let itself (tp: TypeParam) =
                             match tp.Kind with
                             | TypeParamKind.Carrier -> NativeType.TNum (CarrierRef.CVar tp, Dimension.one)
                             | TypeParamKind.Measure -> NativeType.TMeasure (Dimension.ofVar (measureVarOf tp))
                             | TypeParamKind.Type -> NativeType.TVar tp
-                        let args = typars |> List.map (fun tp -> match Map.tryFind tp.Id subst with Some ty -> ty | None -> itself tp)
+                        let args = typars |> List.map (fun tp ->
+                            match Map.tryFind tp.Id subst |> Option.orElseWith (fun () -> uniformMeasures.TryFind tp.Id) with
+                            | Some ty -> ty
+                            | None -> itself tp)
                         let substitute (ty: NativeType) = Clef.Compiler.NativeTypedTree.NativeTypes.instantiate typars args (canonicalizeVars ty)
+                        let residual = typars |> List.filter (fun tp -> tp.Kind = TypeParamKind.Measure && not (uniformMeasures.ContainsKey tp.Id))
+                        let signature = substitute schemeBody
                         let cloneName = sprintf "%s__mono%d" bindingName (gi + 1)
                         let newBindingId = NodeId.fresh()
                         let before = current
@@ -606,22 +722,35 @@ let runWithEvidence (nodes: Map<NodeId, SemanticNode>) : Result =
                             { bindingNode with
                                 Id = newBindingId
                                 Kind = SemanticKind.Binding (cloneName, false, false, None)
-                                Type = substitute schemeBody
-                                Children = [newLambdaId] }
-                        for n in clonedNodes do current <- Map.add n.Id n current
+                                Type = signature
+                                Children = [newLambdaId]
+                                Metadata = residualMetadata newBindingId residual signature bindingNode.Metadata }
+                        for n in clonedNodes do
+                            let node =
+                                if n.Id = newLambdaId then
+                                    { n with Metadata = residualMetadata newBindingId residual signature n.Metadata }
+                                else n
+                            current <- Map.add node.Id node current
                         current <- Map.add newBindingId newBinding current
                         let requests = members |> List.map (fun (_, _, useId) -> useId, formatType before[useId].Type)
                         let updated, edges = recordDerivation bindingId newBindingId typars args requests before (mapping.Add(bindingId, newBindingId)) current
                         current <- updated
                         evidence <- edges @ evidence
                         cloneIds <- cloneIds @ [newBindingId]
-                        for (_, _, useId) in members do redirect <- Map.add useId newBindingId redirect)
+                        for (useId, actualArguments) in checkedInstances do
+                            redirect <- Map.add useId newBindingId redirect
+                            // Only a checker-issued instance can authorize the
+                            // residual scheme's use at this exact occurrence.
+                            let metadata = projectInstanceMetadata newBindingId typars residual signature actualArguments current[useId].Metadata
+                            instanceMetadata <- instanceMetadata.Add(useId, metadata))
                     // Repoint use sites at their clone
                     for (useId, useNode) in useSites do
                         match Map.tryFind useId redirect with
                         | Some target ->
                             let name = match useNode.Kind with SemanticKind.VarRef (n, _) -> n | _ -> bindingName
-                            current <- Map.add useId { useNode with Kind = SemanticKind.VarRef (name, Some target) } current
+                            current <- Map.add useId
+                                { useNode with Kind = SemanticKind.VarRef (name, Some target)
+                                               Metadata = instanceMetadata[useId] } current
                         | None -> ()
                     // Replace execution membership; keep source participants.
                     current <- replaceBindingMembership bindingId cloneIds true current

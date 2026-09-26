@@ -99,7 +99,7 @@ and InlineScope = {
     TypeAbbrevs: Map<string, NativeType>
     Measures: Clef.Compiler.NativeTypedTree.MeasureEnvironment.MeasureEnv
     MeasureScope: Map<string, Clef.Compiler.NativeTypedTree.DimensionAlgebra.MeasureVar>
-    RecordDefs: Map<string, RecordTypeInfo>
+    RecordDefs: Map<NominalTypeIdentity, RecordTypeInfo>
     FieldLabels: Map<string, FieldRef list>
 }
 

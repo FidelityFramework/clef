@@ -26,6 +26,7 @@ type Reading = private {
     RetainedEvidence: Map<NodeId, Evidence>
     Access: NodeId -> Access option
     Correspondence: NodeId -> NodeId -> Set<NodeId> option
+    ClosedImplementation: NodeId -> Evidence option
 }
 type private Closed = { Dependencies: Set<NodeId>; Callers: Set<NodeId>; Participants: Set<NodeId>; Calls: Call list; Valid: bool }
 
@@ -495,11 +496,20 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                 occurrence true Set.empty current.Source |> Option.map (fun (proof, _) ->
                     current.Source, { proof with Participants = Set.union proof.Participants current.Participants }))
         | _ -> None) |> Map.ofList
+    let closedImplementation implementation =
+        closed implementation |> Option.map (fun required ->
+            let participants = required |> Set.fold (fun found code -> Set.union found candidates[code].Participants) Set.empty
+            { empty with Implementations = required; Participants = participants
+                         Calls = required |> Set.toList |> List.collect (fun code -> candidates[code].Calls) |> List.distinct
+                         Uses = participants |> Set.toList |> List.map (fun id -> id, observedUses id) |> Map.ofList })
     { Evidence = evidence; RetainedEvidence = retained; Access = access
+      ClosedImplementation = closedImplementation
       Correspondence = fun source current -> corresponds Set.empty Set.empty source current }
 
 let analyze graph = analyzeWith graph (CallableOrigins.resolve graph)
 let tryEvidence reading occurrence = reading.Evidence.TryFind occurrence
+/// Complete implementation ingress, unlike a code-value occurrence's identity.
+let tryClosedImplementation reading implementation = reading.ClosedImplementation implementation
 /// Retained logical values are readable only through a validated current access;
 /// they remain absent from executable occurrence admission.
 let tryRetainedEvidence reading occurrence = reading.RetainedEvidence.TryFind occurrence

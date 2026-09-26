@@ -1588,6 +1588,53 @@ and [<RequireQualifiedAccess; NoComparison>] CarrierRef =
     | Carrier of tycon: TypeConRef
     | CVar of var: TypeParam
 
+/// The identity of a nominal declaration. Display names and declaration order do not
+/// identify types; the checker admits one declaration at this module/name pair.
+type NominalTypeIdentity = { Module: ModulePath; Name: string }
+
+module NominalTypeIdentity =
+    let ofConstructor (tycon: TypeConRef) : NominalTypeIdentity =
+        { Module = tycon.Module; Name = tycon.Name }
+
+    /// Presentation only. Maps and semantic comparisons use the record itself.
+    let display (identity: NominalTypeIdentity) =
+        String.concat "." (identity.Module @ [identity.Name])
+
+/// An immutable snapshot of constructor identity, including native kinds and argument sorts.
+/// Layout/placement qualifiers are intentionally absent: they do not change type identity.
+type ConstructorIdentity = {
+    Declaration: NominalTypeIdentity
+    Parameters: TypeParamKind list
+    NativeKind: NTUKind option
+}
+
+/// Stable map keys contain no inference cells. A later substitution produces a new key;
+/// it cannot mutate the key already attached to a previous graph snapshot.
+[<RequireQualifiedAccess>]
+type TypeIdentity =
+    | Application of ConstructorIdentity * TypeIdentity list
+    | Numeric of CarrierIdentity * Dimension
+    | Measure of Dimension
+    | Variable of TypeParamId * TypeParamKind
+    | Function of TypeIdentity * TypeIdentity
+    | Tuple of bool * TypeIdentity list
+    | AnonymousRecord of bool * (string * TypeIdentity) list
+    | Union of ConstructorIdentity * (string * int * (string option * TypeIdentity) list) list
+    | Forall of (TypeParamId * TypeParamKind) list * TypeIdentity
+    | Byref of ByrefKind * TypeIdentity
+    | NativePointer of TypeIdentity
+    | Lazy of TypeIdentity
+    | Sequence of TypeIdentity
+    | Enumerator of TypeIdentity
+    | List of TypeIdentity
+    | Map of TypeIdentity * TypeIdentity
+    | Set of TypeIdentity
+    | Error of string
+
+and [<RequireQualifiedAccess>] CarrierIdentity =
+    | Constructor of ConstructorIdentity
+    | Variable of TypeParamId * TypeParamKind
+
 //-------------------------------------------------------------------------
 // Carrier positions: the one read of a carrier variable
 //-------------------------------------------------------------------------
@@ -1875,7 +1922,13 @@ let rec formatType (ty: NativeType) : string =
         elems |> List.map formatType |> String.concat " * "
     | NativeType.TForall(tps, body) ->
         let tpsStr = tps |> List.map (fun tp -> tp.Name) |> String.concat " "
-        $"forall {tpsStr}. {formatType body}"
+        let members =
+            tps |> List.collect _.Constraints |> List.distinct
+            |> List.choose (function
+                | Constraint.HasMember(receiver, name, result, _) -> Some $"{formatType receiver}: (member {name}: {formatType result})"
+                | _ -> None)
+        let suffix = if members.IsEmpty then "" else " when " + String.concat " and " members
+        $"forall {tpsStr}. {formatType body}{suffix}"
     | NativeType.TByref(elem, ByrefKind.In) -> $"inref<{formatType elem}>"
     | NativeType.TByref(elem, ByrefKind.Out) -> $"outref<{formatType elem}>"
     | NativeType.TByref(elem, ByrefKind.InOut) -> $"byref<{formatType elem}>"

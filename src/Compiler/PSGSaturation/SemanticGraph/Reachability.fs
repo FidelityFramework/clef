@@ -50,38 +50,38 @@ let getSemanticReferences (node: SemanticNode) : NodeId list =
 
 /// Extract type names from a NativeType (for reachability of TypeDef nodes)
 /// Only extracts user-defined type names (records, unions) that need TypeDef lookup
-let rec getTypeNames (ty: NativeType) : string list =
+let rec getTypeIdentities (ty: NativeType) : NominalTypeIdentity list =
     match ty with
     | NativeType.TApp(tycon, args) ->
         // TApp with FieldCount > 0 indicates a record type needing TypeDef
-        let tyconNames = if tycon.FieldCount > 0 then [tycon.Name] else []
-        tyconNames @ (args |> List.collect getTypeNames)
+        let tyconNames = if tycon.FieldCount > 0 || tycon.CaseCount > 0 then [NominalTypeIdentity.ofConstructor tycon] else []
+        tyconNames @ (args |> List.collect getTypeIdentities)
     | NativeType.TFun(domain, range) ->
-        getTypeNames domain @ getTypeNames range
+        getTypeIdentities domain @ getTypeIdentities range
     | NativeType.TTuple(elements, _) ->
-        elements |> List.collect getTypeNames
+        elements |> List.collect getTypeIdentities
     // Named records use TApp - handled above via tycon.FieldCount > 0 check
     | NativeType.TUnion(tycon, cases) ->
-        tycon.Name :: (cases |> List.collect (fun c -> c.Fields |> List.collect (fun (_, t) -> getTypeNames t)))
+        NominalTypeIdentity.ofConstructor tycon :: (cases |> List.collect (fun c -> c.Fields |> List.collect (fun (_, t) -> getTypeIdentities t)))
     | NativeType.TNativePtr(inner) ->
-        getTypeNames inner
+        getTypeIdentities inner
     | NativeType.TByref(inner, _) ->
-        getTypeNames inner
+        getTypeIdentities inner
     | NativeType.TAnon(fields, _) ->
-        fields |> List.collect (fun (_, t) -> getTypeNames t)
+        fields |> List.collect (fun (_, t) -> getTypeIdentities t)
     | NativeType.TForall(_, body) ->
-        getTypeNames body
+        getTypeIdentities body
     | NativeType.TVar(tv) ->
         match tv.Parent with
-        | TypeParamState.Bound t -> getTypeNames t
+        | TypeParamState.Bound t -> getTypeIdentities t
         | _ -> []
     | _ -> []
 
 /// Get TypeDef NodeIds for types referenced by a node
 let getTypeDefRefs (node: SemanticNode) (graph: SemanticGraph) : NodeId list =
-    let typeNames = getTypeNames node.Type
+    let typeNames = getTypeIdentities node.Type
     typeNames
-    |> List.choose (fun name -> SemanticGraph.recallType name graph)
+    |> List.choose (fun identity -> RecordInstances.tryDefinition identity graph |> Option.map _.Id)
 
 /// Find a binding node by name in the graph
 let findBindingByName (name: string) (graph: SemanticGraph) : NodeId option =

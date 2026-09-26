@@ -39,6 +39,7 @@
 module Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.TypeIdentities
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.NativeTypedTree.Expressions.Types
 open Clef.Compiler.NativeTypedTree.Expressions.Intrinsics
@@ -126,6 +127,9 @@ type private Program = {
     Reachable: Map<NodeId, SemanticNode>
     /// Reachable nodes in node order.
     Ordered: SemanticNode list
+    /// Values that require runtime representation under current source demand.
+    /// Domain/type facts for deferred source expressions remain in the graph.
+    CommitmentSites: Set<NodeId>
     Parents: Map<NodeId, NodeId>
     /// An application node -> what it calls and its whole argument list (curried calls flattened).
     Callees: Map<NodeId, Callee * NodeId list>
@@ -176,30 +180,30 @@ type private Program = {
     /// between the guard and a branch.
     Refinements: Map<NodeId, Map<NodeId, Refinement list>>
     /// A record type name -> its reachable constructions: the construction node and its (field, value) list.
-    Constructions: Map<string, (NodeId * (string * NodeId) list) list>
+    Constructions: Map<NominalTypeIdentity, (NodeId * (string * NodeId) list) list>
     /// A record type name -> the fields its definition declares at an integer type.
-    IntegerFields: Map<string, string list>
+    IntegerFields: Map<NominalTypeIdentity, string list>
     /// The declared inputs of a hardware design (§1.1: an input arrives through a declaration):
     /// the record type of a `[<HardwareModule>]` design's Step inputs parameter, each pin field at
     /// its declared range, a boolean pin `[0, 1]`. No program constructs this record; the pins do.
-    InputSeeds: Map<string, Map<string, ValueRange>>
+    InputSeeds: Map<NominalTypeIdentity, Map<string, ValueRange>>
     /// A node whose value a binding descriptor declares (§4.1, the C ABI row; ruling 1 of
     /// CS-12): an extern's parameter node at its declared range, the extern's body at the
     /// declared return. The declaration binds (§4.4); the arguments are checked against it.
     BoundarySeeds: Map<NodeId, ValueRange>
     /// The declared wire fields seeded into `InputSeeds`, for the boundary check (§4.2): the
     /// record type and the field's declaration.
-    DeclaredFields: (string * PlatformResolution.DeclaredField) list
+    DeclaredFields: (NominalTypeIdentity * PlatformResolution.DeclaredField) list
     /// The declared extern parameters seeded into `BoundarySeeds`: the parameter node and its
     /// declaration.
     DeclaredParameters: (NodeId * PlatformResolution.DeclaredParameter) list
     /// An array element type (rendered) -> every value stored into an array of that type, as
     /// (the storing node, the value node): an array literal's elements, an indexer or `Array.set`
     /// assignment, `Array.create`'s seed, `Array.init`'s function result.
-    ElementStores: Map<string, (NodeId * NodeId) list>
+    ElementStores: Map<TypeIdentity, (NodeId * NodeId) list>
     /// An array element type (rendered) -> the constant seeds stored into it: `Array.zeroCreate`'s
     /// zero, and the unbounded store of an array handed to a boundary call.
-    ElementSeeds: Map<string, ValueRange>
+    ElementSeeds: Map<TypeIdentity, ValueRange>
     Thresholds: ValueRange.Threshold list
     Fabric: bool
 }
@@ -230,7 +234,7 @@ let private arrayElementType (ty: NativeType) : NativeType option =
     | _ -> None
 
 /// The key of `ElementRanges`: the element type's rendered form.
-let private elementKey (elem: NativeType) : string = formatType (applySubst elem)
+let private elementKey (elem: NativeType) : TypeIdentity = ofType elem
 
 /// Whether two types may be the same type: a conservative reading (a type variable unifies with
 /// anything; a shape the reader does not know is not excluded), so that no lambda a call could
@@ -1111,6 +1115,8 @@ let private lazyRangeSources (graph: SemanticGraph) =
 let private readProgram (context: PlatformContext option) (graph: SemanticGraph) : Program =
     let reachableNodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let ordered = reachableNodes |> Map.toList |> List.map snd
+    let demand = OrdinaryDemand.read graph
+    let deferred = Set.union (OrdinaryDemand.deferredOnly graph) (demand.Formals.Keys |> Set.ofSeq)
     let parents = parentIndex reachableNodes
     let candidates = escapingOf reachableNodes ordered parents
     let poisons = poisoningOf reachableNodes ordered
@@ -1121,6 +1127,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Context = context
         Reachable = reachableNodes
         Ordered = ordered
+        CommitmentSites = reachableNodes.Keys |> Set.ofSeq |> fun sites -> Set.difference sites deferred
         Parents = parents
         Callees = Map.empty
         Effects = Map.empty
@@ -1295,19 +1302,18 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         |> List.fold (fun acc node ->
             match node.Kind, node.Type with
             | SemanticKind.RecordExpr (fields, _), NativeType.TApp (tycon, _) ->
-                let existing = Map.tryFind tycon.Name acc |> Option.defaultValue []
-                Map.add tycon.Name ((node.Id, fields) :: existing) acc
+                let existing = Map.tryFind (NominalTypeIdentity.ofConstructor tycon) acc |> Option.defaultValue []
+                Map.add (NominalTypeIdentity.ofConstructor tycon) ((node.Id, fields) :: existing) acc
             | _ -> acc) Map.empty
     let integerFields =
-        graph.Types.Value
-        |> Map.toList
-        |> List.choose (fun (name, id) ->
-            match Map.tryFind id graph.Nodes with
-            | Some { Kind = SemanticKind.TypeDef (_, TypeDefKind.RecordDef fields, _) } ->
+        graph.Nodes.Values
+        |> Seq.choose (fun node ->
+            match node.Kind, node.Type with
+            | SemanticKind.TypeDef (_, TypeDefKind.RecordDef fields, _), NativeType.TApp(tycon, _) ->
                 let integers = fields |> List.filter (fun (_, ty) -> Types.isIntegerType ty) |> List.map fst
-                if List.isEmpty integers then None else Some (name, integers)
+                if List.isEmpty integers then None else Some (NominalTypeIdentity.ofConstructor tycon, integers)
             | _ -> None)
-        |> Map.ofList
+        |> Map.ofSeq
     // A hardware design's inputs: the Step function's second parameter is the pin record. Each
     // boolean pin is `[0, 1]`; a pin of any other numeric type has no declared range in this
     // changeset (CS-12 supplies boundary ranges) and so is unobservable.
@@ -1329,10 +1335,10 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                     | _ -> None)
                 |> Option.bind (fun (_, parameters, _) ->
                     match parameters with
-                    | [ _; (_, NativeType.TApp (tycon, _), _) ] ->
-                        SemanticGraph.tryGetRecordFields tycon.Name graph
+                    | [ _; (_, (NativeType.TApp (tycon, _) as inputType), _) ] ->
+                        RecordInstances.tryFields inputType graph
                         |> Option.map (fun fields ->
-                            tycon.Name,
+                            NominalTypeIdentity.ofConstructor tycon,
                             fields
                             |> List.choose (fun (name, ty) ->
                                 match Types.tryGetNTUKind ty with
@@ -1354,7 +1360,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     let descriptors = { descriptors with Functions = descriptors.Functions @ ((CallbackDeclarations.read graph).Callbacks |> List.map (fun c -> c.Function)) }
     let inputSeeds =
         descriptors.Layouts
-        |> List.fold (fun (acc: Map<string, Map<string, ValueRange>>) layout ->
+        |> List.fold (fun (acc: Map<NominalTypeIdentity, Map<string, ValueRange>>) layout ->
             match layout.RecordType with
             | Some typeName ->
                 let existing = Map.tryFind typeName acc |> Option.defaultValue Map.empty
@@ -1389,7 +1395,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     // comprehension's yields), an indexer or `Array.set` assignment, `Array.create`'s seed,
     // `Array.init`'s function result (a named lambda's body, or every candidate's through a value),
     // and `Array.zeroCreate`'s zero for an integer element type.
-    let store (key: string) (storer: NodeId) (value: NodeId) (acc: Map<string, (NodeId * NodeId) list>) =
+    let store (key: TypeIdentity) (storer: NodeId) (value: NodeId) (acc: Map<TypeIdentity, (NodeId * NodeId) list>) =
         let existing = Map.tryFind key acc |> Option.defaultValue []
         Map.add key ((storer, value) :: existing) acc
     /// The bodies a function value's results come from; None when a poisoning value may be the
@@ -1407,7 +1413,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     let referenceParameters = descriptors.Functions |> List.collect (fun f -> f.References) |> Map.ofList
     let (elementStores, elementSeeds) =
         ordered
-        |> List.fold (fun (stores: Map<string, (NodeId * NodeId) list>, seeds: Map<string, ValueRange>) node ->
+        |> List.fold (fun (stores: Map<TypeIdentity, (NodeId * NodeId) list>, seeds: Map<TypeIdentity, ValueRange>) node ->
             let typeOf (id: NodeId) = Map.tryFind id reachableNodes |> Option.map (fun n -> n.Type)
             match node.Kind with
             | SemanticKind.ArrayExpr elements ->
@@ -1449,7 +1455,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                                 List.zip parameters args |> List.map (fun ((_, _, paramId), arg) -> arg, Map.tryFind paramId referenceParameters)
                             | _ -> node.Children |> List.map (fun arg -> arg, None)
                         supplied
-                        |> List.fold (fun (s: Map<string, ValueRange>) (argId, declared) ->
+                        |> List.fold (fun (s: Map<TypeIdentity, ValueRange>) (argId, declared) ->
                             match typeOf argId |> Option.bind arrayElementType with
                             | Some elem ->
                                 let key = elementKey elem
@@ -1571,7 +1577,7 @@ let private read (program: Program) (state: State) (consumer: NodeId) (operand: 
 /// value leaves it is witnessed by CCS8012, never merged), else the join of the field over the
 /// type's reachable constructions and the seed a hardware design's pin carries; the empty range
 /// where nothing constructs it and nothing declares it.
-let private fieldRange (program: Program) (state: State) (typeName: string) (field: string) : ValueRange =
+let private fieldRange (program: Program) (state: State) (typeName: NominalTypeIdentity) (field: string) : ValueRange =
     let declared =
         Map.tryFind typeName program.InputSeeds
         |> Option.bind (Map.tryFind field)
@@ -1834,8 +1840,8 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
         | SemanticKind.Downcast (inner, _) -> Some (get inner)
         | SemanticKind.FieldGet (exprId, field) ->
             match Map.tryFind exprId program.Reachable with
-            | Some { Type = NativeType.TApp (tycon, _) } when Map.containsKey tycon.Name program.Constructions || Map.containsKey tycon.Name program.InputSeeds ->
-                Some (fieldRange program state tycon.Name field)
+            | Some { Type = NativeType.TApp (tycon, _) } when Map.containsKey (NominalTypeIdentity.ofConstructor tycon) program.Constructions || Map.containsKey (NominalTypeIdentity.ofConstructor tycon) program.InputSeeds ->
+                Some (fieldRange program state (NominalTypeIdentity.ofConstructor tycon) field)
             // A read of a field of a record type nothing reachable constructs and nothing declares
             // came from a source the pass did not see: unobservable (CCS8011), never a fabricated width.
             // (`Empty` remains right for FieldRanges of a field nothing reads.)
@@ -2212,7 +2218,7 @@ let private fieldReason (program: Program) (node: SemanticNode) : string option 
     | SemanticKind.FieldGet (exprId, field) ->
         match Map.tryFind exprId program.Reachable with
         | Some { Type = NativeType.TApp (tycon, _) } ->
-            let declared = Map.tryFind tycon.Name program.InputSeeds |> Option.exists (Map.containsKey field)
+            let declared = Map.tryFind (NominalTypeIdentity.ofConstructor tycon) program.InputSeeds |> Option.exists (Map.containsKey field)
             if declared then None
             else Some (sprintf ": no descriptor declares the representation of field '%s' of '%s'" field tycon.Name)
         | _ -> None
@@ -2235,7 +2241,7 @@ let private unobservableDiagnostics (program: Program) (state: State) : Diagnost
     let severity = if program.Fabric then NativeDiagnosticSeverity.Error else NativeDiagnosticSeverity.Info
     program.Ordered
     |> List.filter (fun node ->
-        isIntegerNode node
+        program.CommitmentSites.Contains node.Id && isIntegerNode node
         && unobservable node.Id
         && (match node.Kind with
             | SemanticKind.VarRef (_, Some defId) -> not (unobservable defId)
@@ -2267,7 +2273,7 @@ let private coverageDiagnostics (program: Program) (state: State) : Diagnostic l
         let reported =
             program.Ordered
             |> List.filter (fun node ->
-                isIntegerNode node
+                program.CommitmentSites.Contains node.Id && isIntegerNode node
                 && (match node.Kind with
                     | SemanticKind.VarRef (_, Some defId) -> Map.tryFind defId program.Reachable |> Option.exists (fun d -> (uncovered d).IsNone)
                     | _ -> true))
@@ -2315,6 +2321,7 @@ let private boundaryDiagnostics (program: Program) (state: State) : Diagnostic l
                 | _ -> None
             | _ -> None
         program.Ordered
+        |> List.filter (fun node -> program.CommitmentSites.Contains node.Id)
         |> List.choose (fun node -> uncovered node |> Option.map (fun found -> (node, found)))
         |> fun found ->
             let byNode = found |> List.map (fun (n, f) -> (n.Id, f)) |> Map.ofList
@@ -2343,8 +2350,9 @@ let private boundaryDiagnostics (program: Program) (state: State) : Diagnostic l
 let private declaredDiagnostics (program: Program) (state: State) : Diagnostic list =
     match program.Context with
     | Some ctx when not program.Fabric ->
-        let short (name: string) = match name.LastIndexOf '.' with -1 -> name | i -> name.Substring(i + 1)
-        let ranged (values: (NodeId * NodeId) list) = values |> List.map (fun (consumer, v) -> v, read program state consumer v)
+        let ranged (values: (NodeId * NodeId) list) =
+            values |> List.filter (fun (consumer, _) -> program.CommitmentSites.Contains consumer)
+            |> List.map (fun (consumer, v) -> v, read program state consumer v)
         let leaving (declared: ValueRange) (values: (NodeId * ValueRange) list) =
             values |> List.filter (fun (_, r) -> ValueRange.isObservable r && not (ValueRange.contains declared r))
         let tightening (declared: ValueRange) (bits: int) (values: (NodeId * ValueRange) list) : (ValueRange * NumericRepresentation) option =
@@ -2374,13 +2382,13 @@ let private declaredDiagnostics (program: Program) (state: State) : Diagnostic l
                     |> List.choose (fun (v, r) ->
                         at v NativeDiagnosticSeverity.Error DiagnosticCodes.CCS8012_RangeNotCovered
                             (sprintf "The range %s of the value stored into field '%s' of '%s' is not covered by its declared representation '%s' (%d bits, %s); bound the value with a comparison, a modulus or a clamp, or change the declaration"
-                                (ValueRange.render r) f.Name (short typeName) f.Repr f.Bits (ValueRange.render f.Range)))
+                                (ValueRange.render r) f.Name (NominalTypeIdentity.display typeName) f.Repr f.Bits (ValueRange.render f.Range)))
                 let wider =
                     tightening f.Range f.Bits values
                     |> Option.bind (fun (joined, r) ->
                         at f.Node NativeDiagnosticSeverity.Info DiagnosticCodes.CCS8014_RepresentationWiderThanRange
                             (sprintf "The field '%s' of '%s' is declared '%s' (%d bits, %s); every value stored lies within %s, which '%s' (%d bits) holds; the declaration can be tightened"
-                                f.Name (short typeName) f.Repr f.Bits (ValueRange.render f.Range) (ValueRange.render joined) r.Name r.Bits))
+                                f.Name (NominalTypeIdentity.display typeName) f.Repr f.Bits (ValueRange.render f.Range) (ValueRange.render joined) r.Name r.Bits))
                 uncovered @ Option.toList wider)
         let parameters =
             program.DeclaredParameters
@@ -2428,6 +2436,7 @@ let private spelledDiagnostics (program: Program) (state: State) : Diagnostic li
             | _ -> None
         let leaving =
             program.Ordered
+            |> List.filter (fun node -> program.CommitmentSites.Contains node.Id)
             |> List.choose (fun node ->
                 match declarationOf node, Map.tryFind node.Id state with
                 | Some d, Some r when ValueRange.isObservable r && not (ValueRange.contains d.Range r) -> Some (node, (d, r))
@@ -2446,6 +2455,7 @@ let private spelledDiagnostics (program: Program) (state: State) : Diagnostic li
                   Reachability = ReachabilityContext.Reachable })
         let wider =
             program.Ordered
+            |> List.filter (fun node -> program.CommitmentSites.Contains node.Id)
             |> List.choose (fun node ->
                 match node.Kind with
                 | SemanticKind.Binding _ | SemanticKind.PatternBinding _ ->
@@ -2494,11 +2504,11 @@ let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph
                 fields |> List.map (fun f -> f, fieldRange program state typeName f) |> Map.ofList)
         let declared =
             program.InputSeeds
-            |> Map.fold (fun (acc: Map<string, Map<string, ValueRange>>) typeName seeds ->
+            |> Map.fold (fun (acc: Map<NominalTypeIdentity, Map<string, ValueRange>>) typeName seeds ->
                 let existing = Map.tryFind typeName acc |> Option.defaultValue Map.empty
                 Map.add typeName (seeds |> Map.fold (fun m f _ -> Map.add f (fieldRange program state typeName f) m) existing) acc) declared
         program.Constructions
-        |> Map.fold (fun (acc: Map<string, Map<string, ValueRange>>) typeName constructions ->
+        |> Map.fold (fun (acc: Map<NominalTypeIdentity, Map<string, ValueRange>>) typeName constructions ->
             let fields = constructions |> List.collect (snd >> List.map fst) |> List.distinct
             let existing = Map.tryFind typeName acc |> Option.defaultValue Map.empty
             let joined =
@@ -2517,14 +2527,15 @@ let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph
     let elementRanges =
         let keys = Set.union (program.ElementStores |> Map.toSeq |> Seq.map fst |> Set.ofSeq) (program.ElementSeeds |> Map.toSeq |> Seq.map fst |> Set.ofSeq)
         // the element type behind each key, from any store of it or from an array node of the type
-        let typeOfKey (key: string) : NativeType option =
+        let typeOfKey (key: TypeIdentity) : NativeType option =
             program.Ordered
             |> List.tryPick (fun n -> arrayElementType n.Type |> Option.filter (fun e -> elementKey e = key))
         keys
         |> Set.toList
         |> List.choose (fun key -> typeOfKey key |> Option.map (fun elem -> key, elementRange program state elem))
         |> Map.ofList
-    let resourceDiagnostics = program.LoopRecognition.Linear |> List.choose (fun recurrence ->
+    let resourceDiagnostics = program.LoopRecognition.Linear |> List.filter (fun recurrence ->
+        recurrence.Cells |> List.exists program.CommitmentSites.Contains) |> List.choose (fun recurrence ->
         match LoopRecipes.saturateLinear (current state) recurrence with
         | Result.Error LoopRangeResidual.ProofResources ->
             let node = graph.Nodes[recurrence.Cells.Head]

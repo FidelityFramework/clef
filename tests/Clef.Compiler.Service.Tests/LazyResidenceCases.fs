@@ -453,6 +453,15 @@ let main _ =
         let graph = LazyResidenceFixture.programWith (Some source)
         let layouts = graph.Codata.Value.LazyLayouts
         Assert.Equal(2, layouts.Count)
+        let demand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.read graph
+        Assert.NotEmpty demand.Calls
+        // Factory destination adaptation must precede both the final demand
+        // proof and every lazy layout which retains the resulting pool. A
+        // source-only refresh of those exact demand rows changes no authority.
+        let refreshed = Clef.Compiler.Nanopass.OrdinaryDemand.normalize graph
+        let settledAgain, repeated = LazyRuntime.settle refreshed
+        Assert.Empty repeated.Diagnostics
+        Assert.Equal<Map<NodeId, LazyLayout>>(layouts, repeated.Layouts)
         let backing = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout.literalEvidence graph
         let authority =
             Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.resolve graph
@@ -461,6 +470,8 @@ let main _ =
         Assert.NotEmpty authority
         for layout in layouts.Values do
             Assert.True(LazyRuntime.validate graph layout)
+            Assert.True(LazyRuntime.validate refreshed layout)
+            Assert.True(LazyRuntime.validate settledAgain layout)
             let cached = layout.Slots |> List.find (fun slot -> slot.Source = layout.Cached)
             Assert.Equal(CaptureSlotKind.ValueView Types.stringType, cached.Holds)
             Assert.Equal(SettledSlot.Pointer 5, cached.Field.Slot)

@@ -193,8 +193,10 @@ let main _ =
 """
         let context = { ClosureValues.context with Dimensions = Map.ofList ["Pointer", pointerBits; "Register", 64] }
         let graph = Clef.Compiler.PSGSaturation.SemanticGraph.Placement.settle (Some context) result.Graph
-        let layout = graph.Layouts.Value |> Map.toSeq |> Seq.pick (fun (name, layout) ->
-            if name = "Holder" || name.EndsWith(".Holder") then Some layout else None)
+        let layout = graph.Layouts.Value |> Map.toSeq |> Seq.pick (fun (identity, layout) ->
+            match identity with
+            | TypeIdentity.Application(constructor, _) when constructor.Declaration.Name = "Holder" -> Some layout
+            | _ -> None)
         match layout with
         | SettledLayout.Record ([work; tail], Some size, Some alignment) ->
             let descriptorBytes = 5 * (pointerBits / 8)

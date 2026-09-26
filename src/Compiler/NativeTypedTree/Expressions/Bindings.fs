@@ -306,7 +306,7 @@ let private isGeneralizableValue (env: TypeEnv) (builder: NodeBuilder) source (n
             let immutable =
                 match applySubst node.Type with
                 | NativeType.TApp(tycon, _) ->
-                    tryLookupRecordDef tycon.Name env
+                    tryLookupRecordDef tycon env
                     |> Option.exists (fun record -> record.TypeCon.Module = tycon.Module && record.MutableFields.IsEmpty)
                 | NativeType.TAnon _ -> true
                 | _ -> false
@@ -605,7 +605,7 @@ let private checkBindingInScope
         let bindingType =
             if preCreatedBinding.IsSome || isMutable then applySubst funcType
             else
-                let scheme = generalizeInEnv env funcType
+                let scheme = if isInline then generalizeInlineInEnv env funcType else generalizeInEnv env funcType
                 if explicitParameters.IsEmpty then scheme
                 else
                     let parameters, body = match scheme with NativeType.TForall(parameters, body) -> parameters, body | _ -> [], scheme

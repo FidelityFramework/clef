@@ -137,6 +137,7 @@ let checkApp
                         match binding.Type with
                         | NativeType.TForall (parameters, signature) ->
                             let fresh = parameters |> List.map (fun parameter -> freshInstanceOf parameter range)
+                            instantiateMemberConstraints env parameters fresh range
                             let instantiate ty = NativeTypes.instantiate parameters fresh (canonicalizeVars ty)
                             instantiate signature, instantiate
                         | signature -> signature, id
@@ -212,6 +213,7 @@ let checkApp
             match applySubst funcNode.Type with
             | NativeType.TForall(parameters, body) ->
                 let fresh = parameters |> List.map (fun parameter -> freshInstanceOf parameter range)
+                instantiateMemberConstraints env parameters fresh range
                 Some(NativeTypes.instantiate parameters fresh body)
             | _ -> None
         else None
@@ -246,6 +248,7 @@ let checkApp
             let instantiatedType =
                 contextualInstance |> Option.defaultWith (fun () ->
                     let freshVars = typeParams |> List.map (fun tp -> freshInstanceOf tp range)
+                    instantiateMemberConstraints env typeParams freshVars range
                     NativeTypes.instantiate typeParams freshVars bodyType)
             // Now handle the instantiated type
             match instantiatedType with
@@ -636,7 +639,9 @@ let checkTypeApp
                 // occurrences with their corresponding type arguments
                 match typeArgTypes |> List.tryPick (function NativeType.TError message -> Some message | _ -> None) with
                 | Some message -> NativeType.TError message
-                | None -> NativeTypes.instantiate typeParams typeArgTypes bodyType
+                | None ->
+                    instantiateMemberConstraints env typeParams typeArgTypes range
+                    NativeTypes.instantiate typeParams typeArgTypes bodyType
         | NativeType.TError message -> NativeType.TError message
         | other ->
             addNativeError DiagnosticCodes.CCS8092_TypeArgumentsOnNonScheme synRange

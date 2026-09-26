@@ -879,6 +879,12 @@ type EdgeRole =
     /// Current finite lazy effect premises, including actual formation/call
     /// multiplicity, memoization protocol, all writes and original cell type.
     | LazyEffectRange
+    /// Exact closed implementation and unused logical formal, followed by all
+    /// current absence, type, invocation and hidden-convention participants.
+    | OrdinaryUnusedFormal
+    /// Exact invocation/formal/actual correspondence for an omitted physical
+    /// operand. Direct explicit eager demand remains independently required.
+    | OrdinaryUnusedActual
 
 /// One directed relation. Sources retain ordered participant occurrences;
 /// structural projections may be single-source while joint facts are n-ary.
@@ -1519,6 +1525,9 @@ type CallableCarrier = {
     Implementation: NodeId
     Parameters: (string * NativeType * NodeId) list
     ParameterShapes: CallableValueShape list
+    /// Logical formals whose physical components are absent under current,
+    /// source-owned unused-formal evidence. Their source types remain intact.
+    OmittedParameters: Set<NodeId>
     Result: NodeId
     ResultShape: CallableValueShape
     Environment: CallableEnvironment option
@@ -1777,6 +1786,172 @@ type ProgramStorageInventory = {
 module ProgramStorageInventory =
     let empty = { Entries = Map.empty; Reservations = Map.empty; Unresolved = Map.empty }
 
+/// Source-settled physical projection of one logical call. The source retains
+/// every actual and its type, including computations that remain deferred.
+type OrdinaryCallProjection = {
+    Implementation: NodeId
+    Actuals: NodeId list
+    Omitted: Set<int>
+    Eager: Set<int>
+}
+
+/// Materialized before emission. Witness traversal reads these consequences;
+/// use census, dependency closure and proof discharge belong to CCS/Baker.
+/// Resolved source declaration identity. The witness formats this admitted name;
+/// it does not recover declaration scope by following parent pointers.
+type WitnessProjectionFailure = {
+    Occurrence: NodeId option
+    Reason: string
+    Participants: Set<NodeId>
+}
+
+[<RequireQualifiedAccess>]
+type CallableSymbolName =
+    | ModuleBinding of moduleName: string * name: string
+    | LocalBinding of declaration: NodeId * name: string
+    | RootBinding of name: string
+    | Anonymous of implementation: NodeId
+
+type CallableEmissionDeclaration = {
+    Lookup: NodeId
+    Implementation: NodeId
+    Parameters: (string * NativeType * NodeId) list
+    Result: NodeId
+    Context: LambdaContext
+    Captures: CaptureInfo list
+    Name: CallableSymbolName
+    /// None is an observed absence, not permission to search for another owner.
+    Parent: NodeId option
+    Participants: Set<NodeId>
+}
+
+type CallableEmissionCall = {
+    Site: NodeId
+    Implementation: NodeId
+    Parameters: (string * NativeType * NodeId) list
+    Arguments: NodeId list
+    Result: NodeId
+    SignatureData: Set<NodeId>
+    Participants: Set<NodeId>
+}
+
+type CallableProgramInstance = {
+    Carrier: CallableCarrier
+    Allocation: NodeId option
+    Participants: Set<NodeId>
+}
+
+/// Eager source-owned observations for passive callable witnessing. No field
+/// contains an analysis callback or a deferred semantic computation. These are
+/// snapshot observations; source revision/worklist authority is a separate
+/// contract, and the immutable leaf emission model additionally freezes types.
+type CallableEmissionProjection = {
+    Carriers: Map<NodeId, CallableCarrier>
+    Joins: Map<NodeId, CallableJoin>
+    Flows: Map<NodeId, CallableFlow>
+    MutableStorage: Map<NodeId, MutableCallableStorage>
+    ValueShapes: Map<NodeId, CallableValueShape>
+    SignatureData: Map<NodeId, Set<NodeId>>
+    Calls: Map<NodeId, CallableEmissionCall>
+    /// Only actual source instance paths appear here, not all pairs of nodes.
+    Transports: Map<NodeId, Set<NodeId>>
+    Declarations: Map<NodeId, CallableEmissionDeclaration>
+    Symbols: Map<NodeId, CallableSymbolName>
+    IntrinsicAliases: Set<NodeId>
+    DirectCallees: Map<NodeId, NodeId>
+    ForeignCalls: Set<NodeId>
+    MutableRetentions: Set<NodeId>
+    ProgramInstances: Map<NodeId, CallableProgramInstance>
+    VoidCallbacks: Set<NodeId>
+    VoidPointers: Set<NodeId>
+    NativeEntries: Map<NodeId, string>
+    FunctionBindings: Set<NodeId>
+    DefinitionOnlyBindings: Set<NodeId>
+    DefinitionOnlyLambdas: Set<NodeId>
+    Arguments: Map<NodeId, int>
+    AliasTargets: Map<NodeId, NodeId>
+    TakesEnvironment: Set<NodeId>
+    UnitNodes: Set<NodeId>
+    ClosedData: Set<NodeId>
+    Supports: Map<NodeId, Set<NodeId>>
+}
+
+module CallableEmissionProjection =
+    let empty = {
+        Carriers = Map.empty; Joins = Map.empty; Flows = Map.empty; MutableStorage = Map.empty
+        ValueShapes = Map.empty; SignatureData = Map.empty; Calls = Map.empty; Transports = Map.empty
+        Declarations = Map.empty; Symbols = Map.empty; IntrinsicAliases = Set.empty
+        DirectCallees = Map.empty; ForeignCalls = Set.empty; MutableRetentions = Set.empty
+        ProgramInstances = Map.empty; VoidCallbacks = Set.empty; VoidPointers = Set.empty; NativeEntries = Map.empty
+        FunctionBindings = Set.empty; DefinitionOnlyBindings = Set.empty; DefinitionOnlyLambdas = Set.empty
+        Arguments = Map.empty; AliasTargets = Map.empty; TakesEnvironment = Set.empty
+        UnitNodes = Set.empty; ClosedData = Set.empty; Supports = Map.empty
+    }
+
+type OrdinaryDemandProjection = {
+    Parameters: Map<NodeId, Set<NodeId>>
+    Calls: Map<NodeId, OrdinaryCallProjection>
+    DeferredOnly: Set<NodeId>
+}
+
+module OrdinaryDemandProjection =
+    let empty = { Parameters = Map.empty; Calls = Map.empty; DeferredOnly = Set.empty }
+
+/// Source-validated storage contracts. These are completed values, never lazy
+/// analyses or readers over a graph. Witnesses preserve the actual operands
+/// against these identities and cannot reconstruct missing source authority.
+type LazyWitnessContract = { Layout: LazyLayout; ElementType: NativeType; ThunkBody: NodeId }
+type LazyProgramWitness = { Owner: NodeId; Allocation: NodeId }
+type SequenceWitnessContract = { Flow: SequenceFlow; Family: SequenceFamily }
+type SequenceProgramWitness = { Owner: NodeId; Generator: NodeId; Allocation: NodeId; Participants: Set<NodeId> }
+type StartupInitializerWitness = { Module: NodeId; Binding: NodeId; Initializer: NodeId; Ordinal: int }
+type StartupWitness = {
+    EntryBinding: NodeId
+    EntryLambda: NodeId
+    SourceBinding: NodeId
+    SourceLambda: NodeId
+    OriginalBody: NodeId
+    Spine: NodeId
+    EntryCall: NodeId
+    Symbol: string
+    Initializers: StartupInitializerWitness list
+    ValueBindings: Set<NodeId>
+}
+type RequirementWitness = {
+    Site: NodeId
+    Condition: NodeId
+    Diagnostic: string
+    Frontier: NodeId
+    Continuation: NodeId
+    PatternTest: NodeId option
+    Participants: NodeId list
+}
+type StorageWitnessProjection = {
+    Lazies: Map<NodeId, LazyWitnessContract>
+    LazyOccurrences: Map<NodeId, NodeId>
+    LazyValues: Set<NodeId>
+    DefinitionOnlyThunks: Set<NodeId>
+    LazyPrograms: Map<NodeId, LazyProgramWitness>
+    Sequences: Map<NodeId, SequenceWitnessContract>
+    SequenceCopies: Map<NodeId, SequenceTemplateCopy>
+    SequencePrograms: Map<NodeId, SequenceProgramWitness>
+    Startup: StartupWitness option
+    SlotAuthorities: Set<NodeId>
+    Requirements: Map<NodeId, RequirementWitness>
+    PatternRequirements: Map<NodeId, NodeId>
+    ProgramStorage: ProgramStorageInventory
+    LiteralPoolAnchors: string list
+}
+
+module StorageWitnessProjection =
+    let empty = {
+        Lazies = Map.empty; LazyOccurrences = Map.empty; LazyValues = Set.empty; DefinitionOnlyThunks = Set.empty; LazyPrograms = Map.empty
+        Sequences = Map.empty; SequenceCopies = Map.empty; SequencePrograms = Map.empty
+        Startup = None; SlotAuthorities = Set.empty; Requirements = Map.empty
+        PatternRequirements = Map.empty; ProgramStorage = ProgramStorageInventory.empty
+        LiteralPoolAnchors = []
+    }
+
 /// The codata the graph carries for emission, settled once at the end of saturation.
 type Codata = {
     Escapes: Map<NodeId, EscapeKind>
@@ -1798,6 +1973,9 @@ type Codata = {
     CallableJoins: Map<NodeId, CallableJoin>
     CallableFlows: Map<NodeId, CallableFlow>
     MutableCallableStorage: Map<NodeId, MutableCallableStorage>
+    CallableEmission: CallableEmissionProjection
+    OrdinaryDemand: OrdinaryDemandProjection
+    StorageWitness: StorageWitnessProjection
     ContinuationFrames: Map<NodeId, ContinuationFrame>
     /// A unique sequence constructor at a use, established in Baker. This
     /// evidence permits elision of the known function half of (fn, env).
@@ -1841,6 +2019,9 @@ module Codata =
         CallableJoins = Map.empty
         CallableFlows = Map.empty
         MutableCallableStorage = Map.empty
+        CallableEmission = CallableEmissionProjection.empty
+        OrdinaryDemand = OrdinaryDemandProjection.empty
+        StorageWitness = StorageWitnessProjection.empty
         ContinuationFrames = Map.empty
         SequenceOrigins = Map.empty
         SequenceFlows = Map.empty
@@ -1898,7 +2079,7 @@ type SemanticGraph = {
     /// one settled fact on the graph, the `hw.struct` of a module signature). Keyed by the type
     /// constructor's name; every integer field of every record type definition has an entry, the
     /// empty range where nothing reachable constructs it. Filled by RangeAnalysis.
-    FieldRanges: Lazy<Map<string, Map<string, ValueRange>>>
+    FieldRanges: Lazy<Map<NominalTypeIdentity, Map<string, ValueRange>>>
     /// Per array element type, the join of every value the program stores into an array of that
     /// element type (an array literal's elements, an indexer or `Array.set` assignment, the seed of
     /// `Array.create`, the zero of `Array.zeroCreate`, the result of `Array.init`'s function; a
@@ -1907,7 +2088,7 @@ type SemanticGraph = {
     /// over the whole program, coarse where two arrays of one type hold different ranges. Keyed by
     /// the element type's rendered form; a type nothing reachable stores into has no entry, and a
     /// read of it is unobservable. Filled by RangeAnalysis.
-    ElementRanges: Lazy<Map<string, ValueRange>>
+    ElementRanges: Lazy<Map<TypeIdentity, ValueRange>>
     /// Per aggregate type, its settled layout (Dimensional_Range_Design.md §3.3, ruling 2): every
     /// reachable non-generic record and union keyed by the type constructor's name (as
     /// `FieldRanges`), each generic record instance by RecordInstances.layoutKey,
@@ -1915,7 +2096,7 @@ type SemanticGraph = {
     /// `ElementRanges`). Filled by Placement after RangeAnalysis; defaulted empty at every graph
     /// construction. The CPU leg reads a field's representation, offset and size here and computes
     /// none of them.
-    Layouts: Lazy<Map<string, SettledLayout>>
+    Layouts: Lazy<Map<TypeIdentity, SettledLayout>>
     /// BAREWire static storage placement, settled after range/aggregate placement.
     StaticStringPool: StaticStringPool option
     /// Per escaping lambda (Dimensional_Range_Design.md ruling 1; CS-11 slice 1): the reason it
