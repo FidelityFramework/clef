@@ -52,6 +52,54 @@ let main _ = if first 1 + second 2 = 13 then 0 else 1
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "CallableEmission")>]
 type CallableEmissionCases() =
     [<Fact>]
+    member _.``Immutable formal read aliases retain their complete source path`` () =
+        let source = """
+module FormalReadAliases
+let choose (value: bool) =
+    let alias = value
+    alias
+[<EntryPoint>]
+let main _ = if choose true then 0 else 1
+"""
+        let graph = LazyResidenceFixture.programWith (Some source)
+        let projection = CallableEmissionFixture.project graph
+        let declaration =
+            projection.Declarations.Values
+            |> Seq.filter (fun declaration ->
+                declaration.Lookup = declaration.Implementation &&
+                (declaration.Parameters |> List.map (fun (name, _, _) -> name)) = ["value"])
+            |> Assert.Single
+        let _, _, formal = declaration.Parameters.Head
+        let reads = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && (match node.Kind with SemanticKind.VarRef(("value" | "alias"), Some _) -> true | _ -> false)) |> Seq.toList
+        Assert.NotEmpty reads
+        for read in reads do
+            Assert.Equal(formal, projection.AliasTargets[read.Id])
+            Assert.Contains(formal, projection.Supports[read.Id])
+            match read.Kind with
+            | SemanticKind.VarRef(_, Some definition) -> Assert.Contains(definition, projection.Supports[read.Id])
+            | _ -> failwith "Expected an actual source read."
+
+    [<Fact>]
+    member _.``Mutable reads retain occurrence identity across writes`` () =
+        let source = """
+module MutableReadAliases
+let choose (value: bool) =
+    let mutable cell = value
+    let before = cell
+    cell <- false
+    before = cell
+[<EntryPoint>]
+let main _ = if choose true then 0 else 1
+"""
+        let graph = LazyResidenceFixture.programWith (Some source)
+        let projection = CallableEmissionFixture.project graph
+        let reads = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && (match node.Kind with SemanticKind.VarRef("cell", Some _) -> true | _ -> false)) |> Seq.toList
+        Assert.True(reads.Length >= 2)
+        for read in reads do Assert.Equal(read.Id, projection.AliasTargets[read.Id])
+
+    [<Fact>]
     member _.``Returned closure occurrence admits identity without admitting another factory call`` () =
         let graph = CallableEmissionFixture.checkedProgram ()
         let projection = CallableEmissionFixture.project graph

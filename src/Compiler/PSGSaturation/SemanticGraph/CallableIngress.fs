@@ -20,6 +20,11 @@ type Evidence = {
     Uses: Map<NodeId, Hyperedge list>
     Calls: Call list
 }
+type FormalInputs = {
+    Inputs: (NodeId * NodeId) list
+    Closure: Evidence
+    Participants: Set<NodeId>
+}
 type Access = { Source: NodeId; Participants: Set<NodeId> }
 type Reading = private {
     Evidence: Map<NodeId, Evidence>
@@ -510,6 +515,33 @@ let analyze graph = analyzeWith graph (CallableOrigins.resolve graph)
 let tryEvidence reading occurrence = reading.Evidence.TryFind occurrence
 /// Complete implementation ingress, unlike a code-value occurrence's identity.
 let tryClosedImplementation reading implementation = reading.ClosedImplementation implementation
+
+/// Share the complete scalar/descriptor ingress decision with source recipes.
+/// ParameterInputs is only a census; it becomes authority after the owning
+/// implementation is closed and every actual occupies its exact formal slot.
+let closedFormalInputs (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) (reading: Reading) =
+    let owners =
+        graph.Nodes.Values |> Seq.collect (fun node ->
+            match node.Kind with
+            | SemanticKind.Lambda(parameters,_,_,_,_) -> parameters |> List.map (fun (_,_,formal) -> formal,node.Id)
+            | _ -> [])
+        |> Seq.groupBy fst |> Seq.choose (fun (formal, rows) ->
+            match rows |> Seq.map snd |> Seq.distinct |> Seq.toList with
+            | [owner] -> Some(formal,owner)
+            | _ -> None) |> Map.ofSeq
+    fun formal ->
+        match resolution.ParameterInputs.TryFind formal, owners.TryFind formal |> Option.bind (tryClosedImplementation reading) with
+        | Some inputs, Some proof when not inputs.IsEmpty ->
+            let exact = proof.Calls |> List.collect (fun call ->
+                if call.Parameters.Length <> call.Arguments.Length then [] else
+                List.zip call.Parameters call.Arguments |> List.choose (fun (parameter,actual) ->
+                    if parameter = formal then Some(call.Site,actual) else None)) |> Set.ofList
+            if Set.ofList inputs = exact then
+                let participants = inputs |> List.fold (fun participants (site,actual) ->
+                    participants |> Set.add site |> Set.add actual) (proof.Participants |> Set.add formal)
+                Some { Inputs = inputs; Closure = proof; Participants = participants }
+            else None
+        | _ -> None
 /// Retained logical values are readable only through a validated current access;
 /// they remain absent from executable occurrence admission.
 let tryRetainedEvidence reading occurrence = reading.RetainedEvidence.TryFind occurrence

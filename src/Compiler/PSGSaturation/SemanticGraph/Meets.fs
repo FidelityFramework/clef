@@ -55,14 +55,10 @@ let private settledLayout (graph: SemanticGraph) (ty: NativeType) : SettledLayou
     Map.tryFind (layoutKey ty) graph.Layouts.Value
 
 /// The width an array's word-integer elements are held at.
-let private elementWidth (graph: SemanticGraph) (elemTy: NativeType) : int =
-    let range =
-        match Map.tryFind (layoutKey elemTy) graph.ElementRanges.Value with
-        | Some range -> range
-        | None -> failwithf "PSG settlement (RangeAnalysis) did not settle the element range of the array element type %s that a meet reads" (formatType elemTy)
-    match RangeAnalysis.heldWidthOf graph range with
-    | Some bits -> bits
-    | None -> failwithf "PSG settlement (RangeAnalysis) selected no width for the element type %s: its range %s has no width on this substrate (CCS8011)" (formatType elemTy) (ValueRange.render range)
+let private elementWidth (graph: SemanticGraph) (elemTy: NativeType) : int option =
+    // An unsettled element range has no adaptation. Keep the source range or
+    // borrow diagnostic reachable instead of throwing before admission runs.
+    Map.tryFind (layoutKey elemTy) graph.ElementRanges.Value |> Option.bind (RangeAnalysis.heldWidthOf graph)
 
 /// The last value a node evaluates to, through a block's last child and an annotation.
 let rec private lastValueOf (graph: SemanticGraph) (id: NodeId) : NodeId =
@@ -135,7 +131,7 @@ let private elementSlotWidth (graph: SemanticGraph) (arrayId: NodeId) : int opti
     | _ ->
       match SemanticGraph.tryGetNode arrayId graph |> Option.map (fun n -> applySubst n.Type) with
       | Some (NativeType.TApp (tycon, [ elemTy ])) when tycon.Name = "array" || tycon.Name = "Array" ->
-          if Types.tryGetNTUKind elemTy |> Option.exists isWordInteger then Some (elementWidth graph elemTy) else None
+          if Types.tryGetNTUKind elemTy |> Option.exists isWordInteger then elementWidth graph elemTy else None
       | _ -> None
 
 /// A direct call's result read from the callee's body width to the call node's own.
@@ -183,7 +179,14 @@ let private applicationMeets (ctx: Ctx) (node: SemanticNode) (funcId: NodeId) (a
                             | _ -> None)
                     |> List.choose id
             | _ -> []
-        | IntrinsicModule.Sys, ("write" | "read" | "readline"), fd :: _ -> Option.toList (toWord fd)
+        | IntrinsicModule.Sys, "write", [fd; _; count] ->
+            match graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.IntrinsicWriteAbi import when edge.Target = node.Id -> Some import | _ -> None) with
+            | [import] ->
+                let bits = function BoundaryScalar.Integer(bits, _) -> Some bits | _ -> None
+                [meetInto graph node.Id fd (bits import.Fd); meetInto graph node.Id count (bits import.Count)
+                 match bits import.Result, nodeWidth graph node.Id with Some from, Some target -> meet graph node.Id node.Id from target | _ -> None] |> List.choose id
+            | _ -> []
+        | IntrinsicModule.Sys, ("read" | "readline"), fd :: _ -> Option.toList (toWord fd)
         | IntrinsicModule.Array, "set", [ arr; _; value ] -> Option.toList (meetInto graph node.Id value (elementSlotWidth graph arr))
         | IntrinsicModule.Array, "create", [ _; seed ] -> Option.toList (meetInto graph node.Id seed (elementSlotWidth graph node.Id))
         | IntrinsicModule.Array, "blit", [ _; srcIdx; _; dstIdx; count ] -> [ srcIdx; dstIdx; count ] |> List.choose toWord

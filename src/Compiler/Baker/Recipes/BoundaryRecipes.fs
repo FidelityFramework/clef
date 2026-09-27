@@ -9,6 +9,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph
 open Clef.Compiler.Baker.Ingredients.Obligations
 module Declarations = PlatformResolution
 module Ingredients = Clef.Compiler.Baker.Ingredients.Boundaries
+module Bytes = Clef.Compiler.Baker.Ingredients.StringBytes
 
 type private CheckedBuilder() =
     member _.Bind(value, next) = Result.bind next value
@@ -227,11 +228,167 @@ let private readCall (graph: SemanticGraph) (site: SemanticNode) callee args pat
              SourceTypes = types }
 }
 
+type private IntrinsicDomain = {
+    Views: BoundaryByteView list
+    Extents: BoundaryStringExtent list
+    Declarations: (NodeId * IntrinsicWriteImport) list
+    Imports: IntrinsicWriteImport list
+    Calls: IntrinsicWriteCall list
+    Proofs: IntrinsicWriteProof list
+    Enrichment: Enrichment
+    Errors: (NodeId * Set<NodeId> * string) list
+}
+
+let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
+    let views = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringByteView view -> Some view | _ -> None)
+    let extents = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringExtent extent -> Some extent | _ -> None)
+    let declarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.IntrinsicWriteAbi import -> Some(edge.Target, import) | _ -> None)
+    let sourceEvidence = StringBorrowRecipes.evidence graph
+    let retainedEvidence =
+        (views |> List.collect (fun view -> [Bytes.viewRow view; Bytes.storageRow view])) @
+        (extents |> List.map Bytes.extentRow) @ (declarations |> List.map (fun (site, import) -> Bytes.abiRow site import))
+    let key (edge: Hyperedge) = edge.Role, edge.Sources, edge.Target
+    let currentEvidence = (sourceEvidence |> List.map key |> List.sort) = (retainedEvidence |> List.map key |> List.sort)
+    let unique message values = match values with [value] -> Ok value | _ -> Error message
+    let range id = graph.Nodes.TryFind id |> Option.bind _.ValueRange |> needed "The intrinsic scalar lacks its established source range."
+    let coverage input destination =
+        match input, destination with
+        | ValueRange.Bounded(lo, hi), ValueRange.Bounded(minimum, maximum) -> Ok(ObligationBody.IntegerRepresentationCoverage(lo, hi, minimum, maximum))
+        | _ -> Error "The intrinsic coverage obligation requires finite source and destination ranges."
+    let read (node: SemanticNode) callee args path = checked' {
+        do! require currentEvidence "The complete byte-origin/formal/actual or intrinsic ABI premises changed after source numeric settlement."
+        let! fd, buffer, count = match args with [fd; buffer; count] -> Ok(fd, buffer, count) | _ -> Error "Sys.write requires exactly fd, a bounded read-only byte view, and its explicit count."
+        do! require (node.Children = callee :: args) "Sys.write's ordered operands differ from its source structural occurrence."
+        let! import = declarations |> List.filter (fun (site, _) -> site = node.Id) |> List.map snd |> unique "Sys.write requires one selected source syscall endpoint, return contract, Register dimension and offered octet declaration before numeric settlement."
+        let! view = views |> List.filter (fun view -> view.Site = buffer) |> unique "Sys.write requires a proved string.Bytes read-only borrow; this bounded slice admits only immutable program-resident string origins."
+        let! extent = extents |> List.filter (fun extent -> extent.Site = count) |> unique "Sys.write's count must preserve the exact borrowed string's per-invocation Length relation."
+        do! require (view.ExtentSource = extent.ExtentSource && view.StaticOrigins = extent.StaticOrigins && not view.StaticOrigins.IsEmpty)
+                "Sys.write's buffer and count do not refer to the same per-invocation string extent and complete origin domain."
+        do! require (view.Representation = import.ByteRepresentation) "The byte borrow and intrinsic ABI have different source-selected byte carriers."
+        do! require (graph.Nodes[buffer].Kind = SemanticKind.StringByteBorrow view.Source && graph.Nodes[count].Kind = SemanticKind.FieldGet(extent.Source, "Length"))
+                "The byte borrow or extent occurrence no longer retains its settled source operation."
+        let readonlyUse = graph.Nodes.Values |> Seq.forall (fun consumer ->
+            if not consumer.IsReachable || consumer.Id = buffer then true else
+            let uses = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence consumer |> List.filter (fun edge -> List.contains buffer edge.Sources)
+            uses.IsEmpty ||
+            (match consumer.Kind, target graph (match consumer.Kind with SemanticKind.Application(fn, _) -> fn | _ -> consumer.Id) with
+             | SemanticKind.Application(_, [_; actual; _]), Some({ Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Sys; Operation = "write" } }, _) when actual = buffer -> true
+             | _ -> false))
+        do! require readonlyUse "A read-only string byte borrow escapes the admitted write operand or has a mutable/unknown use."
+        let! pool = graph.StaticStringPool |> needed "A byte borrow requires the settled immutable program string pool."
+        let! storage = view.StaticOrigins |> Map.toList |> List.map (fun (origin, length) -> checked' {
+            let! entry = pool.Entries |> List.filter (fun entry -> List.contains origin entry.NodeIds) |> unique "A string borrow origin has no unique program-resident immutable storage entry."
+            do! require (bigint entry.Length = length && System.Text.Encoding.UTF8.GetByteCount entry.Content = entry.Length && entry.StorageLength = entry.Length + 1)
+                    "The string borrow extent differs from its exact immutable storage entry."
+            do! require (graph.Nodes.TryFind origin |> Option.exists (fun node -> node.Kind = SemanticKind.Literal(NativeLiteral.String entry.Content)))
+                    "The program storage entry no longer belongs to the exact literal source bytes."
+            return length, length, bigint entry.StorageLength }) |> collect
+        let! fdRange = range fd
+        let! countRange = range count
+        let expectedCount = ValueRange.bounded (view.StaticOrigins.Values |> Seq.min) (view.StaticOrigins.Values |> Seq.max)
+        do! require (countRange = expectedCount) "The scalar count range no longer matches the complete exact string extent domain."
+        let! platform = Declarations.resolve graph |> needed "Sys.write lost its selected source platform description."
+        let! result = platform.Returns |> List.filter (fun bound -> bound.Node = import.ReturnContract && bound.Endpoint = "write" && bound.AtMost = "count") |> unique "Sys.write lost its exact declared signed return bound."
+        let! upper = match countRange with ValueRange.Bounded(_, hi) -> Ok hi | _ -> Error "The write count is not bounded."
+        let returnRange = ValueRange.bounded result.Floor upper
+        let! actualResult = range node.Id
+        do! require (actualResult = returnRange) "Sys.write's result range differs from its source endpoint return contract."
+        let! fdWidth = sourceWidth graph fd import.Fd
+        let! countWidth = sourceWidth graph count import.Count
+        let! resultWidth = sourceWidth graph node.Id import.Result
+        let! fdMeet = adaptation graph node.Id fd fdWidth (scalarBits import.Fd) fdRange
+        let! countMeet = adaptation graph node.Id count countWidth (scalarBits import.Count) countRange
+        let! resultMeet = adaptation graph node.Id node.Id (scalarBits import.Result) resultWidth returnRange
+        let! resultRepresentation = RangeAnalysis.selectedRepresentation graph node.Id |> Option.bind Clef.Compiler.NativeTypedTree.Expressions.Intrinsics.RangeSources.declaredRange |> needed "The write result has no offered representation range."
+        let! fdProof = coverage fdRange (scalarRange import.Fd)
+        let! countProof = coverage countRange (scalarRange import.Count)
+        let! resultProof = coverage returnRange resultRepresentation
+        let participants = Set.unionMany [path; import.Participants; view.Participants; extent.Participants; Set.ofList [anchor; node.Id; callee; fd; buffer; count; pool.DeclarationNode]]
+        let call = { Site = node.Id; Import = import.Identity; Callee = callee; Fd = fd; Buffer = buffer; Count = count
+                     FdAdaptation = fdMeet; CountAdaptation = countMeet; ResultAdaptation = resultMeet; Participants = participants }
+        return import, call, [0, fdProof; 1, ObligationBody.StringBorrowBound storage; 2, countProof; -1, resultProof] }
+    let evidenceErrors =
+        if currentEvidence then [] else
+        let participants = Set.unionMany ((views |> List.map _.Participants) @ (extents |> List.map _.Participants))
+        [anchor,participants,"The complete string view, descriptor extent, actual/formal or intrinsic ABI evidence changed after source range settlement."]
+    let initial = { Views = views; Extents = extents; Declarations = declarations; Imports = []; Calls = []; Proofs = []; Enrichment = Enrichment.empty; Errors = evidenceErrors }
+    graph.Nodes |> Map.fold (fun state _ node ->
+        match node.Kind with
+        | SemanticKind.Application(callee, args) when node.IsReachable ->
+            match target graph callee with
+            | Some({ Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Sys; Operation = "write" } }, path) ->
+                match read node callee args path with
+                | Error reason -> { state with Errors = (node.Id, Set.union path (Set.ofList(node.Id :: args)), reason) :: state.Errors }
+                | Ok(import, call, bodies) ->
+                    let proofs, enrichment, errors = bodies |> List.fold (fun (proofs, enrichment, errors) (ordinal, body) ->
+                        let info =
+                            { Id = $"intrinsic_write_{NodeId.value node.Id}_{ordinal}"; Kind = "intrinsic-write-proof"; Logic = "QF_LIA"
+                              Statement = "the exact ordered intrinsic write has covered scalars and a count-contained immutable borrow"
+                              Source = fmtRange node.Range; Refs = []; Body = body }
+                        let obligation = obligationNode node enrichId info |> Ingredients.markOwned
+                        let proof = { Site = node.Id; Obligation = obligation.Id; Ordinal = ordinal; Body = body; Participants = call.Participants }
+                        let errors = if Bytes.proofOutcome body = BoundaryProofOutcome.Proven then errors else (node.Id, call.Participants, "The intrinsic write obligation was refuted.") :: errors
+                        proof :: proofs, Enrichment.combine enrichment { NewNodes = [obligation]; Annotated = []; NewEdges = Bytes.proofRows proof }, errors) (state.Proofs, state.Enrichment, state.Errors)
+                    { state with Imports = import :: state.Imports; Calls = call :: state.Calls; Proofs = proofs; Enrichment = enrichment; Errors = errors }
+            | _ -> state
+        | _ -> state) initial
+
 /// Late stage: all source ranges and ordinary numeric meets are already fixed.
 /// The complete source domain records negative membership dependencies too.
 let elaborate (graph: SemanticGraph) : Enrichment =
     let enrichId = Elaboration.freshId ()
     let anchor = Ingredients.anchor enrichId graph
+    let intrinsic = intrinsicWrites enrichId anchor.Id graph
+    let lengthComparisons = StringComparisonRecipes.lengthConstructions graph
+    let lengthErrors = graph.Nodes.Values |> Seq.choose (fun node ->
+        if node.Metadata.TryFind "Baker.StringLengthComparison" <> Some(MetadataValue.Bool true) then None else
+        match lengthComparisons |> List.filter (fun fact -> fact.Site=node.Id) with
+        | [fact] when StringComparisonRecipes.validLengthStructure graph fact -> None
+        | _ -> Some(node.Id,Set.singleton node.Id,"The descriptor-only string comparison lost its exact zero-extent origin, actual/formal membership, or ordered source construction proof.")) |> Seq.toList
+    let localViews, localReads, localSnapshots, localCopies, localErrors =
+        let memory = Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project graph |> Result.toOption
+        StringComparisonRecipes.constructions graph |> List.fold (fun (views,reads,snapshots,copies,errors) construction ->
+            let participants = Set.ofList(construction.Site::construction.Left::construction.Right::construction.Members)
+            let result = checked' {
+                do! require (StringComparisonRecipes.validStructure graph construction) "The source string comparison lost its ordered length test, traversal, early exit or local result correspondence."
+                let! memory = memory |> needed "A local string comparison borrow requires admitted memory access and bounds proofs."
+                let! accesses = [construction.LeftView,construction.LeftRead; construction.RightView,construction.RightRead]
+                                |> List.map (fun (view,frontier) -> checked' {
+                    let! access =
+                        match graph.Nodes.TryFind frontier with
+                        | Some { Kind=SemanticKind.Sequential [_;continuation] } ->
+                            memory.Operations.TryFind continuation |> Option.bind (function MemoryWitnessOperation.ArrayAccess fact -> Some fact | _ -> None)
+                        | _ -> None
+                        |> needed "The string comparison read lacks its exact guarded access continuation."
+                    do! require (access.Buffer=view && access.Index=construction.Current && access.Value.IsNone && access.Bounds.Requirement.Frontier=frontier)
+                            "The string comparison borrow is not read by its exact source guard and index occurrence."
+                    let allowed = Set.ofList [access.Site;access.Bounds.Length]
+                    let uses =
+                        let source = graph.Nodes.Values |> Seq.collect Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence |> Seq.toList
+                        source @ (graph.Edges |> List.filter (fun edge -> edge.Class=EdgeClass.Structural || edge.Class=EdgeClass.Reference))
+                        |> List.filter (fun edge -> List.contains view edge.Sources && graph.Nodes.TryFind edge.Target |> Option.exists _.IsReachable)
+                    do! require (not uses.IsEmpty && uses |> List.forall (fun edge -> allowed.Contains edge.Target))
+                            "A local string comparison byte view escapes its exact read-only guarded uses."
+                    let! byteView = intrinsic.Views |> List.filter (fun fact -> fact.Site=view) |> function [fact] -> Ok fact | _ -> Error "The local comparison lacks its single exact byte view."
+                    do! require (byteView.ExtentSource=byteView.Source && byteView.Participants.IsSupersetOf participants)
+                            "The local comparison view lost its complete actual and construction lifetime premises."
+                    let! snapshots,copies,_ = StringViewRecipes.localLineage graph memory byteView.Source
+                    return access,snapshots,copies }) |> collect
+                return accesses }
+            match result with
+            | Ok accesses ->
+                let localReads=accesses |> List.map(fun (read,_,_) -> read)
+                let localSnapshots=accesses |> List.collect(fun (_,facts,_) -> facts)
+                let localCopies=accesses |> List.collect(fun (_,_,facts) -> facts)
+                Set.add construction.LeftView (Set.add construction.RightView views),localReads@reads,localSnapshots@snapshots,localCopies@copies,errors
+            | Error reason -> views,reads,snapshots,copies,(construction.Site,participants,reason)::errors) (Set.empty,[],[],[],[])
+    let intrinsic =
+        let errors = graph.Nodes |> Map.fold (fun errors _ node ->
+            match node.Kind with
+            | SemanticKind.StringByteBorrow _ when node.IsReachable && not (localViews.Contains node.Id) && not (intrinsic.Calls |> List.exists (fun call -> call.Buffer = node.Id)) ->
+                (node.Id, Set.singleton node.Id, "A string.Bytes borrow requires complete intrinsic write-use or local guarded comparison lifetime proofs.") :: errors
+            | _ -> errors) intrinsic.Errors
+        { intrinsic with Errors = lengthErrors @ localErrors @ errors }
     let descriptors = Declarations.readDescriptors graph
     let runtime = Declarations.read graph
     let runtimeContract = checked' {
@@ -240,7 +397,7 @@ let elaborate (graph: SemanticGraph) : Enrichment =
         let! core = platform.Core |> needed "A reachable C import requires a declared TargetCore.Runtime."
         do! require (Declarations.runtimeModel core = Some RuntimeModel.Libc) "A reachable C import requires source TargetCore.Runtime libc; startup or project defaults do not establish library availability."
         return () }
-    let initialErrors = descriptors.Findings |> List.map (fun finding -> finding.Node, Set.singleton finding.Node, finding.Message)
+    let initialErrors = intrinsic.Errors @ (descriptors.Findings |> List.map (fun finding -> finding.Node, Set.singleton finding.Node, finding.Message))
     let imports, calls, errors = graph.Nodes |> Map.fold (fun (imports, calls, errors) _ node ->
         match node.Kind with
         | SemanticKind.Application(callee, args) when node.IsReachable ->
@@ -263,6 +420,7 @@ let elaborate (graph: SemanticGraph) : Enrichment =
                 | Ok (import, call) -> Map.add import.Identity import imports, Map.add node.Id call calls, errors
                 | Error reason -> imports, calls, (node.Id, participants, reason) :: errors
             | Some ({ Kind = SemanticKind.Intrinsic info }, path) when info.Module = IntrinsicModule.Sys ->
+                if info.Operation = "write" then imports, calls, errors else
                 imports, calls, (node.Id, Set.union path (Set.ofList (node.Id :: args)),
                     $"Intrinsic/system boundary Sys.{info.Operation} requires CCS/Baker intrinsic boundary settlement (Layer 1); its source-owned operand and ABI contract is unsettled, and runtime or startup defaults cannot supply it.") :: errors
             | _ -> imports, calls, errors
@@ -320,6 +478,14 @@ let elaborate (graph: SemanticGraph) : Enrichment =
         { Premises = Ingredients.premises graph; Platform = Ingredients.platformPremise graph.Platform; Meets = graph.Codata.Value.Meets
           Declarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration | _ -> None)
           Imports = Map.keys imports |> Seq.toList; Calls = Map.keys calls |> Seq.toList
+          ByteViews = intrinsic.Views; StringExtents = intrinsic.Extents; IntrinsicDeclarations = intrinsic.Declarations
+          StringComparisons = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringComparisonConstruction negated -> Some(edge.Target,negated,edge.Sources) | _ -> None)
+          StringLengthComparisons = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringLengthComparison negated -> Some(edge.Target,negated,edge.Sources) | _ -> None)
+          StringComparisonReads = localReads
+          StringComparisonSnapshots = List.distinct localSnapshots
+          StringComparisonCopies = List.distinct localCopies
+          IntrinsicImports = List.distinct intrinsic.Imports; IntrinsicCalls = intrinsic.Calls; IntrinsicProofs = intrinsic.Proofs
+          StringStorage = Bytes.storagePremise graph
           DeclarationLeaves = leaves; DeclarationOnly = declarationOnly
           Links = imports.Values |> Seq.map _.Library |> Set.ofSeq; Failures = List.rev errors }
     let sources = Map.keys domain.Premises |> Seq.toList
@@ -328,4 +494,6 @@ let elaborate (graph: SemanticGraph) : Enrichment =
          { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = sources; Target = anchor.Id }]
         @ (imports.Values |> Seq.map Ingredients.importRow |> Seq.toList)
         @ (calls.Values |> Seq.collect (fun call -> Ingredients.callRow call :: Ingredients.operandRows call) |> Seq.toList)
-    Enrichment.combine { NewNodes = [anchor]; Annotated = []; NewEdges = rows } proofs
+        @ (domain.IntrinsicImports |> List.map Bytes.importRow)
+        @ (domain.IntrinsicCalls |> List.collect Bytes.callRows)
+    Enrichment.combine (Enrichment.combine { NewNodes = [anchor]; Annotated = []; NewEdges = rows } proofs) intrinsic.Enrichment

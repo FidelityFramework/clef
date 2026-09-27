@@ -131,3 +131,72 @@ let private analyze (graph: SemanticGraph) (absorbed: Set<NodeId>) : CurryInfo =
 let normalize (graph: SemanticGraph) : SemanticGraph * CurryInfo =
     let (flattened, absorbed) = flatten graph
     (flattened, analyze flattened absorbed)
+
+/// A completed partial application keeps its saved and current argument
+/// occurrences in one declared boundary. Validate the held owner facts against
+/// the actual immutable binding chain before publication names that boundary.
+let completedCalls (graph: SemanticGraph) (held: CurryInfo) (resolution: CallableOrigins.Resolution) =
+    let current = analyze graph held.AbsorbedLambdas
+    let errors = ResizeArray<WitnessProjectionFailure>()
+    let refuse site participants =
+        errors.Add { Occurrence = Some site; Participants = participants
+                     Reason = "Completed partial application lacks its exact source declaration, immutable saved arguments and current invocation correspondence." }
+    for KeyValue(site, saturated) in current.SaturatedCalls do
+        if not (held.SaturatedCalls.ContainsKey site) then
+            refuse site (Set.ofList(site :: saturated.TargetBindingId :: saturated.AllArgNodes))
+    let calls = held.SaturatedCalls |> Map.fold (fun calls site saturated ->
+        let participants = Set.ofList(site :: saturated.TargetBindingId :: saturated.AllArgNodes)
+        let boundary =
+            match graph.Nodes.TryFind site, current.SaturatedCalls.TryFind site, resolution.Calls.TryFind site with
+            | Some { Kind = SemanticKind.Application(callee, arguments); Children = children }, None,
+              Some { Complete = true; Unknown = false; Targets = [target] }
+                when children = callee :: arguments && arguments = saturated.AllArgNodes && target.Arguments = arguments &&
+                     target.Parameters.Length = arguments.Length ->
+                // Factory-result recipes already made their hidden destination
+                // an actual operand. Their complete invocation shares this
+                // codata table but is not an immutable partial-binding chain.
+                match graph.Nodes.TryFind saturated.TargetBindingId, graph.Nodes.TryFind target.Lambda with
+                | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [implementation] },
+                  Some { Kind = SemanticKind.Lambda(parameters, body, [], _, _) }
+                    when implementation = target.Lambda && parameters = target.Parameters && body = target.Body ->
+                    let complete = Set.union participants (Set.ofList(callee :: implementation :: body :: (parameters |> List.map (fun (_, _, id) -> id))))
+                    Some { Site = site; Implementation = implementation; Parameters = parameters
+                           Arguments = arguments; Result = body; SignatureData = Set.empty; Participants = complete }
+                | _ -> None
+            | Some { Kind = SemanticKind.Application(callee, arguments); Children = children }, Some actual,
+              Some { Complete = true; Unknown = false; Targets = [target] }
+                when actual = saturated && children = callee :: arguments ->
+                match graph.Nodes.TryFind callee with
+                | Some { Kind = SemanticKind.VarRef(_, Some binding) } ->
+                    match graph.Nodes.TryFind binding with
+                    | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [partialSite] }
+                        when held.PartialAppBindings.Contains binding && current.PartialAppBindings.Contains binding ->
+                        match graph.Nodes.TryFind partialSite, held.PartialApplications.TryFind partialSite,
+                              current.PartialApplications.TryFind partialSite with
+                        | Some { Kind = SemanticKind.Application(originalCallee, supplied); Children = partialChildren },
+                          Some partial, Some expected
+                            when partial = expected && partialChildren = originalCallee :: supplied &&
+                                 partial.SuppliedArgNodes = supplied && partial.TargetBindingId = saturated.TargetBindingId &&
+                                 supplied @ arguments = saturated.AllArgNodes ->
+                            match graph.Nodes.TryFind saturated.TargetBindingId, graph.Nodes.TryFind originalCallee with
+                            | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [implementation] },
+                              Some { Kind = SemanticKind.VarRef(_, Some declaration) } when declaration = saturated.TargetBindingId ->
+                                match graph.Nodes.TryFind implementation with
+                                | Some { Kind = SemanticKind.Lambda(parameters, body, [], _, _) }
+                                    when target.Lambda = implementation && target.Body = body && target.Arguments = arguments &&
+                                         parameters.Length = partial.TotalParams && parameters.Length = saturated.AllArgNodes.Length &&
+                                         target.Parameters = List.skip supplied.Length parameters ->
+                                    let complete = Set.union participants (Set.ofList(callee :: binding :: partialSite :: originalCallee :: implementation :: body :: (parameters |> List.map (fun (_, _, id) -> id))))
+                                    Some { Site = site; Implementation = implementation; Parameters = parameters
+                                           Arguments = saturated.AllArgNodes; Result = body; SignatureData = Set.empty
+                                           Participants = complete }
+                                | _ -> None
+                            | _ -> None
+                        | _ -> None
+                    | _ -> None
+                | _ -> None
+            | _ -> None
+        match boundary with
+        | Some proof -> Map.add site proof calls
+        | None -> refuse site participants; calls) Map.empty
+    calls, List.ofSeq errors

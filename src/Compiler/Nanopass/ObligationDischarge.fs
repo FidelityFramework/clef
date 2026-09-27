@@ -150,6 +150,36 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
     | ObligationBody.IntegerRepresentationCoverage (lower, upper, minimum, maximum) ->
         [ sprintf "(assert (= %s (and (<= %s %s) (<= %s %s) (<= %s %s))))" id (integer minimum) (integer lower) (integer lower) (integer upper) (integer upper) (integer maximum)
           sprintf "(assert (not %s))" id ]
+    | ObligationBody.IntegerDivisorNonzero (lower, upper) ->
+        [ sprintf "(assert (= %s (and (<= %s %s) (or (< %s 0) (> %s 0)))))" id (integer lower) (integer upper) (integer upper) (integer lower)
+          sprintf "(assert (not %s))" id ]
+    | ObligationBody.IntegerShiftCount (lower, upper, bits) ->
+        [ sprintf "(assert (= %s (and (> %s 0) (<= 0 %s) (<= %s %s) (< %s %s))))" id (integer (bigint bits)) (integer lower) (integer lower) (integer upper) (integer upper) (integer (bigint bits))
+          sprintf "(assert (not %s))" id ]
+    | ObligationBody.SpatialKernelPartition(elements, grain, columns, slices, depth, iterations) ->
+        let clauses =
+            [ yield sprintf "(> %s 0)" (integer elements)
+              yield sprintf "(> %s 0)" (integer grain)
+              yield sprintf "(> %s 0)" (integer(bigint columns))
+              yield sprintf "(> %s 0)" (integer(bigint depth))
+              yield sprintf "(> %s 0)" (integer iterations)
+              yield sprintf "(> %d 0)" slices.Length
+              yield sprintf "(= %s (* %d %s))" (integer elements) slices.Length (integer grain)
+              for ordinal, (column, offset, count) in List.indexed slices do
+                  yield sprintf "(and (<= 0 %s) (< %s %s) (<= 0 %s) (= %s %s))" (integer(bigint column)) (integer(bigint column)) (integer(bigint columns)) (integer offset) (integer count) (integer grain)
+                  let previous =
+                      if ordinal = 0 then "0" else
+                      let _, previousOffset, previousCount = slices[ordinal - 1]
+                      sprintf "(+ %s %s)" (integer previousOffset) (integer previousCount)
+                  yield sprintf "(= %s %s)" (integer offset) previous
+                  yield sprintf "(<= (+ %s %s) %s)" (integer offset) (integer count) (integer elements)
+                  for other, _, _ in slices |> List.take ordinal do
+                      yield sprintf "(not (= %s %s))" (integer(bigint column)) (integer(bigint other))
+              match List.tryLast slices with
+              | Some(_, offset, count) -> yield sprintf "(= (+ %s %s) %s)" (integer offset) (integer count) (integer elements)
+              | None -> yield "false" ]
+        [ sprintf "(assert (= %s (and %s)))" id (String.concat " " clauses)
+          sprintf "(assert (not %s))" id ]
     | ObligationBody.ApplicationDimensions comparisons ->
         let integer value = if value < 0 then sprintf "(- %d)" (-(int64 value)) else string value
         let equality left right =
@@ -322,6 +352,11 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
           sprintf "(assert (not %s))" id ]
     | ObligationBody.InputBufferBound (count, allocation) ->
         [ sprintf "(assert (= %s (<= %d %d)))" id count allocation
+          sprintf "(assert (not %s))" id ]
+    | ObligationBody.StringBorrowBound origins ->
+        let conditions = origins |> List.map (fun (count, extent, storage) ->
+            sprintf "(and (<= 0 %s) (= %s %s) (< %s %s))" (integer count) (integer count) (integer extent) (integer extent) (integer storage))
+        [ sprintf "(assert (= %s %s))" id (if conditions.IsEmpty then "false" else "(and " + String.concat " " conditions + ")")
           sprintf "(assert (not %s))" id ]
     | ObligationBody.InputCopyBound (cap, bound) ->
         [ "(declare-const r Int)"

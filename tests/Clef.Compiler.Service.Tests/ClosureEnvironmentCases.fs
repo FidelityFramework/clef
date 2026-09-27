@@ -65,7 +65,7 @@ type ClosureEnvironmentCases() =
     [<InlineData(false)>]
     [<InlineData(true)>]
     member _.``Extracted closure declarations retain every sibling and their actual module owner`` nested =
-        let declarations = """let invoke callback = callback 11
+        let declarations = """let invoke (callback: int -> int) = callback 11
 let run () =
     let first = invoke (fun value -> value)
     let second = invoke (fun value -> value + 1)
@@ -77,13 +77,16 @@ let run () =
                 "\n[<EntryPoint>]\nlet main _ = Inner.run ()\n"
             else declarations + "\n[<EntryPoint>]\nlet main _ = run ()\n"
         let graph = EnvironmentFixture.check source
-        let extracted = graph.Nodes.Values |> Seq.choose (fun binding ->
-            match binding.Kind, binding.Children with
-            | SemanticKind.Binding _, [implementation] ->
-                match graph.Nodes.TryFind implementation with
-                | Some code when code.Metadata.ContainsKey ClosureMetadata.SourceSignature -> Some(binding, code)
-                | _ -> None
-            | _ -> None) |> Seq.toList
+        let extracted =
+            graph.Nodes.Values
+            |> Seq.choose (fun binding ->
+                match binding.Kind, binding.Children with
+                | SemanticKind.Binding _, [implementation] ->
+                    match graph.Nodes.TryFind implementation with
+                    | Some code when code.Metadata.ContainsKey ClosureMetadata.SourceSignature -> Some(binding, code)
+                    | _ -> None
+                | _ -> None)
+            |> Seq.toList
         Assert.Equal(2, extracted.Length)
         let owners = extracted |> List.map (fun (binding, code) ->
             Assert.Equal(Some binding.Id, code.Parent)
@@ -92,12 +95,13 @@ let run () =
                 match owner.Kind with
                 | SemanticKind.ModuleDef(name, members) -> name, members
                 | other -> failwithf "Extracted code is not placed in a source module: %A" other
-            Assert.Equal((if nested then "EnvironmentFixture.Inner" else "EnvironmentFixture"), name)
+            Assert.Equal((if nested then "Inner" else "EnvironmentFixture"), name)
             Assert.Contains(binding.Id, members)
-            Assert.Contains(binding.Id, owner.Children)
+            Assert.Empty owner.Children
             Assert.Contains(binding.Id, graph.ModuleClassifications.Value[owner.Id].Definitions)
-            Assert.Contains(graph.Edges, fun edge -> edge.Class = EdgeClass.Structural &&
-                                                   edge.Role = EdgeRole.Attached && edge.Target = owner.Id && edge.Sources = [binding.Id])
+            Assert.Contains(graph.Edges, fun edge ->
+                edge.Class = EdgeClass.Reference && edge.Role = EdgeRole.Member &&
+                edge.Target = owner.Id && edge.Sources = [binding.Id])
             owner.Id)
         let ownerId = Assert.Single(List.distinct owners)
         let members =

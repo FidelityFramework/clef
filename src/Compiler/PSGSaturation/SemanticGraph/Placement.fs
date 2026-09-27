@@ -206,6 +206,12 @@ let private extentOf (p: Placer) (slot: SettledSlot) : (int * int) option =
     | _, SettledSlot.Real bits -> let b = max 1 ((bits + 7) / 8) in Some (b, b)
     | Some ptr, SettledSlot.Pointer words -> Some (words * ptr, ptr)
 
+/// Source memory recipes reuse the established placement extent rule.
+let extentOfSlot (graph: SemanticGraph) (slot: SettledSlot) =
+    let pointerBytes = graph.Platform |> Option.bind (fun context -> PlatformContext.pointerSize context |> Result.toOption)
+    extentOf { Boundaries = Map.empty; Graph = graph; Context = graph.Platform
+               PointerBytes = pointerBytes; TupleRanges = Map.empty } slot
+
 let private alignUp (offset: int) (align: int) : int =
     if align <= 1 then offset else ((offset + align - 1) / align) * align
 

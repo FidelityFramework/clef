@@ -297,6 +297,12 @@ type ObligationBody =
     /// The analysed integer range fits the representation actually selected
     /// from the platform declaration; this does not assert physical placement.
     | IntegerRepresentationCoverage of lower: bigint * upper: bigint * minimum: bigint * maximum: bigint
+    /// Every admitted divisor is distinct from zero.
+    | IntegerDivisorNonzero of lower: bigint * upper: bigint
+    /// Native shifts require an exact nonnegative count below the operation width.
+    | IntegerShiftCount of lower: bigint * upper: bigint * operationBits: int
+    /// Exact source partition and bounded repeated transaction schedule.
+    | SpatialKernelPartition of elements: bigint * grain: bigint * columns: int * slices: (int * bigint * bigint) list * fifoDepth: int * iterations: bigint
     /// Dimensional positions in an ordinary call: instantiated signature versus
     /// actual arguments/result. A missing side is an incompatible type shape,
     /// never an invented dimensionless value. Paths include partial results.
@@ -340,6 +346,9 @@ type ObligationBody =
     /// The count handed to a reader is the declared capacity, which sizes the
     /// allocation the same declaration governs (count <= allocation).
     | InputBufferBound of count: int64 * allocation: int64
+    /// Every possible immutable origin supplies this same invocation's count
+    /// and logical extent. Storage includes the sentinel, the read excludes it.
+    | StringBorrowBound of origins: (bigint * bigint * bigint) list
     /// For any successful read of r bytes, 1 <= r <= capacity, the trimmed copy
     /// of r - 1 bytes is within bound.
     | InputCopyBound of capacity: int64 * bound: int64
@@ -436,8 +445,12 @@ type SemanticKind =
     | DUConstruct of caseName: string * caseIndex: int * payload: NodeId option * arenaHint: NodeId option
     | TupleExpr of elements: NodeId list
     | ArrayExpr of elements: NodeId list
+    /// Internal region-owned storage. Its source constructor owns initialization.
+    | ArrayAllocate of count: NodeId
     | ListExpr of elements: NodeId list
     | FieldGet of expr: NodeId * fieldName: string
+    /// Baker's read-only view; public String.toBytes remains a copying operation.
+    | StringByteBorrow of source: NodeId
     | FieldSet of expr: NodeId * fieldName: string * value: NodeId
     | IndexGet of expr: NodeId * index: NodeId
     | IndexSet of expr: NodeId * index: NodeId * value: NodeId
@@ -447,6 +460,10 @@ type SemanticKind =
     | Downcast of expr: NodeId * targetType: NativeType
     | TypeTest of expr: NodeId * testType: NativeType
     | AddressOf of expr: NodeId * isByref: bool
+    | CellAddress of binding: NodeId
+    | ElementAddress of buffer: NodeId * index: NodeId
+    | FieldAddress of receiver: NodeId * field: string
+    | Reborrow of reference: NodeId
     | Deref of expr: NodeId
     | Set of target: NodeId * value: NodeId
     | PlatformBinding of name: string
@@ -596,6 +613,80 @@ type Meet = { Consumer: NodeId; Operand: NodeId; From: int; To: int; Adapt: Meet
 [<RequireQualifiedAccess>]
 type BoundaryScalar = Integer of bits: int * signed: bool | Boolean
 
+/// A physical slot settled by the source numeric/layout owner.
+[<RequireQualifiedAccess>]
+type SettledSlot =
+    | InlineBytes of bytes: int * alignment: int
+    | Integer of bits: int * representation: string option
+    | Bool
+    | Char
+    | Real of bits: int
+    | Pointer of words: int
+    | Unit
+    | Opaque of what: string
+
+type SettledField = { Name: string; Slot: SettledSlot; Offset: int option; Size: int option; Align: int option }
+
+[<RequireQualifiedAccess>]
+type SettledLayout =
+    | Record of fields: SettledField list * size: int option * align: int option
+    | Union of cases: (string * SettledSlot option) list * payloadOffset: int option * size: int option * align: int option
+
+/// Immutable source representation. No checker cells or native-type lookup is
+/// available to a witness through this contract.
+[<RequireQualifiedAccess>]
+type ValueRepresentation =
+    | Scalar of SettledSlot
+    | Buffer of count: int option * element: ValueRepresentation
+    | Record of fields: (string * ValueRepresentation) list * placement: (int list * int * int) option
+    | Tag of cases: int
+
+type ScalarCarrier = {
+    Site: NodeId
+    Slot: SettledSlot
+    Range: ValueRange
+    Representation: NumericRepresentation option
+    Declaration: NodeId option
+    SourceType: TypeIdentity
+    Obligations: NodeId list
+    Participants: Set<NodeId>
+}
+
+/// Exact source-authorized transport into the selected platform's index domain.
+type NumericIndexTransport = {
+    Site: NodeId
+    Operand: NodeId
+    Carrier: ScalarCarrier
+    PointerDeclaration: NodeId
+    PointerBits: int
+    Unsigned: bool
+    Capacity: ValueRange
+    Obligation: NodeId
+    Participants: Set<NodeId>
+}
+
+[<RequireQualifiedAccess>]
+type NumericOperationKind =
+    | Add | Subtract | Multiply | Divide | Remainder
+    | BitAnd | BitOr | BitXor | ShiftLeft | ShiftRight
+    | Equal | NotEqual | Less | LessOrEqual | Greater | GreaterOrEqual
+    | Negate | Complement | Identity | LogicalNot
+
+[<RequireQualifiedAccess>]
+type NumericOperationForm = Integer of signed: bool | Real | Boolean | Unit | OpaqueReference
+
+type NumericOperationOperand = { Actual: NodeId; Carrier: ScalarCarrier option; Adaptation: Meet option }
+type NumericOperationWitness = {
+    Site: NodeId; Callee: NodeId; Kind: NumericOperationKind; Form: NumericOperationForm
+    Operands: NumericOperationOperand list; OperationCarrier: SettledSlot option
+    Representation: NumericRepresentation option; Declaration: NodeId option
+    Result: ScalarCarrier; ResultAdaptation: Meet option; Range: ValueRange option
+    Obligations: NodeId list; Participants: Set<NodeId>
+}
+type NumericOperationProof = {
+    Site: NodeId; Obligation: NodeId; Body: ObligationBody; Participants: Set<NodeId>; Proven: bool
+}
+
 type BoundaryDeclarationFact = {
     Form: string
     Text: string list
@@ -623,6 +714,61 @@ type BoundaryImport = {
 
 type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Adaptation: Meet option }
 
+type BoundaryByteView = {
+    Site: NodeId
+    Source: NodeId
+    ExtentSource: NodeId
+    Representation: NumericRepresentation
+    RepresentationDeclaration: NodeId
+    StaticOrigins: Map<NodeId, bigint>
+    Participants: Set<NodeId>
+}
+
+type BoundaryStringExtent = {
+    Site: NodeId
+    Source: NodeId
+    ExtentSource: NodeId
+    StaticOrigins: Map<NodeId, bigint>
+    Participants: Set<NodeId>
+}
+
+type IntrinsicWriteImport = {
+    Identity: NodeId
+    Scope: NodeId
+    Symbol: string
+    Fd: BoundaryScalar
+    Count: BoundaryScalar
+    Result: BoundaryScalar
+    ByteRepresentation: NumericRepresentation
+    Core: NodeId
+    ReturnContract: NodeId
+    Endpoint: NodeId
+    Surface: NodeId
+    SyscallNumber: bigint
+    Participants: Set<NodeId>
+}
+
+type IntrinsicWriteCall = {
+    Site: NodeId
+    Import: NodeId
+    Callee: NodeId
+    Fd: NodeId
+    Buffer: NodeId
+    Count: NodeId
+    FdAdaptation: Meet option
+    CountAdaptation: Meet option
+    ResultAdaptation: Meet option
+    Participants: Set<NodeId>
+}
+
+type IntrinsicWriteProof = {
+    Site: NodeId
+    Obligation: NodeId
+    Ordinal: int
+    Body: ObligationBody
+    Participants: Set<NodeId>
+}
+
 type BoundaryCall = {
     Site: NodeId
     Import: NodeId
@@ -644,6 +790,7 @@ type BoundaryDeclaration = { Binding: NodeId; Path: NodeId list; Implementation:
 type BoundarySourcePremise = {
     Shape: BoundaryDeclarationFact
     EmbeddedTypes: TypeIdentity list
+    ConstructorFacts: (ConstructorIdentity * TypeLayout * int * int * NTUQualifiers option * Map<string, string list>) list
     Reachable: bool
     Range: ValueRange option
     ExternLibrary: string option
@@ -669,30 +816,34 @@ type BoundaryPlatformPremise = {
     EndpointReturns: Map<string, ReturnBound>
 }
 
-type BoundaryDomain = {
+type NumericDomain = {
     Premises: Map<NodeId, BoundarySourcePremise>
     Platform: BoundaryPlatformPremise option
-    Meets: Map<NodeId, Meet list>
-    Declarations: BoundaryDeclaration list
-    Imports: NodeId list
-    Calls: NodeId list
-    DeclarationLeaves: Set<NodeId>
-    DeclarationOnly: Set<NodeId>
-    Links: Set<string>
-    Failures: (NodeId * Set<NodeId> * string) list
+    Roots: (NodeId * DeclRoot) list
+    Escaping: Map<NodeId, string>
+    Layouts: Map<TypeIdentity, SettledLayout>
+    Required: Set<NodeId>
+    ResultSites: Set<NodeId>
+    SourceTypes: Map<NodeId, TypeIdentity>
+    Elements: Map<NodeId, SettledSlot>
+    ElementTypes: Map<TypeIdentity, SettledSlot>
+    DeclaredScalars: Map<NTUKind, SettledSlot>
+    OccurrenceRepresentations: Map<NodeId, Result<ValueRepresentation, string>>
+    TypeRepresentations: Map<TypeIdentity, Result<ValueRepresentation, string>>
+    ElementRanges: Map<TypeIdentity, ValueRange>
+    ByteRanges: (NodeId * NodeId list * bigint * bigint * string) list
+    ByteReadRanges: (NodeId * NodeId list * bigint * bigint) list
+    ByteViews: BoundaryByteView list
+    StringExtents: BoundaryStringExtent list
+    Values: ScalarCarrier list
+    Operations: NumericOperationWitness list
+    OperationRequired: Set<NodeId>
+    OperationMeets: Map<NodeId, Meet list>
+    OperationProofs: NumericOperationProof list
+    IndexTransports: NumericIndexTransport list
+    IndexRequired: Set<NodeId>
+    Unresolved: Map<NodeId, string>
 }
-
-type BoundaryCoverage = {
-    Site: NodeId
-    Operand: NodeId
-    Ordinal: int
-    Input: ValueRange
-    Destination: ValueRange
-    Obligation: NodeId
-}
-
-[<RequireQualifiedAccess>]
-type BoundaryProofOutcome = Proven | Refuted
 
 [<RequireQualifiedAccess>]
 type EdgeClass =
@@ -722,12 +873,343 @@ type EdgeClass =
     | Range
     /// Baker's complete source declaration, call and proof relations.
     | Boundary
+    /// Source-settled hardware/kernel declaration and complete spatial plan.
+    | Spatial
+
+type MemoryExtentWitness = {
+    Site: NodeId
+    Source: NodeId
+    Element: NumericRepresentation
+    ElementDeclaration: NodeId
+    Result: ScalarCarrier
+    Extent: BoundaryStringExtent
+    IndexUnsigned: bool
+    Participants: Set<NodeId>
+}
+
+type RequirementWitness = {
+    Site: NodeId
+    Condition: NodeId
+    Diagnostic: string
+    Frontier: NodeId
+    Continuation: NodeId
+    PatternTest: NodeId option
+    Participants: NodeId list
+}
+
+[<RequireQualifiedAccess>]
+type ProgramStorageIdentity = Allocation of NodeId | BindingSlot of NodeId
+
+type MemoryArrayExtentWitness = { Site: NodeId; Source: NodeId; Element: SettledSlot; Result: ScalarCarrier; Participants: Set<NodeId> }
+type MemoryBoundsWitness = {
+    Buffer: NodeId
+    Index: NodeId
+    IndexCarrier: ScalarCarrier
+    ExtentCarrier: ScalarCarrier
+    IndexUnsigned: bool
+    Length: NodeId
+    Lower: NodeId
+    Upper: NodeId
+    Requirement: RequirementWitness
+    Participants: Set<NodeId>
+}
+type MemoryArrayAccessWitness = {
+    Site: NodeId; Buffer: NodeId; Index: NodeId; Value: NodeId option
+    Element: SettledSlot; Adaptation: Meet option; Bounds: MemoryBoundsWitness; Participants: Set<NodeId>
+}
+[<RequireQualifiedAccess>]
+type MemoryResidence = Stack of scope: NodeId * space: NodeId | Program of ProgramStorageIdentity | ImmutableProgram of space: NodeId
+type MemoryArrayLiteralWitness = {
+    Site: NodeId; Elements: (NodeId * Meet option) list; Element: SettledSlot
+    Length: int; Residence: MemoryResidence; Initializers: NativeLiteral list option
+    Alignment: int; ElementBytes: int; Participants: Set<NodeId>
+}
+type MemoryArrayAllocationWitness = {
+    Site: NodeId; Count: NodeId; CountCarrier: ScalarCarrier; IndexUnsigned: bool
+    Element: SettledSlot; ElementBytes: int; Alignment: int; Residence: MemoryResidence
+    MinimumCount: bigint; MaximumCount: bigint; Requirement: RequirementWitness; Participants: Set<NodeId>
+}
+type ArrayBoundOperand = { Actual: NodeId; Binding: NodeId; Reference: NodeId }
+type ArrayRangeGuard = {
+    Requirement: NodeId; Predicate: NodeId; Frontier: NodeId; Continuation: NodeId
+    Count: NodeId; Offset: NodeId option; Buffer: NodeId option; Length: NodeId option
+    Zero: NodeId; NonnegativeCount: NodeId; NonnegativeOffset: NodeId option
+    End: NodeId option; Within: NodeId option
+}
+type ArrayInitializationConstruction = {
+    Buffer: NodeId; Index: NodeId; Initial: NodeId; Loop: NodeId; Guard: NodeId
+    Current: NodeId; Write: NodeId; Step: NodeId; Advance: NodeId
+}
+type ArrayAllocationConstruction = {
+    Site: NodeId; Owner: NodeId; Count: ArrayBoundOperand; Default: NodeId option
+    Initialization: ArrayInitializationConstruction option
+    Guard: ArrayRangeGuard; Participants: Set<NodeId>
+}
+type ArrayCopyConstruction = {
+    Site: NodeId; Source: ArrayBoundOperand; SourceOffset: ArrayBoundOperand
+    Destination: NodeId; DestinationOffset: ArrayBoundOperand; Count: ArrayBoundOperand
+    Allocation: NodeId option; Index: NodeId option; IndexInitial: NodeId option
+    Loop: NodeId option; Guard: NodeId option; Current: NodeId option
+    SourceIndex: NodeId option; DestinationIndex: NodeId option
+    Read: NodeId option; Write: NodeId option; Step: NodeId option; Advance: NodeId option
+    Requirements: ArrayRangeGuard list; Participants: Set<NodeId>
+}
+type MemoryArrayCopyWitness = {
+    Site: NodeId; Source: NodeId; SourceOffset: NodeId; Destination: NodeId; DestinationOffset: NodeId
+    Count: NodeId; CountCarrier: ScalarCarrier; Allocation: NodeId option; Loop: NodeId option
+    Read: MemoryArrayAccessWitness option; Write: MemoryArrayAccessWitness option
+    Requirements: RequirementWitness list; Participants: Set<NodeId>
+}
+[<RequireQualifiedAccess>]
+type MemoryPlace =
+    | MutableCell of binding: NodeId
+    | ExistingReference of source: NodeId
+    | ArrayElement of buffer: NodeId * index: NodeId * bounds: MemoryBoundsWitness
+    | RecordField of receiver: NodeId * receiverBytes: int * field: SettledField
+type MemoryAddressWitness = { Site: NodeId; Place: MemoryPlace; Element: SettledSlot option; ElementBytes: int option; PointerBits: int; Participants: Set<NodeId> }
+
+[<RequireQualifiedAccess>]
+type MemoryStringViewDirection = FromBytes | ToBytes
+type MemoryStringViewWitness = {
+    Site: NodeId
+    Source: NodeId
+    Owner: NodeId
+    Snapshot: NodeId
+    Direction: MemoryStringViewDirection
+    SourceCarrier: ValueRepresentation
+    ResultCarrier: ValueRepresentation
+    Element: SettledSlot
+    Representation: NumericRepresentation
+    Declaration: NodeId
+    Extent: ScalarCarrier
+    Participants: Set<NodeId>
+}
+
+[<RequireQualifiedAccess>]
+type MemoryWitnessOperation =
+    | BufferExtent of MemoryExtentWitness
+    | ArrayExtent of MemoryArrayExtentWitness
+    | ArrayAccess of MemoryArrayAccessWitness
+    | ArrayLiteral of MemoryArrayLiteralWitness
+    | ArrayAllocation of MemoryArrayAllocationWitness
+    | Address of MemoryAddressWitness
+    | StringView of MemoryStringViewWitness
+
+type MemoryProof = {
+    Site: NodeId; Obligation: NodeId; Body: ObligationBody
+    Participants: Set<NodeId>; Proven: bool
+}
+
+[<RequireQualifiedAccess>]
+type MemoryStringPremise =
+    | Snapshot
+    | ToBytesSnapshot
+    | Copy
+    | Storage of lower: bigint * upper: bigint * representation: string
+    | Read
+    | ReadRange of lower: bigint * upper: bigint
+    | Ascii
+    | Utf8Constant of byte list
+    | ByteView of BoundaryByteView
+    | Extent of BoundaryStringExtent
+
+type MemoryStringRelation = {
+    Class: EdgeClass
+    Premise: MemoryStringPremise
+    Ordinal: int
+    Sources: NodeId list
+    Target: NodeId
+}
+
+type MemoryDomain = {
+    Premises: Map<NodeId, BoundarySourcePremise>
+    Platform: BoundaryPlatformPremise option
+    Meets: Map<NodeId, Meet list>
+    Guards: (NodeId * NodeId list) list
+    Requirements: (int * NodeId * NodeId list) list
+    StringRelations: MemoryStringRelation list
+    AllocationConstructions: ArrayAllocationConstruction list
+    CopyConstructions: ArrayCopyConstruction list
+    ArrayCopies: MemoryArrayCopyWitness list
+    Proofs: MemoryProof list
+    Required: Set<NodeId>
+    Operations: (NodeId * MemoryWitnessOperation) list
+    Unresolved: Map<NodeId, string>
+}
+
+type PinConstraint = { PortName: string; PackagePin: string; IOStandard: string; Direction: string }
+type ClockConstraint = { PortName: string; PackagePin: string; IOStandard: string; FrequencyHz: int64 }
+type ResetConstraint = { PortName: string; IsExternal: bool; PackagePin: string; IOStandard: string; ActiveHigh: bool }
+
+/// Immutable declared pins shared by source spatial settlement and target realization.
+type PinMapping = {
+    Pins: PinConstraint list
+    Clock: ClockConstraint
+    Reset: ResetConstraint option
+    DevicePart: string
+    FieldPinAttrs: Map<string, string list>
+}
+
+type SpatialProof = {
+    Site: NodeId; Obligation: NodeId; Body: ObligationBody
+    Participants: Set<NodeId>; Proven: bool
+}
+
+type HardwarePortWitness = { Name: string; Path: string list; Representation: ValueRepresentation; Declaration: NodeId }
+
+type HardwareStateFieldWitness = {
+    Name: string; Literal: NodeId; Reset: bigint; Slot: SettledSlot
+    Range: ValueRange; Capacity: ValueRange
+}
+
+type HardwareModuleWitness = {
+    Site: NodeId; Scope: NodeId; Name: string
+    StepBinding: NodeId; Implementation: NodeId
+    Parameters: (string * NodeId) list; Result: NodeId
+    StateRepresentation: ValueRepresentation
+    InputRepresentation: ValueRepresentation option
+    ResultRepresentation: ValueRepresentation
+    InputPorts: HardwarePortWitness list; OutputPorts: HardwarePortWitness list
+    ResetFields: HardwareStateFieldWitness list
+    ClockReference: NodeId; ClockDeclaration: NodeId; ResetDeclaration: NodeId
+    ClockPath: Set<NodeId>; Pins: PinMapping
+    MetadataOnly: Set<NodeId>; Participants: Set<NodeId>; Obligations: NodeId list
+}
+
+/// A complete ordered scalar computation, including actual argument identity.
+/// Operations retain the numeric owner's exact construction and adaptations.
+[<RequireQualifiedAccess>]
+type KernelScalarLiteral = Integer of bigint | Boolean of bool | Character of char
+
+[<RequireQualifiedAccess>]
+type KernelScalarStep =
+    | Parameter of site: NodeId * ordinal: int * carrier: ScalarCarrier
+    | Literal of site: NodeId * value: KernelScalarLiteral * carrier: ScalarCarrier
+    | Alias of site: NodeId * source: NodeId * carrier: ScalarCarrier * adaptation: Meet option
+    | Operation of NumericOperationWitness
+
+/// These are source-declared topology/scheduling facts, not backend defaults.
+type KernelTransport = {
+    Declaration: NodeId
+    Representation: NumericRepresentation
+    Range: ValueRange
+}
+
+/// Source-declared external decoding domains, before ordinary range saturation.
+type KernelIngress = {
+    Site: NodeId; Scope: NodeId; Target: NodeId; Core: NodeId
+    ComputeBinding: NodeId; Implementation: NodeId
+    ComputePath: Set<NodeId>
+    Uses: Map<NodeId, BoundaryDeclarationFact>
+    Parameters: (string * NodeId) list; Result: NodeId
+    Inputs: KernelTransport list; Output: KernelTransport
+    Participants: Set<NodeId>
+    Premises: Map<NodeId, BoundaryDeclarationFact>
+    SourceFiles: Map<NodeId, string>
+    Platform: BoundaryPlatformPremise option
+}
+
+type KernelTargetPlan = {
+    Declaration: NodeId; Device: string; Columns: int
+    ShimRow: int; ComputeRow: int; FifoDepth: int; Iterations: bigint
+    Participants: Set<NodeId>
+}
+
+type KernelTileSlice = { Column: int; ShimRow: int; ComputeRow: int; Offset: int; Elements: int }
+
+type KernelModuleWitness = {
+    Site: NodeId; Scope: NodeId; Name: string
+    ComputeBinding: NodeId; Implementation: NodeId
+    Parameters: (string * NodeId) list; Result: NodeId
+    Steps: KernelScalarStep list
+    Ingress: KernelIngress
+    ElementsSite: NodeId; GrainSite: NodeId; Elements: int; Grain: int
+    Target: KernelTargetPlan; Tiles: KernelTileSlice list
+    MetadataOnly: Set<NodeId>; Participants: Set<NodeId>; Obligations: NodeId list
+}
+
+[<RequireQualifiedAccess>]
+type SpatialModuleWitness = Hardware of HardwareModuleWitness | Kernel of KernelModuleWitness
+
+type SpatialModuleDomain = {
+    Premises: Map<NodeId, BoundarySourcePremise>
+    SourceFiles: Map<NodeId, string>
+    Platform: BoundaryPlatformPremise option
+    Meets: Map<NodeId, Meet list>
+    Representations: Map<NodeId, Result<ValueRepresentation, string>>
+    Carriers: Map<NodeId, ScalarCarrier>
+    NumericOperations: Map<NodeId, NumericOperationWitness>
+    FieldRanges: Map<NominalTypeIdentity, Map<string, ValueRange>>
+    Pins: PinMapping option
+    Required: Set<NodeId>
+    Hardware: HardwareModuleWitness list
+    Kernels: KernelModuleWitness list
+    Proofs: SpatialProof list
+    Unresolved: Map<NodeId, string>
+}
+
+type BoundaryDomain = {
+    Premises: Map<NodeId, BoundarySourcePremise>
+    Platform: BoundaryPlatformPremise option
+    Meets: Map<NodeId, Meet list>
+    Declarations: BoundaryDeclaration list
+    Imports: NodeId list
+    Calls: NodeId list
+    ByteViews: BoundaryByteView list
+    StringExtents: BoundaryStringExtent list
+    StringComparisons: (NodeId * bool * NodeId list) list
+    StringLengthComparisons: (NodeId * bool * NodeId list) list
+    StringComparisonReads: MemoryArrayAccessWitness list
+    StringComparisonSnapshots: MemoryStringViewWitness list
+    StringComparisonCopies: MemoryArrayCopyWitness list
+    IntrinsicDeclarations: (NodeId * IntrinsicWriteImport) list
+    IntrinsicImports: IntrinsicWriteImport list
+    IntrinsicCalls: IntrinsicWriteCall list
+    IntrinsicProofs: IntrinsicWriteProof list
+    /// Exact immutable pool facts consulted by the borrow proof, including
+    /// bytes and declaration authority. Publication may not substitute a pool.
+    StringStorage: (string * byte list * int * int * int * string * int64 * int * int * NodeId * (NodeId list * string * int * int * int) list) option
+    DeclarationLeaves: Set<NodeId>
+    DeclarationOnly: Set<NodeId>
+    Links: Set<string>
+    Failures: (NodeId * Set<NodeId> * string) list
+}
+
+type BoundaryCoverage = {
+    Site: NodeId
+    Operand: NodeId
+    Ordinal: int
+    Input: ValueRange
+    Destination: ValueRange
+    Obligation: NodeId
+}
+
+[<RequireQualifiedAccess>]
+type BoundaryProofOutcome = Proven | Refuted
 
 /// The role the source plays relative to the target -- the edge label.
 /// Generalises Traversal.RegionKind, which named the same thing but was
 /// handed to a callback and discarded instead of being stored.
 [<RequireQualifiedAccess>]
 type EdgeRole =
+    | NumericDomain of NumericDomain
+    | NumericCarrier of ScalarCarrier
+    | NumericProof of BoundaryProofOutcome
+    | NumericOperation of NumericOperationWitness
+    | NumericOperationProof of NumericOperationProof
+    | NumericIndexTransport of NumericIndexTransport
+    | MemoryDomain of MemoryDomain
+    | MemoryOperation of MemoryWitnessOperation
+    | MemoryArrayCopy of MemoryArrayCopyWitness
+    | ArrayAllocationConstruction of ArrayAllocationConstruction
+    | ArrayCopyConstruction of ArrayCopyConstruction
+    | MemoryProof of MemoryProof
+    | MemoryAccessGuard
+    | SpatialModuleDomain of SpatialModuleDomain
+    | HardwareModule of HardwareModuleWitness
+    | KernelModule of KernelModuleWitness
+    | KernelIngress of KernelIngress
+    | SpatialProof of SpatialProof
     | BoundaryDeclaration of BoundaryDeclaration
     | BoundaryDomain of BoundaryDomain
     | BoundaryImport of BoundaryImport
@@ -736,6 +1218,15 @@ type EdgeRole =
     | BoundaryAdaptation of Meet
     | BoundaryCoverage of BoundaryCoverage
     | BoundaryProof of BoundaryProofOutcome
+    | StringByteView of BoundaryByteView
+    | StringExtent of BoundaryStringExtent
+    | StringComparisonConstruction of negated: bool
+    | StringLengthComparison of negated: bool
+    | IntrinsicWriteAbi of IntrinsicWriteImport
+    | IntrinsicWriteImport of IntrinsicWriteImport
+    | IntrinsicWriteCall of IntrinsicWriteCall
+    | IntrinsicWriteOperand of NodeId
+    | IntrinsicWriteProof of IntrinsicWriteProof
     /// [marker; operand; transparent wrapper path; first-boundary alternatives
     /// and their real formals; callee for Actual] -> the activated frontier.
     /// Ordinal identifies the component/actual in that current owning node.
@@ -1136,10 +1627,12 @@ let kindEdges (target: NodeId) (kind: SemanticKind) : Hyperedge list =
 
     | SemanticKind.TupleExpr elements -> sts EdgeRole.Element elements
     | SemanticKind.ArrayExpr elements -> sts EdgeRole.Element elements
+    | SemanticKind.ArrayAllocate count -> [st EdgeRole.Argument count]
     | SemanticKind.ListExpr elements -> sts EdgeRole.Element elements
     | SemanticKind.TupleGet (tuple, _) -> [ st EdgeRole.Subject tuple ]
 
     | SemanticKind.FieldGet (expr, _) -> [ st EdgeRole.Subject expr ]
+    | SemanticKind.StringByteBorrow source -> [ st EdgeRole.Subject source ]
     | SemanticKind.FieldSet (expr, _, value) ->
         [ st EdgeRole.Subject expr; st EdgeRole.AssignValue value ]
     | SemanticKind.IndexGet (expr, index) ->
@@ -1154,6 +1647,10 @@ let kindEdges (target: NodeId) (kind: SemanticKind) : Hyperedge list =
     | SemanticKind.Downcast (expr, _) -> [ st EdgeRole.Operand expr ]
     | SemanticKind.TypeTest (expr, _) -> [ st EdgeRole.Operand expr ]
     | SemanticKind.AddressOf (expr, _) -> [ st EdgeRole.Operand expr ]
+    | SemanticKind.CellAddress binding -> [ rf EdgeRole.Definition binding ]
+    | SemanticKind.ElementAddress(buffer, index) -> [ st EdgeRole.Subject buffer; st EdgeRole.Index index ]
+    | SemanticKind.FieldAddress(receiver, _) -> [ st EdgeRole.Subject receiver ]
+    | SemanticKind.Reborrow reference -> [ st EdgeRole.Operand reference ]
     | SemanticKind.Deref expr -> [ st EdgeRole.Operand expr ]
     | SemanticKind.Set (target', value) ->
         [ st EdgeRole.AssignTarget target'; st EdgeRole.AssignValue value ]
@@ -1413,59 +1910,6 @@ type SemanticNode = {
 //-------------------------------------------------------------------------
 // Settled layouts (Dimensional_Range_Design.md §3.3, ruling 2; Layout_As_Joint_Constraint.md §3)
 //-------------------------------------------------------------------------
-
-/// How one field of a settled layout is held on the graph's platform. A record's layout is the
-/// consequence of its fields' selections, settled at saturation once the range pass has run and
-/// the platform has filled the context (CS-11 slice 0); `TypeConRef.Layout` keeps the identity of
-/// a type's layout family and never a byte count.
-[<RequireQualifiedAccess>]
-type SettledSlot =
-    /// Owned bytes at an already settled aggregate extent and alignment.
-    | InlineBytes of bytes: int * alignment: int
-    /// An integer at the representation its range selects: the bits, and the declared
-    /// representation's name on a core (`None` on fabric, where the width is exactly the range's).
-    | Integer of bits: int * representation: string option
-    /// A boolean: one byte on a core, one bit on fabric.
-    | Bool
-    /// A char at its code-point representation (32 bits).
-    | Char
-    /// A real at its declared bits.
-    | Real of bits: int
-    /// A pointer-sized field: `words` declared Pointer widths. One word is an address (a handle,
-    /// a byref, a list or map node); five words a view of a buffer (a string, an array, a nested
-    /// record, a tuple, an option, a union, a lazy, a seq or a function's closure pair), which the
-    /// CPU leg holds as its memref descriptor: two addresses, an offset, a
-    /// size and a stride. The word count is the leg's realisation, read here and never summed
-    /// below the graph; a declaration of it belongs to the platform description (CS-12, owed).
-    | Pointer of words: int
-    /// The unit value, held as the leg's zero of 32 bits.
-    | Unit
-    /// A type the pass cannot place (an unresolved variable, an unmapped kind): a stop for any
-    /// reader that needs its size, naming the type.
-    | Opaque of what: string
-
-/// One field of a settled layout: its slot, and on a core its byte offset, size and alignment,
-/// tiled in declaration order with the alignment the selected representation declares
-/// (native-type-universe.md §2.3). `None` on a context declaring no representations (fabric).
-type SettledField = {
-    Name: string
-    Slot: SettledSlot
-    Offset: int option
-    Size: int option
-    Align: int option
-}
-
-/// The settled layout of an aggregate type.
-[<RequireQualifiedAccess>]
-type SettledLayout =
-    /// A record (or a tuple, `Item1`..): its fields, its size and its alignment (`None` on fabric,
-    /// or where a field is opaque).
-    | Record of fields: SettledField list * size: int option * align: int option
-    /// A union (a user union, an option, a Result): one byte of tag at offset zero, then the
-    /// payload slot of the widest case at `payloadOffset`; each case names its payload slot
-    /// (`None` for a case without one). The tag-then-payload form is the leg's realisation of a
-    /// union as a byte buffer read through typed views; its alignment is one.
-    | Union of cases: (string * SettledSlot option) list * payloadOffset: int option * size: int option * align: int option
 
 //-------------------------------------------------------------------------
 // Semantic Graph
@@ -1789,20 +2233,6 @@ type SequenceTemplateCopy = {
 [<RequireQualifiedAccess>]
 type UnionResidence = Arena | Inline
 
-type PinConstraint = { PortName: string; PackagePin: string; IOStandard: string; Direction: string }
-type ClockConstraint = { PortName: string; PackagePin: string; IOStandard: string; FrequencyHz: int64 }
-type ResetConstraint = { PortName: string; IsExternal: bool; PackagePin: string; IOStandard: string; ActiveHigh: bool }
-
-/// The pin facts of a hardware design: the description's endpoints joined with the design's
-/// `[<Pin>]` attributes. Read by the hardware module witness and the XDC writer.
-type PinMapping = {
-    Pins: PinConstraint list
-    Clock: ClockConstraint
-    Reset: ResetConstraint option
-    DevicePart: string
-    FieldPinAttrs: Map<string, string list>
-}
-
 /// A native callback keeps a resolved declaration edge, without a closure environment.
 type FunctionPointerPlan =
     | Address of symbol: string * lambda: NodeId
@@ -1840,9 +2270,6 @@ type MmioAccessEvidence = {
     Bits: int
     Binding: MmioBindingEvidence option
 }
-
-[<RequireQualifiedAccess>]
-type ProgramStorageIdentity = Allocation of NodeId | BindingSlot of NodeId
 
 [<RequireQualifiedAccess>]
 type ProgramStorageShape = Bytes | Scalar of SettledSlot | ValueView of NativeType
@@ -2003,15 +2430,6 @@ type StartupWitness = {
     Initializers: StartupInitializerWitness list
     ValueBindings: Set<NodeId>
 }
-type RequirementWitness = {
-    Site: NodeId
-    Condition: NodeId
-    Diagnostic: string
-    Frontier: NodeId
-    Continuation: NodeId
-    PatternTest: NodeId option
-    Participants: NodeId list
-}
 type StorageWitnessProjection = {
     Lazies: Map<NodeId, LazyWitnessContract>
     LazyOccurrences: Map<NodeId, NodeId>
@@ -2042,6 +2460,11 @@ type BoundaryEmissionProjection = {
     Imports: Map<NodeId, BoundaryImport>
     ByScope: Map<NodeId, NodeId list>
     Calls: Map<NodeId, BoundaryCall>
+    ByteViews: Map<NodeId, BoundaryByteView>
+    StringExtents: Map<NodeId, BoundaryStringExtent>
+    IntrinsicWriteImports: Map<NodeId, IntrinsicWriteImport>
+    IntrinsicWrites: Map<NodeId, IntrinsicWriteCall>
+    IntrinsicWriteProofs: Map<NodeId, IntrinsicWriteProof list>
     /// Exact source declaration bindings whose bodies are placeholders, not
     /// executable ordinary function definitions.
     DeclarationLeaves: Set<NodeId>
@@ -2054,11 +2477,47 @@ type BoundaryEmissionProjection = {
 
 /// Complete emission-domain facts published by their source owners. Absence is
 /// distinct from a valid publication whose domain maps happen to be empty.
+type NumericWitnessProjection = {
+    Values: Map<NodeId, ScalarCarrier>
+    Operations: Map<NodeId, NumericOperationWitness>
+    OperationRequired: Set<NodeId>
+    IndexTransports: Map<NodeId, NumericIndexTransport>
+    Required: Set<NodeId>
+    ResultSites: Set<NodeId>
+    Unresolved: Map<NodeId, string>
+    SourceTypes: Map<NodeId, TypeIdentity>
+    Layouts: Map<TypeIdentity, SettledLayout>
+    Elements: Map<NodeId, SettledSlot>
+    ElementTypes: Map<TypeIdentity, SettledSlot>
+    DeclaredScalars: Map<NTUKind, SettledSlot>
+    OccurrenceRepresentations: Map<NodeId, Result<ValueRepresentation, string>>
+    TypeRepresentations: Map<TypeIdentity, Result<ValueRepresentation, string>>
+}
+
+type MemoryWitnessProjection = {
+    Operations: Map<NodeId, MemoryWitnessOperation>
+    ArrayCopies: Map<NodeId, MemoryArrayCopyWitness>
+    Required: Set<NodeId>
+    Unresolved: Map<NodeId, string>
+}
+
+type SpatialModuleProjection = {
+    Hardware: Map<NodeId, HardwareModuleWitness>
+    Kernels: Map<NodeId, KernelModuleWitness>
+    Required: Set<NodeId>
+    MetadataOnly: Set<NodeId>
+    ByScope: Map<NodeId, NodeId list>
+    CodeRoots: Set<NodeId>
+}
+
 type WitnessEmissionProjection = {
     Ordinary: OrdinaryDemandProjection
     Callable: CallableEmissionProjection
     Storage: StorageWitnessProjection
     Boundary: BoundaryEmissionProjection
+    Numeric: NumericWitnessProjection
+    Memory: MemoryWitnessProjection
+    Spatial: SpatialModuleProjection
 }
 
 /// The codata the graph carries for emission, settled once at the end of saturation.

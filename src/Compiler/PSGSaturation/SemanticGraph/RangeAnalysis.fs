@@ -191,6 +191,7 @@ type private Program = {
     /// CS-12): an extern's parameter node at its declared range, the extern's body at the
     /// declared return. The declaration binds (§4.4); the arguments are checked against it.
     BoundarySeeds: Map<NodeId, ValueRange>
+    ArrayLengths: Map<NodeId, Clef.Compiler.Baker.Ingredients.ArrayShapes.Extent>
     /// The declared wire fields seeded into `InputSeeds`, for the boundary check (§4.2): the
     /// record type and the field's declaration.
     DeclaredFields: (NominalTypeIdentity * PlatformResolution.DeclaredField) list
@@ -1156,6 +1157,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         IntegerFields = Map.empty
         InputSeeds = Map.empty
         BoundarySeeds = Map.empty
+        ArrayLengths = Map.empty
         DeclaredFields = []
         DeclaredParameters = []
         ElementStores = Map.empty
@@ -1177,13 +1179,16 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             | Some (_, parameters, _) -> parameters |> List.map (fun (_, _, id) -> (id, root))
             | None -> [])
         |> Map.ofList
+    let kernelIngress = Clef.Compiler.Baker.Recipes.KernelDeclarations.admitted graph
+    let kernelParameters = kernelIngress |> List.collect (fun ingress -> ingress.Parameters |> List.map snd) |> Set.ofList
+    let kernelImplementations = kernelIngress |> List.map _.Implementation |> Set.ofList
     let escaping =
         candidates
         |> List.collect (fun c -> c.Parameters |> List.skip (min c.Offset c.Parameters.Length) |> List.map (fun (_, _, id) -> (id, c.Escape)))
-        |> List.fold (fun acc (id, why) -> if Map.containsKey id acc then acc else Map.add id why acc) Map.empty
+        |> List.fold (fun acc (id, why) -> if kernelParameters.Contains id || Map.containsKey id acc then acc else Map.add id why acc) Map.empty
     let escapingLambdas =
         candidates
-        |> List.fold (fun acc c -> if Map.containsKey c.LambdaId acc then acc else Map.add c.LambdaId c.Escape acc) Map.empty
+        |> List.fold (fun acc c -> if kernelImplementations.Contains c.LambdaId || Map.containsKey c.LambdaId acc then acc else Map.add c.LambdaId c.Escape acc) Map.empty
     let callableFlow = CallableOrigins.resolve graph
     let callees =
         ordered
@@ -1383,6 +1388,9 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                 | _ -> seeds
             (seeds, declared @ (f.Parameters |> List.choose (fun (paramId, d) -> d |> Option.map (fun d -> paramId, d))))) (Map.empty, [])
     let boundarySeeds =
+        Clef.Compiler.Baker.Recipes.KernelDeclarations.seeds graph
+        |> Map.fold (fun seeds formal range -> Map.add formal range seeds) boundarySeeds
+    let boundarySeeds =
         ordered |> List.fold (fun seeds node ->
             match CallbackDeclarations.invocationResult graph node.Id |> Option.orElseWith (fun () -> Mmio.numericBoundary graph node.Id) |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph node.Id) |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph node.Id) with
             | Some result -> Map.add node.Id result.Range seeds
@@ -1393,6 +1401,29 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             | Some range -> Map.add node.Id range seeds
             | None -> seeds) boundarySeeds
     // Every value stored into an array, by element type (§3.3): an array literal's elements (a
+    let boundarySeeds =
+        graph.Edges |> List.fold (fun seeds edge ->
+            match edge.Role with
+            | EdgeRole.StringExtent extent when not extent.StaticOrigins.IsEmpty ->
+                let values = extent.StaticOrigins.Values |> Seq.toList
+                Map.add extent.Site (ValueRange.bounded (List.min values) (List.max values)) seeds
+            | EdgeRole.StringExtent extent ->
+                Map.add extent.Site (RangeSources.lengthRange graph.Platform) seeds
+            | _ -> seeds) boundarySeeds
+    // A local byte view retains the exact source string's descriptor extent.
+    // Known origin lengths refine its ordinary Array.length observation; the
+    // dynamic value remains a descriptor read, never a chosen maximum length.
+    let boundarySeeds =
+        let views = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringByteView view -> Some(view.Site,view) | _ -> None) |> Map.ofList
+        ordered |> List.fold (fun seeds node ->
+            match node.Kind with
+            | SemanticKind.Application(callee,[buffer]) ->
+                match graph.Nodes.TryFind callee,views.TryFind buffer with
+                | Some { Kind=SemanticKind.Intrinsic { Module=IntrinsicModule.Array; Operation="length" } },Some view when not view.StaticOrigins.IsEmpty ->
+                    let lengths = view.StaticOrigins.Values |> Seq.toList
+                    Map.add node.Id (ValueRange.bounded (List.min lengths) (List.max lengths)) seeds
+                | _ -> seeds
+            | _ -> seeds) boundarySeeds
     // comprehension's yields), an indexer or `Array.set` assignment, `Array.create`'s seed,
     // `Array.init`'s function result (a named lambda's body, or every candidate's through a value),
     // and `Array.zeroCreate`'s zero for an integer element type.
@@ -1417,6 +1448,14 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         |> List.fold (fun (stores: Map<TypeIdentity, (NodeId * NodeId) list>, seeds: Map<TypeIdentity, ValueRange>) node ->
             let typeOf (id: NodeId) = Map.tryFind id reachableNodes |> Option.map (fun n -> n.Type)
             match node.Kind with
+            | SemanticKind.ArrayAllocate _ ->
+                let defaults=graph.Edges |> List.choose(fun edge ->
+                    match edge.Role with
+                    | EdgeRole.ArrayAllocationConstruction construction when construction.Site=node.Id -> construction.Default
+                    | _ -> None)
+                match arrayElementType node.Type,defaults with
+                | Some elem,[value] -> store (elementKey elem) node.Id value stores,seeds
+                | _ -> stores,seeds
             | SemanticKind.ArrayExpr elements ->
                 match arrayElementType node.Type with
                 | Some elem ->
@@ -1521,6 +1560,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             IntegerFields = integerFields
             InputSeeds = inputSeeds
             BoundarySeeds = boundarySeeds
+            ArrayLengths = Clef.Compiler.Baker.Ingredients.ArrayShapes.observations graph
             DeclaredFields = declaredFields
             DeclaredParameters = declaredParameters
             ElementStores = elementStores
@@ -1774,6 +1814,13 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
                 | _ -> 0
             Some (ValueRange.Bounded (bigint.Zero, bigint (max 0 (cases - 1))))
         | _ when not ranged -> None
+        | _ when program.ArrayLengths.ContainsKey node.Id ->
+            program.ArrayLengths[node.Id].Sources |> List.fold (fun range source ->
+                let value =
+                    match source with
+                    | Clef.Compiler.Baker.Ingredients.ArrayShapes.Length.Constant value -> ValueRange.point value
+                    | Clef.Compiler.Baker.Ingredients.ArrayShapes.Length.Count count -> current state count
+                ValueRange.join range value) ValueRange.Empty |> Some
         // a node a binding descriptor declares (an extern's parameter, its result): the declaration binds
         | _ when Map.containsKey node.Id program.BoundarySeeds -> Map.tryFind node.Id program.BoundarySeeds
         | _ when program.LazyResults.ContainsKey node.Id ->
@@ -2652,7 +2699,8 @@ let private selectsFromDeclared (ctx: PlatformContext) : bool =
 /// the offered representation of the sign's family with the fewest bits whose declared range
 /// covers the range, or the widest when none does (CCS8012 was reported); None for an
 /// unobservable range, or a context declaring no integer representation. A read of the settled
-/// range against the declaration, never stored (C3).
+/// range against the declaration. Baker materializes this selection and its
+/// declaration/range evidence before publication; witnesses read that carrier.
 let selectedRepresentationOf (graph: SemanticGraph) (range: ValueRange) : NumericRepresentation option =
     match graph.Platform with
     | Some ctx when selectsFromDeclared ctx -> (selectRange ctx range).Representation
@@ -2663,7 +2711,8 @@ let selectedRepresentationOf (graph: SemanticGraph) (range: ValueRange) : Numeri
 /// value-call boundary (ruling 1) the Register representation of the range's sign; a width-named
 /// carrier's own; for the bare kind, `selectedRepresentationOf` its range. None for an
 /// unobservable range, a context declaring no integer representation, or a node that is not an
-/// integer. Never stored beside the range (Horizon C3).
+/// integer. This source selector is consumed by Baker's carrier settlement;
+/// witness consumers use NumericWitnessProjection instead.
 let selectedRepresentation (graph: SemanticGraph) (nodeId: NodeId) : NumericRepresentation option =
     match graph.Platform, SemanticGraph.tryGetNode nodeId graph with
     | Some ctx, Some node when isIntegerNode node && selectsFromDeclared ctx ->
@@ -2694,7 +2743,7 @@ let selectedWidthOf (graph: SemanticGraph) (range: ValueRange) : int option =
 
 /// The width a range is held at: exactly its selection. CCS8011 is an error on every substrate
 /// (§1.3), so an unobservable range is a stop here, never held at the declared Register width.
-/// The record and union placement (Placement.fs) and Composer's width reads come through here.
+/// Source record/union placement and carrier settlement use this rule.
 let heldWidthOf (graph: SemanticGraph) (range: ValueRange) : int option =
     selectedWidthOf graph range
 
@@ -2722,13 +2771,13 @@ let selectedWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
     | _ -> None
 
 /// The bits a spelled kind's declaration names on the graph's platform (CS-12 step 5a): the read
-/// Composer's type mapping makes for a value of a width-named spelling where no node is at hand
+/// source carrier settlement makes for a width-named spelling where no node is at hand
 /// (a signature, a capture's type); None for the bare kind, whose width is the node's selection.
 let declaredWidthOfKind (graph: SemanticGraph) (kind: NTUKind) : int option =
     RangeSources.declarationOfKind graph.Platform kind |> Option.map (fun d -> d.Bits)
 
 /// The width a node's value is held at: `selectedWidth`, or `heldWidthOf` its settled range.
-/// The read Composer's CPU leg makes for every integer node; None is a stop there (a node with
+/// Baker's held-carrier rule for each integer node; None is a source stop (a node with
 /// no range, an unobservable range, or no platform context).
 let heldWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
     match selectedWidth graph nodeId with

@@ -1119,6 +1119,12 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     //=========================================================================
     let platformContext = PlatformDeclaration.fill platformContext finalGraph
     let finalGraph = { finalGraph with Platform = platformContext }
+    let finalGraph = Clef.Compiler.Nanopass.KernelDeclarations.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.StringComparisons.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.StringBorrows.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.MemoryAccessElaboration.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.SequenceEvaluation.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.EagerDemand.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize finalGraph
 
     //=========================================================================
@@ -1142,6 +1148,16 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             let byteGraph = Clef.Compiler.Nanopass.EagerDemand.normalize byteGraph
             let byteGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize byteGraph
             RangeAnalysis.run platformContext byteGraph
+
+    let arrayGraph = Clef.Compiler.Nanopass.ArrayConstruction.normalize finalGraph
+    let finalGraph, rangeDiagnostics =
+        if obj.ReferenceEquals(finalGraph,arrayGraph) && obj.ReferenceEquals(finalGraph,byteGraph) then finalGraph,rangeDiagnostics
+        else
+            let arrayGraph = Clef.Compiler.Nanopass.MemoryAccessElaboration.normalize arrayGraph
+            let arrayGraph = Clef.Compiler.Nanopass.SequenceEvaluation.normalize arrayGraph
+            let arrayGraph = Clef.Compiler.Nanopass.EagerDemand.normalize arrayGraph
+            let arrayGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize arrayGraph
+            RangeAnalysis.run platformContext arrayGraph
 
     //=========================================================================
     // Placement (CS-11 slice 0, Dimensional_Range_Design.md ruling 2): every
@@ -1319,6 +1335,9 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     // Boundary calls need the settled range/meet domain, and must contribute
     // their joint obligations before ledger emission and passive publication.
+    let finalGraph = Clef.Compiler.Nanopass.NumericSettlement.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.MemorySettlement.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.SpatialSettlement.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.BoundarySettlement.normalize finalGraph
     ObligationDischarge.emit finalGraph
     tracePhase "obligations"
@@ -2476,6 +2495,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                         recordType,
                         range
                     )
+                    let node = builder.SetMetadata(node.Id, "TypeDef.MutableFields", MetadataValue.StringList(Set.toList recordInfo.MutableFields))
                     (updatedEnv, node :: accNodes)
 
                 | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Enum(_, _), _) ->

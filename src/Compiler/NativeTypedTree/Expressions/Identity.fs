@@ -163,7 +163,7 @@ and private resolveBinding (parts: string list) (fullName: string) (env: TypeEnv
 
 /// Determine the type of a member access.
 /// Delegates to Types.resolveFieldType which handles:
-/// 1. Intrinsic members (string.Pointer, string.Length, array.Length)
+/// 1. Intrinsic members (string.Bytes, string.Length, array.Length)
 /// 2. Record field lookup (no SRTP needed)
 /// 3. SRTP constraint fallback for generic types
 and private resolveMemberType (baseType: NativeType) (memberName: string) (env: TypeEnv) (range: SourceRange) : NativeType =

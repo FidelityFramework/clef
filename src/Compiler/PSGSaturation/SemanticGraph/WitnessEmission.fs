@@ -17,15 +17,18 @@ let private project graph =
         | Error failures -> Error failures
     let storage = StorageWitness.project graph
     let boundary = BoundaryEmission.project graph
-    match ordinary, callable, storage, boundary with
-    | Ok ordinary, Ok callable, Ok storage, Ok boundary ->
-        Ok { Ordinary = ordinary; Callable = callable; Storage = storage; Boundary = boundary }
+    let numeric = NumericPublication.project graph
+    let memory = MemoryPublication.project graph
+    let spatial = SpatialPublication.project graph
+    match ordinary, callable, storage, boundary, numeric, memory, spatial with
+    | Ok ordinary, Ok callable, Ok storage, Ok boundary, Ok numeric, Ok memory, Ok spatial ->
+        Ok { Ordinary = ordinary; Callable = callable; Storage = storage; Boundary = boundary; Numeric = numeric; Memory = memory; Spatial = spatial }
     | _ ->
         let failures = function Ok _ -> [] | Error failures -> failures
         // Failed demand validation already owns its diagnostic; the dependent
         // callable domain cannot contribute an independent result in that case.
         let callableFailures = match ordinary with Ok _ -> failures callable | Error _ -> []
-        Error (failures ordinary @ callableFailures @ failures storage @ failures boundary)
+        Error (failures ordinary @ callableFailures @ failures storage @ failures boundary @ failures numeric @ failures memory @ failures spatial)
 
 /// A source edit retains premises for validation but cannot carry publication
 /// into witnessing. The original graph retains its own published facts.
@@ -120,3 +123,6 @@ let tryOrdinary graph = tryRead graph |> Result.map _.Ordinary
 let tryCallable graph = tryRead graph |> Result.map _.Callable
 let tryStorage graph = tryRead graph |> Result.map _.Storage
 let tryBoundary graph = tryRead graph |> Result.map _.Boundary
+let tryNumeric graph = tryRead graph |> Result.map _.Numeric
+let tryMemory graph = tryRead graph |> Result.map _.Memory
+let trySpatial graph = tryRead graph |> Result.map _.Spatial

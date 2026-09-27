@@ -18,18 +18,7 @@ module PlatformResolution = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformRe
 
 type Plan = { Site: SemanticNode; Input: NodeId; Origin: NodeId; Members: NodeId list; Premises: NodeId list; Range: ValueRange; Representation: string; Text: EdgeRole }
 
-let private byteRepresentation (graph: SemanticGraph) =
-    let declarations =
-        PlatformResolution.resolve graph |> Option.bind _.Core
-        |> Option.map _.Representations |> Option.defaultValue []
-    graph.Platform |> Option.bind (fun platform ->
-        platform.Representations.Values |> Seq.tryPick (fun rep ->
-            if rep.Bits = 8 && rep.Family = "uint" && NumericRepresentation.isOffered rep
-               && (RangeSources.declaredRange rep |> Option.exists (fun range -> ValueRange.contains range (ValueRange.bounded 0I 255I))) then
-                match declarations |> List.filter (fun declaration -> declaration.Representation = rep) with
-                | [declaration] -> Some(rep, declaration.Node)
-                | _ -> None
-            else None))
+let private byteRepresentation = Clef.Compiler.Baker.Ingredients.StringBytes.byteRepresentation
 
 let private arrayElement (node: SemanticNode) =
     match applySubst node.Type with
@@ -333,24 +322,11 @@ let expandToBytes (graph: SemanticGraph) (source: SemanticNode) input =
         let! view = intrinsic IntrinsicModule.String "toBytes" [reference] [Types.stringType] source.Type
         let! length = intrinsic IntrinsicModule.Array "length" [view] [source.Type] Types.intType
         let! zero = intLit 0
-        let! allocation = intrinsic IntrinsicModule.Array "zeroCreate" [length] [Types.intType] source.Type
-        let! destination = letBind "__string_array" allocation source.Type
-        let! output = varRef "__string_array" (Some destination) source.Type
-        let! index = C.mutableBinding "__string_index" zero Types.intType
-        let! guardIndex = varRef "__string_index" (Some index) Types.intType
-        let! guard = intrinsic IntrinsicModule.Operators "op_LessThan" [guardIndex; length] [Types.intType; Types.intType] Types.boolType
-        let! currentIndex = varRef "__string_index" (Some index) Types.intType
-        let! current = intrinsic IntrinsicModule.Array "get" [view; currentIndex] [source.Type; Types.intType] Types.intType
-        let! store = intrinsic IntrinsicModule.Array "set" [output; currentIndex; current] [source.Type; Types.intType; Types.intType] Types.unitType
-        let! one = intLit 1
-        let! next = intrinsic IntrinsicModule.Operators "op_Addition" [currentIndex; one] [Types.intType; Types.intType] Types.intType
-        let! advance = C.assign index "__string_index" Types.intType next
-        let! body = C.block [currentIndex; current; store; advance] Types.unitType
-        let! loop = createWithChildren (SemanticKind.WhileLoop(guard, body)) Types.unitType [guard; body]
-        let! root = evaluateBefore [binding; view; length; destination; index; loop] output source.Type
-        return root, view, output, current, allocation, loop, store }
+        let! snapshot = intrinsic IntrinsicModule.Array "sub" [view;zero;length] [source.Type;Types.intType;Types.intType] source.Type
+        let! root = evaluateBefore [binding;view;length] snapshot source.Type
+        return root,view,snapshot }
     match run state parser with
-    | Matched(root, view, snapshot, current, allocation, loop, store), created ->
+    | Matched(root, view, snapshot), created ->
         let created = created |> List.map (fun node ->
             let range =
                 match node.Kind with
@@ -365,7 +341,5 @@ let expandToBytes (graph: SemanticGraph) (source: SemanticNode) input =
         | Some(representation, declaration) ->
             let edge = { Class = EdgeClass.Provenance; Role = EdgeRole.StringToBytesSnapshot; Sources = [input; view; snapshot]; Target = source.Id; Ordinal = 0 }
             let storage = { Class = EdgeClass.Range; Role = EdgeRole.StringByteStorage(0I, 255I, representation.Name); Sources = [source.Id; input; view; declaration]; Target = view; Ordinal = 0 }
-            let read = { Class = EdgeClass.Range; Role = EdgeRole.StringByteRead; Sources = [view; input; declaration]; Target = current; Ordinal = 0 }
-            let copy = { Class = EdgeClass.Provenance; Role = EdgeRole.CopyFrom; Sources = [view; current; loop; store; allocation; declaration]; Target = snapshot; Ordinal = 0 }
-            Some(root, created, [edge; storage; read; { read with Role = EdgeRole.StringByteRange(0I, 255I) }; copy])
+            Some(root, created, [edge; storage])
     | NoMatch reason, _ -> failwithf "String array snapshot recipe failed: %s" reason

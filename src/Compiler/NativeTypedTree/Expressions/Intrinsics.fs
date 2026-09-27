@@ -81,9 +81,9 @@ let private resolveSysOp (op: string) (range: SourceRange) : IntrinsicResolution
     let fullName = "Sys." + op
     match op with
     | "write" ->
-        // fd:int -> buffer:string -> int (bytes written)
+        // fd -> bounded native integer array -> explicit count -> signed result.
         let ty = NativeType.TFun(Types.intType,
-            NativeType.TFun(Types.stringType, Types.intType))
+            NativeType.TFun(NativeType.TApp(Types.arrayTyCon, [Types.intType]), NativeType.TFun(Types.intType, Types.intType)))
         Resolved (mkIntrinsic IntrinsicModule.Sys op IntrinsicCategory.Platform fullName, ty)
     | "read" ->
         // fd:int -> buffer:string -> int (bytes read)
@@ -1358,7 +1358,9 @@ module RangeSources =
         // element reads
         | _, IntrinsicModule.Array, "get", _ -> Result.ElementOf 0
         // the platform's read and write: the endpoint's declared return bound over the buffer's length
-        | _, IntrinsicModule.Sys, (("read" | "write") as endpoint), _ ->
+        | _, IntrinsicModule.Sys, "write", [ _; _; count ] -> declaredReturn ctx "write" count
+        | _, IntrinsicModule.Sys, "write", _ -> Result.Untabled
+        | _, IntrinsicModule.Sys, ("read" as endpoint), _ ->
             match args with
             | [ _; buffer ] -> declaredReturn ctx endpoint (bufferLength ctx buffer)
             | _ -> declaredReturn ctx endpoint (lengthRange ctx)

@@ -105,6 +105,11 @@
     <Compile Include="MonomorphizationMembershipCases.fs" />
     <Compile Include="ForeignReferenceCases.fs" />
     <Compile Include="BoundaryEmissionCases.fs" />
+    <Compile Include="IntrinsicWriteCases.fs" />
+    <Compile Include="NumericPublicationCases.fs" />
+    <Compile Include="NumericOperationCases.fs" />
+    <Compile Include="MemoryAccessCases.fs" />
+    <Compile Include="ArrayConstructionCases.fs" />
     <Compile Include="BorrowedViewCases.fs" />
     <Compile Include="LocalUnusedCases.fs" />
     <Compile Include="ModuleScopeCases.fs" />

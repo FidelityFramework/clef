@@ -79,6 +79,32 @@ module private CallableIngressFixture =
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "CallableIngress")>]
 type CallableIngressCases() =
     [<Fact>]
+    member _.``Source shape readers share complete formal ingress with retained participants`` () =
+        let fixture = CallableIngressFixture.create ()
+        let resolution = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve fixture.Graph
+        let reading = Ingress.analyzeWith fixture.Graph resolution
+        let ingress = Ingress.closedFormalInputs fixture.Graph resolution reading fixture.Formal |> Option.get
+        Assert.Equal<(NodeId * NodeId) list>(resolution.ParameterInputs[fixture.Formal],ingress.Inputs)
+        Assert.Contains(fixture.Formal,ingress.Participants)
+        Assert.True(Set.isSubset ingress.Closure.Participants ingress.Participants)
+        for site, actual in ingress.Inputs do
+            Assert.Contains(site,ingress.Participants)
+            Assert.Contains(actual,ingress.Participants)
+
+    [<Theory>]
+    [<InlineData("entry")>]
+    [<InlineData("hardware")>]
+    [<InlineData("kernel")>]
+    member _.``A retained actual argument census cannot authorize externally rooted formal shapes`` flavor =
+        let fixture = CallableIngressFixture.create ()
+        let root = match flavor with "hardware" -> DeclRoot.HardwareModule | "kernel" -> DeclRoot.KernelModule | _ -> DeclRoot.EntryPoint
+        let graph = { fixture.Graph with DeclarationRoots = (fixture.Binding,root) :: fixture.Graph.DeclarationRoots }
+        let resolution = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
+        Assert.NotEmpty resolution.ParameterInputs[fixture.Formal]
+        let reading = Ingress.analyzeWith graph resolution
+        Assert.True((Ingress.closedFormalInputs graph resolution reading fixture.Formal).IsNone)
+
+    [<Fact>]
     member _.``Closed executable ingress retains exact formal actual and call identities without forcing codata`` () =
         let fixture = CallableIngressFixture.create ()
         let graph = { fixture.Graph with Codata = lazy (failwith "Ingress forced downstream codata") }

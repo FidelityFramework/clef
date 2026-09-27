@@ -30,6 +30,7 @@ module SetRecipes = Clef.Compiler.Baker.Recipes.SetRecipes
 module OptionRecipes = Clef.Compiler.Baker.Recipes.OptionRecipes
 module ResultRecipes = Clef.Compiler.Baker.Recipes.ResultRecipes
 module SeqRecipes = Clef.Compiler.Baker.Recipes.SeqRecipes
+module StringRecipes = Clef.Compiler.Baker.Recipes.StringRecipes
 module NumericRecipes = Clef.Compiler.Baker.Recipes.NumericRecipes
 module MatchRecipes = Clef.Compiler.Baker.Recipes.MatchRecipes
 
@@ -169,15 +170,17 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Option, ("some" | "none") -> false
     | IntrinsicModule.Seq, "empty" -> false
     | IntrinsicModule.Seq, "getEnumerator" -> false
-    // String operations are atomic intrinsics witnessed directly (StringRecipes has
-    // no decomposition); declaring concat2 decomposable only produced a recipe
-    // failure that left the node untouched.
+    // String storage operations have separate owning source recipes.
     | IntrinsicModule.String, "concat2" -> false
     // Library schemes (design (c); Dimensional_Range_Design.md §5): compare-and-select and the
     // rounding functions decompose; truncate, sqrt, atan2 and the transcendentals are atomic.
     | IntrinsicModule.Math, ("abs" | "sign" | "min" | "max" | "clamp" | "floor" | "ceiling" | "round") -> true
     // Everything else
     | _ -> false
+
+let private reifiesValue (info: IntrinsicInfo) =
+    (info.Module = IntrinsicModule.String && info.Operation = "length") ||
+    ((info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result || info.Module = IntrinsicModule.Seq) && shouldDecomposeIntrinsic info)
 
 //-------------------------------------------------------------------------
 // Pass 3: Saturation Fan-Out (Recipe Creation)
@@ -191,8 +194,7 @@ let private needsSaturationBasic (node: SemanticNode) : bool =
     | SemanticKind.Match _ -> true
     | SemanticKind.UnionCase _ -> true  // DU construction needs lowering to DUConstruct
     | SemanticKind.Application _ -> true  // May or may not need decomposition, checked in recipe creation
-    | SemanticKind.Intrinsic info when
-        (info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result || info.Module = IntrinsicModule.Seq) && shouldDecomposeIntrinsic info -> true
+    | SemanticKind.Intrinsic info when reifiesValue info -> true
     | SemanticKind.Lambda(_, _, captures, _, LambdaContext.RegularClosure)
         when List.isEmpty captures -> true  // Zero-capture lambda may need closure pair (checked in recipe)
     | SemanticKind.VarRef (_, Some _) -> true  // A named function in value position is elaborated (checked in recipe)
@@ -377,8 +379,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
         // They are not bare value occurrences and must not synthesize deferred
         // sequence bodies whose cuts have no live delimiter.
         NotApplicable "Unreachable Seq intrinsic has no live value occurrence"
-    | SemanticKind.Intrinsic info when
-        (info.Module = IntrinsicModule.Option || info.Module = IntrinsicModule.Result || info.Module = IntrinsicModule.Seq) && shouldDecomposeIntrinsic info ->
+    | SemanticKind.Intrinsic info when reifiesValue info ->
         // A call head is consumed by its application's recipe. Only value occurrences
         // need reification; explicit TypeApp may put a TypeAnnotation between the two.
         let rec isHead candidate =
@@ -399,6 +400,7 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                 match info.Module with
                 | IntrinsicModule.Option -> OptionRecipes.tryReifyValue
                 | IntrinsicModule.Result -> ResultRecipes.tryReifyValue
+                | IntrinsicModule.String -> StringRecipes.tryReifyValue
                 | _ -> SeqRecipes.tryReifyValue
             match reify ctx info.Operation node.Type (enclosingFunctionName graph node.Id) with
             | Some result -> RecipeCreated (toRecipe node.Id name result)
@@ -582,14 +584,15 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                         calleeUse seen parent
                     | _ -> false
             calleeUse Set.empty node
-        // A field of a [<HardwareModule>] binding's Design record (Step = step) is a declaration
-        // read structurally by the witness (hw.instance of the named module), not a closure.
-        let rec inHardwareModuleDeclaration (nodeId: NodeId) =
+        // Spatial design fields refer to source declarations. Their owners
+        // settle the exact Step/Compute identity and external ingress; these
+        // references do not construct runtime closure values.
+        let rec inSpatialModuleDeclaration (nodeId: NodeId) =
             match SemanticGraph.tryGetNode nodeId graph with
-            | Some { Kind = SemanticKind.Binding (_, _, _, Some DeclRoot.HardwareModule) } -> true
+            | Some { Kind = SemanticKind.Binding (_, _, _, Some (DeclRoot.HardwareModule | DeclRoot.KernelModule)) } -> true
             | Some { Kind = SemanticKind.Binding _ } -> false
             | Some { Kind = SemanticKind.Lambda _ } -> false
-            | Some { Parent = Some parentId } -> inHardwareModuleDeclaration parentId
+            | Some { Parent = Some parentId } -> inSpatialModuleDeclaration parentId
             | _ -> false
         let rec resolved (ty: NativeType) =
             match ty with
@@ -609,8 +612,8 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
             NotApplicable "Reference is not to a capture-free named function"
         | Some _ when inCallPosition || isNativeCallbackArgument graph node ->
             NotApplicable "Function reference in call position"
-        | Some _ when node.Parent |> Option.map inHardwareModuleDeclaration |> Option.defaultValue false ->
-            NotApplicable "Declaration field of a hardware module Design"
+        | Some _ when node.Parent |> Option.map inSpatialModuleDeclaration |> Option.defaultValue false ->
+            NotApplicable "Declaration field of a spatial module design"
         | Some arity ->
             match resolved node.Type, signature arity node.Type with
             | (NativeType.TFun _ as funcType), Some(domains, resultType) ->

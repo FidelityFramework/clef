@@ -36,6 +36,7 @@ let private local (graph: SemanticGraph) owner generator (node: SemanticNode) =
     match node.Kind with
     | SemanticKind.Sequential ids | SemanticKind.TupleExpr ids
     | SemanticKind.ArrayExpr ids | SemanticKind.ListExpr ids -> eager ids
+    | SemanticKind.ArrayAllocate count -> eager [count]
     | SemanticKind.Application (callee, args) -> eager (callee :: args)
     // The false path terminates the activation; only successful requirements
     // return to the following source operation. Never treat one as a value.
@@ -106,11 +107,18 @@ let private local (graph: SemanticGraph) owner generator (node: SemanticNode) =
                 @ E.ordered owner node.Id [1, value] EvaluationTransfer.Continue, [value])
         | None -> pending EvaluationResidual.MissingOperand [value]
         | _ -> pending EvaluationResidual.InvalidShape [target; value]
+    | SemanticKind.CellAddress binding ->
+        if resident binding then
+            [E.operand owner node.Id 0 EvaluationAccess.Storage binding]
+            @ E.ordered owner node.Id [] EvaluationTransfer.Continue, []
+        else pending EvaluationResidual.MissingOperand [binding]
+    | SemanticKind.ElementAddress(buffer, index) -> eager [buffer; index]
+    | SemanticKind.FieldAddress(receiver, _) | SemanticKind.Reborrow receiver -> eager [receiver]
     | SemanticKind.RecordExpr (fields, copyFrom) -> eager (Option.toList copyFrom @ List.map snd fields)
     | SemanticKind.UnionCase (_, _, payload)
     | SemanticKind.DUConstruct (_, _, payload, None) -> eager (Option.toList payload)
     | SemanticKind.DUGetTag (value, _) | SemanticKind.DUEliminate (value, _, _, _)
-    | SemanticKind.TupleGet (value, _) | SemanticKind.FieldGet (value, _)
+    | SemanticKind.TupleGet (value, _) | SemanticKind.FieldGet (value, _) | SemanticKind.StringByteBorrow value
     | SemanticKind.TypeAnnotation (value, _) | SemanticKind.Deref value
     | SemanticKind.LazyForce value | SemanticKind.EagerExpr value
     | SemanticKind.TraitCall (_, _, value) -> eager [value]

@@ -856,8 +856,9 @@ let resolveIndexElementType (objType: NativeType) (env: TypeEnv) (range: SourceR
 let resolveFieldType (baseType: NativeType) (fieldName: string) (env: TypeEnv) (range: SourceRange) : NativeType =
     let resolvedType = applySubst baseType
 
-    // 1. Check intrinsic members (string.Pointer, string.Length, array.Length)
+    // 1. Check intrinsic members (string.Bytes, string.Length, array.Length)
     match fieldName with
+    | "Bytes" when isStringType resolvedType -> NativeType.TApp(Types.arrayTyCon, [Types.intType])
     | "Length" when isStringType resolvedType ->
         Types.intType
     | "Length" when isArrayType resolvedType ->
@@ -909,6 +910,7 @@ let resolveFieldType (baseType: NativeType) (fieldName: string) (env: TypeEnv) (
 let dischargeMemberConstraints (env: TypeEnv) (constraints: Constraint list) =
     let memberOf ty name =
         match name with
+        | "Bytes" when isStringType ty -> Some (NativeType.TApp(Types.arrayTyCon, [Types.intType]))
         | "Length" when isStringType ty || isArrayType ty -> Some Types.intType
         | _ -> tryResolveRecordFieldType ty name env
     let rec loop pending errors =

@@ -83,6 +83,22 @@ let main _ =
         for binding in bindings do
             let callable = DispatchEnvironments.tryKnown graph binding.Id
             Assert.True(callable.IsSome, "Returned composition needs one real code/environment schema and its own actual instance.")
+        let factories =
+            graph.Nodes.Values |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.Binding(name, _, _, _) -> name.StartsWith "__callable_dispatch_"
+                | _ -> false) |> Seq.toList
+        Assert.Equal(2, factories.Length)
+        for factory in factories do
+            let owner = graph.Nodes[factory.Parent |> Option.defaultWith (fun () -> failwith "A dispatch factory lost its source owner.")]
+            match owner.Kind with
+            | SemanticKind.ModuleDef(_, members) -> Assert.Contains(factory.Id, members)
+            | _ -> failwith "A dispatch factory is not placed in its source module."
+            Assert.Empty owner.Children
+            Assert.Contains(factory.Id, graph.ModuleClassifications.Value[owner.Id].Definitions)
+            Assert.Contains(graph.Edges, fun edge ->
+                edge.Class = EdgeClass.Reference && edge.Role = EdgeRole.Member &&
+                edge.Target = owner.Id && edge.Sources = [factory.Id])
         let legacy =
             graph.Nodes.Values |> Seq.filter (fun node ->
                 match node.IsReachable, node.Kind with

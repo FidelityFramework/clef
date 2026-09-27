@@ -55,7 +55,13 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) =
                            (SemanticKind.Lambda(["__callable_alternative", Types.intType, tag], dispatcher, [], None, LambdaContext.RegularClosure))
                            factoryType [tag; dispatcher]
         let name = sprintf "__callable_dispatch_%d" (NodeId.value source.Id)
-        let! declaration = letBind name factory factoryType
+        let! declarationState = getUserState
+        let declarationNode = mkNode declarationState (SemanticKind.Binding(name, false, false, None)) factoryType [factory]
+        let declaration = declarationNode.Id
+        // The factory originates at this formal's source occurrence. Settle
+        // its declaration placement before extracting the captured dispatcher.
+        do! declareInSourceModule graph source declarationNode
+        do! withBinding name declaration factoryType
         do! updateUserState (fun state ->
             let updated =
                 state.EmittedNodes |> List.map (fun node ->

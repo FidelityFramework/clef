@@ -125,10 +125,12 @@ let remapKindReferences (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKin
         SemanticKind.TupleExpr (List.map update elements)
     | SemanticKind.ArrayExpr elements ->
         SemanticKind.ArrayExpr (List.map update elements)
+    | SemanticKind.ArrayAllocate count -> SemanticKind.ArrayAllocate(update count)
     | SemanticKind.ListExpr elements ->
         SemanticKind.ListExpr (List.map update elements)
     | SemanticKind.FieldGet (expr, fieldName) ->
         SemanticKind.FieldGet (update expr, fieldName)
+    | SemanticKind.StringByteBorrow source -> SemanticKind.StringByteBorrow(update source)
     | SemanticKind.FieldSet (expr, fieldName, value) ->
         SemanticKind.FieldSet (update expr, fieldName, update value)
     | SemanticKind.IndexGet (expr, index) ->
@@ -147,6 +149,10 @@ let remapKindReferences (replacementMap: Map<NodeId, NodeId>) (kind: SemanticKin
         SemanticKind.TypeTest (update expr, ty)
     | SemanticKind.AddressOf (expr, isByref) ->
         SemanticKind.AddressOf (update expr, isByref)
+    | SemanticKind.CellAddress binding -> SemanticKind.CellAddress(update binding)
+    | SemanticKind.ElementAddress(buffer, index) -> SemanticKind.ElementAddress(update buffer, update index)
+    | SemanticKind.FieldAddress(receiver, field) -> SemanticKind.FieldAddress(update receiver, field)
+    | SemanticKind.Reborrow source -> SemanticKind.Reborrow(update source)
     | SemanticKind.Deref expr ->
         SemanticKind.Deref (update expr)
     | SemanticKind.Set (target, value) ->

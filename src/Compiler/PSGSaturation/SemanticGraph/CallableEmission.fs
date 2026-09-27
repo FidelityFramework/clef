@@ -138,14 +138,18 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
     let transports =
         callableOccurrences |> Seq.map (fun destination -> destination, transportPath destination) |> Map.ofSeq
     let callInstance = CallableInstantiations.callReader graph
+    let completedCalls, completedFailures = Curry.completedCalls graph codata.Curry resolution
+    errors.AddRange completedFailures
     let calls =
         resolution.Calls |> choose (fun site call ->
             match call.Complete, call.Unknown, call.Targets with
             | true, false, [target] ->
+                let completed = completedCalls.TryFind site
                 match graph.Nodes.TryFind target.Lambda, graph.Nodes.TryFind site with
                 | Some { Kind = SemanticKind.Lambda(parameters, body, [], _, _) },
                   Some { Kind = SemanticKind.Application(callee, arguments); Children = children }
-                    when children = callee :: arguments && arguments = target.Arguments && parameters.Length = arguments.Length ->
+                    when children = callee :: arguments && arguments = target.Arguments &&
+                         (parameters.Length = arguments.Length || completed.IsSome) ->
                     if parameters |> List.exists (fun (_, ty, _) -> not (freeMeasureVars ty).IsEmpty) then
                         match callInstance site target.Lambda with
                         | Some proof ->
@@ -158,9 +162,10 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
                                          Reason = $"Baker callable instantiation did not settle a dimensional call instance for call site {NodeId.value site}: callee {NodeId.value target.Lambda} has measure-polymorphic formals and no checked scheme instance was proved along its actual callee/environment path." }
                             None
                     else
-                        Some { Site = site; Implementation = target.Lambda; Parameters = parameters; Arguments = arguments
-                               Result = body; SignatureData = Set.empty
-                               Participants = Set.ofList (site :: callee :: target.Lambda :: body :: (arguments @ (parameters |> List.map (fun (_, _, id) -> id)))) }
+                        completed |> Option.orElseWith (fun () ->
+                            Some { Site = site; Implementation = target.Lambda; Parameters = parameters; Arguments = arguments
+                                   Result = body; SignatureData = Set.empty
+                                   Participants = Set.ofList (site :: callee :: target.Lambda :: body :: (arguments @ (parameters |> List.map (fun (_, _, id) -> id)))) })
                 | _ -> None
             | _ -> None)
     let symbols, declarations = declarations graph
@@ -278,6 +283,14 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
         if Set.contains id seen then Result.Error seen else
         let seen = Set.add id seen
         match graph.Nodes.TryFind id with
+        | Some { Kind = SemanticKind.VarRef(_, Some definition) } ->
+            match graph.Nodes.TryFind definition with
+            | Some { Kind = SemanticKind.PatternBinding _ } -> aliasTarget seen definition
+            | Some { Kind = SemanticKind.Binding(_, false, _, _) }
+                when not (ProgramInitialization.isSlotBinding graph definition) -> aliasTarget seen definition
+            // A mutable or program-slot read is an executable observation;
+            // its identity cannot collapse to the storage or initializer.
+            | _ -> Result.Ok(id, seen)
         | Some { Kind = SemanticKind.PatternBinding _; Children = child :: _ } when graph.Nodes.ContainsKey child -> aliasTarget seen child
         | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = child :: _ }
             when not (ProgramInitialization.isSlotBinding graph id) && graph.Nodes.ContainsKey child -> aliasTarget seen child

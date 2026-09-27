@@ -915,6 +915,29 @@ let caseOf (graph: SemanticGraph) (id: NodeId) : (SemanticNode * string * NodeId
     | Some (({ Kind = SemanticKind.DUConstruct (name, _, payload, _) } : SemanticNode) as node) -> Some (node, name, payload)
     | _ -> None
 
+type DeclaredSyscall = { Node: NodeId; Surface: NodeId; Number: bigint }
+
+/// Capability is an endpoint in the selected description, never a runtime default.
+let syscall (graph: SemanticGraph) (platform: DeclaredPlatform) name =
+    let endpoints =
+        recordOf graph platform.Node |> Option.toList |> List.collect (fun (_, fields) ->
+            field "Surfaces" fields |> Option.bind (elementsOf graph) |> Option.defaultValue []
+            |> List.collect (fun surface ->
+                recordOf graph surface |> Option.toList |> List.collect (fun (owner, fields) ->
+                    field "Endpoints" fields |> Option.bind (elementsOf graph) |> Option.defaultValue []
+                    |> List.choose (fun endpoint ->
+                        recordOf graph endpoint |> Option.bind (fun (node, fields) ->
+                            if field "Name" fields |> Option.bind (stringOf graph) = Some name then Some(owner.Id, node, fields) else None)))))
+    match endpoints with
+    | [surface, node, fields] ->
+        match field "Location" fields |> Option.bind (stringOf graph), field "Address" fields |> Option.bind (stringOf graph) with
+        | Some location, Some address when location = BAREWire.Platform.EndpointKind.SyscallNumber ->
+            match System.Numerics.BigInteger.TryParse address with
+            | true, number when number >= 0I -> Some { Node = node.Id; Surface = surface; Number = number }
+            | _ -> None
+        | _ -> None
+    | _ -> None
+
 /// The two elements of a pair payload (`Integer (Signed, 32)`).
 let private pairOf (graph: SemanticGraph) (id: NodeId) : (NodeId * NodeId) option =
     match valueOf graph id with

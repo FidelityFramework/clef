@@ -54,19 +54,27 @@ let declareInSourceModule (graph: SemanticGraph) (source: SemanticNode) (declara
         else
             let seen = Set.add child.Id seen
             match child.Parent |> Option.bind graph.Nodes.TryFind with
-            | Some parent when List.contains child.Id parent.Children ->
+            | Some parent ->
                 match parent.Kind with
                 | SemanticKind.ModuleDef(name, members) when List.contains child.Id members -> Ok(parent, name, members)
                 | SemanticKind.ModuleDef _ -> Error "The closure source occurrence is absent from its lexical module membership."
-                | _ -> owner seen parent
-            | _ -> Error "The closure source occurrence has no complete structural path to its lexical module."
+                // Startup owns executable initialization and therefore clears
+                // a module's structural children. Its lexical members remain
+                // declaration authority; other steps must retain containment.
+                | _ when List.contains child.Id parent.Children -> owner seen parent
+                | _ -> Error $"The closure source occurrence {NodeId.value child.Id} is absent from parent {NodeId.value parent.Id}'s structural children {parent.Children |> List.map NodeId.value}."
+            | None ->
+                Error $"The closure source occurrence {NodeId.value child.Id} has no lexical owner at parent {child.Parent |> Option.map NodeId.value}."
     saturation {
         match owner Set.empty source with
         | Error reason -> return! fail (XParsec.ErrorType.Message reason)
         | Ok(moduleNode, name, members) ->
             do! emit { declaration with Parent = Some moduleNode.Id }
+            // Module membership authorizes its definition occurrences through
+            // source classification. Preserve the settled execution spine;
+            // extracted code must not reopen module initialization children.
             do! enrich moduleNode (SemanticKind.ModuleDef(name, members @ [declaration.Id])) moduleNode.Type
-                           (moduleNode.Children @ [declaration.Id]) moduleNode.EmissionStrategy false
+                           moduleNode.Children moduleNode.EmissionStrategy false
     }
 
 /// Refresh the kind-derived incidence of enriched nodes. Other relations

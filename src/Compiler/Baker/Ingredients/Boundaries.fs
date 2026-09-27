@@ -2,6 +2,7 @@
 module Clef.Compiler.Baker.Ingredients.Boundaries
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration
 open Clef.Compiler.Baker.Ingredients.Obligations
@@ -19,27 +20,75 @@ let platformPremise (platform: PlatformContext option) =
 /// Closed immutable observations; native types become identities before any
 /// later inference-cell mutation can occur. Only settlement calls readers.
 let premise (node: SemanticNode) : BoundarySourcePremise =
+    let literal = function
+        | NativeLiteral.String value -> "string", [value], []
+        | NativeLiteral.Int(value, kind) -> "integer", [string kind], [bigint value]
+        | NativeLiteral.UInt(value, kind) -> "unsigned-integer", [string kind], [bigint value]
+        | NativeLiteral.Bool value -> "boolean", [], [if value then 1I else 0I]
+        | NativeLiteral.Char value -> "character", [], [bigint (int value)]
+        | NativeLiteral.Float(value, kind) -> "real", [string kind], [bigint (System.BitConverter.DoubleToInt64Bits value)]
+        | NativeLiteral.Decimal value -> "decimal", [], System.Decimal.GetBits value |> Array.map bigint |> Array.toList
+        | NativeLiteral.ByteArray values -> "bytes", [], values |> Array.map bigint |> Array.toList
+        | NativeLiteral.UInt16Array values -> "uint16-array", [], values |> Array.map bigint |> Array.toList
+        | NativeLiteral.Unit -> "unit", [], []
     let form, text, numbers =
         match node.Kind with
         | SemanticKind.RecordExpr(fields, copy) -> "record", List.map fst fields, [if copy.IsSome then 1I else 0I]
         | SemanticKind.ArrayExpr _ -> "array", [], []
+        | SemanticKind.ArrayAllocate _ -> "array-allocation", [], []
         | SemanticKind.TupleExpr _ -> "tuple", [], []
         | SemanticKind.UnionCase(name, index, _) -> "case", [name], [bigint index]
         | SemanticKind.DUConstruct(name, index, _, _) -> "settled-case", [name], [bigint index]
-        | SemanticKind.Literal(NativeLiteral.String value) -> "string", [value], []
-        | SemanticKind.Literal(NativeLiteral.Int(value, kind)) -> "integer", [string kind], [bigint value]
-        | SemanticKind.Literal(NativeLiteral.UInt(value, kind)) -> "unsigned-integer", [string kind], [bigint value]
-        | SemanticKind.Literal(NativeLiteral.Bool value) -> "boolean", [], [if value then 1I else 0I]
-        | SemanticKind.Literal NativeLiteral.Unit -> "unit", [], []
+        | SemanticKind.Literal value -> literal value
         | SemanticKind.VarRef(name, _) -> "reference", [name], []
         | SemanticKind.Binding(name, mutable', recursive', _) -> "binding", [name], [if mutable' then 1I else 0I; if recursive' then 1I else 0I]
         | SemanticKind.TypeAnnotation _ -> "annotation", [], []
         | SemanticKind.Quote _ -> "quotation", [], []
         | SemanticKind.Application _ -> "application", [], []
+        | SemanticKind.ContinuationDispatch(_, cases, _) -> "continuation-dispatch", [], cases |> List.map (fst >> bigint)
+        | SemanticKind.FieldGet(_, name) -> "field", [name], []
+        | SemanticKind.StringByteBorrow _ -> "string-byte-borrow", [], []
+        | SemanticKind.CellAddress _ -> "cell-address", [], []
+        | SemanticKind.ElementAddress _ -> "element-address", [], []
+        | SemanticKind.FieldAddress(_, name) -> "field-address", [name], []
+        | SemanticKind.Reborrow _ -> "reborrow", [], []
         | SemanticKind.Intrinsic info -> "intrinsic", [string info.Module; info.Operation], []
         | SemanticKind.Lambda(formals, _, captures, _, context) -> "lambda", string context :: List.map (fun (name, _, _) -> name) formals, [bigint formals.Length; bigint captures.Length]
         | SemanticKind.ModuleDef(name, _) -> "module", [name], []
+        | SemanticKind.TypeDef(name, kind, _) ->
+            match kind with
+            | TypeDefKind.RecordDef fields -> "record-definition", name :: List.map fst fields, [bigint fields.Length]
+            | TypeDefKind.UnionDef cases ->
+                let names = cases |> List.collect (fun (name, fields) -> name :: (fields |> List.collect (fun (name, _) -> match name with None -> ["unnamed"] | Some name -> ["named"; name])))
+                "union-definition", name :: names, cases |> List.map (snd >> List.length >> bigint)
+            | TypeDefKind.EnumDef cases ->
+                let forms = cases |> List.map (fun (name, value) -> let form, text, numbers = literal value in name :: form :: text, numbers)
+                "enum-definition", name :: (forms |> List.collect fst), forms |> List.collect (fun (text, numbers) -> bigint text.Length :: bigint numbers.Length :: numbers)
+            | TypeDefKind.AbbreviationDef _ -> "abbreviation-definition", [name], []
+            | TypeDefKind.ClassDef -> "class-definition", [name], []
+            | TypeDefKind.StructDef -> "struct-definition", [name], []
+            | TypeDefKind.InterfaceDef -> "interface-definition", [name], []
         | _ -> "other-incidence", [], []
+    let embeddedTypes =
+        match node.Kind with
+        | SemanticKind.Lambda(formals, _, captures, _, _) -> (formals |> List.map (fun (_, ty, _) -> ty)) @ (captures |> List.map _.Type)
+        | SemanticKind.TypeAnnotation(_, ty) -> [ty]
+        | SemanticKind.TypeDef(_, TypeDefKind.RecordDef fields, _) -> fields |> List.map snd
+        | SemanticKind.TypeDef(_, TypeDefKind.UnionDef cases, _) -> cases |> List.collect (snd >> List.map snd)
+        | SemanticKind.TypeDef(_, TypeDefKind.AbbreviationDef target, _) -> [target]
+        | _ -> []
+    let rec constructors ty =
+        let own tc = [Clef.Compiler.NativeTypedTree.TypeIdentities.constructor tc, tc.Layout, tc.FieldCount, tc.CaseCount, tc.Qualifiers, tc.FieldPinAttributes]
+        match applySubst ty with
+        | NativeType.TApp(tc, arguments) -> own tc @ List.collect constructors arguments
+        | NativeType.TNum(carrier, _) -> CarrierRef.tryConstructor carrier |> Option.map own |> Option.defaultValue []
+        | NativeType.TTuple(arguments, _) -> List.collect constructors arguments
+        | NativeType.TFun(argument, result) | NativeType.TMap(argument, result) -> constructors argument @ constructors result
+        | NativeType.TAnon(fields, _) -> fields |> List.collect (snd >> constructors)
+        | NativeType.TUnion(tc, cases) -> own tc @ (cases |> List.collect (fun case -> case.Fields |> List.collect (snd >> constructors)))
+        | NativeType.TForall(_, ty) | NativeType.TByref(ty, _) | NativeType.TNativePtr ty | NativeType.TLazy ty
+        | NativeType.TSeq ty | NativeType.TSeqEnumerator ty | NativeType.TList ty | NativeType.TSet ty -> constructors ty
+        | _ -> []
     let stringMetadata name =
         match node.Metadata.TryFind name with Some (MetadataValue.String value) -> Some value | _ -> None
     let metadata = node.Metadata |> Map.fold (fun facts name value ->
@@ -59,11 +108,8 @@ let premise (node: SemanticNode) : BoundarySourcePremise =
                 References = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node |> List.collect _.Sources
                 Children = node.Children; Parent = node.Parent
                 SourceType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type }
-      EmbeddedTypes =
-          (match node.Kind with
-           | SemanticKind.Lambda(formals, _, captures, _, _) -> (formals |> List.map (fun (_, ty, _) -> ty)) @ (captures |> List.map _.Type)
-           | SemanticKind.TypeAnnotation(_, ty) -> [ty]
-           | _ -> []) |> List.map Clef.Compiler.NativeTypedTree.TypeIdentities.ofType
+      EmbeddedTypes = embeddedTypes |> List.map Clef.Compiler.NativeTypedTree.TypeIdentities.ofType
+      ConstructorFacts = (node.Type :: embeddedTypes) |> List.collect constructors
       Reachable = node.IsReachable; Range = node.ValueRange
       ExternLibrary = stringMetadata "FidelityExtern.Library"; ExternSymbol = stringMetadata "FidelityExtern.Symbol"
       HasExtern = node.Metadata.ContainsKey "FidelityExtern.Library" || node.Metadata.ContainsKey "FidelityExtern.Symbol"

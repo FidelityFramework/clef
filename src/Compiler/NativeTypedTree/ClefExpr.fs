@@ -217,6 +217,9 @@ and [<RequireQualifiedAccess; NoComparison; NoEquality>] ClefExpr =
         elements: ClefExpr list *
         ty: NativeType
 
+    /// Source-owned storage only; initialization is explicit in the PSG.
+    | ArrayAllocate of count: ClefExpr * ty: NativeType
+
     /// List expression: [ e1; e2; ... ]
     | ListExpr of
         elements: ClefExpr list *
@@ -552,6 +555,7 @@ module ClefExpr =
             | SemanticKind.ArrayExpr elementIds ->
                 let elements = elementIds |> List.map (fromNode graph)
                 ClefExpr.ArrayExpr(elements, node.Type)
+            | SemanticKind.ArrayAllocate count -> ClefExpr.ArrayAllocate(fromNode graph count, node.Type)
 
             // List expression
             | SemanticKind.ListExpr elementIds ->
@@ -562,6 +566,7 @@ module ClefExpr =
             | SemanticKind.FieldGet(exprId, fieldName) ->
                 let expr = fromNode graph exprId
                 ClefExpr.FieldGet(expr, fieldName, node.Type)
+            | SemanticKind.StringByteBorrow source -> ClefExpr.FieldGet(fromNode graph source, "Bytes", node.Type)
 
             // Field set
             | SemanticKind.FieldSet(exprId, fieldName, valueId) ->
@@ -614,6 +619,22 @@ module ClefExpr =
             | SemanticKind.AddressOf(exprId, isByref) ->
                 let expr = fromNode graph exprId
                 ClefExpr.AddressOf(expr, isByref, node.Type)
+            | SemanticKind.CellAddress binding ->
+                match graph.Nodes.TryFind binding with
+                | Some { Kind = SemanticKind.Binding(name, true, _, _); Type = ty } ->
+                    let variable = ClefExpr.Variable(name, ty, true, Some binding)
+                    ClefExpr.AddressOf(variable, (match node.Type with NativeType.TNativePtr _ -> false | _ -> true), node.Type)
+                | _ -> ClefExpr.Error("Address-of lost its mutable cell declaration", node.Range)
+            | SemanticKind.ElementAddress(buffer, index) ->
+                let elementType = match node.Type with NativeType.TByref(ty, _) | NativeType.TNativePtr ty -> ty | _ -> node.Type
+                let place = ClefExpr.IndexGet(fromNode graph buffer, fromNode graph index, elementType)
+                ClefExpr.AddressOf(place, (match node.Type with NativeType.TNativePtr _ -> false | _ -> true), node.Type)
+            | SemanticKind.FieldAddress(receiver, field) ->
+                let elementType = match node.Type with NativeType.TByref(ty, _) | NativeType.TNativePtr ty -> ty | _ -> node.Type
+                let place = ClefExpr.FieldGet(fromNode graph receiver, field, elementType)
+                ClefExpr.AddressOf(place, (match node.Type with NativeType.TNativePtr _ -> false | _ -> true), node.Type)
+            | SemanticKind.Reborrow reference ->
+                ClefExpr.AddressOf(fromNode graph reference, true, node.Type)
 
             // Dereference
             | SemanticKind.Deref exprId ->
@@ -1001,6 +1022,7 @@ module ClefExpr =
         | ClefExpr.TupleExpr(elements, _) -> sprintf "Tuple(%d)" (List.length elements)
         | ClefExpr.TupleGet(_, index, _) -> sprintf "TupleGet[%d]" index
         | ClefExpr.ArrayExpr(elements, _) -> sprintf "Array(%d)" (List.length elements)
+        | ClefExpr.ArrayAllocate _ -> "ArrayAllocate"
         | ClefExpr.ListExpr(elements, _) -> sprintf "List(%d)" (List.length elements)
         | ClefExpr.FieldGet(_, name, _) -> sprintf "FieldGet(.%s)" name
         | ClefExpr.FieldSet(_, name, _) -> sprintf "FieldSet(.%s)" name
