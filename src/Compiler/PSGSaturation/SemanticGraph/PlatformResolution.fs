@@ -117,6 +117,17 @@ type DeclaredCore = {
     Representations: DeclaredRepresentation list
 }
 
+/// Transport the resolved source runtime vocabulary; project claims never
+/// replace this declaration and remain available for consistency checking.
+let runtimeModel (core: DeclaredCore) : RuntimeModel option =
+    match core.Runtime with
+    | "libc" -> Some RuntimeModel.Libc
+    | "freestanding" -> Some RuntimeModel.Freestanding
+    | "bare" -> Some RuntimeModel.Bare
+    | "rocm" -> Some RuntimeModel.ROCm
+    | "xdna" -> Some RuntimeModel.XDNA
+    | _ -> None
+
 /// A declared return bound of an endpoint (Dimensional_Range_Design.md, ruling
 /// 2 of CS-12): read from a Contract whose `AtMost` names a parameter, with its
 /// `Floor`; the endpoint's return lies in `[Floor, hi(AtMost)]`. Mirrors the
@@ -908,31 +919,48 @@ let caseOf (graph: SemanticGraph) (id: NodeId) : (SemanticNode * string * NodeId
 let private pairOf (graph: SemanticGraph) (id: NodeId) : (NodeId * NodeId) option =
     match valueOf graph id with
     | Some ({ Kind = SemanticKind.TupleExpr [ a; b ] } : SemanticNode) -> Some (a, b)
-    | Some ({ Children = [ a; b ] } : SemanticNode) -> Some (a, b)
     | _ -> None
 
 /// A `TypeRef` as declared: the bits and range of an integer or boolean reference, None for a
 /// reference that carries no integer (`Float`, `Pointer`, `Void`, `Named`), a finding for a
 /// case the vocabulary does not name, a payload the reader cannot read, or a width of no bits.
-let private readTypeRef (graph: SemanticGraph) (id: NodeId) : Result<(int * ValueRange) option, DeclarationFinding> =
+[<RequireQualifiedAccess>]
+type DeclaredTypeRef =
+    | Scalar of BoundaryScalar
+    | Void
+    | Float of int
+    | Pointer of int
+    | Named of string
+
+let scalarRange = function
+    | BoundaryScalar.Boolean -> 1, ValueRange.boolean
+    | BoundaryScalar.Integer(bits, true) -> bits, ValueRange.twosComplement bits
+    | BoundaryScalar.Integer(bits, false) -> bits, ValueRange.unsignedOf bits
+
+let private numericType = function
+    | DeclaredTypeRef.Scalar scalar -> Some (scalarRange scalar)
+    | _ -> None
+
+/// The one typed TypeRef reader used by range and physical boundary settlement.
+let readTypeRef (graph: SemanticGraph) (id: NodeId) : Result<DeclaredTypeRef, DeclarationFinding> =
     match caseOf graph id with
     | Some (node, "Integer", Some payload) ->
         match pairOf graph payload with
         | Some (signId, bitsId) ->
             match caseOf graph signId, int64Of graph bitsId with
-            | Some (_, "Signed", _), Some bits when bits > 0L -> Ok (Some (int bits, ValueRange.twosComplement (int bits)))
-            | Some (_, "Unsigned", _), Some bits when bits > 0L -> Ok (Some (int bits, ValueRange.unsignedOf (int bits)))
-            | Some (_, ("Signed" | "Unsigned"), _), Some bits -> Error (findingAt node DeclarationDefect.Invalid (sprintf "an Integer of %d bits; a width is a positive number of bits" bits))
+            | Some (_, "Signed", None), Some bits when bits > 0L && bits <= int64 System.Int32.MaxValue -> Ok (DeclaredTypeRef.Scalar (BoundaryScalar.Integer(int bits, true)))
+            | Some (_, "Unsigned", None), Some bits when bits > 0L && bits <= int64 System.Int32.MaxValue -> Ok (DeclaredTypeRef.Scalar (BoundaryScalar.Integer(int bits, false)))
+            | Some (_, ("Signed" | "Unsigned"), None), Some bits -> Error (findingAt node DeclarationDefect.Invalid (sprintf "an Integer of %d bits; a width must be positive and representable by the declaration reader" bits))
             | _ -> Error (findingAt node DeclarationDefect.Malformed "an Integer's payload must be a Signedness case and an integer literal")
         | None -> Error (findingAt node DeclarationDefect.Malformed "an Integer's payload must be a pair (Signed | Unsigned, bits)")
     | Some (node, (("Float" | "Pointer") as case), Some payload) ->
         match int64Of graph payload with
-        | Some bits when bits > 0L -> Ok None
+        | Some bits when bits > 0L && bits <= int64 System.Int32.MaxValue -> Ok (if case = "Float" then DeclaredTypeRef.Float (int bits) else DeclaredTypeRef.Pointer (int bits))
         | Some bits -> Error (findingAt node DeclarationDefect.Invalid (sprintf "a %s of %d bits; a width is a positive number of bits" case bits))
         | None -> Error (findingAt node DeclarationDefect.Malformed (sprintf "a %s's bits must be an integer literal" case))
-    | Some (_, "Bool", _) -> Ok (Some (1, ValueRange.boolean))
-    | Some (_, "Void", _) -> Ok None
-    | Some (_, "Named", Some payload) when (stringOf graph payload).IsSome -> Ok None
+    | Some (_, "Bool", None) -> Ok (DeclaredTypeRef.Scalar BoundaryScalar.Boolean)
+    | Some (_, "Void", None) -> Ok DeclaredTypeRef.Void
+    | Some (_, "Named", Some payload) when (stringOf graph payload).IsSome -> Ok (DeclaredTypeRef.Named (stringOf graph payload |> Option.get))
     | Some (node, "Named", _) -> Error (findingAt node DeclarationDefect.Malformed "a Named TypeRef's payload must be a string literal naming the record")
     | Some (node, other, _) -> Error (findingAt node DeclarationDefect.Invalid (sprintf "'%s' is not a TypeRef case the BAREWire vocabulary names" other))
     | None -> Error (findingOn graph id DeclarationDefect.Malformed "a Type must be a TypeRef case (Integer, Float, Pointer, Bool, Void, Named)")
@@ -955,6 +983,7 @@ let private readParameter (graph: SemanticGraph) (id: NodeId) : Result<(string *
             | Error finding -> Error finding
             | Ok passing ->
             readTypeRef graph typeId
+            |> Result.map numericType
             |> Result.map (Option.map (fun (bits, range) -> { Node = node.Id; Name = name; Bits = bits; Range = range }))
             |> Result.map (fun declared ->
                 let readOnly = passing |> Option.exists (fun (_, name, _) -> name = "ReadOnlyReference")
@@ -1120,7 +1149,7 @@ let readFunctionForBinding (graph: SemanticGraph) (binding: SemanticNode) (_bind
     | Some cname, Some returnId ->
         let parameters, parameterFindings = readList graph fields "Parameters" (readParameter graph)
         let returned, returnFindings =
-            match readTypeRef graph returnId with
+            match readTypeRef graph returnId |> Result.map numericType with
             | Ok (Some (bits, range)) -> Some { Node = returnId; Name = "ReturnType"; Bits = bits; Range = range }, []
             | Ok None -> None, []
             | Error f -> None, [ f ]

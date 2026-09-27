@@ -142,6 +142,7 @@ module SemanticGraph =
         Escaping = lazy Map.empty
         Codata = lazy Codata.empty
         Edges = []
+        WitnessProvenance = None
     }
 
     /// Create an empty semantic graph with platform context
@@ -159,13 +160,15 @@ module SemanticGraph =
         Escaping = lazy Map.empty
         Codata = lazy Codata.empty
         Edges = []
+        WitnessProvenance = None
     }
 
     /// Source graph edits invalidate witness publication while preserving the
     /// old snapshot. Re-publication belongs to source settlement.
     let invalidateWitness (graph: SemanticGraph) : SemanticGraph =
         let previous = graph.Codata
-        { graph with Codata = lazy { previous.Value with WitnessEmission = None } }
+        { graph with Codata = lazy { previous.Value with WitnessEmission = None }
+                     WitnessProvenance = None }
 
     /// Set the platform context on a graph
     let withPlatform (platform: PlatformContext) (graph: SemanticGraph) : SemanticGraph =

@@ -36,19 +36,9 @@ let analyze (graph: SemanticGraph) =
     // An external declaration's placeholder is not the foreign function's
     // implementation. Its lack of formal reads proves no argument unused:
     // foreign argument demand belongs to the declared boundary contract.
-    let rec externalCode seen id =
-        if Set.contains id seen then None else
-        let seen = Set.add id seen
-        match graph.Nodes.TryFind id with
-        | Some { Kind = SemanticKind.Lambda _ } -> Some id
-        | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } -> externalCode seen inner
-        | Some { Kind = SemanticKind.Binding _; Children = [value] } -> externalCode seen value
-        | _ -> None
     let externalImplementations =
-        graph.Nodes.Values |> Seq.choose (fun node ->
-            if node.Metadata.ContainsKey "FidelityExtern.Library" || node.Metadata.ContainsKey "FidelityExtern.Symbol" then
-                externalCode Set.empty node.Id
-            else None) |> Set.ofSeq
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Role with EdgeRole.BoundaryDeclaration declaration -> Some declaration.Implementation | _ -> None) |> Set.ofList
     let incidence = nodes.Values |> Seq.collect Incidence.structuralIncidence |> Seq.toList
     let recorded = graph.Edges |> List.filter (fun edge ->
         edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference)

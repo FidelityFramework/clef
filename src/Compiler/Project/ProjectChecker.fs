@@ -209,6 +209,7 @@ module ProjectChecker =
                                 Escaping = lazy Map.empty
                                 Codata = lazy Codata.empty
                                 Edges = []
+                                WitnessProvenance = None
                             }
                             Ok {
                                 Options = options

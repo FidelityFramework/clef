@@ -148,7 +148,7 @@ type NodeBuilder() =
           StaticStringPool = None
           Escaping = lazy Map.empty
           Codata = lazy Codata.empty
-          Edges = [] }
+          Edges = []; WitnessProvenance = None }
 
     /// Build the semantic graph with platform context
     member _.BuildWithPlatform(declRoots: (NodeId * DeclRoot) list, platform: PlatformContext) : SemanticGraph =
@@ -164,7 +164,7 @@ type NodeBuilder() =
           StaticStringPool = None
           Escaping = lazy Map.empty
           Codata = lazy Codata.empty
-          Edges = [] }
+          Edges = []; WitnessProvenance = None }
 
     /// Reset the builder
     member _.Reset() =

@@ -197,7 +197,34 @@ is_scheduled() {
   return 1
 }
 
+# Tuple SSA construction belongs to exactly one derivation owner. The older
+# arithmetic row also scans prose; this code check catches whitespace variants,
+# nested first arguments and constant ordinals without treating a match pattern
+# or a line comment as construction. It has no scheduled-file exemption.
+SSA_CONSTRUCTION='(^|[^[:alnum:]_])V[[:space:]]*\('
+ssa_construction_text() {
+  local text="${1%%//*}"
+  # Remove only a leading destructuring pattern, preserving any constructor on
+  # the right of the arrow (including one on the same line).
+  if [[ "$text" =~ ^[[:space:]]*\|[[:space:]]*(SSA\.)?V[[:space:]]*\([^\(\)]*\)[[:space:]]*-\> ]]; then
+    text="${text#*->}"
+  fi
+  grep -Eq "$SSA_CONSTRUCTION" <<<"$text"
+}
+
 hits=0; scheduled=0
+if [[ -d "$ROOT/Composer/src" ]]; then
+  while IFS= read -r file; do
+    [[ "$file" == "$ROOT/Composer/src/MiddleEnd/Alex/Traversal/Values.fs" ]] && continue
+    while IFS= read -r line; do
+      text="${line#*:}"
+      ssa_construction_text "$text" || continue
+      printf '%s:%s\n' "$file" "$line"
+      hits=$((hits+1))
+    done < <(grep -nE "$SSA_CONSTRUCTION" "$file")
+  done < <(rg --files "$ROOT/Composer/src" -g '*.fs' -g '*.fsi' -g '*.fsx')
+fi
+
 for dir in "${CORPUS[@]}"; do
   [[ -d "$dir" ]] || continue
   for pat in "${RETIRED[@]}"; do

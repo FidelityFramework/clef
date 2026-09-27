@@ -44,6 +44,31 @@ let captureProvenance lambda source parameter : Hyperedge =
     { Sources = [lambda; source]; Target = parameter
       Class = EdgeClass.Provenance; Role = EdgeRole.CaptureOrigin; Ordinal = 0 }
 
+/// Extracted closure code remains a declaration in the source occurrence's
+/// lexical module. A reference to that code is not its structural placement.
+/// The owning recipe emits the changed module with the new declaration, so
+/// ordinary fold-in settles membership, parents and module classification.
+let declareInSourceModule (graph: SemanticGraph) (source: SemanticNode) (declaration: SemanticNode) : SaturationParser<unit> =
+    let rec owner seen (child: SemanticNode) =
+        if Set.contains child.Id seen then Error "The closure source occurrence has a cyclic parent chain."
+        else
+            let seen = Set.add child.Id seen
+            match child.Parent |> Option.bind graph.Nodes.TryFind with
+            | Some parent when List.contains child.Id parent.Children ->
+                match parent.Kind with
+                | SemanticKind.ModuleDef(name, members) when List.contains child.Id members -> Ok(parent, name, members)
+                | SemanticKind.ModuleDef _ -> Error "The closure source occurrence is absent from its lexical module membership."
+                | _ -> owner seen parent
+            | _ -> Error "The closure source occurrence has no complete structural path to its lexical module."
+    saturation {
+        match owner Set.empty source with
+        | Error reason -> return! fail (XParsec.ErrorType.Message reason)
+        | Ok(moduleNode, name, members) ->
+            do! emit { declaration with Parent = Some moduleNode.Id }
+            do! enrich moduleNode (SemanticKind.ModuleDef(name, members @ [declaration.Id])) moduleNode.Type
+                           (moduleNode.Children @ [declaration.Id]) moduleNode.EmissionStrategy false
+    }
+
 /// Refresh the kind-derived incidence of enriched nodes. Other relations
 /// (including obligations and provenance) survive independently of that table.
 let structuralIncidence (node: SemanticNode) =

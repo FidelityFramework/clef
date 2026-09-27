@@ -173,10 +173,8 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
         | _ -> None
     let directCallees = graph.Nodes |> choose (fun id _ -> directCallee Set.empty id)
     let foreignCalls =
-        graph.Nodes.Values |> Seq.choose (fun node ->
-            match node.Kind with
-            | SemanticKind.Application(callee, _) when (MappedBindings.tryFindCall graph callee).IsSome -> Some node.Id
-            | _ -> None) |> Set.ofSeq
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Role with EdgeRole.BoundaryCall call -> Some call.Site | _ -> None) |> Set.ofList
     let mutableRetentions =
         codata.MutableCallableStorage.Values |> Seq.collect _.Alternatives |> Seq.distinct |> Seq.filter (fun id ->
             codata.CallableCarriers.TryFind id |> Option.exists (fun carrier ->

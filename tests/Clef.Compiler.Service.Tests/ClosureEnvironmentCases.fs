@@ -61,6 +61,56 @@ let main _ =
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ClosureEnvironments")>]
 type ClosureEnvironmentCases() =
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Extracted closure declarations retain every sibling and their actual module owner`` nested =
+        let declarations = """let invoke callback = callback 11
+let run () =
+    let first = invoke (fun value -> value)
+    let second = invoke (fun value -> value + 1)
+    first + second
+"""
+        let source =
+            if nested then
+                "module Inner =\n" + (declarations.Split '\n' |> Array.map (fun line -> "    " + line) |> String.concat "\n") +
+                "\n[<EntryPoint>]\nlet main _ = Inner.run ()\n"
+            else declarations + "\n[<EntryPoint>]\nlet main _ = run ()\n"
+        let graph = EnvironmentFixture.check source
+        let extracted = graph.Nodes.Values |> Seq.choose (fun binding ->
+            match binding.Kind, binding.Children with
+            | SemanticKind.Binding _, [implementation] ->
+                match graph.Nodes.TryFind implementation with
+                | Some code when code.Metadata.ContainsKey ClosureMetadata.SourceSignature -> Some(binding, code)
+                | _ -> None
+            | _ -> None) |> Seq.toList
+        Assert.Equal(2, extracted.Length)
+        let owners = extracted |> List.map (fun (binding, code) ->
+            Assert.Equal(Some binding.Id, code.Parent)
+            let owner = graph.Nodes[binding.Parent |> Option.defaultWith (fun () -> failwith "Extracted code has no lexical owner")]
+            let name, members =
+                match owner.Kind with
+                | SemanticKind.ModuleDef(name, members) -> name, members
+                | other -> failwithf "Extracted code is not placed in a source module: %A" other
+            Assert.Equal((if nested then "EnvironmentFixture.Inner" else "EnvironmentFixture"), name)
+            Assert.Contains(binding.Id, members)
+            Assert.Contains(binding.Id, owner.Children)
+            Assert.Contains(binding.Id, graph.ModuleClassifications.Value[owner.Id].Definitions)
+            Assert.Contains(graph.Edges, fun edge -> edge.Class = EdgeClass.Structural &&
+                                                   edge.Role = EdgeRole.Attached && edge.Target = owner.Id && edge.Sources = [binding.Id])
+            owner.Id)
+        let ownerId = Assert.Single(List.distinct owners)
+        let members =
+            match graph.Nodes[ownerId].Kind with
+            | SemanticKind.ModuleDef(_, members) -> members
+            | _ -> failwith "Expected the retained source module"
+        let generated = extracted |> List.map (fst >> _.Id) |> Set.ofList
+        let retainedNames = members |> List.choose (fun id ->
+            if generated.Contains id then None else
+            match graph.Nodes[id].Kind with SemanticKind.Binding(name, _, _, _) -> Some name | _ -> None)
+        Assert.Equal<string list>((if nested then ["invoke"; "run"] else ["invoke"; "run"; "main"]), retainedNames)
+        Assert.Equal<NodeId list>(extracted |> List.map (fst >> _.Id), members |> List.filter generated.Contains)
+
     [<Fact>]
     member _.``Ordinary callbacks settle the same callable formation as deferred consumers`` () =
         let graph = EnvironmentFixture.check """

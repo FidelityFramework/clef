@@ -167,10 +167,11 @@ type BoundaryEmissionCases() =
             Assert.DoesNotContain(argument.Formal, omitted)
         Assert.Empty call.ErasedUnitArguments
         Assert.Equal(imported.Result, call.Result)
+        let domainRow = graph.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.BoundaryDomain _ -> true | _ -> false) |> Assert.Single
         Assert.Equal<Set<NodeId>>(
-            Set.union (imported.DeclarationFacts |> Map.keys |> Set.ofSeq)
+            Set.add domainRow.Target (Set.union (imported.DeclarationFacts |> Map.keys |> Set.ofSeq)
                 (Set.ofList (scope :: body :: (BoundaryEmissionFixture.binding "combineDescriptor" graph).Id ::
-                             (parameters |> List.map (fun (_, _, formal) -> formal)) @ imported.DeclarationPath)),
+                             (parameters |> List.map (fun (_, _, formal) -> formal)) @ imported.DeclarationPath))),
             imported.Participants)
         Assert.Equal(binding.Id, List.head imported.DeclarationPath)
         match graph.Nodes[List.last imported.DeclarationPath].Kind with
@@ -289,8 +290,9 @@ let main _ =
     [<Fact>]
     member _.``Explicit libc runtime remains authoritative when startup metadata exists``() =
         let graph = BoundaryEmissionFixture.scalar ()
-        let context = { BoundaryEmissionFixture.platform with FreestandingStartup = Some FreestandingStartup.defaultLinux_x86_64 }
-        let projection = BoundaryEmissionFixture.project { graph with Platform = Some context }
+        let context = { graph.Platform.Value with FreestandingStartup = Some FreestandingStartup.defaultLinux_x86_64 }
+        let settled = Clef.Compiler.Nanopass.BoundarySettlement.normalize { graph with Platform = Some context }
+        let projection = BoundaryEmissionFixture.project settled
         Assert.Single projection.Imports |> ignore
         Assert.Single projection.Calls |> ignore
 
@@ -303,12 +305,25 @@ let main _ =
         let graph = BoundaryEmissionFixture.scalar ()
         let selected =
             match runtime with
-            | "bare" -> Some { BoundaryEmissionFixture.platform with RuntimeModel = Some RuntimeModel.Bare }
-            | "freestanding" -> Some { BoundaryEmissionFixture.platform with RuntimeModel = Some RuntimeModel.Freestanding }
-            | "undeclared" -> Some { BoundaryEmissionFixture.platform with RuntimeModel = None }
+            | "bare" -> Some { graph.Platform.Value with RuntimeModel = Some RuntimeModel.Bare }
+            | "freestanding" -> Some { graph.Platform.Value with RuntimeModel = Some RuntimeModel.Freestanding }
+            | "undeclared" -> Some { graph.Platform.Value with RuntimeModel = None }
             | "no-target" -> None
             | _ -> failwithf "Unknown runtime: %s" runtime
-        BoundaryEmissionFixture.rejected { graph with Platform = selected } |> ignore
+        let changed =
+            if runtime = "undeclared" then
+                let core = (BoundaryDeclarations.resolve graph |> Option.get).Core.Value
+                let _, fields = BoundaryDeclarations.recordOf graph core.Node |> Option.get
+                let runtimeId = fields |> List.find (fst >> (=) "Runtime") |> snd
+                let declared = BoundaryDeclarations.valueOf graph runtimeId |> Option.get
+                { graph with Platform = selected
+                             Nodes = graph.Nodes.Add(declared.Id, { declared with Kind = SemanticKind.Literal (NativeLiteral.String "") }) }
+            else { graph with Platform = selected }
+        BoundaryEmissionFixture.rejected changed |> ignore
+        let settled = Clef.Compiler.Nanopass.BoundarySettlement.normalize changed
+        let failures = BoundaryEmissionFixture.rejected settled
+        if runtime = "bare" || runtime = "freestanding" then
+            Assert.Contains(failures, fun failure -> failure.Reason.Contains "project consistency")
 
     [<Fact>]
     member _.``Target free unreachable declarations project an empty boundary without witness authority``() =
@@ -338,9 +353,108 @@ let main _ =
             | other -> failwithf "Expected boundary application, got %A" other
         let changed = { graph with Nodes = graph.Nodes.Add(site.Id, revised) }
         Assert.True(BoundaryWitness.admit changed |> Result.isError)
-        match BoundarySource.project changed with
-        | Error _ -> ()
-        | Ok current -> Assert.NotEqual<BoundaryEmissionProjection>(projection, current)
+        BoundaryEmissionFixture.rejected changed |> ignore
+
+    [<Fact>]
+    member _.``Boundary recipe records ordered relations actual range obligations and rewrite evidence``() =
+        let graph = BoundaryEmissionFixture.scalar ()
+        let call = Assert.Single (BoundaryEmissionFixture.project graph).Calls.Values
+        let declarationRows = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryDeclaration value -> Some value | _ -> None)
+        Assert.Single declarationRows |> ignore
+        let operands = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryOperand value -> Some (edge.Ordinal, value) | _ -> None) |> List.sortBy fst
+        Assert.Equal<BoundaryOperand list>(call.Arguments, operands |> List.map snd)
+        let coverages = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryCoverage value -> Some value | _ -> None)
+        Assert.Equal(call.Arguments.Length + 1, coverages.Length)
+        for coverage in coverages do
+            Assert.Contains(graph.Edges, fun edge -> edge.Target = coverage.Obligation && edge.Role = EdgeRole.Constrains)
+            Assert.Contains(graph.Edges, fun edge -> edge.Target = coverage.Obligation && edge.Role = EdgeRole.EnrichedWith)
+            Assert.Contains(graph.Edges, fun edge -> edge.Target = call.Site && edge.Ordinal = coverage.Ordinal && edge.Role = EdgeRole.BoundaryProof BoundaryProofOutcome.Proven)
+            match graph.Nodes[coverage.Obligation].Kind with
+            | SemanticKind.Obligation info -> Assert.Equal("boundary-range-coverage", info.Kind)
+            | other -> failwithf "Expected a real range obligation, got %A" other
+
+    [<Theory>]
+    [<InlineData("missing-proof")>]
+    [<InlineData("refuted-proof")>]
+    [<InlineData("missing-call")>]
+    [<InlineData("duplicate-operand")>]
+    [<InlineData("missing-rewrite")>]
+    member _.``Publication validates complete source rows and cannot create or repair evidence`` defect =
+        let graph = BoundaryEmissionFixture.scalar ()
+        let edges =
+            match defect with
+            | "missing-proof" -> graph.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.BoundaryProof _ -> false | _ -> true)
+            | "refuted-proof" -> graph.Edges |> List.map (fun edge -> match edge.Role with EdgeRole.BoundaryProof _ -> { edge with Role = EdgeRole.BoundaryProof BoundaryProofOutcome.Refuted } | _ -> edge)
+            | "missing-call" -> graph.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.BoundaryCall _ -> false | _ -> true)
+            | "duplicate-operand" ->
+                (graph.Edges |> List.find (fun edge -> match edge.Role with EdgeRole.BoundaryOperand _ -> true | _ -> false)) :: graph.Edges
+            | "missing-rewrite" -> graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.EnrichedWith)
+            | _ -> failwith "Unknown relation defect"
+        BoundaryEmissionFixture.rejected { graph with Edges = edges } |> ignore
+
+    [<Fact>]
+    member _.``Boundary normalization retracts stale order and retains repeated actual occurrences``() =
+        let graph = BoundaryEmissionFixture.scalar ()
+        let call = Assert.Single (BoundaryEmissionFixture.project graph).Calls.Values
+        let site = graph.Nodes[call.Site]
+        let repeated = [call.Arguments.Head.Actual; call.Arguments.Head.Actual]
+        let changedSite = { site with Kind = SemanticKind.Application(call.Callee, repeated); Children = call.Callee :: repeated }
+        let changed = { graph with Nodes = graph.Nodes.Add(site.Id, changedSite) }
+        BoundaryEmissionFixture.rejected changed |> ignore
+        let settled = Clef.Compiler.Nanopass.BoundarySettlement.normalize changed
+        let revised = Assert.Single (BoundaryEmissionFixture.project settled).Calls.Values
+        Assert.Equal<NodeId list>(repeated, revised.Arguments |> List.map _.Actual)
+        let row = settled.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.BoundaryCall _ -> true | _ -> false) |> Assert.Single
+        Assert.Equal(2, row.Sources |> List.take (2 + repeated.Length) |> List.filter ((=) repeated.Head) |> List.length)
+        Assert.Single(settled.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.BoundaryDomain _ -> true | _ -> false)) |> ignore
+
+    [<Fact>]
+    member _.``Refuted range coverage remains an obligation and prevents publication``() =
+        let graph = BoundaryEmissionFixture.scalar ()
+        let call = Assert.Single (BoundaryEmissionFixture.project graph).Calls.Values
+        let actual = graph.Nodes[call.Arguments.Head.Actual]
+        let changed = { graph with Nodes = graph.Nodes.Add(actual.Id, { actual with ValueRange = Some (ValueRange.Bounded(0I, 2147483648I)) }) }
+        let settled = Clef.Compiler.Nanopass.BoundarySettlement.normalize changed
+        BoundaryEmissionFixture.rejected settled |> ignore
+        Assert.Contains(settled.Edges, fun edge -> edge.Role = EdgeRole.BoundaryProof BoundaryProofOutcome.Refuted)
+        Assert.Contains(settled.Nodes.Values, fun node ->
+            match node.Kind with
+            | SemanticKind.Obligation info -> info.Body = ObligationBody.IntegerRepresentationCoverage(0I, 2147483648I, -2147483648I, 2147483647I)
+            | _ -> false)
+
+    [<Fact>]
+    member _.``Resolved source runtime remains authoritative without a project runtime claim``() =
+        let graph = BoundaryEmissionFixture.scalar ()
+        let context = { graph.Platform.Value with RuntimeModel = None }
+        let settled = Clef.Compiler.Nanopass.BoundarySettlement.normalize { graph with Platform = Some context }
+        let projection = BoundaryEmissionFixture.project settled
+        Assert.Single projection.Imports |> ignore
+        Assert.Equal<Set<string>>(Set.singleton "c", projection.Links)
+
+    [<Theory>]
+    [<InlineData("non-tuple-payload")>]
+    [<InlineData("unrepresentable-width")>]
+    member _.``One typed TypeRef reader rejects malformed shape and unrepresentable width`` defect =
+        let graph = BoundaryEmissionFixture.scalar ()
+        let imported = Assert.Single (BoundaryEmissionFixture.project graph).Imports.Values
+        let _, fields = BoundaryDeclarations.recordOf graph imported.Identity |> Option.get
+        let typeId = fields |> List.find (fst >> (=) "ReturnType") |> snd
+        Assert.Equal(Ok (BoundaryDeclarations.DeclaredTypeRef.Scalar (BoundaryScalar.Integer(32, true))), BoundaryDeclarations.readTypeRef graph typeId)
+        let _, _, payload = BoundaryDeclarations.caseOf graph typeId |> Option.get
+        let pair = BoundaryDeclarations.valueOf graph payload.Value |> Option.get
+        let sign, bits = match pair.Kind with SemanticKind.TupleExpr [sign; bits] -> sign, bits | other -> failwithf "Expected TypeRef tuple: %A" other
+        let revised =
+            match defect with
+            | "non-tuple-payload" -> { pair with Kind = SemanticKind.Application(sign, [bits]); Children = [sign; bits] }
+            | "unrepresentable-width" ->
+                let width = graph.Nodes[bits]
+                match width.Kind with
+                | SemanticKind.Literal (NativeLiteral.Int(_, kind)) -> { width with Kind = SemanticKind.Literal (NativeLiteral.Int(int64 System.Int32.MaxValue + 1L, kind)) }
+                | other -> failwithf "Expected literal TypeRef width: %A" other
+            | _ -> failwith "Unknown TypeRef defect"
+        let changed = { graph with Nodes = graph.Nodes.Add(revised.Id, revised) }
+        Assert.True(BoundaryDeclarations.readTypeRef changed typeId |> Result.isError)
+        Assert.NotEmpty((BoundaryDeclarations.readDescriptors changed).Findings)
 
     [<Theory>]
     [<InlineData("extern")>]
@@ -404,7 +518,9 @@ let main _ =
                     | other -> failwithf "Expected exact source module owner, got %A" other
                 { graph with Nodes = graph.Nodes.Add(outside.Id, outside).Add(owner.Id, owner) }, outside.Id
             | _ -> failwithf "Unknown executable placeholder use: %s" useKind
-        let failures = BoundaryEmissionFixture.rejected changed
+        BoundaryEmissionFixture.rejected changed |> ignore
+        let settled = Clef.Compiler.Nanopass.BoundarySettlement.normalize changed
+        let failures = BoundaryEmissionFixture.rejected settled
         Assert.Contains(failures, fun failure ->
             failure.Occurrence = Some useSite && failure.Participants.Contains body &&
             failure.Reason.Contains "outside its declaration leaf")

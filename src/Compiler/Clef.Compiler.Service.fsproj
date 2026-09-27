@@ -319,6 +319,7 @@
     <Compile Include="Baker\Ingredients\Sequences.fs" />
     <Compile Include="Baker\Ingredients\Patterns.fs" />
     <Compile Include="Baker\Ingredients\Obligations.fs" />
+    <Compile Include="Baker\Ingredients\Boundaries.fs" />
     <Compile Include="Baker\Ingredients\Suspensions.fs" />
     <Compile Include="Baker\Ingredients\Evaluation.fs" />
     <Compile Include="Baker\Ingredients\Continuations.fs" />
@@ -338,6 +339,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\ScopedCallbacks.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableDispatch.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\LazyContracts.fs" />
+    <Compile Include="Baker\Recipes\BoundaryDeclarations.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\OrdinaryDemand.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\StaticStringLayout.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableCarriers.fs" />
@@ -395,6 +397,7 @@
     <Compile Include="Nanopass\SequenceDelegation.fs" />
     <Compile Include="Nanopass\SequenceEvaluation.fs" />
     <Compile Include="Nanopass\EagerDemand.fs" />
+    <Compile Include="Nanopass\BoundaryDeclarations.fs" />
     <Compile Include="Nanopass\OrdinaryDemand.fs" />
     <Compile Include="Nanopass\ObligationDischarge.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
@@ -432,6 +435,8 @@
     <Compile Include="PSGSaturation\SemanticGraph\ProgramStorage.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableEmission.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\StorageWitness.fs" />
+    <Compile Include="Baker\Recipes\BoundaryRecipes.fs" />
+    <Compile Include="Nanopass\BoundarySettlement.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\BoundaryEmission.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\WitnessEmission.fs" />
     <Compile Include="NativeTypedTree\NativeService.fs" />

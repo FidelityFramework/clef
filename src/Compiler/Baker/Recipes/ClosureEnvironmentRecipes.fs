@@ -66,7 +66,8 @@ let private plain (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion
                           Metadata = source.Metadata.Remove(ClosureMetadata.RequiresClosurePair).Remove(ClosureMetadata.LambdaExpression)
                                         .Add(ClosureMetadata.SourceSignature, MetadataValue.Type source.Type) }
         do! emit code
-        do! emit { code with Id = binding; Kind = SemanticKind.Binding(name, false, false, None); Children = [implementation]; Parent = None }
+        do! declareInSourceModule graph source
+                { code with Id = binding; Kind = SemanticKind.Binding(name, false, false, None); Children = [implementation]; Parent = None }
         do! enrich source (SemanticKind.VarRef(name, Some binding)) source.Type [] source.EmissionStrategy false
         for node in graph.Nodes.Values do
             if node.IsReachable && node.Id <> source.Id then
@@ -219,7 +220,7 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
         let codeBinding =
             { implementationNode with Id = binding; Kind = SemanticKind.Binding(name, false, false, None)
                                       Children = [implementation]; Parent = None }
-        do! emit codeBinding
+        do! declareInSourceModule graph source codeBinding
         do! enrich source (SemanticKind.ClosureValue(implementation, environment)) source.Type
                         [implementation; environment] source.EmissionStrategy false
         for callId in plan.Calls do

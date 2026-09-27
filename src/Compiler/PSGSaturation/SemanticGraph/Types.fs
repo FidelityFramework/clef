@@ -587,6 +587,113 @@ type LoopRangeResidual =
     /// This is not a source numeric width or a representation fallback.
     | ProofResources
 
+/// Source boundary facts are carried by joint Baker rows, before publication.
+[<RequireQualifiedAccess>]
+type MeetKind = ExtendUnsigned | ExtendSigned | Truncate | ExtendFloat | TruncateFloat
+
+type Meet = { Consumer: NodeId; Operand: NodeId; From: int; To: int; Adapt: MeetKind }
+
+[<RequireQualifiedAccess>]
+type BoundaryScalar = Integer of bits: int * signed: bool | Boolean
+
+type BoundaryDeclarationFact = {
+    Form: string
+    Text: string list
+    Numbers: bigint list
+    References: NodeId list
+    Children: NodeId list
+    Parent: NodeId option
+    SourceType: TypeIdentity
+}
+
+type BoundaryImport = {
+    Identity: NodeId
+    Binding: NodeId
+    Scope: NodeId
+    Library: string
+    Symbol: string
+    CallingConvention: string
+    DeclarationPath: NodeId list
+    Parameters: (NodeId * BoundaryScalar) list
+    Result: BoundaryScalar option
+    Participants: Set<NodeId>
+    SourceTypes: Map<NodeId, TypeIdentity>
+    DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
+}
+
+type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Adaptation: Meet option }
+
+type BoundaryCall = {
+    Site: NodeId
+    Import: NodeId
+    Callee: NodeId
+    Arguments: BoundaryOperand list
+    ErasedUnitArguments: NodeId list
+    Result: BoundaryScalar option
+    ResultAdaptation: Meet option
+    Participants: Set<NodeId>
+    SourceTypes: Map<NodeId, TypeIdentity>
+}
+
+/// Source identity exists before numeric admission; demand consumes this row.
+type BoundaryDeclaration = { Binding: NodeId; Path: NodeId list; Implementation: NodeId; Formals: NodeId list; Body: NodeId }
+
+/// Immutable observations sufficient for boundary membership, descriptor,
+/// alias, scope, incidence, native type and range premises. Other source kinds
+/// contribute their full structural/reference incidence, not an ABI guess.
+type BoundarySourcePremise = {
+    Shape: BoundaryDeclarationFact
+    EmbeddedTypes: TypeIdentity list
+    Reachable: bool
+    Range: ValueRange option
+    ExternLibrary: string option
+    ExternSymbol: string option
+    HasExtern: bool
+    /// The boundary owner only reads these closed scalar metadata forms.
+    Metadata: Map<string, string list * bigint list * NodeId list * TypeIdentity option>
+}
+
+/// Only source-selection and numeric facts consulted by boundary rules. The
+/// startup configuration is deliberately absent: it establishes no boundary.
+type BoundaryPlatformPremise = {
+    Id: string
+    Description: string option
+    LibraryPath: string option
+    SourcePaths: Set<string>
+    Architecture: string option
+    OS: string option
+    RuntimeClaim: RuntimeModel option
+    Substrate: SubstrateKind option
+    Dimensions: Map<string, int>
+    Representations: Map<string, NumericRepresentation>
+    EndpointReturns: Map<string, ReturnBound>
+}
+
+type BoundaryDomain = {
+    Premises: Map<NodeId, BoundarySourcePremise>
+    Platform: BoundaryPlatformPremise option
+    Meets: Map<NodeId, Meet list>
+    Declarations: BoundaryDeclaration list
+    Imports: NodeId list
+    Calls: NodeId list
+    DeclarationLeaves: Set<NodeId>
+    DeclarationOnly: Set<NodeId>
+    Links: Set<string>
+    Failures: (NodeId * Set<NodeId> * string) list
+}
+
+type BoundaryCoverage = {
+    Site: NodeId
+    Operand: NodeId
+    Ordinal: int
+    Input: ValueRange
+    Destination: ValueRange
+    Obligation: NodeId
+}
+
+[<RequireQualifiedAccess>]
+type BoundaryProofOutcome = Proven | Refuted
+
 [<RequireQualifiedAccess>]
 type EdgeClass =
     /// Containment: the source is structurally part of the target.
@@ -613,12 +720,22 @@ type EdgeClass =
     /// Joint numeric premises and their recurrence dependency, distinct from
     /// the local interval annotation resulting from range saturation.
     | Range
+    /// Baker's complete source declaration, call and proof relations.
+    | Boundary
 
 /// The role the source plays relative to the target -- the edge label.
 /// Generalises Traversal.RegionKind, which named the same thing but was
 /// handed to a callback and discarded instead of being stored.
 [<RequireQualifiedAccess>]
 type EdgeRole =
+    | BoundaryDeclaration of BoundaryDeclaration
+    | BoundaryDomain of BoundaryDomain
+    | BoundaryImport of BoundaryImport
+    | BoundaryCall of BoundaryCall
+    | BoundaryOperand of BoundaryOperand
+    | BoundaryAdaptation of Meet
+    | BoundaryCoverage of BoundaryCoverage
+    | BoundaryProof of BoundaryProofOutcome
     /// [marker; operand; transparent wrapper path; first-boundary alternatives
     /// and their real formals; callee for Actual] -> the activated frontier.
     /// Ordinal identifies the component/actual in that current owning node.
@@ -1374,19 +1491,6 @@ type EscapeKind =
     | EscapesViaByRef
     | StaticLifetime
 
-/// How a meet adapts its operand (Dimensional_Range_Design.md §3.1, §8.3; rulings 1 and 3).
-[<RequireQualifiedAccess>]
-type MeetKind =
-    | ExtendUnsigned
-    | ExtendSigned
-    | Truncate
-    | ExtendFloat
-    | TruncateFloat
-
-/// One meet: the consumer node, the operand node (the consumer itself for a read of a slot), and
-/// the bit widths it adapts between.
-type Meet = { Consumer: NodeId; Operand: NodeId; From: int; To: int; Adapt: MeetKind }
-
 /// A partial application of a flattened curried function.
 type PartialApplication = { TargetBindingId: NodeId; SuppliedArgNodes: NodeId list; TotalParams: int }
 
@@ -1685,28 +1789,6 @@ type SequenceTemplateCopy = {
 [<RequireQualifiedAccess>]
 type UnionResidence = Arena | Inline
 
-/// The runtime a program is compiled against.
-[<RequireQualifiedAccess>]
-type RuntimeMode = Freestanding | Console
-
-/// How a platform operation is resolved. A syscall names the operation; its number is the
-/// description's (`Syscalls`), read by the freestanding leg.
-[<RequireQualifiedAccess>]
-type ResolvedBinding =
-    | Syscall of operation: string
-    | LibcCall of name: string
-    | ExternCall of library: string * symbol: string
-
-type BindingResolution = { Node: NodeId; EntryPoint: string; Resolved: ResolvedBinding }
-
-type PlatformBindings = {
-    RuntimeMode: RuntimeMode
-    /// Keyed by the call site (the Application node).
-    Bindings: Map<NodeId, BindingResolution>
-    /// Statically linked libraries; a dynamic extern is resolved at run time and is not here.
-    ExternLibraries: Set<string>
-}
-
 type PinConstraint = { PortName: string; PackagePin: string; IOStandard: string; Direction: string }
 type ClockConstraint = { PortName: string; PackagePin: string; IOStandard: string; FrequencyHz: int64 }
 type ResetConstraint = { PortName: string; IsExternal: bool; PackagePin: string; IOStandard: string; ActiveHigh: bool }
@@ -1956,63 +2038,6 @@ module StorageWitnessProjection =
         LiteralPoolAnchors = []
     }
 
-/// A scalar carrier explicitly declared at a C boundary. This is source ABI
-/// vocabulary, independent of any emitted dialect or host-language width.
-[<RequireQualifiedAccess>]
-type BoundaryScalar =
-    | Integer of bits: int * signed: bool
-    | Boolean
-
-/// A descriptor premise copied into immutable source vocabulary. No native
-/// type inference cell, syntax object or analysis callback crosses publication.
-type BoundaryDeclarationFact = {
-    Form: string
-    Text: string list
-    Numbers: bigint list
-    References: NodeId list
-    Children: NodeId list
-    Parent: NodeId option
-    SourceType: TypeIdentity
-}
-
-/// An admitted import belongs to this exact source module occurrence. Ordered
-/// formals and declaration premises survive publication even for a module that
-/// has no executable body of its own.
-type BoundaryImport = {
-    Identity: NodeId
-    Binding: NodeId
-    Scope: NodeId
-    Library: string
-    Symbol: string
-    CallingConvention: string
-    DeclarationPath: NodeId list
-    Parameters: (NodeId * BoundaryScalar) list
-    Result: BoundaryScalar option
-    Participants: Set<NodeId>
-    SourceTypes: Map<NodeId, TypeIdentity>
-    /// Exact declaration structure; changing a descriptor retracts admission.
-    DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
-}
-
-type BoundaryOperand = {
-    Actual: NodeId
-    Formal: NodeId
-    Abi: BoundaryScalar
-    Adaptation: Meet option
-}
-
-type BoundaryCall = {
-    Site: NodeId
-    Import: NodeId
-    Callee: NodeId
-    Arguments: BoundaryOperand list
-    ErasedUnitArguments: NodeId list
-    Result: BoundaryScalar option
-    ResultAdaptation: Meet option
-    Participants: Set<NodeId>
-    SourceTypes: Map<NodeId, TypeIdentity>
-}
-
 type BoundaryEmissionProjection = {
     Imports: Map<NodeId, BoundaryImport>
     ByScope: Map<NodeId, NodeId list>
@@ -2023,6 +2048,8 @@ type BoundaryEmissionProjection = {
     /// Exclusive structural declaration nodes retained for source proof. They
     /// have no executable coverage obligation and cannot justify an SSA value.
     DeclarationOnly: Set<NodeId>
+    /// Link requirements come from this admitted source boundary domain.
+    Links: Set<string>
 }
 
 /// Complete emission-domain facts published by their source owners. Absence is
@@ -2073,7 +2100,6 @@ type Codata = {
     /// Caller-owned destination for a known sequence factory constructor.
     SequenceDestinations: Map<NodeId, NodeId>
     SequenceCurrentReads: Set<NodeId>
-    Bindings: PlatformBindings
     Pins: PinMapping option
     /// The lambda of each declaration root, with the root's flavour.
     DeclarationRootLambdas: Map<NodeId, DeclRoot>
@@ -2121,7 +2147,6 @@ module Codata =
         SequenceInitializers = Map.empty
         SequenceDestinations = Map.empty
         SequenceCurrentReads = Set.empty
-        Bindings = { RuntimeMode = RuntimeMode.Console; Bindings = Map.empty; ExternLibraries = Set.empty }
         Pins = None
         DeclarationRootLambdas = Map.empty
         FunctionPointers = Map.empty
@@ -2202,4 +2227,13 @@ type SemanticGraph = {
     /// duplicated here merely to support the structural traversal.
     /// The emission traversal never queries this set (PHG paper 2.4).
     Edges: Hyperedge list
+    /// Source-owned transport provenance for the exact prepared input roots.
+    /// This does not freeze checker cells or authorize an accepted revision.
+    WitnessProvenance: WitnessProvenance option
+}
+
+/// The retained source roots have no provenance of their own. Only the source
+/// assembly can construct this evidence; witnesses validate it passively.
+and [<NoComparison; NoEquality>] WitnessProvenance = internal {
+    PreparedRoots: SemanticGraph
 }

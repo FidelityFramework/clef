@@ -987,6 +987,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         Escaping = lazy Map.empty
         Codata = lazy Codata.empty
         Edges = specialization.Derivations
+        WitnessProvenance = None
     }
 
     // Compute source diagnostics before generated activation changes ownership.
@@ -1228,8 +1229,6 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize finalGraph
     let finalGraph, lazies = Clef.Compiler.Nanopass.LazyRuntime.settleWhenSourceAdmitted sourceAdmitted finalGraph
     tracePhase "lazy-settlement"
-    ObligationDischarge.emit finalGraph  // Includes settled continuation frame obligations.
-    tracePhase "obligations"
     let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
     let mmio, mmioDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess.settle (diagnostics @ residual @ rangeDiagnostics) finalGraph
     let environmentOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.origins finalGraph
@@ -1306,7 +1305,6 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 SequenceInitializers = sequences.Initializers
                 SequenceDestinations = sequences.Destinations
                 SequenceCurrentReads = sequences.CurrentReads
-                Bindings = PlatformBindings.resolve platformContext settled
                 Pins = PlatformBindings.pins settled
                 DeclarationRootLambdas = Roots.declarationRootLambdas settled
                 FunctionPointers = functionPointers
@@ -1319,8 +1317,15 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         let facts = finalGraph.Codata.Value
         { finalGraph with Codata = lazy { facts with ProgramStorage = programInventory } }
 
-    // Source identity, including complete membership, binds the projection to
-    // this exact graph. A copied or revised graph needs fresh source settlement.
+    // Boundary calls need the settled range/meet domain, and must contribute
+    // their joint obligations before ledger emission and passive publication.
+    let finalGraph = Clef.Compiler.Nanopass.BoundarySettlement.normalize finalGraph
+    ObligationDischarge.emit finalGraph
+    tracePhase "obligations"
+
+    // Publication retains the exact prepared input roots, including collection
+    // membership. Replacing a root requires new source publication; an exact
+    // copy of the same roots retains its transport provenance.
     let finalGraph, witnessEmissionDiagnostics =
         // Target-free typechecking is a valid source/editor result. Physical
         // publication uses the same readiness boundary as callable settlement;
@@ -2775,7 +2780,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
         // A signature file has no checker yet: the input contributes no graph, and that is an
         // error rather than a warning, because a warning would let the program lose a file silently.
         {
-            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Layouts = lazy Map.empty; StaticStringPool = None; Escaping = lazy Map.empty; Codata = lazy Codata.empty; Edges = [] }
+            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Layouts = lazy Map.empty; StaticStringPool = None; Escaping = lazy Map.empty; Codata = lazy Codata.empty; Edges = []; WitnessProvenance = None }
             Diagnostics = [{
                 Severity = NativeDiagnosticSeverity.Error
                 Code = DiagnosticCodes.CCS8401_UnsupportedConstruct

@@ -327,6 +327,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
                         if e.Class = EdgeClass.Provenance && e.Role = EdgeRole.SchemeSpecialization then e.Sources
                         else e.Sources |> List.map (updateRef replacementMap)
                     Target = updateRef replacementMap e.Target })
+        WitnessProvenance = None
     }
 
     // NOTE: Reachability validation removed (Feb 2026)

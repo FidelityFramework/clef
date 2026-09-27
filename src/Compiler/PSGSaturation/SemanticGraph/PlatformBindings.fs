@@ -1,100 +1,13 @@
 // Copyright (c) 2025-2026 Houston Haynes / Braidpoint
 // SPDX-License-Identifier: MIT
 
-/// PlatformBindings: how every platform call site resolves, and the pin facts of a hardware
-/// design, read from the description and the graph and carried as `Codata.Bindings` and
-/// `Codata.Pins`. A `Sys` intrinsic resolves to a libc call under the libc runtime and to a
-/// syscall under the freestanding one; an application of a `[<FidelityExtern>]` binding resolves
-/// to the library and symbol its metadata names. The witnesses read the resolution and decide
-/// nothing.
+/// Independent hardware pin facts. Call and runtime identity belong exclusively
+/// to Baker's boundary declaration and call relations.
 module Clef.Compiler.PSGSaturation.SemanticGraph.PlatformBindings
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
-
-//-------------------------------------------------------------------------
-// Call sites
-//-------------------------------------------------------------------------
-
-/// The runtime the description declares: libc (console), or direct syscalls (freestanding, bare).
-/// A description declaring none is freestanding exactly when the project's startup is (the
-/// project checker settles that from its output kind).
-let runtimeMode (context: PlatformContext option) : RuntimeMode =
-    match context with
-    | None -> RuntimeMode.Console
-    | Some ctx ->
-        match ctx.RuntimeModel with
-        | Some RuntimeModel.Freestanding | Some RuntimeModel.Bare -> RuntimeMode.Freestanding
-        | Some RuntimeModel.Libc | Some RuntimeModel.ROCm | Some RuntimeModel.XDNA -> RuntimeMode.Console
-        | None -> if ctx.FreestandingStartup.IsSome then RuntimeMode.Freestanding else RuntimeMode.Console
-
-let private isPlatformIntrinsic (info: IntrinsicInfo) : bool =
-    match info.Module, info.Operation with
-    | IntrinsicModule.Sys, _ -> true
-    | IntrinsicModule.DateTime, ("now" | "utcNow") -> true
-    | _ -> false
-
-let private resolveIntrinsic (mode: RuntimeMode) (info: IntrinsicInfo) : ResolvedBinding option =
-    match info.Module, info.Operation with
-    | IntrinsicModule.Sys, ("write" | "read" | "exit" as op) ->
-        match mode with
-        | RuntimeMode.Freestanding -> Some (ResolvedBinding.Syscall op)
-        | RuntimeMode.Console -> Some (ResolvedBinding.LibcCall op)
-    | _ -> None
-
-/// The `[<FidelityExtern>]` binding an application's function resolves to, through an
-/// annotation and a reference: its library and symbol.
-let private externOf (graph: SemanticGraph) (funcId: NodeId) : (string * string) option =
-    let rec toBinding (id: NodeId) =
-        match SemanticGraph.tryGetNode id graph with
-        | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> toBinding inner
-        | Some { Kind = SemanticKind.VarRef (_, Some defId) } -> SemanticGraph.tryGetNode defId graph
-        | Some ({ Kind = SemanticKind.Binding _ } as b) -> Some b
-        | _ -> None
-    toBinding funcId |> Option.bind (fun binding ->
-        match Map.tryFind "FidelityExtern.Library" binding.Metadata, Map.tryFind "FidelityExtern.Symbol" binding.Metadata with
-        | Some (MetadataValue.String library), Some (MetadataValue.String symbol) -> Some (library, symbol)
-        | _ -> None)
-
-let private intrinsicOf (graph: SemanticGraph) (funcId: NodeId) : IntrinsicInfo option =
-    match SemanticGraph.tryGetNode funcId graph with
-    | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } ->
-        match SemanticGraph.tryGetNode inner graph with
-        | Some { Kind = SemanticKind.Intrinsic info } when isPlatformIntrinsic info -> Some info
-        | _ -> None
-    | Some { Kind = SemanticKind.Intrinsic info } when isPlatformIntrinsic info -> Some info
-    | _ -> None
-
-/// Resolve every platform call site of the graph.
-let resolve (context: PlatformContext option) (graph: SemanticGraph) : PlatformBindings =
-    let mode = runtimeMode context
-    let bindings =
-        graph.Nodes
-        |> Map.toSeq
-        |> Seq.choose (fun (nodeId, node) ->
-            match node.Kind with
-            | SemanticKind.Application (funcId, _) ->
-                match intrinsicOf graph funcId with
-                | Some info ->
-                    resolveIntrinsic mode info
-                    |> Option.map (fun resolved -> nodeId, ({ Node = nodeId; EntryPoint = sprintf "%s.%s" (string info.Module) info.Operation; Resolved = resolved } : BindingResolution))
-                | None ->
-                    externOf graph funcId
-                    |> Option.map (fun (library, symbol) -> nodeId, ({ Node = nodeId; EntryPoint = symbol; Resolved = ResolvedBinding.ExternCall (library, symbol) } : BindingResolution))
-            | _ -> None)
-        |> Map.ofSeq
-    // statically linked libraries only: a dynamic extern is loaded at run time
-    let externLibraries =
-        bindings
-        |> Map.toSeq
-        |> Seq.choose (fun (_, b) ->
-            match b.Resolved with
-            | ResolvedBinding.LibcCall _ -> Some "c"
-            | ResolvedBinding.ExternCall (library, _) when library = "c" -> Some library
-            | _ -> None)
-        |> Set.ofSeq
-    { RuntimeMode = mode; Bindings = bindings; ExternLibraries = externLibraries }
 
 //-------------------------------------------------------------------------
 // Pins (the hardware design's endpoints joined with its [<Pin>] attributes)
