@@ -1119,7 +1119,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     //=========================================================================
     let platformContext = PlatformDeclaration.fill platformContext finalGraph
     let finalGraph = { finalGraph with Platform = platformContext }
-    let finalGraph = Clef.Compiler.Nanopass.KernelDeclarations.normalize finalGraph
+    let finalGraph, kernelIngressDiagnostics = Clef.Compiler.Nanopass.KernelDeclarations.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.StringComparisons.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.StringBorrows.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.MemoryAccessElaboration.normalize finalGraph
@@ -1211,7 +1211,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let taggedDiagnostics = (diagnostics @ residual) |> List.map tagReachability
 
     let sourceAdmitted =
-        (taggedDiagnostics @ programInitializationDiagnostics) |> List.exists (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error) |> not
+        (taggedDiagnostics @ programInitializationDiagnostics @ kernelIngressDiagnostics) |> List.exists (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error) |> not
     let finalGraph, programStorageDiagnostics = Clef.Compiler.Nanopass.ProgramInitialization.settleValueAuthority sourceAdmitted finalGraph
     let sourceAdmitted = sourceAdmitted && programStorageDiagnostics.IsEmpty
     let finalGraph, curry =
@@ -1380,7 +1380,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ witnessEmissionDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ witnessEmissionDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 

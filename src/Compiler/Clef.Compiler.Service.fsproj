@@ -469,6 +469,9 @@
     <Compile Include="Nanopass\BoundarySettlement.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\BoundaryEmission.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\WitnessEmission.fs" />
+    <!-- Publication: the one place a graph leaves CCS, as a Fidelity.PSG revision -->
+    <Compile Include="PSGSaturation\Publication\RevisionMappers.fs" />
+    <Compile Include="PSGSaturation\Publication\RevisionPublication.fs" />
     <Compile Include="NativeTypedTree\NativeService.fs" />
 
     <!-- Project - Unified project loading and checking (DRY - single source of truth) -->
@@ -549,6 +552,11 @@
     <BAREWireProjectPath Condition="'$(BAREWireProjectPath)' == '' and Exists('$(MSBuildProjectDirectory)/../../../BAREWire/src/BAREWire.fsproj')">$(MSBuildProjectDirectory)/../../../BAREWire/src/BAREWire.fsproj</BAREWireProjectPath>
     <BAREWireProjectPath Condition="'$(BAREWireProjectPath)' == ''">$(MSBuildProjectDirectory)/../../../../BAREWire/src/BAREWire.fsproj</BAREWireProjectPath>
   </PropertyGroup>
+  <!-- Fidelity.PSG - the published contract this compiler service produces revisions of -->
+  <PropertyGroup>
+    <FidelityPSGProjectPath Condition="'$(FidelityPSGProjectPath)' == '' and Exists('$(MSBuildProjectDirectory)/../../../Fidelity.PSG/src/Fidelity.PSG/Fidelity.PSG.fsproj')">$(MSBuildProjectDirectory)/../../../Fidelity.PSG/src/Fidelity.PSG/Fidelity.PSG.fsproj</FidelityPSGProjectPath>
+    <FidelityPSGProjectPath Condition="'$(FidelityPSGProjectPath)' == ''">$(MSBuildProjectDirectory)/../../../../Fidelity.PSG/src/Fidelity.PSG/Fidelity.PSG.fsproj</FidelityPSGProjectPath>
+  </PropertyGroup>
   <!-- Fidelity.Data - TOML/XML/YAML/JSON/CSV parser for .fidproj loading -->
   <PropertyGroup>
     <!-- Accept both sibling checkouts and clef.worktrees/name checkouts. -->
@@ -558,6 +566,7 @@
   <ItemGroup>
     <ProjectReference Include="$(FidelityDataProjectPath)" />
     <ProjectReference Include="$(BAREWireProjectPath)" />
+    <ProjectReference Include="$(FidelityPSGProjectPath)" />
   </ItemGroup>
 
 </Project>

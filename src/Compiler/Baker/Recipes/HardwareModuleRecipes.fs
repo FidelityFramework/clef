@@ -172,8 +172,7 @@ let private settleOne (graph: SemanticGraph) (numeric: NumericWitnessProjection)
                 | None ->
                     match representation with
                     | ValueRepresentation.Record _ -> ports direction path representation
-                    | _ when direction = "Output" -> []
-                    | _ -> failwith $"Input field '{name}' has no declared physical pin.")
+                    | _ -> failwith $"{direction} field '{name}' has no declared physical pin.")
         let inputPorts = input |> Option.map (ports "Input" []) |> Option.defaultValue []
         let outputPorts = output |> Option.map (ports "Output" []) |> Option.defaultValue []
         let names = (inputPorts @ outputPorts) |> List.map _.Name

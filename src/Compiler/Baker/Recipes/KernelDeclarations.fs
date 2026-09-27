@@ -127,7 +127,7 @@ let private declaration (graph: SemanticGraph) (site: SemanticNode) =
             Premises=participants |> Seq.map (fun id -> id,(Boundary.premise graph.Nodes[id]).Shape) |> Map.ofSeq
             SourceFiles=participants |> Seq.map (fun id -> id,graph.Nodes[id].Range.File) |> Map.ofSeq
             Platform=Boundary.platformPremise graph.Platform}
-    with error -> Error("Kernel ingress: "+error.Message)
+    with error -> Error error.Message
 
 let elaborate (graph: SemanticGraph) =
     graph.Nodes.Values |> Seq.choose (fun site ->
