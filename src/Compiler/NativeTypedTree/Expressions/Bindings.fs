@@ -83,53 +83,75 @@ let extractLambdaParams
                     unsupported pat ("an attributed parameter of form " + other.GetType().Name))
 
 //-------------------------------------------------------------------------
-// Binding Name Extraction
+// Binding Heads
 //-------------------------------------------------------------------------
 
-/// Marker returned by getBindingName for tuple patterns
-/// This tells checkBinding to use special tuple destructuring logic
-[<Literal>]
-let TuplePatternMarker = "__TUPLE_PATTERN__"
+/// The head pattern of a let binding, read once where the binding is checked or
+/// pre-created. A tuple head is elaborated by tuple destructuring into its
+/// component bindings; a discard declares no name.
+[<RequireQualifiedAccess>]
+type BindingHead =
+    | Named of string
+    | Tuple
+    | Discard
 
-/// Get the name from a binding
-/// NOTE: For tuple patterns, returns TuplePatternMarker to trigger special handling in checkBinding.
-/// A head pattern with no binding-name form is CCS8401 at its range, reported once per site
-/// (the name is read at pre-creation, at checking and at scope extension); the binding then
-/// carries the discard name, the diagnostic having stopped the build.
-let getBindingName (env: TypeEnv) (binding: SynBinding) : string =
+/// The names one checked binding declares into its scope.
+[<RequireQualifiedAccess>]
+type Declared =
+    /// The binding node declares this name.
+    | Name of string
+    /// Tuple destructuring declares each named component at its own Binding node.
+    | Components of (string * SemanticNode) list
+    /// `let _ = e` and `let () = e` declare no name.
+    | Nothing
+
+/// What checking one binding settles.
+type CheckedBinding =
+    { Node: SemanticNode
+      /// The body of a function explicitly marked `inline`, re-checked at each expansion site.
+      InlineBody: InlineBody option
+      IsMutable: bool
+      /// The constant of a [<Literal>] binding.
+      Literal: NativeLiteral option
+      Declares: Declared }
+
+/// Read the head pattern of a binding. A head with no binding elaboration is CCS8401 at
+/// its range and is read as a discard, the diagnostic having stopped the build.
+let getBindingHead (env: TypeEnv) (binding: SynBinding) : BindingHead =
     let (SynBinding(_, _, _, _, _, _, _, headPat, _, _, _, _, _)) = binding
-    let rec getNameFromPat pat =
+    let rec read pat =
         match pat with
-        | SynPat.Named(SynIdent(ident, _), _, _, _) -> Ok ident.idText
-        | SynPat.LongIdent(longDotId, _, _, _, _, _) ->
-            longDotId.LongIdent |> List.last |> fun id -> Ok id.idText
-        | SynPat.Paren(innerPat, _) ->
-            // Unwrap parentheses - (name) is the same as name
-            getNameFromPat innerPat
-        | SynPat.Typed(innerPat, _, _) ->
-            // Type annotation - (name : Type) extracts name
-            getNameFromPat innerPat
-        | SynPat.Tuple _ ->
-            // Return marker to trigger tuple destructuring in checkBinding
-            Ok TuplePatternMarker
-        | SynPat.Wild _ ->
-            // Wildcard pattern: let _ = expr
-            Ok "_"
-        | SynPat.Const(SynConst.Unit, _) ->
-            // Unit pattern: let () = expr
-            Ok "_"
-        | other -> Error other
-    match getNameFromPat headPat with
-    | Ok name -> name
-    | Error pattern ->
-        let site = rangeToSourceRange pattern.Range
-        let reported =
-            !(env.Diagnostics) |> List.exists (fun d -> d.Code = DiagnosticCodes.CCS8401_UnsupportedConstruct && d.Range = site)
-        if not reported then
-            addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct pattern.Range
-                ("CCS source checking did not settle a binding name for this let pattern: a head pattern of form "
-                 + pattern.GetType().Name + " has no binding elaboration.") env
-        "_"
+        | SynPat.Named(SynIdent(ident, _), _, _, _) -> Result.Ok (BindingHead.Named ident.idText)
+        | SynPat.LongIdent(longDotId, _, _, _, _, _) -> Result.Ok (BindingHead.Named (List.last longDotId.LongIdent).idText)
+        | SynPat.Paren(inner, _) | SynPat.Typed(inner, _, _) -> read inner
+        | SynPat.Tuple _ -> Result.Ok BindingHead.Tuple
+        | SynPat.Wild _ | SynPat.Const(SynConst.Unit, _) -> Result.Ok BindingHead.Discard
+        | other -> Result.Error other
+    match read headPat with
+    | Result.Ok head -> head
+    | Result.Error pattern ->
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct pattern.Range
+            ("CCS source checking did not settle a binding name for this let pattern: a head pattern of form "
+             + pattern.GetType().Name + " has no binding elaboration.") env
+        BindingHead.Discard
+
+/// A recursive group pre-creates one Binding node per member before any body is checked,
+/// so a member declares at most one name. A tuple head in a recursive group is CCS8401 and
+/// is read as a discard, the diagnostic having stopped the build.
+let getRecursiveBindingHead (env: TypeEnv) (binding: SynBinding) : BindingHead =
+    match getBindingHead env binding with
+    | BindingHead.Tuple ->
+        let (SynBinding(_, _, _, _, _, _, _, headPat, _, _, _, _, _)) = binding
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct headPat.Range
+            "CCS source checking did not settle a recursive binding: a member of a recursive group declares one name, never a tuple of names." env
+        BindingHead.Discard
+    | head -> head
+
+/// The name carried by a head's Binding node. A discard's node is named "_" and declares nothing.
+let bindingNodeName (head: BindingHead) : string =
+    match head with
+    | BindingHead.Named name -> name
+    | BindingHead.Tuple | BindingHead.Discard -> "_"
 
 /// Check if a binding is mutable
 let isBindingMutable (binding: SynBinding) : bool =
@@ -359,11 +381,11 @@ let recordSourceBinding (isLocal: bool) (builder: NodeBuilder) (binding: SynBind
         builder.SetMetadata(node.Id, "SourceBinding.Local", MetadataValue.Bool isLocal) |> ignore
     | _ -> ()
 
-/// Check a single binding
-/// Returns the semantic node, optionally an InlineBody for transparent function expansion,
-/// the isMutable flag, and optionally a NativeLiteral for [<Literal>] bindings.
+/// Check a single binding and settle what it declares into scope.
 /// InlineBody is captured only for functions explicitly marked `inline` - this enables
 /// escape analysis where allocations are lifted to the caller's frame.
+/// The head is read once per binding by the caller: getBindingHead for an ordinary binding,
+/// getRecursiveBindingHead at the pre-creation of a recursive group.
 /// PRD-13: preCreatedBinding allows recursive bindings to provide a pre-created Binding node
 /// so that VarRefs can resolve to it before the body is checked.
 let private checkBindingInScope
@@ -372,8 +394,9 @@ let private checkBindingInScope
     (env: TypeEnv)
     (builder: NodeBuilder)
     (binding: SynBinding)
+    (head: BindingHead)
     (preCreatedBinding: SemanticNode option)
-    : SemanticNode * InlineBody option * bool * NativeLiteral option =
+    : CheckedBinding =
 
     let (SynBinding(_, _, isInline, isMutable, attrs, _, _, headPat, returnInfo, expr, bindingRange, _, _)) = binding
     let declarations =
@@ -382,7 +405,8 @@ let private checkBindingInScope
         | _ -> None
     let env, explicitParameters = withDeclaredTypeParameters declarations env
     let range = rangeToSourceRange bindingRange
-    let name = getBindingName env binding
+    let name = bindingNodeName head
+    let declares = match head with BindingHead.Named name -> Declared.Name name | BindingHead.Tuple | BindingHead.Discard -> Declared.Nothing
     // One measure variable per name for the whole binding (spec §Generalization of Measure
     // Variables): the names written in the parameter and return annotations are minted here, so
     // `(y: float<'u>) (z: float<'u>)` share `'u` and a use at two dimensions is CCS8040.
@@ -485,9 +509,8 @@ let private checkBindingInScope
         // Constrain the complete tuple shape, including nested tuple kinds.
         addConstraint (Constraint.Equals(tupleExprNode.Type, expectedTupleType, range)) env
 
-        // Create a hidden binding for the tuple
-        // Use NodeId.fresh() to get a unique identifier for the hidden name
-        let hiddenName = sprintf "__tuple_%d" (NodeId.value (NodeId.fresh()))
+        // The tuple value is held by one binding named from its own expression node.
+        let hiddenName = sprintf "__tuple_%d" (NodeId.value tupleExprNode.Id)
         let hiddenBinding = builder.Create(
             SemanticKind.Binding(hiddenName, isMutable, false, None),
             tupleExprNode.Type,
@@ -495,16 +518,16 @@ let private checkBindingInScope
             children = [tupleExprNode.Id])
         builder.SetParent(tupleExprNode.Id, hiddenBinding.Id)
 
-        // Create TupleGet nodes and bindings for each element
-        let elementBindings =
-            elementInfo |> List.mapi (fun i (elemName, isWildcard, elemType, elemRange, path) ->
-                // Create VarRef to the hidden tuple
+        // Each named component is a Binding over its TupleGet path. A wildcard component
+        // declares nothing, so it has no projection and no binding.
+        let components =
+            elementInfo |> List.choose (fun (elemName, isWildcard, elemType, elemRange, path) ->
+                if isWildcard then None else
                 let tupleRef = builder.Create(
                     SemanticKind.VarRef(hiddenName, Some hiddenBinding.Id),
                     tupleExprNode.Type,
                     elemRange,
                     arena = env.CurrentArena)
-
                 let tupleGetNode =
                     path |> List.fold (fun (value: SemanticNode) (index, ty) ->
                         let projection = builder.Create(
@@ -512,21 +535,15 @@ let private checkBindingInScope
                             children = [value.Id])
                         builder.SetParent(value.Id, projection.Id)
                         projection) tupleRef
-
-                // Create binding for the element (unless wildcard)
-                let bindingName = if isWildcard then sprintf "_discard_%d" i else elemName
                 let elemBinding = builder.Create(
-                    SemanticKind.Binding(bindingName, isMutable, false, None),
+                    SemanticKind.Binding(elemName, isMutable, false, None),
                     elemType,
                     elemRange,
                     children = [tupleGetNode.Id])
                 builder.SetParent(tupleGetNode.Id, elemBinding.Id)
+                Some (elemName, elemBinding))
 
-                (elemName, elemType, elemBinding, isWildcard))
-
-        // Create Sequential containing all bindings
-        let allBindingNodes = hiddenBinding :: (elementBindings |> List.map (fun (_, _, b, _) -> b))
-        let allBindingIds = allBindingNodes |> List.map (fun n -> n.Id)
+        let allBindingIds = hiddenBinding.Id :: (components |> List.map (fun (_, b) -> b.Id))
 
         // The type of the Sequential is unit (the bindings introduce names but produce no value)
         let seqNode = builder.Create(
@@ -539,21 +556,12 @@ let private checkBindingInScope
         for bindingId in allBindingIds do
             builder.SetParent(bindingId, seqNode.Id)
 
-        // Store element binding info in metadata for environment extension
-        // Format: comma-separated "name:nodeId" pairs
-        let elementBindingInfo =
-            elementBindings
-            |> List.filter (fun (_, _, _, isWildcard) -> not isWildcard)
-            |> List.map (fun (name, _, binding, _) -> sprintf "%s:%d" name (NodeId.value binding.Id))
-            |> String.concat ","
-        let seqNodeWithMeta = builder.SetMetadata(seqNode.Id, "TupleBindings", MetadataValue.String elementBindingInfo)
+        { Node = seqNode; InlineBody = None; IsMutable = isMutable; Literal = None
+          Declares = Declared.Components components }
 
-        (seqNodeWithMeta, None, isMutable, None)
-
-    // Check if this is a tuple pattern - handle it specially
-    if name = TuplePatternMarker then
-        checkTupleDestructure ()
-    else
+    match head with
+    | BindingHead.Tuple -> checkTupleDestructure ()
+    | BindingHead.Named _ | BindingHead.Discard ->
 
     // Check if this is a function definition (has parameters)
     match tryGetFunctionParams headPat env range with
@@ -733,7 +741,7 @@ let private checkBindingInScope
             else
                 None
 
-        (bindingNode, inlineBodyOpt, isMutable, literalValue)
+        { Node = bindingNode; InlineBody = inlineBodyOpt; IsMutable = isMutable; Literal = literalValue; Declares = declares }
 
     | None ->
         // Regular value binding (not a function - no inline body)
@@ -747,23 +755,22 @@ let private checkBindingInScope
         // lambda would delay that read until invocation and invent currying boundaries.
         // Baker elaborates references to actual named function declarations into pairs;
         // existing closure values and closure-factory results remain values here.
-        let finalExprNode = exprNode
 
         // PRD-13: Use pre-created Binding if provided (for recursive bindings)
         let node =
             match preCreatedBinding with
             | Some preCreated ->
-                addConstraint (Constraint.Equals(preCreated.Type, finalExprNode.Type, range)) env
-                builder.SetChildren(preCreated.Id, [finalExprNode.Id])
+                addConstraint (Constraint.Equals(preCreated.Type, exprNode.Type, range)) env
+                builder.SetChildren(preCreated.Id, [exprNode.Id])
                 preCreated
             | None ->
                 builder.Create(
                     SemanticKind.Binding(name, isMutable, false, declRoot),
                     bindingType,
                     range,
-                    children = [finalExprNode.Id])
+                    children = [exprNode.Id])
         // Establish bidirectional parent-child link
-        builder.SetParent(finalExprNode.Id, node.Id)
+        builder.SetParent(exprNode.Id, node.Id)
 
         // Propagate [<FidelityExtern>] metadata for Farscape-generated native bindings
         match fidelityExtern with
@@ -781,15 +788,15 @@ let private checkBindingInScope
             | Some { Kind = SemanticKind.Quote _ } -> true
             | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> holdsQuotation inner
             | _ -> false
-        if isModuleLevel && declRoot.IsNone && not (holdsQuotation finalExprNode.Id) then
+        if isModuleLevel && declRoot.IsNone && not (holdsQuotation exprNode.Id) then
             builder.SetEmissionStrategy(node.Id, EmissionStrategy.MainPrologue)
 
-        (node, None, isMutable, literalValue)
+        { Node = node; InlineBody = None; IsMutable = isMutable; Literal = literalValue; Declares = declares }
 
 /// Module declaration entry. Lexical expression bindings use the explicit
 /// local entry below, independently of whether a named function encloses them.
-let checkBinding checkExpr env builder binding preCreatedBinding =
-    checkBindingInScope true checkExpr env builder binding preCreatedBinding
+let checkBinding checkExpr env builder binding head preCreatedBinding =
+    checkBindingInScope true checkExpr env builder binding head preCreatedBinding
 
 //-------------------------------------------------------------------------
 // Let/LetRec Handling
@@ -839,70 +846,30 @@ let checkLetOrUse
     let bindings = letOrUse.Bindings
     let bodyExpr = letOrUse.Body
 
-    // Helper: extend environment with binding results
-    let extendEnvWithResults baseEnv bindingList (results: (SemanticNode * InlineBody option * bool * NativeLiteral option) list) =
+    // Enter what each checked binding declares into the body's scope. A tuple destructuring
+    // declares its named components at their own Binding nodes; a discard declares nothing.
+    let extendEnvWithResults baseEnv bindingList (results: CheckedBinding list) =
         List.zip bindingList results
-        |> List.fold (fun env (binding, (node: SemanticNode, inlineBodyOpt, isMutable, literalValueOpt)) ->
+        |> List.fold (fun env (binding, (checkedBinding: CheckedBinding)) ->
             // Generated bindings and source parameters are outside this
             // named-let diagnostic. Resource-use forms are rejected above.
             if letOrUse.IsFromSource && not letOrUse.IsUse then
-                recordSourceBinding true builder binding node (inlineBodyOpt.IsSome || literalValueOpt.IsSome)
-            let name = getBindingName env binding
-            // PRD-13a: Handle tuple destructuring
-            if name = TuplePatternMarker then
-                // Read tuple binding info from metadata. A component that cannot be read
-                // back is an invariant failure at the destructuring, never a dropped name or
-                // an invented type.
-                let invariant (detail: string) =
-                    addDiagnostic {
-                        Severity = NativeDiagnosticSeverity.Error
-                        Code = DiagnosticCodes.CCS8090_InternalInvariant
-                        Message =
-                            "CCS source checking did not settle the component bindings of tuple destructuring node "
-                            + string (NodeId.value node.Id) + ": " + detail
-                        Range = node.Range
-                        RelatedNodes = [node.Id]
-                        Reachability = ReachabilityContext.Unknown
-                    } env
-                match node.Metadata.TryFind "TupleBindings" with
-                | Some (MetadataValue.String "") ->
-                    // No bindings to add (all wildcards)
-                    env
-                | Some (MetadataValue.String bindingInfo) ->
-                    // Parse "name1:nodeId1,name2:nodeId2,..."
-                    bindingInfo.Split(',')
-                    |> Array.fold (fun env part ->
-                        let parts = part.Split(':')
-                        match parts with
-                        | [| elemName; nodeIdText |] ->
-                            match System.Int32.TryParse nodeIdText with
-                            | true, nodeIdVal ->
-                                let elemNodeId = NodeId nodeIdVal
-                                // Get the element type from the binding node
-                                match builder.Nodes.TryFind elemNodeId with
-                                | Some elemNode ->
-                                    addBinding elemName elemNode.Type isMutable (Some elemNodeId) false env
-                                | None ->
-                                    invariant ("component '" + elemName + "' names node " + nodeIdText + ", which the graph does not hold.")
-                                    env
-                            | _ ->
-                                invariant ("component entry '" + part + "' carries no node id.")
-                                env
-                        | _ ->
-                            invariant ("component entry '" + part + "' is not of the form name:nodeId.")
-                            env
-                    ) env
-                | _ ->
-                    invariant "the node carries no TupleBindings record."
-                    env
-            else
-                match inlineBodyOpt, literalValueOpt with
+                recordSourceBinding true builder binding checkedBinding.Node
+                    (checkedBinding.InlineBody.IsSome || checkedBinding.Literal.IsSome)
+            let node = checkedBinding.Node
+            match checkedBinding.Declares with
+            | Declared.Nothing -> env
+            | Declared.Components components ->
+                components |> List.fold (fun env (name, (declared: SemanticNode)) ->
+                    addBinding name declared.Type checkedBinding.IsMutable (Some declared.Id) false env) env
+            | Declared.Name name ->
+                match checkedBinding.InlineBody, checkedBinding.Literal with
                 | Some inlineBody, _ ->
                     addInlineBindingInScope false name node.Type (Some node.Id) inlineBody env
                 | None, Some litVal ->
                     addLiteralBindingInScope false name node.Type (Some node.Id) litVal env
                 | None, None ->
-                    addBinding name node.Type isMutable (Some node.Id) false env
+                    addBinding name node.Type checkedBinding.IsMutable (Some node.Id) false env
         ) baseEnv
 
     // Helper: build final Sequential node
@@ -925,7 +892,7 @@ let checkLetOrUse
         // Pre-create Binding nodes to get NodeIds before checking bodies
         let preCreatedBindings =
             bindings |> List.map (fun binding ->
-                let name = getBindingName env binding
+                let head = getRecursiveBindingHead env binding
                 let ty = freshTypeVar range
                 let (SynBinding(_, _, _, isMutable, attrs, _, _, _, _, _, _, _, _)) = binding
                 let declRoot =
@@ -934,29 +901,29 @@ let checkLetOrUse
                     elif hasKernelModuleAttribute attrs then Some DeclRoot.KernelModule
                     else None
                 let node = builder.Create(
-                    SemanticKind.Binding(name, isMutable, true, declRoot),
+                    SemanticKind.Binding(bindingNodeName head, isMutable, true, declRoot),
                     ty,
                     range,
                     children = [])
-                (binding, name, ty, node))
+                (binding, head, ty, node))
 
-        // Add all bindings to environment WITH their NodeIds
+        // Add every named member to the environment WITH its NodeId
         let envWithBindings =
             preCreatedBindings
-            |> List.fold (fun env (_, name, ty, node) ->
-                addBinding name ty false (Some node.Id) false env
+            |> List.fold (fun env (_, head, ty, (node: SemanticNode)) ->
+                match head with
+                | BindingHead.Named name -> addBinding name ty false (Some node.Id) false env
+                | BindingHead.Tuple | BindingHead.Discard -> env
             ) env
 
         // Check each binding body - VarRefs now resolve to pre-created NodeIds
         let bindingResults =
             preCreatedBindings
-            |> List.map (fun (binding, _, _, preCreatedNode) ->
-                checkBindingInScope false checkExpr envWithBindings builder binding (Some preCreatedNode))
+            |> List.map (fun (binding, head, _, preCreatedNode) ->
+                let checkedBinding = checkBindingInScope false checkExpr envWithBindings builder binding head (Some preCreatedNode)
+                { checkedBinding with Node = generalizeRecursiveBinding env builder checkedBinding.Node })
 
-        let bindingResults = bindingResults |> List.map (fun (node, inlineBody, isMutable, literal) ->
-            generalizeRecursiveBinding env builder node, inlineBody, isMutable, literal)
-
-        let bindingNodes = bindingResults |> List.map (fun (node, _, _, _) -> node)
+        let bindingNodes = bindingResults |> List.map _.Node
         let bodyEnv = extendEnvWithResults envWithBindings bindings bindingResults
         let bodyNode = checkExpr bodyEnv builder bodyExpr
         buildSequential bindingNodes bodyNode
@@ -965,9 +932,9 @@ let checkLetOrUse
         // NON-RECURSIVE BINDINGS: Standard sequential processing
         let bindingResults =
             bindings |> List.map (fun binding ->
-                checkBindingInScope false checkExpr env builder binding None)
+                checkBindingInScope false checkExpr env builder binding (getBindingHead env binding) None)
 
-        let bindingNodes = bindingResults |> List.map (fun (node, _, _, _) -> node)
+        let bindingNodes = bindingResults |> List.map _.Node
         let bodyEnv = extendEnvWithResults env bindings bindingResults
         let bodyNode = checkExpr bodyEnv builder bodyExpr
         buildSequential bindingNodes bodyNode

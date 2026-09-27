@@ -150,7 +150,9 @@ let rec checkPattern
             // The alias's right side is a name; any other pattern there would be dropped.
             addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct rhsPat.Range
                 "CCS source checking did not settle an alias for this 'as' pattern: the right side of 'as' is not a name, and a refutable right side has no pattern form." env
-            (Pattern.Wildcard, lhsBindings @ rhsBindings)
+            // Recovery binds nothing, so the refused pattern's count of source bindings agrees
+            // with its wildcard and the diagnostic, not a saturation failure, is what surfaces.
+            (Pattern.Wildcard, [])
 
     | SynPat.Or(lhsPat, rhsPat, _, _) ->
         // Alternation pattern
@@ -232,13 +234,15 @@ let rec checkPattern
         let elemTy = freshTypeVar range
         let listTy = NativeType.TList elemTy
         addConstraint (Constraint.Equals(expectedTy, listTy, range)) env
-        let (_, lhsBindings) = checkPattern env lhsPat elemTy range
-        let (_, rhsBindings) = checkPattern env rhsPat listTy range
+        checkPattern env lhsPat elemTy range |> ignore
+        checkPattern env rhsPat listTy range |> ignore
         // The pattern graph has no cons form; a tuple of head and tail would test a list as a
         // tuple. Refused at the site.
         addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct pat.Range
             "CCS source checking did not settle a pattern form for this list cons pattern 'head :: tail': the pattern graph has no cons form." env
-        (Pattern.Wildcard, lhsBindings @ rhsBindings)
+        // Recovery binds nothing, so the refused pattern's count of source bindings agrees
+        // with its wildcard and the diagnostic, not a saturation failure, is what surfaces.
+        (Pattern.Wildcard, [])
 
     | SynPat.Ands(pats, _) ->
         // Conjunction pattern: pat1 & pat2 & ...

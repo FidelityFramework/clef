@@ -57,12 +57,18 @@ let private normalizeUsing select (orderedRoots: NodeId list) (graph: SemanticGr
                         match node.Kind with SemanticKind.VarRef(_, Some target) when target = source.Id -> Some node.Id | _ -> None) |> Set.ofList
                     match nodes |> List.filter (fun node ->
                             match node.Kind with SemanticKind.Application(callee, _) -> references.Contains callee | _ -> false) with
-                    | [call] -> Ok ({ Nodes = nodes; Binding = binding; Call = call.Id }: Construction.ExistingStartup)
-                    | calls -> Error (sprintf "PSG settlement (platform startup) did not settle one exact source-entry call for entry %d: the startup wrapper constructs %d" (NodeId.value source.Id) calls.Length)))
-            match startup with
-            | Some (Error message) -> graph, [residual graph source.Id message]
-            | _ ->
-                let startup = startup |> Option.bind (function Ok existing -> Some existing | Error _ -> None)
+                    | [call] -> Result.Ok ({ Nodes = nodes; Binding = binding; Call = call.Id }: Construction.ExistingStartup)
+                    | calls -> Result.Error (sprintf "PSG settlement (platform startup) did not settle one exact source-entry call for entry %d: the startup wrapper constructs %d" (NodeId.value source.Id) calls.Length)))
+            // A freestanding platform's startup either settles one exact entry call or is
+            // reported; a hosted platform has no startup to construct.
+            let settled =
+                match startup with
+                | Some (Result.Error message) -> Result.Error message
+                | Some (Result.Ok existing) -> Result.Ok (Some existing)
+                | None -> Result.Ok None
+            match settled with
+            | Result.Error message -> graph, [residual graph source.Id message]
+            | Result.Ok startup ->
                 let context = mkContext source.Range source.Type graph.Platform "Program.initialization" source.Id
                 let expansion = Construction.materialize context graph source selection.Initializers selection.UnitActivations startup
                 let create (_: SemanticNode) _ = RecipeCreated {

@@ -255,22 +255,23 @@ module ProjectChecker =
                     Error $"No source files found for project {options.Name}"
                 else
                     // Read all source files, using volatile content where available
-                    let sourceFiles =
+                    let readResults =
                         allSourcePaths
-                        |> List.choose (fun path ->
+                        |> List.map (fun path ->
                             let normalizedPath = normalizePath path
                             match Map.tryFind normalizedPath volatileContent with
                             | Some content ->
                                 // Use volatile (unsaved) content
-                                Some (normalizedPath, content)
+                                Result.Ok (normalizedPath, content)
                             | None ->
                                 // Read from disk
-                                match readSourceFile path with
-                                | Result.Ok f -> Some f
-                                | Result.Error _ -> None)
+                                readSourceFile path)
+                    // Each read failure is reported with its own reason, never collapsed.
+                    let readErrors = readResults |> List.choose (function Result.Error e -> Some e | Result.Ok _ -> None)
+                    let sourceFiles = readResults |> List.choose (function Result.Ok f -> Some f | Result.Error _ -> None)
 
-                    if List.length sourceFiles <> List.length allSourcePaths then
-                        Error "Some source files could not be read"
+                    if not (List.isEmpty readErrors) then
+                        Error (String.concat "\n" readErrors)
                     else
                         // Parse all source files
                         let parseResults =

@@ -1956,12 +1956,82 @@ module StorageWitnessProjection =
         LiteralPoolAnchors = []
     }
 
+/// A scalar carrier explicitly declared at a C boundary. This is source ABI
+/// vocabulary, independent of any emitted dialect or host-language width.
+[<RequireQualifiedAccess>]
+type BoundaryScalar =
+    | Integer of bits: int * signed: bool
+    | Boolean
+
+/// A descriptor premise copied into immutable source vocabulary. No native
+/// type inference cell, syntax object or analysis callback crosses publication.
+type BoundaryDeclarationFact = {
+    Form: string
+    Text: string list
+    Numbers: bigint list
+    References: NodeId list
+    Children: NodeId list
+    Parent: NodeId option
+    SourceType: TypeIdentity
+}
+
+/// An admitted import belongs to this exact source module occurrence. Ordered
+/// formals and declaration premises survive publication even for a module that
+/// has no executable body of its own.
+type BoundaryImport = {
+    Identity: NodeId
+    Binding: NodeId
+    Scope: NodeId
+    Library: string
+    Symbol: string
+    CallingConvention: string
+    DeclarationPath: NodeId list
+    Parameters: (NodeId * BoundaryScalar) list
+    Result: BoundaryScalar option
+    Participants: Set<NodeId>
+    SourceTypes: Map<NodeId, TypeIdentity>
+    /// Exact declaration structure; changing a descriptor retracts admission.
+    DeclarationFacts: Map<NodeId, BoundaryDeclarationFact>
+}
+
+type BoundaryOperand = {
+    Actual: NodeId
+    Formal: NodeId
+    Abi: BoundaryScalar
+    Adaptation: Meet option
+}
+
+type BoundaryCall = {
+    Site: NodeId
+    Import: NodeId
+    Callee: NodeId
+    Arguments: BoundaryOperand list
+    ErasedUnitArguments: NodeId list
+    Result: BoundaryScalar option
+    ResultAdaptation: Meet option
+    Participants: Set<NodeId>
+    SourceTypes: Map<NodeId, TypeIdentity>
+}
+
+type BoundaryEmissionProjection = {
+    Imports: Map<NodeId, BoundaryImport>
+    ByScope: Map<NodeId, NodeId list>
+    Calls: Map<NodeId, BoundaryCall>
+    /// Exact source declaration bindings whose bodies are placeholders, not
+    /// executable ordinary function definitions.
+    DeclarationLeaves: Set<NodeId>
+    /// Exclusive structural declaration nodes retained for source proof. They
+    /// have no executable coverage obligation and cannot justify an SSA value.
+    DeclarationOnly: Set<NodeId>
+}
+
 /// Complete emission-domain facts published by their source owners. Absence is
 /// distinct from a valid publication whose domain maps happen to be empty.
 type WitnessEmissionProjection = {
     Ordinary: OrdinaryDemandProjection
     Callable: CallableEmissionProjection
     Storage: StorageWitnessProjection
+    Boundary: BoundaryEmissionProjection
 }
 
 /// The codata the graph carries for emission, settled once at the end of saturation.

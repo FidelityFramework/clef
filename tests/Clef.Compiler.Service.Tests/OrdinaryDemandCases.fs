@@ -198,11 +198,25 @@ let main _ = if first 1<m> + second 1<m> = 10<m> then 0 else 1
         Assert.Equal(isEager, (DemandStrings.literalEvidence graph).ContainsKey literal.Id)
         Assert.Equal(Types.stringType, literal.Type)
         if not isEager then
+            let omittedSites =
+                graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.OrdinaryUnusedActual)
+                |> List.map _.Target |> Set.ofList
             let missing = { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.OrdinaryUnusedActual) }
             Assert.Empty(DemandStrings.literalEvidence missing)
-            let restored, diagnostics = DemandStrings.settle missing
-            Assert.Empty diagnostics
-            Assert.Contains(restored.StaticStringPool.Value.Entries, fun entry -> List.contains literal.Id entry.NodeIds)
+            let refused, diagnostics = DemandStrings.settle missing
+            Assert.False refused.StaticStringPool.IsSome
+            Assert.Equal<Set<NodeId>>(omittedSites, diagnostics |> List.map (fun diagnostic -> List.head diagnostic.RelatedNodes) |> Set.ofList)
+            Assert.All(diagnostics, fun diagnostic ->
+                Assert.Equal("CCS8403", diagnostic.Code)
+                Assert.Equal(NativeDiagnosticSeverity.Error, diagnostic.Severity)
+                Assert.Contains("PSG settlement (OrdinaryDemand)", diagnostic.Message)
+                Assert.Equal(graph.Nodes[List.head diagnostic.RelatedNodes].Range, diagnostic.Range))
+            let restored, restoredDiagnostics = DemandStrings.settle (DemandRecipe.normalize missing)
+            Assert.Empty restoredDiagnostics
+            Assert.False restored.StaticStringPool.IsSome
+            Assert.Empty(DemandStrings.literalEvidence restored)
+            Assert.Contains(literal.Id, DemandProjection.deferredOnly restored)
+            Assert.Equal(literal.Kind, restored.Nodes[literal.Id].Kind)
 
     [<Theory>]
     [<InlineData(false)>]
@@ -242,14 +256,27 @@ let main _ = discard (1<m> + 2<s>)
     [<InlineData(true)>]
     member _.``Unobservable arithmetic requires executable range evidence only when demanded`` isEager =
         let argument = if isEager then "eager (1 / 0)" else "1 / 0"
-        let graph = OrdinaryDemandFixture.check ("let discard (value: int) = 0\n[<EntryPoint>]\nlet main _ = discard (" + argument + ")\n")
+        let source = "module OrdinaryDemand\nlet discard (value: int) = 0\n[<EntryPoint>]\nlet main _ = discard (" + argument + ")\n"
+        let result =
+            match parseAndCheck source "ordinary-demand.clef" with
+            | Success result | CheckFailure result -> result
+            | ParseFailure errors -> failwithf "%A" errors
+        let graph = result.Graph
+        let sourceErrors = result.Diagnostics |> List.filter (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error)
+        let assertUnobservable (diagnostic: Diagnostic) =
+            Assert.Equal("CCS8011", diagnostic.Code)
+            Assert.Contains("the result of '/'", diagnostic.Message)
+            let site = Assert.Single diagnostic.RelatedNodes
+            Assert.True graph.Nodes[site].IsReachable
+            Assert.Equal(graph.Nodes[site].Range, diagnostic.Range)
+        if isEager then assertUnobservable (Assert.Single sourceErrors) else Assert.Empty sourceErrors
         let context = { LazyResidenceFixture.platform 64 with SubstrateKind = Some SubstrateKind.FPGA }
         let settled, diagnostics = DemandRanges.run (Some context) graph
         let formal = OrdinaryDemandFixture.formal settled
         let call = OrdinaryDemandFixture.calls settled formal |> Assert.Single
         Assert.True(settled.Nodes[call.Actuals.Head].IsReachable)
         let required = diagnostics |> List.filter (fun diagnostic -> diagnostic.Code = "CCS8011")
-        if isEager then Assert.NotEmpty required else Assert.Empty required
+        if isEager then assertUnobservable (Assert.Single required) else Assert.Empty required
 
     [<Theory>]
     [<InlineData("library")>]
@@ -303,8 +330,28 @@ let main _ = discard (1<m> + 2<s>)
             | _ ->
                 let row = graph.Edges |> List.find (fun edge -> edge.Role = EdgeRole.OrdinaryUnusedFormal && edge.Target = proof.Formal)
                 { graph with Edges = row :: graph.Edges }
-        Assert.Empty(DemandProjection.parameters changed proof.Implementation)
-        Assert.Empty(DemandProjection.deferredActuals changed call.Site)
+        let failures =
+            match DemandProjection.tryRead changed with
+            | Result.Error failures -> failures
+            | Result.Ok _ -> failwith "Changed ordinary-demand proof premises were admitted."
+        let expectedSites =
+            if defect = "missing-row" || defect = "duplicate-row" then Set.singleton proof.Formal
+            else
+                proof.Formal :: (OrdinaryDemandFixture.calls graph proof |> List.map _.Site)
+                |> Set.ofList
+        Assert.Equal<Set<NodeId>>(expectedSites, failures |> List.choose _.Occurrence |> Set.ofList)
+        Assert.All(failures, fun failure ->
+            Assert.Contains(failure.Occurrence.Value, failure.Participants)
+            Assert.Contains(proof.Formal, failure.Participants)
+            Assert.Contains("PSG settlement (OrdinaryDemand)", failure.Reason)
+            Assert.Contains("OrdinaryUnusedFormal/OrdinaryUnusedActual rows do not match", failure.Reason))
+        let sites = expectedSites |> Set.toList |> List.map (NodeId.value >> string) |> String.concat ", "
+        let expectedRefusal =
+            sprintf "PSG settlement (OrdinaryDemand) did not settle the ordinary-demand relations for the current graph: the published OrdinaryUnusedFormal/OrdinaryUnusedActual rows do not match the current complete use proof at nodes [%s]." sites
+        let parameterRefusal = Assert.Throws<System.InvalidOperationException>(fun () -> DemandProjection.parameters changed proof.Implementation |> ignore)
+        let actualRefusal = Assert.Throws<System.InvalidOperationException>(fun () -> DemandProjection.deferredActuals changed call.Site |> ignore)
+        Assert.Equal(expectedRefusal, parameterRefusal.Message)
+        Assert.Equal(expectedRefusal, actualRefusal.Message)
         if defect <> "missing-row" && defect <> "duplicate-row" then
             let fresh = DemandRecipe.normalize changed
             if defect = "callee" then

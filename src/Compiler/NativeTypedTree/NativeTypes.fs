@@ -1037,34 +1037,6 @@ module PlatformContext =
     let wordSize (ctx: PlatformContext) : Result<int, string> =
         tryWidth ctx (WidthDimension.name WidthDimension.Register)
 
-    /// Resolve the byte size for an NTU kind on this platform
-    let resolveSize (ctx: PlatformContext) (kind: NTUKind) : Result<int, string> =
-        match kind with
-        // Parameterized numeric types — resolve width dimension
-        | NTUKind.NTUint w | NTUKind.NTUuint w | NTUKind.NTUfloat w
-        | NTUKind.NTUposit (w, _) ->
-            resolveWidth ctx w |> Result.map (fun bits -> bits / 8)
-        // Pointer types — pointer-sized
-        | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff ->
-            pointerSize ctx
-        // Special types
-        | NTUKind.NTUstring -> Ok 16  // Fat pointer: ptr + length
-        | NTUKind.NTUbool -> Ok 1
-        | NTUKind.NTUchar -> Ok 4  // UTF-32
-        | NTUKind.NTUunit -> Ok 0
-        | NTUKind.NTUdecimal -> Ok 16
-        // Temporal and identity types
-        | NTUKind.NTUuuid -> Ok 16  // 128-bit UUID
-        | NTUKind.NTUdatetime -> Ok 8  // 64-bit ticks
-        | NTUKind.NTUtimespan -> Ok 8  // 64-bit duration
-        | NTUKind.NTUlazy -> Ok -1  // Size depends on element type (PRD-14)
-        | NTUKind.NTUseq -> Ok -1  // Size depends on element type (PRD-15)
-        | NTUKind.NTUarray -> Ok 16  // Fat pointer: ptr + length (C-04)
-        | NTUKind.NTUborrowedview -> pointerSize ctx |> Result.map (fun bytes -> 5 * bytes)
-        | NTUKind.NTUlist -> pointerSize ctx  // Pointer to cons cell (PRD-13a)
-        | NTUKind.NTUmap -> pointerSize ctx  // Pointer to tree root (PRD-13a)
-        | NTUKind.NTUset -> pointerSize ctx  // Pointer to tree root (PRD-13a)
-
     /// Resolve the alignment for an NTU kind on this platform: a pointer aligns to
     /// the declared Pointer width, a numeric to its own.
     let resolveAlign (ctx: PlatformContext) (kind: NTUKind) : Result<int, string> =
@@ -1077,18 +1049,14 @@ module PlatformContext =
         | NTUKind.NTUptr | NTUKind.NTUfnptr | NTUKind.NTUsize | NTUKind.NTUdiff ->
             pointerSize ctx
         // Special types
-        | NTUKind.NTUstring -> Ok 8  // Pointer alignment for fat pointer
         | NTUKind.NTUbool -> Ok 1
         | NTUKind.NTUchar -> Ok 4
         | NTUKind.NTUunit -> Ok 1
-        | NTUKind.NTUdecimal -> Ok 8
-        // Temporal and identity types
-        | NTUKind.NTUuuid -> Ok 8  // 64-bit aligned (two i64s)
-        | NTUKind.NTUdatetime -> Ok 8  // 64-bit aligned
-        | NTUKind.NTUtimespan -> Ok 8  // 64-bit aligned
-        | NTUKind.NTUlazy -> Ok 8  // Pointer-aligned (PRD-14)
-        | NTUKind.NTUseq -> Ok 8  // Pointer-aligned (PRD-15)
-        | NTUKind.NTUarray -> Ok 8  // Pointer-aligned (C-04)
+        // Composite and multi-word kinds: their alignment is their settled fields', which
+        // Placement owns; no 64-bit alignment is assumed for them here.
+        | NTUKind.NTUstring | NTUKind.NTUdecimal | NTUKind.NTUuuid | NTUKind.NTUdatetime
+        | NTUKind.NTUtimespan | NTUKind.NTUlazy | NTUKind.NTUseq | NTUKind.NTUarray ->
+            Error (sprintf "Placement did not settle the alignment of %A: a composite kind aligns to its settled fields, and the platform declares no alignment for it" kind)
         | NTUKind.NTUborrowedview -> pointerSize ctx
         | NTUKind.NTUlist -> pointerSize ctx  // Pointer-aligned (PRD-13a)
         | NTUKind.NTUmap -> pointerSize ctx  // Pointer-aligned (PRD-13a)

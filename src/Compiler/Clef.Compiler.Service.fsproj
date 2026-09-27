@@ -432,6 +432,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\ProgramStorage.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableEmission.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\StorageWitness.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\BoundaryEmission.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\WitnessEmission.fs" />
     <Compile Include="NativeTypedTree\NativeService.fs" />
 

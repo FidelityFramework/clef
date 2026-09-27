@@ -104,6 +104,7 @@
     <Compile Include="PipeEvaluationCases.fs" />
     <Compile Include="MonomorphizationMembershipCases.fs" />
     <Compile Include="ForeignReferenceCases.fs" />
+    <Compile Include="BoundaryEmissionCases.fs" />
     <Compile Include="BorrowedViewCases.fs" />
     <Compile Include="LocalUnusedCases.fs" />
     <Compile Include="ModuleScopeCases.fs" />

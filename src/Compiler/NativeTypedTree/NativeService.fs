@@ -1894,40 +1894,6 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     | SynExpr.LibraryOnlyUnionCaseFieldSet _ ->
         unsupported "CCS source checking did not settle an elaboration for this library-only union case field set: it has no native graph form."
 
-let checkExpression (expr: SynExpr) : CheckResult =
-    let env = createTypeEnv()
-    let builder = NodeBuilder()
-    NodeId.reset()
-
-    let node = checkExpr env builder expr
-    // The checker's own diagnostics are reported with the constraint diagnostics, never drained.
-    let reported = solveAndGetDiagnostics env !(env.Constraints) @ List.rev !(env.Diagnostics)
-    let diagnostics = reported @ residualDiagnostics builder reported
-
-    buildResult builder [node] Map.empty diagnostics None Set.empty
-
-//-------------------------------------------------------------------------
-// Type Checking: Binding Level
-//-------------------------------------------------------------------------
-
-/// Check a single let binding and return a semantic node.
-/// Note: The inline body is intentionally discarded here because:
-/// 1. This checks a single binding in isolation (no subsequent bindings to inline into)
-/// 2. The Lambda node's child already contains the checked body for code generation
-/// 3. InlineBody is for environment-based name resolution during multi-binding checking
-let checkLetBinding (binding: SynBinding) : CheckResult =
-    let env = createTypeEnv()
-    let builder = NodeBuilder()
-    NodeId.reset()
-
-    // InlineBody, isMutable and literalValue discarded - see function doc comment for rationale
-    let (node, _inlineBody, _isMutable, _literalValue) = Bindings.checkBinding checkExpr env builder binding None
-    // The checker's own diagnostics are reported with the constraint diagnostics, never drained.
-    let reported = solveAndGetDiagnostics env !(env.Constraints) @ List.rev !(env.Diagnostics)
-    let diagnostics = reported @ residualDiagnostics builder reported
-
-    buildResult builder [node] Map.empty diagnostics None Set.empty
-
 //-------------------------------------------------------------------------
 // Type Checking: Module Level
 //-------------------------------------------------------------------------
@@ -2057,8 +2023,24 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     | [] -> simpleName
                     | _ -> (modPath |> String.concat ".") + "." + simpleName)
 
-        // Capture function bodies for `inline` functions (escape analysis)
-        // Handle recursive vs non-recursive bindings differently
+        // Enter what a checked module binding declares, under every module-path suffix. The
+        // binding node's own name carries `nameType` (its generalized scheme); tuple components
+        // are ordinary module values at their own Binding nodes; a discard declares nothing.
+        let declareModuleBinding (checkedBinding: Bindings.CheckedBinding) (nameType: NativeType) env =
+            let node = checkedBinding.Node
+            match checkedBinding.Declares with
+            | Bindings.Declared.Nothing -> env
+            | Bindings.Declared.Components components ->
+                components |> List.fold (fun env (name, (declared: SemanticNode)) ->
+                    bindingNameSuffixes name |> List.fold (fun env qname ->
+                        addBinding qname declared.Type checkedBinding.IsMutable (Some declared.Id) true env) env) env
+            | Bindings.Declared.Name name ->
+                bindingNameSuffixes name |> List.fold (fun env qname ->
+                    match checkedBinding.InlineBody, checkedBinding.Literal with
+                    | Some inlineBody, _ -> addInlineBinding qname nameType (Some node.Id) inlineBody env
+                    | None, Some litVal -> addLiteralBinding qname nameType (Some node.Id) litVal env
+                    | None, None -> addBinding qname nameType checkedBinding.IsMutable (Some node.Id) true env) env
+
         let (finalEnv, nodes) =
             match isRec with
             | true ->
@@ -2067,7 +2049,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 let preCreatedBindings =
                     bindings
                     |> List.map (fun binding ->
-                        let simpleName = Bindings.getBindingName env binding
+                        let head = Bindings.getRecursiveBindingHead env binding
                         let placeholderTy = freshTypeVar range
                         let (SynBinding(_, _, _, isMutable, attrs, _, _, _, _, _, _, _, _)) = binding
                         let declRoot =
@@ -2076,91 +2058,71 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                             elif hasKernelModuleAttribute attrs then Some DeclRoot.KernelModule
                             else None
                         let node = builder.Create(
-                            SemanticKind.Binding(simpleName, isMutable, true, declRoot),
+                            SemanticKind.Binding(Bindings.bindingNodeName head, isMutable, true, declRoot),
                             placeholderTy,
                             range,
                             children = [])
-                        (binding, simpleName, placeholderTy, node))
+                        (binding, head, placeholderTy, node))
 
-                // Add all bindings to environment WITH their NodeIds
+                // Add every named member to the environment WITH its NodeId
                 let envWithAllNames =
                     preCreatedBindings
-                    |> List.fold (fun accEnv (_, simpleName, placeholderTy, preCreatedNode) ->
-                        bindingNameSuffixes simpleName
-                        |> List.fold (fun env qname ->
-                            addBinding qname placeholderTy false (Some preCreatedNode.Id) true env  // Module-level bindings
-                        ) accEnv
+                    |> List.fold (fun accEnv (_, head, placeholderTy, (preCreatedNode: SemanticNode)) ->
+                        match head with
+                        | Bindings.BindingHead.Named simpleName ->
+                            bindingNameSuffixes simpleName
+                            |> List.fold (fun env qname ->
+                                addBinding qname placeholderTy false (Some preCreatedNode.Id) true env  // Module-level bindings
+                            ) accEnv
+                        | Bindings.BindingHead.Tuple | Bindings.BindingHead.Discard -> accEnv
                     ) env
 
                 // Check all bodies - VarRefs now resolve to pre-created NodeIds
                 let (updatedEnv, checkedBindings) =
                     preCreatedBindings
-                    |> List.fold (fun (accEnv, accResults) (binding, simpleName, placeholderTy, preCreatedNode) ->
-                        let (node, inlineBodyOpt, isMutable, literalValueOpt) =
-                            Bindings.checkBinding checkExpr envWithAllNames builder binding (Some preCreatedNode)
-                        Bindings.recordSourceBinding false builder binding node (inlineBodyOpt.IsSome || literalValueOpt.IsSome)
+                    |> List.fold (fun (accEnv, accResults) (binding, head, placeholderTy, preCreatedNode) ->
+                        let checkedBinding = Bindings.checkBinding checkExpr envWithAllNames builder binding head (Some preCreatedNode)
+                        let node = checkedBinding.Node
+                        Bindings.recordSourceBinding false builder binding node
+                            (checkedBinding.InlineBody.IsSome || checkedBinding.Literal.IsSome)
 
                         // Unify placeholder type with inferred type
                         addConstraint (Constraint.Equals(placeholderTy, node.Type, range)) accEnv
 
-                        // Update environment with actual types and inline bodies
-                        let envWithNode =
-                            bindingNameSuffixes simpleName
-                            |> List.fold (fun env qname ->
-                                match inlineBodyOpt, literalValueOpt with
-                                | Some inlineBody, _ -> addInlineBinding qname node.Type (Some node.Id) inlineBody env
-                                | None, Some litVal -> addLiteralBinding qname node.Type (Some node.Id) litVal env
-                                | None, None -> addBinding qname node.Type isMutable (Some node.Id) true env  // Module-level bindings
-                            ) accEnv
-
-                        (envWithNode, (node, inlineBodyOpt, simpleName) :: accResults)
+                        (declareModuleBinding checkedBinding node.Type accEnv, checkedBinding :: accResults)
                     ) (envWithAllNames, [])
 
+                // The group is generalized once every body is checked; each member is then
+                // re-entered at its scheme.
                 let updatedEnv, nodes =
-                    checkedBindings |> List.rev |> List.fold (fun (current, nodes) (node, inlineBody, name) ->
-                        let node = Bindings.generalizeRecursiveBinding env builder node
-                        let current = bindingNameSuffixes name |> List.fold (fun current qualified ->
-                            match inlineBody with
-                            | Some body -> addInlineBinding qualified node.Type (Some node.Id) body current
-                            | None -> addBinding qualified node.Type false (Some node.Id) true current) current
+                    checkedBindings |> List.rev |> List.fold (fun (current, nodes) (checkedBinding: Bindings.CheckedBinding) ->
+                        let node = Bindings.generalizeRecursiveBinding env builder checkedBinding.Node
+                        let current = declareModuleBinding { checkedBinding with Node = node; Literal = None; IsMutable = false } node.Type current
                         current, nodes @ [node]) (updatedEnv, [])
                 (updatedEnv, nodes)
             | false ->
-                // NON-RECURSIVE BINDINGS: Sequential processing (existing behavior)
+                // NON-RECURSIVE BINDINGS: Sequential processing
                 // Each binding can only reference bindings that came before it
                 bindings |> List.fold (fun (accEnv, accNodes) binding ->
-                    let (node, inlineBodyOpt, isMutable, literalValueOpt) = Bindings.checkBinding checkExpr accEnv builder binding None
-                    Bindings.recordSourceBinding false builder binding node (inlineBodyOpt.IsSome || literalValueOpt.IsSome)
+                    let checkedBinding = Bindings.checkBinding checkExpr accEnv builder binding (Bindings.getBindingHead accEnv binding) None
+                    let node = checkedBinding.Node
+                    Bindings.recordSourceBinding false builder binding node
+                        (checkedBinding.InlineBody.IsSome || checkedBinding.Literal.IsSome)
                     // Let-polymorphism: a top-level function with free type variables left after
                     // solving the constraints so far becomes a TForall scheme (Binding node + env).
-                    let bindingType = generalizeTopLevelFunction builder accEnv node inlineBodyOpt.IsSome
-                    // Add the binding to environment so later bindings can reference it
-                    // Register lexical aliases and the canonical export path
-                    // CRITICAL: Use actual isMutable flag for module-level mutable variables
-                    // [<Literal>] bindings are registered for compile-time substitution
-                    let simpleName = Bindings.getBindingName accEnv binding
-                    let updatedEnv =
-                        bindingNameSuffixes simpleName
-                        |> List.fold (fun env qname ->
-                            // Use addInlineBinding for functions, addLiteralBinding for literals
-                            match inlineBodyOpt, literalValueOpt with
-                            | Some inlineBody, _ -> addInlineBinding qname bindingType (Some node.Id) inlineBody env
-                            | None, Some litVal -> addLiteralBinding qname bindingType (Some node.Id) litVal env
-                            | None, None -> addBinding qname bindingType isMutable (Some node.Id) true env  // Module-level bindings
-                        ) accEnv
-                    (updatedEnv, node :: accNodes)
+                    // [<Literal>] bindings are registered for compile-time substitution.
+                    let bindingType = generalizeTopLevelFunction builder accEnv node checkedBinding.InlineBody.IsSome
+                    (declareModuleBinding checkedBinding bindingType accEnv, node :: accNodes)
                 ) (env, [])
                 |> fun (finalEnv, nodes) -> (finalEnv, List.rev nodes)
         (finalEnv, nodes)
 
-    | SynModuleDecl.Expr(expr, exprRange) ->
+    | SynModuleDecl.Expr(expr, _) ->
         // Module-level expression (e.g., do expr)
-        let _ = rangeToSourceRange exprRange  // Could be used for diagnostics
         (env, [checkExpr env builder expr])
 
-    | SynModuleDecl.Types(typeDefns, typesRange) ->
+    | SynModuleDecl.Types(typeDefns, _) ->
         // Type definitions - process each and potentially update environment
-        let _ = rangeToSourceRange typesRange  // Range for the whole types block
 
         // Keep lexical shorthand inside this declaration scope. Only canonical paths escape
         // its boundary; retain the existing primary TypeCon name used by graph consumers.

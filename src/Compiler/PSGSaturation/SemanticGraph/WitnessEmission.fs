@@ -16,15 +16,16 @@ let private project graph =
         | Ok demand -> CallableEmission.projectWithDemand graph demand
         | Error failures -> Error failures
     let storage = StorageWitness.project graph
-    match ordinary, callable, storage with
-    | Ok ordinary, Ok callable, Ok storage ->
-        Ok { Ordinary = ordinary; Callable = callable; Storage = storage }
+    let boundary = BoundaryEmission.project graph
+    match ordinary, callable, storage, boundary with
+    | Ok ordinary, Ok callable, Ok storage, Ok boundary ->
+        Ok { Ordinary = ordinary; Callable = callable; Storage = storage; Boundary = boundary }
     | _ ->
         let failures = function Ok _ -> [] | Error failures -> failures
         // Failed demand validation already owns its diagnostic; the dependent
         // callable domain cannot contribute an independent result in that case.
         let callableFailures = match ordinary with Ok _ -> failures callable | Error _ -> []
-        Error (failures ordinary @ callableFailures @ failures storage)
+        Error (failures ordinary @ callableFailures @ failures storage @ failures boundary)
 
 /// A source edit retains premises for validation but cannot carry publication
 /// into witnessing. The original immutable snapshot retains its own facts.
@@ -93,3 +94,4 @@ let admit (graph: SemanticGraph) : Result<unit, WitnessProjectionFailure list> =
 let tryOrdinary graph = tryRead graph |> Result.map _.Ordinary
 let tryCallable graph = tryRead graph |> Result.map _.Callable
 let tryStorage graph = tryRead graph |> Result.map _.Storage
+let tryBoundary graph = tryRead graph |> Result.map _.Boundary
