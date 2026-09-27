@@ -22,6 +22,84 @@ let rec mapAdditiveLoopInvariantModel (value: S.AdditiveLoopInvariantModel) : Fi
         Upper = value.Upper
     } : Fidelity.PSG.AdditiveLoopInvariantModel)
 
+and mapArenaAffinity (value: N.ArenaAffinity) : Fidelity.PSG.ArenaAffinity =
+    match value with
+    | N.ArenaAffinity.CurrentActor -> Fidelity.PSG.ArenaAffinity.CurrentActor
+    | N.ArenaAffinity.Explicit(a0) -> Fidelity.PSG.ArenaAffinity.Explicit(a0)
+    | N.ArenaAffinity.Stack -> Fidelity.PSG.ArenaAffinity.Stack
+
+and mapArrayAllocationConstruction (value: S.ArrayAllocationConstruction) : Fidelity.PSG.ArrayAllocationConstruction =
+    ({
+        Site = nodeId value.Site
+        Owner = nodeId value.Owner
+        Count = mapArrayBoundOperand value.Count
+        Default = (value.Default |> Option.map (fun x -> nodeId x))
+        Initialization = (value.Initialization |> Option.map (fun x -> mapArrayInitializationConstruction x))
+        Guard = mapArrayRangeGuard value.Guard
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+    } : Fidelity.PSG.ArrayAllocationConstruction)
+
+and mapArrayBoundOperand (value: S.ArrayBoundOperand) : Fidelity.PSG.ArrayBoundOperand =
+    ({
+        Actual = nodeId value.Actual
+        Binding = nodeId value.Binding
+        Reference = nodeId value.Reference
+    } : Fidelity.PSG.ArrayBoundOperand)
+
+and mapArrayCopyConstruction (value: S.ArrayCopyConstruction) : Fidelity.PSG.ArrayCopyConstruction =
+    ({
+        Site = nodeId value.Site
+        Source = mapArrayBoundOperand value.Source
+        SourceOffset = mapArrayBoundOperand value.SourceOffset
+        Destination = nodeId value.Destination
+        DestinationOffset = mapArrayBoundOperand value.DestinationOffset
+        Count = mapArrayBoundOperand value.Count
+        Allocation = (value.Allocation |> Option.map (fun x -> nodeId x))
+        Index = (value.Index |> Option.map (fun x -> nodeId x))
+        IndexInitial = (value.IndexInitial |> Option.map (fun x -> nodeId x))
+        Loop = (value.Loop |> Option.map (fun x -> nodeId x))
+        Guard = (value.Guard |> Option.map (fun x -> nodeId x))
+        Current = (value.Current |> Option.map (fun x -> nodeId x))
+        SourceIndex = (value.SourceIndex |> Option.map (fun x -> nodeId x))
+        DestinationIndex = (value.DestinationIndex |> Option.map (fun x -> nodeId x))
+        Read = (value.Read |> Option.map (fun x -> nodeId x))
+        Write = (value.Write |> Option.map (fun x -> nodeId x))
+        Step = (value.Step |> Option.map (fun x -> nodeId x))
+        Advance = (value.Advance |> Option.map (fun x -> nodeId x))
+        Requirements = (value.Requirements |> List.map (fun x -> mapArrayRangeGuard x))
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+    } : Fidelity.PSG.ArrayCopyConstruction)
+
+and mapArrayInitializationConstruction (value: S.ArrayInitializationConstruction) : Fidelity.PSG.ArrayInitializationConstruction =
+    ({
+        Buffer = nodeId value.Buffer
+        Index = nodeId value.Index
+        Initial = nodeId value.Initial
+        Loop = nodeId value.Loop
+        Guard = nodeId value.Guard
+        Current = nodeId value.Current
+        Write = nodeId value.Write
+        Step = nodeId value.Step
+        Advance = nodeId value.Advance
+    } : Fidelity.PSG.ArrayInitializationConstruction)
+
+and mapArrayRangeGuard (value: S.ArrayRangeGuard) : Fidelity.PSG.ArrayRangeGuard =
+    ({
+        Requirement = nodeId value.Requirement
+        Predicate = nodeId value.Predicate
+        Frontier = nodeId value.Frontier
+        Continuation = nodeId value.Continuation
+        Count = nodeId value.Count
+        Offset = (value.Offset |> Option.map (fun x -> nodeId x))
+        Buffer = (value.Buffer |> Option.map (fun x -> nodeId x))
+        Length = (value.Length |> Option.map (fun x -> nodeId x))
+        Zero = nodeId value.Zero
+        NonnegativeCount = nodeId value.NonnegativeCount
+        NonnegativeOffset = (value.NonnegativeOffset |> Option.map (fun x -> nodeId x))
+        End = (value.End |> Option.map (fun x -> nodeId x))
+        Within = (value.Within |> Option.map (fun x -> nodeId x))
+    } : Fidelity.PSG.ArrayRangeGuard)
+
 and mapBaseMeasure (value: D.BaseMeasure) : Fidelity.PSG.BaseMeasure =
     ({
         Name = value.Name
@@ -52,6 +130,25 @@ and mapBoundaryCall (value: S.BoundaryCall) : Fidelity.PSG.BoundaryCall =
         SourceTypes = (value.SourceTypes |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapTypeIdentity v) |> Map.ofSeq)
     } : Fidelity.PSG.BoundaryCall)
 
+and mapBoundaryCoverage (value: S.BoundaryCoverage) : Fidelity.PSG.BoundaryCoverage =
+    ({
+        Site = nodeId value.Site
+        Operand = nodeId value.Operand
+        Ordinal = value.Ordinal
+        Input = mapValueRange value.Input
+        Destination = mapValueRange value.Destination
+        Obligation = nodeId value.Obligation
+    } : Fidelity.PSG.BoundaryCoverage)
+
+and mapBoundaryDeclaration (value: S.BoundaryDeclaration) : Fidelity.PSG.BoundaryDeclaration =
+    ({
+        Binding = nodeId value.Binding
+        Path = (value.Path |> List.map (fun x -> nodeId x))
+        Implementation = nodeId value.Implementation
+        Formals = (value.Formals |> List.map (fun x -> nodeId x))
+        Body = nodeId value.Body
+    } : Fidelity.PSG.BoundaryDeclaration)
+
 and mapBoundaryDeclarationFact (value: S.BoundaryDeclarationFact) : Fidelity.PSG.BoundaryDeclarationFact =
     ({
         Form = value.Form
@@ -62,6 +159,32 @@ and mapBoundaryDeclarationFact (value: S.BoundaryDeclarationFact) : Fidelity.PSG
         Parent = (value.Parent |> Option.map (fun x -> nodeId x))
         SourceType = mapTypeIdentity value.SourceType
     } : Fidelity.PSG.BoundaryDeclarationFact)
+
+and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
+    ({
+        Premises = (value.Premises |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundarySourcePremise v) |> Map.ofSeq)
+        Platform = (value.Platform |> Option.map (fun x -> mapBoundaryPlatformPremise x))
+        Meets = (value.Meets |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> List.map (fun x -> mapMeet x))) |> Map.ofSeq)
+        Declarations = (value.Declarations |> List.map (fun x -> mapBoundaryDeclaration x))
+        Imports = (value.Imports |> List.map (fun x -> nodeId x))
+        Calls = (value.Calls |> List.map (fun x -> nodeId x))
+        ByteViews = (value.ByteViews |> List.map (fun x -> mapBoundaryByteView x))
+        StringExtents = (value.StringExtents |> List.map (fun x -> mapBoundaryStringExtent x))
+        StringComparisons = (value.StringComparisons |> List.map (fun x -> (let (t0, t1, t2) = x in (nodeId t0, t1, (t2 |> List.map (fun x -> nodeId x))))))
+        StringLengthComparisons = (value.StringLengthComparisons |> List.map (fun x -> (let (t0, t1, t2) = x in (nodeId t0, t1, (t2 |> List.map (fun x -> nodeId x))))))
+        StringComparisonReads = (value.StringComparisonReads |> List.map (fun x -> mapMemoryArrayAccessWitness x))
+        StringComparisonSnapshots = (value.StringComparisonSnapshots |> List.map (fun x -> mapMemoryStringViewWitness x))
+        StringComparisonCopies = (value.StringComparisonCopies |> List.map (fun x -> mapMemoryArrayCopyWitness x))
+        IntrinsicDeclarations = (value.IntrinsicDeclarations |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapIntrinsicWriteImport t1))))
+        IntrinsicImports = (value.IntrinsicImports |> List.map (fun x -> mapIntrinsicWriteImport x))
+        IntrinsicCalls = (value.IntrinsicCalls |> List.map (fun x -> mapIntrinsicWriteCall x))
+        IntrinsicProofs = (value.IntrinsicProofs |> List.map (fun x -> mapIntrinsicWriteProof x))
+        StringStorage = (value.StringStorage |> Option.map (fun x -> (let (t0, t1, t2, t3, t4, t5, t6, t7, t8, t9, t10) = x in (t0, t1, t2, t3, t4, t5, t6, t7, t8, nodeId t9, (t10 |> List.map (fun x -> (let (t0, t1, t2, t3, t4) = x in ((t0 |> List.map (fun x -> nodeId x)), t1, t2, t3, t4))))))))
+        DeclarationLeaves = (value.DeclarationLeaves |> Set.map (fun x -> nodeId x))
+        DeclarationOnly = (value.DeclarationOnly |> Set.map (fun x -> nodeId x))
+        Links = value.Links
+        Failures = (value.Failures |> List.map (fun x -> (let (t0, t1, t2) = x in (nodeId t0, (t1 |> Set.map (fun x -> nodeId x)), t2))))
+    } : Fidelity.PSG.BoundaryDomain)
 
 and mapBoundaryEmissionProjection (value: S.BoundaryEmissionProjection) : Fidelity.PSG.BoundaryEmissionProjection =
     ({
@@ -117,10 +240,28 @@ and mapBoundaryPlatformPremise (value: S.BoundaryPlatformPremise) : Fidelity.PSG
         EndpointReturns = (value.EndpointReturns |> Map.map (fun _ x -> mapReturnBound x))
     } : Fidelity.PSG.BoundaryPlatformPremise)
 
+and mapBoundaryProofOutcome (value: S.BoundaryProofOutcome) : Fidelity.PSG.BoundaryProofOutcome =
+    match value with
+    | S.BoundaryProofOutcome.Proven -> Fidelity.PSG.BoundaryProofOutcome.Proven
+    | S.BoundaryProofOutcome.Refuted -> Fidelity.PSG.BoundaryProofOutcome.Refuted
+
 and mapBoundaryScalar (value: S.BoundaryScalar) : Fidelity.PSG.BoundaryScalar =
     match value with
     | S.BoundaryScalar.Integer(a0, a1) -> Fidelity.PSG.BoundaryScalar.Integer(a0, a1)
     | S.BoundaryScalar.Boolean -> Fidelity.PSG.BoundaryScalar.Boolean
+
+and mapBoundarySourcePremise (value: S.BoundarySourcePremise) : Fidelity.PSG.BoundarySourcePremise =
+    ({
+        Shape = mapBoundaryDeclarationFact value.Shape
+        EmbeddedTypes = (value.EmbeddedTypes |> List.map (fun x -> mapTypeIdentity x))
+        ConstructorFacts = (value.ConstructorFacts |> List.map (fun x -> (let (t0, t1, t2, t3, t4, t5) = x in (mapConstructorIdentity t0, mapTypeLayout t1, t2, t3, (t4 |> Option.map (fun x -> mapNTUQualifiers x)), t5))))
+        Reachable = value.Reachable
+        Range = (value.Range |> Option.map (fun x -> mapValueRange x))
+        ExternLibrary = value.ExternLibrary
+        ExternSymbol = value.ExternSymbol
+        HasExtern = value.HasExtern
+        Metadata = (value.Metadata |> Map.map (fun _ x -> (let (t0, t1, t2, t3) = x in (t0, t1, (t2 |> List.map (fun x -> nodeId x)), (t3 |> Option.map (fun x -> mapTypeIdentity x))))))
+    } : Fidelity.PSG.BoundarySourcePremise)
 
 and mapBoundaryStringExtent (value: S.BoundaryStringExtent) : Fidelity.PSG.BoundaryStringExtent =
     ({
@@ -405,6 +546,179 @@ and mapEagerFrontier (value: S.EagerFrontier) : Fidelity.PSG.EagerFrontier =
     | S.EagerFrontier.Component -> Fidelity.PSG.EagerFrontier.Component
     | S.EagerFrontier.Expression -> Fidelity.PSG.EagerFrontier.Expression
 
+and mapEdgeClass (value: S.EdgeClass) : Fidelity.PSG.EdgeClass =
+    match value with
+    | S.EdgeClass.Structural -> Fidelity.PSG.EdgeClass.Structural
+    | S.EdgeClass.Reference -> Fidelity.PSG.EdgeClass.Reference
+    | S.EdgeClass.Provenance -> Fidelity.PSG.EdgeClass.Provenance
+    | S.EdgeClass.Obligation -> Fidelity.PSG.EdgeClass.Obligation
+    | S.EdgeClass.Suspension -> Fidelity.PSG.EdgeClass.Suspension
+    | S.EdgeClass.Evaluation -> Fidelity.PSG.EdgeClass.Evaluation
+    | S.EdgeClass.Demand -> Fidelity.PSG.EdgeClass.Demand
+    | S.EdgeClass.Range -> Fidelity.PSG.EdgeClass.Range
+    | S.EdgeClass.Boundary -> Fidelity.PSG.EdgeClass.Boundary
+    | S.EdgeClass.Spatial -> Fidelity.PSG.EdgeClass.Spatial
+
+and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
+    match value with
+    | S.EdgeRole.NumericDomain(a0) -> Fidelity.PSG.EdgeRole.NumericDomain(mapNumericDomain a0)
+    | S.EdgeRole.NumericCarrier(a0) -> Fidelity.PSG.EdgeRole.NumericCarrier(mapScalarCarrier a0)
+    | S.EdgeRole.NumericProof(a0) -> Fidelity.PSG.EdgeRole.NumericProof(mapBoundaryProofOutcome a0)
+    | S.EdgeRole.NumericOperation(a0) -> Fidelity.PSG.EdgeRole.NumericOperation(mapNumericOperationWitness a0)
+    | S.EdgeRole.NumericOperationProof(a0) -> Fidelity.PSG.EdgeRole.NumericOperationProof(mapNumericOperationProof a0)
+    | S.EdgeRole.NumericIndexTransport(a0) -> Fidelity.PSG.EdgeRole.NumericIndexTransport(mapNumericIndexTransport a0)
+    | S.EdgeRole.MemoryDomain(a0) -> Fidelity.PSG.EdgeRole.MemoryDomain(mapMemoryDomain a0)
+    | S.EdgeRole.MemoryOperation(a0) -> Fidelity.PSG.EdgeRole.MemoryOperation(mapMemoryWitnessOperation a0)
+    | S.EdgeRole.MemoryArrayCopy(a0) -> Fidelity.PSG.EdgeRole.MemoryArrayCopy(mapMemoryArrayCopyWitness a0)
+    | S.EdgeRole.ArrayAllocationConstruction(a0) -> Fidelity.PSG.EdgeRole.ArrayAllocationConstruction(mapArrayAllocationConstruction a0)
+    | S.EdgeRole.ArrayCopyConstruction(a0) -> Fidelity.PSG.EdgeRole.ArrayCopyConstruction(mapArrayCopyConstruction a0)
+    | S.EdgeRole.MemoryProof(a0) -> Fidelity.PSG.EdgeRole.MemoryProof(mapMemoryProof a0)
+    | S.EdgeRole.MemoryAccessGuard -> Fidelity.PSG.EdgeRole.MemoryAccessGuard
+    | S.EdgeRole.SpatialModuleDomain(a0) -> Fidelity.PSG.EdgeRole.SpatialModuleDomain(mapSpatialModuleDomain a0)
+    | S.EdgeRole.HardwareModule(a0) -> Fidelity.PSG.EdgeRole.HardwareModule(mapHardwareModuleWitness a0)
+    | S.EdgeRole.KernelModule(a0) -> Fidelity.PSG.EdgeRole.KernelModule(mapKernelModuleWitness a0)
+    | S.EdgeRole.KernelIngress(a0) -> Fidelity.PSG.EdgeRole.KernelIngress(mapKernelIngress a0)
+    | S.EdgeRole.SpatialProof(a0) -> Fidelity.PSG.EdgeRole.SpatialProof(mapSpatialProof a0)
+    | S.EdgeRole.BoundaryDeclaration(a0) -> Fidelity.PSG.EdgeRole.BoundaryDeclaration(mapBoundaryDeclaration a0)
+    | S.EdgeRole.BoundaryDomain(a0) -> Fidelity.PSG.EdgeRole.BoundaryDomain(mapBoundaryDomain a0)
+    | S.EdgeRole.BoundaryImport(a0) -> Fidelity.PSG.EdgeRole.BoundaryImport(mapBoundaryImport a0)
+    | S.EdgeRole.BoundaryCall(a0) -> Fidelity.PSG.EdgeRole.BoundaryCall(mapBoundaryCall a0)
+    | S.EdgeRole.BoundaryOperand(a0) -> Fidelity.PSG.EdgeRole.BoundaryOperand(mapBoundaryOperand a0)
+    | S.EdgeRole.BoundaryAdaptation(a0) -> Fidelity.PSG.EdgeRole.BoundaryAdaptation(mapMeet a0)
+    | S.EdgeRole.BoundaryCoverage(a0) -> Fidelity.PSG.EdgeRole.BoundaryCoverage(mapBoundaryCoverage a0)
+    | S.EdgeRole.BoundaryProof(a0) -> Fidelity.PSG.EdgeRole.BoundaryProof(mapBoundaryProofOutcome a0)
+    | S.EdgeRole.StringByteView(a0) -> Fidelity.PSG.EdgeRole.StringByteView(mapBoundaryByteView a0)
+    | S.EdgeRole.StringExtent(a0) -> Fidelity.PSG.EdgeRole.StringExtent(mapBoundaryStringExtent a0)
+    | S.EdgeRole.StringComparisonConstruction(a0) -> Fidelity.PSG.EdgeRole.StringComparisonConstruction(a0)
+    | S.EdgeRole.StringLengthComparison(a0) -> Fidelity.PSG.EdgeRole.StringLengthComparison(a0)
+    | S.EdgeRole.IntrinsicWriteAbi(a0) -> Fidelity.PSG.EdgeRole.IntrinsicWriteAbi(mapIntrinsicWriteImport a0)
+    | S.EdgeRole.IntrinsicWriteImport(a0) -> Fidelity.PSG.EdgeRole.IntrinsicWriteImport(mapIntrinsicWriteImport a0)
+    | S.EdgeRole.IntrinsicWriteCall(a0) -> Fidelity.PSG.EdgeRole.IntrinsicWriteCall(mapIntrinsicWriteCall a0)
+    | S.EdgeRole.IntrinsicWriteOperand(a0) -> Fidelity.PSG.EdgeRole.IntrinsicWriteOperand(nodeId a0)
+    | S.EdgeRole.IntrinsicWriteProof(a0) -> Fidelity.PSG.EdgeRole.IntrinsicWriteProof(mapIntrinsicWriteProof a0)
+    | S.EdgeRole.EagerDemand(a0) -> Fidelity.PSG.EdgeRole.EagerDemand(mapEagerFrontier a0)
+    | S.EdgeRole.EagerDemandPending -> Fidelity.PSG.EdgeRole.EagerDemandPending
+    | S.EdgeRole.StringByteStorage(a0, a1, a2) -> Fidelity.PSG.EdgeRole.StringByteStorage(a0, a1, a2)
+    | S.EdgeRole.StringByteRead -> Fidelity.PSG.EdgeRole.StringByteRead
+    | S.EdgeRole.StringByteRange(a0, a1) -> Fidelity.PSG.EdgeRole.StringByteRange(a0, a1)
+    | S.EdgeRole.StringByteSnapshot -> Fidelity.PSG.EdgeRole.StringByteSnapshot
+    | S.EdgeRole.StringToBytesSnapshot -> Fidelity.PSG.EdgeRole.StringToBytesSnapshot
+    | S.EdgeRole.StringAscii -> Fidelity.PSG.EdgeRole.StringAscii
+    | S.EdgeRole.StringUtf8Constant(a0) -> Fidelity.PSG.EdgeRole.StringUtf8Constant(a0)
+    | S.EdgeRole.LoopInduction(a0, a1) -> Fidelity.PSG.EdgeRole.LoopInduction(a0, a1)
+    | S.EdgeRole.LoopAccumulation -> Fidelity.PSG.EdgeRole.LoopAccumulation
+    | S.EdgeRole.LoopRangePending(a0) -> Fidelity.PSG.EdgeRole.LoopRangePending(mapLoopRangeResidual a0)
+    | S.EdgeRole.Callee -> Fidelity.PSG.EdgeRole.Callee
+    | S.EdgeRole.Argument -> Fidelity.PSG.EdgeRole.Argument
+    | S.EdgeRole.Parameter -> Fidelity.PSG.EdgeRole.Parameter
+    | S.EdgeRole.Body -> Fidelity.PSG.EdgeRole.Body
+    | S.EdgeRole.Scrutinee -> Fidelity.PSG.EdgeRole.Scrutinee
+    | S.EdgeRole.CaseBinding -> Fidelity.PSG.EdgeRole.CaseBinding
+    | S.EdgeRole.CaseGuard -> Fidelity.PSG.EdgeRole.CaseGuard
+    | S.EdgeRole.CaseBody -> Fidelity.PSG.EdgeRole.CaseBody
+    | S.EdgeRole.Guard -> Fidelity.PSG.EdgeRole.Guard
+    | S.EdgeRole.ThenBranch -> Fidelity.PSG.EdgeRole.ThenBranch
+    | S.EdgeRole.ElseBranch -> Fidelity.PSG.EdgeRole.ElseBranch
+    | S.EdgeRole.LoopStart -> Fidelity.PSG.EdgeRole.LoopStart
+    | S.EdgeRole.LoopFinish -> Fidelity.PSG.EdgeRole.LoopFinish
+    | S.EdgeRole.Collection -> Fidelity.PSG.EdgeRole.Collection
+    | S.EdgeRole.Handler -> Fidelity.PSG.EdgeRole.Handler
+    | S.EdgeRole.Cleanup -> Fidelity.PSG.EdgeRole.Cleanup
+    | S.EdgeRole.Element -> Fidelity.PSG.EdgeRole.Element
+    | S.EdgeRole.FieldValue -> Fidelity.PSG.EdgeRole.FieldValue
+    | S.EdgeRole.CopyFrom -> Fidelity.PSG.EdgeRole.CopyFrom
+    | S.EdgeRole.Payload -> Fidelity.PSG.EdgeRole.Payload
+    | S.EdgeRole.ArenaHint -> Fidelity.PSG.EdgeRole.ArenaHint
+    | S.EdgeRole.AssignTarget -> Fidelity.PSG.EdgeRole.AssignTarget
+    | S.EdgeRole.AssignValue -> Fidelity.PSG.EdgeRole.AssignValue
+    | S.EdgeRole.Subject -> Fidelity.PSG.EdgeRole.Subject
+    | S.EdgeRole.Index -> Fidelity.PSG.EdgeRole.Index
+    | S.EdgeRole.Member -> Fidelity.PSG.EdgeRole.Member
+    | S.EdgeRole.Operand -> Fidelity.PSG.EdgeRole.Operand
+    | S.EdgeRole.InterpolationPart -> Fidelity.PSG.EdgeRole.InterpolationPart
+    | S.EdgeRole.Attached -> Fidelity.PSG.EdgeRole.Attached
+    | S.EdgeRole.Definition -> Fidelity.PSG.EdgeRole.Definition
+    | S.EdgeRole.TypeDefinition -> Fidelity.PSG.EdgeRole.TypeDefinition
+    | S.EdgeRole.IntrinsicImplementation -> Fidelity.PSG.EdgeRole.IntrinsicImplementation
+    | S.EdgeRole.Symbol -> Fidelity.PSG.EdgeRole.Symbol
+    | S.EdgeRole.EnrichedWith -> Fidelity.PSG.EdgeRole.EnrichedWith
+    | S.EdgeRole.ProgramInitialization -> Fidelity.PSG.EdgeRole.ProgramInitialization
+    | S.EdgeRole.ProgramInitializationPending(a0) -> Fidelity.PSG.EdgeRole.ProgramInitializationPending(a0)
+    | S.EdgeRole.ProgramInitializer -> Fidelity.PSG.EdgeRole.ProgramInitializer
+    | S.EdgeRole.ProgramUnitActivation -> Fidelity.PSG.EdgeRole.ProgramUnitActivation
+    | S.EdgeRole.ProgramEntryCall -> Fidelity.PSG.EdgeRole.ProgramEntryCall
+    | S.EdgeRole.ProgramValueIntent -> Fidelity.PSG.EdgeRole.ProgramValueIntent
+    | S.EdgeRole.ProgramValue -> Fidelity.PSG.EdgeRole.ProgramValue
+    | S.EdgeRole.ProgramActivationCall -> Fidelity.PSG.EdgeRole.ProgramActivationCall
+    | S.EdgeRole.ProgramActivationCoverage -> Fidelity.PSG.EdgeRole.ProgramActivationCoverage
+    | S.EdgeRole.SequenceInputBorrow -> Fidelity.PSG.EdgeRole.SequenceInputBorrow
+    | S.EdgeRole.CallableInvocationBorrow -> Fidelity.PSG.EdgeRole.CallableInvocationBorrow
+    | S.EdgeRole.BranchOccurrence -> Fidelity.PSG.EdgeRole.BranchOccurrence
+    | S.EdgeRole.CaptureOrigin -> Fidelity.PSG.EdgeRole.CaptureOrigin
+    | S.EdgeRole.EnvironmentCapture(a0) -> Fidelity.PSG.EdgeRole.EnvironmentCapture(a0)
+    | S.EdgeRole.EnvironmentInitializer -> Fidelity.PSG.EdgeRole.EnvironmentInitializer
+    | S.EdgeRole.EnvironmentFormal -> Fidelity.PSG.EdgeRole.EnvironmentFormal
+    | S.EdgeRole.LazyInstance -> Fidelity.PSG.EdgeRole.LazyInstance
+    | S.EdgeRole.LazyCapture(a0) -> Fidelity.PSG.EdgeRole.LazyCapture(a0)
+    | S.EdgeRole.LazyMemoization -> Fidelity.PSG.EdgeRole.LazyMemoization
+    | S.EdgeRole.LazyResultDestination -> Fidelity.PSG.EdgeRole.LazyResultDestination
+    | S.EdgeRole.LazyResultCall -> Fidelity.PSG.EdgeRole.LazyResultCall
+    | S.EdgeRole.LazyResidence -> Fidelity.PSG.EdgeRole.LazyResidence
+    | S.EdgeRole.LazyLayout -> Fidelity.PSG.EdgeRole.LazyLayout
+    | S.EdgeRole.EnvironmentResidence -> Fidelity.PSG.EdgeRole.EnvironmentResidence
+    | S.EdgeRole.EnvironmentResultDestination -> Fidelity.PSG.EdgeRole.EnvironmentResultDestination
+    | S.EdgeRole.EnvironmentResultCall -> Fidelity.PSG.EdgeRole.EnvironmentResultCall
+    | S.EdgeRole.SequenceCaptureFormation -> Fidelity.PSG.EdgeRole.SequenceCaptureFormation
+    | S.EdgeRole.SequenceCaptureInitializer(a0) -> Fidelity.PSG.EdgeRole.SequenceCaptureInitializer(a0)
+    | S.EdgeRole.SequenceEnvironmentBorrow -> Fidelity.PSG.EdgeRole.SequenceEnvironmentBorrow
+    | S.EdgeRole.SequenceResultCapture -> Fidelity.PSG.EdgeRole.SequenceResultCapture
+    | S.EdgeRole.Delimiter -> Fidelity.PSG.EdgeRole.Delimiter
+    | S.EdgeRole.DelegationOrigin -> Fidelity.PSG.EdgeRole.DelegationOrigin
+    | S.EdgeRole.IteratorCurrentAdmitted -> Fidelity.PSG.EdgeRole.IteratorCurrentAdmitted
+    | S.EdgeRole.SequenceElementAdmission -> Fidelity.PSG.EdgeRole.SequenceElementAdmission
+    | S.EdgeRole.SequenceElementOwner -> Fidelity.PSG.EdgeRole.SequenceElementOwner
+    | S.EdgeRole.SequenceElementPayload -> Fidelity.PSG.EdgeRole.SequenceElementPayload
+    | S.EdgeRole.SequenceElementUnknown -> Fidelity.PSG.EdgeRole.SequenceElementUnknown
+    | S.EdgeRole.SequencePullBody -> Fidelity.PSG.EdgeRole.SequencePullBody
+    | S.EdgeRole.SequenceInitialize -> Fidelity.PSG.EdgeRole.SequenceInitialize
+    | S.EdgeRole.SequenceFamilyLayout -> Fidelity.PSG.EdgeRole.SequenceFamilyLayout
+    | S.EdgeRole.SequenceFamilyCurrent -> Fidelity.PSG.EdgeRole.SequenceFamilyCurrent
+    | S.EdgeRole.SequenceTemplateCopy -> Fidelity.PSG.EdgeRole.SequenceTemplateCopy
+    | S.EdgeRole.SequenceEffectUnknown -> Fidelity.PSG.EdgeRole.SequenceEffectUnknown
+    | S.EdgeRole.SuspensionCut(a0) -> Fidelity.PSG.EdgeRole.SuspensionCut(a0)
+    | S.EdgeRole.SuspensionLiveAcross -> Fidelity.PSG.EdgeRole.SuspensionLiveAcross
+    | S.EdgeRole.SuspensionResume(a0) -> Fidelity.PSG.EdgeRole.SuspensionResume(a0)
+    | S.EdgeRole.SuspensionResumeAction(a0) -> Fidelity.PSG.EdgeRole.SuspensionResumeAction(a0)
+    | S.EdgeRole.SuspensionCompleted -> Fidelity.PSG.EdgeRole.SuspensionCompleted
+    | S.EdgeRole.EvaluationOperand(a0) -> Fidelity.PSG.EdgeRole.EvaluationOperand(mapEvaluationAccess a0)
+    | S.EdgeRole.EvaluationFlow(a0, a1, a2) -> Fidelity.PSG.EdgeRole.EvaluationFlow(mapEvaluationPort a0, mapEvaluationPort a1, mapEvaluationTransfer a2)
+    | S.EdgeRole.EvaluationCapture -> Fidelity.PSG.EdgeRole.EvaluationCapture
+    | S.EdgeRole.EvaluationRoot -> Fidelity.PSG.EdgeRole.EvaluationRoot
+    | S.EdgeRole.EvaluationPending(a0) -> Fidelity.PSG.EdgeRole.EvaluationPending(mapEvaluationResidual a0)
+    | S.EdgeRole.ContinuationCase(a0) -> Fidelity.PSG.EdgeRole.ContinuationCase(a0)
+    | S.EdgeRole.MatchRequirement -> Fidelity.PSG.EdgeRole.MatchRequirement
+    | S.EdgeRole.ContinuationDefault -> Fidelity.PSG.EdgeRole.ContinuationDefault
+    | S.EdgeRole.FrameSlot -> Fidelity.PSG.EdgeRole.FrameSlot
+    | S.EdgeRole.ContinuationValue -> Fidelity.PSG.EdgeRole.ContinuationValue
+    | S.EdgeRole.ContinuationSlotAccess -> Fidelity.PSG.EdgeRole.ContinuationSlotAccess
+    | S.EdgeRole.ContinuationRegion -> Fidelity.PSG.EdgeRole.ContinuationRegion
+    | S.EdgeRole.ContinuationBorrow -> Fidelity.PSG.EdgeRole.ContinuationBorrow
+    | S.EdgeRole.AggregateCopy -> Fidelity.PSG.EdgeRole.AggregateCopy
+    | S.EdgeRole.AggregateSnapshot -> Fidelity.PSG.EdgeRole.AggregateSnapshot
+    | S.EdgeRole.SequenceTemplateBorrow -> Fidelity.PSG.EdgeRole.SequenceTemplateBorrow
+    | S.EdgeRole.Resides -> Fidelity.PSG.EdgeRole.Resides
+    | S.EdgeRole.Constrains -> Fidelity.PSG.EdgeRole.Constrains
+    | S.EdgeRole.CallableReferenceOrigin -> Fidelity.PSG.EdgeRole.CallableReferenceOrigin
+    | S.EdgeRole.CaptureReferenceOrigin -> Fidelity.PSG.EdgeRole.CaptureReferenceOrigin
+    | S.EdgeRole.LoopLinearRecurrence -> Fidelity.PSG.EdgeRole.LoopLinearRecurrence
+    | S.EdgeRole.EnvironmentInvocation -> Fidelity.PSG.EdgeRole.EnvironmentInvocation
+    | S.EdgeRole.SequenceProgramStorage -> Fidelity.PSG.EdgeRole.SequenceProgramStorage
+    | S.EdgeRole.SchemeSpecialization -> Fidelity.PSG.EdgeRole.SchemeSpecialization
+    | S.EdgeRole.LazyEffectRange -> Fidelity.PSG.EdgeRole.LazyEffectRange
+    | S.EdgeRole.OrdinaryUnusedFormal -> Fidelity.PSG.EdgeRole.OrdinaryUnusedFormal
+    | S.EdgeRole.OrdinaryUnusedActual -> Fidelity.PSG.EdgeRole.OrdinaryUnusedActual
+    | S.EdgeRole.FiniteCellRange -> Fidelity.PSG.EdgeRole.FiniteCellRange
+
 and mapEmissionStrategy (value: S.EmissionStrategy) : Fidelity.PSG.EmissionStrategy =
     match value with
     | S.EmissionStrategy.Inline -> Fidelity.PSG.EmissionStrategy.Inline
@@ -429,6 +743,36 @@ and mapEscapeKind (value: S.EscapeKind) : Fidelity.PSG.EscapeKind =
     | S.EscapeKind.EscapesViaReturn -> Fidelity.PSG.EscapeKind.EscapesViaReturn
     | S.EscapeKind.EscapesViaByRef -> Fidelity.PSG.EscapeKind.EscapesViaByRef
     | S.EscapeKind.StaticLifetime -> Fidelity.PSG.EscapeKind.StaticLifetime
+
+and mapEvaluationAccess (value: S.EvaluationAccess) : Fidelity.PSG.EvaluationAccess =
+    match value with
+    | S.EvaluationAccess.Value -> Fidelity.PSG.EvaluationAccess.Value
+    | S.EvaluationAccess.Storage -> Fidelity.PSG.EvaluationAccess.Storage
+
+and mapEvaluationPort (value: S.EvaluationPort) : Fidelity.PSG.EvaluationPort =
+    match value with
+    | S.EvaluationPort.Entry -> Fidelity.PSG.EvaluationPort.Entry
+    | S.EvaluationPort.OperandEntry(a0) -> Fidelity.PSG.EvaluationPort.OperandEntry(a0)
+    | S.EvaluationPort.OperandExit(a0) -> Fidelity.PSG.EvaluationPort.OperandExit(a0)
+    | S.EvaluationPort.Ready -> Fidelity.PSG.EvaluationPort.Ready
+    | S.EvaluationPort.Exit -> Fidelity.PSG.EvaluationPort.Exit
+
+and mapEvaluationResidual (value: S.EvaluationResidual) : Fidelity.PSG.EvaluationResidual =
+    match value with
+    | S.EvaluationResidual.MissingOperand -> Fidelity.PSG.EvaluationResidual.MissingOperand
+    | S.EvaluationResidual.InvalidShape -> Fidelity.PSG.EvaluationResidual.InvalidShape
+    | S.EvaluationResidual.MatchSelection -> Fidelity.PSG.EvaluationResidual.MatchSelection
+    | S.EvaluationResidual.ExceptionFlow -> Fidelity.PSG.EvaluationResidual.ExceptionFlow
+    | S.EvaluationResidual.CollectionIteration -> Fidelity.PSG.EvaluationResidual.CollectionIteration
+    | S.EvaluationResidual.CountedIteration -> Fidelity.PSG.EvaluationResidual.CountedIteration
+    | S.EvaluationResidual.Delegation -> Fidelity.PSG.EvaluationResidual.Delegation
+
+and mapEvaluationTransfer (value: S.EvaluationTransfer) : Fidelity.PSG.EvaluationTransfer =
+    match value with
+    | S.EvaluationTransfer.Continue -> Fidelity.PSG.EvaluationTransfer.Continue
+    | S.EvaluationTransfer.WhenTrue -> Fidelity.PSG.EvaluationTransfer.WhenTrue
+    | S.EvaluationTransfer.WhenFalse -> Fidelity.PSG.EvaluationTransfer.WhenFalse
+    | S.EvaluationTransfer.Resume -> Fidelity.PSG.EvaluationTransfer.Resume
 
 and mapExactRational (value: N.ExactRational) : Fidelity.PSG.ExactRational =
     ({
@@ -504,6 +848,15 @@ and mapHardwareStateFieldWitness (value: S.HardwareStateFieldWitness) : Fidelity
         Range = mapValueRange value.Range
         Capacity = mapValueRange value.Capacity
     } : Fidelity.PSG.HardwareStateFieldWitness)
+
+and mapHyperedge (value: S.Hyperedge) : Fidelity.PSG.Hyperedge =
+    ({
+        Sources = (value.Sources |> List.map (fun x -> nodeId x))
+        Target = nodeId value.Target
+        Class = mapEdgeClass value.Class
+        Role = mapEdgeRole value.Role
+        Ordinal = value.Ordinal
+    } : Fidelity.PSG.Hyperedge)
 
 and mapInterpolatedPart (value: S.InterpolatedPart) : Fidelity.PSG.InterpolatedPart =
     match value with
@@ -721,6 +1074,19 @@ and mapLazyWitnessContract (value: S.LazyWitnessContract) : Fidelity.PSG.LazyWit
         ThunkBody = nodeId value.ThunkBody
     } : Fidelity.PSG.LazyWitnessContract)
 
+and mapLoopRangeResidual (value: S.LoopRangeResidual) : Fidelity.PSG.LoopRangeResidual =
+    match value with
+    | S.LoopRangeResidual.Guard -> Fidelity.PSG.LoopRangeResidual.Guard
+    | S.LoopRangeResidual.Step -> Fidelity.PSG.LoopRangeResidual.Step
+    | S.LoopRangeResidual.OtherWrites -> Fidelity.PSG.LoopRangeResidual.OtherWrites
+    | S.LoopRangeResidual.ConditionalUpdate -> Fidelity.PSG.LoopRangeResidual.ConditionalUpdate
+    | S.LoopRangeResidual.CapturedCell -> Fidelity.PSG.LoopRangeResidual.CapturedCell
+    | S.LoopRangeResidual.UnknownEffect -> Fidelity.PSG.LoopRangeResidual.UnknownEffect
+    | S.LoopRangeResidual.Reentry -> Fidelity.PSG.LoopRangeResidual.Reentry
+    | S.LoopRangeResidual.NonAdditive -> Fidelity.PSG.LoopRangeResidual.NonAdditive
+    | S.LoopRangeResidual.MissingBound -> Fidelity.PSG.LoopRangeResidual.MissingBound
+    | S.LoopRangeResidual.ProofResources -> Fidelity.PSG.LoopRangeResidual.ProofResources
+
 and mapMappedSpanModel (value: S.MappedSpanModel) : Fidelity.PSG.MappedSpanModel =
     ({
         PointerBits = value.PointerBits
@@ -860,6 +1226,23 @@ and mapMemoryBoundsWitness (value: S.MemoryBoundsWitness) : Fidelity.PSG.MemoryB
         Participants = (value.Participants |> Set.map (fun x -> nodeId x))
     } : Fidelity.PSG.MemoryBoundsWitness)
 
+and mapMemoryDomain (value: S.MemoryDomain) : Fidelity.PSG.MemoryDomain =
+    ({
+        Premises = (value.Premises |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundarySourcePremise v) |> Map.ofSeq)
+        Platform = (value.Platform |> Option.map (fun x -> mapBoundaryPlatformPremise x))
+        Meets = (value.Meets |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> List.map (fun x -> mapMeet x))) |> Map.ofSeq)
+        Guards = (value.Guards |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, (t1 |> List.map (fun x -> nodeId x))))))
+        Requirements = (value.Requirements |> List.map (fun x -> (let (t0, t1, t2) = x in (t0, nodeId t1, (t2 |> List.map (fun x -> nodeId x))))))
+        StringRelations = (value.StringRelations |> List.map (fun x -> mapMemoryStringRelation x))
+        AllocationConstructions = (value.AllocationConstructions |> List.map (fun x -> mapArrayAllocationConstruction x))
+        CopyConstructions = (value.CopyConstructions |> List.map (fun x -> mapArrayCopyConstruction x))
+        ArrayCopies = (value.ArrayCopies |> List.map (fun x -> mapMemoryArrayCopyWitness x))
+        Proofs = (value.Proofs |> List.map (fun x -> mapMemoryProof x))
+        Required = (value.Required |> Set.map (fun x -> nodeId x))
+        Operations = (value.Operations |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapMemoryWitnessOperation t1))))
+        Unresolved = (value.Unresolved |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, v) |> Map.ofSeq)
+    } : Fidelity.PSG.MemoryDomain)
+
 and mapMemoryExtentWitness (value: S.MemoryExtentWitness) : Fidelity.PSG.MemoryExtentWitness =
     ({
         Site = nodeId value.Site
@@ -879,11 +1262,42 @@ and mapMemoryPlace (value: S.MemoryPlace) : Fidelity.PSG.MemoryPlace =
     | S.MemoryPlace.ArrayElement(a0, a1, a2) -> Fidelity.PSG.MemoryPlace.ArrayElement(nodeId a0, nodeId a1, mapMemoryBoundsWitness a2)
     | S.MemoryPlace.RecordField(a0, a1, a2) -> Fidelity.PSG.MemoryPlace.RecordField(nodeId a0, a1, mapSettledField a2)
 
+and mapMemoryProof (value: S.MemoryProof) : Fidelity.PSG.MemoryProof =
+    ({
+        Site = nodeId value.Site
+        Obligation = nodeId value.Obligation
+        Body = mapObligationBody value.Body
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+        Proven = value.Proven
+    } : Fidelity.PSG.MemoryProof)
+
 and mapMemoryResidence (value: S.MemoryResidence) : Fidelity.PSG.MemoryResidence =
     match value with
     | S.MemoryResidence.Stack(a0, a1) -> Fidelity.PSG.MemoryResidence.Stack(nodeId a0, nodeId a1)
     | S.MemoryResidence.Program(a0) -> Fidelity.PSG.MemoryResidence.Program(mapProgramStorageIdentity a0)
     | S.MemoryResidence.ImmutableProgram(a0) -> Fidelity.PSG.MemoryResidence.ImmutableProgram(nodeId a0)
+
+and mapMemoryStringPremise (value: S.MemoryStringPremise) : Fidelity.PSG.MemoryStringPremise =
+    match value with
+    | S.MemoryStringPremise.Snapshot -> Fidelity.PSG.MemoryStringPremise.Snapshot
+    | S.MemoryStringPremise.ToBytesSnapshot -> Fidelity.PSG.MemoryStringPremise.ToBytesSnapshot
+    | S.MemoryStringPremise.Copy -> Fidelity.PSG.MemoryStringPremise.Copy
+    | S.MemoryStringPremise.Storage(a0, a1, a2) -> Fidelity.PSG.MemoryStringPremise.Storage(a0, a1, a2)
+    | S.MemoryStringPremise.Read -> Fidelity.PSG.MemoryStringPremise.Read
+    | S.MemoryStringPremise.ReadRange(a0, a1) -> Fidelity.PSG.MemoryStringPremise.ReadRange(a0, a1)
+    | S.MemoryStringPremise.Ascii -> Fidelity.PSG.MemoryStringPremise.Ascii
+    | S.MemoryStringPremise.Utf8Constant(a0) -> Fidelity.PSG.MemoryStringPremise.Utf8Constant(a0)
+    | S.MemoryStringPremise.ByteView(a0) -> Fidelity.PSG.MemoryStringPremise.ByteView(mapBoundaryByteView a0)
+    | S.MemoryStringPremise.Extent(a0) -> Fidelity.PSG.MemoryStringPremise.Extent(mapBoundaryStringExtent a0)
+
+and mapMemoryStringRelation (value: S.MemoryStringRelation) : Fidelity.PSG.MemoryStringRelation =
+    ({
+        Class = mapEdgeClass value.Class
+        Premise = mapMemoryStringPremise value.Premise
+        Ordinal = value.Ordinal
+        Sources = (value.Sources |> List.map (fun x -> nodeId x))
+        Target = nodeId value.Target
+    } : Fidelity.PSG.MemoryStringRelation)
 
 and mapMemoryStringViewDirection (value: S.MemoryStringViewDirection) : Fidelity.PSG.MemoryStringViewDirection =
     match value with
@@ -1050,6 +1464,36 @@ and mapNominalTypeIdentity (value: N.NominalTypeIdentity) : Fidelity.PSG.Nominal
         Name = value.Name
     } : Fidelity.PSG.NominalTypeIdentity)
 
+and mapNumericDomain (value: S.NumericDomain) : Fidelity.PSG.NumericDomain =
+    ({
+        Premises = (value.Premises |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundarySourcePremise v) |> Map.ofSeq)
+        Platform = (value.Platform |> Option.map (fun x -> mapBoundaryPlatformPremise x))
+        Roots = (value.Roots |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapDeclRoot t1))))
+        Escaping = (value.Escaping |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, v) |> Map.ofSeq)
+        Layouts = (value.Layouts |> Map.toSeq |> Seq.map (fun (k, v) -> mapTypeIdentity k, mapSettledLayout v) |> Map.ofSeq)
+        Required = (value.Required |> Set.map (fun x -> nodeId x))
+        ResultSites = (value.ResultSites |> Set.map (fun x -> nodeId x))
+        SourceTypes = (value.SourceTypes |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapTypeIdentity v) |> Map.ofSeq)
+        Elements = (value.Elements |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapSettledSlot v) |> Map.ofSeq)
+        ElementTypes = (value.ElementTypes |> Map.toSeq |> Seq.map (fun (k, v) -> mapTypeIdentity k, mapSettledSlot v) |> Map.ofSeq)
+        DeclaredScalars = (value.DeclaredScalars |> Map.toSeq |> Seq.map (fun (k, v) -> mapNTUKind k, mapSettledSlot v) |> Map.ofSeq)
+        OccurrenceRepresentations = (value.OccurrenceRepresentations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (match v with Ok x -> Ok (mapValueRepresentation x) | Error x -> Error (x))) |> Map.ofSeq)
+        TypeRepresentations = (value.TypeRepresentations |> Map.toSeq |> Seq.map (fun (k, v) -> mapTypeIdentity k, (match v with Ok x -> Ok (mapValueRepresentation x) | Error x -> Error (x))) |> Map.ofSeq)
+        ElementRanges = (value.ElementRanges |> Map.toSeq |> Seq.map (fun (k, v) -> mapTypeIdentity k, mapValueRange v) |> Map.ofSeq)
+        ByteRanges = (value.ByteRanges |> List.map (fun x -> (let (t0, t1, t2, t3, t4) = x in (nodeId t0, (t1 |> List.map (fun x -> nodeId x)), t2, t3, t4))))
+        ByteReadRanges = (value.ByteReadRanges |> List.map (fun x -> (let (t0, t1, t2, t3) = x in (nodeId t0, (t1 |> List.map (fun x -> nodeId x)), t2, t3))))
+        ByteViews = (value.ByteViews |> List.map (fun x -> mapBoundaryByteView x))
+        StringExtents = (value.StringExtents |> List.map (fun x -> mapBoundaryStringExtent x))
+        Values = (value.Values |> List.map (fun x -> mapScalarCarrier x))
+        Operations = (value.Operations |> List.map (fun x -> mapNumericOperationWitness x))
+        OperationRequired = (value.OperationRequired |> Set.map (fun x -> nodeId x))
+        OperationMeets = (value.OperationMeets |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> List.map (fun x -> mapMeet x))) |> Map.ofSeq)
+        OperationProofs = (value.OperationProofs |> List.map (fun x -> mapNumericOperationProof x))
+        IndexTransports = (value.IndexTransports |> List.map (fun x -> mapNumericIndexTransport x))
+        IndexRequired = (value.IndexRequired |> Set.map (fun x -> nodeId x))
+        Unresolved = (value.Unresolved |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, v) |> Map.ofSeq)
+    } : Fidelity.PSG.NumericDomain)
+
 and mapNumericIndexTransport (value: S.NumericIndexTransport) : Fidelity.PSG.NumericIndexTransport =
     ({
         Site = nodeId value.Site
@@ -1100,6 +1544,15 @@ and mapNumericOperationOperand (value: S.NumericOperationOperand) : Fidelity.PSG
         Carrier = (value.Carrier |> Option.map (fun x -> mapScalarCarrier x))
         Adaptation = (value.Adaptation |> Option.map (fun x -> mapMeet x))
     } : Fidelity.PSG.NumericOperationOperand)
+
+and mapNumericOperationProof (value: S.NumericOperationProof) : Fidelity.PSG.NumericOperationProof =
+    ({
+        Site = nodeId value.Site
+        Obligation = nodeId value.Obligation
+        Body = mapObligationBody value.Body
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+        Proven = value.Proven
+    } : Fidelity.PSG.NumericOperationProof)
 
 and mapNumericOperationWitness (value: S.NumericOperationWitness) : Fidelity.PSG.NumericOperationWitness =
     ({
@@ -1538,6 +1991,24 @@ and mapSourceRange (value: N.SourceRange) : Fidelity.PSG.SourceRange =
         End = mapPosition value.End
     } : Fidelity.PSG.SourceRange)
 
+and mapSpatialModuleDomain (value: S.SpatialModuleDomain) : Fidelity.PSG.SpatialModuleDomain =
+    ({
+        Premises = (value.Premises |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundarySourcePremise v) |> Map.ofSeq)
+        SourceFiles = (value.SourceFiles |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, v) |> Map.ofSeq)
+        Platform = (value.Platform |> Option.map (fun x -> mapBoundaryPlatformPremise x))
+        Meets = (value.Meets |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> List.map (fun x -> mapMeet x))) |> Map.ofSeq)
+        Representations = (value.Representations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (match v with Ok x -> Ok (mapValueRepresentation x) | Error x -> Error (x))) |> Map.ofSeq)
+        Carriers = (value.Carriers |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapScalarCarrier v) |> Map.ofSeq)
+        NumericOperations = (value.NumericOperations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapNumericOperationWitness v) |> Map.ofSeq)
+        FieldRanges = (value.FieldRanges |> Map.toSeq |> Seq.map (fun (k, v) -> mapNominalTypeIdentity k, (v |> Map.map (fun _ x -> mapValueRange x))) |> Map.ofSeq)
+        Pins = (value.Pins |> Option.map (fun x -> mapPinMapping x))
+        Required = (value.Required |> Set.map (fun x -> nodeId x))
+        Hardware = (value.Hardware |> List.map (fun x -> mapHardwareModuleWitness x))
+        Kernels = (value.Kernels |> List.map (fun x -> mapKernelModuleWitness x))
+        Proofs = (value.Proofs |> List.map (fun x -> mapSpatialProof x))
+        Unresolved = (value.Unresolved |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, v) |> Map.ofSeq)
+    } : Fidelity.PSG.SpatialModuleDomain)
+
 and mapSpatialModuleProjection (value: S.SpatialModuleProjection) : Fidelity.PSG.SpatialModuleProjection =
     ({
         Hardware = (value.Hardware |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapHardwareModuleWitness v) |> Map.ofSeq)
@@ -1552,6 +2023,15 @@ and mapSpatialModuleWitness (value: S.SpatialModuleWitness) : Fidelity.PSG.Spati
     match value with
     | S.SpatialModuleWitness.Hardware(a0) -> Fidelity.PSG.SpatialModuleWitness.Hardware(mapHardwareModuleWitness a0)
     | S.SpatialModuleWitness.Kernel(a0) -> Fidelity.PSG.SpatialModuleWitness.Kernel(mapKernelModuleWitness a0)
+
+and mapSpatialProof (value: S.SpatialProof) : Fidelity.PSG.SpatialProof =
+    ({
+        Site = nodeId value.Site
+        Obligation = nodeId value.Obligation
+        Body = mapObligationBody value.Body
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+        Proven = value.Proven
+    } : Fidelity.PSG.SpatialProof)
 
 and mapStartupInitializerWitness (value: S.StartupInitializerWitness) : Fidelity.PSG.StartupInitializerWitness =
     ({
@@ -1654,6 +2134,18 @@ and mapTypeIdentity (value: N.TypeIdentity) : Fidelity.PSG.TypeIdentity =
     | N.TypeIdentity.Map(a0, a1) -> Fidelity.PSG.TypeIdentity.Map(mapTypeIdentity a0, mapTypeIdentity a1)
     | N.TypeIdentity.Set(a0) -> Fidelity.PSG.TypeIdentity.Set(mapTypeIdentity a0)
     | N.TypeIdentity.Error(a0) -> Fidelity.PSG.TypeIdentity.Error(a0)
+
+and mapTypeLayout (value: N.TypeLayout) : Fidelity.PSG.TypeLayout =
+    match value with
+    | N.TypeLayout.Inline(a0, a1) -> Fidelity.PSG.TypeLayout.Inline(a0, a1)
+    | N.TypeLayout.Reference(a0) -> Fidelity.PSG.TypeLayout.Reference(mapArenaAffinity a0)
+    | N.TypeLayout.Opaque -> Fidelity.PSG.TypeLayout.Opaque
+    | N.TypeLayout.PlatformWord -> Fidelity.PSG.TypeLayout.PlatformWord
+    | N.TypeLayout.FatPointer -> Fidelity.PSG.TypeLayout.FatPointer
+    | N.TypeLayout.NTUCompound(a0) -> Fidelity.PSG.TypeLayout.NTUCompound(a0)
+    | N.TypeLayout.Qualified(a0, a1) -> Fidelity.PSG.TypeLayout.Qualified(mapTypeLayout a0, mapNTUQualifiers a1)
+    | N.TypeLayout.Record -> Fidelity.PSG.TypeLayout.Record
+    | N.TypeLayout.Union -> Fidelity.PSG.TypeLayout.Union
 
 and mapTypeParamKind (value: N.TypeParamKind) : Fidelity.PSG.TypeParamKind =
     match value with

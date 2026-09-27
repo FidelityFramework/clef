@@ -33,7 +33,7 @@ let flags = BindingFlags.Public ||| BindingFlags.NonPublic
 
 /// Contract types assembled by hand in RevisionPublication.fs.
 let assembledByHand =
-    set [ "SemanticNode"; "Revision"; "RevisionHeader"; "Codata"; "PlatformWidths"
+    set [ "SemanticNode"; "Revision"; "RevisionHeader"; "Codata"; "PlatformWidths"; "IntegrityViolation"
           "BorrowedViewLayout"; "BorrowedViewOperation"; "MmioOperation"
           "ForeignStorageProjection"; "EagerDemandRelation"; "ExplicitDemandProjection"
           "NodeId" ]

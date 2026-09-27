@@ -107,6 +107,7 @@
     <Compile Include="BoundaryEmissionCases.fs" />
     <Compile Include="IntrinsicWriteCases.fs" />
     <Compile Include="NumericPublicationCases.fs" />
+    <Compile Include="PublicationContractCases.fs" />
     <Compile Include="NumericOperationCases.fs" />
     <Compile Include="MemoryAccessCases.fs" />
     <Compile Include="ArrayConstructionCases.fs" />

@@ -179,6 +179,15 @@ let private publishObligationSources (graph: SemanticGraph) : Map<Fidelity.PSG.N
     |> List.map (fun (target, edges) -> nodeId target, edges |> List.map (fun edge -> List.map nodeId edge.Sources))
     |> Map.ofList
 
+/// The entire edge set. Relations implied by a node's kind are projected here once,
+/// under the source owner, so that no reader derives them from kinds.
+let private publishEdges (graph: SemanticGraph) : Fidelity.PSG.Hyperedge list =
+    let implied =
+        graph.Nodes
+        |> Map.toList
+        |> List.collect (fun (_, node) -> Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node)
+    implied @ graph.Edges |> List.map mapHyperedge
+
 let private publishWidths (platform: PlatformContext) : Fidelity.PSG.PlatformWidths =
     let width dimension = PlatformContext.tryWidth platform (WidthDimension.name dimension)
     { Register = width WidthDimension.Register; Pointer = width WidthDimension.Pointer }
@@ -196,6 +205,7 @@ let publish (platform: PlatformContext) (graph: SemanticGraph) : Result<Fidelity
                 let obligations = Clef.Compiler.Nanopass.ObligationDischarge.ofGraph graph
                 Ok ({ Header = { Schema = Contract.Schema; Producer = Producer }
                       Nodes = nodes
+                      Edges = publishEdges graph
                       DeclarationRoots = graph.DeclarationRoots |> List.map (fun (id, root) -> nodeId id, mapDeclRoot root)
                       ModuleClassifications =
                         graph.ModuleClassifications.Value
