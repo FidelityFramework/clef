@@ -11,8 +11,7 @@ module Declaration = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolutio
 
 /// BAREWire chooses the offsets. The compiler materializes exactly that plan;
 /// its immutable bytes and views then travel to both proof and native emission.
-let settle (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
-    let deferred = OrdinaryDemand.deferredOnly graph
+let private settleWith (deferred: Set<NodeId>) (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
     let graph = { graph with StaticStringPool = None }
     let literals =
         graph.Nodes |> Map.toList |> List.map snd
@@ -24,14 +23,18 @@ let settle (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
         |> List.sortBy (fun (_, node) -> node.Range.File, node.Range.Start.Line, node.Range.Start.Column, node.Id)
         |> List.groupBy fst
     let reading = Declaration.read graph
+    let error (site: SemanticNode) message =
+        { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8206"
+          Message = "Cannot settle BAREWire static string storage: " + message
+          Range = site.Range; RelatedNodes = [site.Id]; Reachability = ReachabilityContext.Reachable }
     match literals, reading.Platform with
-    | [], _ | _, None -> graph, []
-    | _, Some _ when not reading.Findings.IsEmpty -> graph, [] // The declaration checker reports these defects.
+    | [], _ -> graph, []
+    | _, _ when not reading.Findings.IsEmpty -> graph, [] // The declaration checker reports these defects.
+    // Type checking without a selected target settles no image storage.
+    | _, None when graph.Platform.IsNone -> graph, []
+    | (_, (_, first) :: _) :: _, None ->
+        graph, [error first (sprintf "PSG settlement (StaticStringLayout) did not settle immutable program storage for string literal node %d: the selected target compiles no platform description to supply its immutable program-lifetime space." (NodeId.value first.Id))]
     | (_, (_, first) :: _) :: _, Some platform ->
-        let error (site: SemanticNode) message =
-            { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8206"
-              Message = "Cannot settle BAREWire static string storage: " + message
-              Range = site.Range; RelatedNodes = [site.Id]; Reachability = ReachabilityContext.Reachable }
         match Declaration.immutableProgramSpace platform with
         | None -> graph, [error first "the platform has no immutable program-lifetime space designation."]
         | Some declared ->
@@ -64,7 +67,14 @@ let settle (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
                       Entries = entries; SpaceName = declared.Name; Capacity = declared.Capacity
                       SpaceAlignment = declared.Alignment; Granularity = declared.Granularity; DeclarationNode = declared.Node }
                 { graph with StaticStringPool = Some pool }, []
-    | _ -> graph, []
+    | (_, []) :: _, _ -> invalidOp "StaticStringLayout: List.groupBy produced an empty literal group."
+
+/// Settle the immutable string pool from the validated demand reading. A demand
+/// mismatch is reported here (CCS8403), never read as "no omitted literal".
+let settle (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
+    match OrdinaryDemand.tryDeferredOnly graph with
+    | Result.Error failures -> { graph with StaticStringPool = None }, OrdinaryDemand.diagnostics graph failures
+    | Result.Ok deferred -> settleWith deferred graph
 
 /// A retained string view may cite immutable program backing only while the
 /// current literals and selected declaration still establish this exact pool.

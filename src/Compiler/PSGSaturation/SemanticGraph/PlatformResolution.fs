@@ -409,8 +409,23 @@ let private readCore (graph: SemanticGraph) (id: NodeId) : DeclaredCore option *
             let optionalText name = field name fields |> Option.bind (optionOf graph) |> Option.flatten |> Option.bind (stringOf graph) |> Option.defaultValue ""
             let triple = if text "Triple" <> "" then text "Triple" else optionalText "TripleOverride"
             let cpu = if text "CpuModel" <> "" then text "CpuModel" else optionalText "CpuModel"
+            // An identity field the core does not carry is undeclared (""); one it
+            // carries must read as a string literal or `Some`/`None` of one, never
+            // collapse to the undeclared spelling.
+            let identityFindings =
+                [ "Arch"; "Os"; "Runtime"; "Triple"; "CpuModel"; "TripleOverride" ]
+                |> List.choose (fun name ->
+                    field name fields |> Option.bind (fun id ->
+                        let readable =
+                            (stringOf graph id).IsSome ||
+                            (match optionOf graph id with
+                             | Some None -> true
+                             | Some (Some payload) -> (stringOf graph payload).IsSome
+                             | None -> false)
+                        if readable then None
+                        else Some (findingOn graph id DeclarationDefect.Malformed (sprintf "TargetCore.%s must be a string literal, or Some/None of one" name))))
             Some { Node = node.Id; Arch = text "Arch"; Os = text "Os"; Runtime = text "Runtime"; Triple = triple; CpuModel = cpu; Widths = widths; Representations = representations },
-            widthFindings @ representationFindings @ duplicateWidths @ duplicateRepresentations @ wordSizeFindings
+            widthFindings @ representationFindings @ duplicateWidths @ duplicateRepresentations @ wordSizeFindings @ identityFindings
         | _ -> None, [ findingOn graph coreId DeclarationDefect.Malformed "Core's payload is not a TargetCore record" ]
 
 /// The two record types a description is declared as: BAREWire's
@@ -916,7 +931,9 @@ let private readTypeRef (graph: SemanticGraph) (id: NodeId) : Result<(int * Valu
         | Some bits -> Error (findingAt node DeclarationDefect.Invalid (sprintf "a %s of %d bits; a width is a positive number of bits" case bits))
         | None -> Error (findingAt node DeclarationDefect.Malformed (sprintf "a %s's bits must be an integer literal" case))
     | Some (_, "Bool", _) -> Ok (Some (1, ValueRange.boolean))
-    | Some (_, ("Void" | "Named"), _) -> Ok None
+    | Some (_, "Void", _) -> Ok None
+    | Some (_, "Named", Some payload) when (stringOf graph payload).IsSome -> Ok None
+    | Some (node, "Named", _) -> Error (findingAt node DeclarationDefect.Malformed "a Named TypeRef's payload must be a string literal naming the record")
     | Some (node, other, _) -> Error (findingAt node DeclarationDefect.Invalid (sprintf "'%s' is not a TypeRef case the BAREWire vocabulary names" other))
     | None -> Error (findingOn graph id DeclarationDefect.Malformed "a Type must be a TypeRef case (Integer, Float, Pointer, Bool, Void, Named)")
 
@@ -926,10 +943,20 @@ let private readParameter (graph: SemanticGraph) (id: NodeId) : Result<(string *
     | Some (node, fields) when typeName node = Some "ParameterInfo" ->
         match field "Name" fields |> Option.bind (stringOf graph), field "Type" fields with
         | Some name, Some typeId ->
+            // PassBy is a closed vocabulary; a present value outside it is not "by value".
+            let passBy =
+                match field "PassBy" fields with
+                | None -> Ok None
+                | Some id ->
+                    match caseOf graph id with
+                    | Some (_, ("Value" | "Reference" | "ReadOnlyReference"), _) as passing -> Ok passing
+                    | _ -> Error (findingOn graph id DeclarationDefect.Invalid (sprintf "the PassBy of parameter '%s' must be Value, Reference or ReadOnlyReference" name))
+            match passBy with
+            | Error finding -> Error finding
+            | Ok passing ->
             readTypeRef graph typeId
             |> Result.map (Option.map (fun (bits, range) -> { Node = node.Id; Name = name; Bits = bits; Range = range }))
             |> Result.map (fun declared ->
-                let passing = field "PassBy" fields |> Option.bind (caseOf graph)
                 let readOnly = passing |> Option.exists (fun (_, name, _) -> name = "ReadOnlyReference")
                 let byReference = readOnly || (passing |> Option.exists (fun (_, name, _) -> name = "Reference"))
                 let pointer =
@@ -1029,21 +1056,36 @@ let private readLayout (graph: SemanticGraph) (node: SemanticNode) (fields: (str
                     |> List.map (fun f -> findingAt (SemanticGraph.tryGetNode f.Node graph |> Option.defaultValue node) DeclarationDefect.Invalid (sprintf "the field '%s' is declared '%s' but the record '%s' carries no integer or boolean field of that name" f.Name f.Repr (NominalTypeIdentity.display one)))
                 Some one, absent
             | many -> None, [ findingAt node DeclarationDefect.Ambiguous (sprintf "the descriptor '%s' names more than one record type of the program (%s); qualify the name" name (many |> List.map NominalTypeIdentity.display |> String.concat ", ")) ]
-        let physical, size, alignment =
+        let physical, size, alignment, physicalFindings =
             match field "Layout" fields |> Option.bind (recordOf graph) with
             | Some (_, body) ->
-                let physical =
+                // Name/Repr defects and non-record elements are readField's findings; a
+                // field that reads there must also carry its measured Offset and Count.
+                let rows =
                     field "Fields" body |> Option.bind (elementsOf graph) |> Option.defaultValue []
                     |> List.choose (fun id ->
                         match recordOf graph id with
                         | Some (f, ff) ->
                             match field "Name" ff |> Option.bind (stringOf graph), field "Repr" ff |> Option.bind (stringOf graph), field "Offset" ff |> Option.bind (int64Of graph), field "Count" ff |> Option.bind (int64Of graph) with
-                            | Some name, Some repr, Some offset, Some count -> Some { Node = f.Id; Name = name; Repr = repr; Offset = int offset; Count = int count }
+                            | Some name, Some repr, Some offset, Some count -> Some (Ok { Node = f.Id; Name = name; Repr = repr; Offset = int offset; Count = int count })
+                            | Some name, Some _, _, _ ->
+                                Some (Error (findingAt f DeclarationDefect.Malformed (sprintf "the field '%s' must declare its Offset and Count as integer literals" name)))
                             | _ -> None
                         | None -> None)
-                physical, (field "Size" body |> Option.bind (int64Of graph) |> Option.map int), (field "Alignment" body |> Option.bind (int64Of graph) |> Option.map int)
-            | None -> [], None, None
-        Some { Node = node.Id; Name = name; RecordType = recordType; Fields = layoutFields; PhysicalFields = physical; Size = size; Alignment = alignment }, layoutFindings @ typeFindings
+                // Size and Alignment the body carries must read; an absent one is undeclared.
+                let measure name =
+                    match field name body with
+                    | None -> None, []
+                    | Some id ->
+                        match int64Of graph id with
+                        | Some value -> Some (int value), []
+                        | None -> None, [ findingOn graph id DeclarationDefect.Malformed (sprintf "a descriptor Layout's %s must be an integer literal" name) ]
+                let size, sizeFindings = measure "Size"
+                let alignment, alignmentFindings = measure "Alignment"
+                (rows |> List.choose (function Ok row -> Some row | Error _ -> None)), size, alignment,
+                (rows |> List.choose (function Error finding -> Some finding | Ok _ -> None)) @ sizeFindings @ alignmentFindings
+            | None -> [], None, None, []
+        Some { Node = node.Id; Name = name; RecordType = recordType; Fields = layoutFields; PhysicalFields = physical; Size = size; Alignment = alignment }, layoutFindings @ typeFindings @ physicalFindings
 
 /// The lambda a binding's value is, through an annotation.
 let lambdaOfBinding (graph: SemanticGraph) (bindingId: NodeId) : ((string * NativeType * NodeId) list * NodeId) option =

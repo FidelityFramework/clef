@@ -787,13 +787,20 @@ let checkNew
     (argExpr: SynExpr)
     (range: SourceRange)
     : SemanticNode =
-    let targetType = resolveSynType env synType
+    let _targetType = resolveSynType env synType
     let argNode = checkExpr env builder argExpr
-    builder.Create(
-        SemanticKind.Application(argNode.Id, []),
-        targetType,
-        range,
-        children = [argNode.Id])
+    // Object construction has no graph form; the constructor arguments are never encoded as a
+    // zero-argument application typed as the constructed type.
+    let message = "CCS source checking did not settle an elaboration for this 'new' expression: object construction has no native graph form."
+    addDiagnostic {
+        Severity = NativeDiagnosticSeverity.Error
+        Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+        Message = message
+        Range = range
+        RelatedNodes = [argNode.Id]
+        Reachability = ReachabilityContext.Unknown
+    } env
+    builder.Create(SemanticKind.Error message, NativeType.TError message, range, children = [argNode.Id])
 
 //-------------------------------------------------------------------------
 // Object Expression: { new Interface with ... }
@@ -812,6 +819,17 @@ let checkObjExpr
     (range: SourceRange)
     : SemanticNode =
     let interfaceType = resolveSynType env objType
+    // No witness realizes an object expression; it is refused here rather than carried
+    // through the graph as an ObjectExpr node nothing below can realize. Its members are still
+    // checked for their own diagnostics.
+    addDiagnostic {
+        Severity = NativeDiagnosticSeverity.Error
+        Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+        Message = "CCS source checking did not settle an elaboration for this object expression: object expressions have no native graph form."
+        Range = range
+        RelatedNodes = []
+        Reachability = ReachabilityContext.Unknown
+    } env
 
     let argNodeIds =
         match argOption with
@@ -899,16 +917,18 @@ let checkTraitCall
         | NativeType.TTuple(elemTys, _) -> elemTys
         | ty -> [ty]
 
-    let memberName =
+    // A trait call names one member signature; any other signature form is refused, never
+    // given an invented member name and result.
+    let memberName, resultType =
         match memberSig with
-        | SynMemberSig.Member(SynValSig(ident = SynIdent(id, _)), _, _, _) -> id.idText
-        | _ -> "unknown_trait"
-
-    let resultType =
-        match memberSig with
-        | SynMemberSig.Member(SynValSig(synType = synRetType), _, _, _) ->
-            resolveSynType env synRetType
-        | _ -> freshTypeVar range
+        | SynMemberSig.Member(SynValSig(ident = SynIdent(id, _); synType = synRetType), _, _, _) ->
+            id.idText, resolveSynType env synRetType
+        | other ->
+            let message =
+                "CCS source checking did not settle the member of this trait call: a signature of form "
+                + other.GetType().Name + " names no member."
+            addNativeError DiagnosticCodes.CCS8711_UnsupportedConstraint other.Range message env
+            message, NativeType.TError message
 
     for constrainedTy in constrainedTypes do
         addConstraint (Constraint.HasMember(constrainedTy, memberName, resultType, range)) env

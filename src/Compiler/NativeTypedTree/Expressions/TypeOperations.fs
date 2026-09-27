@@ -21,6 +21,22 @@ open Clef.Compiler.NativeTypedTree.Expressions.Types
 /// Callback for checking expressions
 type CheckExprFn = TypeEnv -> NodeBuilder -> SynExpr -> SemanticNode
 
+/// A type-directed cast or test (`:>`, `:?>`, `:?`, `upcast`, `downcast`) has no native graph
+/// form: there is no subtyping and no run-time type information to test. The operand is checked
+/// for its own diagnostics; the cast is refused at its range, never carried as an unrelated
+/// Upcast, Downcast or TypeTest node that nothing below can realize.
+let private refuseCast (builder: NodeBuilder) (env: TypeEnv) (form: string) (innerNode: SemanticNode) (range: SourceRange) : SemanticNode =
+    let message = $"CCS source checking did not settle an elaboration for this {form}: type casts and type tests have no native graph form."
+    addDiagnostic {
+        Severity = NativeDiagnosticSeverity.Error
+        Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+        Message = message
+        Range = range
+        RelatedNodes = [innerNode.Id]
+        Reachability = ReachabilityContext.Unknown
+    } env
+    builder.Create(SemanticKind.Error message, NativeType.TError message, range, children = [innerNode.Id])
+
 //-------------------------------------------------------------------------
 // Type Annotation
 //-------------------------------------------------------------------------
@@ -108,12 +124,8 @@ let checkUpcast
     : SemanticNode =
 
     let innerNode = checkExpr env builder innerExpr
-    let targetTy = resolveSynType env targetType
-    builder.Create(
-        SemanticKind.Upcast(innerNode.Id, targetTy),
-        targetTy,
-        range,
-        children = [innerNode.Id])
+    let _targetTy = resolveSynType env targetType
+    refuseCast builder env "upcast ':>'" innerNode range
 
 //-------------------------------------------------------------------------
 // InferredUpcast: upcast expr
@@ -128,12 +140,7 @@ let checkInferredUpcast
     : SemanticNode =
 
     let innerNode = checkExpr env builder innerExpr
-    let targetTy = freshTypeVar range
-    builder.Create(
-        SemanticKind.Upcast(innerNode.Id, targetTy),
-        targetTy,
-        range,
-        children = [innerNode.Id])
+    refuseCast builder env "'upcast'" innerNode range
 
 //-------------------------------------------------------------------------
 // Downcast: expr :?> type
@@ -149,12 +156,8 @@ let checkDowncast
     : SemanticNode =
 
     let innerNode = checkExpr env builder innerExpr
-    let targetTy = resolveSynType env targetType
-    builder.Create(
-        SemanticKind.Downcast(innerNode.Id, targetTy),
-        targetTy,
-        range,
-        children = [innerNode.Id])
+    let _targetTy = resolveSynType env targetType
+    refuseCast builder env "downcast ':?>'" innerNode range
 
 //-------------------------------------------------------------------------
 // InferredDowncast: downcast expr
@@ -169,12 +172,7 @@ let checkInferredDowncast
     : SemanticNode =
 
     let innerNode = checkExpr env builder innerExpr
-    let targetTy = freshTypeVar range
-    builder.Create(
-        SemanticKind.Downcast(innerNode.Id, targetTy),
-        targetTy,
-        range,
-        children = [innerNode.Id])
+    refuseCast builder env "'downcast'" innerNode range
 
 //-------------------------------------------------------------------------
 // TypeTest: expr :? type
@@ -190,12 +188,8 @@ let checkTypeTest
     : SemanticNode =
 
     let innerNode = checkExpr env builder innerExpr
-    let targetTy = resolveSynType env targetType
-    builder.Create(
-        SemanticKind.TypeTest(innerNode.Id, targetTy),
-        Types.boolType,
-        range,
-        children = [innerNode.Id])
+    let _targetTy = resolveSynType env targetType
+    refuseCast builder env "type test ':?'" innerNode range
 
 
 //-------------------------------------------------------------------------

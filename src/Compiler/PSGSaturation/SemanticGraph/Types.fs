@@ -1401,8 +1401,6 @@ type CurryInfo = {
     PartialAppBindings: Set<NodeId>
     /// Lambdas absorbed by flattening (unreachable now).
     AbsorbedLambdas: Set<NodeId>
-    /// Arguments of partial applications whose emission is deferred to the saturating call.
-    DeferredArgNodes: Set<NodeId>
 }
 
 /// What a closure environment slot holds.
@@ -2026,7 +2024,7 @@ with
 module Codata =
     let empty : Codata = {
         Escapes = Map.empty
-        Curry = { PartialApplications = Map.empty; SaturatedCalls = Map.empty; PartialAppBindings = Set.empty; AbsorbedLambdas = Set.empty; DeferredArgNodes = Set.empty }
+        Curry = { PartialApplications = Map.empty; SaturatedCalls = Map.empty; PartialAppBindings = Set.empty; AbsorbedLambdas = Set.empty }
         Meets = Map.empty
         ReturnMeets = Map.empty
         Closures = Map.empty

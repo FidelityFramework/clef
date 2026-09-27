@@ -23,27 +23,40 @@ let materialize (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) sel
         | _ -> invalidOp "Startup requires an ordinary captureless source entry."
     let sourceLambda = source.Children.Head
     let modules = graph.Nodes.Values |> Seq.choose (fun node ->
-        match node.Kind with SemanticKind.ModuleDef(_, members) -> Some(node, members) | _ -> None) |> Seq.toList
-    let owner id = modules |> List.choose (fun (node, members) -> if List.contains id members then Some node.Id else None)
-                   |> function [moduleId] -> moduleId | _ -> invalidOp "A startup initializer requires one lexical module declaration."
+        match node.Kind with SemanticKind.ModuleDef(name, members) -> Some(node, name, members) | _ -> None) |> Seq.toList
+    let owner id =
+        match modules |> List.choose (fun (node, _, members) -> if List.contains id members then Some node.Id else None) with
+        | [moduleId] -> preturn moduleId
+        | found ->
+            fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle one lexical module declaration for startup initializer %d: found %d" (NodeId.value id) found.Length))
     let state = SaturationState.create { source.Range with End = source.Range.Start } ctx.OriginalHOF ctx.ExpansionId source.Id graph.Platform
     let outcome, emitted = run state (saturation {
         let! initializers = selected |> C.collect (fun id -> saturation {
             let node = graph.Nodes[id]
             match node.Kind, node.Children with
-            | SemanticKind.Binding _, [value] -> return id, id, value, owner id, node.Type <> Types.unitType
-            | SemanticKind.Binding _, _ -> return invalidOp "A runtime initializer must have exactly one value."
+            | SemanticKind.Binding _, [value] ->
+                let! moduleId = owner id
+                return id, id, value, moduleId, node.Type <> Types.unitType
+            | SemanticKind.Binding _, children ->
+                return! fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle exactly one value for runtime initializer %d: found %d children" (NodeId.value id) children.Length))
             | _ ->
+                let! moduleId = owner id
                 let! discard = C.create (SemanticKind.Binding(sprintf "__program_effect_%d" (NodeId.value id), false, false, None)) node.Type [id]
-                return id, discard, id, owner id, false
+                return id, discard, id, moduleId, false
         })
         let! entryBinding, entryLambda, call, symbol, entryType, formals, tail =
             match existing with
             | Some startup -> saturation {
                 let binding = startup.Nodes |> List.find (fun node -> node.Id = startup.Binding)
                 let lambda = startup.Nodes |> List.find (fun node -> node.Id = binding.Children.Head)
-                let formals, body = match lambda.Kind with SemanticKind.Lambda(ps, body, [], _, _) -> ps, body | _ -> invalidOp "Malformed platform startup Lambda."
-                let symbol = match binding.Kind with SemanticKind.Binding(name, _, _, _) -> name | _ -> invalidOp "Malformed platform startup declaration."
+                let! formals, body =
+                    match lambda.Kind with
+                    | SemanticKind.Lambda(ps, body, [], _, _) -> preturn (ps, body)
+                    | other -> fail (XParsec.ErrorType.Message (sprintf "PSG settlement (platform startup) did not settle a captureless startup Lambda at node %d: found %A" (NodeId.value lambda.Id) other))
+                let! symbol =
+                    match binding.Kind with
+                    | SemanticKind.Binding(name, _, _, _) -> preturn name
+                    | other -> fail (XParsec.ErrorType.Message (sprintf "PSG settlement (platform startup) did not settle a startup declaration at node %d: found %A" (NodeId.value binding.Id) other))
                 for node in startup.Nodes do do! emit node
                 return binding.Id, lambda.Id, startup.Call, symbol, binding.Type, formals, [body]
               }
@@ -63,11 +76,10 @@ let materialize (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) sel
                                Metadata = binding.Metadata.Add(Facts.EntrySymbol, MetadataValue.String symbol) }
         let sourceKind = match source.Kind with SemanticKind.Binding(name, mutableValue, recursive, _) -> SemanticKind.Binding(name, mutableValue, recursive, None) | _ -> source.Kind
         do! emit { source with Kind = sourceKind }
-        for moduleNode, members in modules do
+        for moduleNode, name, members in modules do
             let replaced = members |> List.map (fun memberId ->
                 initializers |> List.tryFind (fun (original, _, _, _, _) -> original = memberId)
                 |> Option.map (fun (_, binding, _, _, _) -> binding) |> Option.defaultValue memberId)
-            let name = match moduleNode.Kind with SemanticKind.ModuleDef(name, _) -> name | _ -> ""
             do! emit { moduleNode with Kind = SemanticKind.ModuleDef(name, replaced); Children = [] }
         return entryBinding, entryLambda, spine, call, initializers
     })

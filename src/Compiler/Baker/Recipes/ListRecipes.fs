@@ -455,7 +455,7 @@ let private listSumByRecipe
 
     // sumBy f xs = fold (\acc x -> acc + f x) 0 xs
     foldLeft
-        (intLit 0)  // Initial sum is 0
+        (numLit 0L numericType)  // Initial sum is the zero of the settled result type
         (fun accId headId ->
             saturation {
                 // Project element to numeric value
@@ -496,7 +496,12 @@ let private listForall2Recipe
 //=============================================================================
 
 /// Try to decompose a List operation.
-/// Returns Some Result if the operation can be decomposed, None for primitives.
+/// Returns Some Result if the operation can be decomposed, None for primitives
+/// and for an application whose settled operand types are absent. The caller
+/// supplies each auxiliary type from the checked graph; none is defaulted here:
+/// `outputElemType` is the result's element (list) or payload (tryPick) type;
+/// `stateType` is fold's state, minBy's projected key, sumBy's result, or
+/// forall2's first-list element type.
 let tryDecompose
     (ctx: Context)
     (operation: string)
@@ -508,12 +513,12 @@ let tryDecompose
 
     match operation, args with
     | "map", [mapper; xs] ->
-        let outElem = outputElemType |> Option.defaultValue elemType
-        Some (runSaturation ctx (listMapRecipe mapper xs elemType outElem))
+        outputElemType |> Option.map (fun outElem ->
+            runSaturation ctx (listMapRecipe mapper xs elemType outElem))
 
     | "fold", [folder; state; xs] ->
-        let stTy = stateType |> Option.defaultValue elemType
-        Some (runSaturation ctx (listFoldRecipe folder state xs elemType stTy))
+        stateType |> Option.map (fun stTy ->
+            runSaturation ctx (listFoldRecipe folder state xs elemType stTy))
 
     | "filter", [predicate; xs] ->
         Some (runSaturation ctx (listFilterRecipe predicate xs elemType))
@@ -534,33 +539,30 @@ let tryDecompose
         Some (runSaturation ctx (listAppendRecipe xs ys elemType))
 
     | "collect", [mapper; xs] ->
-        let outElem = outputElemType |> Option.defaultValue elemType
-        Some (runSaturation ctx (listCollectRecipe mapper xs elemType outElem))
+        outputElemType |> Option.map (fun outElem ->
+            runSaturation ctx (listCollectRecipe mapper xs elemType outElem))
 
     | "contains", [value; xs] ->
         Some (runSaturation ctx (listContainsRecipe value xs elemType))
 
     | "tryPick", [chooser; xs] ->
-        let outElem = outputElemType |> Option.defaultValue elemType
-        Some (runSaturation ctx (listTryPickRecipe chooser xs elemType outElem))
+        outputElemType |> Option.map (fun outElem ->
+            runSaturation ctx (listTryPickRecipe chooser xs elemType outElem))
 
     | "minBy", [projection; xs] ->
-        // For minBy, we need the key type. For now, assume same as elem type.
-        // This should be extracted from the projection function's return type.
-        let keyType = stateType |> Option.defaultValue elemType
-        Some (runSaturation ctx (listMinByRecipe projection xs elemType keyType))
+        stateType |> Option.map (fun keyType ->
+            runSaturation ctx (listMinByRecipe projection xs elemType keyType))
 
     | "max", [xs] ->
         Some (runSaturation ctx (listMaxRecipe xs elemType))
 
     | "forall2", [predicate; xs; ys] ->
-        // For forall2, both lists have same element type for now
-        Some (runSaturation ctx (listForall2Recipe predicate xs ys elemType elemType))
+        stateType |> Option.map (fun firstElemType ->
+            runSaturation ctx (listForall2Recipe predicate xs ys firstElemType elemType))
 
     | "sumBy", [projection; xs] ->
-        // sumBy projects to numeric type, default to int
-        let numType = stateType |> Option.defaultValue Types.intType
-        Some (runSaturation ctx (listSumByRecipe projection xs elemType numType))
+        stateType |> Option.map (fun numType ->
+            runSaturation ctx (listSumByRecipe projection xs elemType numType))
 
     // Cross-module alias: List.ofSeq = Seq.toList
     | "ofSeq", [xs] ->

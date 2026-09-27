@@ -1472,10 +1472,6 @@ and [<RequireQualifiedAccess>] Constraint =
     | HasMember of ty: NativeType * name: string * signature: NativeType * SourceRange
     /// Subtype relationship (minimal, for inheritance)
     | Subtype of sub: NativeType * super: NativeType * SourceRange
-    /// Type must have compatible memory layout
-    | LayoutCompatible of NativeType * TypeLayout * SourceRange
-    /// Type application: forall type must instantiate with given args to yield result
-    | HasTypeArgs of forallTy: NativeType * args: NativeType list * resultTy: NativeType * SourceRange
     /// Attached to a variable minted for an operand position of operator `op` (design c.1, c.3):
     /// on a carrier variable it is the provenance CCS8000 names; on the type variable of `+` it
     /// is the kind dispatch of D5, which fires when the variable binds (numeric or string, else

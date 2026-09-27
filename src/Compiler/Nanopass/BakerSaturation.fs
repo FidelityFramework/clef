@@ -30,7 +30,6 @@ module SetRecipes = Clef.Compiler.Baker.Recipes.SetRecipes
 module OptionRecipes = Clef.Compiler.Baker.Recipes.OptionRecipes
 module ResultRecipes = Clef.Compiler.Baker.Recipes.ResultRecipes
 module SeqRecipes = Clef.Compiler.Baker.Recipes.SeqRecipes
-module StringRecipes = Clef.Compiler.Baker.Recipes.StringRecipes
 module NumericRecipes = Clef.Compiler.Baker.Recipes.NumericRecipes
 module MatchRecipes = Clef.Compiler.Baker.Recipes.MatchRecipes
 
@@ -170,8 +169,10 @@ let private shouldDecomposeIntrinsic (info: IntrinsicInfo) : bool =
     | IntrinsicModule.Option, ("some" | "none") -> false
     | IntrinsicModule.Seq, "empty" -> false
     | IntrinsicModule.Seq, "getEnumerator" -> false
-    // String operations
-    | IntrinsicModule.String, "concat2" -> true
+    // String operations are atomic intrinsics witnessed directly (StringRecipes has
+    // no decomposition); declaring concat2 decomposable only produced a recipe
+    // failure that left the node untouched.
+    | IntrinsicModule.String, "concat2" -> false
     // Library schemes (design (c); Dimensional_Range_Design.md §5): compare-and-select and the
     // rounding functions decompose; truncate, sqrt, atan2 and the transcendentals are atomic.
     | IntrinsicModule.Math, ("abs" | "sign" | "min" | "max" | "clamp" | "floor" | "ceiling" | "round") -> true
@@ -217,13 +218,26 @@ let private applyIntrinsicRecipe
 
         match listArgType with
         | Some elemType ->
-            let outputElemType = extractListElementType returnType
+            // Every auxiliary type is read from the checked graph; the recipe
+            // defaults none of them.
+            let argType index =
+                args |> List.tryItem index
+                |> Option.bind (fun argId -> SemanticGraph.tryGetNode argId graph)
+                |> Option.map (fun n -> n.Type)
+            let outputElemType =
+                if info.Operation = "tryPick" then extractOptionInnerType returnType
+                else extractListElementType returnType
             let stateType =
-                if info.Operation = "fold" then
-                    args |> List.tryItem 1
-                    |> Option.bind (fun argId -> SemanticGraph.tryGetNode argId graph)
-                    |> Option.map (fun n -> n.Type)
-                else None
+                match info.Operation with
+                | "fold" -> argType 1
+                | "sumBy" -> Some returnType
+                | "minBy" ->
+                    argType 0 |> Option.bind (fun projection ->
+                        match Clef.Compiler.NativeTypedTree.UnionFind.applySubst projection with
+                        | NativeType.TFun (_, key) -> Some key
+                        | _ -> None)
+                | "forall2" -> argType 1 |> Option.bind extractListElementType
+                | _ -> None
             ListRecipes.tryDecompose ctx info.Operation args elemType outputElemType stateType
         | None -> None
 
@@ -315,19 +329,23 @@ let private applyIntrinsicRecipe
                 let outputElemType =
                     if info.Operation = "tryPick" then extractOptionInnerType returnType
                     else extractSeqElementType returnType
+                let argType index =
+                    args |> List.tryItem index
+                    |> Option.bind (fun id -> SemanticGraph.tryGetNode id graph)
+                    |> Option.map _.Type
+                // fold's state, or minBy/maxBy's projected key, read from the checked graph.
                 let stateType =
-                    if info.Operation = "fold" then
-                        args |> List.tryItem 1
-                        |> Option.bind (fun id -> SemanticGraph.tryGetNode id graph)
-                        |> Option.map _.Type
-                    else None
+                    match info.Operation with
+                    | "fold" -> argType 1
+                    | "minBy" | "maxBy" ->
+                        argType 0 |> Option.bind (fun projection ->
+                            match Clef.Compiler.NativeTypedTree.UnionFind.applySubst projection with
+                            | NativeType.TFun (_, key) -> Some key
+                            | _ -> None)
+                    | _ -> None
                 SeqRecipes.tryDecompose ctx info.Operation args elemType outputElemType stateType
                     (enclosingFunctionName graph ctx.InspiringNode)
             | None -> None
-
-    | IntrinsicModule.String ->
-        // String operations decompose to memory primitives
-        StringRecipes.tryDecompose ctx info.Operation args returnType (Some returnType)
 
     | IntrinsicModule.Math ->
         // The library schemes decompose over the arguments' resolved types (the operand's
@@ -384,7 +402,10 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                 | _ -> SeqRecipes.tryReifyValue
             match reify ctx info.Operation node.Type (enclosingFunctionName graph node.Id) with
             | Some result -> RecipeCreated (toRecipe node.Id name result)
-            | None -> NotApplicable "Library value has no settled callable instance"
+            | None ->
+                CreationFailed (
+                    sprintf "CCS source checking did not settle a callable instance for library value %s at node %d: its type %A has no reifiable function shape" name (NodeId.value node.Id) node.Type,
+                    Map.ofList [ "operation", name; "nodeId", string (NodeId.value node.Id) ])
     | SemanticKind.Application (funcNodeId, argNodeIds) ->
         match SemanticGraph.tryGetNode funcNodeId graph with
         | Some funcNode ->
@@ -392,11 +413,15 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
             let unwrappedKind =
                 match funcNode.Kind with
                 | SemanticKind.TypeAnnotation (innerNodeId, _) ->
-                    match SemanticGraph.tryGetNode innerNodeId graph with
-                    | Some innerNode -> innerNode.Kind
-                    | None -> funcNode.Kind
-                | _ -> funcNode.Kind
+                    SemanticGraph.tryGetNode innerNodeId graph |> Option.map _.Kind
+                | _ -> Some funcNode.Kind
 
+            match unwrappedKind with
+            | None ->
+                CreationFailed (
+                    sprintf "PSG settlement (BakerSaturation) did not settle the annotated callee of application %d: annotated node %d names a node missing from the graph" (NodeId.value node.Id) (NodeId.value funcNodeId),
+                    Map.ofList [ "nodeId", string (NodeId.value node.Id); "funcId", string (NodeId.value funcNodeId) ])
+            | Some unwrappedKind ->
             match unwrappedKind with
             | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Seq && not node.IsReachable ->
                 // The live flattened call owns its supplied values. Retain an
@@ -412,7 +437,10 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                     RecipeCreated (toRecipe node.Id hofName result)
                 | None ->
                     CreationFailed (
-                        sprintf "applyIntrinsicRecipe returned None for %s" hofName,
+                        sprintf "Baker %s recipe did not settle a decomposition for application %d at %s:%d:%d: no recipe accepts the settled operand types %A with result %A"
+                            hofName (NodeId.value node.Id) node.Range.File node.Range.Start.Line node.Range.Start.Column
+                            (argNodeIds |> List.map (fun id -> SemanticGraph.tryGetNode id graph |> Option.map _.Type))
+                            node.Type,
                         Map.ofList [
                             "operation", hofName
                             "nodeId", string (NodeId.value node.Id)
@@ -633,7 +661,9 @@ let private createSaturationRecipe (node: SemanticNode) (graph: SemanticGraph) :
                 let result = mkResultNoShadow (paramBindings @ paramRefs @ [funcRef; body; lambda]) lambda.Id []
                 RecipeCreated (toRecipe node.Id "FunctionValue" result)
             | _ ->
-                NotApplicable "Function reference without a function type"
+                CreationFailed (
+                    sprintf "CCS source checking did not settle a function type of arity %d for value-position reference '%s' at node %d: found %A" arity name (NodeId.value node.Id) node.Type,
+                    Map.ofList [ "nodeId", string (NodeId.value node.Id); "definition", string (NodeId.value defId) ])
 
     | _ ->
         NotApplicable "Node kind does not need saturation"

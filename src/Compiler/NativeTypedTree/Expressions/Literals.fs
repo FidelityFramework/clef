@@ -151,7 +151,13 @@ let checkInterpolatedString
             | SynInterpolatedStringPart.String(value, partRange) ->
                 if System.String.IsNullOrEmpty(value) then None
                 else Some (SynExpr.Const(SynConst.String(value, SynStringKind.Regular, partRange), partRange))
-            | SynInterpolatedStringPart.FillExpr(fillExpr, _qualifiers) ->
+            | SynInterpolatedStringPart.FillExpr(fillExpr, qualifiers) ->
+                // A format qualifier (`{x:N2}`) is part of the fill's meaning; it is refused at
+                // its range rather than dropped.
+                qualifiers |> Option.iter (fun qualifier ->
+                    addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct qualifier.idRange
+                        ("CCS source checking did not settle a formatting for interpolation fill qualifier '"
+                         + qualifier.idText + "': format qualifiers have no string elaboration.") env)
                 Some fillExpr)
 
     match partExprs with
@@ -161,7 +167,11 @@ let checkInterpolatedString
             Types.stringType,
             range)
     | [single] ->
-        checkExpr env builder single
+        // The interpolation is a string, as each concatenated part is; a lone fill of another
+        // type is a mismatch at the fill, never a non-string interpolation.
+        let node = checkExpr env builder single
+        addConstraint (Constraint.Equals(node.Type, Types.stringType, rangeToSourceRange single.Range)) env
+        node
     | first :: rest ->
         let concat2Ident =
             SynExpr.LongIdent(

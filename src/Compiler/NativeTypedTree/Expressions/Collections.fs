@@ -324,9 +324,16 @@ let checkAnonRecd
             // The source expression provides fields to inherit
             // Type must be extracted from the source for field inheritance
             let srcFields =
-                match sourceNode.Type with
+                match applySubst sourceNode.Type with
                 | NativeType.TAnon(fields, _) -> fields
-                | _ -> []  // Source type will be resolved during unification
+                | NativeType.TError _ -> []  // already reported
+                | other ->
+                    // The inherited fields are read here; a source whose record type is not yet
+                    // known would silently drop every one of them.
+                    addNativeError DiagnosticCodes.CCS8711_UnsupportedConstraint sourceExpr.Range
+                        ("CCS source checking did not settle the source record type of this anonymous record copy-and-update: the source has type '"
+                         + formatType other + "' here, not an anonymous record; annotate it.") env
+                    []
             Some sourceNode, srcFields
         | None -> None, []
 
@@ -569,6 +576,14 @@ let checkDotIndexedSet
         | SynExpr.Tuple(_, exprs, _, _) -> exprs |> List.map (checkExpr env builder)
         | indexExpr -> [checkExpr env builder indexExpr]
     let valueNode = checkExpr env builder valueExpr
+    // The index and the stored value are related to the receiver as at every other indexed
+    // access; a store is never accepted unrelated to the element it writes.
+    match indexNodes with
+    | [single] ->
+        addConstraint (Constraint.Equals(single.Type, Types.intType, range)) env
+    | _ -> ()
+    let elementType = resolveIndexElementType (applySubst objNode.Type) env range
+    addConstraint (Constraint.Equals(valueNode.Type, elementType, range)) env
     let indexNodeId =
         match indexNodes with
         | [single] -> single.Id

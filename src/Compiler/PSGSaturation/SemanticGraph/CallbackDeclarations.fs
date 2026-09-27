@@ -41,7 +41,11 @@ let private readUncached (graph: SemanticGraph) : Reading =
             | Some bits, Some expected when bits <> int64 expected ->
                 finding node DeclarationDefect.Invalid "A native callback pointer declaration must match the platform's Pointer dimension."
                 false
-            | Some bits, _ when bits > 0L -> true
+            | Some bits, Some _ when bits > 0L -> true
+            | Some _, None ->
+                finding node DeclarationDefect.Invalid
+                    (sprintf "PSG settlement (PlatformResolution) did not settle the platform's Pointer dimension for native callback pointer declaration %d: the declared width cannot be validated against an absent platform fact." (NodeId.value node.Id))
+                false
             | _ -> false
         | _ -> false
     let rec unannotated id =
@@ -116,7 +120,11 @@ let private readUncached (graph: SemanticGraph) : Reading =
                                                         if not (pointerDeclared (List.tryItem index parameterTypes |> Option.flatten)) then
                                                             finding address DeclarationDefect.Invalid "An opaque callback parameter requires a matching Pointer declaration."
                                                     | _ -> finding address DeclarationDefect.Invalid "A native callback parameter needs a matching scalar declaration or an opaque handle representation."
-                                                let sourceResult = SemanticGraph.getNode body graph
+                                                match SemanticGraph.tryGetNode body graph with
+                                                | None ->
+                                                    finding address DeclarationDefect.Malformed
+                                                        (sprintf "PSG settlement (CallbackDeclarations) did not settle the result node %d of native callback lambda %d: the body is absent from the graph." (NodeId.value body) (NodeId.value lambda.Id))
+                                                | Some sourceResult ->
                                                 let resultKind = Types.tryGetNTUKind sourceResult.Type
                                                 let sourceVoid = resultKind = Some NTUKind.NTUunit
                                                 if returnsVoid <> sourceVoid then

@@ -482,50 +482,9 @@ let solveConstraint (c: Constraint) : SolveResult =
         // Subtype constraint - for now, treat as equality
         tryUnify sub super range |> equality
 
-    | Constraint.LayoutCompatible(ty, layout, range) ->
-        // Layout constraint: the two layouts are of one family. An identity comparison of the
-        // symbolic layout (Layout_As_Joint_Constraint.md §3): no size is read here, sizes being
-        // settled at saturation (Placement). Opaque and PlatformWord defer to that settlement.
-        let actualLayout = TypeLayout.baseLayout (layoutOf ty)
-        match (actualLayout, TypeLayout.baseLayout layout) with
-        | TypeLayout.Opaque, _ -> Solved  // Unknown layout, defer check
-        | _, TypeLayout.Opaque -> Solved  // Any layout is compatible with opaque
-        | TypeLayout.Inline _, TypeLayout.Inline _ -> Solved
-        | TypeLayout.Record, TypeLayout.Record -> Solved
-        | TypeLayout.Union, TypeLayout.Union -> Solved
-        | TypeLayout.FatPointer, TypeLayout.FatPointer -> Solved
-        | TypeLayout.NTUCompound a, TypeLayout.NTUCompound b when a = b -> Solved
-        | TypeLayout.Reference _, TypeLayout.Reference _ -> Solved
-        | TypeLayout.PlatformWord, TypeLayout.PlatformWord -> Solved  // Platform word matches platform word
-        | TypeLayout.PlatformWord, _ -> Solved  // Platform word deferred to codegen
-        | _, TypeLayout.PlatformWord -> Solved  // Platform word deferred to codegen
-        | _ ->
-            ignore range  // Would be used for error location
-            Solved  // For now, accept - codegen will validate
-
     | Constraint.OperandOf _ ->
         // Lives on a variable and fires in `unify` when that variable binds; never in the list.
         Solved
-
-    | Constraint.HasTypeArgs(forallTy, args, resultTy, range) ->
-        // Type application constraint - forallTy should be generic and instantiate to resultTy
-        match forallTy with
-        | NativeType.TForall(typeParams, bodyType) ->
-            if List.length typeParams = List.length args then
-                // Instantiate body with args and unify with result
-                let substituted = NativeTypes.instantiate typeParams args bodyType
-                tryUnify substituted resultTy range |> equality
-            else
-                // Arity mismatch
-                Failed [UnificationError.ArityMismatch(List.length typeParams, List.length args, range)]
-        | NativeType.TVar _ ->
-            // Type variable - cannot resolve yet, this is okay
-            Solved
-        | _ ->
-            // Non-forall type - this constraint will fail unless resolved later
-            // For now, accept it; later constraint solving may refine
-            ignore (args, resultTy, range)
-            Solved
 
 /// Solve a list of constraints, returning any that couldn't be solved immediately
 let solveConstraints (constraints: Constraint list) : SolveResult =

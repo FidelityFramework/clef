@@ -836,9 +836,18 @@ let resolveIndexElementType (objType: NativeType) (env: TypeEnv) (range: SourceR
     | NativeType.TApp(tc, [elemType]) when tc.Name = "array" -> elemType
     | _ when isStringType objType -> Types.charType
     | NativeType.TVar _ ->
-        let elemType = freshTypeVar range
-        addConstraint (Constraint.Equals(objType, NativeTypes.Types.mkArrayType elemType, range)) env
-        elemType
+        // An indexed receiver of unknown type is not taken to be an array.
+        let message =
+            "CCS source checking did not settle the receiver type of this indexed access: the receiver's type is not known at this point; annotate it."
+        addDiagnostic {
+            Severity = NativeDiagnosticSeverity.Error
+            Code = DiagnosticCodes.CCS8711_UnsupportedConstraint
+            Message = message
+            Range = range
+            RelatedNodes = []
+            Reachability = ReachabilityContext.Unknown
+        } env
+        NativeType.TError message
     | _ ->
         let resultType = freshTypeVar range
         addConstraint (Constraint.HasMember(objType, "Item", resultType, range)) env
@@ -1679,7 +1688,11 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
                     match kind with
                     | TypeParamKind.Measure -> measureArgument env arg
                     | TypeParamKind.Type -> resolveSynType env arg
-                    | TypeParamKind.Carrier -> failwith $"resolveSynType: constructor {tyCon.Name} declares a carrier-kinded parameter: kind violation")
+                    | TypeParamKind.Carrier ->
+                        let message =
+                            $"CCS source checking did not settle the parameter sort of type constructor '{tyCon.Name}': it declares a carrier-kinded parameter, which no constructor takes."
+                        addNativeError DiagnosticCodes.CCS8090_InternalInvariant arg.Range message env
+                        NativeType.TError message)
                 tyCon.ParamKinds
                 typeArgs
         else
@@ -1810,8 +1823,11 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
         if rank = 1 then
             NativeTypes.Types.mkArrayType elemTy
         else
-            // Multi-dimensional arrays - use array of arrays for now
-            List.fold (fun ty _ -> NativeTypes.Types.mkArrayType ty) elemTy [1..rank]
+            // A rank-n array is never read as nested arrays; that is a different type.
+            let message =
+                $"CCS source checking did not settle a type for this rank-{rank} array: multi-dimensional arrays have no native type."
+            addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct synType.Range message env
+            NativeType.TError message
 
     | SynType.Paren(innerType, _) ->
         // Parenthesized type: (int)
@@ -1842,8 +1858,11 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
     | SynType.StaticConstantNull _
     | SynType.StaticConstantExpr(_, _)
     | SynType.StaticConstantNamed(_, _, _) ->
-        // Static constants in types - not supported in native
-        NativeType.TError "Static constants in types not supported"
+        // Static constants in types - not supported in native. The error type unifies with
+        // anything, so it is never returned without its diagnostic.
+        let message = "CCS source checking did not settle a type for this static constant in type position: static type constants have no native type."
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct synType.Range message env
+        NativeType.TError message
 
     | SynType.AnonRecd(isStruct, fields, _) ->
         // Anonymous record: {| X: int; Y: string |}
@@ -1854,15 +1873,17 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
         // Parse error recovery - return error type
         NativeType.TError "Type from parse error"
 
-    | SynType.Intersection(_, types, _, _) ->
-        // Type intersection - resolve first type for now
-        match types with
-        | ty :: _ -> resolveSynType env ty
-        | [] -> NativeType.TError "Empty type intersection"
+    | SynType.Intersection(_, _, r, _) ->
+        // A type intersection is never read as its first member; the others would be dropped.
+        let message = "CCS source checking did not settle a type for this type intersection: intersection types have no native type."
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct r message env
+        NativeType.TError message
 
-    | SynType.Or(lhs, _rhs, _, _) ->
-        // Type union/or - resolve to first type
-        resolveSynType env lhs
+    | SynType.Or(_, _, r, _) ->
+        // An `or` type is never read as its left alternative; the right one would be dropped.
+        let message = "CCS source checking did not settle a type for this 'or' type: alternative types have no native type."
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct r message env
+        NativeType.TError message
 
     | SynType.SignatureParameter(_, _, _idOpt, ty, _) ->
         // Signature parameter - resolve the underlying type

@@ -18,6 +18,9 @@ type SourceResolutionError =
     | ProjectSourceFileNotFound of path: string
     /// Circular dependency detected.
     | CircularDependency of chain: string list
+    /// A dependency declares no local path. There is no package registry: such a dependency
+    /// has no sources, and is refused rather than skipped.
+    | DependencyPathNotDeclared of name: string
 
 module SourceResolutionError =
     /// Format error for display.
@@ -34,6 +37,8 @@ module SourceResolutionError =
         | CircularDependency chain ->
             let chainStr = String.concat " -> " chain
             $"Circular dependency detected: {chainStr}"
+        | DependencyPathNotDeclared name ->
+            $"Dependency '{name}' declares no local path; there is no package registry to resolve it. Declare its 'path' in the .fidproj dependencies."
 
 module SourceResolver =
     type ResolvedSources = {
@@ -87,12 +92,12 @@ module SourceResolver =
                     // This ensures transitive dependencies are compiled first
                     let transitiveDepsResult =
                         depOptions.Dependencies
-                        |> List.filter (fun dep -> dep.Path.IsSome)
                         |> List.fold (fun acc dep ->
-                            match acc with
-                            | Error e -> Error e
-                            | Ok (accSources, accLibraries, accVisited) ->
-                                match getDependencySourcesRec dep.Name dep.Path.Value accVisited newActive newChain with
+                            match acc, dep.Path with
+                            | Error e, _ -> Error e
+                            | Ok _, None -> Error (DependencyPathNotDeclared dep.Name)
+                            | Ok (accSources, accLibraries, accVisited), Some path ->
+                                match getDependencySourcesRec dep.Name path accVisited newActive newChain with
                                 | Error e -> Error e
                                 | Ok (depSources, depLibraries, depVisited) ->
                                     Ok (accSources @ depSources, accLibraries @ depLibraries, depVisited)
@@ -149,12 +154,12 @@ module SourceResolver =
         // This ensures shared transitive dependencies aren't duplicated
         let dependencySourcesResult =
             options.Dependencies
-            |> List.filter (fun dep -> dep.Path.IsSome)  // Only process deps with local paths
             |> List.fold (fun acc dep ->
-                match acc with
-                | Error e -> Error e  // Short-circuit on first error
-                | Ok (accSources, accLibraries, visited) ->
-                    match getDependencySourcesRec dep.Name dep.Path.Value visited (Set.singleton (normalizePath options.ProjectPath)) [options.Name] with
+                match acc, dep.Path with
+                | Error e, _ -> Error e  // Short-circuit on first error
+                | Ok _, None -> Error (DependencyPathNotDeclared dep.Name)
+                | Ok (accSources, accLibraries, visited), Some path ->
+                    match getDependencySourcesRec dep.Name path visited (Set.singleton (normalizePath options.ProjectPath)) [options.Name] with
                     | Error e -> Error e
                     | Ok (depSources, depLibraries, newVisited) ->
                         Ok (accSources @ depSources, accLibraries @ depLibraries, newVisited)

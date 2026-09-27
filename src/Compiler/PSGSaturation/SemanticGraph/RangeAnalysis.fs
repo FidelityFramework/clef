@@ -30,9 +30,8 @@
 /// arguments, and its arguments join into those lambdas' parameters; a parameter no seen call
 /// supplies is unobservable and its CCS8011 names the escape.
 ///
-/// A reachable integer whose final range has no width is CCS8011 (§1.3, §7): an error on fabric,
-/// where the width has no other source, and information on every other substrate while the
-/// migration inventory is open (CS-11 slice 3 records the residual). A bounded range of the bare
+/// A reachable integer whose final range has no width is CCS8011 (§1.3, §7), an error on every
+/// substrate: no width has another source. A bounded range of the bare
 /// kind that no declared integer representation covers is CCS8012, a warning promoted by
 /// `--warnaserror` (§4.2). Runs on every substrate, over reachable nodes only, after the declared
 /// platform has filled the context and before it is checked (NativeService.buildResult).
@@ -2245,7 +2244,9 @@ let private unobservableDiagnostics (program: Program) (state: State) : Diagnost
         match Map.tryFind id program.Reachable with
         | Some { Kind = SemanticKind.VarRef (_, Some defId) } -> unobservable defId
         | _ -> false
-    let severity = if program.Fabric then NativeDiagnosticSeverity.Error else NativeDiagnosticSeverity.Info
+    // An unobservable range has no width on any substrate: no representation is
+    // selected for it and no carrier is supplied in its place (§1.3).
+    let severity = NativeDiagnosticSeverity.Error
     program.Ordered
     |> List.filter (fun node ->
         program.CommitmentSites.Contains node.Id && isIntegerNode node
@@ -2492,7 +2493,7 @@ let private spelledDiagnostics (program: Program) (state: State) : Diagnostic li
 /// type its per-field ranges, every array element type its element range, and every unobservable
 /// integer is CCS8011, every uncovered one CCS8012. The graph is returned with the annotations
 /// written and the field and element ranges settled.
-let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
+let private runValidated (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
     let program = readProgram context graph
     let graph = program.Graph
     let state = fixpoint program
@@ -2546,7 +2547,7 @@ let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph
         match LoopRecipes.saturateLinear (current state) recurrence with
         | Result.Error LoopRangeResidual.ProofResources ->
             let node = graph.Nodes[recurrence.Cells.Head]
-            Some { Severity = if context.IsSome then NativeDiagnosticSeverity.Error else NativeDiagnosticSeverity.Info
+            Some { Severity = NativeDiagnosticSeverity.Error
                    Code = DiagnosticCodes.CCS8011_UnobservableRange
                    Message = sprintf "The finite recurrence proof exceeded its %s-bit aggregate certificate-work budget; numeric range remains pending. This compiler analysis limit supplies no runtime representation or width." (string LoopRecipes.defaultCertificateBits)
                    Range = node.Range; RelatedNodes = LoopRecipes.linearSources recurrence
@@ -2557,6 +2558,14 @@ let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph
     let graph = LazyEffectRanges.settle (program.LazyEffects.Values |> Seq.distinctBy _.Cell |> Seq.toList) graph
     let graph = FiniteCellRanges.settle (program.FiniteCells.Values |> Seq.distinctBy _.Cell |> Seq.toList) graph
     (LoopRanges.saturate (current state) program.LoopRecognition graph, diagnostics)
+
+/// The commitment sites are the values the settled demand projection retains.
+/// A demand relation that disagrees with the current use proof is reported
+/// (CCS8403) and no range is settled over it.
+let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
+    match OrdinaryDemand.tryRead graph with
+    | Result.Error failures -> graph, OrdinaryDemand.diagnostics graph failures
+    | Result.Ok _ -> runValidated context graph
 
 //-------------------------------------------------------------------------
 // Reads for the witnesses (Composer transcribes; it computes no range and no width)
@@ -2671,8 +2680,8 @@ let selectedRepresentation (graph: SemanticGraph) (nodeId: NodeId) : NumericRepr
 /// no core, the exact width of the range (§3, `ValueRange.width`); on a core, the bits of the
 /// selected representation, or of the widest declared one for a range no representation covers
 /// (CCS8012 named it). None for an unobservable range on a core: no width is fabricated for it
-/// here (C3, width-inference.md §6); `heldWidthOf` is the one site that holds such a value at
-/// the declared word while CCS8011 is information there.
+/// (C3, width-inference.md §6). None where the graph carries no platform context: no target
+/// selects a width, and no substrate's rule is borrowed in its place.
 let selectedWidthOf (graph: SemanticGraph) (range: ValueRange) : int option =
     match graph.Platform with
     | Some ctx when selectsFromDeclared ctx ->
@@ -2680,25 +2689,14 @@ let selectedWidthOf (graph: SemanticGraph) (range: ValueRange) : int option =
         | false, _ -> None
         | true, Some r -> Some r.Bits
         | true, None -> None
-    | _ -> ValueRange.width range
+    | Some _ -> ValueRange.width range
+    | None -> None
 
-/// THE ONE INTERIM of the node-reading CPU leg (Dimensional_Range_Design.md, "CS-11 as built, the
-/// CPU leg"; §1.3): an integer value on a core whose range is unobservable has no selection
-/// (`selectedWidthOf` is None; CCS8011 is information on cores until the migration inventory is
-/// drained and promoted, §1.3 and the slice-4 rule) and is held at the declared Register width
-/// read from the context. Nothing else defaults: on fabric an unobservable range stays None and
-/// the leg stops naming the node. When CCS8011 is promoted to an error on every substrate this
-/// site becomes a stop naming the range, since no such value reaches emission. The record and
-/// union placement (Placement.fs) and Composer's width reads both come through here, so the
-/// interim has one site.
+/// The width a range is held at: exactly its selection. CCS8011 is an error on every substrate
+/// (§1.3), so an unobservable range is a stop here, never held at the declared Register width.
+/// The record and union placement (Placement.fs) and Composer's width reads come through here.
 let heldWidthOf (graph: SemanticGraph) (range: ValueRange) : int option =
-    match selectedWidthOf graph range with
-    | Some bits -> Some bits
-    | None ->
-        match graph.Platform with
-        | Some ctx when PlatformContext.substrateKind ctx <> SubstrateKind.FPGA && not (ValueRange.isObservable range) ->
-            registerWidth ctx   // the interim: an unobservable range on a core, CCS8011 information
-        | _ -> None
+    selectedWidthOf graph range
 
 /// The width a node's value is selected at on the graph's platform (§3.1, width-inference.md
 /// §8): at the value-call boundary (ruling 1: a parameter or the result of a lambda that escapes
@@ -2729,9 +2727,9 @@ let selectedWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
 let declaredWidthOfKind (graph: SemanticGraph) (kind: NTUKind) : int option =
     RangeSources.declarationOfKind graph.Platform kind |> Option.map (fun d -> d.Bits)
 
-/// The width a node's value is held at: `selectedWidth`, or, for an unobservable range on a core,
-/// the interim word of `heldWidthOf`. The read Composer's CPU leg makes for every integer node;
-/// None is a stop there (fabric, or a node with no range).
+/// The width a node's value is held at: `selectedWidth`, or `heldWidthOf` its settled range.
+/// The read Composer's CPU leg makes for every integer node; None is a stop there (a node with
+/// no range, an unobservable range, or no platform context).
 let heldWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
     match selectedWidth graph nodeId with
     | Some bits -> Some bits

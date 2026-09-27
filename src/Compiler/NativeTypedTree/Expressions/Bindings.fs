@@ -50,6 +50,12 @@ let extractLambdaParams
         // node just as for `let f () = ...` and Baker-created closures.
         [("_", Types.unitType)]
     | SynSimplePats.SimplePats(pats, _, _) ->
+        // A parameter form with no named formal is refused at its range; the error node's
+        // type stands in its place and the diagnostic stops the build.
+        let unsupported (pat: SynSimplePat) (form: string) =
+            let message = $"CCS source checking did not settle a named formal for this lambda parameter: {form} has no parameter elaboration."
+            addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct pat.Range message env
+            ("_", NativeType.TError message)
         pats |> List.map (fun pat ->
             match pat with
             | SynSimplePat.Id(ident, _, _, _, _, _) ->
@@ -58,15 +64,14 @@ let extractLambdaParams
                 // Type annotation provided - convert to native type
                 (ident.idText, resolveSynType env synType)
             | SynSimplePat.Typed(SynSimplePat.Typed _, _, _) ->
-                // Double-typed pattern - unusual but handle gracefully
-                failwith "Double type annotation in lambda parameter not supported"
+                unsupported pat "a doubly annotated parameter"
             | SynSimplePat.Typed(SynSimplePat.Attrib(innerInner, _, _), synType, _) ->
                 // Typed attributed pattern - (name: Type) with attributes
                 match innerInner with
                 | SynSimplePat.Id(ident, _, _, _, _, _) ->
                     (ident.idText, resolveSynType env synType)
                 | other ->
-                    failwith ("Unsupported typed attributed lambda parameter: " + other.GetType().Name)
+                    unsupported pat ("a typed attributed parameter of form " + other.GetType().Name)
             | SynSimplePat.Attrib(innerPat, _, _) ->
                 // Attributed pattern - extract the inner identifier
                 match innerPat with
@@ -75,7 +80,7 @@ let extractLambdaParams
                 | SynSimplePat.Typed(SynSimplePat.Id(ident, _, _, _, _, _), synType, _) ->
                     (ident.idText, resolveSynType env synType)
                 | other ->
-                    failwith ("Unsupported attributed lambda parameter: " + other.GetType().Name))
+                    unsupported pat ("an attributed parameter of form " + other.GetType().Name))
 
 //-------------------------------------------------------------------------
 // Binding Name Extraction
@@ -88,13 +93,16 @@ let TuplePatternMarker = "__TUPLE_PATTERN__"
 
 /// Get the name from a binding
 /// NOTE: For tuple patterns, returns TuplePatternMarker to trigger special handling in checkBinding.
-let getBindingName (binding: SynBinding) : string =
+/// A head pattern with no binding-name form is CCS8401 at its range, reported once per site
+/// (the name is read at pre-creation, at checking and at scope extension); the binding then
+/// carries the discard name, the diagnostic having stopped the build.
+let getBindingName (env: TypeEnv) (binding: SynBinding) : string =
     let (SynBinding(_, _, _, _, _, _, _, headPat, _, _, _, _, _)) = binding
     let rec getNameFromPat pat =
         match pat with
-        | SynPat.Named(SynIdent(ident, _), _, _, _) -> ident.idText
+        | SynPat.Named(SynIdent(ident, _), _, _, _) -> Ok ident.idText
         | SynPat.LongIdent(longDotId, _, _, _, _, _) ->
-            longDotId.LongIdent |> List.last |> fun id -> id.idText
+            longDotId.LongIdent |> List.last |> fun id -> Ok id.idText
         | SynPat.Paren(innerPat, _) ->
             // Unwrap parentheses - (name) is the same as name
             getNameFromPat innerPat
@@ -103,42 +111,30 @@ let getBindingName (binding: SynBinding) : string =
             getNameFromPat innerPat
         | SynPat.Tuple _ ->
             // Return marker to trigger tuple destructuring in checkBinding
-            TuplePatternMarker
+            Ok TuplePatternMarker
         | SynPat.Wild _ ->
             // Wildcard pattern: let _ = expr
-            "_"
+            Ok "_"
         | SynPat.Const(SynConst.Unit, _) ->
             // Unit pattern: let () = expr
-            "_"
-        | other ->
-            // Explicit diagnostic for unhandled patterns
-            // This should never reach here for valid F# - if it does, we need to add support
-            failwith ("Unsupported pattern in let binding: " + other.GetType().Name + ". Please report this as a bug with your source code.")
-    getNameFromPat headPat
+            Ok "_"
+        | other -> Error other
+    match getNameFromPat headPat with
+    | Ok name -> name
+    | Error pattern ->
+        let site = rangeToSourceRange pattern.Range
+        let reported =
+            !(env.Diagnostics) |> List.exists (fun d -> d.Code = DiagnosticCodes.CCS8401_UnsupportedConstruct && d.Range = site)
+        if not reported then
+            addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct pattern.Range
+                ("CCS source checking did not settle a binding name for this let pattern: a head pattern of form "
+                 + pattern.GetType().Name + " has no binding elaboration.") env
+        "_"
 
 /// Check if a binding is mutable
 let isBindingMutable (binding: SynBinding) : bool =
     let (SynBinding(_, _, _, isMutable, _, _, _, _, _, _, _, _, _)) = binding
     isMutable
-
-/// Extract element names from a tuple pattern (for tuple destructuring)
-/// Returns list of (name, isWildcard) pairs
-let rec extractTupleElements (pat: SynPat) : (string * bool) list =
-    match pat with
-    | SynPat.Tuple(_, elements, _, _) ->
-        elements |> List.collect extractTupleElements
-    | SynPat.Paren(inner, _) ->
-        extractTupleElements inner
-    | SynPat.Typed(inner, _, _) ->
-        extractTupleElements inner
-    | SynPat.Named(SynIdent(ident, _), _, _, _) ->
-        [(ident.idText, false)]
-    | SynPat.Wild _ ->
-        [("_", true)]
-    | SynPat.Const(SynConst.Unit, _) ->
-        [("_", true)]
-    | other ->
-        failwith ("Unsupported pattern in tuple destructuring: " + other.GetType().Name)
 
 /// Get the head pattern from a binding, unwrapping Paren
 let getHeadPattern (binding: SynBinding) : SynPat =
@@ -200,42 +196,49 @@ let tryGetFunctionParams
     (range: SourceRange)
     : (string * NativeType * SourceRange) list option =
     let named (ident: Ident) ty = ident.idText, ty, rangeToSourceRange ident.idRange
+    // A parameter pattern with no named formal (a refutable pattern, a constant, a
+    // constructor) is refused at its range; it never becomes an unnamed `_` formal whose
+    // test is dropped. A wildcard is the one unnamed formal.
+    let refused (pattern: SynPat) =
+        let message =
+            "CCS source checking did not settle a named formal for this function parameter: a parameter pattern of form "
+            + pattern.GetType().Name + " has no parameter elaboration; bind a name and match on it in the body."
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct pattern.Range message env
+        ("_", NativeType.TError message, rangeToSourceRange pattern.Range)
     match headPat with
     | SynPat.LongIdent(_, _, _, argPats, _, _) ->
         match argPats with
         | SynArgPats.Pats pats when not (List.isEmpty pats) ->
-            // Has parameters - this is a function definition
+            // Has parameters - this is a function definition. Tuple parameters were given
+            // named formals by lowerTupleParameters before this reading.
             let extractedParameters = pats |> List.collect (fun pat ->
                 match pat with
                 | SynPat.Paren(innerPat, _) ->
-                    // Parenthesized pattern like (x, y) or () or (x: Type)
+                    // Parenthesized pattern like () or (x: Type)
                     match innerPat with
                     | SynPat.Const(SynConst.Unit, _) ->
                         // Unit literal - bind to dummy name
                         [("_", Types.unitType, rangeToSourceRange innerPat.Range)]
                     | SynPat.Named(SynIdent(ident, _), _, _, _) ->
                         [named ident (freshTypeVar range)]
+                    | SynPat.Wild _ ->
+                        [("_", freshTypeVar range, rangeToSourceRange innerPat.Range)]
                     | SynPat.Typed(typedInner, synType, _) ->
                         // Typed pattern like (name: NativeStr)
                         let annotatedType = resolveSynType env synType
                         match typedInner with
                         | SynPat.Named(SynIdent(ident, _), _, _, _) ->
                             [named ident annotatedType]
-                        | _ -> [("_", annotatedType, rangeToSourceRange typedInner.Range)]
-                    | SynPat.Tuple(_, tuplePats, _, _) ->
-                        tuplePats |> List.map (fun tuplePat ->
-                            match tuplePat with
-                            | SynPat.Named(SynIdent(ident, _), _, _, _) -> named ident (freshTypeVar range)
-                            | SynPat.Typed(SynPat.Named(SynIdent(ident, _), _, _, _), synType, _) ->
-                                named ident (resolveSynType env synType)
-                            | _ -> ("_", freshTypeVar range, rangeToSourceRange tuplePat.Range))
-                    | _ -> [("_", freshTypeVar range, rangeToSourceRange innerPat.Range)]
+                        | SynPat.Wild _ -> [("_", annotatedType, rangeToSourceRange typedInner.Range)]
+                        | _ -> [refused typedInner]
+                    | _ -> [refused innerPat]
                 | SynPat.Named(SynIdent(ident, _), _, _, _) ->
                     [named ident (freshTypeVar range)]
                 | SynPat.Const(SynConst.Unit, _) ->
                     // Unit literal - bind to dummy name
                     [("_", Types.unitType, rangeToSourceRange pat.Range)]
-                | _ -> [("_", freshTypeVar range, rangeToSourceRange pat.Range)]
+                | SynPat.Wild _ -> [("_", freshTypeVar range, rangeToSourceRange pat.Range)]
+                | _ -> [refused pat]
             )
             Some extractedParameters
         | _ -> None
@@ -379,7 +382,7 @@ let private checkBindingInScope
         | _ -> None
     let env, explicitParameters = withDeclaredTypeParameters declarations env
     let range = rangeToSourceRange bindingRange
-    let name = getBindingName binding
+    let name = getBindingName env binding
     // One measure variable per name for the whole binding (spec §Generalization of Measure
     // Variables): the names written in the parameter and return annotations are minted here, so
     // `(y: float<'u>) (z: float<'u>)` share `'u` and a use at two dimensions is CCS8040.
@@ -410,12 +413,23 @@ let private checkBindingInScope
     // Extract literal value if this is a [<Literal>] binding with a constant expression
     let literalValue =
         if isLiteral then
-            match expr with
+            // `let X: T = c` carries its annotation on the right side; the constant is read
+            // through it (the annotation is checked with the body below).
+            let rec constantOf (e: SynExpr) =
+                match e with
+                | SynExpr.Typed(inner, _, _) | SynExpr.Paren(inner, _, _, _) -> constantOf inner
+                | other -> other
+            match constantOf expr with
             | SynExpr.Const(constant, _) ->
                 match Literals.checkConst env constant with
                 | Result.Ok (_, literal) -> Some literal
                 | Result.Error _ -> None  // the failure is reported where the body is checked below
-            | _ -> None  // Non-constant [<Literal>] - will be caught by type checker
+            | _ ->
+                // A [<Literal>] whose right side is not a constant is never demoted to an
+                // ordinary value binding.
+                addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct expr.Range
+                    $"CCS source checking did not settle a compile-time constant for [<Literal>] binding '{name}': its right side is not a constant." env
+                None
         else
             None
 
@@ -456,7 +470,13 @@ let private checkBindingInScope
                 ty, ["_", true, ty, patternRange, []]
             | SynPat.Const(SynConst.Unit, _) ->
                 Types.unitType, ["_", true, Types.unitType, patternRange, []]
-            | other -> failwith ("Unsupported pattern in tuple destructuring: " + other.GetType().Name)
+            | other ->
+                let message =
+                    "CCS source checking did not settle a component binding for this tuple destructuring: a component pattern of form "
+                    + other.GetType().Name + " has no binding elaboration."
+                addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct other.Range message env
+                let ty = NativeType.TError message
+                ty, ["_", true, ty, patternRange, []]
         let expectedTupleType, elementInfo = describe (getHeadPattern binding)
 
         // Check the RHS expression - this gives us the tuple value
@@ -572,7 +592,14 @@ let private checkBindingInScope
                 let retType =
                     match returnInfo with
                     | Some (SynBindingReturnInfo(typeName = synType)) -> resolveSynType env synType
-                    | None -> freshTypeVar range
+                    | None ->
+                        // The declaration is the one source of the foreign return type; it is
+                        // never inferred from the uses of the binding.
+                        let message =
+                            "CCS source checking did not settle the return type of [<FidelityExtern>] binding '" + name
+                            + "': the declaration carries no return type annotation."
+                        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct bindingRange message env
+                        NativeType.TError message
                 builder.Create(
                     SemanticKind.Literal(NativeLiteral.Unit),
                     retType,
@@ -588,7 +615,10 @@ let private checkBindingInScope
             | [(_, paramTy, _)] ->
                 let stringArrayType = NativeType.TApp(Types.arrayTyCon, [Types.stringType])
                 addConstraint (Constraint.Equals(paramTy, stringArrayType, range)) env
-            | _ -> ()  // Multiple or no params - unusual for entry point
+            | parameters ->
+                addNativeError DiagnosticCodes.CCS8004_ArityMismatch bindingRange
+                    ("CCS source checking did not settle the entry point signature of '" + name
+                     + "': [<EntryPoint>] takes one string[] parameter, got " + string parameters.Length + ".") env
             // Constrain return type to int
             addConstraint (Constraint.Equals(bodyNode.Type, Types.intType, range)) env
 
@@ -817,31 +847,53 @@ let checkLetOrUse
             // named-let diagnostic. Resource-use forms are rejected above.
             if letOrUse.IsFromSource && not letOrUse.IsUse then
                 recordSourceBinding true builder binding node (inlineBodyOpt.IsSome || literalValueOpt.IsSome)
-            let name = getBindingName binding
+            let name = getBindingName env binding
             // PRD-13a: Handle tuple destructuring
             if name = TuplePatternMarker then
-                // Read tuple binding info from metadata
+                // Read tuple binding info from metadata. A component that cannot be read
+                // back is an invariant failure at the destructuring, never a dropped name or
+                // an invented type.
+                let invariant (detail: string) =
+                    addDiagnostic {
+                        Severity = NativeDiagnosticSeverity.Error
+                        Code = DiagnosticCodes.CCS8090_InternalInvariant
+                        Message =
+                            "CCS source checking did not settle the component bindings of tuple destructuring node "
+                            + string (NodeId.value node.Id) + ": " + detail
+                        Range = node.Range
+                        RelatedNodes = [node.Id]
+                        Reachability = ReachabilityContext.Unknown
+                    } env
                 match node.Metadata.TryFind "TupleBindings" with
-                | Some (MetadataValue.String bindingInfo) when bindingInfo <> "" ->
+                | Some (MetadataValue.String "") ->
+                    // No bindings to add (all wildcards)
+                    env
+                | Some (MetadataValue.String bindingInfo) ->
                     // Parse "name1:nodeId1,name2:nodeId2,..."
                     bindingInfo.Split(',')
                     |> Array.fold (fun env part ->
                         let parts = part.Split(':')
-                        if parts.Length = 2 then
-                            let elemName = parts.[0]
-                            let nodeIdVal = int parts.[1]
-                            let elemNodeId = NodeId nodeIdVal
-                            // Get the element type from the binding node
-                            let elemType =
+                        match parts with
+                        | [| elemName; nodeIdText |] ->
+                            match System.Int32.TryParse nodeIdText with
+                            | true, nodeIdVal ->
+                                let elemNodeId = NodeId nodeIdVal
+                                // Get the element type from the binding node
                                 match builder.Nodes.TryFind elemNodeId with
-                                | Some elemNode -> elemNode.Type
-                                | None -> freshTypeVar node.Range  // Fallback
-                            addBinding elemName elemType isMutable (Some elemNodeId) false env
-                        else
+                                | Some elemNode ->
+                                    addBinding elemName elemNode.Type isMutable (Some elemNodeId) false env
+                                | None ->
+                                    invariant ("component '" + elemName + "' names node " + nodeIdText + ", which the graph does not hold.")
+                                    env
+                            | _ ->
+                                invariant ("component entry '" + part + "' carries no node id.")
+                                env
+                        | _ ->
+                            invariant ("component entry '" + part + "' is not of the form name:nodeId.")
                             env
                     ) env
                 | _ ->
-                    // No bindings to add (all wildcards)
+                    invariant "the node carries no TupleBindings record."
                     env
             else
                 match inlineBodyOpt, literalValueOpt with
@@ -873,7 +925,7 @@ let checkLetOrUse
         // Pre-create Binding nodes to get NodeIds before checking bodies
         let preCreatedBindings =
             bindings |> List.map (fun binding ->
-                let name = getBindingName binding
+                let name = getBindingName env binding
                 let ty = freshTypeVar range
                 let (SynBinding(_, _, _, isMutable, attrs, _, _, _, _, _, _, _, _)) = binding
                 let declRoot =

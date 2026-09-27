@@ -146,7 +146,18 @@ let checkFor
             // Pin the operator's type variable to int so no unbound variable survives
             addConstraint (Constraint.Equals(opTy, NativeType.TFun(Types.intType, NativeType.TFun(Types.intType, resultTy)), range)) env
             builder.Create(SemanticKind.Intrinsic info, opTy, range, arena = env.CurrentArena)
-        | None -> failwith ("for loop desugaring: operator intrinsic missing: " + opName)
+        | None ->
+            let message =
+                "CCS source checking did not settle the intrinsic '" + opName + "' for this for loop's desugaring: the operator table does not hold it."
+            addDiagnostic {
+                Severity = NativeDiagnosticSeverity.Error
+                Code = DiagnosticCodes.CCS8090_InternalInvariant
+                Message = message
+                Range = range
+                RelatedNodes = []
+                Reachability = ReachabilityContext.Unknown
+            } env
+            builder.Create(SemanticKind.Error message, NativeType.TError message, range)
 
     // Guard: i <= end (or i >= end for downto)
     let cmpNode = mkOperator (if direction then "op_LessThanOrEqual" else "op_GreaterThanOrEqual") Types.boolType
@@ -291,9 +302,20 @@ let checkTryWith
 
     let tryNode = checkExpr env builder tryExpr
 
-    // Exception handlers are like match expressions over the caught exception
-    // TODO: Define proper exception type for native. Using string as placeholder.
-    let exnType = Types.stringType
+    // Exception handlers are like match expressions over the caught exception. There is no
+    // native exception type: the caught value is never given an invented type (it was
+    // `string`); the handler is refused at the try/with, and its clauses are still checked.
+    let exnMessage =
+        "CCS source checking did not settle an exception type for this try/with handler: there is no native exception value for its clauses to match."
+    addDiagnostic {
+        Severity = NativeDiagnosticSeverity.Error
+        Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+        Message = exnMessage
+        Range = range
+        RelatedNodes = [tryNode.Id]
+        Reachability = ReachabilityContext.Unknown
+    } env
+    let exnType = NativeType.TError exnMessage
 
     // Create a synthetic match node for the handlers (create scrutinee first so we have its ID)
     let handlerScrutinee = builder.Create(
@@ -409,8 +431,15 @@ let checkAssert
     : SemanticNode =
     let condNode = checkExpr env builder condExpr
     addConstraint (Constraint.Equals(condNode.Type, Types.boolType, range)) env
-    builder.Create(
-        SemanticKind.Application(condNode.Id, []),
-        Types.unitType,
-        range,
-        children = [condNode.Id])
+    // The graph has no assertion form; the condition is never encoded as a zero-argument
+    // application of a bool.
+    let message = "CCS source checking did not settle an elaboration for this assert: an assertion has no native graph form."
+    addDiagnostic {
+        Severity = NativeDiagnosticSeverity.Error
+        Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+        Message = message
+        Range = range
+        RelatedNodes = [condNode.Id]
+        Reachability = ReachabilityContext.Unknown
+    } env
+    builder.Create(SemanticKind.Error message, NativeType.TError message, range, children = [condNode.Id])

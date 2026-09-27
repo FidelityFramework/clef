@@ -61,6 +61,16 @@ let private runSaturation (ctx: Context) (parser: SaturationParser<NodeId>) : Re
     | NoMatch reason ->
         failwithf "Saturation failed: %s" reason
 
+/// A consumer that reads its first element requires its first pull to succeed:
+/// `current` after an unsuccessful pull has no value. That pull's result is the
+/// source requirement, never a discarded value.
+let private requireFirstPull (operation: string) (pulled: NodeId) : SaturationParser<NodeId> =
+    saturation {
+        let! range = getSourceRange
+        let diagnostic = sprintf "Seq.%s requires a nonempty input sequence at %s:%d:%d" operation range.File range.Start.Line range.Start.Column
+        return! createWithChildren (SemanticKind.Require(pulled, diagnostic)) Types.unitType [pulled]
+    }
+
 //=============================================================================
 // CONSUMER PATTERN: Iterate seq with enumerator
 //=============================================================================
@@ -178,7 +188,7 @@ let private transformRecipe operation callback input inputElement outputElement 
                 | "collect" -> return! yieldBang transformed
                 | _ -> return! yield' transformed
             })
-        | _ -> failwith "A sequence transformer requires its callback and input captures")
+        | operands -> fail (XParsec.ErrorType.Message (sprintf "Baker Seq recipe did not settle its operand snapshots: A sequence transformer requires its callback and input captures, got %d" (List.length operands))))
 
 let private seqAppendRecipe first second elementType enclosingFunction =
     let sequenceType = NativeType.TSeq elementType
@@ -189,7 +199,7 @@ let private seqAppendRecipe first second elementType enclosingFunction =
             let! secondYield = yieldBang secondRef
             return! evaluateBefore [firstYield] secondYield Types.unitType
           }
-        | _ -> failwith "Sequence append requires both input captures")
+        | operands -> fail (XParsec.ErrorType.Message (sprintf "Baker Seq recipe did not settle its operand snapshots: Sequence append requires both input captures, got %d" (List.length operands))))
 
 /// Take checks its own remaining demand before asking the input to advance.
 /// The counter is per enumeration; operands were captured at producer creation.
@@ -217,7 +227,7 @@ let private seqTakeRecipe count input elementType enclosingFunction =
             })
             return! evaluateBefore [remaining] loop Types.unitType
           }
-        | _ -> failwith "Sequence take requires its count and input captures")
+        | operands -> fail (XParsec.ErrorType.Message (sprintf "Baker Seq recipe did not settle its operand snapshots: Sequence take requires its count and input captures, got %d" (List.length operands))))
 
 //=============================================================================
 // CONSUMER: SEQ.TOLIST
@@ -317,13 +327,13 @@ let private seqFoldRecipe
         match operands with
         | [folder; initial; input] ->
             seqFoldLeft (preturn initial) (fun accumulator current -> app2 folder accumulator current stateType) input elemType stateType
-        | _ -> failwith "Sequence fold requires its folder, initial state and input")
+        | operands -> fail (XParsec.ErrorType.Message (sprintf "Baker Seq recipe did not settle its operand snapshots: Sequence fold requires its folder, initial state and input, got %d" (List.length operands))))
 
 let private seqIterRecipe action input elementType =
     consumer [action, NativeType.TFun(elementType, Types.unitType); input, NativeType.TSeq elementType] Types.unitType (fun operands ->
         match operands with
         | [actionRef; inputRef] -> Sequences.iterate inputRef elementType (fun current -> app1 actionRef current Types.unitType)
-        | _ -> failwith "Sequence iter requires its action and input")
+        | operands -> fail (XParsec.ErrorType.Message (sprintf "Baker Seq recipe did not settle its operand snapshots: Sequence iter requires its action and input, got %d" (List.length operands))))
 
 //=============================================================================
 // CONSUMER: SEQ.EXISTS
@@ -334,7 +344,7 @@ let private seqPredicateRecipe baseValue predicate input elementType =
         match operands with
         | [predicateRef; inputRef] ->
             seqBoolFold baseValue (fun current -> app1 predicateRef current Types.boolType) inputRef elementType
-        | _ -> failwith "Sequence predicate requires its callback and input")
+        | operands -> fail (XParsec.ErrorType.Message (sprintf "Baker Seq recipe did not settle its operand snapshots: Sequence predicate requires its callback and input, got %d" (List.length operands))))
 
 let private seqExistsRecipe predicate input elementType =
     seqPredicateRecipe false predicate input elementType
@@ -434,7 +444,8 @@ let private seqHeadRecipe
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
         let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
-        let! _hasElementId = app1 moveNextFuncId enumId Types.boolType
+        let! firstPull = app1 moveNextFuncId enumId Types.boolType
+        let! nonEmpty = requireFirstPull "head" firstPull
 
         // Get current element
         let currentInfo = {
@@ -445,7 +456,8 @@ let private seqHeadRecipe
         }
         let currentFuncType = NativeType.TFun (enumType, elemType)
         let! currentFuncId = createAndEmit (SemanticKind.Intrinsic currentInfo) currentFuncType
-        return! app1 currentFuncId enumId elemType
+        let! first = app1 currentFuncId enumId elemType
+        return! evaluateBefore [nonEmpty] first elemType
     }
 
 //=============================================================================
@@ -489,7 +501,7 @@ let private seqTryHeadRecipe input elementType =
     let optionType = NativeType.TApp(Types.optionTyCon, [elementType])
     consumer [input, NativeType.TSeq elementType] optionType (function
         | [inputRef] -> seqOptionalSelection inputRef elementType elementType (fun current -> Options.some current elementType)
-        | _ -> failwith "Sequence tryHead requires its evaluated input")
+        | operands -> fail (XParsec.ErrorType.Message (sprintf "Baker Seq recipe did not settle its operand snapshots: Sequence tryHead requires its evaluated input, got %d" (List.length operands))))
 
 //=============================================================================
 // CONSUMER: SEQ.TRYPICK
@@ -501,7 +513,7 @@ let private seqTryPickRecipe chooser input elementType resultType =
     consumer [chooser, chooserType; input, NativeType.TSeq elementType] optionType (function
         | [chooserRef; inputRef] ->
             seqOptionalSelection inputRef elementType resultType (fun current -> app1 chooserRef current optionType)
-        | _ -> failwith "Sequence tryPick requires its evaluated chooser and input")
+        | operands -> fail (XParsec.ErrorType.Message (sprintf "Baker Seq recipe did not settle its operand snapshots: Sequence tryPick requires its evaluated chooser and input, got %d" (List.length operands))))
 
 //=============================================================================
 // CONSUMER: SEQ.MAX
@@ -536,7 +548,8 @@ let private seqMaxRecipe
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
         let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
-        let! _ = app1 moveNextFuncId enumId Types.boolType
+        let! firstPull = app1 moveNextFuncId enumId Types.boolType
+        let! nonEmpty = requireFirstPull "max" firstPull
 
         let currentInfo = {
             Module = IntrinsicModule.SeqEnumerator
@@ -591,7 +604,8 @@ let private seqMaxRecipe
 
         // Initial call with first element
         let! loopCallRefId = varRef "loop" (Some bindingId) loopFuncType
-        return! app1 loopCallRefId firstElemId elemType
+        let! result = app1 loopCallRefId firstElemId elemType
+        return! evaluateBefore [nonEmpty] result elemType
     }
 
 //=============================================================================
@@ -626,7 +640,8 @@ let private seqMinRecipe
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
         let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
-        let! _ = app1 moveNextFuncId enumId Types.boolType
+        let! firstPull = app1 moveNextFuncId enumId Types.boolType
+        let! nonEmpty = requireFirstPull "min" firstPull
 
         let currentInfo = {
             Module = IntrinsicModule.SeqEnumerator
@@ -669,7 +684,8 @@ let private seqMinRecipe
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
 
         let! loopCallRefId = varRef "loop" (Some bindingId) loopFuncType
-        return! app1 loopCallRefId firstElemId elemType
+        let! result = app1 loopCallRefId firstElemId elemType
+        return! evaluateBefore [nonEmpty] result elemType
     }
 
 //=============================================================================
@@ -706,7 +722,8 @@ let private seqMinByRecipe
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
         let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
-        let! _ = app1 moveNextFuncId enumId Types.boolType
+        let! firstPull = app1 moveNextFuncId enumId Types.boolType
+        let! nonEmpty = requireFirstPull "minBy" firstPull
 
         let currentInfo = {
             Module = IntrinsicModule.SeqEnumerator
@@ -752,7 +769,8 @@ let private seqMinByRecipe
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
 
         let! loopCallRefId = varRef "loop" (Some bindingId) loopFuncType
-        return! app1 loopCallRefId firstElemId elemType
+        let! result = app1 loopCallRefId firstElemId elemType
+        return! evaluateBefore [nonEmpty] result elemType
     }
 
 //=============================================================================
@@ -789,7 +807,8 @@ let private seqMaxByRecipe
         }
         let moveNextFuncType = NativeType.TFun (enumType, Types.boolType)
         let! moveNextFuncId = createAndEmit (SemanticKind.Intrinsic moveNextInfo) moveNextFuncType
-        let! _ = app1 moveNextFuncId enumId Types.boolType
+        let! firstPull = app1 moveNextFuncId enumId Types.boolType
+        let! nonEmpty = requireFirstPull "maxBy" firstPull
 
         let currentInfo = {
             Module = IntrinsicModule.SeqEnumerator
@@ -835,7 +854,8 @@ let private seqMaxByRecipe
         let! bindingId = letRecBind "loop" lambdaId loopFuncType
 
         let! loopCallRefId = varRef "loop" (Some bindingId) loopFuncType
-        return! app1 loopCallRefId firstElemId elemType
+        let! result = app1 loopCallRefId firstElemId elemType
+        return! evaluateBefore [nonEmpty] result elemType
     }
 
 //=============================================================================
@@ -855,16 +875,15 @@ let private operationRecipe
 
     match operation, args with
     // Producers
+    // Result element and key types are the checked graph's; none defaults to the input element.
     | "map", [mapper; xs] ->
-        let outElem = outputElemType |> Option.defaultValue elemType
-        Some (transformRecipe "map" mapper xs elemType outElem enclosingFunction)
+        outputElemType |> Option.map (fun outElem -> transformRecipe "map" mapper xs elemType outElem enclosingFunction)
 
     | "filter", [predicate; xs] ->
         Some (transformRecipe "filter" predicate xs elemType elemType enclosingFunction)
 
     | "collect", [mapper; xs] ->
-        let outElem = outputElemType |> Option.defaultValue elemType
-        Some (transformRecipe "collect" mapper xs elemType outElem enclosingFunction)
+        outputElemType |> Option.map (fun outElem -> transformRecipe "collect" mapper xs elemType outElem enclosingFunction)
 
     | "append", [xs; ys] ->
         Some (seqAppendRecipe xs ys elemType enclosingFunction)
@@ -913,12 +932,10 @@ let private operationRecipe
         Some (seqMinRecipe xs elemType)
 
     | "minBy", [projection; xs] ->
-        let keyType = stateType |> Option.defaultValue elemType
-        Some (seqMinByRecipe projection xs elemType keyType)
+        stateType |> Option.map (fun keyType -> seqMinByRecipe projection xs elemType keyType)
 
     | "maxBy", [projection; xs] ->
-        let keyType = stateType |> Option.defaultValue elemType
-        Some (seqMaxByRecipe projection xs elemType keyType)
+        stateType |> Option.map (fun keyType -> seqMaxByRecipe projection xs elemType keyType)
 
     // Primitives - Alex witnesses directly
     | "empty", _
@@ -965,6 +982,14 @@ let private operationShape operation functionType =
                 else Some (parameters, elemType, outputElemType, stateType, resultType)
             | _ -> None))
 
+/// The completed frontier composes the operation body; a body the recipe
+/// cannot construct from the checked shape is a failure, never an empty value.
+let private settledOperation (ctx: Context) operation arguments elemType outputElemType stateType enclosing =
+    match operationRecipe operation arguments elemType outputElemType stateType enclosing with
+    | Some recipe -> recipe
+    | None ->
+        fail (XParsec.ErrorType.Message (sprintf "Baker Seq recipe did not settle an operation body for Seq.%s at node %d: %d operands, element %A, result element %A, state/key %A" operation (NodeId.value ctx.InspiringNode) (List.length arguments) elemType outputElemType stateType))
+
 /// Snapshot supplied values at each formation frontier. Later invocations use
 /// local capture references, never replay the original supplied expressions.
 /// One parameter per closure preserves both retained fold frontiers.
@@ -982,14 +1007,14 @@ let rec private partialRecipe (ctx: Context) operation supplied parameters elemT
             let body arguments captures =
                 let suppliedValues = List.zip captures (List.map snd supplied) @ List.zip arguments [parameterType]
                 if List.isEmpty remaining then
-                    operationRecipe operation (List.map fst suppliedValues) elemType outputElemType stateType enclosing |> Option.get
+                    settledOperation ctx operation (List.map fst suppliedValues) elemType outputElemType stateType enclosing
                 else
                     partialRecipe ctx operation suppliedValues remaining elemType outputElemType stateType resultType enclosing
             let! value = closure [(name, parameterType)] (List.map snd snapshots) enclosing body residualType
             if List.isEmpty snapshots then return value
             else return! evaluateBefore (List.map fst snapshots) value (NativeType.TFun (parameterType, residualType))
         | [] ->
-            return! operationRecipe operation (List.map fst supplied) elemType outputElemType stateType enclosing |> Option.get
+            return! settledOperation ctx operation (List.map fst supplied) elemType outputElemType stateType enclosing
     }
 
 /// Partial applications retain checked operand values and a typed next frontier.

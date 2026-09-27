@@ -319,11 +319,8 @@ let main _ =
 """
         let formation, partial = graph.Codata.Value.Curry.PartialApplications |> Map.toList |> Assert.Single
         Assert.Equal(2, partial.SuppliedArgNodes.Length)
-        let explicit, ordinary = partial.SuppliedArgNodes[0], partial.SuppliedArgNodes[1]
         let first = EagerGraph.frontiers graph formation EagerFrontier.Actual |> Assert.Single
         Assert.Equal(0, first.Ordinal)
-        Assert.DoesNotContain(explicit, graph.Codata.Value.Curry.DeferredArgNodes)
-        Assert.Contains(ordinary, graph.Codata.Value.Curry.DeferredArgNodes)
         let later = graph.Edges |> List.filter (fun edge ->
             edge.Role = EdgeRole.EagerDemand EagerFrontier.Actual && edge.Target <> formation) |> Assert.Single
         Assert.DoesNotContain(first.Sources.Head, later.Sources)

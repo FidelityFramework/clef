@@ -147,7 +147,7 @@ let expand (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
         | _ -> None
 
     let mutable nodes = graph.Nodes
-    let mutable entries = Map.empty<NodeId * NodeId, NodeId>
+    let mutable entries = Map.empty<NodeId * NodeId, NodeId * string>
     for site in graph.Nodes.Values do
         match site.Kind with
         | SemanticKind.Application (callee, [handler]) when reachable.Contains site.Id ->
@@ -156,9 +156,9 @@ let expand (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
                 match namedModule Set.empty handler with
                 | Some target when sameType target.Type declaration.HandlerType ->
                     let key = declaration.Factory.Id, target.Id
-                    let entryBinding =
+                    let entryBinding, entryName =
                         match entries.TryFind key with
-                        | Some id -> id
+                        | Some entry -> entry
                         | None ->
                             let adapterLambda = List.exactlyOne declaration.Adapter.Children
                             let entryId = NodeId.fresh()
@@ -204,9 +204,8 @@ let expand (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
                             | Some ({ Kind = SemanticKind.ModuleDef (name, members) } as owner) ->
                                 nodes <- nodes.Add(owner.Id, { owner with Kind = SemanticKind.ModuleDef (name, members @ [entryId]); Children = owner.Children @ [entryId] })
                             | _ -> error declaration.Site "A closed callback adapter must be a module-level function."
-                            entries <- entries.Add(key, entryId)
-                            entryId
-                    let entryName = match nodes[entryBinding].Kind with SemanticKind.Binding (name, _, _, _) -> name | _ -> ""
+                            entries <- entries.Add(key, (entryId, entryName))
+                            entryId, entryName
                     let referenceId, intrinsicId, addressId = NodeId.fresh(), NodeId.fresh(), NodeId.fresh()
                     let reference = { site with Id = referenceId; Kind = SemanticKind.VarRef (entryName, Some entryBinding); Type = declaration.EntryType; Children = []; Parent = Some addressId; Metadata = Map.empty }
                     let intrinsicInfo =

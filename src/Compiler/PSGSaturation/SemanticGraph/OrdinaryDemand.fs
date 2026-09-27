@@ -7,6 +7,7 @@ module Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+module Reports = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 module Incidence = Clef.Compiler.Baker.Ingredients.Closures
 
 type Formal = {
@@ -189,15 +190,49 @@ let edges reading =
                       Sources = [call.Implementation; call.Parameters[ordinal]; call.Actuals[ordinal]; call.Callee]
                                 @ (call.Participants |> Set.toList) } ]
 
-let private cache = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Reading>()
 /// Recompute against the immutable graph and require its exact current joint
-/// rows. An old codata/edge projection supplies no independent authority.
+/// rows. An old codata/edge projection supplies no independent authority, and
+/// an absent or extra relation is a located failure, never an empty admission.
+let private validate graph : Result<Reading, WitnessProjectionFailure list> =
+    let fresh = analyze graph
+    let expected = edges fresh
+    let actual = graph.Edges |> List.filter owned
+    if (expected |> List.map key |> List.sort) = (actual |> List.map key |> List.sort) then Ok fresh
+    else
+        let targets = (expected @ actual) |> List.map _.Target |> Set.ofList
+        targets |> Set.toList |> List.choose (fun target ->
+            let expectedAt = expected |> List.filter (fun edge -> edge.Target = target)
+            let actualAt = actual |> List.filter (fun edge -> edge.Target = target)
+            if (expectedAt |> List.map key |> List.sort) = (actualAt |> List.map key |> List.sort) then None
+            else Some {
+                Occurrence = Some target
+                Reason = sprintf "PSG settlement (OrdinaryDemand) did not settle the ordinary-demand relations for node %d: the published OrdinaryUnusedFormal/OrdinaryUnusedActual rows do not match the current complete use proof." (NodeId.value target)
+                Participants = (expectedAt @ actualAt) |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList })
+        |> Error
+
+type private Validated = { Result: Result<Reading, WitnessProjectionFailure list> }
+let private cache = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Validated>()
+
+/// The validated reading, or the located failures of the current graph.
+let tryRead graph = (cache.GetValue(graph, fun graph -> { Result = validate graph })).Result
+
+/// The same failures as CCS8403 diagnostics, for a source stage that owns a diagnostic list.
+let diagnostics (graph: SemanticGraph) (failures: WitnessProjectionFailure list) : Reports.Diagnostic list =
+    failures |> List.map (fun failure ->
+        let site = failure.Occurrence |> Option.bind graph.Nodes.TryFind
+        ({ Severity = Reports.NativeDiagnosticSeverity.Error; Code = "CCS8403"; Message = failure.Reason
+           Range = site |> Option.map _.Range |> Option.defaultValue { File = ""; Start = { Line = 0; Column = 0 }; End = { Line = 0; Column = 0 } }
+           RelatedNodes = Option.toList failure.Occurrence @ (failure.Participants |> Set.toList)
+           Reachability = Reports.ReachabilityContext.Reachable } : Reports.Diagnostic))
+
+/// A reader with no diagnostic channel of its own. A mismatch between the
+/// published rows and the current proof stops here, naming the nodes.
 let read graph =
-    cache.GetValue(graph, fun graph ->
-        let fresh = analyze graph
-        let expected = edges fresh |> List.map key |> List.sort
-        let actual = graph.Edges |> List.filter owned |> List.map key |> List.sort
-        if actual = expected then fresh else { Formals = Map.empty; Calls = Map.empty })
+    match tryRead graph with
+    | Ok reading -> reading
+    | Error failures ->
+        let sites = failures |> List.choose _.Occurrence |> List.map (NodeId.value >> string) |> String.concat ", "
+        invalidOp (sprintf "PSG settlement (OrdinaryDemand) did not settle the ordinary-demand relations for the current graph: the published OrdinaryUnusedFormal/OrdinaryUnusedActual rows do not match the current complete use proof at nodes [%s]." sites)
 
 let parameters graph implementation =
     (read graph).Formals.Values |> Seq.filter (fun proof -> proof.Implementation = implementation) |> Seq.map _.Formal |> Set.ofSeq
@@ -243,6 +278,7 @@ let private deferredFrom graph (reading: Reading) =
     retain candidates
 
 let deferredOnly graph = deferredFrom graph (read graph)
+let tryDeferredOnly graph = tryRead graph |> Result.map (deferredFrom graph)
 
 let private projectionFrom graph (reading: Reading) : OrdinaryDemandProjection =
     { Parameters =
@@ -263,20 +299,4 @@ let project graph = projectionFrom graph (read graph)
 /// Compute and validate the final use proof once while the source stage owns
 /// publication. An absent or extra relation cannot become an empty admission.
 let projectValidated graph : Result<OrdinaryDemandProjection, WitnessProjectionFailure list> =
-    let fresh = analyze graph
-    let expected = edges fresh
-    let actual = graph.Edges |> List.filter owned
-    if (expected |> List.map key |> List.sort) = (actual |> List.map key |> List.sort) then
-        Ok (projectionFrom graph fresh)
-    else
-        let targets = (expected @ actual) |> List.map _.Target |> Set.ofList
-        let failures =
-            targets |> Set.toList |> List.choose (fun target ->
-                let expectedAt = expected |> List.filter (fun edge -> edge.Target = target)
-                let actualAt = actual |> List.filter (fun edge -> edge.Target = target)
-                if (expectedAt |> List.map key |> List.sort) = (actualAt |> List.map key |> List.sort) then None
-                else Some {
-                    Occurrence = Some target
-                    Reason = "Ordinary-demand source relations do not match the current complete use proof."
-                    Participants = (expectedAt @ actualAt) |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList })
-        Error failures
+    tryRead graph |> Result.map (projectionFrom graph)

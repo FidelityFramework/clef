@@ -1778,40 +1778,22 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // no pointer surface. Grammar is inherited unforked; the construct errors.
     //---------------------------------------------------------------------
     | SynExpr.Fixed _ ->
-        builder.Create(
-            SemanticKind.Error "'fixed' is not supported in native compilation",
-            NativeType.TError "fixed expression",
-            range)
+        unsupported "CCS source checking did not settle an elaboration for this 'fixed' expression: pinning has no native graph form."
 
     //---------------------------------------------------------------------
     // Dynamic: expr?name (dynamic member access)
     //---------------------------------------------------------------------
-    | SynExpr.Dynamic(objExpr, _, memberExpr, _) ->
-        let objNode = checkExpr env builder objExpr
-        let memberNode = checkExpr env builder memberExpr
-        builder.Create(
-            SemanticKind.Application(objNode.Id, [memberNode.Id]),
-            freshTypeVar range,
-            range,
-            children = [objNode.Id; memberNode.Id])
+    | SynExpr.Dynamic _ ->
+        // Never encoded as an application of the receiver to the member name.
+        unsupported "CCS source checking did not settle an elaboration for this dynamic member access '?': dynamic lookup has no native graph form."
 
     //---------------------------------------------------------------------
     // DotLambda: _.Property (shorthand lambda)
     //---------------------------------------------------------------------
-    | SynExpr.DotLambda(innerExpr, _, _) ->
-        let innerNode = checkExpr env builder innerExpr
-        let argType = freshTypeVar range
-        let paramNode = builder.Create(
-            SemanticKind.PatternBinding("_"),
-            argType,
-            range)
-        let lambdaNode = builder.Create(
-            SemanticKind.Lambda([("_", argType, paramNode.Id)], innerNode.Id, [], env.EnclosingFunction, LambdaContext.RegularClosure),
-            NativeType.TFun(argType, innerNode.Type),
-            range,
-            children = [paramNode.Id; innerNode.Id])
-        builder.SetEmissionStrategy(innerNode.Id, EmissionStrategy.SeparateFunction 0)
-        lambdaNode
+    | SynExpr.DotLambda _ ->
+        // The member path was checked as a free expression, never as an access on the
+        // lambda's argument; that elaboration read an unrelated binding of the same name.
+        unsupported "CCS source checking did not settle an elaboration for this shorthand lambda '_.member': write 'fun x -> x.member'."
 
     //---------------------------------------------------------------------
     // DotNamedIndexedPropertySet: obj.Prop[idx] <- value
@@ -1822,61 +1804,34 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     //---------------------------------------------------------------------
     // NamedIndexedPropertySet: Prop(idx) <- value
     //---------------------------------------------------------------------
-    | SynExpr.NamedIndexedPropertySet(SynLongIdent(longId, _, _), indexExpr, valueExpr, _) ->
-        let indexNode = checkExpr env builder indexExpr
-        let valueNode = checkExpr env builder valueExpr
+    | SynExpr.NamedIndexedPropertySet(SynLongIdent(longId, _, _), _, _, _) ->
         let propName = longId |> List.map (fun id -> id.idText) |> String.concat "."
-        builder.Create(
-            SemanticKind.Error $"NamedIndexedPropertySet '{propName}' - requires context",
-            Types.unitType,
-            range,
-            children = [indexNode.Id; valueNode.Id])
+        unsupported $"CCS source checking did not settle a receiver for this indexed property set '{propName}(i) <- v': an indexed property has no native graph form."
 
     //---------------------------------------------------------------------
     // Typar: 'a (type parameter in expression position)
     //---------------------------------------------------------------------
     | SynExpr.Typar(SynTypar(ident, _, _), _) ->
-        let typarName = ident.idText
-        builder.Create(
-            SemanticKind.Error $"Type parameter '{typarName}' in expression position",
-            freshTypeVar range,
-            range)
+        unsupported $"CCS source checking did not settle a value for type parameter '{ident.idText}' in expression position: a type parameter is not a value."
 
     //---------------------------------------------------------------------
     // IndexRange: expr.[start..finish]
     //---------------------------------------------------------------------
-    | SynExpr.IndexRange(startOpt, _, finishOpt, _, _, _) ->
-        let startNode = startOpt |> Option.map (checkExpr env builder)
-        let finishNode = finishOpt |> Option.map (checkExpr env builder)
-        let children = [startNode; finishNode] |> List.choose id |> List.map (fun n -> n.Id)
-        builder.Create(
-            SemanticKind.Error "IndexRange - requires slice support",
-            freshTypeVar range,
-            range,
-            children = children)
+    | SynExpr.IndexRange _ ->
+        unsupported "CCS source checking did not settle an elaboration for this range expression 'a..b': a range outside a counted for loop has no native graph form."
 
     //---------------------------------------------------------------------
     // IndexFromEnd: ^expr (index from end)
     //---------------------------------------------------------------------
-    | SynExpr.IndexFromEnd(expr, _) ->
-        let exprNode = checkExpr env builder expr
-        builder.Create(
-            SemanticKind.Application(exprNode.Id, []),
-            Types.intType,
-            range,
-            children = [exprNode.Id])
+    | SynExpr.IndexFromEnd _ ->
+        // Never encoded as a zero-argument application of the offset typed as int.
+        unsupported "CCS source checking did not settle an elaboration for this from-end index '^i': from-end indexing has no native graph form."
 
     //---------------------------------------------------------------------
     // JoinIn: join ... in ... (query syntax)
     //---------------------------------------------------------------------
-    | SynExpr.JoinIn(expr1, _, expr2, _) ->
-        let node1 = checkExpr env builder expr1
-        let node2 = checkExpr env builder expr2
-        builder.Create(
-            SemanticKind.Error "JoinIn - query syntax not supported",
-            freshTypeVar range,
-            range,
-            children = [node1.Id; node2.Id])
+    | SynExpr.JoinIn _ ->
+        unsupported "CCS source checking did not settle an elaboration for this query 'join ... in': query syntax has no native graph form."
 
     //---------------------------------------------------------------------
     // DebugPoint: debugging information (transparent)
@@ -1919,42 +1874,25 @@ and private checkExpr (env: TypeEnv) (builder: NodeBuilder) (syn: SynExpr) : Sem
     // LibraryOnlyILAssembly: inline IL (FSharp.Core internal)
     //---------------------------------------------------------------------
     | SynExpr.LibraryOnlyILAssembly _ ->
-        builder.Create(
-            SemanticKind.Error "Inline IL assembly is not supported in native compilation",
-            NativeType.TError "IL assembly",
-            range)
+        unsupported "CCS source checking did not settle an elaboration for this inline IL: IL assembly has no native graph form."
 
     //---------------------------------------------------------------------
     // LibraryOnlyStaticOptimization: static optimization (FSharp.Core internal)
     //---------------------------------------------------------------------
     | SynExpr.LibraryOnlyStaticOptimization _ ->
-        builder.Create(
-            SemanticKind.Error "Static optimization is not supported in native compilation",
-            NativeType.TError "static optimization",
-            range)
+        unsupported "CCS source checking did not settle an elaboration for this static optimization: it has no native graph form."
 
     //---------------------------------------------------------------------
     // LibraryOnlyUnionCaseFieldGet: internal union field access
     //---------------------------------------------------------------------
-    | SynExpr.LibraryOnlyUnionCaseFieldGet(expr, _, _, _) ->
-        let exprNode = checkExpr env builder expr
-        builder.Create(
-            SemanticKind.Error "Library-only union case field get",
-            freshTypeVar range,
-            range,
-            children = [exprNode.Id])
+    | SynExpr.LibraryOnlyUnionCaseFieldGet _ ->
+        unsupported "CCS source checking did not settle an elaboration for this library-only union case field get: it has no native graph form."
 
     //---------------------------------------------------------------------
     // LibraryOnlyUnionCaseFieldSet: internal union field set
     //---------------------------------------------------------------------
-    | SynExpr.LibraryOnlyUnionCaseFieldSet(expr, _, _, valueExpr, _) ->
-        let exprNode = checkExpr env builder expr
-        let valueNode = checkExpr env builder valueExpr
-        builder.Create(
-            SemanticKind.Error "Library-only union case field set",
-            Types.unitType,
-            range,
-            children = [exprNode.Id; valueNode.Id])
+    | SynExpr.LibraryOnlyUnionCaseFieldSet _ ->
+        unsupported "CCS source checking did not settle an elaboration for this library-only union case field set: it has no native graph form."
 
 let checkExpression (expr: SynExpr) : CheckResult =
     let env = createTypeEnv()
@@ -1962,7 +1900,9 @@ let checkExpression (expr: SynExpr) : CheckResult =
     NodeId.reset()
 
     let node = checkExpr env builder expr
-    let diagnostics = solveAndGetDiagnostics env !(env.Constraints)
+    // The checker's own diagnostics are reported with the constraint diagnostics, never drained.
+    let reported = solveAndGetDiagnostics env !(env.Constraints) @ List.rev !(env.Diagnostics)
+    let diagnostics = reported @ residualDiagnostics builder reported
 
     buildResult builder [node] Map.empty diagnostics None Set.empty
 
@@ -1982,7 +1922,9 @@ let checkLetBinding (binding: SynBinding) : CheckResult =
 
     // InlineBody, isMutable and literalValue discarded - see function doc comment for rationale
     let (node, _inlineBody, _isMutable, _literalValue) = Bindings.checkBinding checkExpr env builder binding None
-    let diagnostics = solveAndGetDiagnostics env !(env.Constraints)
+    // The checker's own diagnostics are reported with the constraint diagnostics, never drained.
+    let reported = solveAndGetDiagnostics env !(env.Constraints) @ List.rev !(env.Diagnostics)
+    let diagnostics = reported @ residualDiagnostics builder reported
 
     buildResult builder [node] Map.empty diagnostics None Set.empty
 
@@ -1995,16 +1937,6 @@ type private ModuleContext = {
     Path: ModulePath
     IsRecursive: bool
 }
-
-/// Check if a type definition has the [<Struct>] attribute
-let private hasStructAttribute (attrs: SynAttributes) : bool =
-    attrs |> List.exists (fun attrList ->
-        attrList.Attributes |> List.exists (fun attr ->
-            match attr.TypeName.LongIdent with
-            | [id] -> id.idText = "Struct" || id.idText = "StructAttribute"
-            | _ -> false
-        )
-    )
 
 /// Check if a type definition has the [<Measure>] attribute
 let private hasMeasureAttribute (attrs: SynAttributes) : bool =
@@ -2135,7 +2067,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 let preCreatedBindings =
                     bindings
                     |> List.map (fun binding ->
-                        let simpleName = Bindings.getBindingName binding
+                        let simpleName = Bindings.getBindingName env binding
                         let placeholderTy = freshTypeVar range
                         let (SynBinding(_, _, _, isMutable, attrs, _, _, _, _, _, _, _, _)) = binding
                         let declRoot =
@@ -2206,7 +2138,7 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     // Register lexical aliases and the canonical export path
                     // CRITICAL: Use actual isMutable flag for module-level mutable variables
                     // [<Literal>] bindings are registered for compile-time substitution
-                    let simpleName = Bindings.getBindingName binding
+                    let simpleName = Bindings.getBindingName accEnv binding
                     let updatedEnv =
                         bindingNameSuffixes simpleName
                         |> List.fold (fun env qname ->
@@ -2330,13 +2262,26 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
         // Process each type definition, threading environment for abbreviations
         let (finalEnv, nodes) =
             typeDefns |> List.fold (fun (accEnv, accNodes) typeDef ->
-                let (SynTypeDefn(typeInfo, typeRepr, _members, _implicitCtor, typeRange, _trivia)) = typeDef
+                let (SynTypeDefn(typeInfo, typeRepr, members, _implicitCtor, typeRange, _trivia)) = typeDef
                 let range = rangeToSourceRange typeRange
 
                 // Extract type name from SynComponentInfo
                 let simpleTypeName =
                     let (SynComponentInfo(_, _, _, longId, _, _, _, _)) = typeInfo
                     longId |> List.map (fun id -> id.idText) |> String.concat "."
+
+                // Type augmentation members are never checked or elaborated; they are refused
+                // here rather than dropped, which left each use to fail far from its cause.
+                if not members.IsEmpty then
+                    addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct typeRange
+                        $"CCS source checking did not settle an elaboration for the members of type '{simpleTypeName}': type members have no native elaboration." accEnv
+
+                // A type form with no native elaboration is refused at its declaration; it is
+                // never registered with an invented layout or an empty body.
+                let refuseTypeForm (form: string) =
+                    addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct typeRange
+                        $"CCS source checking did not settle a representation for {form} '{simpleTypeName}': it has no native elaboration." accEnv
+                    (accEnv, accNodes)
                 
                 let typeNameSuffixes = typeNameSuffixesOf simpleTypeName
                 
@@ -2392,8 +2337,12 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                                                 (fieldName, fieldTy)
                                         )
                                     | SynUnionCaseKind.FullType(synType, _) ->
-                                        // Full type annotation: Case: T1 * T2 -> UnionType
-                                        [(None, resolveSynType accEnv synType)]
+                                        // A full-type case signature is never read as one field of
+                                        // the whole signature type.
+                                        let message =
+                                            $"CCS source checking did not settle the fields of union case '{caseName}': a full-type case signature has no native elaboration; declare its fields with 'of'."
+                                        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct synType.Range message accEnv
+                                        [(None, NativeType.TError message)]
                                 (caseName, fields)
                         )
 
@@ -2563,54 +2512,17 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                     (updatedEnv, node :: accNodes)
 
                 | SynTypeDefnRepr.Simple(SynTypeDefnSimpleRepr.Enum(_, _), _) ->
-                    // Enum type
-                    let tyCon = mkTypeConRef typeName 0 (TypeLayout.Inline(4, 4))  // Enums are typically i32
-                    // Register lexical aliases and the canonical export path
-                    let updatedEnv = 
-                        typeNameSuffixes 
-                        |> List.fold (fun env name -> addTypeDef name tyCon env) accEnv
-                    let node = builder.Create(
-                        SemanticKind.TypeDef(typeName, TypeDefKind.EnumDef [], []),
-                        mkSimpleType tyCon,
-                        range
-                    )
-                    (updatedEnv, node :: accNodes)
+                    // An enum was registered with an invented 4-byte layout and no cases.
+                    refuseTypeForm "enum"
 
-                | SynTypeDefnRepr.ObjectModel(kind, _members, _) ->
-                    // Class/struct/interface
-                    let (SynComponentInfo(attrs, typars, _, _, _, _, _, _)) = typeInfo
-                    let arity = match typars with Some tp -> tp.TyparDecls.Length | None -> 0
-                    // Check for [<Struct>] attribute in addition to SynTypeDefnKind.Struct
-                    let isStruct = match kind with SynTypeDefnKind.Struct -> true | _ -> hasStructAttribute attrs
-                    let layout = if isStruct then TypeLayout.Opaque else TypeLayout.Reference ArenaAffinity.CurrentActor
-                    let tyCon = mkTypeConRef typeName arity layout
-                    // Register lexical aliases and the canonical export path
-                    let updatedEnv = 
-                        typeNameSuffixes 
-                        |> List.fold (fun env name -> addTypeDef name tyCon env) accEnv
-                    // For structs (including [<Struct>] attributed), register constructor as binding
-                    let structType = mkSimpleType tyCon
-                    let updatedEnv = if isStruct then addBinding typeName structType false None true updatedEnv else updatedEnv  // Type constructors are module-level
-                    let defKind =
-                        if isStruct then TypeDefKind.StructDef
-                        else match kind with
-                             | SynTypeDefnKind.Interface -> TypeDefKind.InterfaceDef
-                             | _ -> TypeDefKind.ClassDef
-                    let node = builder.Create(
-                        SemanticKind.TypeDef(typeName, defKind, []),
-                        structType,
-                        range
-                    )
-                    (updatedEnv, node :: accNodes)
+                | SynTypeDefnRepr.ObjectModel(_, _, _) ->
+                    // A class, struct or interface was registered with an invented layout and
+                    // its members dropped.
+                    refuseTypeForm "class, struct or interface"
 
                 | _ ->
-                    // Other type definitions (delegates, etc.)
-                    let node = builder.Create(
-                        SemanticKind.TypeDef(typeName, TypeDefKind.ClassDef, []),
-                        Types.unitType,
-                        range
-                    )
-                    (accEnv, node :: accNodes)
+                    // Delegates and the other type forms were registered as a unit-typed class.
+                    refuseTypeForm "type"
             ) (preEnv, [])
 
         (finalEnv, List.rev nodes)
@@ -2690,26 +2602,24 @@ let rec private checkModuleDecl (env: TypeEnv) (builder: NodeBuilder) (ctx: Modu
                 (sprintf "Module abbreviation '%s' must name an accessible module; '%s' does not." ident.idText name) env
             (env, [])
 
-    | SynModuleDecl.Attributes _ ->
-        // Standalone attributes (assembly-level, etc.)
-        // TODO: Capture for assembly metadata
+    | SynModuleDecl.Attributes(_, attributesRange) ->
+        // Standalone (assembly-level) attributes are refused, never dropped.
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct attributesRange
+            "CCS source checking did not settle an elaboration for these standalone attributes: module-level attributes have no native elaboration." env
         (env, [])
 
     | SynModuleDecl.Exception(exnDefn, exnRange) ->
-        // Exception type definition
-        let range = rangeToSourceRange exnRange
-        // Extract exception name from definition
+        // Exception type definition. There is no native exception type; the declaration is
+        // refused, never registered as a string-typed class.
         let exnName =
             let (SynExceptionDefn(repr, _, _, _)) = exnDefn
             let (SynExceptionDefnRepr(_, unionCase, _, _, _, _)) = repr
             let (SynUnionCase(_, synIdent, _, _, _, _, _)) = unionCase
             let (SynIdent(ident, _)) = synIdent
             ident.idText
-        (env, [builder.Create(
-            SemanticKind.TypeDef(exnName, TypeDefKind.ClassDef, []),
-            Types.stringType,  // TODO: Define proper exception type
-            range
-        )])
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct exnRange
+            $"CCS source checking did not settle a representation for exception '{exnName}': exception declarations have no native elaboration." env
+        (env, [])
 
     | SynModuleDecl.NamespaceFragment _ ->
         // Namespace fragments are handled at a higher level in checkModuleOrNamespace
@@ -2733,7 +2643,9 @@ let checkModuleDeclarations (decls: SynModuleDecl list) : CheckResult =
 
     let ctx = { Path = []; IsRecursive = false }
     let (finalEnv, nodes) = checkModuleDecls env builder ctx decls
-    let diagnostics = solveAndGetDiagnostics finalEnv !(env.Constraints)
+    // The checker's own diagnostics are reported with the constraint diagnostics, never drained.
+    let reported = solveAndGetDiagnostics finalEnv !(env.Constraints) @ List.rev !(env.Diagnostics)
+    let diagnostics = reported @ residualDiagnostics builder reported
 
     buildResult builder nodes Map.empty diagnostics None Set.empty
 
@@ -2853,8 +2765,17 @@ let checkParsedInputsWithPlatformAndSources (inputs: ParsedInput list) (platform
                 // across file boundaries; the single reversal below restores
                 // file order and declaration order within each file together.
                 (updatedEnv, fileResults @ accResults)
-            | ParsedInput.SigFile _ ->
-                // Skip signature files for now
+            | ParsedInput.SigFile sigFile ->
+                // A signature file has no checker; it is an error, never a silently skipped input
+                // (as checkParsedInput reports it).
+                addDiagnostic {
+                    Severity = NativeDiagnosticSeverity.Error
+                    Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+                    Message = "CCS source checking did not settle this signature file '" + sigFile.FileName + "': signature files have no checker; the file contributes nothing."
+                    Range = rangeToSourceRange input.Range
+                    RelatedNodes = []
+                    Reachability = ReachabilityContext.Unknown
+                } accEnv
                 (accEnv, accResults)
         ) (initialEnv, [])
 

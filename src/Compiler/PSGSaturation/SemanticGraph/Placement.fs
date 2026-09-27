@@ -118,12 +118,12 @@ let rec private collect (graph: SemanticGraph) (acc: Map<TypeIdentity, Aggregate
 //-------------------------------------------------------------------------
 
 /// The slot of an integer of the bare kind with the given range: the representation its range
-/// selects (`RangeAnalysis.heldWidthOf`, the one site for an unobservable range on a core), with
-/// the declared representation's name on a core; on fabric the range's own width.
+/// selects (`RangeAnalysis.heldWidthOf`), with the declared representation's name on a core; on
+/// fabric the range's own width. An unobservable range selects nothing and the slot says so.
 let private integerSlot (p: Placer) (range: ValueRange) : SettledSlot =
     match RangeAnalysis.heldWidthOf p.Graph range with
     | Some bits -> SettledSlot.Integer (bits, RangeAnalysis.selectedRepresentationOf p.Graph range |> Option.map (fun r -> r.Name))
-    | None -> SettledSlot.Opaque (sprintf "an integer of the unobservable range %s" (ValueRange.render range))
+    | None -> SettledSlot.Opaque (sprintf "PSG settlement (RangeAnalysis) selected no width for an integer of the range %s (CCS8011)" (ValueRange.render range))
 
 /// The slot of a spelled field: the representation its declaration names
 /// (`RangeSources.declarationOfKind`, the interim declared boundary of CS-12 step 5a), with the
@@ -260,8 +260,8 @@ let private tupleRange (p: Placer) (key: TypeIdentity) (index: int) : ValueRange
 
 /// The payload slot of a union case: one field's slot, several fields' as one tuple payload
 /// (a view), none for a case without a payload. A union payload of the bare integer kind has no
-/// settled range in this changeset (a DU payload is unobservable, CS-10 owed) and is held through
-/// the interim word.
+/// settled range in this changeset (a DU payload is unobservable, CS-10 owed): its slot is the
+/// opaque stop `integerSlot` names, never a word supplied in the range's place.
 let private payloadSlot (p: Placer) (fields: (string option * NativeType) list) : SettledSlot option =
     match fields with
     | [] -> None
@@ -355,7 +355,12 @@ let [<Literal>] private FlagBytes = 1
 let private pointerBytes (p: Placer) : int =
     match p.PointerBytes with
     | Some b -> b
-    | None -> failwith "Placement: a closure environment is placed on a core, which declares its Pointer width"
+    | None ->
+        let reason =
+            match p.Context with
+            | Some ctx -> PlatformContext.pointerSize ctx |> function Error reason -> reason | Ok _ -> "the Pointer width is not read on this substrate"
+            | None -> "no platform context is selected"
+        failwithf "PSG settlement (PlatformDeclaration) did not settle the Pointer width a closure environment is placed with: %s" reason
 
 /// The bytes the leg holds a value of the given type in: an integer at its held width, a record
 /// or tuple at its settled size, a buffer-backed value as its five-word view, a handle or a
@@ -638,6 +643,7 @@ let placeProgramSlot (graph: SemanticGraph) id =
                 | SettledLayout.Record(_, Some bytes, Some alignment), [{ Holds = CaptureSlotKind.Scalar slot }] ->
                     Ok(ProgramStorageShape.Scalar slot, bytes, alignment)
                 | _ -> Error (ContinuationPlacementError.UnsupportedField(id, "The program slot requires an ordinary scalar or typed value view")))
+    | Some node, None when node.IsReachable -> Error ContinuationPlacementError.MissingPlatform
     | _ -> Error (ContinuationPlacementError.MissingSource id)
 
 /// Closure environments share exact slot selection/tiling with continuation

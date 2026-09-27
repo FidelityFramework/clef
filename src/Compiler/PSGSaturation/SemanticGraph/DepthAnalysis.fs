@@ -109,17 +109,18 @@ let private nodeLabel (graph: SemanticGraph) (node: SemanticNode) =
 // CATAMORPHISM
 //=============================================================================
 
-let [<Literal>] DefaultThreshold = 6
-
 /// Compute combinational depth threshold from clock frequency and fabric delay.
 /// threshold = floor(clock_period_ns / ns_per_weight_unit)
-/// Falls back to DefaultThreshold when timing data is unavailable.
-let computeThreshold (clockMhz: int option) (nsPerUnit: float option) : int =
+/// The temporal budget is a declared fact: an absent or non-positive clock or
+/// calibration is reported, never replaced by an invented threshold.
+let computeThreshold (clockMhz: int option) (nsPerUnit: float option) : Result<int, string> =
     match clockMhz, nsPerUnit with
     | Some mhz, Some npu when mhz > 0 && npu > 0.0 ->
         let periodNs = 1000.0 / float mhz
-        int (floor (periodNs / npu))
-    | _ -> DefaultThreshold
+        Result.Ok (int (floor (periodNs / npu)))
+    | None, _ -> Result.Error "PSG settlement (PlatformResolution) did not settle the FPGA clock frequency (platform clock_mhz or the project clock override): the combinational temporal budget (CCS0100) cannot be computed."
+    | _, None -> Result.Error "PSG settlement (PlatformResolution) did not settle the FPGA fabric calibration (platform ns_per_weight_unit): the combinational temporal budget (CCS0100) cannot be computed."
+    | Some mhz, Some npu -> Result.Error (sprintf "PSG settlement (PlatformResolution) settled a non-positive FPGA temporal budget (clock %d MHz, ns_per_weight_unit %g): the combinational temporal budget (CCS0100) cannot be computed." mhz npu)
 
 let private analyzeNode (state: DepthAnalysisState) (node: SemanticNode) : DepthAnalysisState =
     let graph = state.Graph
@@ -219,14 +220,23 @@ let private formatDiagnostics (threshold: int) (clockMhz: int option) (nsPerUnit
 
 /// Run combinational depth analysis on the semantic graph.
 /// FPGA-only — returns empty list for non-FPGA substrates.
-/// Threshold is calibrated from platform binding timing data when available:
+/// Threshold is calibrated from the platform's declared timing data:
 ///   threshold = floor(clock_period_ns / ns_per_weight_unit)
+/// An FPGA platform that does not declare both is reported as a platform defect.
 let analyze (platformContext: PlatformContext option) (graph: SemanticGraph) : Diagnostic list =
     match platformContext with
     | Some ctx when PlatformContext.substrateKind ctx = SubstrateKind.FPGA ->
         let clockMhz = ctx.ClockFrequencyMhz
         let nsPerUnit = ctx.NsPerWeightUnit
-        let threshold = computeThreshold clockMhz nsPerUnit
+        match computeThreshold clockMhz nsPerUnit with
+        | Result.Error message ->
+            [ { Severity = NativeDiagnosticSeverity.Error
+                Code = Clef.Compiler.NativeTypedTree.Expressions.Types.DiagnosticCodes.CCS8207_InvalidPlatformDeclaration
+                Message = sprintf "The platform description of '%s': %s" ctx.PlatformId message
+                Range = dummyRange
+                RelatedNodes = []
+                Reachability = ReachabilityContext.Reachable } ]
+        | Result.Ok threshold ->
         let initialState = DepthAnalysisState.create graph threshold
         let finalState = Traversal.foldWithLambdaPreBind (fun s _ -> s) analyzeNode initialState graph
         let peaks = finalState.Peaks |> Map.toList |> List.map snd

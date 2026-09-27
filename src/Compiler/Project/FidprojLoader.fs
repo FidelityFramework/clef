@@ -159,12 +159,14 @@ module FidprojLoader =
         | Some _ -> Error "Expected [link] libraries to be an array of non-empty strings"
 
     /// Parses a memory model string.
-    let private parseMemoryModel (s: string) =
+    // An unrecognized memory model is refused, never read as Standard.
+    let private parseMemoryModel (s: string) : Result<MemoryModel, string> =
         match s.ToLowerInvariant() with
-        | "stack_only" | "stackonly" -> MemoryModel.StackOnly
-        | "static_pools" | "staticpools" -> MemoryModel.StaticPools
-        | "arena" -> MemoryModel.Arena
-        | "standard" | _ -> MemoryModel.Standard
+        | "stack_only" | "stackonly" -> Ok MemoryModel.StackOnly
+        | "static_pools" | "staticpools" -> Ok MemoryModel.StaticPools
+        | "arena" -> Ok MemoryModel.Arena
+        | "standard" -> Ok MemoryModel.Standard
+        | unknown -> Error $"Unrecognized memory_model '%s{unknown}'. Expected: stack_only, static_pools, arena, standard"
 
     /// Parses a target platform string from [compilation] target.
     let private parseTargetPlatform (s: string) : Result<TargetPlatform, string> =
@@ -247,45 +249,47 @@ module FidprojLoader =
             | Ok doc -> parsePlatformSection doc
 
     /// Parses a dependency from a TOML value.
-    let private parseDependency (name: string) (value: TomlValue) (projectDir: string): FidprojDependency =
+    // A dependency entry whose fields are present but malformed is refused; a malformed path,
+    // feature list or flag is never read as absent, and an entry of another TOML form is never
+    // read as a dependency with no path.
+    let private parseDependency (name: string) (value: TomlValue) (projectDir: string): Result<FidprojDependency, string> =
         match value with
         | TomlValue.String version ->
-            { Name = name
-              Version = Some version
-              Path = None
-              Features = []
-              Optional = false }
+            Ok { Name = name
+                 Version = Some version
+                 Path = None
+                 Features = []
+                 Optional = false }
         | TomlValue.InlineTable table ->
-            let version = table |> Map.tryFind "version" |> Option.bind (function TomlValue.String s -> Some s | _ -> None)
-            let path =
-                table
-                |> Map.tryFind "path"
-                |> Option.bind (function TomlValue.String s -> Some s | _ -> None)
-                |> Option.map (fun p -> normalizePath (Path.Combine(projectDir, p)))
-            let features =
-                table
-                |> Map.tryFind "features"
-                |> Option.bind (function
-                    | TomlValue.Array arr ->
-                        arr |> List.choose (function TomlValue.String s -> Some s | _ -> None) |> Some
-                    | _ -> None)
-                |> Option.defaultValue []
-            let optional =
-                table
-                |> Map.tryFind "optional"
-                |> Option.bind (function TomlValue.Boolean b -> Some b | _ -> None)
-                |> Option.defaultValue false
-            { Name = name
-              Version = version
-              Path = path
-              Features = features
-              Optional = optional }
+            let field key (read: TomlValue -> 'a option) (expected: string) : Result<'a option, string> =
+                match Map.tryFind key table with
+                | None -> Ok None
+                | Some value ->
+                    match read value with
+                    | Some parsed -> Ok (Some parsed)
+                    | None -> Error $"Dependency '%s{name}': '%s{key}' must be %s{expected}"
+            let text = function TomlValue.String s -> Some s | _ -> None
+            let texts = function
+                | TomlValue.Array arr ->
+                    let values = arr |> List.choose text
+                    if values.Length = arr.Length then Some values else None
+                | _ -> None
+            let flag = function TomlValue.Boolean b -> Some b | _ -> None
+            field "version" text "a string"
+            |> Result.bind (fun version ->
+                field "path" text "a string"
+                |> Result.bind (fun path ->
+                    field "features" texts "an array of strings"
+                    |> Result.bind (fun features ->
+                        field "optional" flag "a boolean"
+                        |> Result.map (fun optional ->
+                            { Name = name
+                              Version = version
+                              Path = path |> Option.map (fun p -> normalizePath (Path.Combine(projectDir, p)))
+                              Features = features |> Option.defaultValue []
+                              Optional = optional |> Option.defaultValue false }))))
         | _ ->
-            { Name = name
-              Version = None
-              Path = None
-              Features = []
-              Optional = false }
+            Error $"Dependency '%s{name}' must be a version string or an inline table"
 
     /// Loads a .fidproj file.
     let load (fidprojPath: string): Result<FidprojOptions, string> =
@@ -311,15 +315,18 @@ module FidprojLoader =
                 let version = Toml.getString "package.version" doc |> Option.defaultValue "0.1.0"
 
                 // Compilation section
-                let memoryModel =
-                    Toml.getString "compilation.memory_model" doc
-                    |> Option.map parseMemoryModel
-                    |> Option.defaultValue MemoryModel.StackOnly
+                let memoryModelResult =
+                    match Toml.getString "compilation.memory_model" doc with
+                    | Some s -> parseMemoryModel s
+                    | None -> Ok MemoryModel.StackOnly
 
                 // Build section — parse output_kind first: libraries are substrate-neutral
-                let sources =
-                    Toml.getStringArray "build.sources" doc
-                    |> Option.defaultValue []
+                // A present but malformed sources list is refused, never read as no sources.
+                let sourcesResult =
+                    match Toml.getValue "build.sources" doc, Toml.getStringArray "build.sources" doc with
+                    | None, _ -> Ok []
+                    | Some _, Some sources -> Ok sources
+                    | Some _, None -> Error "Expected [build] sources to be an array of strings"
                 let outputName = Toml.getString "build.output" doc
                 let deploymentModeResult =
                     match Toml.getString "build.output_kind" doc with
@@ -339,18 +346,34 @@ module FidprojLoader =
                 | Error msg -> Error msg
                 | Ok targetPlatform ->
 
+                match memoryModelResult with
+                | Error msg -> Error msg
+                | Ok memoryModel ->
+
+                match sourcesResult with
+                | Error msg -> Error msg
+                | Ok sources ->
+
                 match parseLinkedLibraries doc with
                 | Error msg -> Error msg
                 | Ok linkedLibraries ->
 
                 // Dependencies section
-                let dependencies =
+                let dependenciesResult =
                     match Toml.getTable "dependencies" doc with
                     | Some depTable ->
                         depTable
                         |> Map.toList
-                        |> List.map (fun (name, value) -> parseDependency name value projectDir)
-                    | None -> []
+                        |> List.fold (fun acc (name, value) ->
+                            match acc with
+                            | Error message -> Error message
+                            | Ok parsed ->
+                                parseDependency name value projectDir
+                                |> Result.map (fun dependency -> parsed @ [dependency])) (Ok [])
+                    | None -> Ok []
+                match dependenciesResult with
+                | Error msg -> Error msg
+                | Ok dependencies ->
 
                 // Extract Alloy path from dependencies
                 let alloyPath =

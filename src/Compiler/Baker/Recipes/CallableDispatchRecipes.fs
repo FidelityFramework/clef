@@ -21,17 +21,26 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) =
         do! emit source
         let! tag = patternBinding "__callable_alternative" Types.intType
         let capture = { Name = "__callable_alternative"; Type = Types.intType; IsMutable = false; SourceNodeId = Some tag }
-        let parameters, resultType =
-            match plan.Members.Head.Implementation.Kind with
-            | SemanticKind.Lambda(parameters, body, _, _, _) ->
-                parameters |> List.map (fun (name, ty, _) -> name, ty), graph.Nodes[body].Type
-            | _ -> invalidOp "A dispatch member must retain its actual declared Lambda."
+        let! parameters, resultType =
+            match plan.Members with
+            | [] ->
+                fail (XParsec.ErrorType.Message (sprintf "PSG settlement (CallableDispatch) did not settle any dispatch member for formal %d" (NodeId.value source.Id)))
+            | first :: _ ->
+                match first.Implementation.Kind with
+                | SemanticKind.Lambda(parameters, body, _, _, _) when graph.Nodes.ContainsKey body ->
+                    preturn (parameters |> List.map (fun (name, ty, _) -> name, ty), graph.Nodes[body].Type)
+                | other ->
+                    fail (XParsec.ErrorType.Message (sprintf "PSG settlement (CallableDispatch) did not settle the declared Lambda of dispatch member %d for formal %d: found %A" (NodeId.value first.Implementation.Id) (NodeId.value source.Id) other))
         let! dispatcher = closure parameters [capture] None (fun arguments captures ->
             let rec branch ordinal members = saturation {
                 match members with
                 | [] -> return! fail (XParsec.ErrorType.Message "A source dispatcher has no alternatives.")
                 | memberValue :: rest ->
-                    let name = match memberValue.Declaration.Kind with SemanticKind.Binding(name, _, _, _) -> name | _ -> invalidOp "Missing code declaration."
+                    let! name =
+                        match memberValue.Declaration.Kind with
+                        | SemanticKind.Binding(name, _, _, _) -> preturn name
+                        | other ->
+                            fail (XParsec.ErrorType.Message (sprintf "PSG settlement (CallableDispatch) did not settle the code declaration of dispatch member %d for formal %d: found %A" (NodeId.value memberValue.Declaration.Id) (NodeId.value source.Id) other))
                     let! callee = varRef name (Some memberValue.Declaration.Id) source.Type
                     let! invocation = app callee arguments resultType
                     if rest.IsEmpty then return invocation else

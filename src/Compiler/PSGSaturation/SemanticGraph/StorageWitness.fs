@@ -201,7 +201,12 @@ let project (graph: SemanticGraph) : Result<StorageWitnessProjection, WitnessPro
     let anchors =
         match graph.StaticStringPool with
         | None ->
-            let expected, _ = StaticStringLayout.settle graph
+            let expected, diagnostics = StaticStringLayout.settle graph
+            // A literal whose storage cannot be settled is that stage's located
+            // failure here too, never an absent pool read as "no literals".
+            for diagnostic in diagnostics do
+                errors.Add(failure (List.tryHead diagnostic.RelatedNodes) (Set.ofList diagnostic.RelatedNodes)
+                                   (sprintf "%s %s" diagnostic.Code diagnostic.Message))
             match expected.StaticStringPool with
             | Some pool -> reject pool.DeclarationNode "Committed source literals have no published immutable allocation."
             | None -> ()

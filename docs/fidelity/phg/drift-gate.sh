@@ -24,7 +24,6 @@ CORPUS=(
   # agent memory directories are a drift vector like any other doc
   "$ROOT/clef/.serena" "$ROOT/Composer/.serena" "$ROOT/ClefAutoComplete/.serena" "$ROOT/BAREWire/.serena"
   "$ROOT/clef-lang-site/hugo/content"
-  "$ROOT/mlir-plugins/README.md"
   # Lattice: the editor witnesses the PSG exactly as Alex does; the forks are corpus, not exhibits
   "$ROOT/lattice-analyzers" "$ROOT/lattice-vim" "$ROOT/lattice-vscode" "$ROOT/lattice-vscode-helpers" "$ROOT/ClefAutoComplete"
   "$ROOT/ionide-native-analyzers" "$ROOT/Ionide-vim-fsnative" "$ROOT/FsNativeAutoComplete"
@@ -88,7 +87,6 @@ ALLOW_FILES=(
   'clef/docs/fidelity/phg/Horizon_Requirements.md'
   'clef/docs/fidelity/phg/Dimensional_Steps_1_2_Sequence.md'
   'clef/docs/fidelity/phg/Dimensional_Range_Design.md'
-  'Composer/src/MiddleEnd/PSGElaboration/SSAAssignment.fs'
   'ship-of-theseus/scaffold/demo-runbook.md'                      # names the real F# compiler's codes in an F# build runbook
   'Composer/docs/Witness_Boundary_Audit.md'
   # the superseding designs: they quote the retired vocabulary in order to retire it,
@@ -115,7 +113,6 @@ SCHEDULED=(
   'clef/samples::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'      # same
   'ship-of-theseus::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # HelloProof's sample and proof trace migrate with CS-11
   'clef-lang-site/hugo/content::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'  # dated posts and docs pages; migrate with CS-11 or stand as history
-  'mlir-plugins/README.md::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'      # same
   'Atelier::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'           # same
   'ClefAutoComplete::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # F# tooling, not Clef source; its .NET widths are its own until self-hosting
   'lattice-analyzers::\b(u?int(8|16|32|64)|sbyte|unativeint|float32|float64|[Pp]osit(8|16|32|64))\b'   # F# tooling, not Clef source; its .NET widths are its own until self-hosting
@@ -137,23 +134,6 @@ SCHEDULED=(
   'clef/src/Compiler/PSGSaturation/SemanticGraph/Core.fs::'                 # SeqSaturation two-shape recognizer → suspension recipe (spec seq §6)
   'clef/src/Compiler/PSGSaturation/SemanticGraph/Types.fs::code_ptr'        # LambdaContext base indices → closure hyperedge in CCS
   'clef/src/Compiler/Nanopass/BakerSaturation.fs::code_ptr'                 # same
-  'Composer/src/MiddleEnd/PSGElaboration/YieldStateIndices.fs::'            # recognizer, Composer side → retired with it
-  'Composer/src/MiddleEnd/PSGElaboration/::unrealized_conversion_cast'   # ClosureLayout / closure-pair coeffects → Closure_Retooling_Plan steps 1–3 (narrowed 2026-09-05 from a blanket row that had exempted the whole middle end from every retired pattern)
-  'Composer/src/MiddleEnd/PSGElaboration/::memref<2xindex>'   # ClosureLayout / closure-pair coeffects → Closure_Retooling_Plan steps 1–3 (narrowed 2026-09-05 from a blanket row that had exempted the whole middle end from every retired pattern)
-  'Composer/src/MiddleEnd/PSGElaboration/::code_ptr'   # ClosureLayout / closure-pair coeffects → Closure_Retooling_Plan steps 1–3 (narrowed 2026-09-05 from a blanket row that had exempted the whole middle end from every retired pattern)
-  'Composer/src/MiddleEnd/PSGElaboration/::resolve-closure-casts'   # ClosureLayout / closure-pair coeffects → Closure_Retooling_Plan steps 1–3 (narrowed 2026-09-05 from a blanket row that had exempted the whole middle end from every retired pattern)
-  'Composer/src/MiddleEnd/PSGElaboration/::ContStateMachine'   # ClosureLayout / closure-pair coeffects → Closure_Retooling_Plan steps 1–3 (narrowed 2026-09-05 from a blanket row that had exempted the whole middle end from every retired pattern)
-  'Composer/src/MiddleEnd/PSGElaboration/::flattenSequentials'   # ClosureLayout / closure-pair coeffects → Closure_Retooling_Plan steps 1–3 (narrowed 2026-09-05 from a blanket row that had exempted the whole middle end from every retired pattern)
-  'Composer/src/MiddleEnd/Alex/::unrealized_conversion_cast'   # cast sites and the memref<2xindex> closure pair → steps 4–5 (narrowed 2026-09-05, same reason)
-  'Composer/src/MiddleEnd/Alex/::memref<2xindex>'   # cast sites and the memref<2xindex> closure pair → steps 4–5 (narrowed 2026-09-05, same reason)
-  'Composer/src/MiddleEnd/Alex/::code_ptr'   # cast sites and the memref<2xindex> closure pair → steps 4–5 (narrowed 2026-09-05, same reason)
-  'Composer/src/MiddleEnd/Alex/::resolve-closure-casts'   # cast sites and the memref<2xindex> closure pair → steps 4–5 (narrowed 2026-09-05, same reason)
-  'Composer/src/MiddleEnd/Alex/::ContStateMachine'   # cast sites and the memref<2xindex> closure pair → steps 4–5 (narrowed 2026-09-05, same reason)
-  'Composer/src/MiddleEnd/Alex/::flattenSequentials'   # cast sites and the memref<2xindex> closure pair → steps 4–5 (narrowed 2026-09-05, same reason)
-  'Composer/src/BackEnd/LLVM/Lowering.fs::'                                 # resolve-closure-casts plugin pipeline → step 5
-  'Composer/tests/::'                                                       # test expectations that pin the cast form → move with the witness
-  'Composer/samples/::'                                                     # sample intermediates/expectations that carry the cast form → move with the witness
-  'mlir-plugins/::'                                                         # the plugin itself → retired at step 5
   'Composer/docs/PRDs/::code_ptr'                                           # implementation PRDs carrying the interim layout, each with a banner → move with the code
   'Composer/docs/PRDs/::nativeptr'                                          # implementation PRDs written against the pre-strip pointer surface, each with a surface banner
   'clef/src/Compiler/::nativeptr'                                           # TNativePtr internal-only (commit 8768e536e); remaining NativePtr.* intrinsic recognition is a vestige to confirm

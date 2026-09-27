@@ -75,13 +75,29 @@ let rec checkPattern
     | SynPat.LongIdent(SynLongIdent(idents, _, _), _, _, argPats, _, _) ->
         // Constructor or identifier pattern
         let caseName = idents |> List.map (fun id -> id.idText) |> String.concat "."
-        match idents, argPats with
-        | [ident], SynArgPats.Pats [] when not (System.Char.IsUpper(ident.idText.[0])) ->
+        // A name bound to a [<Literal>] is a constant pattern: the scrutinee equals that value.
+        let literal =
+            match argPats with
+            | SynArgPats.Pats [] ->
+                tryLookupBinding caseName env
+                |> Option.bind (fun binding -> binding.NativeLiteral |> Option.map (fun value -> value, binding.Type))
+            | _ -> None
+        match idents, argPats, literal with
+        | [ident], SynArgPats.Pats [], _ when not (System.Char.IsUpper(ident.idText.[0])) ->
             (Pattern.Var(caseName, expectedTy), [(caseName, expectedTy)])
+        | _, _, Some(value, literalTy) ->
+            addConstraint (Constraint.Equals(expectedTy, literalTy, range)) env
+            (Pattern.Const value, [])
         | _ ->
             let payloadTypes, tagIndex =
-                match tryLookupBinding caseName env with
-                | Some binding ->
+                match tryLookupBinding caseName env |> Option.map (fun binding -> binding, binding.UnionCaseInfo) with
+                | Some(_, None) ->
+                    // A bound value that is neither a union case nor a [<Literal>] has no
+                    // constructor tag; it is never read as a test of tag 0.
+                    addNativeError DiagnosticCodes.CCS8008_UndefinedConstructor pat.Range
+                        $"CCS source checking did not settle a union case for constructor pattern '{caseName}': the name is bound to a value that is neither a union case nor a [<Literal>], and has no pattern elaboration." env
+                    [], 0
+                | Some(binding, Some caseInfo) ->
                     let constructorType =
                         match binding.Type with
                         | NativeType.TForall(parameters, body) ->
@@ -96,7 +112,7 @@ let rec checkPattern
                     let fields, result = extractDomains constructorType []
                     // The payload and the scrutinee share this use's fresh variables.
                     addConstraint (Constraint.Equals(expectedTy, result, range)) env
-                    fields, (binding.UnionCaseInfo |> Option.map (fun info -> info.CaseIndex) |> Option.defaultValue 0)
+                    fields, caseInfo.CaseIndex
                 | None ->
                     addNativeError DiagnosticCodes.CCS8008_UndefinedConstructor pat.Range $"The constructor '{caseName}' is not defined." env
                     [], 0
@@ -127,15 +143,22 @@ let rec checkPattern
     | SynPat.As(lhsPat, rhsPat, _) ->
         // Pattern alias: pat as name
         let (lhsPattern, lhsBindings) = checkPattern env lhsPat expectedTy range
-        let (_, rhsBindings) = checkPattern env rhsPat expectedTy range
-        (lhsPattern, lhsBindings @ rhsBindings)
+        let (rhsPattern, rhsBindings) = checkPattern env rhsPat expectedTy range
+        match rhsPattern with
+        | Pattern.Var(name, _) -> (Pattern.As(lhsPattern, name), lhsBindings @ rhsBindings)
+        | _ ->
+            // The alias's right side is a name; any other pattern there would be dropped.
+            addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct rhsPat.Range
+                "CCS source checking did not settle an alias for this 'as' pattern: the right side of 'as' is not a name, and a refutable right side has no pattern form." env
+            (Pattern.Wildcard, lhsBindings @ rhsBindings)
 
     | SynPat.Or(lhsPat, rhsPat, _, _) ->
         // Alternation pattern
         let (lhsPattern, lhsBindings) = checkPattern env lhsPat expectedTy range
-        let (_rhsPattern, _rhsBindings) = checkPattern env rhsPat expectedTy range
-        // Use left pattern, but both branches should bind same names
-        (lhsPattern, lhsBindings)
+        let (rhsPattern, _rhsBindings) = checkPattern env rhsPat expectedTy range
+        // Both alternatives are retained; the right one is never dropped. Both branches bind
+        // the same names, so the left branch's bindings name the case's variables.
+        (Pattern.Or(lhsPattern, rhsPattern), lhsBindings)
 
     | SynPat.ArrayOrList(isArray, pats, _) ->
         let elemTy = freshTypeVar range
@@ -189,8 +212,12 @@ let rec checkPattern
 
     | SynPat.IsInst(synType, _) ->
         // Type test pattern: :? Type
-        let testTy = resolveSynType env synType
-        (Pattern.IsType testTy, [])
+        let _testTy = resolveSynType env synType
+        // There is no run-time type information to test; the pattern is refused, never carried
+        // as an IsType test nothing below can realize.
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct pat.Range
+            "CCS source checking did not settle an elaboration for this type test pattern ':?': type tests have no native graph form." env
+        (Pattern.Wildcard, [])
 
     | SynPat.OptionalVal(ident, _) ->
         // Optional parameter pattern: ?x
@@ -205,10 +232,13 @@ let rec checkPattern
         let elemTy = freshTypeVar range
         let listTy = NativeType.TList elemTy
         addConstraint (Constraint.Equals(expectedTy, listTy, range)) env
-        let (lhsPattern, lhsBindings) = checkPattern env lhsPat elemTy range
-        let (rhsPattern, rhsBindings) = checkPattern env rhsPat listTy range
-        // Represent as a tuple pattern for head :: tail
-        (Pattern.Tuple [lhsPattern; rhsPattern], lhsBindings @ rhsBindings)
+        let (_, lhsBindings) = checkPattern env lhsPat elemTy range
+        let (_, rhsBindings) = checkPattern env rhsPat listTy range
+        // The pattern graph has no cons form; a tuple of head and tail would test a list as a
+        // tuple. Refused at the site.
+        addNativeError DiagnosticCodes.CCS8401_UnsupportedConstruct pat.Range
+            "CCS source checking did not settle a pattern form for this list cons pattern 'head :: tail': the pattern graph has no cons form." env
+        (Pattern.Wildcard, lhsBindings @ rhsBindings)
 
     | SynPat.Ands(pats, _) ->
         // Conjunction pattern: pat1 & pat2 & ...
@@ -216,9 +246,7 @@ let rec checkPattern
             pats
             |> List.map (fun p -> checkPattern env p expectedTy range)
             |> List.unzip
-        match patterns with
-        | [single] -> (single, List.concat bindings)
-        | _ -> (Pattern.And(List.head patterns, Pattern.Tuple (List.tail patterns)), List.concat bindings)
+        (List.reduceBack (fun left right -> Pattern.And(left, right)) patterns, List.concat bindings)
 
     | SynPat.Attrib(innerPat, _, _) ->
         // Attributed pattern - ignore attributes, check inner pattern

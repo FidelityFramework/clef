@@ -56,10 +56,13 @@ let private settledLayout (graph: SemanticGraph) (ty: NativeType) : SettledLayou
 
 /// The width an array's word-integer elements are held at.
 let private elementWidth (graph: SemanticGraph) (elemTy: NativeType) : int =
-    let range = Map.tryFind (layoutKey elemTy) graph.ElementRanges.Value |> Option.defaultValue ValueRange.Unbounded
+    let range =
+        match Map.tryFind (layoutKey elemTy) graph.ElementRanges.Value with
+        | Some range -> range
+        | None -> failwithf "PSG settlement (RangeAnalysis) did not settle the element range of the array element type %s that a meet reads" (formatType elemTy)
     match RangeAnalysis.heldWidthOf graph range with
     | Some bits -> bits
-    | None -> failwithf "Meets: the element type %s has the range %s, which has no width on this substrate (CCS8011)" (formatType elemTy) (ValueRange.render range)
+    | None -> failwithf "PSG settlement (RangeAnalysis) selected no width for the element type %s: its range %s has no width on this substrate (CCS8011)" (formatType elemTy) (ValueRange.render range)
 
 /// The last value a node evaluates to, through a block's last child and an annotation.
 let rec private lastValueOf (graph: SemanticGraph) (id: NodeId) : NodeId =

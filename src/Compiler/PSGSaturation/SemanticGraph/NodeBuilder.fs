@@ -93,7 +93,7 @@ type NodeBuilder() =
         | Some node ->
             let updated = { node with Parent = Some parentId }
             nodes <- Map.add childId updated nodes
-        | None -> ()  // Node not found (shouldn't happen)
+        | None -> invalidArg "childId" (sprintf "CCS source checking set the parent of node %d, which this builder did not create" (NodeId.value childId))
 
     /// Set children on an existing node (for recursive bindings)
     /// PRD-13: Recursive bindings pre-create Binding nodes to get NodeIds,
@@ -103,7 +103,7 @@ type NodeBuilder() =
         | Some node ->
             let updated = { node with Children = children }
             nodes <- Map.add nodeId updated nodes
-        | None -> ()
+        | None -> invalidArg "nodeId" (sprintf "CCS source checking set the children of node %d, which this builder did not create" (NodeId.value nodeId))
 
     /// Set the type of an existing node.
     /// Used to attach a generalized (TForall) type scheme to a top-level function binding
@@ -113,7 +113,7 @@ type NodeBuilder() =
         | Some node ->
             let updated = { node with Type = ty }
             nodes <- Map.add nodeId updated nodes
-        | None -> ()
+        | None -> invalidArg "nodeId" (sprintf "CCS source checking set the type of node %d, which this builder did not create" (NodeId.value nodeId))
 
     /// Set emission strategy on an existing node
     /// Used to mark Lambda/SeqExpr bodies as SeparateFunction after creation.
@@ -122,7 +122,7 @@ type NodeBuilder() =
         | Some node ->
             let updated = { node with EmissionStrategy = strategy }
             nodes <- Map.add nodeId updated nodes
-        | None -> ()
+        | None -> invalidArg "nodeId" (sprintf "CCS source checking set the emission strategy of node %d, which this builder did not create" (NodeId.value nodeId))
 
     /// Set metadata on an existing node and return the updated node
     /// PRD-13a: Used for tuple destructuring to store element binding info

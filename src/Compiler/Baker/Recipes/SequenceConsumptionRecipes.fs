@@ -14,13 +14,14 @@ open Clef.Compiler.Baker.Ingredients.Sequences
 open Clef.Compiler.Baker.Recipes.Decomposition
 
 let expand (ctx: Context) (source: SemanticNode) (formal: SemanticNode) collection body elementType : Result =
-    let name =
-        match formal.Kind with
-        | SemanticKind.PatternBinding name -> name
-        | _ -> invalidArg (nameof formal) "Sequence consumption requires its source formal"
     let point = { source.Range with End = source.Range.Start }
     let state = SaturationState.create point ctx.OriginalHOF ctx.ExpansionId ctx.InspiringNode ctx.Platform
     let result, nodes = run state (saturation {
+        let! name =
+            match formal.Kind with
+            | SemanticKind.PatternBinding name -> XParsec.Parsers.preturn name
+            | other ->
+                XParsec.Parsers.fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle the source formal for sequence consumption %d: formal %d is %A" (NodeId.value source.Id) (NodeId.value formal.Id) other))
         let! iteration = iterate collection elementType (fun current -> saturation {
             do! enrich formal (SemanticKind.Binding(name, false, false, None)) elementType [current] formal.EmissionStrategy false
             return! evaluateBefore [formal.Id] body Types.unitType

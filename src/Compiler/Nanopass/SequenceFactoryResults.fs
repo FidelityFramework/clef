@@ -435,13 +435,10 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                     |> List.map (fun meet -> { meet with Consumer = actual.Id }))
             for id in call.Spine do meets <- meets.Remove id
             if not rewrittenMeets.IsEmpty then meets <- meets.Add(actual.Id, rewrittenMeets)
-            let removedPartials = updatedCurry.PartialApplications |> Map.filter (fun id _ -> call.Spine.Contains id)
-            let removedArguments = removedPartials.Values |> Seq.collect _.SuppliedArgNodes |> Set.ofSeq
             updatedCurry <-
                 { updatedCurry with
                     PartialApplications = updatedCurry.PartialApplications |> Map.filter (fun id _ -> not (call.Spine.Contains id))
-                    SaturatedCalls = (updatedCurry.SaturatedCalls |> Map.filter (fun id _ -> not (call.Spine.Contains id))).Add(actual.Id, { TargetBindingId = plan.Binding.Id; AllArgNodes = arguments })
-                    DeferredArgNodes = Set.difference updatedCurry.DeferredArgNodes removedArguments }
+                    SaturatedCalls = (updatedCurry.SaturatedCalls |> Map.filter (fun id _ -> not (call.Spine.Contains id))).Add(actual.Id, { TargetBindingId = plan.Binding.Id; AllArgNodes = arguments })}
             for node in generated do
                 if node.Id <> call.Site.Id && node.Range = call.Site.Range then
                     extraEdges <- { Sources = [call.Site.Id; plan.Binding.Id; plan.Owner.Id]; Target = node.Id

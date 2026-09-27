@@ -52,7 +52,8 @@ let private operationBody operation callback input inputType outputType okType e
                 let! mapped = app1 callback okValue outputOk
                 return! duConstruct "Ok" 0 (Some mapped) None outputType
             | "bind" -> return! app1 callback okValue outputType
-            | _ -> return! duConstruct "Ok" 0 (Some okValue) None outputType
+            | "mapError" -> return! duConstruct "Ok" 0 (Some okValue) None outputType
+            | other -> return! fail (XParsec.ErrorType.Message (sprintf "Baker Result recipe did not settle a case transform for Result.%s at node %d: the operation has no Ok-branch rule" other (NodeId.value input)))
         }
         let! errorBranch = saturation {
             if operation = "mapError" then
@@ -103,13 +104,18 @@ let private partialRecipe (ctx: Context) operation callback callbackType inputTy
         let capture = { Name = name; Type = callbackType; IsMutable = false; SourceNodeId = Some snapshot }
         let closureBody parameters captures =
             match parameters, captures with
-            | [input], [callback] -> saturation {
-                let! result = body operation callback input inputType outputType |> Option.get
-                // Shared operands must dominate both case arms, including in
-                // residual closures. Payload reads stay in the selected case.
-                return! evaluateBefore [callback; input] result outputType
-              }
-            | _ -> failwith "A Result partial requires one input and one callback capture"
+            | [input], [callback] ->
+                match body operation callback input inputType outputType with
+                | Some parser -> saturation {
+                    let! result = parser
+                    // Shared operands must dominate both case arms, including in
+                    // residual closures. Payload reads stay in the selected case.
+                    return! evaluateBefore [callback; input] result outputType
+                  }
+                | None ->
+                    fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle Result payload types for partial Result.%s at node %d: input %A, output %A" operation (NodeId.value ctx.InspiringNode) inputType outputType))
+            | parameters, captures ->
+                fail (XParsec.ErrorType.Message (sprintf "Baker Result recipe did not settle the closure frontier for partial Result.%s at node %d: expected one input and one callback capture, got %d and %d" operation (NodeId.value ctx.InspiringNode) parameters.Length captures.Length))
         let! value = closure [("__result", inputType)] [capture] enclosing closureBody outputType
         return! evaluateBefore [snapshot] value (NativeType.TFun(inputType, outputType))
     }
@@ -144,20 +150,20 @@ let tryDecompose ctx operation arguments returnType enclosing : Result option =
                     })))
     | _ -> None
 
-let tryReifyValue ctx operation functionType enclosing : Result option =
+let tryReifyValue (ctx: Context) operation functionType enclosing : Result option =
     match functionType with
     | NativeType.TFun (inputType, outputType)
         when (operation = "isOk" || operation = "isError") && (payloadTypes inputType).IsSome && outputType = Types.boolType ->
         let closureBody parameters _ =
             match parameters with
             | [input] -> predicateBody operation input inputType
-            | _ -> failwith "A Result predicate value requires one input parameter"
+            | parameters -> fail (XParsec.ErrorType.Message (sprintf "Baker Result recipe did not settle the closure frontier for Result.%s value at node %d: expected one input parameter, got %d" operation (NodeId.value ctx.InspiringNode) parameters.Length))
         Some (runRecipe ctx (closure [("__result", inputType)] [] enclosing closureBody Types.boolType))
     | NativeType.TFun (callbackType, (NativeType.TFun (inputType, outputType) as residual))
         when (payloadTypes inputType).IsSome ->
         let closureBody parameters _ =
             match parameters with
             | [callback] -> partialRecipe ctx operation callback callbackType inputType outputType enclosing
-            | _ -> failwith "A Result operation value requires one callback parameter"
+            | parameters -> fail (XParsec.ErrorType.Message (sprintf "Baker Result recipe did not settle the closure frontier for Result.%s value at node %d: expected one callback parameter, got %d" operation (NodeId.value ctx.InspiringNode) parameters.Length))
         Some (runRecipe ctx (closure [("__callback", callbackType)] [] enclosing closureBody residual))
     | _ -> None

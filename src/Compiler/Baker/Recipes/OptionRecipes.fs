@@ -219,7 +219,7 @@ let private foldBody operation arguments inputType stateType =
     match operation, arguments with
     | "fold", [folder; state; optionId]
     | "foldBack", [folder; optionId; state] -> optionFoldRecipe operation folder state optionId inputType stateType
-    | _ -> failwith "An Option fold requires its three declared arguments"
+    | _ -> fail (XParsec.ErrorType.Message (sprintf "Baker Option recipe did not settle the declared operands for Option.%s: expected three, got %d" operation (List.length arguments)))
 
 /// A completed residual has the same eager operands as a direct invocation.
 /// Establish its local capture and parameter references before either branch:
@@ -285,12 +285,13 @@ let tryDecomposeFold ctx operation supplied returnType enclosing : Result option
 /// No body emits another Option HOF that would require a second saturation firing.
 let private operationRecipe operation args inputType outputType =
     match operation, args with
+    // The result payload type is the checked application's; it is never the input's by default.
     | "map", [mapper; opt] ->
-        let outType = outputType |> Option.defaultValue inputType
-        Some (optionMapRecipe mapper opt inputType outType, Options.typeOf outType)
+        outputType |> Option.map (fun outType ->
+            optionMapRecipe mapper opt inputType outType, Options.typeOf outType)
     | "bind", [binder; opt] ->
-        let outType = outputType |> Option.defaultValue inputType
-        Some (optionBindRecipe binder opt inputType outType, Options.typeOf outType)
+        outputType |> Option.map (fun outType ->
+            optionBindRecipe binder opt inputType outType, Options.typeOf outType)
     | "filter", [predicate; opt] ->
         Some (optionFilterRecipe predicate opt inputType, Options.typeOf inputType)
     | "exists", [predicate; opt] ->
@@ -365,8 +366,13 @@ let private partialRecipe (ctx: Context) operation supplied suppliedType inputTy
         let capture = { Name = name; Type = suppliedType; IsMutable = false; SourceNodeId = Some snapshot }
         let body parameters captures =
             match parameters, captures with
-            | [opt], [argument] -> operationRecipe operation [argument; opt] inputType (innerType resultType) |> Option.get |> fst
-            | _ -> failwith "An Option partial requires one option parameter and one supplied argument capture"
+            | [opt], [argument] ->
+                match operationRecipe operation [argument; opt] inputType (innerType resultType) with
+                | Some (recipe, _) -> recipe
+                | None ->
+                    fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle the result type of partial Option.%s at node %d: input payload %A, result %A" operation (NodeId.value ctx.InspiringNode) inputType resultType))
+            | parameters, captures ->
+                fail (XParsec.ErrorType.Message (sprintf "Baker Option recipe did not settle the closure frontier for partial Option.%s at node %d: expected one option parameter and one supplied capture, got %d and %d" operation (NodeId.value ctx.InspiringNode) parameters.Length captures.Length))
         let! value = closure [("__option", Options.typeOf inputType)] [capture] enclosing body resultType
         return! evaluateBefore [snapshot] value (NativeType.TFun (Options.typeOf inputType, resultType))
     }
@@ -393,14 +399,17 @@ let tryReifyValue (ctx: Context) operation functionType enclosing : Result optio
             let body parameters _ =
                 match parameters with
                 | [supplied] -> partialRecipe ctx operation supplied suppliedType inputType resultType enclosing
-                | _ -> failwith "An Option operation value requires one leading parameter"
+                | parameters -> fail (XParsec.ErrorType.Message (sprintf "Baker Option recipe did not settle the closure frontier for Option.%s value at node %d: expected one leading parameter, got %d" operation (NodeId.value ctx.InspiringNode) parameters.Length))
             let parameterName = if operation = "defaultValue" || operation = "orElse" then "__fallback" else "__callback"
             runSaturation ctx (closure [(parameterName, suppliedType)] [] enclosing body residual))
     | NativeType.TFun (domain, resultType) ->
         innerType domain |> Option.bind (fun inputType ->
             match operation with
             | "isSome" | "isNone" | "get" ->
-                let body parameters _ = operationRecipe operation parameters inputType None |> Option.get |> fst
+                let body parameters _ =
+                    match operationRecipe operation parameters inputType None with
+                    | Some (recipe, _) -> recipe
+                    | None -> fail (XParsec.ErrorType.Message (sprintf "Baker Option recipe did not settle the closure frontier for Option.%s value at node %d: %d parameters" operation (NodeId.value ctx.InspiringNode) (List.length parameters)))
                 Some (runSaturation ctx (closure [("__option", domain)] [] enclosing body resultType))
             | _ -> None)
     | _ -> None

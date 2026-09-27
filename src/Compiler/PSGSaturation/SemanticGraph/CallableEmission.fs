@@ -147,10 +147,16 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
                   Some { Kind = SemanticKind.Application(callee, arguments); Children = children }
                     when children = callee :: arguments && arguments = target.Arguments && parameters.Length = arguments.Length ->
                     if parameters |> List.exists (fun (_, ty, _) -> not (freeMeasureVars ty).IsEmpty) then
-                        callInstance site target.Lambda |> Option.map (fun proof ->
-                            { Site = site; Implementation = proof.Implementation; Parameters = proof.Parameters
-                              Arguments = proof.Arguments; Result = proof.Result; SignatureData = proof.SignatureData
-                              Participants = proof.Participants })
+                        match callInstance site target.Lambda with
+                        | Some proof ->
+                            Some { Site = site; Implementation = proof.Implementation; Parameters = proof.Parameters
+                                   Arguments = proof.Arguments; Result = proof.Result; SignatureData = proof.SignatureData
+                                   Participants = proof.Participants }
+                        | None ->
+                            errors.Add { Occurrence = Some site
+                                         Participants = Set.ofList (site :: callee :: target.Lambda :: arguments)
+                                         Reason = $"Baker callable instantiation did not settle a dimensional call instance for call site {NodeId.value site}: callee {NodeId.value target.Lambda} has measure-polymorphic formals and no checked scheme instance was proved along its actual callee/environment path." }
+                            None
                     else
                         Some { Site = site; Implementation = target.Lambda; Parameters = parameters; Arguments = arguments
                                Result = body; SignatureData = Set.empty

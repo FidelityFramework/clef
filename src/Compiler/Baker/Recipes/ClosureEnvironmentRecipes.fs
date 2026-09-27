@@ -114,10 +114,10 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
     let formations = ResizeArray<Hyperedge>()
     let forwarded = ResizeArray<NodeId * Hyperedge list>()
     let outcome, nodes = run state (saturation {
-        let parameters, body, enclosing, context =
+        let! parameters, body, enclosing, context =
             match source.Kind with
-            | SemanticKind.Lambda(parameters, body, _, enclosing, context) -> parameters, body, enclosing, context
-            | _ -> invalidOp "An environment plan must identify a source Lambda."
+            | SemanticKind.Lambda(parameters, body, _, enclosing, context) -> preturn (parameters, body, enclosing, context)
+            | other -> fail (XParsec.ErrorType.Message (sprintf "PSG settlement (ClosureEnvironments) did not settle a source Lambda for the environment plan at node %d: found %A" (NodeId.value source.Id) other))
         let! formal = patternBinding "__closure_environment" environmentType
         let implementation = NodeId.fresh()
         let binding = NodeId.fresh()
@@ -125,16 +125,18 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
         let initializers = plan.Captures |> List.map (fun capture -> capture.SourceNodeId.Value, capture.SourceNodeId.Value)
         let! environment = C.create (SemanticKind.EnvironmentCreate(source.Id, initializers)) environmentType []
         let captures = plan.Captures |> List.map (fun capture -> capture.SourceNodeId.Value, capture) |> Map.ofList
-        let rec within seen id =
-            if Set.contains id seen then seen else
+        let rec within (seen, missing) id =
+            if Set.contains id seen then seen, missing else
             match graph.Nodes.TryFind id with
             | Some node ->
                 let seen = Set.add id seen
                 match node.Kind with
-                | SemanticKind.SeqExpr _ | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ -> seen
-                | _ -> List.fold within seen node.Children
-            | None -> seen
-        let bodyNodes = within Set.empty body
+                | SemanticKind.SeqExpr _ | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ -> seen, missing
+                | _ -> List.fold within (seen, missing) node.Children
+            | None -> seen, id :: missing
+        let bodyNodes, missing = within (Set.empty, []) body
+        do! (if missing.IsEmpty then preturn () else
+                fail (XParsec.ErrorType.Message (sprintf "PSG settlement (ClosureEnvironments) did not settle the closure body of %d: structural children %A are missing from the graph" (NodeId.value source.Id) (missing |> List.rev |> List.map NodeId.value))))
         let sourceOf id =
             match graph.Nodes.TryFind id with
             | Some { Kind = SemanticKind.VarRef(_, Some declaration) } when captures.ContainsKey declaration -> Some declaration
@@ -169,7 +171,9 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
                           Role = EdgeRole.EnvironmentCapture mutableCell; Ordinal = ordinal })
                     forwarded.Add(node.Id, rows)
                     do! preturn ()
-                | _ -> do! preturn ()
+                | Some _ -> do! preturn ()
+                | None ->
+                    do! fail (XParsec.ErrorType.Message (sprintf "PSG settlement (ClosureEnvironments) did not settle the capture evidence of nested environment %d (owner %d) inside closure %d" (NodeId.value node.Id) (NodeId.value owner) (NodeId.value source.Id)))
             | SemanticKind.SeqExpr(generator, nested) when nested |> List.exists (fun capture -> capture.SourceNodeId |> Option.exists captures.ContainsKey) ->
                 let! initializers = nested |> C.collect (fun capture -> saturation {
                     let declaration = capture.SourceNodeId.Value
@@ -229,7 +233,8 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
                 formations.Add { Sources = [callee; implementation; actualEnvironment] @ arguments
                                  Target = call.Id; Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentInvocation; Ordinal = 0 }
                 do! preturn ()
-            | _ -> invalidOp "A known callable call plan must identify an Application."
+            | other ->
+                do! fail (XParsec.ErrorType.Message (sprintf "PSG settlement (ClosureEnvironments) did not settle an Application for known callable call %d of %d: found %A" (NodeId.value callId) (NodeId.value source.Id) other))
         return environment, implementation, formal
     })
     match outcome with

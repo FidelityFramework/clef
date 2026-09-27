@@ -122,19 +122,10 @@ let private analyze (graph: SemanticGraph) (absorbed: Set<NodeId>) : CurryInfo =
                     | _ -> acc
                 | _ -> acc
             | _ -> acc) Map.empty
-    // An explicit actual belongs to this partial formation's activated
-    // frontier. Supplying the rest later retains its result and must not move
-    // the earlier marker into the later invocation's deferred-argument set.
-    let deferred = partials |> Map.fold (fun acc _ p ->
-        p.SuppliedArgNodes |> List.fold (fun s actual ->
-            match ExplicitDemand.direct graph actual with
-            | Ok (Some _) -> s
-            | _ -> Set.add actual s) acc) Set.empty
     { PartialApplications = partials
       SaturatedCalls = saturated
       PartialAppBindings = partialBindings
-      AbsorbedLambdas = absorbed
-      DeferredArgNodes = deferred }
+      AbsorbedLambdas = absorbed }
 
 /// Flatten the graph's curried chains and record its partial applications.
 let normalize (graph: SemanticGraph) : SemanticGraph * CurryInfo =

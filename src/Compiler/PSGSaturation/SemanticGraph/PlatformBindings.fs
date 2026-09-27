@@ -141,34 +141,45 @@ let private field (name: string) (fields: (string * NodeId) list) : NodeId optio
 /// A pin's logical name as a port identifier.
 let private portName (name: string) = name.Replace("[", "_").Replace("]", "")
 
+/// A required string field of a pin-inventory record. The description declares every
+/// electrical fact; none is supplied here in its place.
+let private requiredText (graph: SemanticGraph) (shape: string) (fields: (string * NodeId) list) (name: string) : string =
+    match field name fields |> Option.bind (stringOf graph) with
+    | Some value -> value
+    | None ->
+        let subject = field "LogicalName" fields |> Option.orElse (field "Name" fields) |> Option.bind (stringOf graph) |> Option.defaultValue "<unnamed>"
+        failwithf "PSG settlement (PlatformBindings) did not settle the %s of the %s '%s': the platform description's field is absent or not a string value" name shape subject
+
+/// A closed-vocabulary field: a value outside the vocabulary is the description's defect.
+let private oneOf (shape: string) (subject: string) (name: string) (vocabulary: string list) (value: string) : string =
+    if List.contains value vocabulary then value
+    else failwithf "PSG settlement (PlatformBindings) did not settle the %s of the %s '%s': '%s' is not one of %s" name shape subject value (String.concat ", " vocabulary)
+
 let private pinOf (graph: SemanticGraph) (fields: (string * NodeId) list) : PinConstraint option =
-    match field "LogicalName" fields |> Option.bind (stringOf graph), field "PackagePin" fields |> Option.bind (stringOf graph) with
-    | Some ln, Some pp ->
-        Some ({ PortName = portName ln
-                PackagePin = pp
-                IOStandard = field "Standard" fields |> Option.bind (stringOf graph) |> Option.defaultValue "LVCMOS33"
-                Direction = field "Direction" fields |> Option.bind (stringOf graph) |> Option.defaultValue "InOut" } : PinConstraint)
-    | _ -> None
+    let text = requiredText graph "PinEndpoint" fields
+    Some ({ PortName = portName (text "LogicalName")
+            PackagePin = text "PackagePin"
+            IOStandard = text "Standard"
+            Direction = text "Direction" |> oneOf "PinEndpoint" (text "LogicalName") "Direction" ["Input"; "Output"; "InOut"] } : PinConstraint)
 
 let private clockOf (graph: SemanticGraph) (fields: (string * NodeId) list) : ClockConstraint option =
-    match field "Name" fields |> Option.bind (stringOf graph), field "PackagePin" fields |> Option.bind (stringOf graph), field "FrequencyHz" fields |> Option.bind (int64Of graph) with
-    | Some n, Some pp, Some freq ->
-        Some ({ PortName = portName n
-                PackagePin = pp
-                IOStandard = field "Standard" fields |> Option.bind (stringOf graph) |> Option.defaultValue "LVCMOS33"
+    let text = requiredText graph "ClockEndpoint" fields
+    match field "FrequencyHz" fields |> Option.bind (int64Of graph) with
+    | Some freq ->
+        Some ({ PortName = portName (text "Name")
+                PackagePin = text "PackagePin"
+                IOStandard = text "Standard"
                 FrequencyHz = freq } : ClockConstraint)
-    | _ -> None
+    | None -> failwithf "PSG settlement (PlatformBindings) did not settle the FrequencyHz of the ClockEndpoint '%s': the platform description's field is absent or not an integer literal" (text "Name")
 
 let private resetOf (graph: SemanticGraph) (fields: (string * NodeId) list) : ResetConstraint option =
-    match field "Name" fields |> Option.bind (stringOf graph), field "Kind" fields |> Option.bind (stringOf graph) with
-    | Some n, Some k ->
-        let text name fallback = field name fields |> Option.bind (stringOf graph) |> Option.defaultValue fallback
-        Some ({ PortName = portName n
-                IsExternal = (k = "External")
-                PackagePin = text "PackagePin" "NONE"
-                IOStandard = text "Standard" "LVCMOS33"
-                ActiveHigh = (text "ActiveLevel" "High" = "High") } : ResetConstraint)
-    | _ -> None
+    let text = requiredText graph "ResetEndpoint" fields
+    let closed name vocabulary = text name |> oneOf "ResetEndpoint" (text "Name") name vocabulary
+    Some ({ PortName = portName (text "Name")
+            IsExternal = (closed "Kind" ["External"; "Internal"] = "External")
+            PackagePin = text "PackagePin"
+            IOStandard = text "Standard"
+            ActiveHigh = (closed "ActiveLevel" ["High"; "Low"] = "High") } : ResetConstraint)
 
 let private devicePartOf (graph: SemanticGraph) (fields: (string * NodeId) list) : string option =
     match field "Device" fields |> Option.bind (stringOf graph), field "Package" fields |> Option.bind (stringOf graph), field "SpeedGrade" fields |> Option.bind (stringOf graph) with
@@ -199,12 +210,25 @@ let pins (graph: SemanticGraph) : PinMapping option =
                 | _ -> None)
         let ofShape name read = bindings |> List.choose (fun (n, fields) -> if n = name then read graph fields else None)
         let pinsByName = ofShape "PinEndpoint" pinOf |> List.map (fun p -> p.PortName, p) |> Map.ofList
-        let designPins = attrs |> Map.toList |> List.collect (fun (_, names) -> names |> List.choose (fun n -> Map.tryFind n pinsByName))
-        match ofShape "ClockEndpoint" clockOf, ofShape "PlatformDescriptor" devicePartOf with
+        let clocks = ofShape "ClockEndpoint" clockOf
+        let resets = ofShape "ResetEndpoint" resetOf
+        // Clock and reset ports are declared by their own endpoints, not the pin inventory.
+        let endpointPorts = Set.ofList ((clocks |> List.map _.PortName) @ (resets |> List.map _.PortName))
+        let designPins =
+            attrs |> Map.toList |> List.collect (fun (_, names) ->
+                names |> List.choose (fun n ->
+                    match Map.tryFind n pinsByName with
+                    | Some pin -> Some pin
+                    | None when endpointPorts.Contains n -> None
+                    | None -> failwithf "PSG settlement (PlatformBindings) did not settle the pin '%s' that a [<Pin>] attribute names: the selected platform declares no PinEndpoint, ClockEndpoint or ResetEndpoint of that name" n))
+        match clocks, ofShape "PlatformDescriptor" devicePartOf with
         | clock :: _, device :: _ ->
             Some { Pins = designPins
                    Clock = clock
-                   Reset = ofShape "ResetEndpoint" resetOf |> List.tryHead
+                   Reset = resets |> List.tryHead
                    DevicePart = device
                    FieldPinAttrs = attrs }
-        | _ -> None
+        | [], _ ->
+            failwithf "PSG settlement (PlatformBindings) did not settle the clock of the hardware design whose fields name pins [%s]: the selected platform declares no ClockEndpoint" (attrs |> Map.toList |> List.collect snd |> String.concat ", ")
+        | _, [] ->
+            failwith "PSG settlement (PlatformBindings) did not settle the device part of the hardware design: no selected PlatformDescriptor declares literal Device, Package and SpeedGrade"

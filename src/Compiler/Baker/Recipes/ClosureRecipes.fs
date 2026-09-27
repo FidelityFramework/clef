@@ -22,10 +22,11 @@ let direct (ctx: Context) (graph: SemanticGraph) (plan: Plan) : DirectResult =
         let! formals = plan.Captures |> List.map (fun capture -> patternBinding capture.Name capture.Type) |> sequence
         let substitutions = List.map2 (fun capture formal -> capture.SourceNodeId.Value, formal) plan.Captures formals |> Map.ofList
         let prefix = List.map2 (fun (capture: CaptureInfo) formal -> capture.Name, capture.Type, formal) plan.Captures formals
-        let parameterNodes, body, enclosing, context =
+        let! parameterNodes, body, enclosing, context =
             match plan.Lambda.Kind with
-            | SemanticKind.Lambda (parameters, body, _, enclosing, context) -> parameters, body, enclosing, context
-            | _ -> failwith "A direct capture plan must name a Lambda"
+            | SemanticKind.Lambda (parameters, body, _, enclosing, context) -> XParsec.Parsers.preturn (parameters, body, enclosing, context)
+            | other ->
+                XParsec.Parsers.fail (XParsec.ErrorType.Message (sprintf "PSG settlement (DirectCaptures) did not settle a Lambda for the direct capture plan at node %d: found %A" (NodeId.value plan.Lambda.Id) other))
         let bodyReferences = plan.BodyNodes |> Set.filter (fun id ->
             let node = graph.Nodes[id]
             let captures =
@@ -54,7 +55,8 @@ let direct (ctx: Context) (graph: SemanticGraph) (plan: Plan) : DirectResult =
                             let definition = if inBody then substitutions[original] else original
                             captureArgument source capture definition) |> sequence
                         return SemanticKind.Application (callee, captures @ args), callee :: (captures @ args)
-                    | _ -> return failwith "A direct capture call plan must name an Application"
+                    | other ->
+                        return! XParsec.Parsers.fail (XParsec.ErrorType.Message (sprintf "PSG settlement (DirectCaptures) did not settle an Application for direct capture call %d of Lambda %d: found %A" (NodeId.value id) (NodeId.value plan.Lambda.Id) other))
                 else
                     let children = if inBody then source.Children |> List.map (fun id -> substitutions.TryFind id |> Option.defaultValue id) else source.Children
                     let kind =

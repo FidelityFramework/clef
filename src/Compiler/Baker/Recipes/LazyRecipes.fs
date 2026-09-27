@@ -39,16 +39,18 @@ let formation (ctx: Context) (graph: SemanticGraph) (plan: Lazy.Plan) : Expansio
         // captured binding's computation or evaluates the deferred thunk body.
         let! environment = C.create (SemanticKind.LazyEnvironment(owner.Id, initializers)) Lazy.environmentType [initial]
         let captures = plan.Captures |> List.map (fun capture -> capture.SourceNodeId.Value, capture) |> Map.ofList
-        let rec within seen id =
-            if Set.contains id seen then seen else
+        let rec within (seen, missing) id =
+            if Set.contains id seen then seen, missing else
             match graph.Nodes.TryFind id with
-            | None -> seen
+            | None -> seen, id :: missing
             | Some node ->
                 let seen = Set.add id seen
                 match node.Kind with
-                | SemanticKind.Lambda _ | SemanticKind.SeqExpr _ | SemanticKind.LazyExpr _ | SemanticKind.LazyValue _ -> seen
-                | _ -> List.fold within seen node.Children
-        let bodyNodes = within Set.empty plan.Body
+                | SemanticKind.Lambda _ | SemanticKind.SeqExpr _ | SemanticKind.LazyExpr _ | SemanticKind.LazyValue _ -> seen, missing
+                | _ -> List.fold within (seen, missing) node.Children
+        let bodyNodes, missing = within (Set.empty, []) plan.Body
+        do! (if missing.IsEmpty then preturn () else
+                fail (XParsec.ErrorType.Message (sprintf "PSG settlement (LazyValues) did not settle the lazy body of %d: structural children %A are missing from the graph" (NodeId.value owner.Id) (missing |> List.rev |> List.map NodeId.value))))
         let destinations = bodyNodes |> Set.toList |> List.choose (fun id ->
             match graph.Nodes[id].Kind with SemanticKind.Set(target, _) -> Some target | _ -> None) |> Set.ofList
         let sourceOf id =
@@ -69,7 +71,10 @@ let formation (ctx: Context) (graph: SemanticGraph) (plan: Lazy.Plan) : Expansio
                 let! environment = varRef "__lazy_environment" (Some formal) Lazy.environmentType
                 do! enrich node (SemanticKind.LazyWrite(environment, source, value)) node.Type [environment; value] node.EmissionStrategy false
             | _ -> do! preturn ()
-        let enclosing = match thunk.Kind with SemanticKind.Lambda(_, _, _, enclosing, _) -> enclosing | _ -> None
+        let! enclosing =
+            match thunk.Kind with
+            | SemanticKind.Lambda(_, _, _, enclosing, _) -> preturn enclosing
+            | other -> fail (XParsec.ErrorType.Message (sprintf "PSG settlement (LazyValues) did not settle a Lambda thunk for lazy %d: thunk %d is %A" (NodeId.value owner.Id) (NodeId.value thunk.Id) other))
         let codeType = NativeType.TFun(Lazy.environmentType, element)
         do! enrich thunk (SemanticKind.Lambda(["__lazy_environment", Lazy.environmentType, formal], plan.Body, [], enclosing, LambdaContext.LazyThunk))
                         codeType [formal; plan.Body] thunk.EmissionStrategy false
@@ -92,9 +97,12 @@ let formation (ctx: Context) (graph: SemanticGraph) (plan: Lazy.Plan) : Expansio
 /// computes once, stores that result, publishes computed=true, then yields the
 /// same result. No default cache value is constructed or read on the cold path.
 let force (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) (contract: Lazy.Instance) : Expansion =
-    let operand = match source.Kind with SemanticKind.LazyForce operand -> operand | _ -> invalidArg "source" "Lazy.force requires its source force occurrence."
     let state = SaturationState.create ctx.SourceRange ctx.OriginalHOF ctx.ExpansionId source.Id graph.Platform
     let outcome, nodes = run state (saturation {
+        let! operand =
+            match source.Kind with
+            | SemanticKind.LazyForce operand -> preturn operand
+            | other -> fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle a force occurrence for Lazy.force at node %d: found %A" (NodeId.value source.Id) other))
         let invoke environment = saturation {
             let! code = varRef "__lazy_thunk" (Some contract.Thunk) (NativeType.TFun(Lazy.environmentType, contract.ElementType))
             return! app code [environment] contract.ElementType
@@ -110,10 +118,10 @@ let force (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) (contract
         }
         let body = [forced.EnvironmentBinding; forced.Conditional]
         do! enrich source (SemanticKind.Sequential body) source.Type body source.EmissionStrategy false
-        return forced
+        return forced, operand
     })
     match outcome with
-    | Matched forced ->
+    | Matched(forced, operand) ->
         let evidence =
             { Class = EdgeClass.Provenance; Role = EdgeRole.LazyMemoization; Ordinal = 0; Target = source.Id
               Sources = [contract.Formation; operand; forced.EnvironmentBinding; forced.Condition; forced.CachedRead
