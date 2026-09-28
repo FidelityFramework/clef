@@ -679,6 +679,7 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.LazyResidence -> Fidelity.PSG.EdgeRole.LazyResidence
     | S.EdgeRole.LazyLayout -> Fidelity.PSG.EdgeRole.LazyLayout
     | S.EdgeRole.EnvironmentResidence -> Fidelity.PSG.EdgeRole.EnvironmentResidence
+    | S.EdgeRole.EnvironmentReservation(a0) -> Fidelity.PSG.EdgeRole.EnvironmentReservation((a0 |> List.map (fun x -> mapParticipant x)))
     | S.EdgeRole.EnvironmentResultDestination -> Fidelity.PSG.EdgeRole.EnvironmentResultDestination
     | S.EdgeRole.EnvironmentResultCall -> Fidelity.PSG.EdgeRole.EnvironmentResultCall
     | S.EdgeRole.SequenceCaptureFormation -> Fidelity.PSG.EdgeRole.SequenceCaptureFormation
@@ -1638,6 +1639,7 @@ and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
     | S.ObligationBody.ConsecutiveLayout(a0, a1, a2) -> Fidelity.PSG.ObligationBody.ConsecutiveLayout(a0, a1, a2)
     | S.ObligationBody.StaticStorageLayout(a0, a1, a2, a3, a4, a5, a6) -> Fidelity.PSG.ObligationBody.StaticStorageLayout(a0, a1, a2, a3, a4, a5, a6)
     | S.ObligationBody.ContinuationLayout(a0, a1, a2) -> Fidelity.PSG.ObligationBody.ContinuationLayout(a0, a1, a2)
+    | S.ObligationBody.EnvironmentStorageReservation(a0, a1, a2, a3, a4) -> Fidelity.PSG.ObligationBody.EnvironmentStorageReservation(a0, a1, a2, a3, a4)
     | S.ObligationBody.ConcatCopyBound(a0, a1) -> Fidelity.PSG.ObligationBody.ConcatCopyBound(a0, a1)
     | S.ObligationBody.CapacityPositive(a0) -> Fidelity.PSG.ObligationBody.CapacityPositive(a0)
     | S.ObligationBody.CapacityFits(a0, a1) -> Fidelity.PSG.ObligationBody.CapacityFits(a0, a1)
@@ -1702,6 +1704,20 @@ and mapParticipantEvidence (value: S.ParticipantEvidence) : Fidelity.PSG.Partici
 
 and mapParticipantRole (value: S.ParticipantRole) : Fidelity.PSG.ParticipantRole =
     match value with
+    | S.ParticipantRole.EnvironmentAllocation -> Fidelity.PSG.ParticipantRole.EnvironmentAllocation
+    | S.ParticipantRole.EnvironmentBinding -> Fidelity.PSG.ParticipantRole.EnvironmentBinding
+    | S.ParticipantRole.EnvironmentInitializer -> Fidelity.PSG.ParticipantRole.EnvironmentInitializer
+    | S.ParticipantRole.EnvironmentOwner -> Fidelity.PSG.ParticipantRole.EnvironmentOwner
+    | S.ParticipantRole.EnvironmentImplementation -> Fidelity.PSG.ParticipantRole.EnvironmentImplementation
+    | S.ParticipantRole.EnvironmentFormal -> Fidelity.PSG.ParticipantRole.EnvironmentFormal
+    | S.ParticipantRole.EnvironmentConstructor -> Fidelity.PSG.ParticipantRole.EnvironmentConstructor
+    | S.ParticipantRole.EnvironmentFactory -> Fidelity.PSG.ParticipantRole.EnvironmentFactory
+    | S.ParticipantRole.EnvironmentCall -> Fidelity.PSG.ParticipantRole.EnvironmentCall
+    | S.ParticipantRole.EnvironmentDestination -> Fidelity.PSG.ParticipantRole.EnvironmentDestination
+    | S.ParticipantRole.EnvironmentLayoutProof -> Fidelity.PSG.ParticipantRole.EnvironmentLayoutProof
+    | S.ParticipantRole.EnvironmentSpace -> Fidelity.PSG.ParticipantRole.EnvironmentSpace
+    | S.ParticipantRole.EnvironmentDeclarationInput -> Fidelity.PSG.ParticipantRole.EnvironmentDeclarationInput
+    | S.ParticipantRole.EnvironmentAuthorityInput -> Fidelity.PSG.ParticipantRole.EnvironmentAuthorityInput
     | S.ParticipantRole.Site -> Fidelity.PSG.ParticipantRole.Site
     | S.ParticipantRole.Source -> Fidelity.PSG.ParticipantRole.Source
     | S.ParticipantRole.ExtentSource -> Fidelity.PSG.ParticipantRole.ExtentSource

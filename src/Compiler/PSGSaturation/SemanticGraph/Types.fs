@@ -337,6 +337,9 @@ type ObligationBody =
     /// establishes layout only, not allocation lifetime or a memory budget.
     /// The empty transient activation layout has extent zero and alignment one.
     | ContinuationLayout of slots: (int * int * int) list * extent: int * alignment: int
+    /// Proposed individual environment extent in declared writable space. Missing
+    /// premises refute coverage; this proves neither lifetime nor aggregate capacity.
+    | EnvironmentStorageReservation of extent: int option * alignment: int option * capacity: int64 option * spaceAlignment: int option * granularity: int option
     /// String.concat2 copy discipline: for ANY operand lengths a, b >= 0
     /// (pinned where the operand is a literal), the two copy windows [0,a) and
     /// [a,a+b) lie within the (a+b)-byte allocation.
@@ -719,6 +722,12 @@ type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Ad
 /// The role of one occurrence in a relation over nodes (`Participant`).
 [<RequireQualifiedAccess>]
 type ParticipantRole =
+    /// Environment reservation occurrences; grouped by allocation, except factory
+    /// correspondence grouped by its actual call. Ordinals retain source order.
+    | EnvironmentAllocation | EnvironmentBinding | EnvironmentInitializer
+    | EnvironmentOwner | EnvironmentImplementation | EnvironmentFormal
+    | EnvironmentConstructor | EnvironmentFactory | EnvironmentCall | EnvironmentDestination
+    | EnvironmentLayoutProof | EnvironmentSpace | EnvironmentDeclarationInput | EnvironmentAuthorityInput
     | Site | Source | ExtentSource | RepresentationDeclaration | Path | Formal
     | ReachingCall | ReachingActual | OmittedCall | OmittedCallActual | OmissionSite | OmittedActual
     | Callee | CalleeBody | CalleeArgument | CalleeParameter | Ingress | Origin | Construction
@@ -1412,6 +1421,9 @@ type EdgeRole =
     | LazyLayout
     /// Complete-use covering activation and retained source cells.
     | EnvironmentResidence
+    /// Required reservation at its Baker firing, including rejected proposals.
+    /// Target is the obligation; Sources are the participant occurrences in order.
+    | EnvironmentReservation of participants: Participant list
     /// Required caller destination: [factory implementation; closure owner;
     /// destination formal] -> exact EnvironmentCreate constructor.
     | EnvironmentResultDestination

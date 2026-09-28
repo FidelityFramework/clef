@@ -311,6 +311,25 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
                         yield sprintf "(or (<= %s %s) (<= %s %s))" (endpoint left) (number rightOffset) (endpoint right) (number leftOffset) ]
         [ sprintf "(assert (= %s (and %s)))" id (String.concat " " clauses)
           sprintf "(assert (not %s))" id ]
+    | ObligationBody.EnvironmentStorageReservation (extent, alignment, capacity, spaceAlignment, granularity) ->
+        let proposition =
+            match extent, alignment, capacity, spaceAlignment, granularity with
+            | Some extent, Some alignment, Some capacity, Some spaceAlignment, Some granularity ->
+                let number (value: int) = integer (bigint value)
+                let powerOfTwo value =
+                    [0 .. 30] |> List.map (fun exponent -> sprintf "(= %s %s)" (number value) (integer (1I <<< exponent)))
+                    |> String.concat " " |> sprintf "(or %s)"
+                // Keep division defined even for invalid source declarations.
+                // Their own conjunct still fails; no zero divisor creates vacuity.
+                let divisor = number (max 1 granularity)
+                let rounded = sprintf "(* (div (+ %s (- %s 1)) %s) %s)" (number extent) divisor divisor divisor
+                [ sprintf "(> %s 0)" (number extent)
+                  powerOfTwo alignment; powerOfTwo spaceAlignment; powerOfTwo granularity
+                  sprintf "(= (mod %s %s) 0)" (number spaceAlignment) (number (max 1 alignment))
+                  sprintf "(<= %s %s)" rounded (integer (bigint capacity)) ]
+                |> String.concat " " |> sprintf "(and %s)"
+            | _ -> "false"
+        [ sprintf "(assert (= %s %s))" id proposition; sprintf "(assert (not %s))" id ]
     | ObligationBody.ConsecutiveLayout (storages, span, capacity) ->
         let n = List.length storages
         let bases = [ for i in 0 .. n - 1 -> sprintf "b%d" i ]

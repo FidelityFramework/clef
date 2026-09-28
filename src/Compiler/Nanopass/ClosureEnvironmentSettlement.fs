@@ -35,6 +35,69 @@ type ProgramInstance = {
 /// initializer. A nested/repeated activation cannot name one static instance.
 let private programSites = ProgramStorageAuthority.candidates
 
+let private reservationName (graph: SemanticGraph) site binding initializer =
+    // Name the recipe's source occurrence, not its fresh destination allocation.
+    // The role-bearing receipt still names the actual allocation and result call.
+    let node = graph.Nodes[site]
+    let origin =
+        match node.Kind, node.Metadata.TryFind ElaborationMetadata.For, node.Metadata.TryFind ElaborationMetadata.Id with
+        | SemanticKind.EnvironmentAllocate _, Some(MetadataValue.String "Closure.factoryResult"), Some(MetadataValue.Int source) -> source
+        | SemanticKind.EnvironmentCreate(owner, _), _, _ -> NodeId.value owner
+        | _ -> NodeId.value site
+    sprintf "environment_%d_binding_%d_initializer_%d_reservation" origin (NodeId.value binding) (NodeId.value initializer)
+
+let private reservationPremises (graph: SemanticGraph) (layout: EnvironmentLayout option) site binding initializer =
+    let occurrence group role ordinal node : Participant = { Node = node; Role = role; Ordinal = ordinal; Group = group }
+    let one role node = occurrence site role 0 node
+    let many role nodes = nodes |> List.mapi (occurrence site role)
+    let authority = Program.tryValueAuthority graph binding
+    let space = authority |> Option.map _.Space
+    let body = ObligationBody.EnvironmentStorageReservation(
+                    layout |> Option.map _.Bytes, layout |> Option.map _.Alignment,
+                    space |> Option.map _.Capacity, space |> Option.map _.Alignment, space |> Option.map _.Granularity)
+    let participants =
+        [one ParticipantRole.EnvironmentAllocation site; one ParticipantRole.EnvironmentBinding binding
+         one ParticipantRole.EnvironmentInitializer initializer]
+        @ (match graph.Nodes[site].Kind with
+           | SemanticKind.EnvironmentCreate(owner, _) | SemanticKind.EnvironmentAllocate owner ->
+               [one ParticipantRole.EnvironmentOwner owner]
+               @ (match graph.Nodes.TryFind owner with
+                  | Some { Kind = SemanticKind.ClosureValue(implementation, constructor) } ->
+                      [one ParticipantRole.EnvironmentImplementation implementation; one ParticipantRole.EnvironmentConstructor constructor]
+                  | _ -> [])
+           | _ -> [])
+        @ (layout |> Option.map (fun value ->
+            [one ParticipantRole.EnvironmentFormal value.Formal]
+            @ many ParticipantRole.EnvironmentLayoutProof value.Obligations) |> Option.defaultValue [])
+        @ (authority |> Option.map (fun value ->
+            [one ParticipantRole.EnvironmentSpace value.Space.Node]
+            @ many ParticipantRole.EnvironmentAuthorityInput value.Evidence.Sources
+            @ many ParticipantRole.EnvironmentDeclarationInput (ProgramStorageAuthority.declarationInputs graph value.Space.Node |> Set.toList)) |> Option.defaultValue [])
+        @ (graph.Edges |> List.collect (fun edge ->
+            match edge.Class, edge.Role, edge.Sources with
+            | EdgeClass.Provenance, EdgeRole.EnvironmentResultCall, [factory; constructor; formal; allocation; destination] when allocation = site ->
+                [ ParticipantRole.EnvironmentCall, edge.Target; ParticipantRole.EnvironmentFactory, factory
+                  ParticipantRole.EnvironmentConstructor, constructor; ParticipantRole.EnvironmentFormal, formal
+                  ParticipantRole.EnvironmentAllocation, allocation; ParticipantRole.EnvironmentDestination, destination ]
+                |> List.map (fun (role, node) -> occurrence edge.Target role edge.Ordinal node)
+            | _ -> []))
+    body, participants
+
+let private reservationProof (graph: SemanticGraph) layout site binding initializer =
+    let body, participants = reservationPremises graph (Some layout) site binding initializer
+    let sources = participants |> List.map _.Node
+    graph.Edges |> List.choose (fun edge ->
+        match edge.Class, edge.Role, graph.Nodes.TryFind edge.Target with
+        | EdgeClass.Provenance, EdgeRole.EnvironmentReservation actual, Some { Kind = SemanticKind.Obligation info }
+            when actual = participants && edge.Sources = sources && edge.Ordinal = 0 && info.Body = body &&
+                 info.Id = reservationName graph site binding initializer ->
+            let constraints = graph.Edges |> List.filter (fun row -> row.Role = EdgeRole.Constrains && row.Target = edge.Target)
+            match constraints with
+            | [{ Class = EdgeClass.Obligation; Sources = actualSources; Ordinal = 0 }] when actualSources = sources -> Some edge.Target
+            | _ -> None
+        | _ -> None)
+    |> function [proof] -> Some proof | _ -> None
+
 let private programBacking graph (layout: EnvironmentLayout) site candidates =
     match candidates with
     | [binding, path] ->
@@ -48,15 +111,16 @@ let private programBacking graph (layout: EnvironmentLayout) site candidates =
                 powerOfTwo space.Granularity && space.Alignment % layout.Alignment = 0 &&
                 extent + ((granularity - extent % granularity) % granularity) <= bigint space.Capacity &&
                 (Platform.read graph).Findings.IsEmpty
-            // This is the individual object's capacity/alignment obligation.
-            // No pooled offsets or aggregate image capacity follow from it.
+            // The obligation already exists, including when coverage fails.
+            // This host guard admits residence; it is not a solver verdict.
             if not covered then None else
+                reservationProof graph layout site binding authority.Initializer.Initializer |> Option.map (fun obligation ->
                 let sources =
-                    [site; binding; layout.Owner; layout.Implementation; layout.Formal] @
+                    [site; binding; layout.Owner; layout.Implementation; layout.Formal; obligation] @
                     authority.Evidence.Sources @ path @ layout.Obligations @
                     (ProgramStorageAuthority.declarationInputs graph space.Node |> Set.toList) |> List.distinct
-                Some { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResidence
-                       Sources = sources; Target = layout.Owner; Ordinal = 0 })
+                { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResidence
+                  Sources = sources; Target = layout.Owner; Ordinal = 0 }))
     | _ -> None
 
 let settlePreparedWhenSourceAdmitted admitted destinations factoryCalls (graph: SemanticGraph) =
@@ -109,22 +173,32 @@ let settlePreparedWhenSourceAdmitted admitted destinations factoryCalls (graph: 
         | _ -> None) |> Seq.toList
     let layouts = placed |> List.choose (function Ok(layout, _) -> Some(layout.Owner, layout) | _ -> None) |> Map.ofList
     let proofs = placed |> List.choose (function Ok(_, proof) -> Some proof | _ -> None) |> Enrichment.concat
+    let proposals = ProgramStorageAuthority.environmentProposals graph
+    let ownerOf site =
+        match graph.Nodes[site].Kind with
+        | SemanticKind.EnvironmentCreate(owner, _) | SemanticKind.EnvironmentAllocate owner -> Some owner
+        | _ -> None
+    let reservations =
+        proposals |> Map.toList |> List.collect (fun (site, initializers) ->
+            let layout = ownerOf site |> Option.bind layouts.TryFind
+            initializers |> List.map (fun (binding, initializer) ->
+                let body, participants = reservationPremises graph layout site binding initializer
+                Proof.environmentReservation (reservationName graph site binding initializer) graph.Nodes[site] body participants))
+        |> Enrichment.concat
+    let graph = ObligationElaboration.foldIn (Enrichment.combine proofs reservations) graph
     let programCandidates = programSites graph
-    let programPlacements = residence.Sites |> Map.toList |> List.choose (fun (site, _) ->
+    let programPlacements = proposals |> Map.toList |> List.map (fun (site, _) ->
         let candidates = programCandidates site
-        if candidates.IsEmpty then None else
-        let owner =
-            match graph.Nodes[site].Kind with
-            | SemanticKind.EnvironmentCreate(owner, _) | SemanticKind.EnvironmentAllocate owner -> Some owner
-            | _ -> None
-        let proof = owner |> Option.bind layouts.TryFind |> Option.bind (fun layout -> programBacking graph layout site candidates)
-        Some(site, proof))
+        let proof =
+            if not (residence.Sites.ContainsKey site) then None else
+            ownerOf site |> Option.bind layouts.TryFind |> Option.bind (fun layout -> programBacking graph layout site candidates)
+        site, proof)
     let programErrors = programPlacements |> List.choose (fun (site, proof) ->
         if proof.IsSome then None else
         Some(residual site [] "Program callable storage requires one unrepeated initializer and declared writable space covering the settled environment."))
     let staticSites = programPlacements |> List.choose (fun (site, proof) -> proof |> Option.map (fun _ -> site)) |> Set.ofList
     let residences = residence.Sites |> Map.map (fun site kind -> if staticSites.Contains site then EscapeKind.StaticLifetime else kind)
-    let proofs = { proofs with NewEdges = proofs.NewEdges @ residence.Evidence @ (programPlacements |> List.choose snd) }
+    let proofs = { Enrichment.empty with NewEdges = residence.Evidence @ (programPlacements |> List.choose snd) }
     let graph = ObligationElaboration.foldIn proofs graph
     let destinations =
       graph.Edges |> List.choose (fun edge ->
