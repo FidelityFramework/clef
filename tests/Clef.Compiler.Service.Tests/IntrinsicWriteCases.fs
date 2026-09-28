@@ -224,6 +224,34 @@ let main _ =
         | SemanticKind.Literal(NativeLiteral.String text) -> text
         | other -> failwithf "Participant %A is not a string literal: %A" id other
 
+    /// `writableAuthority` whose 8-bit representation is named uint8, the authority of
+    /// the factory probe of step A2.
+    let factoryAuthority = writableAuthority.Replace("Name = \"octet\"", "Name = \"uint8\"")
+
+    /// The participants of an established borrow row. A pending row fails the test.
+    let established (evidence: ParticipantEvidence) =
+        match evidence with
+        | ParticipantEvidence.Established participants -> participants
+        | ParticipantEvidence.Pending _ -> failwith "The string borrow row states its participants as pending."
+
+    /// The string byte view rows of the graph, each with the sources of its edge.
+    let viewRows (graph: SemanticGraph) =
+        graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringByteView view -> Some(view, edge.Sources) | _ -> None)
+
+    /// The reachable calls of `write` whose argument is the literal of `text`.
+    let writeCallOf (graph: SemanticGraph) text =
+        let argument = literal graph text
+        writeCalls graph |> List.filter (fun call ->
+            match graph.Nodes[call].Kind with
+            | SemanticKind.Application(_, [actual]) -> actual = argument
+            | _ -> false) |> Seq.exactlyOne
+
+    /// The occurrences of one group in one role.
+    let inGroup group role (participants: Participant list) =
+        participants |> List.filter (fun participant -> participant.Group = group && participant.Role = role)
+
+    let occurrence node role ordinal group : Participant = { Node = node; Role = role; Ordinal = ordinal; Group = group }
+
 type IntrinsicWriteCases() =
     [<Fact>]
     member _.``Source preserves exact extent through nested formals and ordered three operand write`` () =
@@ -287,9 +315,11 @@ type IntrinsicWriteCases() =
         let view = projection.ByteViews[call.Buffer]
         Assert.False(view.StaticOrigins.ContainsKey never)
         Assert.Equal<bigint list>([4I], view.StaticOrigins.Values |> Seq.toList)
-        let site, _, actual = Assert.Single(IntrinsicWriteFixture.omissionsContaining graph never)
-        Assert.Contains(site, view.Participants)
-        Assert.Contains(actual, view.Participants)
+        let site, ordinal, actual = Assert.Single(IntrinsicWriteFixture.omissionsContaining graph never)
+        let omitted = IntrinsicWriteFixture.writeCallOf graph "never demanded"
+        let participants = IntrinsicWriteFixture.established view.Participants
+        Assert.Contains(IntrinsicWriteFixture.occurrence site ParticipantRole.OmissionSite ordinal omitted, participants)
+        Assert.Contains(IntrinsicWriteFixture.occurrence actual ParticipantRole.OmittedActual ordinal omitted, participants)
         Assert.False(IntrinsicWriteFixture.pooled graph "never demanded")
         Assert.True(IntrinsicWriteFixture.pooled graph "kept")
         Assert.Equal(4, IntrinsicWriteFixture.writeProofs graph)
@@ -312,9 +342,11 @@ type IntrinsicWriteCases() =
         let call = Assert.Single projection.IntrinsicWrites.Values
         let view = projection.ByteViews[call.Buffer]
         Assert.Equal<NodeId list>([both], view.StaticOrigins.Keys |> Seq.toList)
-        let site, _, actual = IntrinsicWriteFixture.writeCalls graph |> List.collect (IntrinsicWriteFixture.omissionsContaining graph) |> Assert.Single
-        Assert.Contains(site, view.Participants)
-        Assert.Contains(actual, view.Participants)
+        let omitted = IntrinsicWriteFixture.writeCalls graph |> List.filter (fun call -> not (IntrinsicWriteFixture.omissionsContaining graph call).IsEmpty) |> Assert.Single
+        let site, ordinal, actual = IntrinsicWriteFixture.omissionsContaining graph omitted |> Assert.Single
+        let participants = IntrinsicWriteFixture.established view.Participants
+        Assert.Contains(IntrinsicWriteFixture.occurrence site ParticipantRole.OmissionSite ordinal omitted, participants)
+        Assert.Contains(IntrinsicWriteFixture.occurrence actual ParticipantRole.OmittedActual ordinal omitted, participants)
         Assert.True(IntrinsicWriteFixture.pooled graph "both")
 
     [<Fact>]
@@ -345,9 +377,10 @@ type IntrinsicWriteCases() =
         Assert.All(inputs.Demanded, fun input ->
             Assert.Equal(0, input.Ordinal)
             Assert.Equal(Some [input.Actual], match graph.Nodes[input.Call].Kind with SemanticKind.Application(_, actuals) -> Some actuals | _ -> None))
-        let omission = Assert.Single inputs.Omissions
+        let omitted = Assert.Single inputs.Omitted
+        let omission = Assert.Single omitted.Omissions
         Assert.Equal<(NodeId * int * NodeId) list>(IntrinsicWriteFixture.omissionsContaining graph c, [omission.Site, omission.Ordinal, omission.Actual])
-        Assert.Equal<NodeId list>([c], inputs.Omitted |> List.map _.Actual)
+        Assert.Equal(c, omitted.Input.Actual)
 
     [<Fact>]
     member _.``Changed actual origins require new source range settlement before boundary resettlement`` () =
@@ -413,7 +446,7 @@ type IntrinsicWriteCases() =
         Assert.NotEmpty omissions
         Assert.Equal<Set<OrdinaryOmission>>(omissions, Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.deferrals graph |> Map.find never)
         match graph.LiteralStorage[never] with
-        | LiteralStorage.NotMaterialized stated -> Assert.Equal<Set<OrdinaryOmission>>(omissions, Set.ofList stated)
+        | LiteralStorage.NotMaterialized (StoragePremise.Established stated) -> Assert.Equal<Set<OrdinaryOmission>>(omissions, Set.ofList stated)
         | other -> failwithf "A literal that no demanded position reads has the storage row %A" other
         entries |> List.iteri (fun index entry ->
             for id in entry.NodeIds do Assert.Equal(LiteralStorage.Materialized index, graph.LiteralStorage[id]))
@@ -436,3 +469,130 @@ type IntrinsicWriteCases() =
             edge.Class = EdgeClass.Obligation && orphans |> List.exists (fun node -> List.contains node.Id edge.Sources))
         Assert.DoesNotContain(Clef.Compiler.Nanopass.ObligationDischarge.ofGraph graph, fun obligation -> obligation.Statement.Contains "\"orphan\"")
         Assert.Equal<string list>(IntrinsicWriteFixture.literalKinds, IntrinsicWriteFixture.proofKinds (IntrinsicWriteFixture.literalProofs graph "kept"))
+
+    [<Fact>]
+    member _.``The borrow participants state roles and groups and pair an omitted call with its omission`` () =
+        let source = """module WriteFixture
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+let discard (offset: int) (unused: int) = offset
+let msg = "hello"
+[<EntryPoint>]
+let main _ =
+    write msg
+    if discard 3 (write msg; 0) = 3 then 0 else 1
+"""
+        let result = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.factoryAuthority source
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let view, sources = Assert.Single(IntrinsicWriteFixture.viewRows graph)
+        let participants = IntrinsicWriteFixture.established view.Participants
+        Assert.Equal<NodeId list>(participants |> List.map _.Node, sources)
+        let calls = IntrinsicWriteFixture.writeCalls graph
+        let omitted = calls |> List.filter (fun call -> not (IntrinsicWriteFixture.omissionsContaining graph call).IsEmpty) |> Assert.Single
+        let demanded = calls |> List.filter ((<>) omitted) |> Assert.Single
+        let hello = IntrinsicWriteFixture.literal graph "hello"
+        Assert.Contains(IntrinsicWriteFixture.occurrence demanded ParticipantRole.ReachingCall 0 demanded, participants)
+        Assert.Contains(IntrinsicWriteFixture.occurrence hello ParticipantRole.Origin 0 demanded, participants)
+        Assert.Contains(IntrinsicWriteFixture.occurrence omitted ParticipantRole.OmittedCall 0 omitted, participants)
+        let site, ordinal, actual = IntrinsicWriteFixture.omissionsContaining graph omitted |> Assert.Single
+        Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence site ParticipantRole.OmissionSite ordinal omitted],
+                                       IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmissionSite participants)
+        Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence actual ParticipantRole.OmittedActual ordinal omitted],
+                                       IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmittedActual participants)
+        Assert.Empty(IntrinsicWriteFixture.inGroup demanded ParticipantRole.OmissionSite participants)
+
+    [<Fact>]
+    member _.``Each demanded call of one binding is its own group with the binding and its origin`` () =
+        let source = IntrinsicWriteFixture.bindingBody.Replace("then write msg\n    0\n", "then write msg\n    write msg\n    0\n")
+        let result = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.writableAuthority source
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let view, _ = Assert.Single(IntrinsicWriteFixture.viewRows graph)
+        let participants = IntrinsicWriteFixture.established view.Participants
+        let both = IntrinsicWriteFixture.literal graph "both"
+        let binding = graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable && match node.Kind with SemanticKind.Binding("msg", _, _, _) -> true | _ -> false) |> Seq.exactlyOne
+        let demanded = IntrinsicWriteFixture.writeCalls graph |> List.filter (fun call -> (IntrinsicWriteFixture.omissionsContaining graph call).IsEmpty)
+        Assert.Equal(2, demanded.Length)
+        for call in demanded do
+            Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence call ParticipantRole.ReachingCall 0 call],
+                                           IntrinsicWriteFixture.inGroup call ParticipantRole.ReachingCall participants)
+            Assert.Equal<NodeId list>([both], IntrinsicWriteFixture.inGroup call ParticipantRole.Origin participants |> List.map _.Node)
+            Assert.Equal(1, IntrinsicWriteFixture.inGroup call ParticipantRole.Path participants |> List.filter (fun path -> path.Node = binding.Id) |> List.length)
+
+    [<Fact>]
+    member _.``Two omitted calls under different omissions each name only their own omission`` () =
+        let source = """module WriteFixture
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+let discard (value: int) = 0
+[<EntryPoint>]
+let main _ =
+    write "kept"
+    if discard (write "a"; 0) = 0 then (if discard (write "b"; 0) = 0 then 0 else 1) else 2
+"""
+        let graph, projection = IntrinsicWriteFixture.graphAndProjectionOfSource source
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let view = projection.ByteViews[call.Buffer]
+        let participants = IntrinsicWriteFixture.established view.Participants
+        let first, second = IntrinsicWriteFixture.writeCallOf graph "a", IntrinsicWriteFixture.writeCallOf graph "b"
+        for omitted in [first; second] do
+            let site, ordinal, actual = IntrinsicWriteFixture.omissionsContaining graph omitted |> Assert.Single
+            Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence site ParticipantRole.OmissionSite ordinal omitted],
+                                           IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmissionSite participants)
+            Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence actual ParticipantRole.OmittedActual ordinal omitted],
+                                           IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmittedActual participants)
+        let firstSites = IntrinsicWriteFixture.omissionsContaining graph first |> List.map (fun (site, _, _) -> site)
+        let secondSites = IntrinsicWriteFixture.omissionsContaining graph second |> List.map (fun (site, _, _) -> site)
+        Assert.NotEqual<NodeId list>(firstSites, secondSites)
+
+    [<Fact>]
+    member _.``An omitted call under a nested omission names each omission once`` () =
+        let source = """module WriteFixture
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+let discard (value: int) = 0
+[<EntryPoint>]
+let main _ =
+    write "kept"
+    if discard (discard (write "nested"; 0); 0) = 0 then 0 else 1
+"""
+        let graph, projection = IntrinsicWriteFixture.graphAndProjectionOfSource source
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let view = projection.ByteViews[call.Buffer]
+        let participants = IntrinsicWriteFixture.established view.Participants
+        let omitted = IntrinsicWriteFixture.writeCallOf graph "nested"
+        let omissions = IntrinsicWriteFixture.omissionsContaining graph omitted
+        Assert.Equal(2, omissions.Length)
+        let sites = omissions |> List.map (fun (site, ordinal, _) -> IntrinsicWriteFixture.occurrence site ParticipantRole.OmissionSite ordinal omitted)
+        let actuals = omissions |> List.map (fun (_, ordinal, actual) -> IntrinsicWriteFixture.occurrence actual ParticipantRole.OmittedActual ordinal omitted)
+        Assert.Equal<Participant list>(List.sort sites, IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmissionSite participants |> List.sort)
+        Assert.Equal<Participant list>(List.sort actuals, IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmittedActual participants |> List.sort)
+
+    [<Fact>]
+    member _.``One omission that is the reason for two omitted calls occurs once in each of their groups`` () =
+        let source = """module WriteFixture
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+let discard (value: int) = 0
+[<EntryPoint>]
+let main _ =
+    write "kept"
+    if discard (write "a"; write "b"; 0) = 0 then 0 else 1
+"""
+        let graph, projection = IntrinsicWriteFixture.graphAndProjectionOfSource source
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let view = projection.ByteViews[call.Buffer]
+        let participants = IntrinsicWriteFixture.established view.Participants
+        let first, second = IntrinsicWriteFixture.writeCallOf graph "a", IntrinsicWriteFixture.writeCallOf graph "b"
+        let site, ordinal, actual = IntrinsicWriteFixture.omissionsContaining graph first |> Assert.Single
+        Assert.Equal<(NodeId * int * NodeId) list>([site, ordinal, actual], IntrinsicWriteFixture.omissionsContaining graph second)
+        for omitted in [first; second] do
+            Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence site ParticipantRole.OmissionSite ordinal omitted],
+                                           IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmissionSite participants)
+            Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence actual ParticipantRole.OmittedActual ordinal omitted],
+                                           IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmittedActual participants)

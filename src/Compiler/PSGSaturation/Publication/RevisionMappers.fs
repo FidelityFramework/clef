@@ -106,6 +106,12 @@ and mapBaseMeasure (value: D.BaseMeasure) : Fidelity.PSG.BaseMeasure =
         Module = value.Module
     } : Fidelity.PSG.BaseMeasure)
 
+and mapBorrowHistory (value: S.BorrowHistory) : Fidelity.PSG.BorrowHistory =
+    ({
+        Site = nodeId value.Site
+        Early = mapEarlyDerivation value.Early
+    } : Fidelity.PSG.BorrowHistory)
+
 and mapBoundaryByteView (value: S.BoundaryByteView) : Fidelity.PSG.BoundaryByteView =
     ({
         Site = nodeId value.Site
@@ -114,7 +120,7 @@ and mapBoundaryByteView (value: S.BoundaryByteView) : Fidelity.PSG.BoundaryByteV
         Representation = mapNumericRepresentation value.Representation
         RepresentationDeclaration = nodeId value.RepresentationDeclaration
         StaticOrigins = (value.StaticOrigins |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, v) |> Map.ofSeq)
-        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+        Participants = mapParticipantEvidence value.Participants
     } : Fidelity.PSG.BoundaryByteView)
 
 and mapBoundaryCall (value: S.BoundaryCall) : Fidelity.PSG.BoundaryCall =
@@ -269,7 +275,7 @@ and mapBoundaryStringExtent (value: S.BoundaryStringExtent) : Fidelity.PSG.Bound
         Source = nodeId value.Source
         ExtentSource = nodeId value.ExtentSource
         StaticOrigins = (value.StaticOrigins |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, v) |> Map.ofSeq)
-        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+        Participants = mapParticipantEvidence value.Participants
     } : Fidelity.PSG.BoundaryStringExtent)
 
 and mapByrefKind (value: N.ByrefKind) : Fidelity.PSG.ByrefKind =
@@ -546,6 +552,11 @@ and mapEagerFrontier (value: S.EagerFrontier) : Fidelity.PSG.EagerFrontier =
     | S.EagerFrontier.Component -> Fidelity.PSG.EagerFrontier.Component
     | S.EagerFrontier.Expression -> Fidelity.PSG.EagerFrontier.Expression
 
+and mapEarlyDerivation (value: S.EarlyDerivation) : Fidelity.PSG.EarlyDerivation =
+    ({
+        Derived = (value.Derived |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.EarlyDerivation)
+
 and mapEdgeClass (value: S.EdgeClass) : Fidelity.PSG.EdgeClass =
     match value with
     | S.EdgeClass.Structural -> Fidelity.PSG.EdgeClass.Structural
@@ -589,6 +600,8 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.BoundaryProof(a0) -> Fidelity.PSG.EdgeRole.BoundaryProof(mapBoundaryProofOutcome a0)
     | S.EdgeRole.StringByteView(a0) -> Fidelity.PSG.EdgeRole.StringByteView(mapBoundaryByteView a0)
     | S.EdgeRole.StringExtent(a0) -> Fidelity.PSG.EdgeRole.StringExtent(mapBoundaryStringExtent a0)
+    | S.EdgeRole.StringBorrowHistory(a0) -> Fidelity.PSG.EdgeRole.StringBorrowHistory(mapBorrowHistory a0)
+    | S.EdgeRole.LiteralStorageHistory(a0) -> Fidelity.PSG.EdgeRole.LiteralStorageHistory(mapStoragePremiseHistory a0)
     | S.EdgeRole.StringComparisonConstruction(a0) -> Fidelity.PSG.EdgeRole.StringComparisonConstruction(a0)
     | S.EdgeRole.StringLengthComparison(a0) -> Fidelity.PSG.EdgeRole.StringLengthComparison(a0)
     | S.EdgeRole.IntrinsicWriteAbi(a0) -> Fidelity.PSG.EdgeRole.IntrinsicWriteAbi(mapIntrinsicWriteImport a0)
@@ -1077,7 +1090,7 @@ and mapLazyWitnessContract (value: S.LazyWitnessContract) : Fidelity.PSG.LazyWit
 and mapLiteralStorage (value: S.LiteralStorage) : Fidelity.PSG.LiteralStorage =
     match value with
     | S.LiteralStorage.Materialized(a0) -> Fidelity.PSG.LiteralStorage.Materialized(a0)
-    | S.LiteralStorage.NotMaterialized(a0) -> Fidelity.PSG.LiteralStorage.NotMaterialized((a0 |> List.map (fun x -> mapOrdinaryOmission x)))
+    | S.LiteralStorage.NotMaterialized(a0) -> Fidelity.PSG.LiteralStorage.NotMaterialized(mapStoragePremise a0)
 
 and mapLoopRangeResidual (value: S.LoopRangeResidual) : Fidelity.PSG.LoopRangeResidual =
     match value with
@@ -1674,6 +1687,41 @@ and mapPartialApplication (value: S.PartialApplication) : Fidelity.PSG.PartialAp
         TotalParams = value.TotalParams
     } : Fidelity.PSG.PartialApplication)
 
+and mapParticipant (value: S.Participant) : Fidelity.PSG.Participant =
+    ({
+        Node = nodeId value.Node
+        Role = mapParticipantRole value.Role
+        Ordinal = value.Ordinal
+        Group = nodeId value.Group
+    } : Fidelity.PSG.Participant)
+
+and mapParticipantEvidence (value: S.ParticipantEvidence) : Fidelity.PSG.ParticipantEvidence =
+    match value with
+    | S.ParticipantEvidence.Pending(a0) -> Fidelity.PSG.ParticipantEvidence.Pending(mapEarlyDerivation a0)
+    | S.ParticipantEvidence.Established(a0) -> Fidelity.PSG.ParticipantEvidence.Established((a0 |> List.map (fun x -> mapParticipant x)))
+
+and mapParticipantRole (value: S.ParticipantRole) : Fidelity.PSG.ParticipantRole =
+    match value with
+    | S.ParticipantRole.Site -> Fidelity.PSG.ParticipantRole.Site
+    | S.ParticipantRole.Source -> Fidelity.PSG.ParticipantRole.Source
+    | S.ParticipantRole.ExtentSource -> Fidelity.PSG.ParticipantRole.ExtentSource
+    | S.ParticipantRole.RepresentationDeclaration -> Fidelity.PSG.ParticipantRole.RepresentationDeclaration
+    | S.ParticipantRole.Path -> Fidelity.PSG.ParticipantRole.Path
+    | S.ParticipantRole.Formal -> Fidelity.PSG.ParticipantRole.Formal
+    | S.ParticipantRole.ReachingCall -> Fidelity.PSG.ParticipantRole.ReachingCall
+    | S.ParticipantRole.ReachingActual -> Fidelity.PSG.ParticipantRole.ReachingActual
+    | S.ParticipantRole.OmittedCall -> Fidelity.PSG.ParticipantRole.OmittedCall
+    | S.ParticipantRole.OmittedCallActual -> Fidelity.PSG.ParticipantRole.OmittedCallActual
+    | S.ParticipantRole.OmissionSite -> Fidelity.PSG.ParticipantRole.OmissionSite
+    | S.ParticipantRole.OmittedActual -> Fidelity.PSG.ParticipantRole.OmittedActual
+    | S.ParticipantRole.Callee -> Fidelity.PSG.ParticipantRole.Callee
+    | S.ParticipantRole.CalleeBody -> Fidelity.PSG.ParticipantRole.CalleeBody
+    | S.ParticipantRole.CalleeArgument -> Fidelity.PSG.ParticipantRole.CalleeArgument
+    | S.ParticipantRole.CalleeParameter -> Fidelity.PSG.ParticipantRole.CalleeParameter
+    | S.ParticipantRole.Ingress -> Fidelity.PSG.ParticipantRole.Ingress
+    | S.ParticipantRole.Origin -> Fidelity.PSG.ParticipantRole.Origin
+    | S.ParticipantRole.Construction -> Fidelity.PSG.ParticipantRole.Construction
+
 and mapPattern (value: S.Pattern) : Fidelity.PSG.Pattern =
     match value with
     | S.Pattern.Const(a0) -> Fidelity.PSG.Pattern.Const(mapNativeLiteral a0)
@@ -2090,6 +2138,17 @@ and mapStaticStringPool (value: S.StaticStringPool) : Fidelity.PSG.StaticStringP
         Granularity = value.Granularity
         DeclarationNode = nodeId value.DeclarationNode
     } : Fidelity.PSG.StaticStringPool)
+
+and mapStoragePremise (value: S.StoragePremise) : Fidelity.PSG.StoragePremise =
+    match value with
+    | S.StoragePremise.Pending(a0) -> Fidelity.PSG.StoragePremise.Pending((a0 |> List.map (fun x -> mapOrdinaryOmission x)))
+    | S.StoragePremise.Established(a0) -> Fidelity.PSG.StoragePremise.Established((a0 |> List.map (fun x -> mapOrdinaryOmission x)))
+
+and mapStoragePremiseHistory (value: S.StoragePremiseHistory) : Fidelity.PSG.StoragePremiseHistory =
+    ({
+        Literal = nodeId value.Literal
+        Early = (value.Early |> List.map (fun x -> mapOrdinaryOmission x))
+    } : Fidelity.PSG.StoragePremiseHistory)
 
 and mapStorageWitnessProjection (value: S.StorageWitnessProjection) : Fidelity.PSG.StorageWitnessProjection =
     ({

@@ -24,14 +24,20 @@ let storagePremise (graph: SemanticGraph) = graph.StaticStringPool |> Option.map
     pool.Symbol, pool.Bytes, pool.Alignment, pool.Size, pool.UsedSize, pool.SpaceName, pool.Capacity,
     pool.SpaceAlignment, pool.Granularity, pool.DeclarationNode,
     pool.Entries |> List.map (fun entry -> entry.NodeIds, entry.Content, entry.Offset, entry.Length, entry.StorageLength))
-let viewRow (view: BoundaryByteView) = rangeRow (EdgeRole.StringByteView view) (view.Source :: view.ExtentSource :: Set.toList view.Participants) view.Site
+/// The sources of a borrow row: the nodes of its participants in their order, or the
+/// nodes of the early derivation while the participants are pending.
+let private incidence (evidence: ParticipantEvidence) =
+    match evidence with
+    | ParticipantEvidence.Established participants -> participants |> List.map _.Node
+    | ParticipantEvidence.Pending early -> early.Derived |> List.map _.Node
+let viewRow (view: BoundaryByteView) = rangeRow (EdgeRole.StringByteView view) (incidence view.Participants) view.Site
 let rewriteRow (view: BoundaryByteView) =
     { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = [view.Source]; Target = view.Site }
-let extentRow (extent: BoundaryStringExtent) = rangeRow (EdgeRole.StringExtent extent) (extent.Source :: extent.ExtentSource :: Set.toList extent.Participants) extent.Site
+let extentRow (extent: BoundaryStringExtent) = rangeRow (EdgeRole.StringExtent extent) (incidence extent.Participants) extent.Site
 let abiRow site (import: IntrinsicWriteImport) = rangeRow (EdgeRole.IntrinsicWriteAbi import) (import.Identity :: import.Scope :: Set.toList import.Participants) site
 let storageRow (view: BoundaryByteView) =
     rangeRow (EdgeRole.StringByteStorage(0I, 255I, view.Representation.Name))
-        ([view.Site; view.Source; view.ExtentSource; view.RepresentationDeclaration] @ Set.toList view.Participants) view.Site
+        ([view.Site; view.Source; view.ExtentSource; view.RepresentationDeclaration] @ incidence view.Participants) view.Site
 
 let proofOutcome body =
     let holds =

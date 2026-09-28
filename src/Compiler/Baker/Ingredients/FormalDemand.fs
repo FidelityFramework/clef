@@ -2,9 +2,10 @@
 /// The calls that reach a closed formal, apart by role. A demanded input is a
 /// call that is entered and supplies its actual to the formal. An omission is a
 /// resident `OrdinaryUnusedActual` relation whose actual contains a call that
-/// reaches the formal; such a call is never entered and supplies no value. The
-/// origin enumeration of a string borrow and the array extent reader read this
-/// one decision; neither decides the exclusion itself.
+/// reaches the formal; such a call is never entered and supplies no value. Each
+/// omitted call keeps the omission relations that contain it. The origin
+/// enumeration of a string borrow and the array extent reader read this one
+/// decision; neither decides the exclusion itself.
 module Clef.Compiler.Baker.Ingredients.FormalDemand
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
@@ -16,16 +17,17 @@ module OrdinaryDemand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
 /// A call that reaches a formal: the call, the formal's ordinal at it, and its actual.
 type Input = { Call: NodeId; Ordinal: int; Actual: NodeId }
 
+/// An omitted input and the omission relations under which it is never entered.
+type OmittedInput = { Input: Input; Omissions: OrdinaryOmission list }
+
 /// Each list is ordered by the identity of the call and then by ordinal.
 type Inputs = {
     /// The calls that are entered.
     Demanded: Input list
-    /// The omission relations (call, ordinal, omitted actual) under which the
-    /// remaining calls are never entered.
-    Omissions: OrdinaryOmission list
-    /// The calls inside an actual of `Omissions`. Each remains a participant of
-    /// a relation over the calls reaching the formal and contributes no value.
-    Omitted: Input list
+    /// The calls inside an actual of an omission relation, each with the omission
+    /// relations whose omitted actual contains it. Each remains a participant of a
+    /// relation over the calls reaching the formal and contributes no value.
+    Omitted: OmittedInput list
     /// The complete ingress of the formal (`CallableIngress.closedFormalInputs`).
     Participants: Set<NodeId>
 }
@@ -50,11 +52,5 @@ let reader (graph: SemanticGraph) (flow: CallableOrigins.Resolution) =
                 |> Set.ofList
             let omitted, demanded = inputs |> Set.partition (fun input -> deferrals.ContainsKey input.Call)
             { Demanded = Set.toList demanded
-              Omissions = omitted |> Seq.collect (fun input -> deferrals[input.Call]) |> Set.ofSeq |> Set.toList
-              Omitted = Set.toList omitted
+              Omitted = omitted |> Set.toList |> List.map (fun input -> { Input = input; Omissions = Set.toList deferrals[input.Call] })
               Participants = ingress.Participants })
-
-/// The nodes of the omission relations (call and omitted actual of each),
-/// which a relation over the calls reaching the formal takes as participants.
-let premises (inputs: Inputs) =
-    inputs.Omissions |> List.collect (fun omission -> [omission.Site; omission.Actual]) |> Set.ofList

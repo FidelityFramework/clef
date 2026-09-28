@@ -79,6 +79,7 @@ let private samePreparedRoots (prepared: SemanticGraph) (graph: SemanticGraph) =
     obj.ReferenceEquals(prepared.ElementRanges, graph.ElementRanges) &&
     obj.ReferenceEquals(prepared.Layouts, graph.Layouts) &&
     obj.ReferenceEquals(prepared.StaticStringPool, graph.StaticStringPool) &&
+    obj.ReferenceEquals(prepared.LiteralStorage, graph.LiteralStorage) &&
     obj.ReferenceEquals(prepared.Escaping, graph.Escaping) &&
     obj.ReferenceEquals(prepared.Codata, graph.Codata) &&
     obj.ReferenceEquals(prepared.Edges, graph.Edges)

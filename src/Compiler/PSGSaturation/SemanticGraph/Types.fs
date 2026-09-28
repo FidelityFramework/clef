@@ -716,6 +716,49 @@ type BoundaryImport = {
 
 type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Adaptation: Meet option }
 
+/// The role of one occurrence in a relation over nodes (`Participant`).
+[<RequireQualifiedAccess>]
+type ParticipantRole =
+    | Site | Source | ExtentSource | RepresentationDeclaration | Path | Formal
+    | ReachingCall | ReachingActual | OmittedCall | OmittedCallActual | OmissionSite | OmittedActual
+    | Callee | CalleeBody | CalleeArgument | CalleeParameter | Ingress | Origin | Construction
+
+/// One occurrence in a relation: the node, its role, its ordinal within the role (an
+/// argument or parameter position; 0 for a role without positions) and its group. The
+/// group is the row's site for the row's own occurrences, the call of an input for the
+/// occurrences of that input, and the formal for the formal's ingress.
+type Participant = { Node: NodeId; Role: ParticipantRole; Ordinal: int; Group: NodeId }
+
+/// What was derived before the final demand rows. Its OmissionSite and OmittedActual
+/// occurrences name the demand rows it read, each by site, ordinal and actual.
+type EarlyDerivation = { Derived: Participant list }
+
+/// The participants of a relation with the status of that evidence. A pending relation
+/// states its early derivation, which is not a participant list of the relation.
+[<RequireQualifiedAccess>]
+type ParticipantEvidence =
+    | Pending of EarlyDerivation
+    | Established of Participant list
+
+/// The early derivation of the string borrow at a site, apart from the current row.
+type BorrowHistory = { Site: NodeId; Early: EarlyDerivation }
+
+/// One resident `OrdinaryUnusedActual` relation whose actual is not entered at
+/// its call: the call site, the ordinal and the omitted actual.
+type OrdinaryOmission = { Site: NodeId; Ordinal: int; Actual: NodeId }
+
+/// The premise of a string literal whose storage was not materialized: the omission
+/// relations whose omitted actual contains it. A pending premise states the omissions
+/// read before the final demand rows.
+[<RequireQualifiedAccess>]
+type StoragePremise =
+    | Pending of OrdinaryOmission list
+    | Established of OrdinaryOmission list
+
+/// The omissions read for a string literal before the final demand rows, apart from
+/// its current premise.
+type StoragePremiseHistory = { Literal: NodeId; Early: OrdinaryOmission list }
+
 type BoundaryByteView = {
     Site: NodeId
     Source: NodeId
@@ -723,7 +766,11 @@ type BoundaryByteView = {
     Representation: NumericRepresentation
     RepresentationDeclaration: NodeId
     StaticOrigins: Map<NodeId, bigint>
-    Participants: Set<NodeId>
+    /// The occurrences of the borrow, in order: the row's own occurrences, then one group
+    /// for each demanded input and one for each omitted input with every omission that is
+    /// its reason, by call and ordinal, with the roles of a group in case order. A node in
+    /// two groups or two roles occurs in each.
+    Participants: ParticipantEvidence
 }
 
 type BoundaryStringExtent = {
@@ -731,7 +778,8 @@ type BoundaryStringExtent = {
     Source: NodeId
     ExtentSource: NodeId
     StaticOrigins: Map<NodeId, bigint>
-    Participants: Set<NodeId>
+    /// The occurrences of the extent, ordered and grouped as `BoundaryByteView.Participants`.
+    Participants: ParticipantEvidence
 }
 
 type IntrinsicWriteImport = {
@@ -1222,6 +1270,12 @@ type EdgeRole =
     | BoundaryProof of BoundaryProofOutcome
     | StringByteView of BoundaryByteView
     | StringExtent of BoundaryStringExtent
+    /// [nodes of the early derivation] -> the borrow site. What was derived for the
+    /// borrow before the final demand rows; not a current premise.
+    | StringBorrowHistory of BorrowHistory
+    /// [site and actual of each early omission] -> the literal. The omissions read for
+    /// the literal's storage before the final demand rows; not a current premise.
+    | LiteralStorageHistory of StoragePremiseHistory
     | StringComparisonConstruction of negated: bool
     | StringLengthComparison of negated: bool
     | IntrinsicWriteAbi of IntrinsicWriteImport
@@ -2640,10 +2694,6 @@ type StaticStringPool = {
     DeclarationNode: NodeId
 }
 
-/// One resident `OrdinaryUnusedActual` relation whose actual is not entered at
-/// its call: the call site, the ordinal and the omitted actual.
-type OrdinaryOmission = { Site: NodeId; Ordinal: int; Actual: NodeId }
-
 /// Whether the storage of a string literal was materialized in the static string
 /// pool. The pool layout (StaticStringLayout.settle) writes one row for each
 /// reachable string literal, from the same demand reading that decides the pool.
@@ -2651,9 +2701,9 @@ type OrdinaryOmission = { Site: NodeId; Ordinal: int; Actual: NodeId }
 type LiteralStorage =
     /// The literal's bytes are the entry at this position of `StaticStringPool.Entries`.
     | Materialized of entry: int
-    /// No demanded position reads the literal: the omission relations whose
-    /// omitted actual contains it (`OrdinaryDemand.deferrals`).
-    | NotMaterialized of omissions: OrdinaryOmission list
+    /// No demanded position reads the literal: the premise states the omission
+    /// relations whose omitted actual contains it (`OrdinaryDemand.deferrals`).
+    | NotMaterialized of premise: StoragePremise
 
 /// The complete semantic graph output
 [<NoComparison; NoEquality>]

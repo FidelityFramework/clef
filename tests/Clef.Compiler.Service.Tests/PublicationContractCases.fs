@@ -94,3 +94,23 @@ type PublicationContractCases() =
             Assert.Contains(failures, fun failure ->
                 failure.Reason.StartsWith "Source emission admission: The current graph differs from its source witness projection input")
         | Ok _ -> failwith "A graph that differs from its projection input was published."
+
+    [<Theory>]
+    [<InlineData("row")>]
+    [<InlineData("premise")>]
+    member _.``A graph whose literal storage changed after its projection is not published`` change =
+        let graph = IntrinsicWriteFixture.pooledGraph (IntrinsicWriteFixture.demandBody "0")
+        let kept = IntrinsicWriteFixture.literal graph "kept"
+        let never = IntrinsicWriteFixture.literal graph "never demanded"
+        Assert.NotEqual(graph.LiteralStorage[kept], graph.LiteralStorage[never])
+        let changed =
+            match change, graph.LiteralStorage[never] with
+            | "row", row -> { graph with LiteralStorage = graph.LiteralStorage.Add(kept, row) }
+            | _, LiteralStorage.NotMaterialized (StoragePremise.Established omissions) ->
+                { graph with LiteralStorage = graph.LiteralStorage.Add(never, LiteralStorage.NotMaterialized (StoragePremise.Pending omissions)) }
+            | _, row -> failwithf "The literal that no demanded position reads has the storage row %A" row
+        match Publication.publish IntrinsicWriteFixture.platform changed with
+        | Error failures ->
+            Assert.Contains(failures, fun failure ->
+                failure.Reason.StartsWith "Source emission admission: The current graph differs from its source witness projection input")
+        | Ok _ -> failwith "A graph whose literal storage differs from its projection input was published."

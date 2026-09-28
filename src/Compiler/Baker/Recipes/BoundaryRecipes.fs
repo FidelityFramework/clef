@@ -10,6 +10,7 @@ open Clef.Compiler.Baker.Ingredients.Obligations
 module Declarations = PlatformResolution
 module Ingredients = Clef.Compiler.Baker.Ingredients.Boundaries
 module Bytes = Clef.Compiler.Baker.Ingredients.StringBytes
+module Participants = Clef.Compiler.Baker.Ingredients.Participants
 
 type private CheckedBuilder() =
     member _.Bind(value, next) = Result.bind next value
@@ -303,13 +304,22 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
         let! fdProof = coverage fdRange (scalarRange import.Fd)
         let! countProof = coverage countRange (scalarRange import.Count)
         let! resultProof = coverage returnRange resultRepresentation
-        let participants = Set.unionMany [path; import.Participants; view.Participants; extent.Participants; Set.ofList [anchor; node.Id; callee; fd; buffer; count; pool.DeclarationNode]]
+        let! viewParticipants = Participants.established view.Participants
+        let! extentParticipants = Participants.established extent.Participants
+        let participants =
+            Set.unionMany [path; import.Participants; Set.ofList (Participants.nodes viewParticipants); Set.ofList (Participants.nodes extentParticipants)
+                           Set.ofList [anchor; node.Id; callee; fd; buffer; count; pool.DeclarationNode]]
         let call = { Site = node.Id; Import = import.Identity; Callee = callee; Fd = fd; Buffer = buffer; Count = count
                      FdAdaptation = fdMeet; CountAdaptation = countMeet; ResultAdaptation = resultMeet; Participants = participants }
         return import, call, [0, fdProof; 1, ObligationBody.StringBorrowBound storage; 2, countProof; -1, resultProof] }
     let evidenceErrors =
         if currentEvidence then [] else
-        let participants = Set.unionMany ((views |> List.map _.Participants) @ (extents |> List.map _.Participants))
+        // The related nodes of each row: its established participants, or its site while they are pending.
+        let related site evidence =
+            match Participants.established evidence with
+            | Ok established -> Set.ofList (Participants.nodes established)
+            | Error _ -> Set.singleton site
+        let participants = Set.unionMany ((views |> List.map (fun view -> related view.Site view.Participants)) @ (extents |> List.map (fun extent -> related extent.Site extent.Participants)))
         [anchor,participants,"The complete string view, descriptor extent, actual/formal or intrinsic ABI evidence changed after source range settlement."]
     let initial = { Views = views; Extents = extents; Declarations = declarations; Imports = []; Calls = []; Proofs = []; Enrichment = Enrichment.empty; Errors = evidenceErrors }
     graph.Nodes |> Map.fold (fun state _ node ->
@@ -370,7 +380,8 @@ let elaborate (graph: SemanticGraph) : Enrichment =
                     do! require (not uses.IsEmpty && uses |> List.forall (fun edge -> allowed.Contains edge.Target))
                             "A local string comparison byte view escapes its exact read-only guarded uses."
                     let! byteView = intrinsic.Views |> List.filter (fun fact -> fact.Site=view) |> function [fact] -> Ok fact | _ -> Error "The local comparison lacks its single exact byte view."
-                    do! require (byteView.ExtentSource=byteView.Source && byteView.Participants.IsSupersetOf participants)
+                    let! viewParticipants = Participants.established byteView.Participants
+                    do! require (byteView.ExtentSource=byteView.Source && (Set.ofList (Participants.nodes viewParticipants)).IsSupersetOf participants)
                             "The local comparison view lost its complete actual and construction lifetime premises."
                     let! snapshots,copies,_ = StringViewRecipes.localLineage graph memory byteView.Source
                     return access,snapshots,copies }) |> collect

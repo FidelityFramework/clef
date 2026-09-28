@@ -7,6 +7,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph
 open Clef.Compiler.Baker.Ingredients.Obligations
 module Bytes = Clef.Compiler.Baker.Ingredients.StringBytes
+module Participants = Clef.Compiler.Baker.Ingredients.Participants
 
 let private stringOrigin = StringComparisonRecipes.stringOrigin
 
@@ -22,28 +23,35 @@ let private scopeOf (graph: SemanticGraph) source =
 let private plan enrichId (graph: SemanticGraph) =
     let flow = CallableOrigins.resolve graph
     let representation = Bytes.byteRepresentation graph
-    let localOrigin view = StringComparisonRecipes.localView graph view |> Option.map (fun (source,_,participants) ->
-        match stringOrigin graph flow source with
-        | Some(_,origins,originPremises) -> source,origins,Set.union participants originPremises
-        | None -> source,Map.empty,participants)
+    // Occurrences at ordinal 0 in the group of the row's site: the row's own fields, a
+    // callee path and the nodes of a local construction.
+    let own site occurrences = occurrences |> List.map (fun (node, role) -> Participants.occurrence node role 0 site)
+    let constructed site nodes = own site (nodes |> Set.toList |> List.map (fun node -> node, ParticipantRole.Construction))
+    let localOrigin site view = StringComparisonRecipes.localView graph view |> Option.map (fun (source,_,participants) ->
+        match stringOrigin graph flow site source with
+        | Some(_,origins,originPremises) -> source,origins,constructed site participants @ originPremises
+        | None -> source,Map.empty,constructed site participants)
     let localExtent site =
         StringComparisonRecipes.constructions graph |> List.tryPick (fun construction ->
             let view = if construction.LeftLength=site then Some construction.LeftView elif construction.RightLength=site then Some construction.RightView else None
-            view |> Option.bind localOrigin)
+            view |> Option.bind (localOrigin site))
         |> Option.orElseWith (fun () ->
             StringComparisonRecipes.lengthConstructions graph |> List.tryPick (fun construction ->
                 let source = if construction.LeftLength=site then Some construction.LeftSource elif construction.RightLength=site then Some construction.RightSource else None
                 source |> Option.map (fun source ->
-                    let origins,originPremises = stringOrigin graph flow source |> Option.map (fun (_,origins,participants) -> origins,participants) |> Option.defaultValue (Map.empty,Set.empty)
-                    let participants = Set.union originPremises (Set.ofList(construction.Site::construction.Left::construction.Right::construction.Evidence))
+                    let origins,originPremises = stringOrigin graph flow site source |> Option.map (fun (_,origins,participants) -> origins,participants) |> Option.defaultValue (Map.empty,[])
+                    let participants = originPremises @ constructed site (Set.ofList(construction.Site::construction.Left::construction.Right::construction.Evidence))
                     source,origins,participants)))
     let extent site source path =
         let identity,origins,participants =
             localExtent site
-            |> Option.orElseWith (fun () -> stringOrigin graph flow source)
-            |> Option.defaultValue (source,Map.empty,Set.singleton source)
+            |> Option.orElseWith (fun () -> stringOrigin graph flow site source)
+            |> Option.defaultValue (source,Map.empty,[])
+        let occurrences =
+            own site ([site, ParticipantRole.Site; source, ParticipantRole.Source; identity, ParticipantRole.ExtentSource]
+                      @ (path |> Set.toList |> List.map (fun node -> node, ParticipantRole.Path)))
         { Site=site; Source=source; ExtentSource=identity; StaticOrigins=origins
-          Participants=Set.unionMany [participants;path;Set.ofList [site;source]] }
+          Participants=ParticipantEvidence.Established (Participants.ordered site (occurrences @ participants)) }
     let views = graph.Nodes |> Map.fold (fun enrichment _ node ->
         if not node.IsReachable then enrichment else
         match node.Kind with
@@ -51,11 +59,14 @@ let private plan enrichId (graph: SemanticGraph) =
         | SemanticKind.StringByteBorrow source when graph.Nodes.TryFind source |> Option.exists (fun source -> Types.isStringType source.Type) ->
             let updated = { node with Kind = SemanticKind.StringByteBorrow source; Children = [source] } |> Elaboration.markBaker "StringByteBorrow" enrichId
             let rows =
-                match (localOrigin node.Id |> Option.orElseWith (fun () -> stringOrigin graph flow source)), representation with
+                match (localOrigin node.Id node.Id |> Option.orElseWith (fun () -> stringOrigin graph flow node.Id source)), representation with
                 | Some(identity, origins, participants), Some(rep, declaration) ->
+                    let occurrences =
+                        own node.Id [node.Id, ParticipantRole.Site; source, ParticipantRole.Source; identity, ParticipantRole.ExtentSource
+                                     declaration, ParticipantRole.RepresentationDeclaration]
                     let view = { Site = node.Id; Source = source; ExtentSource = identity; StaticOrigins = origins
                                  Representation = rep; RepresentationDeclaration = declaration
-                                 Participants = Set.union participants (Set.ofList [node.Id; source; declaration]) }
+                                 Participants = ParticipantEvidence.Established (Participants.ordered node.Id (occurrences @ participants)) }
                     [Bytes.viewRow view; Bytes.storageRow view]
                 | _ -> []
             let rewrite = { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = [source]; Target = node.Id }

@@ -10,12 +10,13 @@ open Clef.Compiler.Baker.Ingredients
 let settle (graph: SemanticGraph) (numeric: NumericWitnessProjection) =
     graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringExtent fact -> Some fact | _ -> None)
     |> List.fold (fun (operations, unresolved, required) extent ->
-        match numeric.Values.TryFind extent.Site, StringBytes.byteRepresentation graph with
-        | Some carrier, Some(element, declaration) ->
-            let participants = Set.union extent.Participants carrier.Participants |> Set.add declaration
+        match numeric.Values.TryFind extent.Site, StringBytes.byteRepresentation graph, Participants.established extent.Participants with
+        | Some carrier, Some(element, declaration), Ok established ->
+            let participants = Set.union (Set.ofList (Participants.nodes established)) carrier.Participants |> Set.add declaration
             let operation = MemoryWitnessOperation.BufferExtent
                                 { Site = extent.Site; Source = extent.Source; Element = element; ElementDeclaration = declaration
                                   Result = carrier; Extent = extent; IndexUnsigned = true; Participants = participants }
             (extent.Site, operation) :: operations, unresolved, Set.add extent.Site required
+        | _, _, Error reason -> operations, Map.add extent.Site reason unresolved, Set.add extent.Site required
         | _ -> operations, Map.add extent.Site "The string extent lacks its settled scalar carrier or explicit byte representation." unresolved, Set.add extent.Site required)
         ([], Map.empty, Set.empty)

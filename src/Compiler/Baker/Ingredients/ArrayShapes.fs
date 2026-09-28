@@ -50,10 +50,11 @@ let reader (graph:SemanticGraph) =
         | Some {Kind=SemanticKind.PatternBinding _} ->
             match inputs id with
             | Some formal ->
-                // A call in an omitted actual supplies no extent; its omission relations are premises.
-                let omitted=Some {Sources=[];StringSources=Set.empty;Participants=FormalDemand.premises formal}
+                // A call in an omitted actual supplies no extent; the omission relations that contain it are premises.
+                let omitted (input: FormalDemand.OmittedInput) =
+                    Some {Sources=[];StringSources=Set.empty;Participants=input.Omissions |> List.collect (fun omission -> [omission.Site;omission.Actual]) |> Set.ofList}
                 (formal.Demanded |> List.map(fun input -> input.Call,follow seen input.Actual))
-                @ (formal.Omitted |> List.map(fun input -> input.Call,omitted))
+                @ (formal.Omitted |> List.map(fun input -> input.Input.Call,omitted input))
                 |> List.map(fun (call,supplied) -> supplied |> Option.map(fun extent ->
                     {extent with Participants=Set.union formal.Participants (extent.Participants.Add call)})) |> combine |> add
             | _ -> None

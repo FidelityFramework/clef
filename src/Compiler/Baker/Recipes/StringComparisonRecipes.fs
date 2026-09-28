@@ -14,13 +14,16 @@ module Operations = Clef.Compiler.Baker.Ingredients.NumericOperations
 module Closures = Clef.Compiler.Baker.Ingredients.Closures
 module CallableOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins
 module FormalDemand = Clef.Compiler.Baker.Ingredients.FormalDemand
+module Participants = Clef.Compiler.Baker.Ingredients.Participants
 
 /// Canonical identity stops at a formal: each invocation carries its own extent.
 /// Origin enumeration follows the existing complete callable-flow relation over
 /// the calls that are demanded (`FormalDemand`). A call inside an actual that
 /// ordinary demand omits never reaches the formal: its actual contributes no
-/// origin, and the omission relations that establish this are participants.
-let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) source =
+/// origin, and the omission relations that contain it are participants in its
+/// group. The occurrences reached from `source` itself are in `group`; those an
+/// input reaches are in the group of its call (`Participants.ofInputs`).
+let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (group: NodeId) source =
     let inputs = FormalDemand.reader graph flow
     let rec canonical seen id =
         if Set.contains id seen then None else
@@ -32,32 +35,32 @@ let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) sourc
         | Some { Kind = SemanticKind.Literal(NativeLiteral.String _) }
         | Some { Kind = SemanticKind.PatternBinding _ } -> Some(id, seen)
         | _ -> None
-    let rec origins seen id =
+    let rec origins seen group id =
         if Set.contains id seen then None else
         let seen = Set.add id seen
+        let path (values, participants) = values, Participants.occurrence id ParticipantRole.Path 0 group :: participants
         match graph.Nodes.TryFind id with
         | Some { Kind = SemanticKind.Literal(NativeLiteral.String text) } ->
-            Some(Map.ofList [id, bigint (System.Text.Encoding.UTF8.GetByteCount text)], Set.singleton id)
-        | Some { Kind = SemanticKind.VarRef(_, Some binding) } -> origins seen binding |> Option.map (fun (values, participants) -> values, Set.add id participants)
+            Some(Map.ofList [id, bigint (System.Text.Encoding.UTF8.GetByteCount text)], [Participants.occurrence id ParticipantRole.Origin 0 group])
+        | Some { Kind = SemanticKind.VarRef(_, Some binding) } -> origins seen group binding |> Option.map path
         | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] }
-        | Some { Kind = SemanticKind.TypeAnnotation(value, _) } -> origins seen value |> Option.map (fun (values, participants) -> values, Set.add id participants)
+        | Some { Kind = SemanticKind.TypeAnnotation(value, _) } -> origins seen group value |> Option.map path
         | Some { Kind = SemanticKind.PatternBinding _ } ->
             match inputs id with
             | Some formal ->
-                let omitted = Some(Map.empty, FormalDemand.premises formal)
-                (formal.Demanded |> List.map (fun input -> input, origins seen input.Actual))
-                @ (formal.Omitted |> List.map (fun input -> input, omitted))
+                (formal.Demanded |> List.map (fun input -> input, origins seen input.Call input.Actual))
+                @ (formal.Omitted |> List.map (fun omitted -> omitted.Input, Some(Map.empty, [])))
                 |> List.fold (fun state (input, contribution) ->
                     match state, flow.Calls.TryFind input.Call, contribution with
                     | Some(values, participants), Some resolved, Some(more, dependencies) when resolved.Complete && not resolved.Unknown ->
-                        let joint = resolved.Targets |> List.collect (fun target -> target.Lambda :: target.Body :: target.Arguments @ (target.Parameters |> List.map (fun (_, _, formal) -> formal))) |> Set.ofList
                         Some(Map.fold (fun acc key value -> Map.add key value acc) values more,
-                             Set.unionMany [participants; dependencies; joint; formal.Participants; Set.ofList [id; input.Call; input.Actual]])
-                    | _ -> None) (Some(Map.empty, Set.singleton id))
+                             participants @ dependencies @ Participants.ofTargets input.Call resolved.Targets)
+                    | _ -> None) (Some(Map.empty, [Participants.occurrence id ParticipantRole.Formal 0 group]))
+                |> Option.map (fun (values, participants) -> values, participants @ Participants.ofInputs id formal)
             | _ -> None
         | _ -> None
-    match canonical Set.empty source, origins Set.empty source with
-    | Some(identity, path), Some(values, participants) -> Some(identity, values, Set.union path participants)
+    match canonical Set.empty source, origins Set.empty group source with
+    | Some(identity, _), Some(values, participants) -> Some(identity, values, participants)
     | _ -> None
 
 let private owned (node: SemanticNode) = node.Metadata.TryFind "Baker.StringComparisonOwned" = Some(MetadataValue.Bool true)
@@ -65,8 +68,8 @@ let private owned (node: SemanticNode) = node.Metadata.TryFind "Baker.StringComp
 let private zeroEvidence graph left right =
     let flow = CallableOrigins.resolve graph
     [left;right] |> List.choose (fun source ->
-        stringOrigin graph flow source |> Option.bind (fun (_,origins,participants) ->
-            if not origins.IsEmpty && origins.Values |> Seq.forall ((=) 0I) then Some participants else None))
+        stringOrigin graph flow source source |> Option.bind (fun (_,origins,participants) ->
+            if not origins.IsEmpty && origins.Values |> Seq.forall ((=) 0I) then Some(Set.ofList (Participants.nodes participants)) else None))
     |> function [] -> None | facts -> Some(Set.unionMany facts)
 
 let lengthRow site negated sources =

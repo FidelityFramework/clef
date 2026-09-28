@@ -25,7 +25,7 @@ let private settleWith (deferrals: Map<NodeId, Set<OrdinaryOmission>>) (graph: S
             | _ -> None)
     let deferred, placed = strings |> List.partition (fun (_, node) -> deferrals.ContainsKey node.Id)
     let omitted =
-        deferred |> List.map (fun (_, node) -> node.Id, LiteralStorage.NotMaterialized (Set.toList deferrals[node.Id])) |> Map.ofList
+        deferred |> List.map (fun (_, node) -> node.Id, LiteralStorage.NotMaterialized (StoragePremise.Established (Set.toList deferrals[node.Id]))) |> Map.ofList
     let graph = { graph with StaticStringPool = None; LiteralStorage = omitted }
     let literals =
         placed
