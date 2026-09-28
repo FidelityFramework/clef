@@ -58,16 +58,81 @@ let main _ =
     0
 """
 
+    /// `discard` returns `formal`: "0" leaves its formal unused, so ordinary
+    /// demand omits the actual that contains the write of "never demanded";
+    /// "value" reads the formal, so that actual is demanded.
+    let demandBody formal = """module WriteFixture
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+let discard (value: int) = """ + formal + """
+[<EntryPoint>]
+let main _ =
+    if discard (write "never demanded"; 0) = 0 then write "kept"
+    0
+"""
+
+    /// One literal reaches the formal of `write` through a call inside an
+    /// omitted actual and through a demanded call.
+    let sharedBody = """module WriteFixture
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+let discard (value: int) = 0
+let print (s: string) =
+    if discard (write s; 0) = 0 then write s
+[<EntryPoint>]
+let main _ =
+    print "both"
+    0
+"""
+
     let checkSource declaration source =
         let parse text path = match parseStringWithDefaults text path with ParseSuccess input -> input | ParseError errors -> failwithf "%A" errors
         checkParsedInputsWithPlatform [parse declaration "write-authority.clef"; parse source "intrinsic-write.clef"] (Some platform)
     let check () = checkSource authority body
-    let admitted () =
-        let result = check ()
+    let admittedResult result =
         DimensionalCases.noErrors result
         match IntrinsicBoundary.project result.Graph with
         | Ok projection -> result.Graph, projection
         | Error errors -> failwithf "%A" errors
+    let admittedSource source = admittedResult (checkSource authority source)
+    let admitted () = admittedSource body
+
+    let literal (graph: SemanticGraph) text =
+        graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable && node.Kind = SemanticKind.Literal(NativeLiteral.String text))
+        |> Seq.map _.Id |> Seq.exactlyOne
+
+    /// The omission relations of ordinary demand (call site, ordinal, actual)
+    /// whose actual structurally contains `id`.
+    let omissionsContaining (graph: SemanticGraph) id =
+        let rec ancestors found current =
+            match graph.Nodes.TryFind current |> Option.bind _.Parent with
+            | Some parent when not (Set.contains parent found) -> ancestors (Set.add parent found) parent
+            | _ -> found
+        let enclosing = ancestors (Set.singleton id) id
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Class, edge.Role, edge.Sources with
+            | EdgeClass.Demand, EdgeRole.OrdinaryUnusedActual, _ :: _ :: actual :: _ when enclosing.Contains actual -> Some(edge.Target, edge.Ordinal, actual)
+            | _ -> None)
+
+    /// Reachable source calls of the fixture's one-argument `write`.
+    let writeCalls (graph: SemanticGraph) =
+        graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable &&
+            match node.Kind with
+            | SemanticKind.Application(callee, [_]) ->
+                match graph.Nodes.TryFind callee with
+                | Some { Kind = SemanticKind.VarRef(name, _) } -> name = "write" || name.EndsWith ".write"
+                | _ -> false
+            | _ -> false) |> Seq.map _.Id |> Seq.toList
+
+    let pooled (graph: SemanticGraph) text =
+        graph.StaticStringPool |> Option.exists (fun pool -> pool.Entries |> List.exists (fun entry -> entry.Content = text))
+
+    let writeProofs (graph: SemanticGraph) =
+        graph.Nodes.Values |> Seq.filter (fun node -> match node.Kind with SemanticKind.Obligation info -> info.Kind = "intrinsic-write-proof" | _ -> false)
+        |> Seq.length
 
 type IntrinsicWriteCases() =
     [<Fact>]
@@ -121,6 +186,46 @@ type IntrinsicWriteCases() =
             | "rewrite" -> { graph with Edges = graph.Edges |> List.filter (fun edge -> not (edge.Role = EdgeRole.EnrichedWith && edge.Target = call.Buffer)) }
             | _ -> { graph with StaticStringPool = None }
         match IntrinsicBoundary.project changed with Error _ -> () | Ok _ -> failwith "Stale source evidence was repaired during publication."
+
+    [<Fact>]
+    member _.``A literal in an omitted actual is not a borrow origin and the omission relation is a participant`` () =
+        let result = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.authority (IntrinsicWriteFixture.demandBody "0")
+        Assert.DoesNotContain(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8403")
+        let graph, projection = IntrinsicWriteFixture.admittedResult result
+        let never = IntrinsicWriteFixture.literal graph "never demanded"
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let view = projection.ByteViews[call.Buffer]
+        Assert.False(view.StaticOrigins.ContainsKey never)
+        Assert.Equal<bigint list>([4I], view.StaticOrigins.Values |> Seq.toList)
+        let site, _, actual = Assert.Single(IntrinsicWriteFixture.omissionsContaining graph never)
+        Assert.Contains(site, view.Participants)
+        Assert.Contains(actual, view.Participants)
+        Assert.False(IntrinsicWriteFixture.pooled graph "never demanded")
+        Assert.True(IntrinsicWriteFixture.pooled graph "kept")
+        Assert.Equal(4, IntrinsicWriteFixture.writeProofs graph)
+
+    [<Fact>]
+    member _.``A literal in a demanded actual remains a borrow origin with its pool entry`` () =
+        let graph, projection = IntrinsicWriteFixture.admittedSource (IntrinsicWriteFixture.demandBody "value")
+        let never = IntrinsicWriteFixture.literal graph "never demanded"
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let view = projection.ByteViews[call.Buffer]
+        Assert.Empty(IntrinsicWriteFixture.omissionsContaining graph never)
+        Assert.True(view.StaticOrigins.ContainsKey never)
+        Assert.True(IntrinsicWriteFixture.pooled graph "never demanded")
+        Assert.Equal(4, IntrinsicWriteFixture.writeProofs graph)
+
+    [<Fact>]
+    member _.``A literal reached from an omitted actual and from a demanded call is a borrow origin`` () =
+        let graph, projection = IntrinsicWriteFixture.admittedSource IntrinsicWriteFixture.sharedBody
+        let both = IntrinsicWriteFixture.literal graph "both"
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let view = projection.ByteViews[call.Buffer]
+        Assert.Equal<NodeId list>([both], view.StaticOrigins.Keys |> Seq.toList)
+        let site, _, actual = IntrinsicWriteFixture.writeCalls graph |> List.collect (IntrinsicWriteFixture.omissionsContaining graph) |> Assert.Single
+        Assert.Contains(site, view.Participants)
+        Assert.Contains(actual, view.Participants)
+        Assert.True(IntrinsicWriteFixture.pooled graph "both")
 
     [<Fact>]
     member _.``Changed actual origins require new source range settlement before boundary resettlement`` () =

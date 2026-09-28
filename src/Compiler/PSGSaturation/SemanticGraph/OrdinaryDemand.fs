@@ -27,6 +27,9 @@ type Call = {
     Participants: Set<NodeId>
 }
 type Reading = { Formals: Map<NodeId, Formal>; Calls: Map<NodeId, Call> }
+/// One resident `OrdinaryUnusedActual` relation whose actual is not entered
+/// at its call: the call site, the ordinal and the omitted actual.
+type Omission = { Site: NodeId; Ordinal: int; Actual: NodeId }
 
 let private key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
 let private owned edge = edge.Role = EdgeRole.OrdinaryUnusedFormal || edge.Role = EdgeRole.OrdinaryUnusedActual
@@ -250,9 +253,12 @@ let deferredActuals graph site =
 /// Source coverage may omit only nodes with no remaining demanding use. Shared
 /// nodes used elsewhere remain required. This changes neither IsReachable nor
 /// source/proof incidence and does not claim an emitted operation for a skip.
-let private deferredFrom graph (reading: Reading) =
-    let omitted = reading.Calls.Values |> Seq.collect (fun call ->
-        Set.difference call.Omitted call.Eager |> Seq.map (fun ordinal -> call.Site, ordinal, call.Actuals[ordinal])) |> Set.ofSeq
+/// Each deferred node is keyed to the omissions whose actual contains it.
+let private deferralsFrom graph (reading: Reading) : Map<NodeId, Set<Omission>> =
+    let omissions = reading.Calls.Values |> Seq.collect (fun call ->
+        Set.difference call.Omitted call.Eager |> Seq.map (fun ordinal ->
+            ({ Site = call.Site; Ordinal = ordinal; Actual = call.Actuals[ordinal] }: Omission))) |> Set.ofSeq
+    let omitted = omissions |> Set.map (fun omission -> omission.Site, omission.Ordinal, omission.Actual)
     let incidence =
         (graph.Nodes.Values |> Seq.filter _.IsReachable |> Seq.collect Incidence.structuralIncidence |> Seq.toList)
         @ (graph.Edges |> List.filter (fun edge ->
@@ -271,7 +277,8 @@ let private deferredFrom graph (reading: Reading) =
                 let dependencies = Incidence.structuralIncidence node |> List.collect _.Sources
                 expand (dependencies @ rest) (Set.add id found)
             | _ -> expand rest found
-    let candidates = expand (omitted |> Set.toList |> List.map (fun (_, _, id) -> id)) Set.empty
+    let containing = omissions |> Set.toList |> List.map (fun omission -> omission, expand [omission.Actual] Set.empty)
+    let candidates = containing |> List.map snd |> Set.unionMany
     let roots = graph.DeclarationRoots |> List.map fst |> Set.ofList
     let rec retain found =
         let next = found |> Set.filter (fun id ->
@@ -281,10 +288,23 @@ let private deferredFrom graph (reading: Reading) =
                 (edge.Class = EdgeClass.Reference && edge.Role = EdgeRole.Member) ||
                 (edge.Class = EdgeClass.Structural && edge.Role = EdgeRole.Argument && omitted.Contains(edge.Target, edge.Ordinal, id)))))
         if next = found then found else retain next
-    retain candidates
+    retain candidates |> Seq.map (fun id ->
+        id, containing |> List.filter (snd >> Set.contains id) |> List.map fst |> Set.ofList) |> Map.ofSeq
+
+let private deferredFrom graph reading = deferralsFrom graph reading |> Map.keys |> Set.ofSeq
 
 let deferredOnly graph = deferredFrom graph (read graph)
 let tryDeferredOnly graph = tryRead graph |> Result.map (deferredFrom graph)
+
+/// A call inside an omitted actual is never entered, so it is not a call that
+/// reaches its callee's formals. For such a call this returns the nodes of the
+/// omission relations that establish it (call site and actual of each), which
+/// an enumeration of the calls reaching a formal takes as participants; for a
+/// demanded call it returns None. The static string pool excludes the same
+/// deferred nodes (`tryDeferredOnly`).
+let omittedCalls graph =
+    let deferred = deferralsFrom graph (read graph)
+    fun call -> deferred.TryFind call |> Option.map (Seq.collect (fun omission -> [omission.Site; omission.Actual]) >> Set.ofSeq)
 
 let private projectionFrom graph (reading: Reading) : OrdinaryDemandProjection =
     { Parameters =

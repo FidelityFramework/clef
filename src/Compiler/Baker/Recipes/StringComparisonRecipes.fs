@@ -14,11 +14,17 @@ module Operations = Clef.Compiler.Baker.Ingredients.NumericOperations
 module Closures = Clef.Compiler.Baker.Ingredients.Closures
 module CallableOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins
 module CallableIngress = Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress
+module OrdinaryDemand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
 
 /// Canonical identity stops at a formal: each invocation carries its own extent.
-/// Origin enumeration follows the existing complete callable-flow relation.
+/// Origin enumeration follows the existing complete callable-flow relation over
+/// the calls that are demanded. A call inside an actual that ordinary demand
+/// omits never reaches the formal: its actual contributes no origin, and the
+/// omission relations that establish this are participants
+/// (`OrdinaryDemand.omittedCalls`, the rows the static string pool reads).
 let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) source =
     let formalInputs = CallableIngress.closedFormalInputs graph flow (CallableIngress.analyzeWith graph flow)
+    let omitted = OrdinaryDemand.omittedCalls graph
     let rec canonical seen id =
         if Set.contains id seen then None else
         let seen = Set.add id seen
@@ -42,7 +48,11 @@ let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) sourc
             match formalInputs id with
             | Some ingress ->
                 ingress.Inputs |> List.fold (fun state (call, actual) ->
-                    match state, flow.Calls.TryFind call, origins seen actual with
+                    let contribution =
+                        match omitted call with
+                        | Some premises -> Some(Map.empty, premises)
+                        | None -> origins seen actual
+                    match state, flow.Calls.TryFind call, contribution with
                     | Some(values, participants), Some resolved, Some(more, dependencies) when resolved.Complete && not resolved.Unknown ->
                         let joint = resolved.Targets |> List.collect (fun target -> target.Lambda :: target.Body :: target.Arguments @ (target.Parameters |> List.map (fun (_, _, formal) -> formal))) |> Set.ofList
                         Some(Map.fold (fun acc key value -> Map.add key value acc) values more,

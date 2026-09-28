@@ -345,9 +345,9 @@
     <Compile Include="PSGSaturation\SemanticGraph\LazyContracts.fs" />
     <Compile Include="Baker\Recipes\BoundaryDeclarations.fs" />
     <Compile Include="Baker\Recipes\KernelDeclarations.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\OrdinaryDemand.fs" />
     <Compile Include="Baker\Recipes\StringComparisonRecipes.fs" />
     <Compile Include="Baker\Recipes\StringBorrowRecipes.fs" />
-    <Compile Include="PSGSaturation\SemanticGraph\OrdinaryDemand.fs" />
     <Compile Include="Baker\Ingredients\MemoryValues.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\StaticStringLayout.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableCarriers.fs" />
@@ -407,9 +407,9 @@
     <Compile Include="Nanopass\EagerDemand.fs" />
     <Compile Include="Nanopass\BoundaryDeclarations.fs" />
     <Compile Include="Nanopass\KernelDeclarations.fs" />
+    <Compile Include="Nanopass\OrdinaryDemand.fs" />
     <Compile Include="Nanopass\StringBorrows.fs" />
     <Compile Include="Nanopass\StringComparisons.fs" />
-    <Compile Include="Nanopass\OrdinaryDemand.fs" />
     <Compile Include="Nanopass\ObligationDischarge.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DepthAnalysis.fs" />
     <!-- The declared platform fills the context at saturation; sealed sites are checked against it (CS-7b) -->

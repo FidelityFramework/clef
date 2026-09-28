@@ -14,7 +14,9 @@ let rec private elaborate graph =
             RecipeCreated { OriginalNodeId=node.Id; NewNodes=structure.NewNodes; ReplacementRootId=node.Id
                             ElaborationKind="Baker"; NewEdges=[]; ElaborationSource="String.equality" }
         let folded = FoldIn.foldIn (FanOut.fanOut "String.equality" (fun node -> node.Id=source.Id) create graph) graph
-        elaborate { folded with Edges=edges }
+        // The next comparison's origins read the resident ordinary-demand rows,
+        // whose participants this rewrite changed. Settle them for this graph.
+        elaborate (OrdinaryDemand.normalize { folded with Edges=edges })
 
 let normalize graph =
     let result = elaborate graph
