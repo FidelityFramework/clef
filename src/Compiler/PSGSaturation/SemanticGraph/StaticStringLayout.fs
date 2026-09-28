@@ -11,15 +11,24 @@ module Declaration = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolutio
 
 /// BAREWire chooses the offsets. The compiler materializes exactly that plan;
 /// its immutable bytes and views then travel to both proof and native emission.
-let private settleWith (deferred: Set<NodeId>) (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
-    let graph = { graph with StaticStringPool = None }
-    let literals =
+/// The same step states, for every reachable string literal, whether its storage
+/// was materialized: the pool entry of its bytes, or the omission relations
+/// under which no demanded position reads it. Both come from `deferrals`, the one
+/// demand reading that decides the pool; neither is computed again.
+let private settleWith (deferrals: Map<NodeId, Set<OrdinaryOmission>>) (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
+    let strings =
         graph.Nodes |> Map.toList |> List.map snd
-        |> List.filter (fun node -> node.IsReachable && not (deferred.Contains node.Id))
+        |> List.filter (fun node -> node.IsReachable)
         |> List.choose (fun node ->
             match node.Kind with
             | SemanticKind.Literal (NativeLiteral.String content) -> Some (content, node)
             | _ -> None)
+    let deferred, placed = strings |> List.partition (fun (_, node) -> deferrals.ContainsKey node.Id)
+    let omitted =
+        deferred |> List.map (fun (_, node) -> node.Id, LiteralStorage.NotMaterialized (Set.toList deferrals[node.Id])) |> Map.ofList
+    let graph = { graph with StaticStringPool = None; LiteralStorage = omitted }
+    let literals =
+        placed
         |> List.sortBy (fun (_, node) -> node.Range.File, node.Range.Start.Line, node.Range.Start.Column, node.Id)
         |> List.groupBy fst
     let reading = Declaration.read graph
@@ -66,15 +75,20 @@ let private settleWith (deferred: Set<NodeId>) (graph: SemanticGraph) : Semantic
                       Alignment = plan.Alignment; Size = int plan.AllocationSize; UsedSize = int plan.UsedSize
                       Entries = entries; SpaceName = declared.Name; Capacity = declared.Capacity
                       SpaceAlignment = declared.Alignment; Granularity = declared.Granularity; DeclarationNode = declared.Node }
-                { graph with StaticStringPool = Some pool }, []
+                let materialized =
+                    entries |> List.indexed |> List.collect (fun (index, entry) ->
+                        entry.NodeIds |> List.map (fun id -> id, LiteralStorage.Materialized index))
+                { graph with StaticStringPool = Some pool
+                             LiteralStorage = materialized |> List.fold (fun rows (id, row) -> Map.add id row rows) graph.LiteralStorage }, []
     | (_, []) :: _, _ -> invalidOp "StaticStringLayout: List.groupBy produced an empty literal group."
 
-/// Settle the immutable string pool from the validated demand reading. A demand
-/// mismatch is reported here (CCS8403), never read as "no omitted literal".
+/// Settle the immutable string pool and the storage row of every reachable string
+/// literal from the validated demand reading. A demand mismatch is reported here
+/// (CCS8403), never read as "no omitted literal"; it settles no pool and no row.
 let settle (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
-    match OrdinaryDemand.tryDeferredOnly graph with
-    | Result.Error failures -> { graph with StaticStringPool = None }, OrdinaryDemand.diagnostics graph failures
-    | Result.Ok deferred -> settleWith deferred graph
+    match OrdinaryDemand.tryDeferrals graph with
+    | Result.Error failures -> { graph with StaticStringPool = None; LiteralStorage = Map.empty }, OrdinaryDemand.diagnostics graph failures
+    | Result.Ok deferrals -> settleWith deferrals graph
 
 /// A retained string view may cite immutable program backing only while the
 /// current literals and selected declaration still establish this exact pool.

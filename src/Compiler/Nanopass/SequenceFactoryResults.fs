@@ -457,7 +457,7 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
     let updated =
         { folded with
             FieldRanges = graph.FieldRanges; ElementRanges = graph.ElementRanges; Layouts = graph.Layouts
-            StaticStringPool = graph.StaticStringPool; Escaping = graph.Escaping
+            StaticStringPool = graph.StaticStringPool; LiteralStorage = graph.LiteralStorage; Escaping = graph.Escaping
             Codata = lazy { graph.Codata.Value with Curry = updatedCurry; Meets = meets }
             Edges =
                 (folded.Edges |> List.filter (fun edge ->

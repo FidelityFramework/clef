@@ -158,7 +158,7 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) =
                     (fun node _ -> RecipeCreated byId[node.Id]) graph
                  |> fun recipes -> FoldIn.foldIn recipes graph
     let updated = { folded with FieldRanges = graph.FieldRanges; ElementRanges = graph.ElementRanges
-                                Layouts = graph.Layouts; StaticStringPool = graph.StaticStringPool; Escaping = graph.Escaping
+                                Layouts = graph.Layouts; StaticStringPool = graph.StaticStringPool; LiteralStorage = graph.LiteralStorage; Escaping = graph.Escaping
                                 Codata = lazy { graph.Codata.Value with Curry = updatedCurry }
                                 Edges = (folded.Edges |> List.filter (fun edge ->
                                     not (changed.Contains edge.Target &&

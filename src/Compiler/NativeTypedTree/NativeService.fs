@@ -985,6 +985,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         ElementRanges = lazy Map.empty
         Layouts = lazy Map.empty
         StaticStringPool = None
+        LiteralStorage = Map.empty
         Escaping = lazy Map.empty
         Codata = lazy Codata.empty
         Edges = specialization.Derivations
@@ -2806,7 +2807,7 @@ let checkParsedInput (input: ParsedInput) : CheckResult =
         // A signature file has no checker yet: the input contributes no graph, and that is an
         // error rather than a warning, because a warning would let the program lose a file silently.
         {
-            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Layouts = lazy Map.empty; StaticStringPool = None; Escaping = lazy Map.empty; Codata = lazy Codata.empty; Edges = []; WitnessProvenance = None }
+            Graph = { Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty; Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty; FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Layouts = lazy Map.empty; StaticStringPool = None; LiteralStorage = Map.empty; Escaping = lazy Map.empty; Codata = lazy Codata.empty; Edges = []; WitnessProvenance = None }
             Diagnostics = [{
                 Severity = NativeDiagnosticSeverity.Error
                 Code = DiagnosticCodes.CCS8401_UnsupportedConstruct

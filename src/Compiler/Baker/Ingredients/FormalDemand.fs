@@ -22,7 +22,7 @@ type Inputs = {
     Demanded: Input list
     /// The omission relations (call, ordinal, omitted actual) under which the
     /// remaining calls are never entered.
-    Omissions: OrdinaryDemand.Omission list
+    Omissions: OrdinaryOmission list
     /// The calls inside an actual of `Omissions`. Each remains a participant of
     /// a relation over the calls reaching the formal and contributes no value.
     Omitted: Input list

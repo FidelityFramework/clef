@@ -397,6 +397,36 @@ type IntrinsicWriteCases() =
         for _, participants in proofs do Assert.Equal<Set<NodeId>>(nodes, participants)
 
     [<Fact>]
+    member _.``The pool layout states materialized storage for a demanded literal and the omissions for a literal no demanded position reads`` () =
+        let graph = IntrinsicWriteFixture.pooledGraph (IntrinsicWriteFixture.demandBody "0")
+        let never = IntrinsicWriteFixture.literal graph "never demanded"
+        let kept = IntrinsicWriteFixture.literal graph "kept"
+        let entries = graph.StaticStringPool.Value.Entries
+        let reachable =
+            graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable && (match node.Kind with SemanticKind.Literal(NativeLiteral.String _) -> true | _ -> false))
+            |> Seq.map _.Id |> Set.ofSeq
+        Assert.Equal<Set<NodeId>>(reachable, graph.LiteralStorage.Keys |> Set.ofSeq)
+        Assert.Equal(LiteralStorage.Materialized(entries |> List.findIndex (fun entry -> List.contains kept entry.NodeIds)), graph.LiteralStorage[kept])
+        let omissions =
+            IntrinsicWriteFixture.omissionsContaining graph never
+            |> List.map (fun (site, ordinal, actual) -> ({ Site = site; Ordinal = ordinal; Actual = actual }: OrdinaryOmission)) |> Set.ofList
+        Assert.NotEmpty omissions
+        Assert.Equal<Set<OrdinaryOmission>>(omissions, Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.deferrals graph |> Map.find never)
+        match graph.LiteralStorage[never] with
+        | LiteralStorage.NotMaterialized stated -> Assert.Equal<Set<OrdinaryOmission>>(omissions, Set.ofList stated)
+        | other -> failwithf "A literal that no demanded position reads has the storage row %A" other
+        entries |> List.iteri (fun index entry ->
+            for id in entry.NodeIds do Assert.Equal(LiteralStorage.Materialized index, graph.LiteralStorage[id]))
+
+    [<Fact>]
+    member _.``The pool layout states materialized storage for every literal when the same literal is demanded`` () =
+        let graph = IntrinsicWriteFixture.pooledGraph (IntrinsicWriteFixture.demandBody "value")
+        let entries = graph.StaticStringPool.Value.Entries
+        for text in ["never demanded"; "kept"] do
+            let id = IntrinsicWriteFixture.literal graph text
+            Assert.Equal(LiteralStorage.Materialized(entries |> List.findIndex (fun entry -> List.contains id entry.NodeIds)), graph.LiteralStorage[id])
+
+    [<Fact>]
     member _.``A literal only in a function that is never called has no proofs`` () =
         let graph = IntrinsicWriteFixture.pooledGraph IntrinsicWriteFixture.uncalledBody
         let orphans = graph.Nodes.Values |> Seq.filter (fun node -> node.Kind = SemanticKind.Literal(NativeLiteral.String "orphan")) |> Seq.toList

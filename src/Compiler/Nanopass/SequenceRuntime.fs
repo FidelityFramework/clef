@@ -178,7 +178,7 @@ let rec private emptyConsumers (graph: SemanticGraph) origins =
                             ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "Seq.emptyConsumption" }
         let rewritten = FoldIn.foldIn (FanOut.fanOut "SequenceEmptyConsumers" (fun node -> loops.ContainsKey node.Id) create graph) graph
         { rewritten with FieldRanges = graph.FieldRanges; ElementRanges = graph.ElementRanges
-                         Layouts = graph.Layouts; StaticStringPool = graph.StaticStringPool }
+                         Layouts = graph.Layouts; StaticStringPool = graph.StaticStringPool; LiteralStorage = graph.LiteralStorage }
         |> Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable
         |> SequenceEvaluation.normalize
         |> fun rewritten -> emptyConsumers rewritten origins
@@ -283,7 +283,7 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
         // These source placements precede this representation-only recipe.
         // It adds no source aggregate type and preserves every existing slot.
         let rewritten = { rewritten with FieldRanges = graph.FieldRanges; ElementRanges = graph.ElementRanges
-                                         Layouts = graph.Layouts; StaticStringPool = graph.StaticStringPool }
+                                         Layouts = graph.Layouts; StaticStringPool = graph.StaticStringPool; LiteralStorage = graph.LiteralStorage }
         let values = machines |> List.collect (fun (_, machine) -> machine.ValueSources)
         let edges = values |> List.map (fun (value, source) -> {
             Sources = [source]; Target = value; Class = EdgeClass.Provenance

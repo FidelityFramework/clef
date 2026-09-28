@@ -214,6 +214,11 @@ let publish (platform: PlatformContext) (graph: SemanticGraph) : Result<Fidelity
                         |> Map.ofSeq
                       Platform = publishWidths platform
                       StaticStringPool = Option.map mapStaticStringPool graph.StaticStringPool
+                      LiteralStorage =
+                        graph.LiteralStorage
+                        |> Map.toSeq
+                        |> Seq.map (fun (literal, row) -> nodeId literal, mapLiteralStorage row)
+                        |> Map.ofSeq
                       Codata = publishCodata graph.Codata.Value
                       Emission = mapWitnessEmissionProjection projection
                       Foreign = publishForeign graph

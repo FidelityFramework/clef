@@ -1074,6 +1074,11 @@ and mapLazyWitnessContract (value: S.LazyWitnessContract) : Fidelity.PSG.LazyWit
         ThunkBody = nodeId value.ThunkBody
     } : Fidelity.PSG.LazyWitnessContract)
 
+and mapLiteralStorage (value: S.LiteralStorage) : Fidelity.PSG.LiteralStorage =
+    match value with
+    | S.LiteralStorage.Materialized(a0) -> Fidelity.PSG.LiteralStorage.Materialized(a0)
+    | S.LiteralStorage.NotMaterialized(a0) -> Fidelity.PSG.LiteralStorage.NotMaterialized((a0 |> List.map (fun x -> mapOrdinaryOmission x)))
+
 and mapLoopRangeResidual (value: S.LoopRangeResidual) : Fidelity.PSG.LoopRangeResidual =
     match value with
     | S.LoopRangeResidual.Guard -> Fidelity.PSG.LoopRangeResidual.Guard
@@ -1654,6 +1659,13 @@ and mapOrdinaryDemandProjection (value: S.OrdinaryDemandProjection) : Fidelity.P
         Calls = (value.Calls |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapOrdinaryCallProjection v) |> Map.ofSeq)
         DeferredOnly = (value.DeferredOnly |> Set.map (fun x -> nodeId x))
     } : Fidelity.PSG.OrdinaryDemandProjection)
+
+and mapOrdinaryOmission (value: S.OrdinaryOmission) : Fidelity.PSG.OrdinaryOmission =
+    ({
+        Site = nodeId value.Site
+        Ordinal = value.Ordinal
+        Actual = nodeId value.Actual
+    } : Fidelity.PSG.OrdinaryOmission)
 
 and mapPartialApplication (value: S.PartialApplication) : Fidelity.PSG.PartialApplication =
     ({

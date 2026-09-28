@@ -2640,6 +2640,21 @@ type StaticStringPool = {
     DeclarationNode: NodeId
 }
 
+/// One resident `OrdinaryUnusedActual` relation whose actual is not entered at
+/// its call: the call site, the ordinal and the omitted actual.
+type OrdinaryOmission = { Site: NodeId; Ordinal: int; Actual: NodeId }
+
+/// Whether the storage of a string literal was materialized in the static string
+/// pool. The pool layout (StaticStringLayout.settle) writes one row for each
+/// reachable string literal, from the same demand reading that decides the pool.
+[<RequireQualifiedAccess>]
+type LiteralStorage =
+    /// The literal's bytes are the entry at this position of `StaticStringPool.Entries`.
+    | Materialized of entry: int
+    /// No demanded position reads the literal: the omission relations whose
+    /// omitted actual contains it (`OrdinaryDemand.deferrals`).
+    | NotMaterialized of omissions: OrdinaryOmission list
+
 /// The complete semantic graph output
 [<NoComparison; NoEquality>]
 type SemanticGraph = {
@@ -2674,6 +2689,9 @@ type SemanticGraph = {
     Layouts: Lazy<Map<TypeIdentity, SettledLayout>>
     /// BAREWire static storage placement, settled after range/aggregate placement.
     StaticStringPool: StaticStringPool option
+    /// Per reachable string literal, whether its storage was materialized in
+    /// `StaticStringPool`. Settled with the pool and travels with it.
+    LiteralStorage: Map<NodeId, LiteralStorage>
     /// Per escaping lambda (Dimensional_Range_Design.md ruling 1; CS-11 slice 1): the reason it
     /// escapes as a value, keyed by the Lambda node. A lambda here has its parameters and its
     /// result at the declared Register width, the value-call boundary (§4.1's second row);

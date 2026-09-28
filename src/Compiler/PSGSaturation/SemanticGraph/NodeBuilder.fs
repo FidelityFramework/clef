@@ -146,6 +146,7 @@ type NodeBuilder() =
           ElementRanges = lazy Map.empty
           Layouts = lazy Map.empty
           StaticStringPool = None
+          LiteralStorage = Map.empty
           Escaping = lazy Map.empty
           Codata = lazy Codata.empty
           Edges = []; WitnessProvenance = None }
@@ -162,6 +163,7 @@ type NodeBuilder() =
           ElementRanges = lazy Map.empty
           Layouts = lazy Map.empty
           StaticStringPool = None
+          LiteralStorage = Map.empty
           Escaping = lazy Map.empty
           Codata = lazy Codata.empty
           Edges = []; WitnessProvenance = None }

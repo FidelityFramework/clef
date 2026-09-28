@@ -27,9 +27,6 @@ type Call = {
     Participants: Set<NodeId>
 }
 type Reading = { Formals: Map<NodeId, Formal>; Calls: Map<NodeId, Call> }
-/// One resident `OrdinaryUnusedActual` relation whose actual is not entered
-/// at its call: the call site, the ordinal and the omitted actual.
-type Omission = { Site: NodeId; Ordinal: int; Actual: NodeId }
 
 let private key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
 let private owned edge = edge.Role = EdgeRole.OrdinaryUnusedFormal || edge.Role = EdgeRole.OrdinaryUnusedActual
@@ -254,10 +251,10 @@ let deferredActuals graph site =
 /// nodes used elsewhere remain required. This changes neither IsReachable nor
 /// source/proof incidence and does not claim an emitted operation for a skip.
 /// Each deferred node is keyed to the omissions whose actual contains it.
-let private deferralsFrom graph (reading: Reading) : Map<NodeId, Set<Omission>> =
+let private deferralsFrom graph (reading: Reading) : Map<NodeId, Set<OrdinaryOmission>> =
     let omissions = reading.Calls.Values |> Seq.collect (fun call ->
         Set.difference call.Omitted call.Eager |> Seq.map (fun ordinal ->
-            ({ Site = call.Site; Ordinal = ordinal; Actual = call.Actuals[ordinal] }: Omission))) |> Set.ofSeq
+            ({ Site = call.Site; Ordinal = ordinal; Actual = call.Actuals[ordinal] }: OrdinaryOmission))) |> Set.ofSeq
     let omitted = omissions |> Set.map (fun omission -> omission.Site, omission.Ordinal, omission.Actual)
     let incidence =
         (graph.Nodes.Values |> Seq.filter _.IsReachable |> Seq.collect Incidence.structuralIncidence |> Seq.toList)
@@ -298,9 +295,14 @@ let tryDeferredOnly graph = tryRead graph |> Result.map (deferredFrom graph)
 
 /// Each node that only omitted actuals demand, with the omission relations
 /// whose actual contains it. A call among these nodes is never entered. The
-/// static string pool excludes the same nodes (`tryDeferredOnly`); the calls
-/// that reach a formal are read through `Baker.Ingredients.FormalDemand`.
+/// static string pool excludes the same nodes and states these relations as the
+/// premise of each literal it does not place (`tryDeferrals`); the calls that
+/// reach a formal are read through `Baker.Ingredients.FormalDemand`.
 let deferrals graph = deferralsFrom graph (read graph)
+
+/// The same reading, or the located failures of the current graph, for a stage
+/// that owns a diagnostic list.
+let tryDeferrals graph = tryRead graph |> Result.map (deferralsFrom graph)
 
 let private projectionFrom graph (reading: Reading) : OrdinaryDemandProjection =
     { Parameters =
