@@ -1692,27 +1692,49 @@ let private indexBelow (n: ValueRange) : ValueRange =
     | Some (_, ValueRange.Endpoint.PosInf) -> ValueRange.Above bigint.Zero
     | _ -> ValueRange.Empty
 
-/// The range of element `index` of a tuple-valued expression, read through the constructions the
+type private AggregateProjection =
+    | TupleSlot of int
+    | UnionPayload of int * string
+
+/// The range of a projection of an aggregate-valued expression, read through the constructions the
 /// expression can evaluate to (a tuple is not a node with one range; its elements are joined by
 /// position, as a record's fields are by name): through references, bindings (a mutable one's
 /// assignments included), the parameters' supplies, branch joins, blocks, annotations, function
 /// results (a named lambda's body, or every candidate's through a value) and an element read of
 /// an array of tuples. An expression that is not traced to constructions has no observable
 /// element range.
-let rec private tupleElement (program: Program) (state: State) (visited: Set<NodeId>) (exprId: NodeId) (index: int) : ValueRange =
-    if Set.contains exprId visited then ValueRange.Empty
+/// Projection paths compose: extracting a tuple slot from a DU payload first selects the
+/// union payload, then the slot. Tags never stand in for payload values. Opaque alternatives
+/// and recursive aggregate origins remain unbounded rather than disappearing from a join.
+let rec private aggregateElement (program: Program) (state: State) (visited: Set<NodeId>) (exprId: NodeId) (path: AggregateProjection list) : ValueRange =
+    if List.isEmpty path then current state exprId
+    elif Set.contains exprId visited then ValueRange.Unbounded
     else
         let visited = Set.add exprId visited
-        let recurse id = tupleElement program state visited id index
+        let project id path = aggregateElement program state visited id path
+        let recurse id = project id path
         let joinAll (ids: NodeId list) = ids |> List.fold (fun acc id -> ValueRange.join acc (recurse id)) ValueRange.Empty
         match Map.tryFind exprId program.Reachable with
         | None -> ValueRange.Unbounded
         | Some node ->
             match node.Kind with
             | SemanticKind.TupleExpr elements ->
-                match List.tryItem index elements with
-                | Some elementId -> current state elementId
-                | None -> ValueRange.Unbounded
+                match path with
+                | TupleSlot index :: rest ->
+                    match List.tryItem index elements with
+                    | Some elementId -> project elementId rest
+                    | None -> ValueRange.Unbounded
+                | _ -> ValueRange.Unbounded
+            | SemanticKind.UnionCase(name, tag, payload)
+            | SemanticKind.DUConstruct(name, tag, payload, _) ->
+                match path with
+                | UnionPayload(expectedTag, expectedName) :: rest ->
+                    if tag <> expectedTag then ValueRange.Empty
+                    elif name <> expectedName then ValueRange.Unbounded
+                    else payload |> Option.map (fun id -> project id rest) |> Option.defaultValue ValueRange.Unbounded
+                | _ -> ValueRange.Unbounded
+            | SemanticKind.DUEliminate(value, tag, name, _) -> project value (UnionPayload(tag, name) :: path)
+            | SemanticKind.TupleGet(value, index) -> project value (TupleSlot index :: path)
             | SemanticKind.VarRef (_, Some defId) -> recurse defId
             | SemanticKind.Binding (_, isMutable, _, _) ->
                 let value =
@@ -1897,7 +1919,9 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
             // came from a source the pass did not see: unobservable (CCS8011), never a fabricated width.
             // (`Empty` remains right for FieldRanges of a field nothing reads.)
             | _ -> Some fallback
-        | SemanticKind.TupleGet (tupleId, index) -> Some (tupleElement program state Set.empty tupleId index)
+        | SemanticKind.TupleGet (tupleId, index) -> Some (aggregateElement program state Set.empty tupleId [TupleSlot index])
+        | SemanticKind.DUEliminate (value, tag, name, _) when isRanged node ->
+            Some (aggregateElement program state Set.empty value [UnionPayload(tag, name)])
         | SemanticKind.IndexGet (exprId, _) ->
             match Map.tryFind exprId program.Reachable |> Option.map (fun n -> n.Type) |> Option.bind arrayElementType with
             | Some elem -> Some (elementRange program state elem)

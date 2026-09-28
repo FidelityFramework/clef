@@ -94,6 +94,7 @@
     <Compile Include="SequenceResidenceCases.fs" />
     <Compile Include="SequenceFactoryResultsCases.fs" />
     <Compile Include="SequenceElementRangeCases.fs" />
+    <Compile Include="UnionPayloadRangeCases.fs" />
     <Compile Include="CountedLoopCases.fs" />
     <Compile Include="OptionFoldCases.fs" />
     <Compile Include="ResultOperationCases.fs" />
