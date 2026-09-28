@@ -118,6 +118,15 @@ type NumericOperationCases() =
         let memory = Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project result.Graph |> function Ok facts -> facts | Error errors -> failwithf "%A" errors
         Assert.Equal((if lengthOnly then 0 else 2),memory.Operations.Values |> Seq.filter (function MemoryWitnessOperation.ArrayAccess _ -> true | _ -> false) |> Seq.length)
 
+    /// Each comparison rewrite changes the incidence that the ordinary-demand
+    /// rows are proved over; the next comparison's origins read those rows.
+    [<Fact>]
+    member _.``Nested string comparisons compile with no error`` () =
+        let program = "module NestedEquality\n[<EntryPoint>]\nlet main _ =\n    if \"a\" = \"a\" then (if \"b\" = \"b\" then 0 else 1) else 2\n"
+        let result = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.authority program
+        DimensionalCases.noErrors result
+        Assert.Equal(2, Clef.Compiler.Baker.Recipes.StringComparisonRecipes.constructions result.Graph |> List.length)
+
     [<Theory>]
     [<InlineData("read-range")>]
     [<InlineData("view")>]

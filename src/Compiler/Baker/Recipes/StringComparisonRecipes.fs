@@ -13,18 +13,15 @@ module C = Clef.Compiler.Baker.Ingredients.Continuations
 module Operations = Clef.Compiler.Baker.Ingredients.NumericOperations
 module Closures = Clef.Compiler.Baker.Ingredients.Closures
 module CallableOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins
-module CallableIngress = Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress
-module OrdinaryDemand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
+module FormalDemand = Clef.Compiler.Baker.Ingredients.FormalDemand
 
 /// Canonical identity stops at a formal: each invocation carries its own extent.
 /// Origin enumeration follows the existing complete callable-flow relation over
-/// the calls that are demanded. A call inside an actual that ordinary demand
-/// omits never reaches the formal: its actual contributes no origin, and the
-/// omission relations that establish this are participants
-/// (`OrdinaryDemand.omittedCalls`, the rows the static string pool reads).
+/// the calls that are demanded (`FormalDemand`). A call inside an actual that
+/// ordinary demand omits never reaches the formal: its actual contributes no
+/// origin, and the omission relations that establish this are participants.
 let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) source =
-    let formalInputs = CallableIngress.closedFormalInputs graph flow (CallableIngress.analyzeWith graph flow)
-    let omitted = OrdinaryDemand.omittedCalls graph
+    let inputs = FormalDemand.reader graph flow
     let rec canonical seen id =
         if Set.contains id seen then None else
         let seen = Set.add id seen
@@ -45,18 +42,17 @@ let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) sourc
         | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] }
         | Some { Kind = SemanticKind.TypeAnnotation(value, _) } -> origins seen value |> Option.map (fun (values, participants) -> values, Set.add id participants)
         | Some { Kind = SemanticKind.PatternBinding _ } ->
-            match formalInputs id with
-            | Some ingress ->
-                ingress.Inputs |> List.fold (fun state (call, actual) ->
-                    let contribution =
-                        match omitted call with
-                        | Some premises -> Some(Map.empty, premises)
-                        | None -> origins seen actual
-                    match state, flow.Calls.TryFind call, contribution with
+            match inputs id with
+            | Some formal ->
+                let omitted = Some(Map.empty, FormalDemand.premises formal)
+                (formal.Demanded |> List.map (fun input -> input, origins seen input.Actual))
+                @ (formal.Omitted |> List.map (fun input -> input, omitted))
+                |> List.fold (fun state (input, contribution) ->
+                    match state, flow.Calls.TryFind input.Call, contribution with
                     | Some(values, participants), Some resolved, Some(more, dependencies) when resolved.Complete && not resolved.Unknown ->
                         let joint = resolved.Targets |> List.collect (fun target -> target.Lambda :: target.Body :: target.Arguments @ (target.Parameters |> List.map (fun (_, _, formal) -> formal))) |> Set.ofList
                         Some(Map.fold (fun acc key value -> Map.add key value acc) values more,
-                             Set.unionMany [participants; dependencies; joint; ingress.Participants; Set.ofList [id; call; actual]])
+                             Set.unionMany [participants; dependencies; joint; formal.Participants; Set.ofList [id; input.Call; input.Actual]])
                     | _ -> None) (Some(Map.empty, Set.singleton id))
             | _ -> None
         | _ -> None

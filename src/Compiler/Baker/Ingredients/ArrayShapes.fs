@@ -6,9 +6,7 @@ module Clef.Compiler.Baker.Ingredients.ArrayShapes
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Origins = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins
-module Ingress = Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress
 module Boundaries = Clef.Compiler.Baker.Recipes.BoundaryDeclarations
-module OrdinaryDemand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
 
 [<RequireQualifiedAccess>]
 type Length = Constant of bigint | Count of NodeId
@@ -28,9 +26,7 @@ let intrinsicApplication (graph:SemanticGraph) start =
 
 let reader (graph:SemanticGraph) =
     let flow=Origins.resolve graph
-    let ingress=Ingress.analyzeWith graph flow
-    let formalInputs=Ingress.closedFormalInputs graph flow ingress
-    let omitted=OrdinaryDemand.omittedCalls graph
+    let inputs=FormalDemand.reader graph flow
     let combine values =
         if List.isEmpty values || values |> List.exists Option.isNone then None else
         let values=List.choose id values
@@ -52,16 +48,14 @@ let reader (graph:SemanticGraph) =
         | Some {Kind=SemanticKind.Sequential values} -> List.tryLast values |> Option.bind(follow seen) |> add
         | Some {Kind=SemanticKind.IfThenElse(_,yes,Some no)} -> combine[follow seen yes;follow seen no] |> add
         | Some {Kind=SemanticKind.PatternBinding _} ->
-            match formalInputs id with
-            | Some ingress ->
+            match inputs id with
+            | Some formal ->
                 // A call in an omitted actual supplies no extent; its omission relations are premises.
-                ingress.Inputs |> List.map(fun (site,value) ->
-                    let supplied =
-                        match omitted site with
-                        | Some premises -> Some {Sources=[];StringSources=Set.empty;Participants=premises}
-                        | None -> follow seen value
-                    supplied |> Option.map(fun extent ->
-                        {extent with Participants=Set.union ingress.Participants (extent.Participants.Add site)})) |> combine |> add
+                let omitted=Some {Sources=[];StringSources=Set.empty;Participants=FormalDemand.premises formal}
+                (formal.Demanded |> List.map(fun input -> input.Call,follow seen input.Actual))
+                @ (formal.Omitted |> List.map(fun input -> input.Call,omitted))
+                |> List.map(fun (call,supplied) -> supplied |> Option.map(fun extent ->
+                    {extent with Participants=Set.union formal.Participants (extent.Participants.Add call)})) |> combine |> add
             | _ -> None
         | Some {Kind=SemanticKind.Application _} ->
             match intrinsicApplication graph id with

@@ -1121,9 +1121,6 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph = { finalGraph with Platform = platformContext }
     let finalGraph, kernelIngressDiagnostics = Clef.Compiler.Nanopass.KernelDeclarations.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.StringComparisons.normalize finalGraph
-    // Byte-view origins range over demanded calls and read the resident
-    // ordinary-demand rows. The comparison rewrites changed their participants.
-    let finalGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.StringBorrows.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.MemoryAccessElaboration.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.SequenceEvaluation.normalize finalGraph

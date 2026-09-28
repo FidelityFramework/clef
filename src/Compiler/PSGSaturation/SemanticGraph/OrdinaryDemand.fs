@@ -296,15 +296,11 @@ let private deferredFrom graph reading = deferralsFrom graph reading |> Map.keys
 let deferredOnly graph = deferredFrom graph (read graph)
 let tryDeferredOnly graph = tryRead graph |> Result.map (deferredFrom graph)
 
-/// A call inside an omitted actual is never entered, so it is not a call that
-/// reaches its callee's formals. For such a call this returns the nodes of the
-/// omission relations that establish it (call site and actual of each), which
-/// an enumeration of the calls reaching a formal takes as participants; for a
-/// demanded call it returns None. The static string pool excludes the same
-/// deferred nodes (`tryDeferredOnly`).
-let omittedCalls graph =
-    let deferred = deferralsFrom graph (read graph)
-    fun call -> deferred.TryFind call |> Option.map (Seq.collect (fun omission -> [omission.Site; omission.Actual]) >> Set.ofSeq)
+/// Each node that only omitted actuals demand, with the omission relations
+/// whose actual contains it. A call among these nodes is never entered. The
+/// static string pool excludes the same nodes (`tryDeferredOnly`); the calls
+/// that reach a formal are read through `Baker.Ingredients.FormalDemand`.
+let deferrals graph = deferralsFrom graph (read graph)
 
 let private projectionFrom graph (reading: Reading) : OrdinaryDemandProjection =
     { Parameters =

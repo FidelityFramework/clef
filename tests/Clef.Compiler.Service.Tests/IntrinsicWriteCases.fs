@@ -87,17 +87,52 @@ let main _ =
     0
 """
 
+    /// One module-level binding reaches the formal of `write` through a call
+    /// inside an omitted actual and through a demanded call.
+    let bindingBody = """module WriteFixture
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+let discard (value: int) = 0
+let msg = "both"
+[<EntryPoint>]
+let main _ =
+    if discard (write msg; 0) = 0 then write msg
+    0
+"""
+
+    /// Two demanded calls of `write` and one inside the omitted actual of `discard`.
+    let threeCallsBody = """module WriteFixture
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+let discard (value: int) = 0
+[<EntryPoint>]
+let main _ =
+    write "a"
+    write "bb"
+    if discard (write "c"; 0) = 0 then 0 else 1
+"""
+
+    /// `authority` with the writable program space that a module-level value binding requires.
+    let writableAuthority =
+        authority
+            .Replace("let rodata =", "let data = { Name = \"data\"; Kind = \"data\"; Capacity = 4096; Alignment = 16; Granularity = 16; Growth = \"fixed\"; Access = \"rw\"; Base = None }\nlet rodata =")
+            .Replace("Spaces = [| rodata |]; ProgramLifetime = Some { Immutable = \"rodata\"; Mutable = None }",
+                     "Spaces = [| rodata; data |]; ProgramLifetime = Some { Immutable = \"rodata\"; Mutable = Some \"data\" }")
+
     let checkSource declaration source =
         let parse text path = match parseStringWithDefaults text path with ParseSuccess input -> input | ParseError errors -> failwithf "%A" errors
         checkParsedInputsWithPlatform [parse declaration "write-authority.clef"; parse source "intrinsic-write.clef"] (Some platform)
     let check () = checkSource authority body
-    let admittedResult result =
+    /// The graph of a result with no error and its boundary projection.
+    let graphAndProjection result =
         DimensionalCases.noErrors result
         match IntrinsicBoundary.project result.Graph with
         | Ok projection -> result.Graph, projection
         | Error errors -> failwithf "%A" errors
-    let admittedSource source = admittedResult (checkSource authority source)
-    let admitted () = admittedSource body
+    let graphAndProjectionOfSource source = graphAndProjection (checkSource authority source)
+    let admitted () = graphAndProjectionOfSource body
 
     let literal (graph: SemanticGraph) text =
         graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable && node.Kind = SemanticKind.Literal(NativeLiteral.String text))
@@ -191,7 +226,7 @@ type IntrinsicWriteCases() =
     member _.``A literal in an omitted actual is not a borrow origin and the omission relation is a participant`` () =
         let result = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.authority (IntrinsicWriteFixture.demandBody "0")
         Assert.DoesNotContain(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8403")
-        let graph, projection = IntrinsicWriteFixture.admittedResult result
+        let graph, projection = IntrinsicWriteFixture.graphAndProjection result
         let never = IntrinsicWriteFixture.literal graph "never demanded"
         let call = Assert.Single projection.IntrinsicWrites.Values
         let view = projection.ByteViews[call.Buffer]
@@ -206,7 +241,7 @@ type IntrinsicWriteCases() =
 
     [<Fact>]
     member _.``A literal in a demanded actual remains a borrow origin with its pool entry`` () =
-        let graph, projection = IntrinsicWriteFixture.admittedSource (IntrinsicWriteFixture.demandBody "value")
+        let graph, projection = IntrinsicWriteFixture.graphAndProjectionOfSource (IntrinsicWriteFixture.demandBody "value")
         let never = IntrinsicWriteFixture.literal graph "never demanded"
         let call = Assert.Single projection.IntrinsicWrites.Values
         let view = projection.ByteViews[call.Buffer]
@@ -217,7 +252,7 @@ type IntrinsicWriteCases() =
 
     [<Fact>]
     member _.``A literal reached from an omitted actual and from a demanded call is a borrow origin`` () =
-        let graph, projection = IntrinsicWriteFixture.admittedSource IntrinsicWriteFixture.sharedBody
+        let graph, projection = IntrinsicWriteFixture.graphAndProjectionOfSource IntrinsicWriteFixture.sharedBody
         let both = IntrinsicWriteFixture.literal graph "both"
         let call = Assert.Single projection.IntrinsicWrites.Values
         let view = projection.ByteViews[call.Buffer]
@@ -226,6 +261,38 @@ type IntrinsicWriteCases() =
         Assert.Contains(site, view.Participants)
         Assert.Contains(actual, view.Participants)
         Assert.True(IntrinsicWriteFixture.pooled graph "both")
+
+    [<Fact>]
+    member _.``A binding written by a demanded call and inside an omitted actual is a borrow origin with its pool entry`` () =
+        let result = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.writableAuthority IntrinsicWriteFixture.bindingBody
+        let graph, projection = IntrinsicWriteFixture.graphAndProjection result
+        let both = IntrinsicWriteFixture.literal graph "both"
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let view = projection.ByteViews[call.Buffer]
+        Assert.Equal<NodeId list>([both], view.StaticOrigins.Keys |> Seq.toList)
+        Assert.True(IntrinsicWriteFixture.pooled graph "both")
+        Assert.Equal(4, IntrinsicWriteFixture.writeProofs graph)
+
+    [<Fact>]
+    member _.``The demanded inputs and the omissions of a formal are apart and ordered by call and ordinal`` () =
+        let graph, _ = IntrinsicWriteFixture.graphAndProjectionOfSource IntrinsicWriteFixture.threeCallsBody
+        let formal =
+            graph.Nodes.Values |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.Lambda([("s", _, formal)], _, _, _, _) when node.IsReachable -> Some formal
+                | _ -> None) |> Seq.exactlyOne
+        let flow = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
+        let inputs = Clef.Compiler.Baker.Ingredients.FormalDemand.reader graph flow formal |> Option.get
+        let ordered (keys: (NodeId * int) list) = keys |> List.pairwise |> List.forall (fun (first, next) -> first < next)
+        let a, bb, c = IntrinsicWriteFixture.literal graph "a", IntrinsicWriteFixture.literal graph "bb", IntrinsicWriteFixture.literal graph "c"
+        Assert.Equal<Set<NodeId>>(set [a; bb], inputs.Demanded |> List.map _.Actual |> set)
+        Assert.True(ordered (inputs.Demanded |> List.map (fun input -> input.Call, input.Ordinal)))
+        Assert.All(inputs.Demanded, fun input ->
+            Assert.Equal(0, input.Ordinal)
+            Assert.Equal(Some [input.Actual], match graph.Nodes[input.Call].Kind with SemanticKind.Application(_, actuals) -> Some actuals | _ -> None))
+        let omission = Assert.Single inputs.Omissions
+        Assert.Equal<(NodeId * int * NodeId) list>(IntrinsicWriteFixture.omissionsContaining graph c, [omission.Site, omission.Ordinal, omission.Actual])
+        Assert.Equal<NodeId list>([c], inputs.Omitted |> List.map _.Actual)
 
     [<Fact>]
     member _.``Changed actual origins require new source range settlement before boundary resettlement`` () =

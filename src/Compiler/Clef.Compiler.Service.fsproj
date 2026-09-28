@@ -346,6 +346,7 @@
     <Compile Include="Baker\Recipes\BoundaryDeclarations.fs" />
     <Compile Include="Baker\Recipes\KernelDeclarations.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\OrdinaryDemand.fs" />
+    <Compile Include="Baker\Ingredients\FormalDemand.fs" />
     <Compile Include="Baker\Recipes\StringComparisonRecipes.fs" />
     <Compile Include="Baker\Recipes\StringBorrowRecipes.fs" />
     <Compile Include="Baker\Ingredients\MemoryValues.fs" />
