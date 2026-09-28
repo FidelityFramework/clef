@@ -756,3 +756,372 @@ let main _ =
             Assert.Contains(diagnostics, fun diagnostic ->
                 diagnostic.Code = "CCS8403" && diagnostic.Range = settled.Nodes[site].Range && diagnostic.Message = text
                 && List.contains call.Id diagnostic.RelatedNodes && List.contains other.Id diagnostic.RelatedNodes)
+
+module PremiseEstablishmentFixture =
+    module Borrows = Clef.Compiler.Baker.Recipes.StringBorrowRecipes
+    module Bytes = Clef.Compiler.Baker.Ingredients.StringBytes
+    module Demand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
+    module Layout = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout
+    module Diagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+
+    let header = "module WriteFixture\nlet write (s: string) =\n    let _ = Sys.write 1 s.Bytes s.Length\n    ()\n"
+    let factoryBody = header + """let make (offset: int) (unused: int) =
+    fun (value: int) -> value + offset
+let msg = "hello"
+let first = make 3 (write msg; 0)
+[<EntryPoint>]
+let main _ =
+    write msg
+    if first 1 = 4 then 0 else 1
+"""
+    let lazyBody = factoryBody.Replace("fun (value: int) -> value + offset", "lazy (offset + 1)").Replace("first 1", "Lazy.force first")
+    let bothRolesBody = header + """let make (offset: int) (unused: int) =
+    fun (value: int) -> value + offset
+let print (s: string) = make (write s; 3) (write s; 0)
+let first = print "hello"
+[<EntryPoint>]
+let main _ =
+    if first 1 = 4 then 0 else 1
+"""
+    let movedStorageBody = header + """let make (unused: int) (offset: int) =
+    fun (value: int) -> value + offset
+[<EntryPoint>]
+let main _ =
+    let add = make (write "never demanded"; 0) 3
+    if add 1 = 4 then write "kept"
+    0
+"""
+    let aliasBody = """module WriteFixture
+let first (s: string) =
+    let b = s.Bytes
+    b.[0]
+let make (offset: int) (unused: int) =
+    fun (value: int) -> value + offset
+let saved = make 3 (first "omitted"; 0)
+[<EntryPoint>]
+let main _ =
+    if first "a" + first "bb" + saved 1 = 0 then 0 else 1
+"""
+    let twoOmissionsBody = (IntrinsicWriteFixture.demandBody "0").Replace("    0\n", "    if discard (write \"also omitted\"; 0) = 0 then ()\n    0\n")
+    let check source = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.factoryAuthority source
+    let factory = lazy (check factoryBody)
+    let lazyFactory = lazy (check lazyBody)
+    let bothRoles = lazy (check bothRolesBody)
+    let movedStorage = lazy (check movedStorageBody)
+    let aliased = lazy (check aliasBody)
+    let omitted = lazy (check (IntrinsicWriteFixture.demandBody "0"))
+    let twoOmissions = lazy (check twoOmissionsBody)
+
+    let normalize = Clef.Compiler.Nanopass.PremiseEstablishment.normalize
+    let establish = Borrows.establish
+    let guard = Layout.premiseGuard
+    let byteRange = Clef.Compiler.Baker.Recipes.MemoryAccessRecipes.byteRange
+
+    let pendingText = "String borrow participants remain pending after the final demand rows: the origins or extent derived there differ from those source range settlement read, or no borrow is derived at this site."
+    let newText = "A string borrow derived after the final demand rows has no row written before source range settlement."
+    let lostText = "A string byte read lost the storage evidence of its borrow after the final demand rows."
+    let premiseText = "The omission premise of this string literal differs from the final demand rows in a site, an ordinal or an actual."
+    let demandedText = "The storage of this string literal was not materialized, and after the final demand rows a demanded position reads it."
+    let materializedText = "The storage of this string literal was materialized, and after the final demand rows no demanded position reads it."
+    let changedTexts = ["premises changed after source numeric settlement"; "evidence changed after source range settlement"; "requires complete intrinsic write-use or local guarded comparison lifetime proofs"]
+    let noErrors (diagnostics: Diagnostics.Diagnostic list) =
+        diagnostics |> List.filter (fun diagnostic -> diagnostic.Severity = Diagnostics.NativeDiagnosticSeverity.Error) |> Assert.Empty
+    let noBorrowChanges (diagnostics: Diagnostics.Diagnostic list) =
+        Assert.DoesNotContain(diagnostics, fun (diagnostic: Diagnostics.Diagnostic) -> changedTexts |> List.exists diagnostic.Message.Contains)
+    let located (graph: SemanticGraph) site text (diagnostics: Diagnostics.Diagnostic list) =
+        Assert.Contains(diagnostics, fun diagnostic ->
+            diagnostic.Code = "CCS8403" && diagnostic.Severity = Diagnostics.NativeDiagnosticSeverity.Error
+            && diagnostic.Range = graph.Nodes[site].Range && diagnostic.Message = text && List.contains site diagnostic.RelatedNodes)
+    let histories (graph: SemanticGraph) =
+        graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringBorrowHistory history -> Some history | _ -> None)
+    let storageHistories (graph: SemanticGraph) =
+        graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.LiteralStorageHistory history -> Some history | _ -> None)
+    let views graph = IntrinsicWriteFixture.viewRows graph |> List.map fst
+    let view graph = views graph |> Assert.Single
+    let participants graph = view graph |> _.Participants |> IntrinsicWriteFixture.established
+    let changeView change (graph: SemanticGraph) =
+        let edges = graph.Edges |> List.map (fun edge ->
+            match edge.Role with EdgeRole.StringByteView view -> Bytes.viewRow (change view) | _ -> edge)
+        { graph with Edges = edges }
+    let makePending (view: BoundaryByteView) =
+        { view with Participants = ParticipantEvidence.Pending { Derived = IntrinsicWriteFixture.established view.Participants } }
+    let changedLength (view: BoundaryByteView) =
+        { view with StaticOrigins = view.StaticOrigins |> Map.map (fun _ length -> length + 1I) }
+    let freshRows (graph: SemanticGraph) =
+        let rows, failures = Borrows.evidence graph
+        Assert.Empty failures
+        rows
+    let boundaryDiagnostics graph =
+        let graph = Clef.Compiler.Nanopass.BoundarySettlement.normalize graph
+        let failures = match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare graph with Error failures -> failures | Ok _ -> []
+        Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.diagnostics graph failures
+    let omissions graph literal =
+        Demand.tryDeferrals graph |> Result.defaultWith (fun failures -> failwithf "%A" failures)
+        |> Map.find literal |> Set.toList
+    let setPremise literal premise (graph: SemanticGraph) =
+        { graph with LiteralStorage = graph.LiteralStorage.Add(literal, LiteralStorage.NotMaterialized premise) }
+    let assertMove (graph: SemanticGraph) =
+        let histories = histories graph
+        Assert.NotEmpty histories
+        for view in views graph do
+            let current = IntrinsicWriteFixture.established view.Participants
+            let early = histories |> List.filter (fun history -> history.Site = view.Site) |> Assert.Single
+            let omitted = current |> List.filter (fun participant -> participant.Role = ParticipantRole.OmissionSite)
+            Assert.NotEmpty omitted
+            for occurrence in omitted do
+                Assert.True(match graph.Nodes[occurrence.Node].Kind with SemanticKind.Application _ -> true | _ -> false)
+                Assert.Contains(graph.Edges, fun edge -> edge.Role = EdgeRole.OrdinaryUnusedActual && edge.Target = occurrence.Node && edge.Ordinal = occurrence.Ordinal)
+                let old = early.Early.Derived |> List.filter (fun participant -> participant.Role = ParticipantRole.OmissionSite && participant.Group = occurrence.Group) |> Assert.Single
+                Assert.NotEqual(old.Node, occurrence.Node)
+                Assert.True(match graph.Nodes[old.Node].Kind with SemanticKind.Sequential values -> List.contains occurrence.Node values | _ -> false)
+            Assert.Equal<NodeId list>(current |> List.map _.Node, graph.Edges |> List.find (fun edge -> edge.Role = EdgeRole.StringByteView view) |> _.Sources)
+        for edge in graph.Edges do
+            match edge.Role with
+            | EdgeRole.StringExtent extent -> IntrinsicWriteFixture.established extent.Participants |> ignore
+            | _ -> ()
+
+type PremiseEstablishmentCases() =
+    [<Fact>]
+    member _.``Early borrow rows retain nonempty pending derivations`` () =
+        let graph = PremiseEstablishmentFixture.factory.Value.Graph
+        let rows = (Clef.Compiler.Baker.Recipes.StringBorrowRecipes.elaborate graph).NewEdges
+        let evidence = rows |> List.choose (fun edge ->
+            match edge.Role with EdgeRole.StringByteView view -> Some view.Participants | EdgeRole.StringExtent extent -> Some extent.Participants | _ -> None)
+        Assert.NotEmpty evidence
+        for value in evidence do
+            Assert.True((match value with ParticipantEvidence.Pending early -> not early.Derived.IsEmpty | _ -> false), sprintf "Early row is not pending with its derivation: %A" value)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Factory moves establish final invocation occurrences and preserve early history`` lazyFactory =
+        let result = if lazyFactory then PremiseEstablishmentFixture.lazyFactory.Value else PremiseEstablishmentFixture.factory.Value
+        PremiseEstablishmentFixture.noErrors result.Diagnostics
+        PremiseEstablishmentFixture.assertMove result.Graph
+
+    [<Fact>]
+    member _.``One identity retains its callee body role while the omission names the moved call`` () =
+        let result = PremiseEstablishmentFixture.bothRoles.Value
+        PremiseEstablishmentFixture.noBorrowChanges result.Diagnostics
+        PremiseEstablishmentFixture.assertMove result.Graph
+        let current = PremiseEstablishmentFixture.participants result.Graph
+        let early = PremiseEstablishmentFixture.histories result.Graph |> List.head
+        let old = early.Early.Derived |> List.filter (fun participant -> participant.Role = ParticipantRole.OmissionSite) |> Assert.Single
+        Assert.Contains(current, fun participant -> participant.Role = ParticipantRole.CalleeBody && participant.Node = old.Node)
+        Assert.DoesNotContain(current, fun participant -> participant.Role = ParticipantRole.OmissionSite && participant.Node = old.Node)
+
+    [<Fact>]
+    member _.``The current borrow guard rejects a stale omission site`` () =
+        let result = PremiseEstablishmentFixture.factory.Value
+        PremiseEstablishmentFixture.noErrors result.Diagnostics
+        let graph = result.Graph
+        let early = PremiseEstablishmentFixture.histories graph |> List.head
+        let old = early.Early.Derived |> List.filter (fun participant -> participant.Role = ParticipantRole.OmissionSite) |> Assert.Single
+        let changed = graph |> PremiseEstablishmentFixture.changeView (fun view ->
+            let participants = IntrinsicWriteFixture.established view.Participants |> List.map (fun participant ->
+                if participant.Role = ParticipantRole.OmissionSite then { participant with Node = old.Node } else participant)
+            { view with Participants = ParticipantEvidence.Established participants })
+        let diagnostics = PremiseEstablishmentFixture.boundaryDiagnostics changed
+        Assert.Contains(diagnostics, fun diagnostic -> diagnostic.Message.Contains "premises changed after source numeric settlement")
+        Assert.Contains(diagnostics, fun diagnostic -> diagnostic.Message.Contains "evidence changed after source range settlement")
+
+    [<Fact>]
+    member _.``Establishment rejects a changed origin length`` () =
+        let graph = PremiseEstablishmentFixture.factory.Value.Graph |> PremiseEstablishmentFixture.changeView (PremiseEstablishmentFixture.changedLength >> PremiseEstablishmentFixture.makePending)
+        let site = (PremiseEstablishmentFixture.view graph).Site
+        let results = PremiseEstablishmentFixture.establish graph
+        Assert.Contains(results, function Error(node, _, text) -> node = site && text = PremiseEstablishmentFixture.pendingText | _ -> false)
+
+    [<Fact>]
+    member _.``A contradicted pending view has one located diagnostic and keeps its early row`` () =
+        let graph, _ = IntrinsicWriteFixture.admitted ()
+        let changed = graph |> PremiseEstablishmentFixture.changeView (PremiseEstablishmentFixture.changedLength >> PremiseEstablishmentFixture.makePending)
+        let early = PremiseEstablishmentFixture.view changed
+        let normalized, diagnostics = PremiseEstablishmentFixture.normalize changed
+        Assert.Single diagnostics |> ignore
+        PremiseEstablishmentFixture.located changed early.Site PremiseEstablishmentFixture.pendingText diagnostics
+        Assert.Equal<BoundaryByteView>(early, PremiseEstablishmentFixture.view normalized)
+
+    [<Fact>]
+    member _.``A derived borrow without an early row is a located error`` () =
+        let graph, _ = IntrinsicWriteFixture.admitted ()
+        let view = PremiseEstablishmentFixture.view graph
+        let changed = { graph with Edges = graph.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.StringByteView _ | EdgeRole.StringByteStorage _ when edge.Target = view.Site -> false | _ -> true) }
+        let _, diagnostics = PremiseEstablishmentFixture.normalize changed
+        PremiseEstablishmentFixture.located graph view.Site PremiseEstablishmentFixture.newText diagnostics
+
+    [<Fact>]
+    member _.``An early borrow without a final derivation remains pending and is located`` () =
+        let graph, _ = IntrinsicWriteFixture.admitted ()
+        let graph = graph |> PremiseEstablishmentFixture.changeView PremiseEstablishmentFixture.makePending
+        let site = (PremiseEstablishmentFixture.view graph).Site
+        let changed = { graph with Nodes = graph.Nodes.Add(site, { graph.Nodes[site] with IsReachable = false }) }
+        let normalized, diagnostics = PremiseEstablishmentFixture.normalize changed
+        PremiseEstablishmentFixture.located graph site PremiseEstablishmentFixture.pendingText diagnostics
+        Assert.Equal<BoundaryByteView>(PremiseEstablishmentFixture.view changed, PremiseEstablishmentFixture.view normalized)
+
+    [<Fact>]
+    member _.``Aliased byte reads renew the entire range fact from current borrow evidence`` () =
+        let graph = PremiseEstablishmentFixture.aliased.Value.Graph
+        let freshView = PremiseEstablishmentFixture.freshRows graph |> List.choose (fun edge ->
+            match edge.Role with EdgeRole.StringByteView view -> Some view | _ -> None) |> Assert.Single
+        let finalOmission = IntrinsicWriteFixture.established freshView.Participants |> List.filter (fun participant -> participant.Role = ParticipantRole.OmissionSite) |> Assert.Single
+        let residentFact = graph.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.StringByteRange _ -> true | _ -> false) |> Assert.Single
+        Assert.Contains(finalOmission.Node, residentFact.Sources)
+        let histories = PremiseEstablishmentFixture.histories graph
+        Assert.NotEmpty histories
+        let current = PremiseEstablishmentFixture.participants graph
+        Assert.Equal(2, current |> List.filter (fun participant -> participant.Role = ParticipantRole.ReachingCall) |> List.length)
+        Assert.Single(current |> List.filter (fun participant -> participant.Role = ParticipantRole.OmittedCall)) |> ignore
+        let old = histories.Head.Early.Derived |> List.filter (fun participant -> participant.Role = ParticipantRole.OmissionSite) |> Assert.Single
+        let early = graph |> PremiseEstablishmentFixture.changeView (fun view ->
+            { view with Participants = ParticipantEvidence.Pending (histories |> List.find (fun history -> history.Site = view.Site)).Early })
+        let edges = early.Edges |> List.map (fun edge ->
+            match edge.Role with EdgeRole.StringByteStorage _ -> Clef.Compiler.Baker.Ingredients.StringBytes.storageRow (PremiseEstablishmentFixture.view early) | _ -> edge)
+        let early = { early with Edges = edges }
+        let guard = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.MemoryAccessGuard) |> Assert.Single
+        let oldFact = PremiseEstablishmentFixture.byteRange early guard |> Option.get
+        Assert.Contains(old.Node, oldFact.Sources)
+        let early = { early with Edges = early.Edges |> List.map (fun edge -> match edge.Role with EdgeRole.StringByteRange _ when edge.Target = guard.Target -> oldFact | _ -> edge) }
+        let normalized, diagnostics = PremiseEstablishmentFixture.normalize early
+        Assert.Empty diagnostics
+        let fact = normalized.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.StringByteRange _ -> edge.Target = guard.Target | _ -> false) |> Assert.Single
+        let fields (edge: Hyperedge) = edge.Sources, edge.Target, edge.Class, edge.Role, edge.Ordinal
+        Assert.Equal((Some (fields fact)), PremiseEstablishmentFixture.byteRange normalized guard |> Option.map fields)
+        Assert.DoesNotContain(old.Node, fact.Sources)
+        Assert.Equal<Set<NodeId>>(graph.Nodes.Keys |> Set.ofSeq, normalized.Nodes.Keys |> Set.ofSeq)
+
+    [<Fact>]
+    member _.``A byte range whose borrow storage is lost reports its read site`` () =
+        let graph = PremiseEstablishmentFixture.aliased.Value.Graph
+        let view = PremiseEstablishmentFixture.view graph
+        let guard = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.MemoryAccessGuard) |> Assert.Single
+        let changed =
+            { graph with Nodes = graph.Nodes.Add(view.Site, { graph.Nodes[view.Site] with IsReachable = false })
+                         Edges = graph.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.StringByteStorage _ | EdgeRole.StringByteView _ when edge.Target = view.Site -> false | _ -> true) }
+        let _, diagnostics = PremiseEstablishmentFixture.normalize changed
+        PremiseEstablishmentFixture.located graph guard.Target PremiseEstablishmentFixture.lostText diagnostics
+
+    [<Fact>]
+    member _.``Borrow history is not an input of the current evidence guard`` () =
+        let result = PremiseEstablishmentFixture.factory.Value
+        PremiseEstablishmentFixture.noErrors result.Diagnostics
+        Assert.NotEmpty(PremiseEstablishmentFixture.histories result.Graph)
+        let edges = result.Graph.Edges |> List.map (fun edge ->
+            match edge.Role with
+            | EdgeRole.StringBorrowHistory history ->
+                let early = { history.Early with Derived = history.Early.Derived |> List.tail }
+                { edge with Role = EdgeRole.StringBorrowHistory { history with Early = early }; Sources = early.Derived |> List.map _.Node }
+            | _ -> edge)
+        let changed = { result.Graph with Edges = edges }
+        PremiseEstablishmentFixture.boundaryDiagnostics changed |> PremiseEstablishmentFixture.noBorrowChanges
+
+    [<Fact>]
+    member _.``Literal storage follows its moved omission and preserves the early site and ordinal`` () =
+        let result = PremiseEstablishmentFixture.movedStorage.Value
+        PremiseEstablishmentFixture.noErrors result.Diagnostics
+        let graph = result.Graph
+        let literal = IntrinsicWriteFixture.literal graph "never demanded"
+        let expected = PremiseEstablishmentFixture.omissions graph literal |> Assert.Single
+        Assert.Equal(1, expected.Ordinal)
+        Assert.True(match graph.Nodes[expected.Site].Kind with SemanticKind.Application _ -> true | _ -> false)
+        Assert.Equal<LiteralStorage>(LiteralStorage.NotMaterialized(StoragePremise.Established [expected]), graph.LiteralStorage[literal])
+        let history = PremiseEstablishmentFixture.storageHistories graph |> List.filter (fun history -> history.Literal = literal) |> Assert.Single
+        let early = Assert.Single history.Early
+        Assert.Equal(0, early.Ordinal)
+        Assert.Equal(expected.Actual, early.Actual)
+        Assert.NotEqual(expected.Site, early.Site)
+        Assert.True(match graph.Nodes[early.Site].Kind with SemanticKind.Sequential values -> List.contains expected.Site values | _ -> false)
+
+    [<Fact>]
+    member _.``Early omitted literal storage keeps a nonempty pending premise`` () =
+        let graph = PremiseEstablishmentFixture.omitted.Value.Graph
+        let literal = IntrinsicWriteFixture.literal graph "never demanded"
+        let settled, diagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout.settle graph
+        Assert.Empty diagnostics
+        Assert.Equal<LiteralStorage>(LiteralStorage.NotMaterialized(StoragePremise.Pending(PremiseEstablishmentFixture.omissions graph literal)), settled.LiteralStorage[literal])
+
+    [<Theory>]
+    [<InlineData("other omission")>]
+    [<InlineData("ordinal")>]
+    [<InlineData("actual")>]
+    [<InlineData("absent literal")>]
+    member _.``The storage guard compares the whole omission for its literal`` defect =
+        let graph = (if defect = "other omission" then PremiseEstablishmentFixture.twoOmissions.Value else PremiseEstablishmentFixture.movedStorage.Value).Graph
+        let literal = IntrinsicWriteFixture.literal graph "never demanded"
+        let expected = PremiseEstablishmentFixture.omissions graph literal |> Assert.Single
+        let unrelated = IntrinsicWriteFixture.literal graph "kept"
+        let premise =
+            match defect with
+            | "other omission" -> PremiseEstablishmentFixture.omissions graph (IntrinsicWriteFixture.literal graph "also omitted")
+            | "ordinal" -> [{ expected with Ordinal = 0 }]
+            | "actual" -> [{ expected with Actual = unrelated }]
+            | _ -> [expected]
+        let target = if defect = "absent literal" then unrelated else literal
+        let changed = graph |> PremiseEstablishmentFixture.setPremise target (StoragePremise.Established premise)
+        let diagnostics = PremiseEstablishmentFixture.guard changed
+        PremiseEstablishmentFixture.located graph target PremiseEstablishmentFixture.premiseText diagnostics
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Changed literal dispositions are diagnosed without rewriting the pool`` materialized =
+        let graph = PremiseEstablishmentFixture.omitted.Value.Graph
+        let omitted = IntrinsicWriteFixture.literal graph "never demanded"
+        let demanded = IntrinsicWriteFixture.literal graph "kept"
+        let literal, text, row =
+            if materialized then omitted, PremiseEstablishmentFixture.materializedText, graph.LiteralStorage[demanded]
+            else demanded, PremiseEstablishmentFixture.demandedText, LiteralStorage.NotMaterialized(StoragePremise.Pending(PremiseEstablishmentFixture.omissions graph omitted))
+        let changed = { graph with LiteralStorage = graph.LiteralStorage.Add(literal, row) }
+        let normalized, diagnostics = PremiseEstablishmentFixture.normalize changed
+        PremiseEstablishmentFixture.located graph literal text diagnostics
+        Assert.Equal<StaticStringPool option>(graph.StaticStringPool, normalized.StaticStringPool)
+        Assert.Equal<LiteralStorage>(row, normalized.LiteralStorage[literal])
+        if materialized then PremiseEstablishmentFixture.guard changed |> PremiseEstablishmentFixture.located graph literal text
+
+    [<Fact>]
+    member _.``Storage history does not justify an incorrect current premise`` () =
+        let graph = PremiseEstablishmentFixture.omitted.Value.Graph
+        let literal = IntrinsicWriteFixture.literal graph "never demanded"
+        let premise = PremiseEstablishmentFixture.omissions graph literal
+        let bad = premise |> List.map (fun omission -> { omission with Ordinal = omission.Ordinal + 1 })
+        let changed = graph |> PremiseEstablishmentFixture.setPremise literal (StoragePremise.Established bad)
+        let changed = { changed with Edges = { Class = EdgeClass.Provenance; Role = EdgeRole.LiteralStorageHistory { Literal = literal; Early = premise }; Sources = literal :: (premise |> List.collect (fun omission -> [omission.Site; omission.Actual])); Target = literal; Ordinal = 0 } :: changed.Edges }
+        PremiseEstablishmentFixture.guard changed |> PremiseEstablishmentFixture.located graph literal PremiseEstablishmentFixture.premiseText
+
+    [<Fact>]
+    member _.``Establishment preserves specific origin failure diagnostics`` () =
+        let graph = (PremiseEstablishmentFixture.check IntrinsicWriteFixture.pickBody).Graph
+        let _, diagnostics = PremiseEstablishmentFixture.normalize graph
+        let _, failures = Clef.Compiler.Baker.Recipes.StringBorrowRecipes.evidence graph
+        Assert.NotEmpty failures
+        for site, failure in failures do
+            let _, related, text = Clef.Compiler.Baker.Recipes.StringComparisonRecipes.originError graph site failure
+            Assert.Contains(diagnostics, fun diagnostic ->
+                diagnostic.Code = "CCS8403" && diagnostic.Range = graph.Nodes[site].Range
+                && diagnostic.Message.Contains text && Set.isSubset related (Set.ofList diagnostic.RelatedNodes))
+        Assert.DoesNotContain(diagnostics, fun diagnostic -> diagnostic.Message = PremiseEstablishmentFixture.pendingText || diagnostic.Message = PremiseEstablishmentFixture.newText)
+
+    [<Fact>]
+    member _.``Demand reading failures keep their own located diagnostics during establishment`` () =
+        let graph = PremiseEstablishmentFixture.omitted.Value.Graph
+        let changed = { graph with Edges = graph.Edges |> List.map (fun edge -> if edge.Role = EdgeRole.OrdinaryUnusedActual then { edge with Ordinal = edge.Ordinal + 1 } else edge) }
+        let expected = match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryDeferrals changed with Error failures -> Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.diagnostics changed failures | Ok _ -> failwith "The fixture did not contradict the resident demand rows."
+        Assert.NotEmpty expected
+        let _, diagnostics = PremiseEstablishmentFixture.normalize changed
+        for diagnostic in expected do Assert.Contains(diagnostic, diagnostics)
+
+    [<Fact>]
+    member _.``Duplicate pending view rows do not establish two histories`` () =
+        let graph, _ = IntrinsicWriteFixture.admitted ()
+        let graph = graph |> PremiseEstablishmentFixture.changeView PremiseEstablishmentFixture.makePending
+        let view = PremiseEstablishmentFixture.view graph
+        let edges = graph.Edges |> List.filter (fun edge ->
+            match edge.Role with EdgeRole.StringBorrowHistory history -> history.Site <> view.Site | _ -> true)
+        let changed = { graph with Edges = Clef.Compiler.Baker.Ingredients.StringBytes.viewRow view :: edges }
+        let normalized, diagnostics = PremiseEstablishmentFixture.normalize changed
+        PremiseEstablishmentFixture.located graph view.Site "A string borrow has more than one row written before source range settlement." diagnostics
+        for row in PremiseEstablishmentFixture.views normalized do
+            Assert.True(match row.Participants with ParticipantEvidence.Pending _ -> true | _ -> false)
+        let histories = PremiseEstablishmentFixture.histories normalized |> List.filter (fun history -> history.Site = view.Site)
+        Assert.Empty histories

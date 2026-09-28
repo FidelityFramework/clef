@@ -1250,6 +1250,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // Source logical arguments remain intact. A closed unused-formal proof
     // supplies the physical omission convention before callable projection.
     let finalGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize finalGraph
+    let finalGraph, premiseDiagnostics = Clef.Compiler.Nanopass.PremiseEstablishment.normalize finalGraph
     let finalGraph, lazies = Clef.Compiler.Nanopass.LazyRuntime.settleWhenSourceAdmitted sourceAdmitted finalGraph
     tracePhase "lazy-settlement"
     let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
@@ -1346,6 +1347,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph = Clef.Compiler.Nanopass.MemorySettlement.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.SpatialSettlement.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.BoundarySettlement.normalize finalGraph
+    let storagePremiseDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout.premiseGuard finalGraph
     ObligationDischarge.emit finalGraph
     tracePhase "obligations"
 
@@ -1382,7 +1384,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ witnessEmissionDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 

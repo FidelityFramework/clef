@@ -85,6 +85,22 @@ let candidates (graph: SemanticGraph) =
         ((access graph node).IsSome || (address graph node).IsSome))
     |> Seq.toList
 
+/// Derive the byte-read range and its storage sources from the access guard.
+let byteRange (graph: SemanticGraph) (guard: Hyperedge) : Hyperedge option =
+    match guard.Role, guard.Sources with
+    | EdgeRole.MemoryAccessGuard, [buffer; index; length; _; lower; upper; predicate; required; source] ->
+        let range lo hi sources =
+            { Class = EdgeClass.Range; Role = EdgeRole.StringByteRange(lo, hi)
+              Ordinal = 0; Sources = sources; Target = guard.Target }
+        match graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringByteView view when view.Site = buffer -> Some view | _ -> None) with
+        | [view] ->
+            Some (range 0I 255I [buffer; view.Source; view.RepresentationDeclaration; index; length; lower; upper; predicate; required; source])
+        | _ ->
+            Clef.Compiler.PSGSaturation.SemanticGraph.StringByteStorage.evidence graph buffer
+            |> Option.map (fun (_, lo, hi, participants) ->
+                range lo hi ([buffer; index; length; lower; upper; predicate; required; source] @ Set.toList participants))
+    | _ -> None
+
 let materialize (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) : Expansion =
     let state = SaturationState.create source.Range ctx.OriginalHOF ctx.ExpansionId source.Id graph.Platform
     let evidence = ResizeArray<Hyperedge>()
@@ -122,21 +138,12 @@ let materialize (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) : E
         do! enrich source (SemanticKind.Sequential [required; operation.Id]) source.Type [required; operation.Id] source.EmissionStrategy false
         evidence.Add { Class = EdgeClass.Provenance; Role = EdgeRole.MatchRequirement; Ordinal = 1
                        Sources = [required; predicate; operation.Id]; Target = source.Id }
-        evidence.Add { Class = EdgeClass.Provenance; Role = EdgeRole.MemoryAccessGuard; Ordinal = 0
-                       Sources = [buffer; index; length; zero; lower; upper; predicate; required; source.Id]; Target = operation.Id }
+        let guard =
+            { Class = EdgeClass.Provenance; Role = EdgeRole.MemoryAccessGuard; Ordinal = 0
+              Sources = [buffer; index; length; zero; lower; upper; predicate; required; source.Id]; Target = operation.Id }
+        evidence.Add guard
         if stored.IsNone then
-            match graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringByteView view when view.Site=buffer -> Some view | _ -> None) with
-            | [view] ->
-                evidence.Add { Class=EdgeClass.Range; Role=EdgeRole.StringByteRange(0I,255I); Ordinal=0
-                               Sources=[buffer;view.Source;view.RepresentationDeclaration;index;length;lower;upper;predicate;required;source.Id]
-                               Target=operation.Id }
-            | _ ->
-                match Clef.Compiler.PSGSaturation.SemanticGraph.StringByteStorage.evidence graph buffer with
-                | Some(_,lo,hi,participants) ->
-                    evidence.Add { Class=EdgeClass.Range;Role=EdgeRole.StringByteRange(lo,hi);Ordinal=0
-                                   Sources=[buffer;index;length;lower;upper;predicate;required;source.Id]@Set.toList participants
-                                   Target=operation.Id }
-                | None -> ()
+            byteRange graph guard |> Option.iter evidence.Add
         return source.Id
       }
     let outcome, nodes = run state recipe

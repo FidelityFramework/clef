@@ -13,8 +13,8 @@ module Declaration = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolutio
 /// its immutable bytes and views then travel to both proof and native emission.
 /// The same step states, for every reachable string literal, whether its storage
 /// was materialized: the pool entry of its bytes, or the omission relations
-/// under which no demanded position reads it. Both come from `deferrals`, the one
-/// demand reading that decides the pool; neither is computed again.
+/// under which no demanded position reads it. The layout decision comes from
+/// `deferrals`; its omission premise remains pending until final demand.
 let private settleWith (deferrals: Map<NodeId, Set<OrdinaryOmission>>) (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
     let strings =
         graph.Nodes |> Map.toList |> List.map snd
@@ -25,7 +25,7 @@ let private settleWith (deferrals: Map<NodeId, Set<OrdinaryOmission>>) (graph: S
             | _ -> None)
     let deferred, placed = strings |> List.partition (fun (_, node) -> deferrals.ContainsKey node.Id)
     let omitted =
-        deferred |> List.map (fun (_, node) -> node.Id, LiteralStorage.NotMaterialized (StoragePremise.Established (Set.toList deferrals[node.Id]))) |> Map.ofList
+        deferred |> List.map (fun (_, node) -> node.Id, LiteralStorage.NotMaterialized (StoragePremise.Pending (Set.toList deferrals[node.Id]))) |> Map.ofList
     let graph = { graph with StaticStringPool = None; LiteralStorage = omitted }
     let literals =
         placed
@@ -156,3 +156,23 @@ let retainedViews (graph: SemanticGraph)
                         Option.map2 (@) result (trace seen input)) (Some(id :: dependencies)))
         | _ -> None
     fun value -> trace Set.empty value |> Option.map List.distinct
+
+/// Validate current literal-keyed omission premises without consulting history
+/// or changing the materialization decision or the pool layout.
+let premiseGuard (graph: SemanticGraph) : Diagnostic list =
+    match OrdinaryDemand.tryDeferrals graph with
+    | Result.Error failures -> OrdinaryDemand.diagnostics graph failures
+    | Result.Ok deferrals ->
+        graph.LiteralStorage |> Map.toList |> List.choose (fun (literal, row) ->
+            let message =
+                match row, deferrals.TryFind literal with
+                | LiteralStorage.NotMaterialized (StoragePremise.Established premise), current
+                    when current |> Option.map Set.toList <> Some premise ->
+                    Some "The omission premise of this string literal differs from the final demand rows in a site, an ordinal or an actual."
+                | LiteralStorage.Materialized _, Some _ ->
+                    Some "The storage of this string literal was materialized, and after the final demand rows no demanded position reads it."
+                | _ -> None
+            message |> Option.map (fun message ->
+                { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8403"; Message = message
+                  Range = graph.Nodes[literal].Range; RelatedNodes = [literal]
+                  Reachability = ReachabilityContext.Reachable }))

@@ -34,6 +34,9 @@ let viewRow (view: BoundaryByteView) = rangeRow (EdgeRole.StringByteView view) (
 let rewriteRow (view: BoundaryByteView) =
     { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = [view.Source]; Target = view.Site }
 let extentRow (extent: BoundaryStringExtent) = rangeRow (EdgeRole.StringExtent extent) (incidence extent.Participants) extent.Site
+let historyRow (history: BorrowHistory) =
+    { Class = EdgeClass.Provenance; Role = EdgeRole.StringBorrowHistory history; Ordinal = 0
+      Sources = history.Early.Derived |> List.map _.Node; Target = history.Site }
 let abiRow site (import: IntrinsicWriteImport) = rangeRow (EdgeRole.IntrinsicWriteAbi import) (import.Identity :: import.Scope :: Set.toList import.Participants) site
 let storageRow (view: BoundaryByteView) =
     rangeRow (EdgeRole.StringByteStorage(0I, 255I, view.Representation.Name))

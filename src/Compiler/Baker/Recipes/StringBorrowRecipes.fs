@@ -125,7 +125,20 @@ let private plan enrichId (graph: SemanticGraph) =
 /// The rows of the borrows whose origins are derived. A site whose origins fail has
 /// no row here; the borrow owner derives the failure again from the graph it
 /// settles and reports it at the site (`evidence`, BoundaryRecipes.intrinsicWrites).
-let elaborate graph = fst (plan (Elaboration.freshId ()) graph)
+let elaborate graph =
+    let enrichment, _ = plan (Elaboration.freshId ()) graph
+    let pending = function
+        | ParticipantEvidence.Established participants -> ParticipantEvidence.Pending { Derived = participants }
+        | ParticipantEvidence.Pending early -> ParticipantEvidence.Pending early
+    let rows = enrichment.NewEdges |> List.collect (fun edge ->
+        match edge.Role with
+        | EdgeRole.StringByteView view ->
+            let view = { view with Participants = pending view.Participants }
+            [Bytes.viewRow view; Bytes.storageRow view]
+        | EdgeRole.StringExtent extent -> [Bytes.extentRow { extent with Participants = pending extent.Participants }]
+        | EdgeRole.StringByteStorage _ -> [] // Replaced together with its view.
+        | _ -> [edge])
+    { enrichment with NewEdges = rows }
 
 /// The late owner rechecks the same complete source recipe premises after
 /// rewriting/placement, with each site whose origins fail and its failure.
@@ -136,3 +149,42 @@ let evidence graph =
         match edge.Role with
         | EdgeRole.StringByteView _ | EdgeRole.StringExtent _ | EdgeRole.IntrinsicWriteAbi _ | EdgeRole.StringByteStorage _ -> true
         | _ -> false), failures
+
+/// Establish current occurrences after demand, preserving the earlier derivation
+/// separately. Origins, extents and representation remain the early facts.
+let establish (graph: SemanticGraph) : Result<Hyperedge list, NodeId * Set<NodeId> * string> list =
+    let current, failures = evidence graph
+    let key (edge: Hyperedge) =
+        match edge.Role with
+        | EdgeRole.StringByteView _ -> Some(edge.Target, true)
+        | EdgeRole.StringExtent _ -> Some(edge.Target, false)
+        | _ -> None
+    let resident = graph.Edges |> List.choose (fun edge -> key edge |> Option.map (fun key -> key, edge)) |> List.groupBy fst |> Map.ofList
+    let derived = current |> List.choose (fun edge -> key edge |> Option.map (fun key -> key, edge)) |> List.groupBy fst |> Map.ofList
+    let failedSites = failures |> List.map fst |> Set.ofList
+    let pending site =
+        Error(site, Set.singleton site,
+              "String borrow participants remain pending after the final demand rows: the origins or extent derived there differ from those source range settlement read, or no borrow is derived at this site.")
+    let history site = function
+        | ParticipantEvidence.Pending early -> [Bytes.historyRow { Site = site; Early = early }]
+        | ParticipantEvidence.Established _ -> []
+    let rows = resident |> Map.toList |> List.choose (fun ((site, _) as rowKey, edges) ->
+        if failedSites.Contains site then None else
+        Some (
+            match edges, Map.tryFind rowKey derived with
+            | [_, { Role = EdgeRole.StringByteView early }], Some [_, { Role = EdgeRole.StringByteView current }]
+                when { current with Participants = early.Participants } = early ->
+                let established = { early with Participants = current.Participants }
+                Ok ([Bytes.viewRow established; Bytes.storageRow established] @ history early.Site early.Participants)
+            | [_, { Role = EdgeRole.StringExtent early }], Some [_, { Role = EdgeRole.StringExtent current }]
+                when { current with Participants = early.Participants } = early ->
+                let established = { early with Participants = current.Participants }
+                Ok (Bytes.extentRow established :: history early.Site early.Participants)
+            | _ :: _ :: _, _ ->
+                Error(site, Set.singleton site, "A string borrow has more than one row written before source range settlement.")
+            | _ -> pending site))
+    let missing = derived |> Map.toList |> List.choose (fun ((site, _) as rowKey, _) ->
+        if resident.ContainsKey rowKey || failedSites.Contains site then None else
+        Some (Error(site, Set.singleton site,
+                    "A string borrow derived after the final demand rows has no row written before source range settlement.")))
+    (failures |> List.map (fun (site, failure) -> Error(StringComparisonRecipes.originError graph site failure))) @ rows @ missing
