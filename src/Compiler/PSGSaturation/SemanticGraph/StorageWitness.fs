@@ -194,7 +194,9 @@ let project (graph: SemanticGraph) : Result<StorageWitnessProjection, WitnessPro
             for KeyValue(identity, reason) in current.Unresolved do reject (ProgramStorage.sourceOf identity) reason
             current
         | None ->
-            let identities = Set.union (codata.ProgramStorage.Entries.Keys |> Set.ofSeq) (codata.ProgramStorage.Unresolved.Keys |> Set.ofSeq)
+            let identitiesOf (inventory: ProgramStorageInventory) =
+                Set.union (inventory.Entries.Keys |> Set.ofSeq) (inventory.Unresolved.Keys |> Set.ofSeq)
+            let identities = Set.union (identitiesOf codata.ProgramStorage) (ProgramStorage.inspect graph |> identitiesOf)
             for identity in identities do reject (ProgramStorage.sourceOf identity) "Writable program inventory does not retain its current source authority."
             if identities.IsEmpty then errors.Add(failure None Set.empty "Writable program inventory omits current source allocations.")
             ProgramStorageInventory.empty

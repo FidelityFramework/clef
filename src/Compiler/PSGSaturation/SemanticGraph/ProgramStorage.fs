@@ -35,9 +35,21 @@ let private viewCarrier ty =
 
 let settle (graph: SemanticGraph) : ProgramStorageInventory =
     let codata = graph.Codata.Value
+    // These are retained source residence claims, not allocations selected by
+    // a successful authority lookup. Losing authority must not erase a claim.
+    // Earlier proposal formation remains the owning residence recipe's work.
+    let staticSites =
+        codata.Escapes |> Map.toList |> List.choose (fun (site, residence) ->
+            match residence, graph.Nodes.TryFind site with
+            | EscapeKind.StaticLifetime, Some node when node.IsReachable -> Some(site, node)
+            | _ -> None)
     match Program.read graph, graph.Platform with
-    | None, _ | _, None -> ProgramStorageInventory.empty
-    | Some _, Some context when PlatformContext.substrateKind context = SubstrateKind.FPGA -> ProgramStorageInventory.empty
+    | _, None -> ProgramStorageInventory.empty
+    | _, Some context when PlatformContext.substrateKind context = SubstrateKind.FPGA -> ProgramStorageInventory.empty
+    | None, Some _ ->
+        { ProgramStorageInventory.empty with
+            Unresolved = staticSites |> List.map (fun (site, _) ->
+                ProgramStorageIdentity.Allocation site, "The retained static allocation lacks a current program startup plan") |> Map.ofList }
     | Some plan, Some _ ->
         let mutable entries: Map<ProgramStorageIdentity, ProgramStorageEntry> = Map.empty
         let mutable unresolved: Map<ProgramStorageIdentity, string> = Map.empty
@@ -77,10 +89,10 @@ let settle (graph: SemanticGraph) : ProgramStorageInventory =
         let sequences =
             plan.ValueBindings |> Seq.choose (fun binding -> Sequences.programInstance graph binding)
             |> Seq.map (fun value -> value.Allocation, value) |> Map.ofSeq
-        for KeyValue(site, residence) in codata.Escapes do
-            match residence, graph.Nodes.TryFind site, Authority.authority graph site with
-            | EscapeKind.StaticLifetime, Some node, Some(authority, dependencies) when node.IsReachable ->
-                let identity = ProgramStorageIdentity.Allocation site
+        for site, node in staticSites do
+            let identity = ProgramStorageIdentity.Allocation site
+            match Authority.authority graph site with
+            | Some(authority, dependencies) ->
                 let proofDependencies obligations =
                     graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains && List.contains edge.Target obligations)
                     |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList |> Set.union dependencies
@@ -111,7 +123,7 @@ let settle (graph: SemanticGraph) : ProgramStorageInventory =
                         add identity ProgramStorageShape.Bytes bytes alignment authority dependencies
                     | _ -> pending identity "The program aggregate backing has no settled source layout"
                 | _ -> pending identity "This static allocation requires its owning source storage contract"
-            | _ -> ()
+            | None -> pending identity "The retained static allocation lacks exact startup and mutable-space authority"
         let mutable reservations = Map.empty
         for spaceNode, values in entries.Values |> Seq.groupBy _.SpaceNode do
             let values = List.ofSeq values
@@ -128,9 +140,17 @@ let settle (graph: SemanticGraph) : ProgramStorageInventory =
 
 /// Recompute against the current graph before native consumption. Stale codata
 /// may not retain a capacity/layout/startup result from a previous snapshot.
-let private readings = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, ProgramStorageInventory option>()
-
-let read (graph: SemanticGraph) =
+type private InventoryReading = { Current: ProgramStorageInventory; Agrees: bool }
+let private readings = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, InventoryReading>()
+let private reading graph =
     readings.GetValue(graph, fun currentGraph ->
         let current = settle currentGraph
-        if current = currentGraph.Codata.Value.ProgramStorage then Some current else None)
+        { Current = current; Agrees = current = currentGraph.Codata.Value.ProgramStorage })
+
+/// One current source reading, shared by validation and its located failures.
+/// It includes unresolved allocations and is not an admission result.
+let inspect (graph: SemanticGraph) = (reading graph).Current
+
+let read (graph: SemanticGraph) =
+    let result = reading graph
+    if result.Agrees then Some result.Current else None
