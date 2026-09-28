@@ -126,9 +126,14 @@ let dimensional (enrichId: int) (name: string, (site: SemanticNode, left: Semant
       Annotated = [] }
 
 /// storage-reservation, view-containment, terminator-sentinel: one triple per
-/// literal, S_f = {literal}. Named immutable program storage contributes its
-/// selected descriptor, designation and space declaration to residence.
-let literal (immutableSpace: DeclaredSpace option) (authority: NodeId list) (enrichId: int) (name: string, (content: string, subject: SemanticNode)) : Enrichment =
+/// text, S_f = every reachable node of the text. Every term is a fact of the
+/// text itself, so the triple is node-level. The first participant supplies
+/// the source position.
+let literalTriple (enrichId: int) (name: string, (content: string, participants: SemanticNode list)) : Enrichment =
+    let subject =
+        match participants with
+        | subject :: _ -> subject
+        | [] -> invalidOp (sprintf "ObligationRecipes.literalTriple: %s has no participant." (describe content))
     let len = byteLength content
     let storage = len + 1
     let born = fmtRange subject.Range
@@ -145,14 +150,19 @@ let literal (immutableSpace: DeclaredSpace option) (authority: NodeId list) (enr
         mk { Id = sprintf "sentinel_%s" name; Kind = "terminator-sentinel"; Logic = "QF_BV"
              Statement = sprintf "the final storage byte of %s is the 0x00 terminator" (describe content)
              Source = born; Refs = [ "CWE-170" ]; Body = ObligationBody.NulSentinel 0 }
+    let sources = participants |> List.map (fun n -> n.Id)
     { NewNodes = [ storageN; viewN; sentinelN ]
       NewEdges =
-        (immutableSpace |> Option.map (fun space ->
-            { resides space.Node subject.Id with Sources = space.Node :: authority |> List.distinct }) |> Option.toList)
-        @ [ constrains [ subject.Id ] storageN
-            constrains [ subject.Id ] viewN
-            constrains [ subject.Id ] sentinelN ]
+        [ constrains sources storageN
+          constrains sources viewN
+          constrains sources sentinelN ]
       Annotated = [] }
+
+/// A literal resides in named immutable program storage: the space
+/// declaration, its selected descriptor and designation are the sources.
+let literalResidence (immutableSpace: DeclaredSpace option) (authority: NodeId list) (subject: SemanticNode) : Hyperedge option =
+    immutableSpace |> Option.map (fun space ->
+        { resides space.Node subject.Id with Sources = space.Node :: authority |> List.distinct })
 
 /// Check the actual BAREWire pool that emission consumes. No placement premise
 /// is invented: the concrete offsets, extents and declared bounds are evidence.

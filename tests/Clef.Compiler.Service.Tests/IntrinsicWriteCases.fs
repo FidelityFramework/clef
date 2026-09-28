@@ -114,6 +114,30 @@ let main _ =
     if discard (write "c"; 0) = 0 then 0 else 1
 """
 
+    /// One text written by two demanded calls.
+    let repeatedBody = """module WriteFixture
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+[<EntryPoint>]
+let main _ =
+    write "same"
+    write "same"
+    0
+"""
+
+    /// A text written only by a function that no call reaches.
+    let uncalledBody = """module WriteFixture
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+let uncalled () = write "orphan"
+[<EntryPoint>]
+let main _ =
+    write "kept"
+    0
+"""
+
     /// `authority` with the writable program space that a module-level value binding requires.
     let writableAuthority =
         authority
@@ -168,6 +192,37 @@ let main _ =
     let writeProofs (graph: SemanticGraph) =
         graph.Nodes.Values |> Seq.filter (fun node -> match node.Kind with SemanticKind.Obligation info -> info.Kind = "intrinsic-write-proof" | _ -> false)
         |> Seq.length
+
+    /// The graph of a source with no error and a settled static string pool.
+    let pooledGraph source =
+        let graph, _ = graphAndProjectionOfSource source
+        Assert.True(graph.StaticStringPool.IsSome)
+        graph
+
+    let literalKinds = ["storage-reservation"; "terminator-sentinel"; "view-containment"]
+
+    /// The reachable nodes of one text.
+    let occurrences (graph: SemanticGraph) text =
+        graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable && node.Kind = SemanticKind.Literal(NativeLiteral.String text))
+        |> Seq.map _.Id |> Set.ofSeq
+
+    /// The storage, view and sentinel proofs whose hyperedge names a reachable
+    /// node of the text, each with its participants.
+    let literalProofs (graph: SemanticGraph) text =
+        let nodes = occurrences graph text
+        graph.Edges |> List.choose (fun edge ->
+            match graph.Nodes.TryFind edge.Target with
+            | Some { Kind = SemanticKind.Obligation info }
+                when edge.Class = EdgeClass.Obligation && List.contains info.Kind literalKinds && List.exists nodes.Contains edge.Sources ->
+                Some (info, Set.ofList edge.Sources)
+            | _ -> None)
+
+    let proofKinds (proofs: (ObligationInfo * Set<NodeId>) list) = proofs |> List.map (fun (info, _) -> info.Kind) |> List.sort
+
+    let textOf (graph: SemanticGraph) id =
+        match graph.Nodes[id].Kind with
+        | SemanticKind.Literal(NativeLiteral.String text) -> text
+        | other -> failwithf "Participant %A is not a string literal: %A" id other
 
 type IntrinsicWriteCases() =
     [<Fact>]
@@ -304,3 +359,50 @@ type IntrinsicWriteCases() =
         match IntrinsicBoundary.project settled with
         | Error errors -> Assert.Contains(errors, fun error -> error.Reason.Contains("premises changed"))
         | Ok _ -> failwith "An old numeric/storage proof was reused after the exact actual origin changed."
+
+    [<Fact>]
+    member _.``A never demanded literal has its storage view and sentinel proofs without a pool entry or residence`` () =
+        let graph = IntrinsicWriteFixture.pooledGraph (IntrinsicWriteFixture.demandBody "0")
+        let never = IntrinsicWriteFixture.literal graph "never demanded"
+        Assert.NotEmpty(IntrinsicWriteFixture.omissionsContaining graph never)
+        let proofs = IntrinsicWriteFixture.literalProofs graph "never demanded"
+        Assert.Equal<string list>(IntrinsicWriteFixture.literalKinds, IntrinsicWriteFixture.proofKinds proofs)
+        let anchors = Clef.Compiler.Nanopass.ObligationDischarge.ofGraph graph |> List.map _.Id |> Set.ofList
+        for info, _ in proofs do Assert.Contains(info.Id, anchors)
+        Assert.DoesNotContain(graph.StaticStringPool.Value.Entries, fun entry -> entry.Content = "never demanded" || List.contains never entry.NodeIds)
+        Assert.DoesNotContain(graph.Edges, fun edge -> edge.Role = EdgeRole.Resides && edge.Target = never)
+        Assert.Equal<string list>(IntrinsicWriteFixture.literalKinds, IntrinsicWriteFixture.proofKinds (IntrinsicWriteFixture.literalProofs graph "kept"))
+        Assert.True(IntrinsicWriteFixture.pooled graph "kept")
+
+    [<Fact>]
+    member _.``The proofs of a literal are equal under either demand while the pool follows demand`` () =
+        let omitted = IntrinsicWriteFixture.pooledGraph (IntrinsicWriteFixture.demandBody "0")
+        let demanded = IntrinsicWriteFixture.pooledGraph (IntrinsicWriteFixture.demandBody "value")
+        let statements graph =
+            IntrinsicWriteFixture.literalProofs graph "never demanded"
+            |> List.map (fun (info, participants) -> info.Kind, info.Statement, participants |> Set.map (IntrinsicWriteFixture.textOf graph))
+            |> List.sort
+        Assert.Equal<string list>(IntrinsicWriteFixture.literalKinds, IntrinsicWriteFixture.proofKinds (IntrinsicWriteFixture.literalProofs demanded "never demanded"))
+        Assert.Equal<(string * string * Set<string>) list>(statements demanded, statements omitted)
+        Assert.True(IntrinsicWriteFixture.pooled demanded "never demanded")
+        Assert.False(IntrinsicWriteFixture.pooled omitted "never demanded")
+
+    [<Fact>]
+    member _.``Every reachable node of a text is a participant of the proofs of that text`` () =
+        let graph = IntrinsicWriteFixture.pooledGraph IntrinsicWriteFixture.repeatedBody
+        let nodes = IntrinsicWriteFixture.occurrences graph "same"
+        Assert.Equal(2, nodes.Count)
+        let proofs = IntrinsicWriteFixture.literalProofs graph "same"
+        Assert.Equal<string list>(IntrinsicWriteFixture.literalKinds, IntrinsicWriteFixture.proofKinds proofs)
+        for _, participants in proofs do Assert.Equal<Set<NodeId>>(nodes, participants)
+
+    [<Fact>]
+    member _.``A literal only in a function that is never called has no proofs`` () =
+        let graph = IntrinsicWriteFixture.pooledGraph IntrinsicWriteFixture.uncalledBody
+        let orphans = graph.Nodes.Values |> Seq.filter (fun node -> node.Kind = SemanticKind.Literal(NativeLiteral.String "orphan")) |> Seq.toList
+        Assert.NotEmpty orphans
+        Assert.All(orphans, fun node -> Assert.False node.IsReachable)
+        Assert.DoesNotContain(graph.Edges, fun edge ->
+            edge.Class = EdgeClass.Obligation && orphans |> List.exists (fun node -> List.contains node.Id edge.Sources))
+        Assert.DoesNotContain(Clef.Compiler.Nanopass.ObligationDischarge.ofGraph graph, fun obligation -> obligation.Statement.Contains "\"orphan\"")
+        Assert.Equal<string list>(IntrinsicWriteFixture.literalKinds, IntrinsicWriteFixture.proofKinds (IntrinsicWriteFixture.literalProofs graph "kept"))

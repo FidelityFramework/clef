@@ -56,6 +56,7 @@ module IntrinsicElaboration = Clef.Compiler.Nanopass.IntrinsicElaboration
 module BakerSaturation = Clef.Compiler.Nanopass.BakerSaturation
 module RecipeSerialization = Clef.Compiler.Nanopass.Serialization
 module ObligationElaboration = Clef.Compiler.Nanopass.ObligationElaboration
+module NodeProofs = Clef.Compiler.Nanopass.NodeProofs
 module ObligationDischarge = Clef.Compiler.Nanopass.ObligationDischarge
 
 open Clef.Compiler.NativeTypedTree.UnionFind
@@ -1014,14 +1015,17 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         else Clef.Compiler.Nanopass.ProgramInitialization.normalizeOwned ownedSources roots graph
 
     // Phase 4: Reachability analysis
-    // Use soft-delete (mark IsReachable = false) or hard prune based on config
+    // Use soft-delete (mark IsReachable = false) or hard prune based on config.
+    // The tier 2 nanopass follows the first marking: every node is new to it.
     let reachableGraph =
         if PhaseConfig.useSoftDeleteReachability() then
             let markedGraph = markUnreachable graph
+            let markedGraph = NodeProofs.create markedGraph (Map.keys markedGraph.Nodes)
             emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability markedGraph diagnostics
             markedGraph
         else
             let prunedGraph = pruneUnreachable graph
+            let prunedGraph = NodeProofs.create prunedGraph (Map.keys prunedGraph.Nodes)
             emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability prunedGraph diagnostics
             prunedGraph
 
@@ -1100,12 +1104,14 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     //=========================================================================
     // Pass 5: Obligation Elaboration -- the declared platform, cross-compiled
-    // into this graph, cross-applied with the saturated program. Obligations
-    // are minted into V and F by the Baker obligation recipes (C-01 14.5;
-    // Obligation_Residency 3) and discharged from F at design time (06a/06b).
-    // Runs after final reachability: the layout obligation ranges over the
-    // complete reachable literal set. Obligation nodes are off the emission
-    // spine; the witness never sees them (PHG paper 2.4).
+    // into this graph, cross-applied with the saturated program. The Baker
+    // obligation recipes add obligations to V and F here (C-01 14.5), and they
+    // are discharged from F at design time (06a/06b). The storage, view and
+    // sentinel proofs of a literal are node-level and were created at the
+    // first marking (NodeProofs); this pass adds the residence of each literal
+    // the pool places. Runs after final reachability: the layout obligation
+    // ranges over the complete reachable literal set. Obligation nodes are off
+    // the emission spine; the witness never sees them (PHG paper 2.4).
     //=========================================================================
     let finalGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize finalGraph
     let finalGraph = ObligationElaboration.foldIn (ObligationElaboration.elaborate finalGraph) finalGraph

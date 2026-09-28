@@ -429,6 +429,7 @@
     <Compile Include="Nanopass\ArrayConstruction.fs" />
     <!-- Obligation recipes observe the range pass's selection; they do not select again. -->
     <Compile Include="Nanopass\ObligationElaboration.fs" />
+    <Compile Include="Nanopass\NodeProofs.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Placement.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ProgramStorageAuthority.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Roots.fs" />

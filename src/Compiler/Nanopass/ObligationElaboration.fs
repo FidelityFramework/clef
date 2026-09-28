@@ -2,16 +2,21 @@
 
 /// Obligation Elaboration -- Pass 5.
 ///
-/// The pass: discover the subjects obligations are stated over (reachable
-/// string literals, String.concat2 sites, the Sys.readline site), read the
-/// declared platform the program was cross-compiled with, apply the Baker
+/// The pass: discover the subjects obligations are stated over (String.concat2
+/// sites, measured operations and applications, the Sys.readline site), read
+/// the declared platform the program was cross-compiled with, apply the Baker
 /// obligation recipes, and fold the result into the graph. The recipes and
 /// their ingredients live in Baker; this module only orchestrates.
 ///
+/// The storage, view and sentinel proofs of a string literal are node-level:
+/// the tier 2 nanopass (NodeProofs) creates them at the first reachability
+/// marking. This pass adds the residence of each literal the pool places,
+/// which demand decides.
+///
 /// Runs after final reachability, over the saturated graph: the layout
-/// obligation needs the complete reachable literal set, and no obligation is
-/// minted for a dead literal. Under the saturation lattice this becomes a rule
-/// that fires when its sources are Saturated; today it is a fixed position.
+/// obligation needs the complete reachable literal set. Under the saturation
+/// lattice this becomes a rule that fires when its sources are Saturated;
+/// today it is a fixed position.
 ///
 /// Pure: `elaborate` projects an Enrichment; `foldIn` returns a new graph.
 module Clef.Compiler.Nanopass.ObligationElaboration
@@ -240,13 +245,12 @@ let elaborate (graph: SemanticGraph) : Enrichment =
     let authority = platform |> Option.map immutableProgramAuthority |> Option.defaultValue []
     let enrichId = freshId ()
     let literals = reachableLiterals graph
-    let namedLiterals = literals |> List.map (fun (c, n) -> slug c, (c, n)) |> uniquify
     let readln =
         match platform |> Option.bind (fun p -> bufferNamed "consoleReadln" p |> Option.map (fun b -> p, b)) with
         | Some (p, b) -> intrinsicSites graph IntrinsicModule.Sys "readline" |> List.map (fun (site, _) -> Recipes.readln p b enrichId site)
         | None -> []
     Enrichment.concat
-        [ namedLiterals |> List.map (Recipes.literal immutableSpace authority enrichId) |> Enrichment.concat
+        [ { Enrichment.empty with NewEdges = literals |> List.choose (fun (_, n) -> Recipes.literalResidence immutableSpace authority n) }
           concatSites graph |> List.map (Recipes.concat enrichId) |> Enrichment.concat
           dimensionalSites graph |> List.map (Recipes.dimensional enrichId) |> Enrichment.concat
           applicationSites graph |> List.map (Recipes.application enrichId) |> Enrichment.concat

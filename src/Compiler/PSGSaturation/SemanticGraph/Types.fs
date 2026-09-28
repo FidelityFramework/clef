@@ -213,10 +213,12 @@ and [<RequireQualifiedAccess>] Pattern =
 // dependency edges" (C-01) and "obligations as hyperedges" (PHG paper 6.4) --
 // are this one structure seen from V and from F.
 //
-// Obligations are minted at saturation by Baker, over the saturated graph, and
-// discharged twice against the same anchor name: design-time from the graph
-// (SMT-LIB to cvc5) and build-time from the witnessed MLIR (smt dialect).
-// Nothing below the graph authors an obligation.
+// The tier 2 nanopass (NodeProofs) creates an obligation when the structure it
+// is about exists and is reachable. Today it creates the storage, view and
+// sentinel proofs of string literals; the later obligation passes still create
+// the others. Every obligation is discharged twice against the same anchor
+// name: design-time from the graph (SMT-LIB to cvc5) and build-time from the
+// witnessed MLIR (smt dialect). Nothing below the graph authors an obligation.
 //
 // INVARIANT I1: every body is a proposition over literals with an enumerated
 // source set. All fragments are quantifier-free.
