@@ -10,10 +10,12 @@ module CallableOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigi
 let occurrence node role ordinal group : Participant = { Node = node; Role = role; Ordinal = ordinal; Group = group }
 
 /// The groups that a formal's inputs state: each demanded input's call and actual, and
-/// each omitted input's call and actual with the site and actual of every omission that
-/// contains the call, each in the group of its call and at its ordinal. An omission that
-/// contains two omitted calls occurs in the group of each. When the formal has an input,
-/// the formal's ingress follows in the group of the formal.
+/// each omitted input's call and actual with the site of every omission that contains the
+/// call, each in the group of its call and at its ordinal. The omitted actual of an
+/// omission is in the group of the omission's site, at the omission's ordinal, so the
+/// site and ordinal name the omission and its actual. An omission that contains two
+/// omitted calls names its site in the group of each and its actual once. When the
+/// formal has an input, the formal's ingress follows in the group of the formal.
 let ofInputs (formal: NodeId) (inputs: FormalDemand.Inputs) : Participant list =
     let demanded =
         inputs.Demanded |> List.collect (fun input ->
@@ -26,21 +28,40 @@ let ofInputs (formal: NodeId) (inputs: FormalDemand.Inputs) : Participant list =
               occurrence omitted.Input.Actual ParticipantRole.OmittedCallActual omitted.Input.Ordinal call ]
             @ (omitted.Omissions |> List.collect (fun omission ->
                 [ occurrence omission.Site ParticipantRole.OmissionSite omission.Ordinal call
-                  occurrence omission.Actual ParticipantRole.OmittedActual omission.Ordinal call ])))
+                  occurrence omission.Actual ParticipantRole.OmittedActual omission.Ordinal omission.Site ])))
     let ingress =
         match demanded @ omitted with
         | [] -> []
         | _ -> inputs.Participants |> Set.toList |> List.map (fun node -> occurrence node ParticipantRole.Ingress 0 formal)
     demanded @ omitted @ ingress
 
-/// The lambdas a call resolves to, each with its body, its arguments and its parameters,
-/// in the group of the call; an argument or a parameter at its position.
+/// The lambdas a call resolves to, each in the group of the call, and each lambda's body in
+/// the group of that lambda. The call's arguments and the parameters that remain for the
+/// call (CallableOrigins.fs lines 263 to 267) are in the group of the call, each at its
+/// position. The group of a call states one argument list and one parameter list: a call
+/// whose targets do not have the same argument nodes and the same parameter nodes in the
+/// same order cannot be stated, and it is an error that names the call. Two different
+/// lambdas have different parameters, so a call that resolves to two of them is such a
+/// case. The resolver makes a target for an exact invocation only, with as many remaining
+/// parameters as the call has arguments; a target with other counts is an error of the form
+/// that names the call. On 2026-09-28 none of the 56 borrow rows measured in 17 programs,
+/// samples 01, 04a and 04c among them, had a call with more than one target, or a lambda
+/// with different parameter lists at two calls.
 let ofTargets (call: NodeId) (targets: CallableOrigins.CallTarget list) : Participant list =
-    targets |> List.collect (fun target ->
-        [ occurrence target.Lambda ParticipantRole.Callee 0 call
-          occurrence target.Body ParticipantRole.CalleeBody 0 call ]
-        @ (target.Arguments |> List.mapi (fun ordinal argument -> occurrence argument ParticipantRole.CalleeArgument ordinal call))
-        @ (target.Parameters |> List.mapi (fun ordinal (_, _, parameter) -> occurrence parameter ParticipantRole.CalleeParameter ordinal call)))
+    let positions (target: CallableOrigins.CallTarget) = target.Arguments, target.Parameters |> List.map (fun (_, _, parameter) -> parameter)
+    match targets |> List.filter (fun target -> target.Arguments.Length <> target.Parameters.Length), targets |> List.map positions |> List.distinct with
+    | target :: _, _ ->
+        invalidOp (sprintf "The target %d of call %d has %d arguments and %d parameters; the resolver states one parameter for each argument of an exact invocation."
+                    (NodeId.value target.Lambda) (NodeId.value call) target.Arguments.Length target.Parameters.Length)
+    | [], _ :: _ :: _ ->
+        invalidOp (sprintf "The targets of call %d have different argument or parameter lists; the participant form cannot state the arguments and parameters of each target apart." (NodeId.value call))
+    | [], lists ->
+        (lists |> List.collect (fun (arguments, parameters) ->
+            (arguments |> List.mapi (fun ordinal argument -> occurrence argument ParticipantRole.CalleeArgument ordinal call))
+            @ (parameters |> List.mapi (fun ordinal parameter -> occurrence parameter ParticipantRole.CalleeParameter ordinal call))))
+        @ (targets |> List.collect (fun target ->
+            [ occurrence target.Lambda ParticipantRole.Callee 0 call
+              occurrence target.Body ParticipantRole.CalleeBody 0 target.Lambda ]))
 
 /// The occurrences in their order: the row's own occurrences (the group of `site`) first,
 /// then the other groups by node, each with its roles in case order, then by ordinal and

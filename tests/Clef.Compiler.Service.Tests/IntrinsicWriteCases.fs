@@ -252,6 +252,18 @@ let main _ =
 
     let occurrence node role ordinal group : Participant = { Node = node; Role = role; Ordinal = ordinal; Group = group }
 
+    /// The omissions the participants state for an omitted call, each as a complete tuple:
+    /// the omitted call, the omission's site and ordinal, and the omitted actuals stated at
+    /// that site and ordinal.
+    let omissionTuples omitted (participants: Participant list) =
+        inGroup omitted ParticipantRole.OmissionSite participants
+        |> List.map (fun site ->
+            omitted, site.Node, site.Ordinal,
+            participants
+            |> List.filter (fun actual -> actual.Role = ParticipantRole.OmittedActual && actual.Group = site.Node && actual.Ordinal = site.Ordinal)
+            |> List.map _.Node)
+        |> List.sort
+
 type IntrinsicWriteCases() =
     [<Fact>]
     member _.``Source preserves exact extent through nested formals and ordered three operand write`` () =
@@ -319,7 +331,7 @@ type IntrinsicWriteCases() =
         let omitted = IntrinsicWriteFixture.writeCallOf graph "never demanded"
         let participants = IntrinsicWriteFixture.established view.Participants
         Assert.Contains(IntrinsicWriteFixture.occurrence site ParticipantRole.OmissionSite ordinal omitted, participants)
-        Assert.Contains(IntrinsicWriteFixture.occurrence actual ParticipantRole.OmittedActual ordinal omitted, participants)
+        Assert.Contains((omitted, site, ordinal, [actual]), IntrinsicWriteFixture.omissionTuples omitted participants)
         Assert.False(IntrinsicWriteFixture.pooled graph "never demanded")
         Assert.True(IntrinsicWriteFixture.pooled graph "kept")
         Assert.Equal(4, IntrinsicWriteFixture.writeProofs graph)
@@ -346,7 +358,7 @@ type IntrinsicWriteCases() =
         let site, ordinal, actual = IntrinsicWriteFixture.omissionsContaining graph omitted |> Assert.Single
         let participants = IntrinsicWriteFixture.established view.Participants
         Assert.Contains(IntrinsicWriteFixture.occurrence site ParticipantRole.OmissionSite ordinal omitted, participants)
-        Assert.Contains(IntrinsicWriteFixture.occurrence actual ParticipantRole.OmittedActual ordinal omitted, participants)
+        Assert.Contains((omitted, site, ordinal, [actual]), IntrinsicWriteFixture.omissionTuples omitted participants)
         Assert.True(IntrinsicWriteFixture.pooled graph "both")
 
     [<Fact>]
@@ -499,8 +511,7 @@ let main _ =
         let site, ordinal, actual = IntrinsicWriteFixture.omissionsContaining graph omitted |> Assert.Single
         Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence site ParticipantRole.OmissionSite ordinal omitted],
                                        IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmissionSite participants)
-        Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence actual ParticipantRole.OmittedActual ordinal omitted],
-                                       IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmittedActual participants)
+        Assert.Equal<(NodeId * NodeId * int * NodeId list) list>([omitted, site, ordinal, [actual]], IntrinsicWriteFixture.omissionTuples omitted participants)
         Assert.Empty(IntrinsicWriteFixture.inGroup demanded ParticipantRole.OmissionSite participants)
 
     [<Fact>]
@@ -542,8 +553,7 @@ let main _ =
             let site, ordinal, actual = IntrinsicWriteFixture.omissionsContaining graph omitted |> Assert.Single
             Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence site ParticipantRole.OmissionSite ordinal omitted],
                                            IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmissionSite participants)
-            Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence actual ParticipantRole.OmittedActual ordinal omitted],
-                                           IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmittedActual participants)
+            Assert.Equal<(NodeId * NodeId * int * NodeId list) list>([omitted, site, ordinal, [actual]], IntrinsicWriteFixture.omissionTuples omitted participants)
         let firstSites = IntrinsicWriteFixture.omissionsContaining graph first |> List.map (fun (site, _, _) -> site)
         let secondSites = IntrinsicWriteFixture.omissionsContaining graph second |> List.map (fun (site, _, _) -> site)
         Assert.NotEqual<NodeId list>(firstSites, secondSites)
@@ -567,10 +577,8 @@ let main _ =
         let omitted = IntrinsicWriteFixture.writeCallOf graph "nested"
         let omissions = IntrinsicWriteFixture.omissionsContaining graph omitted
         Assert.Equal(2, omissions.Length)
-        let sites = omissions |> List.map (fun (site, ordinal, _) -> IntrinsicWriteFixture.occurrence site ParticipantRole.OmissionSite ordinal omitted)
-        let actuals = omissions |> List.map (fun (_, ordinal, actual) -> IntrinsicWriteFixture.occurrence actual ParticipantRole.OmittedActual ordinal omitted)
-        Assert.Equal<Participant list>(List.sort sites, IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmissionSite participants |> List.sort)
-        Assert.Equal<Participant list>(List.sort actuals, IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmittedActual participants |> List.sort)
+        let expected = omissions |> List.map (fun (site, ordinal, actual) -> omitted, site, ordinal, [actual]) |> List.sort
+        Assert.Equal<(NodeId * NodeId * int * NodeId list) list>(expected, IntrinsicWriteFixture.omissionTuples omitted participants)
 
     [<Fact>]
     member _.``One omission that is the reason for two omitted calls occurs once in each of their groups`` () =
@@ -594,5 +602,71 @@ let main _ =
         for omitted in [first; second] do
             Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence site ParticipantRole.OmissionSite ordinal omitted],
                                            IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmissionSite participants)
-            Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence actual ParticipantRole.OmittedActual ordinal omitted],
-                                           IntrinsicWriteFixture.inGroup omitted ParticipantRole.OmittedActual participants)
+            Assert.Equal<(NodeId * NodeId * int * NodeId list) list>([omitted, site, ordinal, [actual]], IntrinsicWriteFixture.omissionTuples omitted participants)
+        Assert.Equal<Participant list>([IntrinsicWriteFixture.occurrence actual ParticipantRole.OmittedActual ordinal site],
+                                       participants |> List.filter (fun participant -> participant.Role = ParticipantRole.OmittedActual && participant.Node = actual))
+
+    [<Fact>]
+    member _.``Crossing the actuals of two omissions of one omitted call changes the participants`` () =
+        let call : Clef.Compiler.Baker.Ingredients.FormalDemand.Input = { Call = NodeId 10; Ordinal = 0; Actual = NodeId 11 }
+        let evidence (omissions: OrdinaryOmission list) =
+            let inputs : Clef.Compiler.Baker.Ingredients.FormalDemand.Inputs =
+                { Demanded = []; Omitted = [ { Input = call; Omissions = omissions } ]; Participants = Set.empty }
+            Clef.Compiler.Baker.Ingredients.Participants.ordered (NodeId 1) (Clef.Compiler.Baker.Ingredients.Participants.ofInputs (NodeId 2) inputs)
+        let stated : OrdinaryOmission list = [ { Site = NodeId 20; Ordinal = 0; Actual = NodeId 21 }; { Site = NodeId 30; Ordinal = 0; Actual = NodeId 31 } ]
+        let crossed : OrdinaryOmission list = [ { Site = NodeId 20; Ordinal = 0; Actual = NodeId 31 }; { Site = NodeId 30; Ordinal = 0; Actual = NodeId 21 } ]
+        Assert.NotEqual<Participant list>(evidence stated, evidence crossed)
+        Assert.Equal<(NodeId * NodeId * int * NodeId list) list>(
+            [ NodeId 10, NodeId 20, 0, [NodeId 21]; NodeId 10, NodeId 30, 0, [NodeId 31] ], IntrinsicWriteFixture.omissionTuples (NodeId 10) (evidence stated))
+
+    [<Fact>]
+    member _.``Crossing the bodies of two targets of one call changes the participants`` () =
+        let target lambda body : Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.CallTarget =
+            { Lambda = NodeId lambda; Parameters = [ "p", Types.intType, NodeId 50 ]; Arguments = [ NodeId 30 ]; Body = NodeId body }
+        let evidence targets =
+            Clef.Compiler.Baker.Ingredients.Participants.ordered (NodeId 1) (Clef.Compiler.Baker.Ingredients.Participants.ofTargets (NodeId 10) targets)
+        let stated = evidence [ target 20 21; target 40 41 ]
+        Assert.NotEqual<Participant list>(stated, evidence [ target 20 41; target 40 21 ])
+        Assert.Equal<Participant list>([ IntrinsicWriteFixture.occurrence (NodeId 21) ParticipantRole.CalleeBody 0 (NodeId 20) ],
+                                       stated |> List.filter (fun participant -> participant.Group = NodeId 20))
+
+    [<Fact>]
+    member _.``One lambda resolved at two calls with different parameters states each call's parameters at its own ordinals`` () =
+        let target arguments parameters : Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.CallTarget =
+            { Lambda = NodeId 20; Body = NodeId 21
+              Parameters = parameters |> List.map (fun parameter -> "p", Types.intType, NodeId parameter); Arguments = List.map NodeId arguments }
+        let stated =
+            Clef.Compiler.Baker.Ingredients.Participants.ordered (NodeId 1)
+                (Clef.Compiler.Baker.Ingredients.Participants.ofTargets (NodeId 10) [ target [30; 31] [50; 51] ]
+                 @ Clef.Compiler.Baker.Ingredients.Participants.ofTargets (NodeId 11) [ target [32] [51] ])
+        let positions call role =
+            stated |> List.filter (fun participant -> participant.Group = NodeId call && participant.Role = role) |> List.map (fun participant -> participant.Ordinal, participant.Node)
+        Assert.Equal<(int * NodeId) list>([ 0, NodeId 50; 1, NodeId 51 ], positions 10 ParticipantRole.CalleeParameter)
+        Assert.Equal<(int * NodeId) list>([ 0, NodeId 51 ], positions 11 ParticipantRole.CalleeParameter)
+        Assert.Equal<(int * NodeId) list>([ 0, NodeId 30; 1, NodeId 31 ], positions 10 ParticipantRole.CalleeArgument)
+        Assert.Equal<(int * NodeId) list>([ 0, NodeId 32 ], positions 11 ParticipantRole.CalleeArgument)
+        Assert.Equal<Participant list>([ IntrinsicWriteFixture.occurrence (NodeId 21) ParticipantRole.CalleeBody 0 (NodeId 20) ],
+                                       stated |> List.filter (fun participant -> participant.Group = NodeId 20))
+
+    [<Fact>]
+    member _.``A target with more arguments than parameters is an error that names the call`` () =
+        let target : Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.CallTarget =
+            { Lambda = NodeId 20; Parameters = [ "p", Types.intType, NodeId 50 ]; Arguments = [ NodeId 30; NodeId 31 ]; Body = NodeId 21 }
+        let error =
+            Assert.Throws<System.InvalidOperationException>(fun () ->
+                Clef.Compiler.Baker.Ingredients.Participants.ofTargets (NodeId 10) [ target ] |> ignore)
+        Assert.Contains("call 10", error.Message)
+        Assert.Contains("2 arguments and 1 parameters", error.Message)
+
+    [<Theory>]
+    [<InlineData("arguments")>]
+    [<InlineData("parameters")>]
+    member _.``Two targets of one call with different arguments or parameters are an error that names the call`` differing =
+        let target lambda argument parameter : Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.CallTarget =
+            { Lambda = NodeId lambda; Parameters = [ "p", Types.intType, NodeId parameter ]; Arguments = [ NodeId argument ]; Body = NodeId (lambda + 1) }
+        let targets = if differing = "arguments" then [ target 20 30 50; target 40 31 50 ] else [ target 20 30 50; target 40 30 51 ]
+        let error =
+            Assert.Throws<System.InvalidOperationException>(fun () ->
+                Clef.Compiler.Baker.Ingredients.Participants.ofTargets (NodeId 10) targets |> ignore)
+        Assert.Contains("call 10", error.Message)
+        Assert.Contains("cannot state the arguments and parameters of each target apart", error.Message)
