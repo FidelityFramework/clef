@@ -31,8 +31,15 @@ let private diagnostic (site: SemanticNode) related reason : Diagnostic =
       Range = site.Range; RelatedNodes = List.distinct(site.Id :: related)
       Reachability = ReachabilityContext.Reachable }
 
-let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list =
+let private analyze renew (graph: SemanticGraph) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
+    let sourceFacts = lazy (
+        // These are the conclusions being renewed. They cannot seed the
+        // independent source rules through an enclosing binding or operation.
+        let edges = graph.Edges |> List.filter (fun edge ->
+            match edge.Role with EdgeRole.StringByteRange _ -> false | _ -> true)
+        let sourceGraph = { graph with Edges = edges }
+        Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.sourceFacts sourceGraph)
     let rec application seen id args =
         if Set.contains id seen then None else
         let seen = Set.add id seen
@@ -51,7 +58,7 @@ let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list 
         match nodes.TryFind id with
         | Some node when arrayElement node |> Option.isSome ->
             match node.Kind with
-            | SemanticKind.ArrayExpr _ -> Some id
+            | SemanticKind.ArrayExpr _ | SemanticKind.ArrayAllocate _ -> Some id
             | SemanticKind.VarRef(_, Some definition) -> origin seen definition
             | SemanticKind.Binding(_, false, _, _) when node.Children.Length = 1 -> origin seen node.Children.Head
             | SemanticKind.TypeAnnotation(inner, _) -> origin seen inner
@@ -65,9 +72,18 @@ let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list 
             | _ -> None
         | _ -> None
     let origins = nodes |> Map.toList |> List.choose (fun (id, _) -> origin Set.empty id |> Option.map (fun root -> id, root)) |> Map.ofList
-    let members root = origins |> Map.toList |> List.choose (fun (id, actual) -> if actual = root then Some id else None)
+    let families = origins |> Map.toList |> List.groupBy snd |> List.map (fun (root, entries) -> root, List.map fst entries) |> Map.ofList
+    let members root = families[root]
     let roots = origins.Values |> Set.ofSeq
     let mutable blocked = Set.empty
+    let initialization =
+        roots |> Seq.map (fun root ->
+            match nodes[root].Kind with
+            | SemanticKind.ArrayAllocate _ ->
+                match Clef.Compiler.Baker.Ingredients.ArrayInitialization.tryInitialization graph root with
+                | Result.Ok support -> root, support
+                | Result.Error _ -> blocked <- Set.add root blocked; root, []
+            | _ -> root, []) |> Map.ofSeq
     let block id = origins.TryFind id |> Option.iter (fun root -> blocked <- Set.add root blocked)
     // Every use must be covered, including references that do not occur in
     // Children. A known body is not permission to pass storage through its ABI.
@@ -91,17 +107,18 @@ let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list 
         | SemanticKind.LazyExpr(_, captures) | SemanticKind.SeqExpr(_, captures) ->
             captures |> List.iter (fun capture -> capture.SourceNodeId |> Option.iter block)
         | _ -> node.Children |> List.iter block
-    let writes root =
+    let stores =
         nodes.Values |> Seq.collect (fun node ->
             match node.Kind with
-            | SemanticKind.ArrayExpr values when node.Id = root -> values |> List.map (fun value -> node.Id, value) |> Seq.ofList
-            | SemanticKind.IndexSet(input, _, value) when origins.TryFind input = Some root -> Seq.singleton(node.Id, value)
+            | SemanticKind.ArrayExpr values when roots.Contains node.Id -> values |> List.map (fun value -> node.Id, (node.Id, value)) |> Seq.ofList
+            | SemanticKind.IndexSet(input, _, value) -> origins.TryFind input |> Option.map (fun root -> root, (node.Id, value)) |> Option.toList |> Seq.ofList
             | _ ->
                 match calls.TryFind node.Id with
-                | Some({ Module = IntrinsicModule.Array; Operation = "set" }, [input; _; value]) when origins.TryFind input = Some root -> Seq.singleton(node.Id, value)
-                | Some({ Module = IntrinsicModule.Array; Operation = "create" }, [_; value]) when node.Id = root -> Seq.singleton(node.Id, value)
-                | _ -> Seq.empty) |> Seq.toList
-    let stores = roots |> Seq.map (fun root -> root, writes root) |> Map.ofSeq
+                | Some({ Module = IntrinsicModule.Array; Operation = "set" }, [input; _; value]) -> origins.TryFind input |> Option.map (fun root -> root, (node.Id, value)) |> Option.toList |> Seq.ofList
+                | Some({ Module = IntrinsicModule.Array; Operation = "create" }, [_; value]) when roots.Contains node.Id -> Seq.singleton(node.Id, (node.Id, value))
+                | _ -> Seq.empty)
+        |> Seq.groupBy fst |> Seq.map (fun (root, writes) -> root, writes |> Seq.map snd |> Seq.toList) |> Map.ofSeq
+    let stores = roots |> Seq.map (fun root -> root, stores.TryFind root |> Option.defaultValue []) |> Map.ofSeq
     let seeded root =
         match calls.TryFind root with
         | Some({ Module = IntrinsicModule.Array; Operation = "zeroCreate" }, [_]) -> ValueRange.point 0I
@@ -120,19 +137,23 @@ let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list 
         match nodes.TryFind id with
         | None -> ValueRange.Unbounded
         | Some node ->
-            let existing = node.ValueRange |> Option.defaultValue ValueRange.Unbounded
+            let existing =
+                (if renew then sourceFacts.Value.TryFind id else node.ValueRange)
+                |> Option.defaultValue ValueRange.Unbounded
             match readInput id |> Option.bind (fun input -> origins.TryFind input) with
             | Some root -> ranges.TryFind root |> Option.defaultValue ValueRange.Unbounded
             | None ->
                 let inferred =
                     match node.Kind with
+                    | SemanticKind.Literal(NativeLiteral.Int(actual, _)) -> ValueRange.point (bigint actual)
+                    | SemanticKind.Literal(NativeLiteral.UInt(actual, _)) -> ValueRange.point (bigint actual)
                     | SemanticKind.Binding(_, false, _, _) when node.Children.Length = 1 -> recurse node.Children.Head
                     | SemanticKind.VarRef(_, Some definition) ->
                         match nodes.TryFind definition with
                         | Some { Kind = SemanticKind.Binding(_, false, _, _) } -> recurse definition
                         | _ -> existing
                     | SemanticKind.TypeAnnotation(inner, _) -> recurse inner
-                    | SemanticKind.Sequential values -> List.tryLast values |> Option.map recurse |> Option.defaultValue existing
+                    | SemanticKind.Sequential values -> List.tryLast values |> Option.map recurse |> Option.defaultValue ValueRange.Unbounded
                     | SemanticKind.IfThenElse(_, yes, no) -> ValueRange.join (recurse yes) (no |> Option.map recurse |> Option.defaultValue ValueRange.Empty)
                     | SemanticKind.Application _ ->
                         match calls.TryFind id with
@@ -141,11 +162,12 @@ let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list 
                                 let source = nodes[arg]
                                 ({ Range = recurse arg; Type = source.Type
                                    Literal = match source.Kind with SemanticKind.Literal literal -> Some literal | _ -> None } : RangeSources.Argument))
-                            match RangeSources.intrinsic graph.Platform info arguments with RangeSources.Result.Fact range -> range | _ -> existing
-                        | _ -> existing
+                            match RangeSources.intrinsic graph.Platform info arguments with RangeSources.Result.Fact range -> range | _ -> ValueRange.Unbounded
+                        | _ -> ValueRange.Unbounded
                     | _ -> existing
-                // Existing guarded scalar facts remain valid; the local read
-                // dependency can improve a type-wide array approximation.
+                // During renewal the independent source rules are recomputed,
+                // including branch refinements. No cached parent can narrow a
+                // changed child; a current guard can still prove a clamp.
                 ValueRange.meet existing inferred
     let mutable ranges = roots |> Seq.map (fun root -> root, seeded root) |> Map.ofSeq
     let mutable stable = false
@@ -195,7 +217,7 @@ let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list 
             with :? System.Text.DecoderFallbackException -> None
     // A temporary-buffer read depends on that buffer's complete write set,
     // even when only the final output buffer changes physical representation.
-    let premises root =
+    let collectPremises root =
         let rec visitRoots seen pending accumulated =
             match pending with
             | [] -> List.distinct accumulated
@@ -216,8 +238,15 @@ let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list 
                             values seen (more @ tail) (Option.toList dependency @ dependencies) (item :: nodesRead)
                 let dependencies, valuesRead = values Set.empty (writes |> List.map snd) [] []
                 visitRoots (Set.add current seen) (dependencies @ rest)
-                    (current :: members current @ (writes |> List.collect (fun (writer, stored) -> [writer; stored])) @ valuesRead @ accumulated)
+                    (current :: members current @ initialization[current] @ (writes |> List.collect (fun (writer, stored) -> [writer; stored])) @ valuesRead @ accumulated)
         visitRoots Set.empty [root] []
+    // Several reads can share one owning family. Compute its dependency closure
+    // once in this analysis; no persistent temporal schema is introduced here.
+    let premiseCache = System.Collections.Generic.Dictionary<NodeId, NodeId list>()
+    let premises root =
+        match premiseCache.TryGetValue root with
+        | true, support -> support
+        | _ -> let support = collectPremises root in premiseCache.Add(root, support); support
     let sites =
         nodes.Values |> Seq.choose (fun node ->
             match calls.TryFind node.Id with
@@ -226,6 +255,10 @@ let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list 
                     edge.Role = EdgeRole.StringByteSnapshot && (match edge.Sources with [_; copy] -> copy = input | _ -> false))) -> Some(node, input)
             | _ -> None)
         |> Seq.toList
+    nodes, origins, members, blocked, ranges, representation, validText, premises, sites, readInput
+
+let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list =
+    let nodes, origins, members, blocked, ranges, representation, validText, premises, sites, readInput = analyze false graph
     let plans, diagnostics = sites |> List.fold (fun (plans, diagnostics) (site, input) ->
         match origins.TryFind input, representation with
         | Some root, Some(rep, declaration) when not (blocked.Contains root) ->
@@ -252,6 +285,43 @@ let recognize (graph: SemanticGraph) : Plan list * Enrichment * Diagnostic list 
         | ValueRange.Bounded(lo, hi) -> [read; { read with Role = EdgeRole.StringByteRange(lo, hi) }]
         | _ -> [read])
     List.rev plans, { Enrichment.empty with Annotated = annotations; NewEdges = edges }, List.rev diagnostics
+
+/// Renew only the scalar producer's paired rows. A storage-backed range may
+/// coexist at the same target and remains the responsibility of its own recipe.
+let establishScalarRanges (graph: SemanticGraph) : Hyperedge list * Hyperedge list * Diagnostic list =
+    let markers = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.StringByteRead)
+    if markers.IsEmpty then [], [], [] else
+    let nodes, origins, _, blocked, ranges, representation, _, premises, _, readInput = analyze true graph
+    let bounds = graph.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.StringByteRange _ -> true | _ -> false)
+                 |> List.groupBy _.Target |> Map.ofList
+    let missing = "The scalar range of this array read lacks its complete current allocation and write premises."
+    let changed = "The scalar range of this array read changed after source range settlement."
+    markers |> List.groupBy _.Target |> List.fold (fun (removed, renewed, diagnostics) (site, reads) ->
+        let owned = bounds.TryFind site |> Option.defaultValue [] |> List.filter (fun edge ->
+            reads |> List.exists (fun read ->
+                edge.Class = read.Class && edge.Ordinal = read.Ordinal &&
+                edge.Target = read.Target && edge.Sources = read.Sources))
+        let fail reason =
+            let diagnostic =
+                { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8404"; Message = reason
+                  Range = graph.Nodes[site].Range; RelatedNodes = [site]
+                  Reachability = ReachabilityContext.Reachable }
+            // Retain the producer marker on failure, so a second establishment
+            // cannot silently treat absence of a current range as success.
+            owned @ removed, renewed, diagnostic :: diagnostics
+        match reads, owned, nodes.TryFind site, representation with
+        | [read], [previous], Some _, Some(_, declaration) ->
+            match readInput site |> Option.bind (fun input -> origins.TryFind input |> Option.map (fun root -> input, root)) with
+            | Some(input, root) when not (blocked.Contains root) ->
+                match ranges[root], previous.Role with
+                | ValueRange.Bounded(lo, hi), EdgeRole.StringByteRange(oldLo, oldHi) when lo <= hi ->
+                    if lo <> oldLo || hi <> oldHi then fail changed else
+                    let sources = List.distinct(root :: input :: declaration :: premises root)
+                    previous :: read :: removed,
+                    { read with Sources = sources } :: { previous with Sources = sources } :: renewed, diagnostics
+                | _ -> fail missing
+            | _ -> fail missing
+        | _ -> fail missing) ([], [], [])
 
 /// The immutable string owns a fresh snapshot. This uses the existing copying
 /// Array.sub operation, not a reinterpretation of externally mutable storage.

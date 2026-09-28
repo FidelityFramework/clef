@@ -2606,6 +2606,14 @@ let private runValidated (context: PlatformContext option) (graph: SemanticGraph
     let graph = FiniteCellRanges.settle (program.FiniteCells.Values |> Seq.distinctBy _.Cell |> Seq.toList) graph
     (LoopRanges.saturate (current state) program.LoopRecognition graph, diagnostics)
 
+/// Fresh logical source facts for a Baker recipe checking current premises.
+/// This computes the existing range rules without publishing annotations,
+/// selecting carriers or discharging obligations. Invalid demand supplies no facts.
+let sourceFacts (graph: SemanticGraph) : Map<NodeId, ValueRange> =
+    match OrdinaryDemand.tryRead graph with
+    | Result.Error _ -> Map.empty
+    | Result.Ok _ -> readProgram graph.Platform graph |> fixpoint
+
 /// The commitment sites are the values the settled demand projection retains.
 /// A demand relation that disagrees with the current use proof is reported
 /// (CCS8403) and no range is settled over it.

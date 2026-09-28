@@ -264,6 +264,13 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection) (existing:(N
         required<-Set.add construction.Site required
         try
             allocationRow graph construction
+            let initializationParticipants =
+                match construction.Default with
+                | Some _ ->
+                    match Clef.Compiler.Baker.Ingredients.ArrayInitialization.tryInitialization graph construction.Site with
+                    | Ok participants -> Set.ofList participants
+                    | Error reason -> raise (MissingContract reason)
+                | None -> Set.empty
             bound graph construction.Count
             let node=live graph construction.Site
             demand (node.Kind=SemanticKind.ArrayAllocate construction.Count.Reference && node.Children=[construction.Count.Reference])
@@ -277,8 +284,6 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection) (existing:(N
             demand (bytes>0 && alignment>0 && bytes%alignment=0) "An array element has no admitted contiguous aligned stride."
             match construction.Default,construction.Initialization with
             | Some value,initialization ->
-                demand (sequence graph construction.Owner=[construction.Count.Binding;value;construction.Guard.Frontier])
-                       "Array.zeroCreate lost its exact count/default binding and Require execution prefix."
                 demand (match (live graph value).Kind with
                         | SemanticKind.Literal(NativeLiteral.Bool false) when slot=SettledSlot.Bool -> true
                         | SemanticKind.Literal(NativeLiteral.Char '\000') when slot=SettledSlot.Char -> true
@@ -290,12 +295,8 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection) (existing:(N
                     let write=access graph operations init.Write
                     demand (loopCount=construction.Count.Reference && write.Buffer=init.Buffer && write.Index=init.Current && write.Value=Some value && write.Element=slot && allocationTarget graph init.Buffer=construction.Site)
                            "Array.zeroCreate lost its complete count-correlated default writes."
-                    initializedBlock graph construction.Site init.Buffer [] [init.Index;init.Loop] construction.Guard.Continuation
                 | None ->
                     demand (maximum=0I && count.Range=ValueRange.point 0I) "A nonempty zeroCreate allocation has no complete initialization loop."
-                    let body=sequence graph construction.Guard.Continuation
-                    demand (body.Length=2) "An empty zeroCreate changed its storage continuation."
-                    initializedBlock graph construction.Site (List.last body) [] [] construction.Guard.Continuation
             | None,None ->
                 demand (constructions |> List.exists(fun copy -> copy.Allocation=Some construction.Site && copy.Count=construction.Count))
                        "An uninitialized array allocation lacks its complete source copy construction."
@@ -321,7 +322,7 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection) (existing:(N
             demand (extent<=bigint System.Int64.MaxValue && extent<=indexMaximum && maximum<=countMaximum)
                    "The array's maximum byte extent exceeds the declared index/address domain."
             demand (extent<=bigint space.Capacity) "The array's complete maximum byte extent exceeds its declared stack capacity."
-            let participants=construction.Participants |> Set.union uses |> Set.union count.Participants
+            let participants=construction.Participants |> Set.union initializationParticipants |> Set.union uses |> Set.union count.Participants
                              |> Set.union(Set.ofList(requirement.Participants@[declared.Node;space.Node;core.Node;pointer.Node;scope]))
             let mutable own=Enrichment.empty
             let proof label body =

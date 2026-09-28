@@ -422,6 +422,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\LazyEffectRanges.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\FiniteCellRanges.fs" />
     <Compile Include="Baker\Ingredients\ArrayShapes.fs" />
+    <Compile Include="Baker\Ingredients\ArrayInitialization.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\RangeAnalysis.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableFlows.fs" />
     <Compile Include="Baker\Recipes\StringByteStorageRecipes.fs" />

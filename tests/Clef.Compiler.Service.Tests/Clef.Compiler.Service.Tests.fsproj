@@ -110,6 +110,7 @@
     <Compile Include="PublicationContractCases.fs" />
     <Compile Include="NumericOperationCases.fs" />
     <Compile Include="MemoryAccessCases.fs" />
+    <Compile Include="ScalarRangeRenewalCases.fs" />
     <Compile Include="ArrayConstructionCases.fs" />
     <Compile Include="BorrowedViewCases.fs" />
     <Compile Include="LocalUnusedCases.fs" />

@@ -7,6 +7,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 module Borrows = Clef.Compiler.Baker.Recipes.StringBorrowRecipes
 module Access = Clef.Compiler.Baker.Recipes.MemoryAccessRecipes
+module Scalar = Clef.Compiler.Baker.Recipes.StringByteStorageRecipes
 module Demand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
 
 let private diagnostic (graph: SemanticGraph) (site, participants, message) : Diagnostic =
@@ -48,10 +49,14 @@ let private storage (deferrals: Map<_, Set<OrdinaryOmission>>) (graph: SemanticG
     failures |> List.rev |> List.map (diagnostic graph)
 
 let private byteRanges (graph: SemanticGraph) =
+    // The two producers can share a target. Renew each producer's exact row,
+    // using its owning recipe and current premises.
+    let scalarEdges, scalarRows, scalarDiagnostics = Scalar.establishScalarRanges graph
+    let scalarEdges = System.Collections.Generic.HashSet<Hyperedge>(scalarEdges, HashIdentity.Reference)
     let guards =
         graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.MemoryAccessGuard)
         |> List.groupBy _.Target |> Map.ofList
-    let rows, failures = graph.Edges |> List.fold (fun (rows, failures) edge ->
+    let rows, failures = graph.Edges |> List.filter (scalarEdges.Contains >> not) |> List.fold (fun (rows, failures) edge ->
         match edge.Role, guards.TryFind edge.Target with
         | EdgeRole.StringByteRange _, Some guards ->
             match guards with
@@ -61,14 +66,20 @@ let private byteRanges (graph: SemanticGraph) =
                 | None -> rows, edge.Target :: failures
             | _ -> rows, edge.Target :: failures
         | _ -> edge :: rows, failures) ([], [])
-    { graph with Edges = List.rev rows },
-    failures |> List.rev |> List.distinct |> List.map (fun site ->
+    { graph with Edges = List.rev rows @ scalarRows },
+    scalarDiagnostics @ (failures |> List.rev |> List.distinct |> List.map (fun site ->
         diagnostic graph (site, Set.singleton site,
-                          "A string byte read lost the storage evidence of its borrow after the final demand rows."))
+                          "A string byte read lost the storage evidence of its borrow after the final demand rows.")))
 
 let normalize graph =
     match Demand.tryDeferrals graph with
-    | Result.Error failures -> graph, Demand.diagnostics graph failures
+    | Result.Error failures ->
+        // Scalar allocation/write premises are independent of the demand proof.
+        // A broken demand row must not leave a disproved scalar bound resident.
+        let removed, current, diagnostics = Scalar.establishScalarRanges graph
+        let removed = System.Collections.Generic.HashSet<Hyperedge>(removed, HashIdentity.Reference)
+        let graph = { graph with Edges = (graph.Edges |> List.filter (removed.Contains >> not)) @ current }
+        SemanticGraph.invalidateWitness graph, Demand.diagnostics graph failures @ diagnostics
     | Result.Ok deferrals ->
         let graph, borrowDiagnostics = borrows graph
         let graph, storageDiagnostics = storage deferrals graph
