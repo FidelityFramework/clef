@@ -28,9 +28,9 @@ let private plan enrichId (graph: SemanticGraph) =
     let own site occurrences = occurrences |> List.map (fun (node, role) -> Participants.occurrence node role 0 site)
     let constructed site nodes = own site (nodes |> Set.toList |> List.map (fun node -> node, ParticipantRole.Construction))
     let localOrigin site view = StringComparisonRecipes.localView graph view |> Option.map (fun (source,_,participants) ->
-        match stringOrigin graph flow site source with
-        | Some(_,origins,originPremises) -> source,origins,constructed site participants @ originPremises
-        | None -> source,Map.empty,constructed site participants)
+        stringOrigin graph flow site source |> Result.map (function
+            | Some(_,origins,originPremises) -> source,origins,constructed site participants @ originPremises
+            | None -> source,Map.empty,constructed site participants))
     let localExtent site =
         StringComparisonRecipes.constructions graph |> List.tryPick (fun construction ->
             let view = if construction.LeftLength=site then Some construction.LeftView elif construction.RightLength=site then Some construction.RightView else None
@@ -39,47 +39,55 @@ let private plan enrichId (graph: SemanticGraph) =
             StringComparisonRecipes.lengthConstructions graph |> List.tryPick (fun construction ->
                 let source = if construction.LeftLength=site then Some construction.LeftSource elif construction.RightLength=site then Some construction.RightSource else None
                 source |> Option.map (fun source ->
-                    let origins,originPremises = stringOrigin graph flow site source |> Option.map (fun (_,origins,participants) -> origins,participants) |> Option.defaultValue (Map.empty,[])
-                    let participants = originPremises @ constructed site (Set.ofList(construction.Site::construction.Left::construction.Right::construction.Evidence))
-                    source,origins,participants)))
+                    stringOrigin graph flow site source |> Result.map (fun derived ->
+                        let origins,originPremises = derived |> Option.map (fun (_,origins,participants) -> origins,participants) |> Option.defaultValue (Map.empty,[])
+                        let participants = originPremises @ constructed site (Set.ofList(construction.Site::construction.Left::construction.Right::construction.Evidence))
+                        source,origins,participants))))
     let extent site source path =
-        let identity,origins,participants =
-            localExtent site
-            |> Option.orElseWith (fun () -> stringOrigin graph flow site source)
-            |> Option.defaultValue (source,Map.empty,[])
-        let occurrences =
-            own site ([site, ParticipantRole.Site; source, ParticipantRole.Source; identity, ParticipantRole.ExtentSource]
-                      @ (path |> Set.toList |> List.map (fun node -> node, ParticipantRole.Path)))
-        { Site=site; Source=source; ExtentSource=identity; StaticOrigins=origins
-          Participants=ParticipantEvidence.Established (Participants.ordered site (occurrences @ participants)) }
-    let views = graph.Nodes |> Map.fold (fun enrichment _ node ->
-        if not node.IsReachable then enrichment else
+        localExtent site
+        |> Option.defaultWith (fun () -> stringOrigin graph flow site source |> Result.map (Option.defaultValue (source,Map.empty,[])))
+        |> Result.map (fun (identity,origins,participants) ->
+            let occurrences =
+                own site ([site, ParticipantRole.Site; source, ParticipantRole.Source; identity, ParticipantRole.ExtentSource]
+                          @ (path |> Set.toList |> List.map (fun node -> node, ParticipantRole.Path)))
+            { Site=site; Source=source; ExtentSource=identity; StaticOrigins=origins
+              Participants=ParticipantEvidence.Established (Participants.ordered site (occurrences @ participants)) })
+    // The extent row of a site, or the site's failure.
+    let extentRows (enrichment: Enrichment, failures) site source path =
+        match extent site source path with
+        | Ok row -> { enrichment with NewEdges=Bytes.extentRow row::enrichment.NewEdges }, failures
+        | Error failure -> enrichment, (site, failure) :: failures
+    // A site whose origins fail has no row; the failure is returned with its site.
+    let views, failures = graph.Nodes |> Map.fold (fun (enrichment: Enrichment, failures) _ node ->
+        if not node.IsReachable then enrichment, failures else
         match node.Kind with
         | SemanticKind.FieldGet(source, "Bytes")
         | SemanticKind.StringByteBorrow source when graph.Nodes.TryFind source |> Option.exists (fun source -> Types.isStringType source.Type) ->
             let updated = { node with Kind = SemanticKind.StringByteBorrow source; Children = [source] } |> Elaboration.markBaker "StringByteBorrow" enrichId
-            let rows =
-                match (localOrigin node.Id node.Id |> Option.orElseWith (fun () -> stringOrigin graph flow node.Id source)), representation with
-                | Some(identity, origins, participants), Some(rep, declaration) ->
+            let derived = localOrigin node.Id node.Id |> Option.map (Result.map Some) |> Option.defaultWith (fun () -> stringOrigin graph flow node.Id source)
+            let rows, failures =
+                match derived, representation with
+                | Error failure, _ -> [], (node.Id, failure) :: failures
+                | Ok (Some(identity, origins, participants)), Some(rep, declaration) ->
                     let occurrences =
                         own node.Id [node.Id, ParticipantRole.Site; source, ParticipantRole.Source; identity, ParticipantRole.ExtentSource
                                      declaration, ParticipantRole.RepresentationDeclaration]
                     let view = { Site = node.Id; Source = source; ExtentSource = identity; StaticOrigins = origins
                                  Representation = rep; RepresentationDeclaration = declaration
                                  Participants = ParticipantEvidence.Established (Participants.ordered node.Id (occurrences @ participants)) }
-                    [Bytes.viewRow view; Bytes.storageRow view]
-                | _ -> []
+                    [Bytes.viewRow view; Bytes.storageRow view], failures
+                | Ok _, _ -> [], failures
             let rewrite = { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = 0; Sources = [source]; Target = node.Id }
             { enrichment with Annotated = updated :: enrichment.Annotated
-                              NewEdges = rows @ [rewrite] @ enrichment.NewEdges }
+                              NewEdges = rows @ [rewrite] @ enrichment.NewEdges }, failures
         | SemanticKind.FieldGet(source, "Length") when graph.Nodes.TryFind source |> Option.exists (fun source -> Types.isStringType source.Type) ->
-            { enrichment with NewEdges=Bytes.extentRow (extent node.Id source Set.empty)::enrichment.NewEdges }
+            extentRows (enrichment, failures) node.Id source Set.empty
         | SemanticKind.Application(callee,[source]) when graph.Nodes.TryFind source |> Option.exists (fun source -> Types.isStringType source.Type) ->
             match BoundaryDeclarations.target graph callee with
             | Some({ Kind=SemanticKind.Intrinsic { Module=IntrinsicModule.String; Operation="length" } },path) ->
-                { enrichment with NewEdges=Bytes.extentRow (extent node.Id source path)::enrichment.NewEdges }
-            | _ -> enrichment
-        | _ -> enrichment) Enrichment.empty
+                extentRows (enrichment, failures) node.Id source path
+            | _ -> enrichment, failures
+        | _ -> enrichment, failures) (Enrichment.empty, [])
     let declaration =
         let reading = PlatformResolution.read graph
         match reading.Findings, reading.Platform, representation with
@@ -112,14 +120,19 @@ let private plan enrichId (graph: SemanticGraph) =
                            ByteRepresentation = rep; Core = core.Node; ReturnContract = result.Node; Endpoint = endpoint.Node; Surface = endpoint.Surface; SyscallNumber = endpoint.Number
                            Participants = Set.unionMany [participants; paths[scope]; Set.ofList [identity; scope]] }
             Bytes.abiRow site import))
-    { views with NewEdges = rows @ views.NewEdges }
+    { views with NewEdges = rows @ views.NewEdges }, List.rev failures
 
-let elaborate graph = plan (Elaboration.freshId ()) graph
+/// The rows of the borrows whose origins are derived. A site whose origins fail has
+/// no row here; the borrow owner derives the failure again from the graph it
+/// settles and reports it at the site (`evidence`, BoundaryRecipes.intrinsicWrites).
+let elaborate graph = fst (plan (Elaboration.freshId ()) graph)
 
 /// The late owner rechecks the same complete source recipe premises after
-/// rewriting/placement. Publication never invokes this source reader.
+/// rewriting/placement, with each site whose origins fail and its failure.
+/// Publication never invokes this source reader.
 let evidence graph =
-    (plan 0 graph).NewEdges |> List.filter (fun edge ->
+    let enrichment, failures = plan 0 graph
+    enrichment.NewEdges |> List.filter (fun edge ->
         match edge.Role with
         | EdgeRole.StringByteView _ | EdgeRole.StringExtent _ | EdgeRole.IntrinsicWriteAbi _ | EdgeRole.StringByteStorage _ -> true
-        | _ -> false)
+        | _ -> false), failures

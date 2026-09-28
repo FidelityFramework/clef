@@ -35,33 +35,44 @@ let ofInputs (formal: NodeId) (inputs: FormalDemand.Inputs) : Participant list =
         | _ -> inputs.Participants |> Set.toList |> List.map (fun node -> occurrence node ParticipantRole.Ingress 0 formal)
     demanded @ omitted @ ingress
 
+/// A call whose targets the participant form cannot state (`ofTargets`).
+[<RequireQualifiedAccess>]
+type TargetFailure =
+    /// A target of the call with a number of arguments other than its number of remaining parameters.
+    | UnequalCounts of call: NodeId * target: NodeId * arguments: int * parameters: int
+    /// Targets of the call whose argument or parameter lists differ.
+    | DifferentLists of call: NodeId
+
 /// The lambdas a call resolves to, each in the group of the call, and each lambda's body in
 /// the group of that lambda. The call's arguments and the parameters that remain for the
 /// call (CallableOrigins.fs lines 263 to 267) are in the group of the call, each at its
 /// position. The group of a call states one argument list and one parameter list: a call
 /// whose targets do not have the same argument nodes and the same parameter nodes in the
-/// same order cannot be stated, and it is an error that names the call. Two different
-/// lambdas have different parameters, so a call that resolves to two of them is such a
-/// case. The resolver makes a target for an exact invocation only, with as many remaining
-/// parameters as the call has arguments; a target with other counts is an error of the form
-/// that names the call. On 2026-09-28 none of the 56 borrow rows measured in 17 programs,
-/// samples 01, 04a and 04c among them, had a call with more than one target, or a lambda
-/// with different parameter lists at two calls.
-let ofTargets (call: NodeId) (targets: CallableOrigins.CallTarget list) : Participant list =
+/// same order cannot be stated, and the result is `DifferentLists`. Two different lambdas
+/// have different parameters, so a call that resolves to two of them is such a case; the
+/// source call `(pick true) "hello"` of a `pick` that returns one of two functions of one
+/// string is one. The resolver makes a target for an exact invocation only, with as many
+/// remaining parameters as the call has arguments; a target with other counts, a lambda
+/// without parameters applied to one argument, is `UnequalCounts`.
+let ofTargets (call: NodeId) (targets: CallableOrigins.CallTarget list) : Result<Participant list, TargetFailure> =
     let positions (target: CallableOrigins.CallTarget) = target.Arguments, target.Parameters |> List.map (fun (_, _, parameter) -> parameter)
     match targets |> List.filter (fun target -> target.Arguments.Length <> target.Parameters.Length), targets |> List.map positions |> List.distinct with
     | target :: _, _ ->
-        invalidOp (sprintf "The target %d of call %d has %d arguments and %d parameters; the resolver states one parameter for each argument of an exact invocation."
-                    (NodeId.value target.Lambda) (NodeId.value call) target.Arguments.Length target.Parameters.Length)
-    | [], _ :: _ :: _ ->
-        invalidOp (sprintf "The targets of call %d have different argument or parameter lists; the participant form cannot state the arguments and parameters of each target apart." (NodeId.value call))
+        Error (TargetFailure.UnequalCounts(call, target.Lambda, target.Arguments.Length, target.Parameters.Length))
+    | [], _ :: _ :: _ -> Error (TargetFailure.DifferentLists call)
     | [], lists ->
-        (lists |> List.collect (fun (arguments, parameters) ->
-            (arguments |> List.mapi (fun ordinal argument -> occurrence argument ParticipantRole.CalleeArgument ordinal call))
-            @ (parameters |> List.mapi (fun ordinal parameter -> occurrence parameter ParticipantRole.CalleeParameter ordinal call))))
-        @ (targets |> List.collect (fun target ->
-            [ occurrence target.Lambda ParticipantRole.Callee 0 call
-              occurrence target.Body ParticipantRole.CalleeBody 0 target.Lambda ]))
+        Ok ((lists |> List.collect (fun (arguments, parameters) ->
+                (arguments |> List.mapi (fun ordinal argument -> occurrence argument ParticipantRole.CalleeArgument ordinal call))
+                @ (parameters |> List.mapi (fun ordinal parameter -> occurrence parameter ParticipantRole.CalleeParameter ordinal call))))
+            @ (targets |> List.collect (fun target ->
+                [ occurrence target.Lambda ParticipantRole.Callee 0 call
+                  occurrence target.Body ParticipantRole.CalleeBody 0 target.Lambda ])))
+
+/// The nodes a failure names: the call, and the target whose counts differ.
+let failureNodes (failure: TargetFailure) : NodeId list =
+    match failure with
+    | TargetFailure.UnequalCounts(call, target, _, _) -> [ call; target ]
+    | TargetFailure.DifferentLists call -> [ call ]
 
 /// The occurrences in their order: the row's own occurrences (the group of `site`) first,
 /// then the other groups by node, each with its roles in case order, then by ordinal and

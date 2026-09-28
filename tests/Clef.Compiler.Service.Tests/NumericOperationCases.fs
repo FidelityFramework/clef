@@ -101,7 +101,7 @@ type NumericOperationCases() =
         if lengthOnly then
             Assert.Empty constructions
             let construction = Clef.Compiler.Baker.Recipes.StringComparisonRecipes.lengthConstructions result.Graph |> Assert.Single
-            Assert.True(Clef.Compiler.Baker.Recipes.StringComparisonRecipes.validLengthStructure result.Graph construction)
+            Assert.Equal(Ok true, Clef.Compiler.Baker.Recipes.StringComparisonRecipes.validLengthStructure result.Graph construction)
         else
             let construction = Assert.Single constructions
             Assert.True(Clef.Compiler.Baker.Recipes.StringComparisonRecipes.validStructure result.Graph construction)
@@ -175,7 +175,7 @@ type NumericOperationCases() =
         let result = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.authority program
         DimensionalCases.noErrors result
         let construction = Clef.Compiler.Baker.Recipes.StringComparisonRecipes.lengthConstructions result.Graph |> Assert.Single
-        Assert.True(Clef.Compiler.Baker.Recipes.StringComparisonRecipes.validLengthStructure result.Graph construction)
+        Assert.Equal(Ok true, Clef.Compiler.Baker.Recipes.StringComparisonRecipes.validLengthStructure result.Graph construction)
         let boundary = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project result.Graph |> function Ok facts -> facts | Error errors -> failwithf "%A" errors
         Assert.Empty boundary.ByteViews
         Assert.Contains(boundary.StringExtents.Values,fun extent -> extent.StaticOrigins.IsEmpty)

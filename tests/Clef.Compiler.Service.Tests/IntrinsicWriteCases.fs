@@ -228,6 +228,42 @@ let main _ =
     /// the factory probe of step A2.
     let factoryAuthority = writableAuthority.Replace("Name = \"octet\"", "Name = \"uint8\"")
 
+    /// The call `(pick true) "hello"` reaches the formal of `write` and resolves to two
+    /// functions of one string, `write` and `other`, whose parameters differ.
+    let pickBody = """module WriteFixture
+let write (s: string) =
+    let _ = Sys.write 1 s.Bytes s.Length
+    ()
+let other (t: string) = ()
+let pick (flag: bool) = if flag then write else other
+[<EntryPoint>]
+let main _ =
+    (pick true) "hello"
+    0
+"""
+
+    /// The participants of targets the participant form states. A failure fails the test.
+    let ofTargets call targets =
+        match Clef.Compiler.Baker.Ingredients.Participants.ofTargets call targets with
+        | Ok participants -> participants
+        | Error failure -> failwithf "The targets of call %A cannot be stated: %A" call failure
+
+    /// The result of a check, or the message of an exception the check throws.
+    let checkWithoutException declaration source =
+        try Ok (checkSource declaration source) with error -> Error error.Message
+
+    /// The sites of the borrow rows of `write`: its byte view and its length.
+    let borrowSites (graph: SemanticGraph) =
+        graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable &&
+            match node.Kind with
+            | SemanticKind.StringByteBorrow _ | SemanticKind.FieldGet(_, "Length") -> true
+            | _ -> false) |> Seq.map _.Id |> Seq.toList
+
+    /// The message of the located error of a borrow whose origins are reached through a call
+    /// whose targets the participant form cannot state.
+    let targetsMessage text = "Source settlement is required before witnessing: BoundaryEmission: " + text
+
     /// The participants of an established borrow row. A pending row fails the test.
     let established (evidence: ParticipantEvidence) =
         match evidence with
@@ -624,7 +660,7 @@ let main _ =
         let target lambda body : Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.CallTarget =
             { Lambda = NodeId lambda; Parameters = [ "p", Types.intType, NodeId 50 ]; Arguments = [ NodeId 30 ]; Body = NodeId body }
         let evidence targets =
-            Clef.Compiler.Baker.Ingredients.Participants.ordered (NodeId 1) (Clef.Compiler.Baker.Ingredients.Participants.ofTargets (NodeId 10) targets)
+            Clef.Compiler.Baker.Ingredients.Participants.ordered (NodeId 1) (IntrinsicWriteFixture.ofTargets (NodeId 10) targets)
         let stated = evidence [ target 20 21; target 40 41 ]
         Assert.NotEqual<Participant list>(stated, evidence [ target 20 41; target 40 21 ])
         Assert.Equal<Participant list>([ IntrinsicWriteFixture.occurrence (NodeId 21) ParticipantRole.CalleeBody 0 (NodeId 20) ],
@@ -637,8 +673,8 @@ let main _ =
               Parameters = parameters |> List.map (fun parameter -> "p", Types.intType, NodeId parameter); Arguments = List.map NodeId arguments }
         let stated =
             Clef.Compiler.Baker.Ingredients.Participants.ordered (NodeId 1)
-                (Clef.Compiler.Baker.Ingredients.Participants.ofTargets (NodeId 10) [ target [30; 31] [50; 51] ]
-                 @ Clef.Compiler.Baker.Ingredients.Participants.ofTargets (NodeId 11) [ target [32] [51] ])
+                (IntrinsicWriteFixture.ofTargets (NodeId 10) [ target [30; 31] [50; 51] ]
+                 @ IntrinsicWriteFixture.ofTargets (NodeId 11) [ target [32] [51] ])
         let positions call role =
             stated |> List.filter (fun participant -> participant.Group = NodeId call && participant.Role = role) |> List.map (fun participant -> participant.Ordinal, participant.Node)
         Assert.Equal<(int * NodeId) list>([ 0, NodeId 50; 1, NodeId 51 ], positions 10 ParticipantRole.CalleeParameter)
@@ -652,11 +688,8 @@ let main _ =
     member _.``A target with more arguments than parameters is an error that names the call`` () =
         let target : Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.CallTarget =
             { Lambda = NodeId 20; Parameters = [ "p", Types.intType, NodeId 50 ]; Arguments = [ NodeId 30; NodeId 31 ]; Body = NodeId 21 }
-        let error =
-            Assert.Throws<System.InvalidOperationException>(fun () ->
-                Clef.Compiler.Baker.Ingredients.Participants.ofTargets (NodeId 10) [ target ] |> ignore)
-        Assert.Contains("call 10", error.Message)
-        Assert.Contains("2 arguments and 1 parameters", error.Message)
+        Assert.Equal(Error (Clef.Compiler.Baker.Ingredients.Participants.TargetFailure.UnequalCounts(NodeId 10, NodeId 20, 2, 1)),
+                     Clef.Compiler.Baker.Ingredients.Participants.ofTargets (NodeId 10) [ target ])
 
     [<Theory>]
     [<InlineData("arguments")>]
@@ -665,8 +698,61 @@ let main _ =
         let target lambda argument parameter : Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.CallTarget =
             { Lambda = NodeId lambda; Parameters = [ "p", Types.intType, NodeId parameter ]; Arguments = [ NodeId argument ]; Body = NodeId (lambda + 1) }
         let targets = if differing = "arguments" then [ target 20 30 50; target 40 31 50 ] else [ target 20 30 50; target 40 30 51 ]
-        let error =
-            Assert.Throws<System.InvalidOperationException>(fun () ->
-                Clef.Compiler.Baker.Ingredients.Participants.ofTargets (NodeId 10) targets |> ignore)
-        Assert.Contains("call 10", error.Message)
-        Assert.Contains("cannot state the arguments and parameters of each target apart", error.Message)
+        Assert.Equal(Error (Clef.Compiler.Baker.Ingredients.Participants.TargetFailure.DifferentLists (NodeId 10)),
+                     Clef.Compiler.Baker.Ingredients.Participants.ofTargets (NodeId 10) targets)
+
+    [<Fact>]
+    member _.``A call that resolves to two functions with different parameters is a located error at each borrow site`` () =
+        let checked' = IntrinsicWriteFixture.checkWithoutException IntrinsicWriteFixture.factoryAuthority IntrinsicWriteFixture.pickBody
+        Assert.True(Result.isOk checked', sprintf "The check threw an exception: %A" checked')
+        let result = match checked' with Ok result -> result | Error message -> failwith message
+        let graph = result.Graph
+        let hello = IntrinsicWriteFixture.literal graph "hello"
+        let call = graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable && match node.Kind with SemanticKind.Application(_, [actual]) -> actual = hello | _ -> false) |> Seq.exactlyOne
+        let text =
+            IntrinsicWriteFixture.targetsMessage
+                (sprintf "The string's origins are reached through the call at %s, whose targets have different argument or parameter lists; the participant form states one argument list and one parameter list for a call."
+                    (Clef.Compiler.Baker.Ingredients.Obligations.fmtRange call.Range))
+        let sites = IntrinsicWriteFixture.borrowSites graph
+        Assert.Equal(2, sites.Length)
+        for site in sites do
+            Assert.Contains(result.Diagnostics, fun diagnostic ->
+                diagnostic.Code = "CCS8403" && diagnostic.Range = graph.Nodes[site].Range && diagnostic.Message = text
+                && List.contains site diagnostic.RelatedNodes && List.contains call.Id diagnostic.RelatedNodes)
+
+    [<Fact>]
+    member _.``A target with more arguments than parameters is a located error at each borrow site`` () =
+        let checked' = IntrinsicWriteFixture.checkWithoutException IntrinsicWriteFixture.factoryAuthority IntrinsicWriteFixture.pickBody
+        Assert.True(Result.isOk checked', sprintf "The check threw an exception: %A" checked')
+        let graph = match checked' with Ok result -> result.Graph | Error message -> failwith message
+        let hello = IntrinsicWriteFixture.literal graph "hello"
+        let call = graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable && match node.Kind with SemanticKind.Application(_, [actual]) -> actual = hello | _ -> false) |> Seq.exactlyOne
+        // The target of the call whose body calls `other`, without its parameter: a target
+        // with one argument and no parameter.
+        let flow = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
+        let callsOther (target: Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.CallTarget) =
+            match graph.Nodes[target.Body].Kind with
+            | SemanticKind.Application(callee, _) -> graph.Nodes[callee].Kind |> function SemanticKind.VarRef("other", _) -> true | _ -> false
+            | _ -> false
+        let target = flow.Calls[call.Id].Targets |> List.filter callsOther |> Assert.Single
+        let other = graph.Nodes[target.Lambda]
+        let changed =
+            match other.Kind with
+            | SemanticKind.Lambda(_, body, captures, enclosing, context) ->
+                { graph with Nodes = graph.Nodes.Add(other.Id, { other with Kind = SemanticKind.Lambda([], body, captures, enclosing, context) }) }
+            | _ -> graph
+        let settled = try Ok (Clef.Compiler.Nanopass.BoundarySettlement.normalize changed) with error -> Error error.Message
+        Assert.True(Result.isOk settled, sprintf "The boundary settlement threw an exception: %A" settled)
+        let settled = match settled with Ok settled -> settled | Error message -> failwith message
+        let failures = match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare settled with Error failures -> failures | Ok _ -> []
+        let diagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.diagnostics settled failures
+        let text =
+            IntrinsicWriteFixture.targetsMessage
+                (sprintf "The string's origins are reached through the call at %s, whose target at %s has 1 arguments and 0 parameters; the participant form states one parameter for each argument of an exact invocation."
+                    (Clef.Compiler.Baker.Ingredients.Obligations.fmtRange call.Range) (Clef.Compiler.Baker.Ingredients.Obligations.fmtRange other.Range))
+        let sites = IntrinsicWriteFixture.borrowSites settled
+        Assert.Equal(2, sites.Length)
+        for site in sites do
+            Assert.Contains(diagnostics, fun diagnostic ->
+                diagnostic.Code = "CCS8403" && diagnostic.Range = settled.Nodes[site].Range && diagnostic.Message = text
+                && List.contains call.Id diagnostic.RelatedNodes && List.contains other.Id diagnostic.RelatedNodes)

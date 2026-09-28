@@ -244,7 +244,7 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
     let views = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringByteView view -> Some view | _ -> None)
     let extents = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringExtent extent -> Some extent | _ -> None)
     let declarations = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.IntrinsicWriteAbi import -> Some(edge.Target, import) | _ -> None)
-    let sourceEvidence = StringBorrowRecipes.evidence graph
+    let sourceEvidence, sourceFailures = StringBorrowRecipes.evidence graph
     let retainedEvidence =
         (views |> List.collect (fun view -> [Bytes.viewRow view; Bytes.storageRow view])) @
         (extents |> List.map Bytes.extentRow) @ (declarations |> List.map (fun (site, import) -> Bytes.abiRow site import))
@@ -321,7 +321,10 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
             | Error _ -> Set.singleton site
         let participants = Set.unionMany ((views |> List.map (fun view -> related view.Site view.Participants)) @ (extents |> List.map (fun extent -> related extent.Site extent.Participants)))
         [anchor,participants,"The complete string view, descriptor extent, actual/formal or intrinsic ABI evidence changed after source range settlement."]
-    let initial = { Views = views; Extents = extents; Declarations = declarations; Imports = []; Calls = []; Proofs = []; Enrichment = Enrichment.empty; Errors = evidenceErrors }
+    // Each borrow site whose origins are reached through a call whose targets the
+    // participant form cannot state, at the site, naming the call.
+    let originErrors = sourceFailures |> List.map (fun (site, failure) -> StringComparisonRecipes.originError graph site failure)
+    let initial = { Views = views; Extents = extents; Declarations = declarations; Imports = []; Calls = []; Proofs = []; Enrichment = Enrichment.empty; Errors = originErrors @ evidenceErrors }
     graph.Nodes |> Map.fold (fun state _ node ->
         match node.Kind with
         | SemanticKind.Application(callee, args) when node.IsReachable ->
@@ -352,9 +355,14 @@ let elaborate (graph: SemanticGraph) : Enrichment =
     let lengthComparisons = StringComparisonRecipes.lengthConstructions graph
     let lengthErrors = graph.Nodes.Values |> Seq.choose (fun node ->
         if node.Metadata.TryFind "Baker.StringLengthComparison" <> Some(MetadataValue.Bool true) then None else
+        let lost = node.Id,Set.singleton node.Id,"The descriptor-only string comparison lost its exact zero-extent origin, actual/formal membership, or ordered source construction proof."
         match lengthComparisons |> List.filter (fun fact -> fact.Site=node.Id) with
-        | [fact] when StringComparisonRecipes.validLengthStructure graph fact -> None
-        | _ -> Some(node.Id,Set.singleton node.Id,"The descriptor-only string comparison lost its exact zero-extent origin, actual/formal membership, or ordered source construction proof.")) |> Seq.toList
+        | [fact] ->
+            match StringComparisonRecipes.validLengthStructure graph fact with
+            | Ok true -> None
+            | Ok false -> Some lost
+            | Error failure -> Some(StringComparisonRecipes.originError graph node.Id failure)
+        | _ -> Some lost) |> Seq.toList
     let localViews, localReads, localSnapshots, localCopies, localErrors =
         let memory = Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project graph |> Result.toOption
         StringComparisonRecipes.constructions graph |> List.fold (fun (views,reads,snapshots,copies,errors) construction ->

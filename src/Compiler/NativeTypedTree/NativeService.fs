@@ -1362,12 +1362,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare finalGraph with
             | Result.Ok admitted -> admitted, []
             | Result.Error failures ->
-                finalGraph,
-                (failures |> List.map (fun failure ->
-                    { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8403"
-                      Message = "Source settlement is required before witnessing: " + failure.Reason
-                      Range = failure.Occurrence |> Option.bind finalGraph.Nodes.TryFind |> Option.map _.Range |> Option.defaultValue dummyRange
-                      RelatedNodes = Set.toList failure.Participants; Reachability = ReachabilityContext.Reachable }))
+                finalGraph, Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.diagnostics finalGraph failures
 
     let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
     tracePhase "witness-publication"

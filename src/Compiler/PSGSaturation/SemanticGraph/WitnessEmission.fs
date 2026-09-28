@@ -30,6 +30,14 @@ let private project graph =
         let callableFailures = match ordinary with Ok _ -> failures callable | Error _ -> []
         Error (failures ordinary @ callableFailures @ failures storage @ failures boundary @ failures numeric @ failures memory @ failures spatial)
 
+/// The failures of `prepare` as CCS8403 diagnostics, each at the range of its occurrence.
+let diagnostics (graph: SemanticGraph) (failures: WitnessProjectionFailure list) : Diagnostics.Diagnostic list =
+    failures |> List.map (fun failure ->
+        ({ Severity = Diagnostics.NativeDiagnosticSeverity.Error; Code = "CCS8403"
+           Message = "Source settlement is required before witnessing: " + failure.Reason
+           Range = failure.Occurrence |> Option.bind graph.Nodes.TryFind |> Option.map _.Range |> Option.defaultValue Clef.Compiler.NativeTypedTree.NativeTypes.dummyRange
+           RelatedNodes = Set.toList failure.Participants; Reachability = Diagnostics.ReachabilityContext.Reachable } : Diagnostics.Diagnostic))
+
 /// A source edit retains premises for validation but cannot carry publication
 /// into witnessing. The original graph retains its own published facts.
 let invalidate (graph: SemanticGraph) =

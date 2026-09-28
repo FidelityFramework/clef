@@ -22,7 +22,10 @@ module Participants = Clef.Compiler.Baker.Ingredients.Participants
 /// ordinary demand omits never reaches the formal: its actual contributes no
 /// origin, and the omission relations that contain it are participants in its
 /// group. The occurrences reached from `source` itself are in `group`; those an
-/// input reaches are in the group of its call (`Participants.ofInputs`).
+/// input reaches are in the group of its call (`Participants.ofInputs`). A call
+/// whose targets the participant form cannot state is the `Error` of the whole
+/// derivation, whatever the other inputs derive; `Ok None` is a source with no
+/// complete static origin.
 let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (group: NodeId) source =
     let inputs = FormalDemand.reader graph flow
     let rec canonical seen id =
@@ -35,42 +38,71 @@ let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (grou
         | Some { Kind = SemanticKind.Literal(NativeLiteral.String _) }
         | Some { Kind = SemanticKind.PatternBinding _ } -> Some(id, seen)
         | _ -> None
-    let rec origins seen group id =
-        if Set.contains id seen then None else
+    let rec origins seen group id : Result<(Map<NodeId, bigint> * Participant list) option, Participants.TargetFailure> =
+        if Set.contains id seen then Ok None else
         let seen = Set.add id seen
-        let path (values, participants) = values, Participants.occurrence id ParticipantRole.Path 0 group :: participants
+        let path = Result.map (Option.map (fun (values, participants) -> values, Participants.occurrence id ParticipantRole.Path 0 group :: participants))
         match graph.Nodes.TryFind id with
         | Some { Kind = SemanticKind.Literal(NativeLiteral.String text) } ->
-            Some(Map.ofList [id, bigint (System.Text.Encoding.UTF8.GetByteCount text)], [Participants.occurrence id ParticipantRole.Origin 0 group])
-        | Some { Kind = SemanticKind.VarRef(_, Some binding) } -> origins seen group binding |> Option.map path
+            Ok (Some(Map.ofList [id, bigint (System.Text.Encoding.UTF8.GetByteCount text)], [Participants.occurrence id ParticipantRole.Origin 0 group]))
+        | Some { Kind = SemanticKind.VarRef(_, Some binding) } -> origins seen group binding |> path
         | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] }
-        | Some { Kind = SemanticKind.TypeAnnotation(value, _) } -> origins seen group value |> Option.map path
+        | Some { Kind = SemanticKind.TypeAnnotation(value, _) } -> origins seen group value |> path
         | Some { Kind = SemanticKind.PatternBinding _ } ->
             match inputs id with
             | Some formal ->
                 (formal.Demanded |> List.map (fun input -> input, origins seen input.Call input.Actual))
-                @ (formal.Omitted |> List.map (fun omitted -> omitted.Input, Some(Map.empty, [])))
+                @ (formal.Omitted |> List.map (fun omitted -> omitted.Input, Ok (Some(Map.empty, []))))
                 |> List.fold (fun state (input, contribution) ->
-                    match state, flow.Calls.TryFind input.Call, contribution with
-                    | Some(values, participants), Some resolved, Some(more, dependencies) when resolved.Complete && not resolved.Unknown ->
-                        Some(Map.fold (fun acc key value -> Map.add key value acc) values more,
-                             participants @ dependencies @ Participants.ofTargets input.Call resolved.Targets)
-                    | _ -> None) (Some(Map.empty, [Participants.occurrence id ParticipantRole.Formal 0 group]))
-                |> Option.map (fun (values, participants) -> values, participants @ Participants.ofInputs id formal)
-            | _ -> None
-        | _ -> None
-    match canonical Set.empty source, origins Set.empty group source with
-    | Some(identity, _), Some(values, participants) -> Some(identity, values, participants)
-    | _ -> None
+                    match state, contribution, flow.Calls.TryFind input.Call with
+                    | Error failure, _, _ | _, Error failure, _ -> Error failure
+                    | Ok state, Ok contribution, Some resolved when resolved.Complete && not resolved.Unknown ->
+                        Participants.ofTargets input.Call resolved.Targets |> Result.map (fun targets ->
+                            match state, contribution with
+                            | Some(values, participants), Some(more, dependencies) ->
+                                Some(Map.fold (fun acc key value -> Map.add key value acc) values more, participants @ dependencies @ targets)
+                            | _ -> None)
+                    | Ok _, Ok _, _ -> Ok None) (Ok (Some(Map.empty, [Participants.occurrence id ParticipantRole.Formal 0 group])))
+                |> Result.map (Option.map (fun (values, participants) -> values, participants @ Participants.ofInputs id formal))
+            | _ -> Ok None
+        | _ -> Ok None
+    origins Set.empty group source |> Result.map (fun derived ->
+        match canonical Set.empty source, derived with
+        | Some(identity, _), Some(values, participants) -> Some(identity, values, participants)
+        | _ -> None)
+
+/// The located error of a string at `site` whose origins are reached through a call
+/// whose targets the participant form cannot state: the site, the nodes the failure
+/// names, and the text that names each of them with its range.
+let originError (graph: SemanticGraph) site (failure: Participants.TargetFailure) =
+    let range id =
+        graph.Nodes.TryFind id
+        |> Option.map (fun node -> Clef.Compiler.Baker.Ingredients.Obligations.fmtRange node.Range)
+        |> Option.defaultValue (sprintf "node %d, which the graph does not hold" (NodeId.value id))
+    let text =
+        match failure with
+        | Participants.TargetFailure.UnequalCounts(call, target, arguments, parameters) ->
+            sprintf "The string's origins are reached through the call at %s, whose target at %s has %d arguments and %d parameters; the participant form states one parameter for each argument of an exact invocation."
+                (range call) (range target) arguments parameters
+        | Participants.TargetFailure.DifferentLists call ->
+            sprintf "The string's origins are reached through the call at %s, whose targets have different argument or parameter lists; the participant form states one argument list and one parameter list for a call."
+                (range call)
+    site, Set.ofList (site :: Participants.failureNodes failure), text
 
 let private owned (node: SemanticNode) = node.Metadata.TryFind "Baker.StringComparisonOwned" = Some(MetadataValue.Bool true)
 
+/// The participants of both operands when every origin of each has length zero, `Ok None`
+/// otherwise, and the first failure of either operand's derivation.
 let private zeroEvidence graph left right =
     let flow = CallableOrigins.resolve graph
-    [left;right] |> List.choose (fun source ->
-        stringOrigin graph flow source source |> Option.bind (fun (_,origins,participants) ->
-            if not origins.IsEmpty && origins.Values |> Seq.forall ((=) 0I) then Some(Set.ofList (Participants.nodes participants)) else None))
-    |> function [] -> None | facts -> Some(Set.unionMany facts)
+    [left;right] |> List.map (fun source ->
+        stringOrigin graph flow source source |> Result.map (Option.bind (fun (_,origins,participants) ->
+            if not origins.IsEmpty && origins.Values |> Seq.forall ((=) 0I) then Some(Set.ofList (Participants.nodes participants)) else None)))
+    |> List.fold (fun state fact ->
+        match state, fact with
+        | Error failure, _ | _, Error failure -> Error failure
+        | Ok facts, Ok fact -> Ok (Option.toList fact @ facts)) (Ok [])
+    |> Result.map (function [] -> None | facts -> Some(Set.unionMany facts))
 
 let lengthRow site negated sources =
     { Class=EdgeClass.Provenance; Role=EdgeRole.StringLengthComparison negated; Ordinal=0; Sources=sources; Target=site }
@@ -167,7 +199,11 @@ let materialize (graph: SemanticGraph) (source: SemanticNode, kind, callee, left
         do! Closures.enrich source (SemanticKind.Sequential [lb;rb;decision]) Types.boolType [lb;rb;decision] source.EmissionStrategy false
         return [callee;left;right;lb;rb;ls;rs;lv;rv;ll;rl;lengthTest;index;equal;guard;current;lr;rr;byteTest;advance;stop;body;loop;result;decision]
       }
-    let empty = zeroEvidence graph left right
+    // A failure of either operand's origins gives no evidence of zero extents, so the
+    // comparison takes the byte traversal, which claims nothing of the origins. Its two
+    // views derive the same origins, and the borrow owner reports the failure at each
+    // view (BoundaryRecipes.intrinsicWrites).
+    let empty = match zeroEvidence graph left right with Ok evidence -> evidence | Error _ -> None
     let parser =
         match empty with
         | None -> fullParser
@@ -206,6 +242,8 @@ let private calleeMatches graph negated callee =
         operation=(if negated then "op_Inequality" else "op_Equality")
     | _ -> false
 
+/// Whether the construction still has its source structure and its zero-extent
+/// evidence, or the failure of the origins that evidence is derived from.
 let validLengthStructure (graph: SemanticGraph) (c: LengthConstruction) =
     let kind id = graph.Nodes.TryFind id |> Option.map _.Kind
     let binding actual id = match graph.Nodes.TryFind id with Some { Kind=SemanticKind.Binding(_,false,_,_); Children=[value] } -> value=actual | _ -> false
@@ -221,10 +259,11 @@ let validLengthStructure (graph: SemanticGraph) (c: LengthConstruction) =
         | Some(SemanticKind.IfThenElse(test,yes,Some no)) ->
             test=c.Test && kind yes=Some(SemanticKind.Literal(NativeLiteral.Bool false)) && kind no=Some(SemanticKind.Literal(NativeLiteral.Bool true))
         | _ -> false
-    calleeMatches graph c.Negated c.Callee && kind c.Site=Some(SemanticKind.Sequential [c.LeftBinding;c.RightBinding;c.Decision]) &&
-    binding c.Left c.LeftBinding && binding c.Right c.RightBinding && reference c.LeftBinding c.LeftSource && reference c.RightBinding c.RightSource &&
-    length c.LeftSource c.LeftLength && length c.RightSource c.RightLength && test && decision &&
-    zeroEvidence graph c.Left c.Right=Some(Set.ofList c.Evidence)
+    zeroEvidence graph c.Left c.Right |> Result.map (fun evidence ->
+        calleeMatches graph c.Negated c.Callee && kind c.Site=Some(SemanticKind.Sequential [c.LeftBinding;c.RightBinding;c.Decision]) &&
+        binding c.Left c.LeftBinding && binding c.Right c.RightBinding && reference c.LeftBinding c.LeftSource && reference c.RightBinding c.RightSource &&
+        length c.LeftSource c.LeftLength && length c.RightSource c.RightLength && test && decision &&
+        evidence=Some(Set.ofList c.Evidence))
 
 /// Identity and lifetime of this view are the containing comparison's actual
 /// string value, independently of where that string's backing bytes were made.
