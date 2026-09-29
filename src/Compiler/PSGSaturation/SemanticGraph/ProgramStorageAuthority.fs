@@ -60,30 +60,52 @@ let candidates (graph: SemanticGraph) =
             |> Seq.groupBy fst
             |> Seq.map (fun (source, rows) -> source, rows |> Seq.map snd |> Seq.distinct |> Seq.toList)
             |> Map.ofSeq
-        let rec path target seen id =
-            if Set.contains id seen then None else
-            match nodes.TryFind id with
-            | Some { Kind = SemanticKind.Lambda _ | SemanticKind.WhileLoop _ | SemanticKind.ForLoop _ | SemanticKind.ForEach _ } -> None
-            | Some _ when id = target -> Some [id]
-            | Some _ ->
-                match parents.TryFind id with
-                | Some enclosing when not enclosing.IsEmpty ->
-                    enclosing |> List.fold (fun proof (parent, role) ->
-                        let delayedBody =
-                            role = EdgeRole.Body &&
-                            (match nodes.TryFind parent with
-                             | Some { Kind = SemanticKind.SeqExpr _ | SemanticKind.LazyExpr _ } -> true
-                             | _ -> false)
-                        if delayedBody then None else
-                        Option.map2 (@) proof (path target (Set.add id seen) parent)) (Some [id])
-                | _ -> None
-            | None -> None
+        let path target site =
+            // A shared suffix is checked once, not copied once per route to it.
+            // State is local to this (site, initializer) query: false is active,
+            // true is completed. An active backedge still rejects the whole
+            // all-parent claim, even when another parent reaches the target.
+            let states = System.Collections.Generic.Dictionary<NodeId, bool>()
+            let pending = System.Collections.Generic.Stack<NodeId * bool>()
+            let participants = ResizeArray<NodeId>()
+            let mutable valid = true
+            pending.Push(site, false)
+            while valid && pending.Count > 0 do
+                let id, leaving = pending.Pop()
+                if leaving then states[id] <- true else
+                match states.TryGetValue id with
+                | true, complete -> if not complete then valid <- false
+                | _ ->
+                    match nodes.TryFind id with
+                    | Some { Kind = SemanticKind.Lambda _ | SemanticKind.WhileLoop _ | SemanticKind.ForLoop _ | SemanticKind.ForEach _ } -> valid <- false
+                    | Some _ when id = target ->
+                        participants.Add id
+                        states[id] <- true
+                    | Some _ ->
+                        match parents.TryFind id with
+                        | Some enclosing when not enclosing.IsEmpty ->
+                            participants.Add id
+                            states[id] <- false
+                            pending.Push(id, true)
+                            // Reverse the stack insertion to retain the old
+                            // traversal's first-occurrence dependency order.
+                            for parent, role in List.rev enclosing do
+                                let delayedBody =
+                                    role = EdgeRole.Body &&
+                                    (match nodes.TryFind parent with
+                                     | Some { Kind = SemanticKind.SeqExpr _ | SemanticKind.LazyExpr _ } -> true
+                                     | _ -> false)
+                                if delayedBody then valid <- false
+                                else pending.Push(parent, false)
+                        | _ -> valid <- false
+                    | None -> valid <- false
+            if valid then Some(List.ofSeq participants) else None
         let rows =
             Program.read graph
             |> Option.map (fun plan -> plan.Initializers |> List.filter (fun row -> plan.ValueBindings.Contains row.Binding))
             |> Option.defaultValue []
         fun site -> rows |> List.choose (fun row ->
-            path row.Initializer Set.empty site |> Option.map (fun participants -> row.Binding, participants))
+            path row.Initializer site |> Option.map (fun participants -> row.Binding, participants))
     readings.GetValue(graph, System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, NodeId -> (NodeId * NodeId list) list>.CreateValueCallback(fun current -> read current))
 
 /// Keep declaration literals/aliases in the proof dependency set, not merely
