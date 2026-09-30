@@ -345,6 +345,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\LazyContracts.fs" />
     <Compile Include="Baker\Recipes\BoundaryDeclarations.fs" />
     <Compile Include="Baker\Recipes\KernelDeclarations.fs" />
+    <Compile Include="Baker\Ingredients\BindingDemand.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\OrdinaryDemand.fs" />
     <Compile Include="Baker\Ingredients\FormalDemand.fs" />
     <Compile Include="Baker\Ingredients\Participants.fs" />
@@ -360,6 +361,7 @@
     <Compile Include="Baker\Recipes\CallableDispatchRecipes.fs" />
     <Compile Include="Baker\Recipes\LazyRecipes.fs" />
     <Compile Include="Baker\Recipes\OrdinaryDemandRecipes.fs" />
+    <Compile Include="Baker\Recipes\BindingDemandRecipes.fs" />
     <Compile Include="Baker\Recipes\ApplicationRecipes.fs" />
     <Compile Include="Baker\Recipes\SeqRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceConsumptionRecipes.fs" />
@@ -413,6 +415,7 @@
     <Compile Include="Nanopass\BoundaryDeclarations.fs" />
     <Compile Include="Nanopass\KernelDeclarations.fs" />
     <Compile Include="Nanopass\OrdinaryDemand.fs" />
+    <Compile Include="Nanopass\BindingDemand.fs" />
     <Compile Include="Nanopass\StringBorrows.fs" />
     <Compile Include="Nanopass\StringComparisons.fs" />
     <Compile Include="Nanopass\ObligationDischarge.fs" />
@@ -476,6 +479,7 @@
     <Compile Include="Baker\Recipes\BoundaryRecipes.fs" />
     <Compile Include="Nanopass\BoundarySettlement.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\BoundaryEmission.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\WitnessSegmentation.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\WitnessEmission.fs" />
     <!-- Publication: the one place a graph leaves CCS, as a Fidelity.PSG revision -->
     <Compile Include="PSGSaturation\Publication\RevisionMappers.fs" />

@@ -203,12 +203,17 @@ let private updateChildRefs (replacementMap: Map<NodeId, NodeId>) (children: Nod
 /// This is Pass 2 (Intrinsic Fold-In) or Pass 4 (Saturation Fold-In).
 let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
     let replacementMap = recipeSet.ReplacementMap
+    let historical (edge: Hyperedge) =
+        edge.Class = EdgeClass.Provenance &&
+        match edge.Role with
+        | EdgeRole.SchemeSpecialization | EdgeRole.OrdinaryBindingDemandHistory _ -> true
+        | _ -> false
     // Historical derivations have two identity domains: their sources are
     // immutable snapshot identities; their target names current execution.
     // Retaining the former never adds declaration roots or live execution.
     let historicalParticipants =
         graph.Edges
-        |> List.filter (fun edge -> edge.Class = EdgeClass.Provenance && edge.Role = EdgeRole.SchemeSpecialization)
+        |> List.filter historical
         |> List.collect _.Sources |> Set.ofList
     let preserveHistory id metadata =
         match graph.Nodes.TryFind id with
@@ -331,7 +336,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
             |> List.map (fun e ->
                 { e with
                     Sources =
-                        if e.Class = EdgeClass.Provenance && e.Role = EdgeRole.SchemeSpecialization then e.Sources
+                        if historical e then e.Sources
                         else e.Sources |> List.map (updateRef replacementMap)
                     Target = updateRef replacementMap e.Target })
         WitnessProvenance = None

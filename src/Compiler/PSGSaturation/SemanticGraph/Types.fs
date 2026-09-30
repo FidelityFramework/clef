@@ -728,6 +728,9 @@ type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Ad
 /// The role of one occurrence in a relation over nodes (`Participant`).
 [<RequireQualifiedAccess>]
 type ParticipantRole =
+    /// A bounded ordinary binding's exact source activation and demand schedule.
+    | DemandBinding | DemandCell | DemandInitializer | DemandAlias | DemandUse
+    | DemandScope | DemandFrontier | DemandStatement | DemandPremise
     /// Ordered startup and complete source reads of one runtime callable binding.
     | InitializationBinding | InitializationValue | InitializationSpine | InitializationEntry
     | InitializationUse | InitializationScope | InitializationParent | InitializationPhase
@@ -748,6 +751,13 @@ type ParticipantRole =
 /// occurrences of that input and for the arguments and parameters of its call, the omission's
 /// site for an omitted actual, a callee for its body, and the formal for the formal's ingress.
 type Participant = { Node: NodeId; Role: ParticipantRole; Ordinal: int; Group: NodeId }
+
+/// Immutable source types and ordered occurrences of a local demand derivation.
+/// A history row records the input schedule, separately from current authority.
+type BindingDemandEvidence = {
+    SourceTypes: Map<NodeId, TypeIdentity>
+    Participants: Participant list
+}
 
 /// What was derived before the final demand rows. Its OmissionSite and OmittedActual
 /// occurrences name the demand rows it read, each by site, ordinal and actual.
@@ -1578,6 +1588,12 @@ type EdgeRole =
     /// Exact invocation/formal/actual correspondence for an omitted physical
     /// operand. Direct explicit eager demand remains independently required.
     | OrdinaryUnusedActual
+    /// Complete local mutable-read/immutable-alias family at its dominating demand.
+    | OrdinaryBindingDemand of BindingDemandEvidence
+    /// A recognized ordinary snapshot whose complete demand schedule is unresolved.
+    | OrdinaryBindingDemandPending of reason: string * evidence: BindingDemandEvidence
+    /// Original source order retained by the scheduling recipe; never current authority.
+    | OrdinaryBindingDemandHistory of BindingDemandEvidence
     /// Complete rooted activation census and typed affine transitions for a
     /// finite program cell. The arithmetic certificate supplies no lifetime.
     | FiniteCellRange
@@ -2605,6 +2621,27 @@ type WitnessEmissionProjection = {
     Spatial: SpatialModuleProjection
 }
 
+/// Baker's independently witnessed source domains. Unsupported shared structure
+/// remains in Common; a consumer cannot split it by guessing dependencies.
+[<RequireQualifiedAccess>]
+type WitnessRegionKind = Common | ScalarCallable
+
+type WitnessRegion = {
+    Identity: string
+    Flavor: WitnessRegionKind
+    Root: NodeId option
+    Anchor: NodeId option
+    /// Actual structural breadcrumbs, nearest parent first.
+    Path: (NodeId * NodeId list * NodeId list) list
+    Members: Set<NodeId>
+    /// Complete source observations underlying the bounded reuse admission.
+    Supports: Set<NodeId>
+    Fingerprint: string
+    Dependencies: Set<string>
+}
+
+type WitnessSegmentation = { Version: int; Regions: WitnessRegion list }
+
 /// The codata the graph carries for emission, settled once at the end of saturation.
 type Codata = {
     Escapes: Map<NodeId, EscapeKind>
@@ -2628,6 +2665,7 @@ type Codata = {
     MutableCallableStorage: Map<NodeId, MutableCallableStorage>
     OrdinaryDemand: OrdinaryDemandProjection
     WitnessEmission: WitnessEmissionProjection option
+    WitnessSegmentation: WitnessSegmentation option
     ContinuationFrames: Map<NodeId, ContinuationFrame>
     /// A unique sequence constructor at a use, established in Baker. This
     /// evidence permits elision of the known function half of (fn, env).
@@ -2681,6 +2719,7 @@ module Codata =
         MutableCallableStorage = Map.empty
         OrdinaryDemand = OrdinaryDemandProjection.empty
         WitnessEmission = None
+        WitnessSegmentation = None
         ContinuationFrames = Map.empty
         SequenceOrigins = Map.empty
         SequenceFlows = Map.empty

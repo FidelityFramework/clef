@@ -1077,6 +1077,9 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     // proven overapplications through the same recipe/fold-in machinery before
     // range and placement inspect the calls and their returned function values.
     let finalGraph = Clef.Compiler.Nanopass.CallableApplications.normalize finalGraph
+    // Ordinary local snapshots read at a source-proved first demand. The
+    // complete family rewrite precedes capture conversion and range analysis.
+    let finalGraph = Clef.Compiler.Nanopass.BindingDemand.normalize finalGraph
     // Known non-escaping named functions carry admitted immutable captures as
     // explicit parameters. Mutable capture storage remains a separate contract.
     let finalGraph = Clef.Compiler.Nanopass.ClosureElaboration.normalize finalGraph
@@ -1219,8 +1222,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     let taggedDiagnostics = (diagnostics @ residual) |> List.map tagReachability
 
+    let finalGraph, bindingDemandDiagnostics = Clef.Compiler.Nanopass.BindingDemand.settle finalGraph
+
     let sourceAdmitted =
-        (taggedDiagnostics @ programInitializationDiagnostics @ kernelIngressDiagnostics) |> List.exists (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error) |> not
+        (taggedDiagnostics @ programInitializationDiagnostics @ kernelIngressDiagnostics @ bindingDemandDiagnostics) |> List.exists (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error) |> not
     let finalGraph, programStorageDiagnostics = Clef.Compiler.Nanopass.ProgramInitialization.settleValueAuthority sourceAdmitted finalGraph
     let sourceAdmitted = sourceAdmitted && programStorageDiagnostics.IsEmpty
     let finalGraph, curry =
@@ -1255,6 +1260,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph, premiseDiagnostics = Clef.Compiler.Nanopass.PremiseEstablishment.normalize finalGraph
     let finalGraph, lazies = Clef.Compiler.Nanopass.LazyRuntime.settleWhenSourceAdmitted sourceAdmitted finalGraph
     let finalGraph, initializationOrderDiagnostics = Clef.Compiler.Nanopass.ProgramInitializationOrder.settle finalGraph
+    let finalGraph, bindingDemandDiagnostics = Clef.Compiler.Nanopass.BindingDemand.settle finalGraph
     tracePhase "lazy-settlement"
     let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
     let mmio, mmioDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess.settle (diagnostics @ residual @ rangeDiagnostics) finalGraph
@@ -1322,6 +1328,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 MutableCallableStorage = mutableCallables.Storage
                 OrdinaryDemand = ordinaryDemand
                 WitnessEmission = None
+                WitnessSegmentation = None
                 ContinuationFrames = sequences.Frames
                 SequenceOrigins = sequences.Origins
                 SequenceFlows = sequences.Flows
@@ -1387,7 +1394,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ initializationOrderDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ initializationOrderDiagnostics @ bindingDemandDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 

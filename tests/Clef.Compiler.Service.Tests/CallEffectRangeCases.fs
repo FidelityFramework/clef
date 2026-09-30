@@ -33,6 +33,8 @@ module private CallEffectRanges =
 
 [<Trait("Category", "NTU"); Trait("Subcategory", "CallEffectRanges")>]
 type CallEffectRangeCases() =
+    // These range fixtures request lexical cell observations explicitly: an ordinary
+    // binding first observes at demand and cannot stand for a pre-write snapshot.
     [<Theory>]
     [<InlineData("let change = fun () -> state <- 300", "change ()")>]
     [<InlineData("let change = fun () -> state <- 300\n    let relay = fun () -> change ()", "relay ()")>]
@@ -45,9 +47,9 @@ let main _ =
     let mutable state: int = 1
     {declarations}
     if state < 10 then
-        let before = state
+        let before = eager state
         {call}
-        let after = state
+        let after = eager state
         if before < 10 && after = 300 then 0 else 1
     else 2
 """
@@ -103,10 +105,10 @@ let main _ =
 let main _ =
     let mutable state: int = 1
     if state < 10 then
-        let delayed = fun () -> state <- 300
-        let before = state
+        let delayed = eager (fun () -> state <- 300)
+        let before = eager state
         delayed ()
-        let after = state
+        let after = eager state
         if before < 10 && after = 300 then 0 else 1
     else 2
 """
@@ -124,7 +126,7 @@ let main _ =
     if state < 10 then
         let mutable count: int = 0
         while count < 2 do
-            let observed = state
+            let observed = eager state
             ignore observed
             relay ()
             count <- count + 1
@@ -134,8 +136,8 @@ let main _ =
         CallEffectRanges.range "observed" 1I 300I graph
 
     [<Theory>]
-    [<InlineData("let wasSmall = state < 10", "wasSmall")>]
-    [<InlineData("let wasSmall = state < 10\n    let saved = wasSmall && state = 1", "saved")>]
+    [<InlineData("let wasSmall = eager (state < 10)", "wasSmall")>]
+    [<InlineData("let wasSmall = eager (state < 10)\n    let saved = eager (wasSmall && state = 1)", "saved")>]
     member _.``Saved predicates do not replay old mutable observations as current bounds``(predicate: string, guard: string) =
         let graph = CallEffectRanges.check $"""
 [<EntryPoint>]
@@ -144,7 +146,7 @@ let main _ =
     {predicate}
     state <- 300
     if {guard} then
-        let afterPredicate = state
+        let afterPredicate = eager state
         if afterPredicate = 300 then 0 else 1
     else 2
 """
@@ -165,17 +167,31 @@ let main _ = inspect 1 + inspect 300
         CallEffectRanges.range "retained" 1I 9I graph
 
     [<Fact>]
+    member _.``Eager saved predicates over immutable values still refine their observations``() =
+        let graph = CallEffectRanges.check """
+let inspect (value: int) =
+    let wasSmall = eager (value < 10)
+    if wasSmall then
+        let retained = value
+        retained
+    else 0
+[<EntryPoint>]
+let main _ = inspect 1 + inspect 300
+"""
+        CallEffectRanges.range "retained" 1I 9I graph
+
+    [<Fact>]
     member _.``Saved successful checks may be combined after different writes to the same cell``() =
         let graph = CallEffectRanges.check """
 [<EntryPoint>]
 let main _ =
     let mutable trace: int = 1245
-    let firstOk = trace = 1245
+    let firstOk = eager (trace = 1245)
     trace <- 12345
-    let secondOk = trace = 12345
+    let secondOk = eager (trace = 12345)
     trace <- 1246
     if firstOk && secondOk then
-        let finalTrace = trace
+        let finalTrace = eager trace
         if finalTrace = 1246 then 0 else 1
     else 2
 """
@@ -189,7 +205,7 @@ let main _ =
     let mutable state: int = 1
     let limit = fun () -> state <- 300; 10
     if state < limit () then
-        let observed = state
+        let observed = eager state
         if observed = 300 then 0 else 1
     else 2
 """
@@ -205,7 +221,7 @@ let isSmall (value: int) =
 [<EntryPoint>]
 let main _ =
     if isSmall state then
-        let observed = state
+        let observed = eager state
         if observed = 300 then 0 else 1
     else 2
 """
@@ -219,7 +235,7 @@ let main _ =
     let mutable state: int = 1
     let change = fun () -> state <- 300; 0
     if state + change () < 10 then
-        let observed = state
+        let observed = eager state
         if observed = 300 then 0 else 1
     else 2
 """
@@ -233,10 +249,10 @@ let main _ =
     let mutable state: int = 1
     let change (_: unit) (_: unit) = state <- 300
     if state < 10 then
-        let delayed = change ()
-        let before = state
+        let delayed = eager (change ())
+        let before = eager state
         delayed ()
-        let after = state
+        let after = eager state
         if before < 10 && after = 300 then 0 else 1
     else 2
 """

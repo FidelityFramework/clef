@@ -56,7 +56,8 @@ let prepare (graph: SemanticGraph) : Result<SemanticGraph, WitnessProjectionFail
     | Ok projection ->
         let facts = {
             graph.Codata.Value with OrdinaryDemand = projection.Ordinary
-                                    WitnessEmission = Some projection }
+                                    WitnessEmission = Some projection
+                                    WitnessSegmentation = Some (WitnessSegmentation.project graph projection) }
         // Force semantic lazy computations under their source owner. A consumer
         // must not execute a deferred layout/index/classification computation.
         let settled = {
@@ -122,6 +123,9 @@ let admit (graph: SemanticGraph) : Result<unit, WitnessProjectionFailure list> =
         if facts.OrdinaryDemand <> projection.Ordinary || facts.WitnessEmission <> Some projection then
             Error [{ Occurrence = None; Participants = Set.empty
                      Reason = "Witness projection differs from the current source snapshot." }]
+        elif facts.WitnessSegmentation <> Some (WitnessSegmentation.project graph projection) then
+            Error [{ Occurrence = None; Participants = Set.empty
+                     Reason = "Witness segmentation differs from the current source snapshot." }]
         elif not (isMaterialized graph) then
             Error [{ Occurrence = None; Participants = Set.empty
                      Reason = "Witness input contains deferred source computations." }]

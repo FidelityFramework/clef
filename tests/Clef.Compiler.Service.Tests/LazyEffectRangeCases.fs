@@ -28,15 +28,155 @@ let main _ =
     let both = Lazy.force first && not (Lazy.force second) && Lazy.force alias
     if both then executions else 9
 """
+    let ordinaryFunction localCell =
+        let declaration = "let mutable executions = 0\n"
+        (if localCell then "let observe () =\n    " + declaration else declaration + "let observe () =\n") + """
+    let value = lazy (executions <- executions + 1; true)
+    let alias = value
+    let first = Lazy.force alias
+    let second = Lazy.force value
+    if first && second then executions else 9
+[<EntryPoint>]
+let main _ = observe ()
+"""
     let cell (graph: SemanticGraph) = graph.Nodes.Values |> Seq.filter (fun node ->
         node.IsReachable && match node.Kind with SemanticKind.Binding("executions", true, _, _) -> true | _ -> false) |> Assert.Single
     let proof graph = EffectRanges.recognize graph |> Assert.Single
     let analyze graph = EffectRangeAnalysis.run graph.Platform graph |> fst
+    let analyzeChanged graph =
+        // The changed structural census also invalidates ordinary-demand rows.
+        // Renew that owning prerequisite before asking range analysis to settle.
+        let current = Clef.Compiler.Nanopass.OrdinaryDemand.normalize graph
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead current |> Result.isOk)
+        Assert.Empty(EffectRanges.recognize current)
+        analyze current
+    let withChildren (graph: SemanticGraph) id children =
+        let node = { graph.Nodes[id] with Children = children }
+        let retained = graph.Edges |> List.filter (fun edge ->
+            edge.Target <> id || (edge.Class <> EdgeClass.Structural && edge.Class <> EdgeClass.Reference))
+        let incidence =
+            Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node
+            |> List.filter (fun edge -> edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference)
+        { graph with Nodes = graph.Nodes.Add(id, node); Edges = incidence @ retained }
     let obligations (graph: SemanticGraph) = graph.Nodes.Values |> Seq.filter (fun node ->
         match node.Kind with SemanticKind.Obligation { Body = ObligationBody.FiniteAdditiveEffects _ } -> true | _ -> false) |> Seq.toList
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "LazyEffectRanges")>]
 type LazyEffectRangeCases() =
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``An ordinary function retains one memo instance for a module or locally captured counter`` localCell =
+        let graph = LazyEffects.ordinaryFunction localCell |> LazyEffects.check
+        let bound = LazyEffects.proof graph
+        Assert.Equal(0I, bound.Lower)
+        Assert.Equal(1I, bound.Upper)
+        let contribution = Assert.Single bound.Contributions
+        Assert.Equal(1I, contribution.Count)
+        Assert.Equal(Some(ValueRange.Bounded(0I, 1I)), (LazyEffects.cell graph).ValueRange)
+        Assert.Equal(Some(ValueRange.Bounded(1I, 1I)), graph.Nodes[contribution.Value].ValueRange)
+        let protocol = EffectLazyValues.settle graph
+        Assert.Single protocol.Instances |> ignore
+        Assert.Equal(2, protocol.Forces.Count)
+        let required = graph.Edges |> List.filter (fun edge ->
+            edge.Role = EdgeRole.LazyMemoization || match edge.Role with EdgeRole.LazyCapture _ -> true | _ -> false)
+        for edge in required do
+            for participant in edge.Target :: edge.Sources do Assert.Contains(participant, bound.Participants)
+
+    [<Fact>]
+    member _.``Distinct lazy formations share a local captured counter without counting its alias again`` () =
+        let graph = LazyEffects.check """
+let observe () =
+    let mutable executions = 0
+    let first = lazy (executions <- executions + 1; true)
+    let second = lazy (executions <- executions + 1; false)
+    let alias = first
+    let both = Lazy.force first && not (Lazy.force second) && Lazy.force alias
+    if both then executions else 9
+[<EntryPoint>]
+let main _ = observe ()
+"""
+        let bound = LazyEffects.proof graph
+        Assert.Equal(0I, bound.Lower)
+        Assert.Equal(2I, bound.Upper)
+        Assert.Equal(2, bound.Contributions.Length)
+        Assert.Equal(2, bound.Contributions |> List.map _.Formation |> Set.ofList |> Set.count)
+        Assert.All(bound.Contributions, fun contribution -> Assert.Equal(1I, contribution.Count))
+        Assert.Equal(Some(ValueRange.Bounded(0I, 2I)), (LazyEffects.cell graph).ValueRange)
+        let protocol = EffectLazyValues.settle graph
+        Assert.Equal(2, protocol.Instances.Count)
+        Assert.Equal(3, protocol.Forces.Count)
+
+    [<Theory>]
+    [<InlineData("missing-initializer-child")>]
+    [<InlineData("captured-binding-child")>]
+    [<InlineData("duplicate-initializer-incidence")>]
+    [<InlineData("missing-capture-premise")>]
+    [<InlineData("computed-already-true")>]
+    [<InlineData("computed-literal-with-child")>]
+    member _.``Local capture formation requires its exact initialization and capture premises`` defect =
+        let original = LazyEffects.ordinaryFunction true |> LazyEffects.check
+        let bound = LazyEffects.proof original
+        let instance = (EffectLazyValues.settle original).Instances.Values |> Assert.Single
+        let environment = original.Nodes[instance.Environment]
+        Assert.Equal<NodeId list>([instance.InitialComputed], environment.Children)
+        let changed =
+            match defect with
+            | "missing-initializer-child" | "captured-binding-child" ->
+                let children = if defect = "missing-initializer-child" then [] else [instance.InitialComputed; bound.Cell]
+                LazyEffects.withChildren original environment.Id children
+            | "duplicate-initializer-incidence" ->
+                let row = original.Edges |> List.find (fun edge ->
+                    edge.Target = environment.Id && edge.Role = EdgeRole.EnvironmentInitializer && edge.Ordinal = 1)
+                { original with Edges = row :: original.Edges }
+            | "missing-capture-premise" ->
+                let edges = original.Edges |> List.filter (fun edge ->
+                    edge.Target <> environment.Id || match edge.Role with EdgeRole.LazyCapture _ -> false | _ -> true)
+                { original with Edges = edges }
+            | "computed-literal-with-child" ->
+                LazyEffects.withChildren original instance.InitialComputed [bound.Initializer]
+            | _ ->
+                let initial = original.Nodes[instance.InitialComputed]
+                { original with Nodes = original.Nodes.Add(initial.Id, { initial with Kind = SemanticKind.Literal(NativeLiteral.Bool true) }) }
+        Assert.Empty(EffectRanges.recognize changed)
+        let analyzed = LazyEffects.analyzeChanged changed
+        Assert.Empty(LazyEffects.obligations analyzed)
+        Assert.Empty(analyzed.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.LazyEffectRange))
+        Assert.NotEqual(Some(ValueRange.Bounded(bound.Lower, bound.Upper)), analyzed.Nodes[bound.Cell].ValueRange)
+        Assert.Single(EffectRanges.recognize original) |> ignore
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``A module counter still requires the exact memo environment initialization`` malformedLiteral =
+        let original = LazyEffects.ordinaryFunction false |> LazyEffects.check
+        let bound = LazyEffects.proof original
+        let instance = (EffectLazyValues.settle original).Instances.Values |> Assert.Single
+        let changed =
+            if malformedLiteral then LazyEffects.withChildren original instance.InitialComputed [bound.Initializer]
+            else LazyEffects.withChildren original instance.Environment []
+        Assert.Empty(EffectRanges.recognize changed)
+        let analyzed = LazyEffects.analyzeChanged changed
+        Assert.Empty(LazyEffects.obligations analyzed)
+        Assert.Empty(analyzed.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.LazyEffectRange))
+        Assert.NotEqual(Some(ValueRange.Bounded(bound.Lower, bound.Upper)), analyzed.Nodes[bound.Cell].ValueRange)
+        Assert.Single(EffectRanges.recognize original) |> ignore
+
+    [<Fact>]
+    member _.``A cyclic computed initializer loses its instance before recursive formation validation`` () =
+        let original = LazyEffects.ordinaryFunction true |> LazyEffects.check
+        let instance = (EffectLazyValues.settle original).Instances.Values |> Assert.Single
+        let initial = original.Nodes[instance.InitialComputed]
+        let cycle =
+            { initial with
+                Kind = SemanticKind.LazyEnvironment(instance.Formation, [instance.Computed, instance.Environment])
+                Type = original.Nodes[instance.Environment].Type
+                Children = [instance.Environment] }
+        let changed = { original with Nodes = original.Nodes.Add(cycle.Id, cycle) }
+        Assert.Empty((EffectLazyValues.settle changed).Instances)
+        Assert.Empty(EffectRanges.recognize changed)
+        Assert.Single(EffectRanges.recognize original) |> ignore
+
     [<Fact>]
     member _.``Two factory activations count two instances while an alias retains the first cache`` () =
         let graph = LazyEffects.check LazyEffects.twoFactories

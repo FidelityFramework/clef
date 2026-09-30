@@ -41,13 +41,14 @@ type ClosureEnvironmentRangeCases() =
 
     [<Fact>]
     member _.``A mapped callback environment write invalidates the same source cell guard`` () =
+        // This tests the cell observation after a pull, not a deferred binding's demand.
         let graph = EnvironmentRangeFixture.check """    let mutable state = 1
     let mapper = fun value -> state <- 300; value
     let mapped = Seq.map mapper (seq { yield 2 })
     let mutable answer = 0
     if state < 10 then
         for value in mapped do
-            let afterPull = state
+            let afterPull = eager state
             answer <- afterPull
     answer
 """

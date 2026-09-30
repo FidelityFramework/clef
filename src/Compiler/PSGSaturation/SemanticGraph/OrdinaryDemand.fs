@@ -323,4 +323,6 @@ let project graph = projectionFrom graph (read graph)
 /// Compute and validate the final use proof once while the source stage owns
 /// publication. An absent or extra relation cannot become an empty admission.
 let projectValidated graph : Result<OrdinaryDemandProjection, WitnessProjectionFailure list> =
-    tryRead graph |> Result.map (projectionFrom graph)
+    match Clef.Compiler.Baker.Ingredients.BindingDemand.failures graph with
+    | [] -> tryRead graph |> Result.map (projectionFrom graph)
+    | failures -> Error failures

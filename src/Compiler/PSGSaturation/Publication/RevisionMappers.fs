@@ -106,6 +106,12 @@ and mapBaseMeasure (value: D.BaseMeasure) : Fidelity.PSG.BaseMeasure =
         Module = value.Module
     } : Fidelity.PSG.BaseMeasure)
 
+and mapBindingDemandEvidence (value: S.BindingDemandEvidence) : Fidelity.PSG.BindingDemandEvidence =
+    ({
+        SourceTypes = (value.SourceTypes |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapTypeIdentity v) |> Map.ofSeq)
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.BindingDemandEvidence)
+
 and mapBorrowHistory (value: S.BorrowHistory) : Fidelity.PSG.BorrowHistory =
     ({
         Site = nodeId value.Site
@@ -733,6 +739,9 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.LazyEffectRange -> Fidelity.PSG.EdgeRole.LazyEffectRange
     | S.EdgeRole.OrdinaryUnusedFormal -> Fidelity.PSG.EdgeRole.OrdinaryUnusedFormal
     | S.EdgeRole.OrdinaryUnusedActual -> Fidelity.PSG.EdgeRole.OrdinaryUnusedActual
+    | S.EdgeRole.OrdinaryBindingDemand(a0) -> Fidelity.PSG.EdgeRole.OrdinaryBindingDemand(mapBindingDemandEvidence a0)
+    | S.EdgeRole.OrdinaryBindingDemandPending(a0, a1) -> Fidelity.PSG.EdgeRole.OrdinaryBindingDemandPending(a0, mapBindingDemandEvidence a1)
+    | S.EdgeRole.OrdinaryBindingDemandHistory(a0) -> Fidelity.PSG.EdgeRole.OrdinaryBindingDemandHistory(mapBindingDemandEvidence a0)
     | S.EdgeRole.FiniteCellRange -> Fidelity.PSG.EdgeRole.FiniteCellRange
 
 and mapEmissionStrategy (value: S.EmissionStrategy) : Fidelity.PSG.EmissionStrategy =
@@ -1708,6 +1717,15 @@ and mapParticipantEvidence (value: S.ParticipantEvidence) : Fidelity.PSG.Partici
 
 and mapParticipantRole (value: S.ParticipantRole) : Fidelity.PSG.ParticipantRole =
     match value with
+    | S.ParticipantRole.DemandBinding -> Fidelity.PSG.ParticipantRole.DemandBinding
+    | S.ParticipantRole.DemandCell -> Fidelity.PSG.ParticipantRole.DemandCell
+    | S.ParticipantRole.DemandInitializer -> Fidelity.PSG.ParticipantRole.DemandInitializer
+    | S.ParticipantRole.DemandAlias -> Fidelity.PSG.ParticipantRole.DemandAlias
+    | S.ParticipantRole.DemandUse -> Fidelity.PSG.ParticipantRole.DemandUse
+    | S.ParticipantRole.DemandScope -> Fidelity.PSG.ParticipantRole.DemandScope
+    | S.ParticipantRole.DemandFrontier -> Fidelity.PSG.ParticipantRole.DemandFrontier
+    | S.ParticipantRole.DemandStatement -> Fidelity.PSG.ParticipantRole.DemandStatement
+    | S.ParticipantRole.DemandPremise -> Fidelity.PSG.ParticipantRole.DemandPremise
     | S.ParticipantRole.InitializationBinding -> Fidelity.PSG.ParticipantRole.InitializationBinding
     | S.ParticipantRole.InitializationValue -> Fidelity.PSG.ParticipantRole.InitializationValue
     | S.ParticipantRole.InitializationSpine -> Fidelity.PSG.ParticipantRole.InitializationSpine
@@ -2285,6 +2303,30 @@ and mapWitnessEmissionProjection (value: S.WitnessEmissionProjection) : Fidelity
         Memory = mapMemoryWitnessProjection value.Memory
         Spatial = mapSpatialModuleProjection value.Spatial
     } : Fidelity.PSG.WitnessEmissionProjection)
+
+and mapWitnessRegion (value: S.WitnessRegion) : Fidelity.PSG.WitnessRegion =
+    ({
+        Identity = value.Identity
+        Flavor = mapWitnessRegionKind value.Flavor
+        Root = (value.Root |> Option.map (fun x -> nodeId x))
+        Anchor = (value.Anchor |> Option.map (fun x -> nodeId x))
+        Path = (value.Path |> List.map (fun x -> (let (t0, t1, t2) = x in (nodeId t0, (t1 |> List.map (fun x -> nodeId x)), (t2 |> List.map (fun x -> nodeId x))))))
+        Members = (value.Members |> Set.map (fun x -> nodeId x))
+        Supports = (value.Supports |> Set.map (fun x -> nodeId x))
+        Fingerprint = value.Fingerprint
+        Dependencies = value.Dependencies
+    } : Fidelity.PSG.WitnessRegion)
+
+and mapWitnessRegionKind (value: S.WitnessRegionKind) : Fidelity.PSG.WitnessRegionKind =
+    match value with
+    | S.WitnessRegionKind.Common -> Fidelity.PSG.WitnessRegionKind.Common
+    | S.WitnessRegionKind.ScalarCallable -> Fidelity.PSG.WitnessRegionKind.ScalarCallable
+
+and mapWitnessSegmentation (value: S.WitnessSegmentation) : Fidelity.PSG.WitnessSegmentation =
+    ({
+        Version = value.Version
+        Regions = (value.Regions |> List.map (fun x -> mapWitnessRegion x))
+    } : Fidelity.PSG.WitnessSegmentation)
 
 /// A checker type crosses as its identity, with the current substitution applied.
 and freeze (value: N.NativeType) : Fidelity.PSG.TypeIdentity =

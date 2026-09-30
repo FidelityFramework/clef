@@ -86,18 +86,26 @@ let main _ = if choose true then 0 else 1
 module MutableReadAliases
 let choose (value: bool) =
     let mutable cell = value
-    let before = cell
+    let before = eager cell
     cell <- false
     before = cell
 [<EntryPoint>]
 let main _ = if choose true then 0 else 1
 """
+        // Force the intended pre-write observation without collapsing either cell read.
         let graph = LazyResidenceFixture.programWith (Some source)
         let projection = CallableEmissionFixture.project graph
         let reads = graph.Nodes.Values |> Seq.filter (fun node ->
             node.IsReachable && (match node.Kind with SemanticKind.VarRef("cell", Some _) -> true | _ -> false)) |> Seq.toList
         Assert.True(reads.Length >= 2)
         for read in reads do Assert.Equal(read.Id, projection.AliasTargets[read.Id])
+        let before = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.Binding("before", _, _, _) -> true | _ -> false) |> Assert.Single
+        match graph.Nodes[Assert.Single before.Children].Kind with
+        | SemanticKind.EagerExpr read ->
+            Assert.Contains(reads, fun node -> node.Id = read)
+            Assert.Equal(read, projection.AliasTargets[read])
+        | kind -> failwithf "The explicit observation lost its eager marker and exact cell read: %A" kind
 
     [<Fact>]
     member _.``Returned closure occurrence admits identity without admitting another factory call`` () =

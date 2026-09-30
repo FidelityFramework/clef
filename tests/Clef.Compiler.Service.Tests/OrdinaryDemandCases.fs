@@ -440,3 +440,196 @@ let main _ = discard (1<m> + 2<s>)
             | _ -> Clef.Compiler.PSGSaturation.SemanticGraph.Traversal.filter (fun _ -> true) graph
         Assert.True(Result.isError(WitnessInput.tryRead changed))
         Assert.Equal(original, WitnessInput.tryRead graph)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``An ordinary snapshot first reads at its dominating demand and later uses retain that binding`` conditionDemand =
+        let body =
+            if conditionDemand then """
+    let mutable observed = 0
+    if snapshot = 2 then observed <- 1 else observed <- -1
+    current <- 3
+    if snapshot = 2 then observed else -1
+"""
+            else """
+    let first = eager snapshot
+    current <- 3
+    let second = eager snapshot
+    if first = 2 && second = 2 then 0 else 1
+"""
+        let graph = OrdinaryDemandFixture.check ("""
+[<EntryPoint>]
+let main _ =
+    let mutable current = 1
+    let snapshot = current
+    current <- 2
+""" + body)
+        let binding name = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.Binding(actual, _, _, _) -> actual = name | _ -> false) |> Assert.Single
+        let current, snapshot = binding "current", binding "snapshot"
+        Assert.Equal(formatType current.Type, formatType snapshot.Type)
+        let read = graph.Nodes[Assert.Single snapshot.Children]
+        match read.Kind with
+        | SemanticKind.VarRef(_, Some source) -> Assert.Equal(current.Id, source)
+        | kind -> failwithf "The deferred snapshot lost its original mutable-cell read: %A" kind
+        let uses = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.VarRef(_, Some source) -> source = snapshot.Id | _ -> false) |> Seq.toList
+        Assert.Equal(2, uses.Length)
+        let startup = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read graph |> Option.get
+        let rec statements id =
+            let node = graph.Nodes[id]
+            match node.Kind with
+            | SemanticKind.Sequential values ->
+                Assert.Equal<NodeId list>(values, node.Children)
+                values |> List.collect statements
+            | _ -> [id]
+        let sequence = statements startup.OriginalBody
+        Assert.Single(sequence |> List.filter ((=) snapshot.Id)) |> ignore
+        let write value =
+            graph.Nodes.Values |> Seq.filter (fun node ->
+                if not node.IsReachable then false else
+                match node.Kind with
+                | SemanticKind.Set(target, assigned) ->
+                    match graph.Nodes[target].Kind, graph.Nodes[assigned].Kind with
+                    | SemanticKind.VarRef(_, Some source), SemanticKind.Literal(NativeLiteral.Int(actual, _)) -> source = current.Id && actual = value
+                    | _ -> false
+                | _ -> false)
+            |> Assert.Single
+        let firstDemand, secondDemand =
+            if conditionDemand then
+                match sequence |> List.filter (fun id -> match graph.Nodes[id].Kind with SemanticKind.IfThenElse _ -> true | _ -> false) with
+                | [first; second] -> first, second
+                | values -> failwithf "Expected two demanded source conditions: %A" values
+            else (binding "first").Id, (binding "second").Id
+        let position id = sequence |> List.findIndex ((=) id)
+        Assert.True(position (write 2L).Id < position snapshot.Id,
+                    "The ordinary snapshot still reads its mutable cell before the write preceding its first demand.")
+        Assert.True(position snapshot.Id < position firstDemand)
+        Assert.True(position firstDemand < position (write 3L).Id)
+        Assert.True(position (write 3L).Id < position secondDemand)
+
+    [<Fact>]
+    member _.``A snapshot alias family moves together and numeric analysis sees the delayed value`` () =
+        let graph = OrdinaryDemandFixture.check """
+[<EntryPoint>]
+let main _ =
+    let mutable current = 1
+    let snapshot = current
+    let alias = snapshot
+    current <- 257
+    let first = eager alias
+    current <- 3
+    let second = eager snapshot
+    if first = 257 && second = 257 then 0 else 1
+"""
+        let named name = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.Binding(actual, _, _, _) -> actual = name | _ -> false) |> Assert.Single
+        let snapshot, alias = named "snapshot", named "alias"
+        let schedule = Clef.Compiler.Baker.Ingredients.BindingDemand.analyze graph |> Assert.Single
+        Assert.Equal<NodeId list>([snapshot.Id; alias.Id], schedule.Family)
+        Assert.True(schedule.Pending.IsNone, sprintf "%A" schedule.Pending)
+        Assert.Equal<NodeId list>(schedule.Desired, schedule.Slots |> List.map _.Statement)
+        Assert.Empty(Clef.Compiler.Baker.Ingredients.BindingDemand.failures graph)
+        for node in [snapshot; alias; named "first"; named "second"] do
+            match node.ValueRange with
+            | Some(ValueRange.Bounded(lower, upper)) -> Assert.True(lower <= 257I && upper >= 257I, sprintf "The delayed value 257 was excluded from %A: %A" node.Id node.ValueRange)
+            | value -> failwithf "Expected a finite post-scheduling range for %A, got %A" node.Id value
+        let history = graph.Edges |> List.filter (fun edge ->
+            edge.Target = snapshot.Id && match edge.Role with EdgeRole.OrdinaryBindingDemandHistory _ -> true | _ -> false) |> Assert.Single
+        let original = match history.Role with EdgeRole.OrdinaryBindingDemandHistory evidence -> evidence | _ -> failwith "Expected input history"
+        let originalOrder = original.Participants |> List.filter (fun p -> p.Role = ParticipantRole.DemandStatement) |> List.sortBy _.Ordinal |> List.map _.Node
+        Assert.NotEqual<NodeId list>(originalOrder, schedule.Desired)
+        Assert.Equal(snapshot.Type, alias.Type)
+        let settled, diagnostics = Clef.Compiler.Nanopass.BindingDemand.settle graph
+        Assert.Empty diagnostics
+        Assert.Equal<(EdgeClass * EdgeRole * NodeId list * NodeId * int) list>(graph.Edges |> List.map OrdinaryDemandFixture.key, settled.Edges |> List.map OrdinaryDemandFixture.key)
+
+    [<Theory>]
+    [<InlineData("role")>]
+    [<InlineData("ordinal")>]
+    [<InlineData("group")>]
+    [<InlineData("type")>]
+    member _.``Current snapshot demand evidence rejects changed roles order grouping and native types`` defect =
+        let graph = OrdinaryDemandFixture.check """
+[<EntryPoint>]
+let main _ =
+    let mutable current = 1
+    let snapshot = current
+    current <- 257
+    let first = eager snapshot
+    current <- 3
+    let second = eager snapshot
+    if first = 257 && second = 257 then 0 else 1
+"""
+        let row = graph.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.OrdinaryBindingDemand _ -> true | _ -> false) |> Assert.Single
+        let evidence = match row.Role with EdgeRole.OrdinaryBindingDemand evidence -> evidence | _ -> failwith "Expected current evidence"
+        let changedEvidence =
+            if defect = "type" then { evidence with SourceTypes = evidence.SourceTypes.Add(row.Target, Clef.Compiler.NativeTypedTree.TypeIdentities.ofType Types.boolType) }
+            else
+                let index = evidence.Participants |> List.findIndex (fun p -> p.Role = ParticipantRole.DemandUse)
+                let participants =
+                    evidence.Participants |> List.mapi (fun i p ->
+                        if i <> index then p else
+                        match defect with
+                        | "role" -> { p with Role = ParticipantRole.DemandInitializer }
+                        | "ordinal" -> { p with Ordinal = p.Ordinal + 1 }
+                        | _ -> { p with Group = row.Target })
+                { evidence with Participants = participants }
+        let changed = { graph with Edges = graph.Edges |> List.map (fun edge -> if OrdinaryDemandFixture.key edge = OrdinaryDemandFixture.key row then { edge with Role = EdgeRole.OrdinaryBindingDemand changedEvidence } else edge) }
+        Assert.NotEmpty(Clef.Compiler.Baker.Ingredients.BindingDemand.failures changed)
+        Assert.True(Result.isError(DemandProjection.projectValidated changed))
+        Assert.Equal<Set<NodeId>>(Set.ofList(evidence.Participants |> List.map _.Node), Set.ofList(changedEvidence.Participants |> List.map _.Node))
+
+    [<Theory>]
+    [<InlineData("independent-reference")>]
+    [<InlineData("shared-initializer")>]
+    [<InlineData("capture")>]
+    [<InlineData("unknown-capture")>]
+    member _.``An additional snapshot use cannot disappear from the demand census`` defect =
+        let graph = OrdinaryDemandFixture.check """
+[<EntryPoint>]
+let main _ =
+    let mutable current = 1
+    let snapshot = current
+    current <- 257
+    let first = eager snapshot
+    if first = 257 then 0 else 1
+"""
+        let schedule = Clef.Compiler.Baker.Ingredients.BindingDemand.analyze graph |> Assert.Single
+        let plan = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read graph |> Option.get
+        let changed =
+            if defect = "shared-initializer" then
+                let read = graph.Nodes[schedule.Binding].Children |> Assert.Single
+                let holder = { graph.Nodes[read] with Id = NodeId.fresh(); Kind = SemanticKind.EagerExpr read; Children = [read]; Parent = None }
+                { graph with Nodes = graph.Nodes.Add(holder.Id, holder) }
+            elif defect = "independent-reference" then
+                let row = { Class = EdgeClass.Reference; Role = EdgeRole.Resides; Sources = [schedule.Binding]; Target = plan.OriginalBody; Ordinal = 0 }
+                { graph with Edges = row :: graph.Edges }
+            else
+                let owner = graph.Nodes[plan.SourceLambda]
+                let capture = { Name = "snapshot"; Type = graph.Nodes[schedule.Binding].Type; IsMutable = false; SourceNodeId = if defect = "capture" then Some schedule.Binding else None }
+                let kind = match owner.Kind with SemanticKind.Lambda(parameters, body, captures, owner, context) -> SemanticKind.Lambda(parameters, body, capture :: captures, owner, context) | _ -> failwith "Expected source activation"
+                { graph with Nodes = graph.Nodes.Add(owner.Id, { owner with Kind = kind }) }
+        Assert.NotEmpty(Clef.Compiler.Baker.Ingredients.BindingDemand.failures changed)
+        let settled, diagnostics = Clef.Compiler.Nanopass.BindingDemand.settle changed
+        Assert.Contains(diagnostics, fun diagnostic -> diagnostic.Code = "CCS8403" && diagnostic.Range = graph.Nodes[schedule.Binding].Range)
+        Assert.Contains(settled.Edges, fun edge -> edge.Target = schedule.Binding && match edge.Role with EdgeRole.OrdinaryBindingDemandPending _ -> true | _ -> false)
+
+    [<Theory>]
+    [<InlineData("branch")>]
+    [<InlineData("loop")>]
+    [<InlineData("discard")>]
+    member _.``A branch loop or discarded expression is not an unconditional snapshot frontier`` shape =
+        let useText =
+            match shape with
+            | "branch" -> "if current = 257 then\n        let forced = eager snapshot\n        forced\n    else 0"
+            | "loop" -> "while current < 258 do\n        let forced = eager snapshot\n        current <- forced + 1\n    0"
+            | _ -> "snapshot\n    0"
+        let source = "module UnsupportedDemand\n[<EntryPoint>]\nlet main _ =\n    let mutable current = 1\n    let snapshot = current\n    current <- 257\n    " + useText + "\n"
+        match parseAndCheck source "unsupported-demand.clef" with
+        | Success result | CheckFailure result ->
+            let pending = result.Graph.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.OrdinaryBindingDemandPending _ -> true | _ -> false)
+            Assert.NotEmpty pending
+            Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8403" && diagnostic.Message.Contains("OrdinaryBindingDemand"))
+        | ParseFailure errors -> failwithf "The negative source fixture did not parse: %A" errors

@@ -95,15 +95,16 @@ let main _ =
 
     [<Fact>]
     member _.``Formation keeps guards and forcing invalidates the original captured cell`` () =
+        // Explicit observations bracket forcing; ordinary bindings read on first demand.
         let graph = LazyRanges.check """
 [<EntryPoint>]
 let main _ =
     let mutable state = 1
     if state < 10 then
         let delayed = lazy (state <- 300; state)
-        let before = state
+        let before = eager state
         ignore (Lazy.force delayed)
-        let after = state
+        let after = eager state
         before + after
     else 0
 """

@@ -114,3 +114,48 @@ type PublicationContractCases() =
             Assert.Contains(failures, fun failure ->
                 failure.Reason.StartsWith "Source emission admission: The current graph differs from its source witness projection input")
         | Ok _ -> failwith "A graph whose literal storage differs from its projection input was published."
+
+    [<Fact>]
+    member _.``Independent scalar function regions survive renumbering and isolate an edited body`` () =
+        let source prefix second =
+            "module RegionReuse\n" + prefix + "let first () = true\nlet second () = " + second +
+            "\n[<EntryPoint>]\nlet main _ = if first () && second () then 0 else 1\n"
+        let regions text =
+            let graph = PublicationFixture.check "region-reuse" text
+            let prepared = match Emission.prepare graph with Ok graph -> graph | Error failures -> failwithf "%A" failures
+            let revision = PublicationFixture.publish prepared
+            let segmentation = revision.Codata.WitnessSegmentation |> Option.get
+            let names = segmentation.Regions |> List.map (fun region -> region.Identity, region) |> Map.ofList
+            let covered = segmentation.Regions |> List.collect (fun region -> Set.toList region.Members)
+            Assert.Equal(revision.Nodes.Count, covered.Length)
+            Assert.Equal(revision.Nodes.Count, Set.ofList covered |> Set.count)
+            names
+        let before = regions (source "" "false")
+        let after = regions (source "let extra () = false\n" "true")
+        let first = "callable:RegionReuse:first"
+        let second = "callable:RegionReuse:second"
+        Assert.True(before.ContainsKey first, sprintf "Missing independent first region: %A" before.Keys)
+        Assert.True(before.ContainsKey second, sprintf "Missing independent second region: %A" before.Keys)
+        Assert.NotEqual(before[first].Root, after[first].Root)
+        Assert.Equal(before[first].Fingerprint, after[first].Fingerprint)
+        Assert.NotEqual(before[second].Fingerprint, after[second].Fingerprint)
+        Assert.NotEmpty after[first].Supports
+        Assert.Equal(Fidelity.PSG.WitnessRegionKind.Common, after["common"].Flavor)
+
+    [<Fact>]
+    member _.``Source admission retracts a changed region fingerprint and publication rejects its stale roots`` () =
+        let graph = PublicationFixture.check "region-retraction" "module RegionRetraction\nlet flag () = true\n[<EntryPoint>]\nlet main _ = if flag () then 0 else 1\n"
+        let prepared = match Emission.prepare graph with Ok graph -> graph | Error failures -> failwithf "%A" failures
+        let segmentation = prepared.Codata.Value.WitnessSegmentation |> Option.get
+        let changedSegmentation =
+            { segmentation with
+                Regions = segmentation.Regions |> List.map (fun region -> { region with Fingerprint = "stale" }) }
+        let changed =
+            { prepared with
+                Codata = lazy { prepared.Codata.Value with WitnessSegmentation = Some changedSegmentation } }
+        match Emission.admit changed with
+        | Ok () -> failwith "Source admitted a stale region contract"
+        | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason = "Witness segmentation differs from the current source snapshot.")
+        match Publication.publish PublicationFixture.platform changed with
+        | Ok _ -> failwith "Publication copied stale region roots"
+        | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains "current graph differs")

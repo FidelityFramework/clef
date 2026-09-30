@@ -51,11 +51,12 @@ type SequencePullEffectCases() =
     [<InlineData(false)>]
     [<InlineData(true)>]
     member _.``Possible generator writes to captured cells invalidate the earlier guard`` alternatives =
+        // Each loop iteration explicitly observes the cell after the generator pull.
         let input = if alternatives then "if choose then seq { yield true } else seq { shared <- 300; yield true }" else "seq { shared <- 300; yield true }"
         let source =
             "let mutable shared = 1\nlet mutable choose = true\nlet input = " + input + "\n" +
             "let observed =\n    let mutable answer = 0\n    if shared < 10 then\n" +
-            "        for value in input do\n            let afterPull = shared\n            answer <- afterPull\n    answer\n"
+            "        for value in input do\n            let afterPull = eager shared\n            answer <- afterPull\n    answer\n"
         let graph = PullEffectFixture.check source
         let observed =
             graph.Nodes.Values |> Seq.filter (fun node ->

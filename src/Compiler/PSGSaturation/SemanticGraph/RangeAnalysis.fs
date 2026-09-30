@@ -755,7 +755,8 @@ let rec private atoms (program: Program) (depth: int) (guardId: NodeId) (polarit
                     atoms program (depth + 1) valueId polarity |> afterEffect program unknownWrites
                 | None -> []
             | _ -> []
-        | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> atoms program (depth + 1) inner polarity
+        | Some { Kind = SemanticKind.TypeAnnotation (inner, _) }
+        | Some { Kind = SemanticKind.EagerExpr inner } -> atoms program (depth + 1) inner polarity
         | Some { Kind = SemanticKind.Sequential ids } ->
             // a block's value is its last expression; its bounds hold once the block has run
             match List.tryLast ids with

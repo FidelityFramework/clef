@@ -36,7 +36,7 @@ let recognize (graph: SemanticGraph) : Bound list =
                |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge))
                |> List.groupBy fst |> List.map (fun (source, rows) -> source, rows |> List.map snd) |> Map.ofList
     let parents id = uses.TryFind id |> Option.defaultValue [] |> List.filter Hyperedge.isStructural
-    let valid id =
+    let rec valid id =
         match nodes.TryFind id with
         | None -> false
         | Some node ->
@@ -47,6 +47,12 @@ let recognize (graph: SemanticGraph) : Bound list =
             let childAgreement =
                 match node.Kind with
                 | SemanticKind.Binding _ | SemanticKind.Intrinsic _ -> true
+                | SemanticKind.LazyEnvironment(owner, _) ->
+                    // Formation executes the initial computed-bit literal. Captured
+                    // declarations remain references, not evaluated children.
+                    settled.Instances.TryFind owner |> Option.exists (fun instance ->
+                        instance.Environment = id && node.Children = [instance.InitialComputed] &&
+                        valid instance.InitialComputed)
                 | _ -> node.Children = children
             childAgreement && recorded.Length = (recorded |> List.distinctBy key |> List.length) &&
             (recorded |> List.forall (fun edge -> expected |> List.exists (fun candidate -> key candidate = key edge)))
@@ -249,7 +255,8 @@ let recognize (graph: SemanticGraph) : Bound list =
                     if not (valid store && valid value) || applySubst nodes[store].Type <> Types.unitType ||
                        applySubst nodes[value].Type <> sourceType || parents value |> List.map _.Target <> [store] then None else
                     match ownerOfStore store, nodes[value].Kind with
-                    | Some instance, SemanticKind.Application(callee, [left; right]) when same cell.Id left && same cell.Id right ->
+                    | Some instance, SemanticKind.Application(callee, [left; right])
+                        when valid instance.Environment && same cell.Id left && same cell.Id right ->
                         let operation =
                             match nodes.TryFind callee with
                             | Some { Kind = SemanticKind.Intrinsic info } when valid callee && info.Module = IntrinsicModule.Operators -> Some info.Operation
