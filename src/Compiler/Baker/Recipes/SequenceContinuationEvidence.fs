@@ -112,6 +112,51 @@ let forMachine (graph: SemanticGraph) (control: Control.Control)
         | Some { Kind = SemanticKind.Literal(NativeLiteral.Int(value, _)) } -> Some(bigint value)
         | Some { Kind = SemanticKind.Literal(NativeLiteral.UInt(value, _)) } -> Some(bigint value)
         | _ -> None
+    // A finite hull is useful only when the cell's initial value, all writes
+    // and every reference remain tied to this exact enumerated control plan.
+    // This validates Baker construction; NumericSettlement still owns carriers.
+    let pcLabels = Set.add control.Entry active
+    let pcRange = ValueRange.bounded (bigint (Set.minElement pcLabels)) (bigint (Set.maxElement pcLabels))
+    let pcLiteral expected id =
+        match nodes.TryFind id with
+        | Some { Kind = SemanticKind.Literal(NativeLiteral.Int(value, NTUKind.NTUint(NTUWidth.Resolved WidthDimension.Pointer)))
+                 Type = ty; ValueRange = Some range } ->
+            ty = Types.nintType && expected (bigint value) && range = ValueRange.point(bigint value)
+        | _ -> false
+    let consumers =
+        nodes.Values |> Seq.collect (fun node ->
+            node.Children @ (kindEdges node.Id node.Kind |> List.collect _.Sources)
+            |> List.distinct |> Seq.map (fun source -> source, node))
+        |> Seq.groupBy fst |> Seq.map (fun (source, uses) -> source, uses |> Seq.map snd |> Seq.toList) |> Map.ofSeq
+    let pcValid =
+        match actionDispatch with
+        | [dispatch] ->
+            match dispatch.Kind with
+            | SemanticKind.ContinuationDispatch(selector, _, _) ->
+                match nodes.TryFind selector with
+                | Some { Kind = SemanticKind.VarRef(name, Some binding) } ->
+                    match nodes.TryFind binding with
+                    | Some { Kind = SemanticKind.Binding(actual, true, false, None); Type = ty; ValueRange = Some range; Children = [initial] }
+                        when actual = name && ty = Types.nintType && range = pcRange
+                             && generated.ContainsKey binding && rootScope.Contains binding
+                             && pcLiteral ((=) (bigint control.Entry)) initial ->
+                        let references = nodes.Values |> Seq.filter (fun node ->
+                            match node.Kind with SemanticKind.VarRef(_, Some source) -> source = binding | _ -> false) |> Seq.toList
+                        references |> List.forall (fun reference ->
+                            reference.Type = ty && reference.ValueRange = Some pcRange
+                            && generated.ContainsKey reference.Id && rootScope.Contains reference.Id
+                            && (consumers.TryFind reference.Id |> Option.defaultValue [] |> function
+                                | [consumer] when generated.ContainsKey consumer.Id && rootScope.Contains consumer.Id ->
+                                    match consumer.Kind with
+                                    | SemanticKind.Set(target, value) when target = reference.Id ->
+                                        pcLiteral (fun value -> pcLabels |> Set.exists (fun label -> bigint label = value)) value
+                                    | SemanticKind.ContinuationDispatch(actual, _, _) -> consumer.Id = dispatch.Id && actual = reference.Id
+                                    | _ -> false
+                                | _ -> false))
+                    | _ -> false
+                | _ -> false
+            | _ -> false
+        | _ -> false
     let writesIn body =
         descendants body |> Set.toList |> List.choose (fun id ->
             match nodes.TryFind id with
@@ -180,6 +225,7 @@ let forMachine (graph: SemanticGraph) (control: Control.Control)
          || entryDispatch.Length <> 1 || actionDispatch.Length <> 1 then
         fail control.Owner "Generated continuation entries do not match their settled dispatch actions."
     elif not stateWritesValid then fail control.Owner "Generated continuation state writes do not match suspension and completion."
+    elif not pcValid then fail control.Owner "Generated program counter lacks its exact finite control range or admitted writes."
     else
         let owner = sourceOwner.Value
         let writes =

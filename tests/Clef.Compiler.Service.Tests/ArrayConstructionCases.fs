@@ -86,6 +86,7 @@ type ArrayConstructionCases() =
             let read = copy.Read |> Option.defaultWith (fun () -> failwith "Copy lost its source read.")
             let write = copy.Write |> Option.defaultWith (fun () -> failwith "Copy lost its source write.")
             Assert.True(read.Value.IsNone && write.Value.IsSome)
+            Assert.Equal(Some read.Site, write.Value)
             ArrayConstructionFixture.require graph read.Bounds.Requirement
             ArrayConstructionFixture.require graph write.Bounds.Requirement
             Assert.Contains(loop,copy.Participants)

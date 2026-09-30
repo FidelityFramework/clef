@@ -27,6 +27,37 @@ module MemoryAccessFixture =
 
 type MemoryAccessCases() =
     [<Fact>]
+    member _.``Snapshot stores publish the exact adapted value while retaining its guarded evaluation`` () =
+        let source = "module StringSnapshots\n[<EntryPoint>]\nlet main _ =\n    let text = \"A\\000B\"\n    let first = eager (String.toBytes text)\n    let second = eager (String.toBytes text)\n    first.[0] <- 512\n    if second.[0] = 65 && first.[0] = 512 then 0 else 1\n"
+        let graph, facts = MemoryAccessFixture.admittedSource MemoryAccessFixture.stackAuthority source
+        let stores = facts.Operations.Values |> Seq.choose (function
+            | MemoryWitnessOperation.ArrayAccess ({ Value = Some _; Adaptation = Some _ } as access) -> Some access
+            | _ -> None) |> Seq.toList
+        Assert.Equal(2, stores.Length)
+        for access in stores do
+            let value, meet = access.Value.Value, access.Adaptation.Value
+            Assert.Equal(value, meet.Operand)
+            Assert.Equal(access.Site, meet.Consumer)
+            Assert.Contains(meet, graph.Codata.Value.Meets[access.Site])
+            Assert.Equal(MeetKind.ExtendUnsigned, meet.Adapt)
+            Assert.True(meet.From < meet.To)
+            let evaluation = match graph.Nodes[access.Site].Kind with
+                             | SemanticKind.IndexSet(_, _, evaluation) -> evaluation
+                             | other -> failwithf "Store lost its source operation: %A" other
+            Assert.NotEqual(evaluation, value)
+            Assert.Contains(evaluation, access.Participants)
+            Assert.Contains(value, access.Participants)
+            match graph.Nodes[evaluation].Kind with
+            | SemanticKind.Sequential [required; result] ->
+                Assert.Equal(value, result)
+                let read = match facts.Operations[result] with
+                           | MemoryWitnessOperation.ArrayAccess read -> read
+                           | other -> failwithf "Snapshot value lost its source read: %A" other
+                Assert.Equal(required, read.Bounds.Requirement.Site)
+                Assert.Equal(evaluation, read.Bounds.Requirement.Frontier)
+            | other -> failwithf "Snapshot value lost its guarded evaluation: %A" other
+
+    [<Fact>]
     member _.``Array access publishes actual source bounds and the exact success continuation`` () =
         let graph, facts = MemoryAccessFixture.admitted "    let values = [| 7; 11 |]\n    values.[1]\n"
         let access = facts.Operations.Values |> Seq.choose (function MemoryWitnessOperation.ArrayAccess fact -> Some fact | _ -> None) |> Assert.Single

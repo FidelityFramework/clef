@@ -33,6 +33,24 @@ let integer (value: int) =
         return node.Id
     }
 
+/// A finite domain established by the owning construction, not a width choice.
+/// Earlier recipes still use the ordinary helpers and their later range pass.
+let private within range kind ty children =
+    saturation {
+        let! state = getUserState
+        let node = mkNode state kind ty children
+        do! emit { node with ValueRange = Some range }
+        return node.Id
+    }
+
+let mutableBindingWithin range name value ty = within range (SemanticKind.Binding(name, true, false, None)) ty [value]
+let referenceWithin range name binding ty = within range (SemanticKind.VarRef(name, Some binding)) ty []
+let assignWithin range binding name ty value =
+    saturation {
+        let! target = referenceWithin range name binding ty
+        return! create (SemanticKind.Set(target, value)) Types.unitType [target; value]
+    }
+
 let mutableBinding name value ty = create (SemanticKind.Binding(name, true, false, None)) ty [value]
 
 let assign binding name ty value =

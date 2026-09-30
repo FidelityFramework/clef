@@ -2739,17 +2739,47 @@ let selectedRepresentationOf (graph: SemanticGraph) (range: ValueRange) : Numeri
     | Some ctx when selectsFromDeclared ctx -> (selectRange ctx range).Representation
     | _ -> None
 
+let private numericBoundary graph nodeId =
+    CallbackDeclarations.numericBoundary graph nodeId
+    |> Option.orElseWith (fun () -> Mmio.numericBoundary graph nodeId)
+    |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph nodeId)
+    |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph nodeId)
+
+/// A Sequential forwards its final value; it is not a separate scalar store or
+/// conversion. Preserve that occurrence's physical carrier, including a call's
+/// ABI width, instead of independently narrowing the block from its range.
+/// Explicit native declarations still own their boundary. The terminal value's
+/// lambdaOfResult reading preserves entry/escaping-result rules through blocks.
+let private integerCarrierSource (graph: SemanticGraph) nodeId =
+    let rec follow seen id =
+        if Set.contains id seen then None else
+        match graph.Nodes.TryFind id with
+        | None -> None
+        | Some node ->
+            let declared = if isIntegerNode node then numericBoundary graph id else None
+            match node.Kind with
+            | SemanticKind.Sequential values when isIntegerNode node && declared.IsNone ->
+                if values <> node.Children then None else
+                values |> List.tryLast |> Option.bind (fun last ->
+                    match graph.Nodes.TryFind last with
+                    | Some value when isIntegerNode value && applySubst value.Type = applySubst node.Type ->
+                        follow (Set.add id seen) last
+                    | _ -> None)
+            | _ -> Some(node, declared)
+    follow Set.empty nodeId
+
 /// The integer representation a node selects on the graph's platform (§3.1), derived on read from
 /// the node's range, its carrier, its boundary and the declared representations: at the
 /// value-call boundary (ruling 1) the Register representation of the range's sign; a width-named
 /// carrier's own; for the bare kind, `selectedRepresentationOf` its range. None for an
 /// unobservable range, a context declaring no integer representation, or a node that is not an
-/// integer. This source selector is consumed by Baker's carrier settlement;
+/// integer. Transparent integer blocks retain their final value's representation.
+/// This source selector is consumed by Baker's carrier settlement;
 /// witness consumers use NumericWitnessProjection instead.
 let selectedRepresentation (graph: SemanticGraph) (nodeId: NodeId) : NumericRepresentation option =
-    match graph.Platform, SemanticGraph.tryGetNode nodeId graph with
-    | Some ctx, Some node when isIntegerNode node && selectsFromDeclared ctx ->
-        match CallbackDeclarations.numericBoundary graph nodeId |> Option.orElseWith (fun () -> Mmio.numericBoundary graph nodeId) |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph nodeId) |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph nodeId) with
+    match graph.Platform, integerCarrierSource graph nodeId with
+    | Some ctx, Some(node, declared) when isIntegerNode node && selectsFromDeclared ctx ->
+        match declared with
         | Some declared -> (selectRange ctx declared.Range).Representation
         | None ->
         match node.ValueRange, boundaryOfNode graph node with
@@ -2785,12 +2815,13 @@ let heldWidthOf (graph: SemanticGraph) (range: ValueRange) : int option =
 /// as a value or is a declaration root, and a call through a value) the declared Register width,
 /// regardless of the range; a width-named carrier at its own representation's bits (interim,
 /// CS-12), or at the bits its spelling states where the context offers no such representation;
-/// otherwise `selectedWidthOf` its range. None for a node with no range, or an unobservable one
-/// on a core (see `heldWidth`).
+/// otherwise `selectedWidthOf` its range. Transparent integer blocks retain their
+/// final value's physical width. None for a node with no range, an invalid block
+/// value path, or an unobservable range on a core (see `heldWidth`).
 let selectedWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
-    match graph.Platform, SemanticGraph.tryGetNode nodeId graph with
-    | Some ctx, Some node when isIntegerNode node && PlatformContext.substrateKind ctx <> SubstrateKind.FPGA ->
-        match CallbackDeclarations.numericBoundary graph nodeId |> Option.orElseWith (fun () -> Mmio.numericBoundary graph nodeId) |> Option.orElseWith (fun () -> BorrowedViews.numericBoundary graph nodeId) |> Option.orElseWith (fun () -> MappedBindings.numericBoundary graph nodeId) with
+    match graph.Platform, integerCarrierSource graph nodeId with
+    | Some ctx, Some(node, declared) when isIntegerNode node && PlatformContext.substrateKind ctx <> SubstrateKind.FPGA ->
+        match declared with
         | Some declared -> Some declared.Bits
         | None ->
         match boundaryOfNode graph node with
@@ -2800,7 +2831,7 @@ let selectedWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
             match declaredKindOf graph.Nodes node |> Option.bind (RangeSources.declarationOfKind (Some ctx)) with
             | Some d -> Some d.Bits
             | None -> node.ValueRange |> Option.bind (selectedWidthOf graph)
-    | _, Some node -> node.ValueRange |> Option.bind (selectedWidthOf graph)
+    | _, Some(node, _) -> node.ValueRange |> Option.bind (selectedWidthOf graph)
     | _ -> None
 
 /// The bits a spelled kind's declaration names on the graph's platform (CS-12 step 5a): the read
@@ -2817,5 +2848,8 @@ let heldWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
     | Some bits -> Some bits
     | None ->
         match SemanticGraph.tryGetNode nodeId graph with
+        // Failed transparent transport cannot regain a fabricated independent
+        // carrier from the wrapper's range after its value path was refused.
+        | Some { Kind = SemanticKind.Sequential _ } -> None
         | Some node when isIntegerNode node -> node.ValueRange |> Option.bind (heldWidthOf graph)
         | _ -> None

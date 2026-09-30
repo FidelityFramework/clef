@@ -196,7 +196,10 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection) (existing:(N
                 operation graph numeric NumericOperationKind.Add [construction.DestinationOffset.Reference;current] destinationIndex
                 let source,target=access graph operations read,access graph operations write
                 demand (source.Buffer=construction.Source.Reference && source.Index=sourceIndex && source.Value.IsNone &&
-                        target.Buffer=construction.Destination && target.Index=destinationIndex && target.Value=Some read &&
+                        target.Buffer=construction.Destination && target.Index=destinationIndex && target.Value=Some source.Site &&
+                        (match (live graph target.Site).Kind with
+                         | SemanticKind.IndexSet(_,_,evaluation) -> evaluation=read
+                         | _ -> false) &&
                         elementIdentity numeric source.Buffer=elementIdentity numeric target.Buffer)
                        "An array copy's read/write pair does not preserve its exact ordered element transfer."
                 Some source,Some target,[index;loopId]

@@ -1576,6 +1576,16 @@ type EdgeRole =
     /// capturing generator] proves the target sequence template's complete
     /// bounded use is covered by its captured source allocation's residence.
     | SequenceTemplateBorrow
+    /// [allocation; covering entry; program binding; exact read; generator;
+    /// use occurrence; complete startup/order/declaration support] proves the
+    /// target constructor's bounded program read. Ordinal is the source
+    /// initializer ordinal; the current target initializer must follow it.
+    | SequenceProgramBorrow
+    /// [allocation; covering activation; owner; generator; storage root;
+    /// retained slot; writer; complete current access support] proves the
+    /// target FrameRead's bounded use after validating every writer/read and
+    /// excluding escaped or metadata-captured scratch storage.
+    | SequenceSlotBorrow
     // declared platform (BAREWire docs/11: cross-applied with the code it governs)
     /// A declared memory space or buffer schema constrains the value that
     /// resides in it: source = the declaration node, target = the value.

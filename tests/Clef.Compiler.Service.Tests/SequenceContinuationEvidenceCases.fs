@@ -97,6 +97,86 @@ let outer = seq { yield shared; shared <- shared + 1; yield shared }
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceContinuationEvidence")>]
 type SequenceContinuationEvidenceCases() =
+    [<Theory>]
+    [<InlineData("empty")>]
+    [<InlineData("cuts")>]
+    [<InlineData("branch")>]
+    [<InlineData("loop")>]
+    member _.``Generated program counter retains the finite control hull independently of frame state`` shape =
+        let source =
+            match shape with
+            | "empty" -> "let outer: seq<int> = seq { () }"
+            | "cuts" -> "let outer = seq { yield 1; yield 2 }"
+            | "branch" -> "let produce (gate: bool) = seq { if gate then yield 1 else yield 2 }\nlet outer = produce true"
+            | "loop" -> "let produce (gate: bool) = seq { while gate do yield 1 }\nlet outer = produce false"
+            | _ -> failwith "Unknown control shape"
+        let fixture = ContinuationFacts.fixture source
+        let pc = fixture.Machine.Nodes |> List.filter (fun node ->
+            match node.Kind with SemanticKind.Binding("__continuation_pc", true, _, _) -> true | _ -> false) |> Assert.Single
+        let labels = fixture.Machine.CaseBodies |> Map.keys |> Set.ofSeq |> Set.add fixture.Control.Entry
+        let expected = ValueRange.bounded (bigint (Set.minElement labels)) (bigint (Set.maxElement labels))
+        Assert.Equal(Some expected, pc.ValueRange)
+        Assert.Equal(Types.nintType, pc.Type)
+        let references = fixture.Machine.Nodes |> List.filter (fun node ->
+            match node.Kind with SemanticKind.VarRef(_, Some binding) -> binding = pc.Id | _ -> false)
+        Assert.NotEmpty references
+        for reference in references do
+            Assert.Equal(Some expected, reference.ValueRange)
+            Assert.Equal(pc.Type, reference.Type)
+        // Completion belongs to the persistent frame state, not a fabricated
+        // negative program-counter label. The finite control includes Complete.
+        Assert.Contains(fixture.Control.Steps.Values, fun step -> step.Instruction = EvidenceControl.Instruction.Complete)
+        Assert.True(Set.minElement labels >= 0)
+        Assert.Contains(fixture.Machine.Nodes, fun node ->
+            match node.Kind with SemanticKind.Literal(NativeLiteral.Int(-1L, _)) -> true | _ -> false)
+        ContinuationFacts.evidence fixture |> ignore
+
+    [<Theory>]
+    [<InlineData("missing-binding-range")>]
+    [<InlineData("missing-read-range")>]
+    [<InlineData("wrong-hull")>]
+    [<InlineData("store-gap")>]
+    [<InlineData("store-outside")>]
+    [<InlineData("initial-value")>]
+    member _.``Program counter evidence refuses missing ranges and nonenumerated writes`` defect =
+        let fixture = ContinuationFacts.twoCuts ()
+        ContinuationFacts.evidence fixture |> ignore
+        let nodes = fixture.Machine.Nodes |> List.map (fun node -> node.Id, node) |> Map.ofList
+        let pc = nodes.Values |> Seq.filter (fun node ->
+            match node.Kind with SemanticKind.Binding("__continuation_pc", true, _, _) -> true | _ -> false) |> Assert.Single
+        let isReference id = match nodes[id].Kind with SemanticKind.VarRef(_, Some binding) -> binding = pc.Id | _ -> false
+        let read = nodes.Values |> Seq.choose (fun node ->
+            match node.Kind with SemanticKind.ContinuationDispatch(selector, _, _) when isReference selector -> Some selector | _ -> None) |> Assert.Single
+        let labels = fixture.Machine.CaseBodies |> Map.keys |> Set.ofSeq |> Set.add fixture.Control.Entry
+        let resumeWrites = fixture.Machine.ResumeBodies.Values |> Seq.map (fun body ->
+            match nodes[body].Kind with SemanticKind.Sequential(first :: _) -> first | _ -> failwith "Missing resume entry") |> Set.ofSeq
+        let ordinaryWrite = nodes.Values |> Seq.pick (fun node ->
+            match node.Kind with
+            | SemanticKind.Set(reference, value) when isReference reference && not(resumeWrites.Contains node.Id) -> Some value
+            | _ -> None)
+        let replaceLiteral (value: int) (node: SemanticNode) =
+            match node.Kind with
+            | SemanticKind.Literal(NativeLiteral.Int(_, kind)) ->
+                { node with Kind = SemanticKind.Literal(NativeLiteral.Int(int64 value, kind)); ValueRange = Some(ValueRange.point(bigint value)) }
+            | _ -> failwith "Expected program counter literal"
+        let site, replacement =
+            match defect with
+            | "missing-binding-range" -> pc.Id, { pc with ValueRange = None }
+            | "missing-read-range" -> read, { nodes[read] with ValueRange = None }
+            | "wrong-hull" -> pc.Id, { pc with ValueRange = Some(ValueRange.point(bigint fixture.Control.Entry)) }
+            | "store-gap" ->
+                let gap = [Set.minElement labels .. Set.maxElement labels] |> List.find (labels.Contains >> not)
+                ordinaryWrite, replaceLiteral gap nodes[ordinaryWrite]
+            | "store-outside" -> ordinaryWrite, replaceLiteral (Set.maxElement labels + 1) nodes[ordinaryWrite]
+            | "initial-value" ->
+                let initial = pc.Children |> List.exactlyOne
+                initial, replaceLiteral (fixture.Control.Entry + 1) nodes[initial]
+            | _ -> failwith "Unknown program counter defect"
+        let machine = { fixture.Machine with Nodes = fixture.Machine.Nodes |> List.map (fun node -> if node.Id = site then replacement else node) }
+        match ContinuationEvidence.forMachine fixture.Graph fixture.Control fixture.Frame machine with
+        | Error residual -> Assert.Equal("Generated program counter lacks its exact finite control range or admitted writes.", residual.Reason)
+        | Ok _ -> failwithf "Malformed program counter %s acquired continuation evidence" defect
+
     [<Fact>]
     member _.``Cut liveness and resume evidence remain resident with exact source and generated participants``() =
         let fixture = ContinuationFacts.twoCuts ()

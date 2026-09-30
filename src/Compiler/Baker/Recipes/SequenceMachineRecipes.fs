@@ -87,6 +87,19 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
     let range = { owner.Range with End = owner.Range.Start }
     let state = SaturationState.create range "Seq.resume" (NodeId.value owner.Id) owner.Id graph.Platform
     let aggregateEvidence = ResizeArray<Hyperedge>()
+    let rec destination seen label =
+        if Set.contains label seen then label else
+        match control.Steps[label] with
+        | { Instruction = Control.Instruction.Pass; Successors = [{ Target = next; Transfer = EvaluationTransfer.Continue }] } ->
+            destination (Set.add label seen) next
+        | _ -> label
+    let target label = destination Set.empty label
+    let active = control.Steps |> Map.toList |> List.filter (fun (label, _) -> target label = label)
+    // Initialization can precede Pass elimination; every subsequent PC write
+    // selects an enumerated action, including Complete. The separate stored
+    // frame state owns the -1 completion discriminant. No target width is chosen.
+    let pcLabels = active |> List.map fst |> Set.ofList |> Set.add control.Entry
+    let pcRange = ValueRange.bounded (bigint (Set.minElement pcLabels)) (bigint (Set.maxElement pcLabels))
     let body = saturation {
         let! envType =
             match owner.Type with
@@ -95,7 +108,7 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
         let! storage = C.create (SemanticKind.ContinuationStorage owner.Id) (Types.mkArrayType Types.uint8Type) []
         let! storageBinding = letBind "__continuation_storage" storage (Types.mkArrayType Types.uint8Type)
         let! initialPc = C.index control.Entry
-        let! pc = C.mutableBinding "__continuation_pc" initialPc Types.nintType
+        let! pc = C.mutableBindingWithin pcRange "__continuation_pc" initialPc Types.nintType
         let! no = boolLit false
         let! running = C.mutableBinding "__continuation_running" no Types.boolType
         let! noResult = boolLit false
@@ -128,7 +141,7 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
         }
         let setPc label = saturation {
             let! value = C.index label
-            return! C.assign pc "__continuation_pc" Types.nintType value
+            return! C.assignWithin pcRange pc "__continuation_pc" Types.nintType value
         }
         let stop hasValue = saturation {
             let! value = boolLit hasValue
@@ -137,13 +150,6 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
             let! halt = C.assign running "__continuation_running" Types.boolType no
             return! C.block [record; halt] Types.unitType
         }
-        let rec destination seen label =
-            if Set.contains label seen then label else
-            match control.Steps[label] with
-            | { Instruction = Control.Instruction.Pass; Successors = [{ Target = next; Transfer = EvaluationTransfer.Continue }] } ->
-                destination (Set.add label seen) next
-            | _ -> label
-        let target label = destination Set.empty label
         let next (step: Control.Step) =
             match step.Successors with
             | [arc] -> setPc (target arc.Target)
@@ -237,7 +243,6 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
                 return! C.block (formation @ [clone.Id; save]) Types.unitType
         }
 
-        let active = control.Steps |> Map.toList |> List.filter (fun (label, _) -> target label = label)
         let! cases = active |> C.collect (fun (label, step) -> saturation {
             let! action = saturation {
                 match step.Instruction with
@@ -278,7 +283,7 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
             return label, action
         })
         let! exhausted = stop false
-        let! pcValue = varRef "__continuation_pc" (Some pc) Types.nintType
+        let! pcValue = C.referenceWithin pcRange "__continuation_pc" pc Types.nintType
         let! selection = C.dispatch pcValue cases exhausted
         let! guard = varRef "__continuation_running" (Some running) Types.boolType
         let! loop = C.create (SemanticKind.WhileLoop(guard, selection)) Types.unitType [guard; selection]

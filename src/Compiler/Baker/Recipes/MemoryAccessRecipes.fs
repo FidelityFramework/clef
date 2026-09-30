@@ -447,15 +447,19 @@ let settle (graph: SemanticGraph) (numeric: NumericWitnessProjection)
                   Initializers = Some values; Alignment = alignment; ElementBytes = bytes
                   Participants = participants |> Set.add layoutProof |> Set.add capacityProof }
           | SemanticKind.IndexGet(buffer,index) | SemanticKind.IndexSet(buffer,index,_) ->
-            let stored = match node.Kind with SemanticKind.IndexSet(_,_,value) -> Some value | _ -> None
+            let evaluation = match node.Kind with SemanticKind.IndexSet(_,_,value) -> Some value | _ -> None
+            // The source operation retains the whole evaluation (including its
+            // guards). The memory operand and its numeric meet both name the
+            // resulting value; a transparent block is not a second value.
+            let stored = evaluation |> Option.map (valueSite graph)
             let bounds = bounds graph numeric node.Id buffer index
             let slot = element numeric buffer
             let adapted = match stored with
-                          | Some value -> adaptation graph node.Id value (carrier numeric (valueSite graph value)).Slot slot
+                          | Some value -> adaptation graph node.Id value (carrier numeric value).Slot slot
                           | None -> adaptation graph node.Id node.Id slot (carrier numeric node.Id).Slot
             MemoryWitnessOperation.ArrayAccess
                 { Site = node.Id; Buffer = buffer; Index = index; Value = stored; Element = slot; Adaptation = adapted
-                  Bounds = bounds; Participants = Set.union bounds.Participants (Set.ofList (Option.toList stored)) }
+                  Bounds = bounds; Participants = Set.union bounds.Participants (Set.ofList (Option.toList evaluation @ Option.toList stored)) }
           | SemanticKind.ElementAddress(buffer,index) ->
             let bounds = bounds graph numeric node.Id buffer index
             let slot = element numeric buffer

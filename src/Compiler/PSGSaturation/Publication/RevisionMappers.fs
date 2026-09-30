@@ -730,6 +730,8 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.AggregateCopy -> Fidelity.PSG.EdgeRole.AggregateCopy
     | S.EdgeRole.AggregateSnapshot -> Fidelity.PSG.EdgeRole.AggregateSnapshot
     | S.EdgeRole.SequenceTemplateBorrow -> Fidelity.PSG.EdgeRole.SequenceTemplateBorrow
+    | S.EdgeRole.SequenceProgramBorrow -> Fidelity.PSG.EdgeRole.SequenceProgramBorrow
+    | S.EdgeRole.SequenceSlotBorrow -> Fidelity.PSG.EdgeRole.SequenceSlotBorrow
     | S.EdgeRole.Resides -> Fidelity.PSG.EdgeRole.Resides
     | S.EdgeRole.Constrains -> Fidelity.PSG.EdgeRole.Constrains
     | S.EdgeRole.CallableReferenceOrigin -> Fidelity.PSG.EdgeRole.CallableReferenceOrigin

@@ -67,6 +67,34 @@ let main _ =
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceProgram")>]
 type SequenceProgramCases() =
     [<Fact>]
+    member _.``Complete source publication retains declared program counter carriers and dispatch transport``() =
+        let graph = SequenceProgramFixture.direct ()
+        let numeric =
+            Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph
+            |> Result.defaultWith (fun failures -> failwithf "%A" failures)
+        let counters = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.Binding("__continuation_pc", true, _, _) -> true | _ -> false) |> Seq.toList
+        Assert.Equal(2, counters.Length)
+        for counter in counters do
+            let sites = graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable && (node.Id = counter.Id || match node.Kind with SemanticKind.VarRef(_, Some binding) -> binding = counter.Id | _ -> false))
+            for node in sites do
+                let carrier = numeric.Values[node.Id]
+                Assert.Equal(node.ValueRange, Some carrier.Range)
+                Assert.Equal(SettledSlot.Integer(64, Some "signed64"), carrier.Slot)
+                Assert.True carrier.Declaration.IsSome
+                Assert.Contains(carrier.Declaration.Value, carrier.Participants)
+            let dispatch = graph.Nodes.Values |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.ContinuationDispatch(selector, _, _) ->
+                    match graph.Nodes[selector].Kind with SemanticKind.VarRef(_, Some binding) when binding = counter.Id -> Some node.Id | _ -> None
+                | _ -> None) |> Assert.Single
+            let transport = numeric.IndexTransports[dispatch]
+            Assert.Equal(64, transport.PointerBits)
+            Assert.Contains(transport.PointerDeclaration, transport.Participants)
+            Assert.Equal(numeric.Values[transport.Operand], transport.Carrier)
+
+    [<Fact>]
     member _.``Program aliases retain one template while independent values retain distinct allocations``() =
         let graph = SequenceProgramFixture.direct ()
         let first, second, alias = SequenceProgramFixture.instance graph "first", SequenceProgramFixture.instance graph "second", SequenceProgramFixture.instance graph "alias"

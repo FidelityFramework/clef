@@ -45,8 +45,151 @@ let main _ =
         Assert.NotEmpty prepared.FactoryCalls
         prepared
 
+    let programDelegation () = SequenceProgramFixture.check """
+let input = seq { yield true }
+let outer = seq { yield! input }
+[<EntryPoint>]
+let main _ = ignore outer; 0
+"""
+
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceResidence")>]
 type SequenceResidenceCases() =
+    [<Fact>]
+    member _.``Program delegation retains exact ordered global read and current slot residence``() =
+        let graph = Residence.programDelegation ()
+        let input = Assert.Single (Residence.binding "input" graph).Children
+        let outer = graph.Nodes[Assert.Single (Residence.binding "outer" graph).Children]
+        match outer.Kind with
+        | SemanticKind.SeqExpr(_, captures) -> Assert.Empty captures
+        | _ -> failwith "Expected source sequence constructor"
+        let reading = SequenceResidence.analyzeWithRegions graph graph.Codata.Value.SequenceDestinations Map.empty
+        Assert.Empty reading.Unresolved
+        Assert.True(reading.Sites.ContainsKey input)
+        let globalReads = reading.Evidence |> List.filter (fun edge -> edge.Role = EdgeRole.SequenceProgramBorrow && edge.Target = outer.Id)
+        Assert.NotEmpty globalReads
+        let plan = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read graph |> Option.get
+        let before = plan.Initializers |> List.find (fun row -> row.Initializer = input)
+        let after = plan.Initializers |> List.find (fun row -> row.Initializer = outer.Id)
+        Assert.True(before.Ordinal < after.Ordinal)
+        for edge in globalReads do
+            Assert.Equal(input, edge.Sources[0])
+            Assert.Equal(plan.EntryLambda, edge.Sources[1])
+            Assert.Equal(before.Binding, edge.Sources[2])
+            Assert.Equal(before.Ordinal, edge.Ordinal)
+            Assert.Contains(plan.Spine, edge.Sources)
+            Assert.Contains(after.Binding, edge.Sources)
+            Assert.True(graph.Nodes[edge.Sources[3]].IsReachable)
+            match graph.Nodes[edge.Sources[3]].Kind with
+            | SemanticKind.VarRef(_, Some declaration) -> Assert.Equal(before.Binding, declaration)
+            | _ -> failwith "Program borrow must name the actual global read"
+        let slots = reading.Evidence |> List.filter (fun edge -> edge.Role = EdgeRole.SequenceSlotBorrow)
+        Assert.NotEmpty slots
+        Assert.Contains(slots, fun edge -> not graph.Nodes[edge.Sources[5]].IsReachable && graph.Nodes[edge.Target].IsReachable)
+        Assert.DoesNotContain(reading.Evidence, fun edge -> edge.Role = EdgeRole.SequenceTemplateBorrow && edge.Target = outer.Id)
+
+    [<Theory>]
+    [<InlineData("missing-program-value")>]
+    [<InlineData("wrong-initializer")>]
+    [<InlineData("wrong-entry")>]
+    [<InlineData("initializer-order")>]
+    [<InlineData("mutable-binding")>]
+    [<InlineData("changed-read")>]
+    [<InlineData("foreign-generator")>]
+    [<InlineData("escaping-constructor")>]
+    [<InlineData("missing-slot-access")>]
+    [<InlineData("changed-slot-writer")>]
+    [<InlineData("extra-read-consumer")>]
+    [<InlineData("captured-scratch-root")>]
+    [<InlineData("captured-eager-scratch-alias")>]
+    [<InlineData("unknown-scratch-capture")>]
+    member _.``Program delegation refuses changed authority order and current slot uses``(defect: string) =
+        let graph = Residence.programDelegation ()
+        let inputBinding = Residence.binding "input" graph
+        let outerBinding = Residence.binding "outer" graph
+        let input = Assert.Single inputBinding.Children
+        let outer = graph.Nodes[Assert.Single outerBinding.Children]
+        let generator = match outer.Kind with SemanticKind.SeqExpr(generator, _) -> generator | _ -> failwith "sequence"
+        let plan = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read graph |> Option.get
+        let read =
+            graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable &&
+                match node.Kind with
+                | SemanticKind.VarRef(_, Some binding) -> binding = inputBinding.Id
+                | _ -> false) |> Assert.Single
+        let access =
+            graph.Edges |> List.filter (fun edge ->
+                edge.Role = EdgeRole.ContinuationSlotAccess &&
+                edge.Sources[0] = outer.Id && graph.Nodes[edge.Sources[3]].Type = graph.Nodes[input].Type) |> Assert.Single
+        let changeNode node = { graph with Nodes = graph.Nodes.Add(node.Id, node) }
+        let damaged =
+            match defect with
+            | "missing-program-value" -> { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.ProgramValue || edge.Target <> inputBinding.Id) }
+            | "wrong-initializer" ->
+                let edges = graph.Edges |> List.map (fun edge ->
+                    if edge.Role = EdgeRole.ProgramInitializer && edge.Sources[1] = inputBinding.Id then
+                        { edge with Sources = [edge.Sources[0]; inputBinding.Id; outer.Id; edge.Sources[3]] }
+                    else edge)
+                { graph with Edges = edges }
+            | "wrong-entry" ->
+                let edges = graph.Edges |> List.map (fun edge ->
+                    if edge.Role = EdgeRole.ProgramValue && edge.Target = inputBinding.Id then
+                        { edge with Sources = generator :: List.tail edge.Sources } else edge)
+                { graph with Edges = edges }
+            | "initializer-order" ->
+                let before = plan.Initializers |> List.find (fun row -> row.Binding = inputBinding.Id)
+                let after = plan.Initializers |> List.find (fun row -> row.Binding = outerBinding.Id)
+                let swap id = if id = inputBinding.Id then outerBinding.Id elif id = outerBinding.Id then inputBinding.Id else id
+                let spine = graph.Nodes[plan.Spine]
+                let reordered =
+                    match spine.Kind with
+                    | SemanticKind.Sequential values -> { spine with Kind = SemanticKind.Sequential(List.map swap values); Children = List.map swap spine.Children }
+                    | _ -> failwith "Expected ordered startup spine"
+                let edges = graph.Edges |> List.map (fun edge ->
+                    let applies = match edge.Role with EdgeRole.ProgramInitializer | EdgeRole.ProgramValueIntent | EdgeRole.ProgramValue -> true | _ -> false
+                    if applies && edge.Ordinal = before.Ordinal then { edge with Ordinal = after.Ordinal }
+                    elif applies && edge.Ordinal = after.Ordinal then { edge with Ordinal = before.Ordinal } else edge)
+                let changed = { graph with Nodes = graph.Nodes.Add(spine.Id, reordered); Edges = edges }
+                Assert.True((Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read changed).IsSome)
+                changed
+            | "mutable-binding" ->
+                let kind = match inputBinding.Kind with SemanticKind.Binding(name, _, recursive, export) -> SemanticKind.Binding(name, true, recursive, export) | _ -> failwith "binding"
+                changeNode { inputBinding with Kind = kind }
+            | "changed-read" -> changeNode { read with Kind = SemanticKind.VarRef("outer", Some outerBinding.Id) }
+            | "foreign-generator" ->
+                let other = match graph.Nodes[input].Kind with SemanticKind.SeqExpr(generator, _) -> generator | _ -> failwith "sequence"
+                changeNode { outer with Kind = SemanticKind.SeqExpr(other, []); Children = [other] }
+            | "escaping-constructor" -> { graph with Edges = Hyperedge.edge1 EdgeClass.Reference EdgeRole.Symbol 0 outer.Id plan.EntryCall :: graph.Edges }
+            | "missing-slot-access" -> { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.ContinuationSlotAccess || edge.Target <> access.Target) }
+            | "changed-slot-writer" ->
+                let edges = graph.Edges |> List.map (fun edge ->
+                    if edge.Role = EdgeRole.ContinuationSlotAccess && edge.Target = access.Target then
+                        { edge with Sources = List.take 5 edge.Sources @ [outer.Id] } else edge)
+                { graph with Edges = edges }
+            | "extra-read-consumer" -> { graph with Edges = Hyperedge.edge1 EdgeClass.Reference EdgeRole.Symbol 0 access.Target plan.EntryCall :: graph.Edges }
+            | "captured-scratch-root" | "captured-eager-scratch-alias" | "unknown-scratch-capture" ->
+                let root = graph.Nodes[access.Sources[2]]
+                let graph, captured =
+                    if defect <> "captured-eager-scratch-alias" then graph, root.Id else
+                    let alias = { root with Id = NodeId.fresh(); Kind = SemanticKind.EagerExpr root.Id; Children = [root.Id]; Parent = None }
+                    let body = match graph.Nodes[generator].Kind with SemanticKind.Lambda(_, body, _, _, _) -> graph.Nodes[body] | _ -> failwith "generator"
+                    let body =
+                        match body.Kind with
+                        | SemanticKind.Sequential values -> { body with Kind = SemanticKind.Sequential(alias.Id :: values); Children = alias.Id :: body.Children }
+                        | _ -> failwith "Expected current machine body"
+                    { graph with Nodes = graph.Nodes.Add(alias.Id, alias).Add(body.Id, body) }, alias.Id
+                let otherGenerator = match graph.Nodes[input].Kind with SemanticKind.SeqExpr(generator, _) -> generator | _ -> failwith "sequence"
+                let code = graph.Nodes[otherGenerator]
+                let capture: CaptureInfo = { Name = "escapedScratch"; Type = root.Type; IsMutable = false; SourceNodeId = if defect = "unknown-scratch-capture" then None else Some captured }
+                let kind = match code.Kind with SemanticKind.Lambda(parameters, body, captures, name, context) -> SemanticKind.Lambda(parameters, body, capture :: captures, name, context) | _ -> failwith "lambda"
+                let changed = { graph with Nodes = graph.Nodes.Add(code.Id, { code with Kind = kind }) }
+                let ingress = Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.analyze changed
+                Assert.True((Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.tryAccess ingress access.Target).IsSome)
+                changed
+            | _ -> failwith "Unknown defect"
+        let reading = SequenceResidence.analyzeWithRegions damaged damaged.Codata.Value.SequenceDestinations Map.empty
+        Assert.NotEmpty reading.Unresolved
+        Assert.DoesNotContain(reading.Evidence, fun edge -> edge.Role = EdgeRole.SequenceProgramBorrow && edge.Target = outer.Id)
+
     [<Fact>]
     member _.``Returned sequence and callable environments share the complete deferred use proof``() =
         let graph = Residence.activated """

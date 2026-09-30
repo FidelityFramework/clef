@@ -379,6 +379,7 @@
     <Compile Include="Baker\Ingredients\ProgramValueUses.fs" />
     <Compile Include="Baker\Recipes\ProgramInitializationOrderRecipes.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\LazyResidence.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\ProgramStorageAuthority.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\SequenceResidence.fs" />
     <Compile Include="Baker\Recipes\ContinuationObligationRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceMachineRecipes.fs" />
@@ -440,7 +441,6 @@
     <Compile Include="Nanopass\ObligationElaboration.fs" />
     <Compile Include="Nanopass\NodeProofs.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Placement.fs" />
-    <Compile Include="PSGSaturation\SemanticGraph\ProgramStorageAuthority.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Roots.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Escape.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Curry.fs" />
