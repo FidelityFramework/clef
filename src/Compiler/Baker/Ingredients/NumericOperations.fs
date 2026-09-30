@@ -78,7 +78,21 @@ let requiredBodies (operation: NumericOperationWitness) =
     let bits = function SettledSlot.Integer(bits, _) -> Some bits | SettledSlot.Bool -> Some 1 | SettledSlot.Char -> Some 32 | _ -> None
     match operation.Form with
     | NumericOperationForm.Unit | NumericOperationForm.OpaqueReference -> Some []
-    | NumericOperationForm.Real -> None
+    | NumericOperationForm.Real ->
+        // No capacity proposition is invented for a Boolean comparison result.
+        // All operands and the exact offered IEEE format remain prerequisites.
+        match operation.OperationCarrier, operation.Representation, operation.Declaration with
+        | Some(SettledSlot.Real width as slot), Some representation, Some declaration
+            when comparison operation.Kind && (width = 32 || width = 64) &&
+                 representation.Family = "ieee" && representation.Bits = width && NumericRepresentation.isOffered representation &&
+                 operation.Result.Slot = SettledSlot.Bool && operation.ResultAdaptation.IsNone && operation.Range.IsNone &&
+                 operation.Participants.Contains declaration && operation.Operands.Length = 2 &&
+                 Set.isSubset operation.Result.Participants operation.Participants &&
+                 (operation.Operands |> List.forall (fun operand ->
+                     operand.Adaptation.IsNone && (operand.Carrier |> Option.exists (fun carrier ->
+                         carrier.Site = operand.Actual && carrier.Slot = slot &&
+                         Set.isSubset carrier.Participants operation.Participants)))) -> Some []
+        | _ -> None
     | NumericOperationForm.Integer _ | NumericOperationForm.Boolean ->
         match operation.Range |> Option.bind bounded, operation.OperationCarrier |> Option.bind bits with
         | Some(lo, hi), Some width when width > 0 ->

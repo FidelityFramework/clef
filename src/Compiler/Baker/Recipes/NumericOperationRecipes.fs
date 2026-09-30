@@ -125,6 +125,27 @@ let settle (graph: SemanticGraph) anchor (values: Map<NodeId, ScalarCarrier>) (r
                 | _ -> []
             let form = if isBoolean then NumericOperationForm.Boolean else NumericOperationForm.Integer(not(ValueRange.isNonNegative joined))
             make form (Some slot) representation declaration (Some joined) operands resultAdaptation (coverage :: preconditions)
+        elif Operations.comparison kind && (scalarInput.Value |> List.forall (fun carrier -> match carrier.Slot with SettledSlot.Real _ -> true | _ -> false)) then
+            // Comparing two already settled IEEE operands has no real-valued
+            // intermediate or rounding adaptation. The selected source format
+            // is still required; a width alone cannot authorize IEEE semantics.
+            let inputs = scalarInput.Value
+            require (result.Slot = SettledSlot.Bool) "A real comparison requires its source Boolean result."
+            require (inputTypes |> List.forall (function Some(NTUKind.NTUfloat _) -> true | _ -> false))
+                "A real comparison requires IEEE source carriers; posit and fixed-point comparisons need their own construction."
+            let slot = inputs.Head.Slot
+            let bits = width slot |> Option.get
+            require ((bits = 32 || bits = 64) && (inputs |> List.forall (fun carrier -> carrier.Slot = slot)))
+                "A real comparison requires identical settled binary32 or binary64 operands; format conversion needs its own fidelity contract."
+            let core = core |> need "A real comparison requires its source core representation declaration."
+            let declared =
+                match core.Representations |> List.filter (fun declaration ->
+                    let representation = declaration.Representation
+                    representation.Family = "ieee" && representation.Bits = bits && NumericRepresentation.isOffered representation) with
+                | [declaration] -> declaration
+                | _ -> raise (MissingOperation "A real comparison requires one exact offered IEEE representation declaration for its settled operands.")
+            let operands = List.zip actuals inputs |> List.map (fun (id, carrier) -> { Actual = id; Carrier = Some carrier; Adaptation = None })
+            make NumericOperationForm.Real (Some slot) (Some declared.Representation) (Some declared.Node) None operands None []
         else
             raise (MissingOperation "The real operation requires its exact source format, intermediate capacity and arithmetic fidelity contract before witnessing.")
     graph.Nodes |> Map.fold (fun (enrichment, operations, unresolved, required, proofs) id node ->

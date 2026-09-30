@@ -114,6 +114,7 @@
     <Compile Include="PublicationContractCases.fs" />
     <Compile Include="PendingObligationCases.fs" />
     <Compile Include="NumericOperationCases.fs" />
+    <Compile Include="ComparisonRegionCases.fs" />
     <Compile Include="MemoryAccessCases.fs" />
     <Compile Include="ScalarRangeRenewalCases.fs" />
     <Compile Include="ArrayConstructionCases.fs" />

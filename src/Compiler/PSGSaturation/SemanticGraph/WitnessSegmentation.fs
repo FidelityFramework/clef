@@ -62,7 +62,7 @@ let private encoder (identities: Map<NodeId, string>) =
         | :? NodeId as id ->
             match identities.TryFind id with
             | Some identity -> "node" + atom identity
-            | None -> invalidOp "Region has a source dependency outside its admitted interface."
+            | None -> invalidOp (sprintf "Region has source dependency %A outside its admitted interface." id)
         | :? NativeType as ty -> encode (box (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType ty))
         | :? string as text -> "string" + atom text
         | _ ->
@@ -133,10 +133,11 @@ let private scoped (members: Set<NodeId>) (types: Set<TypeIdentity>) encode (val
 
 let private hash text = Encoding.UTF8.GetBytes(text: string) |> SHA256.HashData |> Convert.ToHexString
 
-/// The first independent cohort has no calls, storage, effects, aggregate
+/// The independent cohort has no calls, storage, effects, aggregate
 /// transports, nested declarations or external reads. Extending this grammar
 /// requires extending its complete source interface, not a witness heuristic.
-let private supported root (members: Set<NodeId>) (node: SemanticNode) =
+/// A settled comparison is an intrinsic operation, not a foreign invocation.
+let private supported root (members: Set<NodeId>) (comparisons: Set<NodeId>) (callees: Set<NodeId>) (node: SemanticNode) =
     match node.Kind with
     | SemanticKind.Lambda(_, _, [], _, LambdaContext.RegularClosure) -> node.Id = root
     | SemanticKind.PatternBinding _ -> true
@@ -145,7 +146,51 @@ let private supported root (members: Set<NodeId>) (node: SemanticNode) =
     | SemanticKind.VarRef(_, Some definition) -> members.Contains definition
     | SemanticKind.Binding(_, false, false, None) -> true
     | SemanticKind.Sequential _ | SemanticKind.IfThenElse _ | SemanticKind.TypeAnnotation _ -> true
+    | SemanticKind.Application _ -> comparisons.Contains node.Id
+    | SemanticKind.Intrinsic _ -> callees.Contains node.Id
     | _ -> false
+
+let private comparison (graph: SemanticGraph) (members: Set<NodeId>) (operation: NumericOperationWitness) =
+    match graph.Nodes.TryFind operation.Site, graph.Nodes.TryFind operation.Callee with
+    | Some { Kind = SemanticKind.Application(callee, actuals) },
+      Some { Kind = SemanticKind.Intrinsic info; Children = [] }
+        when members.Contains operation.Callee && callee = operation.Callee &&
+             actuals = (operation.Operands |> List.map _.Actual) && List.forall members.Contains actuals &&
+             info.Module = IntrinsicModule.Operators &&
+             Clef.Compiler.Baker.Ingredients.NumericOperations.classify info.Operation = Some operation.Kind &&
+             operation.Form = NumericOperationForm.Real &&
+             Clef.Compiler.Baker.Ingredients.NumericOperations.requiredBodies operation = Some [] -> true
+    | _ -> false
+
+/// Proof citizens are re-discharged in the current whole graph. Their identities
+/// stay in Supports; the complete held value and format authority remain here.
+let private operationInput (operation: NumericOperationWitness) =
+    let carrier (value: ScalarCarrier) = { value with Obligations = []; Participants = Set.empty }
+    { operation with
+        Operands = operation.Operands |> List.map (fun operand -> { operand with Carrier = operand.Carrier |> Option.map carrier })
+        Result = carrier operation.Result
+        Obligations = []; Participants = Set.empty }
+
+/// A closed typed interface for numeric declarations, including the complete
+/// offered set whose uniqueness the source recipe inspected. This does not
+/// serialize an arbitrary external graph or infer identity from physical width.
+let private numericInterface (graph: SemanticGraph) (operations: NumericOperationWitness list) =
+    let read = PlatformResolution.read graph
+    let platform = read.Platform |> Option.filter (fun _ -> read.Findings.IsEmpty)
+                   |> Option.defaultWith (fun () -> invalidOp "Comparison region lacks its current source platform.")
+    let core = platform.Core |> Option.defaultWith (fun () -> invalidOp "Comparison region lacks its source core.")
+    let named =
+        (core.Node, "numeric-core:" + platform.Id) ::
+        (core.Widths |> List.map (fun row -> row.Node, "numeric-width:" + platform.Id + ":" + row.Name)) @
+        (core.Representations |> List.map (fun row -> row.Node, "numeric-representation:" + platform.Id + ":" + row.Representation.Name))
+    if (named |> List.map fst |> Set.ofList |> Set.count) <> named.Length ||
+       (named |> List.map snd |> Set.ofList |> Set.count) <> named.Length then
+        invalidOp "Comparison region has ambiguous source declaration identities."
+    for operation in operations do
+        if not (core.Representations |> List.exists (fun row ->
+            operation.Declaration = Some row.Node && operation.Representation = Some row.Representation)) then
+            invalidOp "Comparison region lost its exact source representation declaration."
+    Map.ofList named, core
 
 let private childOrder (graph: SemanticGraph) root =
     let rec visit seen id =
@@ -158,6 +203,22 @@ let private childOrder (graph: SemanticGraph) root =
                     visit seen child |> Option.map (fun (next, descendants) -> next, order @ descendants)))
                 (Some (Set.add id seen, [id]))
     visit Set.empty root |> Option.map snd
+
+/// Flattening an intrinsic application retains its intermediate partial
+/// application in the rewrite record. It is not a second live owner of the
+/// actual. Admit only the exact detached, unreachable prefix of this settled
+/// comparison; its nodes remain Common and in the current proof supports.
+let private retiredComparisonPrefix (graph: SemanticGraph) (operations: NumericOperationWitness list) id (parent: SemanticNode) =
+    if parent.IsReachable || parent.Parent.IsSome then false else
+    match parent.Kind with
+    | SemanticKind.Application(callee, actuals) when parent.Children = callee :: actuals && List.contains id actuals ->
+        operations |> List.exists (fun operation ->
+            let settled = operation.Operands |> List.map _.Actual
+            actuals.Length < settled.Length && actuals = List.take actuals.Length settled &&
+            match graph.Nodes.TryFind callee, graph.Nodes.TryFind operation.Callee with
+            | Some { Kind = SemanticKind.Intrinsic old }, Some { Kind = SemanticKind.Intrinsic current } -> old = current
+            | _ -> false)
+    | _ -> false
 
 let private nodeInput (node: SemanticNode) =
     // Range and diagnostic metadata do not enter scalar emission. All fields
@@ -176,7 +237,8 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) : Witne
             Callable = { emission.Callable with Supports = Map.empty }
             Numeric = { emission.Numeric with
                             Values = emission.Numeric.Values |> Map.map (fun _ carrier ->
-                                { carrier with Declaration = None; Obligations = []; Participants = Set.empty }) }
+                                { carrier with Declaration = None; Obligations = []; Participants = Set.empty })
+                            Operations = emission.Numeric.Operations |> Map.map (fun _ operation -> operationInput operation) }
             Storage = { emission.Storage with Startup = None; ProgramStorage = ProgramStorageInventory.empty
                                               LiteralPoolAnchors = [] } }
     let localCodata = { codata with ProgramStorage = ProgramStorageInventory.empty }
@@ -190,6 +252,9 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) : Witne
             | Some ordered ->
                 let members = Set.ofList ordered
                 let own = members.Add binding.Id
+                let comparisons = emission.Numeric.Operations.Values |> Seq.filter (fun operation -> members.Contains operation.Site) |> Seq.filter (comparison graph members) |> Seq.toList
+                let comparisonSites = comparisons |> List.map _.Site |> Set.ofList
+                let comparisonCallees = comparisons |> List.map _.Callee |> Set.ofList
                 let eligible =
                     binding.IsReachable && declaration.Captures.IsEmpty &&
                     not (codata.DeclarationRootLambdas.ContainsKey root) &&
@@ -197,15 +262,15 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) : Witne
                     (Set.intersect own emission.Boundary.DeclarationLeaves |> Set.isEmpty) &&
                     (Set.intersect own emission.Boundary.DeclarationOnly |> Set.isEmpty) &&
                     (emission.Storage.Startup |> Option.forall (fun startup -> startup.EntryLambda <> root)) &&
-                    (ordered |> List.forall (fun id -> supported root members graph.Nodes[id])) &&
+                    (ordered |> List.forall (fun id -> supported root members comparisonSites comparisonCallees graph.Nodes[id])) &&
                     (ordered |> List.forall (fun id ->
-                        id = root ||
+                        id = root || comparisonCallees.Contains id ||
                         match emission.Numeric.OccurrenceRepresentations.TryFind id with
                         | Some (Ok (ValueRepresentation.Scalar (SettledSlot.Integer _ | SettledSlot.Bool | SettledSlot.Char | SettledSlot.Real _ | SettledSlot.Unit))) -> true
                         | _ -> false)) &&
                     (ordered |> List.forall (fun id ->
                         graph.Nodes.Values |> Seq.forall (fun parent ->
-                            not (List.contains id parent.Children) || own.Contains parent.Id)))
+                            not (List.contains id parent.Children) || own.Contains parent.Id || retiredComparisonPrefix graph comparisons id parent)))
                 if not eligible then None else
                 let parent = binding.Parent |> Option.bind graph.Nodes.TryFind
                 match parent with
@@ -229,17 +294,41 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) : Witne
                                 Set.union support carrier.Participants
                                 |> Set.union (Set.ofList (carrier.Obligations @ Option.toList carrier.Declaration))
                             else support) supports
+                    let supports =
+                        comparisons |> List.fold (fun support operation ->
+                            Set.union support operation.Participants
+                            |> Set.union (Set.ofList (operation.Obligations @ Option.toList operation.Declaration))
+                            |> Set.union operation.Result.Participants
+                            |> Set.union (Set.ofList operation.Result.Obligations)
+                            |> fun support -> operation.Operands |> List.fold (fun support operand ->
+                                match operand.Carrier with
+                                | Some carrier -> Set.union support carrier.Participants |> Set.union (Set.ofList (carrier.Obligations @ Option.toList carrier.Declaration))
+                                | None -> support) support) supports
                     try
+                        let interfaces, core =
+                            if comparisons.IsEmpty then Map.empty, None else
+                            let identities, core = numericInterface graph comparisons
+                            identities, Some core
+                        if interfaces.Keys |> Seq.exists identities.ContainsKey then
+                            invalidOp "Numeric declaration is not external to its scalar region."
+                        let identities = Map.fold (fun identities id name -> Map.add id name identities) identities interfaces
+                        // Numeric selection reads the source declaration family,
+                        // including absence/uniqueness. Fresh whole-graph proof
+                        // remains mandatory; retain its complete current support.
+                        let supports =
+                            if comparisons.IsEmpty then supports else
+                            Set.union supports (graph.Nodes.Keys |> Set.ofSeq)
                         let encode = encoder identities
                         let ownTypes = own |> Set.map (fun id -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType graph.Nodes[id].Type)
                         let scope value = scoped own ownTypes encode value
                         let inputs =
-                            [ "scalar-v1"; moduleName; name
+                            [ (if comparisons.IsEmpty then "scalar-v1" else "scalar-comparison-v1"); moduleName; name
                               ordered |> List.map (fun id -> encode (nodeInput graph.Nodes[id])) |> String.concat "|"
                               encode (box binding.Kind)
                               scope (box witnessInputs); scope (box localCodata)
                               encode (box graph.Platform)
                               ordered |> List.collect (fun id -> kindEdges id graph.Nodes[id].Kind) |> box |> encode ]
+                            @ (core |> Option.map (fun value -> [encode (box value)]) |> Option.defaultValue [])
                         Some { Identity = "callable:" + moduleName + ":" + name
                                Flavor = WitnessRegionKind.ScalarCallable
                                Root = Some root; Anchor = Some binding.Id; Path = [binding.Id, [], []]
@@ -254,10 +343,13 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) : Witne
     let owned = regions |> List.fold (fun all region -> Set.union all region.Members) Set.empty
     let all = graph.Nodes |> Map.toSeq |> Seq.map fst |> Set.ofSeq
     let complete = encoder (all |> Set.toSeq |> Seq.map (fun (NodeId id as node) -> node, string id) |> Map.ofSeq)
+    let current label value =
+        try complete value
+        with :? InvalidOperationException as error -> invalidOp ("Common witness input " + label + ": " + error.Message)
     let commonFingerprint =
-        [ graph.Nodes.Values |> Seq.map (fun node -> complete (nodeInput node) + complete (box node.Metadata)) |> String.concat "|"
-          complete (box emission); complete (box codata); complete (box graph.Platform)
-          complete (box graph.Edges); complete (box graph.StaticStringPool); complete (box graph.LiteralStorage) ]
+        [ graph.Nodes.Values |> Seq.map (fun node -> current (sprintf "Nodes[%A]" node.Id) (nodeInput node) + current (sprintf "Metadata[%A]" node.Id) (box node.Metadata)) |> String.concat "|"
+          current "WitnessEmission" (box emission); current "Codata" (box codata); current "Platform" (box graph.Platform)
+          current "Edges" (box graph.Edges); current "StaticStringPool" (box graph.StaticStringPool); current "LiteralStorage" (box graph.LiteralStorage) ]
         |> String.concat "\n" |> hash
     // Common remains freshly witnessed. Its revision key cannot authorize old
     // source-bound operations; backend reuse must also compare typed contents.

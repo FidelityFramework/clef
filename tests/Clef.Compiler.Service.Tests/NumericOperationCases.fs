@@ -23,7 +23,79 @@ module NumericOperationFixture =
         Assert.Equal(SemanticKind.Literal(NativeLiteral.String right), graph.Nodes[no].Kind)
         yes, no
 
+module RealComparisonFixture =
+    let representation: NumericRepresentation =
+        { Name = "float64"; Capability = "native"; Family = "ieee"; Bits = 64
+          MinMagnitude = "-1.7976931348623157e308"; MaxMagnitude = "1.7976931348623157e308"; Boundary = "wrap" }
+    let authority = IntrinsicWriteFixture.authority.Replace("Representations = [|", "Representations = [| { Name = \"float64\"; Capability = \"native\"; Family = \"ieee\"; Bits = 64; MinMagnitude = \"-1.7976931348623157e308\"; MaxMagnitude = \"1.7976931348623157e308\"; Boundary = \"wrap\" }; ")
+    let check declaration source =
+        let parse text path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults text path with
+            | Clef.Compiler.NativeService.ParseSuccess input -> input
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "%A" errors
+        let platform = { IntrinsicWriteFixture.platform with Representations = IntrinsicWriteFixture.platform.Representations.Add(representation.Name, representation) }
+        Clef.Compiler.NativeService.checkParsedInputsWithPlatform [parse declaration "write-authority.clef"; parse source "real-comparison.clef"] (Some platform)
+
 type NumericOperationCases() =
+    [<Theory>]
+    [<InlineData("=")>]
+    [<InlineData("<>")>]
+    [<InlineData("<")>]
+    [<InlineData("<=")>]
+    [<InlineData(">")>]
+    [<InlineData(">=")>]
+    member _.``IEEE comparison retains its exact offered format and complete operands`` (operator: string) =
+        let source = $"module RealComparison\n[<Measure>] type m\nlet compare (left: float<m>) (right: float<m>) = left {operator} right\n[<EntryPoint>]\nlet main _ = if compare 1.25<m> 2.5<m> then 0 else 1\n"
+        let result = RealComparisonFixture.check RealComparisonFixture.authority source
+        DimensionalCases.noErrors result
+        let facts = OperationPublication.project result.Graph |> Result.defaultWith (sprintf "%A" >> failwith)
+        let operation = facts.Operations.Values |> Seq.filter (fun operation -> operation.Form = NumericOperationForm.Real) |> Assert.Single
+        Assert.Equal(Some(SettledSlot.Real 64), operation.OperationCarrier)
+        Assert.Equal(SettledSlot.Bool, operation.Result.Slot)
+        Assert.Equal(Some "float64", operation.Representation |> Option.map _.Name)
+        Assert.True(operation.Declaration.IsSome)
+        Assert.Contains(operation.Declaration.Value, operation.Participants)
+        Assert.Equal(2, operation.Operands.Length)
+        Assert.Empty(operation.Obligations)
+        Assert.True(operation.ResultAdaptation.IsNone)
+        for operand in operation.Operands do
+            Assert.Equal(Some(SettledSlot.Real 64), operand.Carrier |> Option.map _.Slot)
+            Assert.True(operand.Adaptation.IsNone)
+            Assert.True(Set.isSubset operand.Carrier.Value.Participants operation.Participants)
+        // A real comparison does not license a real arithmetic intermediate.
+        let arithmetic = { operation with Kind = NumericOperationKind.Add }
+        Assert.True((Clef.Compiler.Baker.Ingredients.NumericOperations.requiredBodies arithmetic).IsNone)
+        let undeclared = { operation with Declaration = None }
+        Assert.True((Clef.Compiler.Baker.Ingredients.NumericOperations.requiredBodies undeclared).IsNone)
+        let refuses changed = Assert.True((Clef.Compiler.Baker.Ingredients.NumericOperations.requiredBodies changed).IsNone)
+        let representation = operation.Representation.Value
+        for changed in [{ representation with Family = "posit" }; { representation with Bits = 32 }; { representation with Capability = "unavailable" }] do
+            refuses { operation with Representation = Some changed }
+        let first = operation.Operands.Head
+        refuses { operation with Operands = [{ first with Carrier = Some { first.Carrier.Value with Slot = SettledSlot.Real 32 } }; operation.Operands[1]] }
+        refuses { operation with Participants = operation.Participants.Remove first.Actual }
+        // The declaration is part of the retained source domain, so even a
+        // still-present operation cannot survive a change to that authority.
+        let declaration = result.Graph.Nodes[operation.Declaration.Value]
+        Assert.NotEmpty declaration.Children
+        let changed = { result.Graph with Nodes = result.Graph.Nodes.Add(declaration.Id, { declaration with Children = [] }) }
+        Assert.True(OperationPublication.project changed |> Result.isError)
+
+    [<Theory>]
+    [<InlineData("missing")>]
+    [<InlineData("unavailable")>]
+    [<InlineData("duplicate")>]
+    member _.``Real comparison refuses missing unavailable or ambiguous source format`` defect =
+        let authority =
+            match defect with
+            | "missing" -> IntrinsicWriteFixture.authority
+            | "unavailable" -> RealComparisonFixture.authority.Replace("Name = \"float64\"; Capability = \"native\"", "Name = \"float64\"; Capability = \"unavailable\"")
+            | _ -> RealComparisonFixture.authority.Replace("Representations = [|", "Representations = [| { Name = \"other64\"; Capability = \"native\"; Family = \"ieee\"; Bits = 64; MinMagnitude = \"-1.7976931348623157e308\"; MaxMagnitude = \"1.7976931348623157e308\"; Boundary = \"wrap\" }; ")
+        let result = RealComparisonFixture.check authority "module RefusedRealComparison\n[<EntryPoint>]\nlet main _ = if 1.25 < 2.5 then 0 else 1\n"
+        Assert.True(OperationPublication.project result.Graph |> Result.isError)
+        Assert.DoesNotContain(result.Graph.Edges, fun edge ->
+            match edge.Role with EdgeRole.NumericOperation operation -> operation.Form = NumericOperationForm.Real | _ -> false)
+
     [<Fact>]
     member _.``Exact sum capacity remains wider than subsequent modular result`` () =
         let graph, facts = NumericOperationFixture.admitted "    let sum = 255 + 255\n    let reduced = sum % 256\n    reduced\n"
