@@ -579,6 +579,12 @@ let main _ =
             | other -> failwithf "Unknown premise change: %s" other
         let before, _ = settle graph
         Assert.True(before.ContainsKey binding.Id)
+        // These mutations may also retract ordinary absence proofs. Refresh
+        // that upstream owner before testing the independent capture contract.
+        let changed = Clef.Compiler.Nanopass.OrdinaryDemand.normalize changed
+        match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead changed with
+        | Ok _ -> ()
+        | Result.Error failures -> failwithf "Expected current ordinary-demand premises before capture carrier settlement: %A" failures
         let after, errors = settle changed
         Assert.False(after.ContainsKey binding.Id)
         Assert.Contains(errors, fun error -> error.Occurrence = binding.Id)

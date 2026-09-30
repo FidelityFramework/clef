@@ -5,24 +5,81 @@ open Clef.Compiler.NativeService
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+module LoopCheckResult = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.CheckResult
 module LoopRanges = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis
 module FiniteRecurrences = Clef.Compiler.Baker.Recipes.LoopRangeRecipes
 
 module private LoopRangeFixture =
-    let check body =
+    let private parse body =
         let source = "module LoopRanges\n[<Measure>] type m\n" + body + "\n[<EntryPoint>]\nlet main _ = ignore observed; 0\n"
-        match parseAndCheck source "loop-ranges.clef" with
+        parseAndCheck source "loop-ranges.clef"
+
+    let check body =
+        match parse body with
         | Success result | CheckFailure result ->
             DimensionalCases.noErrors result
             result.Graph
         | ParseFailure errors -> failwithf "Expected parsed recurrence: %A" errors
 
+    let rejected expectedSites body =
+        match parse body with
+        | CheckFailure result ->
+            let errors = LoopCheckResult.errors result
+            Assert.NotEmpty errors
+            let sites = errors |> List.map (fun diagnostic ->
+                Assert.Equal("CCS8011", diagnostic.Code)
+                Assert.Equal("loop-ranges.clef", diagnostic.Range.File)
+                Assert.Contains("cannot be observed", diagnostic.Message)
+                Assert.Equal(diagnostic.Range.Start.Line, diagnostic.Range.End.Line)
+                let node = result.Graph.Nodes[Assert.Single diagnostic.RelatedNodes]
+                Assert.True(node.IsReachable)
+                Assert.True((node.Range = diagnostic.Range), "The range refusal must identify its actual source node")
+                Assert.True(node.ValueRange |> Option.exists (ValueRange.isObservable >> not), "The rejected source node must retain a nonobservable range")
+                diagnostic.Range.Start.Line, diagnostic.Range.Start.Column, diagnostic.Range.End.Column)
+            // Check exact locations and multiplicity, not just a permissive
+            // diagnostic-code whitelist; no unrelated refusal can stand in.
+            Assert.Equal<(int * int * int) list>(List.sort expectedSites, List.sort sites)
+            result.Graph
+        | result -> failwithf "Expected the located numeric source refusals: %A" result
+
     let cell name (graph: SemanticGraph) =
         graph.Nodes.Values |> Seq.filter (fun node ->
             node.IsReachable && match node.Kind with SemanticKind.Binding(actual, true, _, _) -> actual = name | _ -> false) |> Assert.Single
 
+    let unobservable subject =
+        sprintf "The range of '%s' in '__clef_program_entry' cannot be observed; bound it with a comparison, a modulus or a clamp" subject
+
+    let resourceMessage =
+        sprintf "The finite recurrence proof exceeded its %s-bit aggregate certificate-work budget; numeric range remains pending. This compiler analysis limit supplies no runtime representation or width." (string FiniteRecurrences.defaultCertificateBits)
+
+    let rejectedLinear expectedSites body =
+        match parse body with
+        | CheckFailure result ->
+            let actual = LoopCheckResult.errors result |> List.map (fun diagnostic ->
+                Assert.Equal("CCS8011", diagnostic.Code)
+                Assert.Equal("loop-ranges.clef", diagnostic.Range.File)
+                Assert.Equal(diagnostic.Range.Start.Line, diagnostic.Range.End.Line)
+                if diagnostic.Message = resourceMessage then
+                    let power = cell "power" result.Graph
+                    Assert.True((power.Range = diagnostic.Range))
+                    let pending = result.Graph.Edges |> List.filter (fun edge ->
+                        edge.Class = EdgeClass.Range && edge.Role = EdgeRole.LoopRangePending LoopRangeResidual.ProofResources &&
+                        edge.Target = power.Id && edge.Ordinal = 0) |> Assert.Single
+                    Assert.NotEmpty pending.Sources
+                    Assert.Equal<NodeId list>(pending.Sources, diagnostic.RelatedNodes)
+                else
+                    let node = result.Graph.Nodes[Assert.Single diagnostic.RelatedNodes]
+                    Assert.True(node.IsReachable)
+                    Assert.True((node.Range = diagnostic.Range), "The refusal must identify its actual source node")
+                    Assert.True(node.ValueRange |> Option.exists (ValueRange.isObservable >> not), "The rejected recurrence node must remain nonobservable")
+                diagnostic.Message, diagnostic.Range.Start.Line, diagnostic.Range.Start.Column, diagnostic.Range.End.Column)
+            Assert.Equal<(string * int * int * int) list>(List.sort expectedSites, List.sort actual)
+            result.Graph
+        | result -> failwithf "Expected the exact located recurrence source refusals: %A" result
+
     let pending name reason graph =
         let binding = cell name graph
+        Assert.True(binding.ValueRange |> Option.exists (ValueRange.isObservable >> not), "A pending cell must retain its nonobservable range")
         Assert.Contains(graph.Edges, fun edge -> edge.Target = binding.Id && edge.Role = EdgeRole.LoopRangePending reason)
         Assert.DoesNotContain(graph.Nodes.Values, fun node ->
             match node.Kind with
@@ -89,18 +146,28 @@ type LoopRangeCases() =
             | "capture" -> "let observed = seq {\n    let mutable total = 0\n    let mutable i = 1\n    let read () = total\n    while i <= 6 do\n        total <- total + i\n        yield read ()\n        i <- i + 1\n}", LoopRangeResidual.CapturedCell
             | "reentry" -> "let observed = seq {\n    let mutable total = 0\n    let mutable i = 1\n    while i <= 6 do\n        while i <= 6 do\n            total <- total + i\n            yield total\n            i <- i + 1\n}", LoopRangeResidual.Reentry
             | _ -> LoopRangeFixture.source "1" "i <= 6" "i + 0" "1", LoopRangeResidual.Step
-        LoopRangeFixture.check source |> LoopRangeFixture.pending "total" reason
+        let sites =
+            match scenario with
+            | "guard" -> [4, 16, 20; 5, 16, 21; 6, 16, 17; 8, 17, 26]
+            | "outside" -> [4, 16, 21; 8, 17, 26]
+            | "conditional" | "zero-step" -> [4, 16, 21; 7, 17, 26]
+            | "capture" -> [4, 16, 21; 6, 18, 23; 8, 17, 26]
+            | "reentry" -> [4, 16, 21; 8, 21, 30]
+            | _ -> failwith "Unknown rejected recurrence fixture"
+        LoopRangeFixture.rejected sites source |> LoopRangeFixture.pending "total" reason
 
     [<Theory>]
     [<InlineData("total * 2")>]
     [<InlineData("other")>]
     member _.``Multiplicative and coupled recurrences do not borrow an additive proof`` update =
         let source = "let observed = seq {\n    let mutable total = 1\n    let mutable other = 2\n    let mutable i = 0\n    while i < 6 do\n        total <- " + update + "\n        other <- other + total\n        yield total\n        i <- i + 1\n}"
-        LoopRangeFixture.check source |> LoopRangeFixture.pending "total" LoopRangeResidual.NonAdditive
+        let updateSite = if update = "total * 2" then 8, 17, 26 else 9, 17, 30
+        LoopRangeFixture.rejected [4, 16, 21; 5, 16, 21; updateSite] source
+        |> LoopRangeFixture.pending "total" LoopRangeResidual.NonAdditive
 
     [<Fact>]
     member _.``Unknown trip bounds remain residual without selecting a carrier``() =
-        let graph = LoopRangeFixture.check "let produce (count: int) = seq {\n    let mutable total = 0\n    let mutable i = 1\n    while i <= count do\n        total <- total + i\n        yield total\n        i <- i + 1\n}\nlet observed = produce"
+        let graph = LoopRangeFixture.rejected [3, 13, 18; 4, 16, 21; 5, 16, 17; 11, 15, 22] "let produce (count: int) = seq {\n    let mutable total = 0\n    let mutable i = 1\n    while i <= count do\n        total <- total + i\n        yield total\n        i <- i + 1\n}\nlet observed = produce"
         LoopRangeFixture.pending "total" LoopRangeResidual.MissingBound graph
         match (LoopRangeFixture.cell "total" graph).ValueRange with
         | Some range -> Assert.False(ValueRange.isObservable range)
@@ -205,7 +272,11 @@ type FiniteRecurrenceCases() =
             | "deferred" -> fibonacci 10 "a + b" "a <- b\n        b <- temp"
             | "reordered" -> fibonacci 10 "eager (a + b)" "b <- temp\n        a <- b"
             | _ -> fibonacci 10 "eager (a + a)" "a <- b\n        b <- temp"
-        let graph = LoopRangeFixture.check source
+        let sumColumn = if change = "deferred" then 19 else 26
+        let graph = LoopRangeFixture.rejectedLinear
+                        [ LoopRangeFixture.unobservable "a", 4, 16, 17
+                          LoopRangeFixture.unobservable "b", 5, 16, 17
+                          LoopRangeFixture.unobservable "the result of '+'", 9, sumColumn, sumColumn + 5 ] source
         Assert.DoesNotContain(graph.Nodes.Values, fun node ->
             match node.Kind with SemanticKind.Obligation { Body = ObligationBody.FiniteLinearRecurrence _ } -> true | _ -> false)
 
@@ -442,8 +513,13 @@ let observed = distances, durations
 
     [<Fact>]
     member _.``Exhausted proof work remains pending and blocks platform representation commitment``() =
-        let graph = LoopRangeFixture.check (powers 1000000000)
+        let graph = LoopRangeFixture.rejectedLinear
+                        [ LoopRangeFixture.unobservable "power", 4, 16, 21
+                          LoopRangeFixture.unobservable "the result of '*'", 8, 17, 26
+                          LoopRangeFixture.resourceMessage, 4, 16, 21 ] (powers 1000000000)
         let power = LoopRangeFixture.cell "power" graph
+        Assert.True(power.ValueRange |> Option.exists (ValueRange.isObservable >> not))
+        Assert.Equal<int option>(None, LoopRanges.selectedWidth graph power.Id)
         Assert.Contains(graph.Edges, fun edge -> edge.Target = power.Id && edge.Role = EdgeRole.LoopRangePending LoopRangeResidual.ProofResources)
         let platform: PlatformContext = {
             PlatformId = "recurrence-resource-test"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
@@ -455,5 +531,7 @@ let observed = distances, durations
         Assert.Contains(diagnostics, fun diagnostic ->
             diagnostic.Code = "CCS8011" && diagnostic.Severity = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.NativeDiagnosticSeverity.Error &&
             diagnostic.Range = power.Range && diagnostic.Message.Contains("certificate-work budget"))
+        Assert.True(rerun.Nodes[power.Id].ValueRange |> Option.exists (ValueRange.isObservable >> not))
+        Assert.Equal<int option>(None, LoopRanges.selectedWidth rerun power.Id)
         Assert.DoesNotContain(rerun.Nodes.Values, fun node ->
             match node.Kind with SemanticKind.Obligation { Body = ObligationBody.FiniteLinearRecurrence _ } -> true | _ -> false)

@@ -48,6 +48,8 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 module PlatformResolution = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 module LoopRecipes = Clef.Compiler.Baker.Recipes.LoopRangeRecipes
 module LoopRanges = Clef.Compiler.Nanopass.LoopRanges
+module SequenceAccumulation = Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes
+module SequenceAccumulations = Clef.Compiler.Nanopass.SequenceAccumulations
 
 //-------------------------------------------------------------------------
 // The program as the pass reads it
@@ -136,6 +138,8 @@ type private Program = {
     LoopRecognition: LoopRecipes.Recognition
     LoopAccumulations: Map<NodeId, LoopRecipes.Accumulation>
     LoopLinear: Map<NodeId, LoopRecipes.LinearRecurrence * int>
+    SequenceAccumulations: SequenceAccumulation.Accumulation list
+    SequenceAccumulationTargets: Map<NodeId, SequenceAccumulation.Accumulation>
     LazyEffects: Map<NodeId, LazyEffectRanges.Bound>
     FiniteCells: Map<NodeId, FiniteCellRanges.Bound>
     /// Complete owner-local payload incidence for a certified current read.
@@ -1134,6 +1138,8 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Callees = Map.empty
         Effects = Map.empty
         LoopRecognition = { Accumulations = []; Linear = []; Edges = [] }
+        SequenceAccumulations = []
+        SequenceAccumulationTargets = Map.empty
         LoopAccumulations = Map.empty
         LoopLinear = Map.empty
         LazyEffects = Map.empty
@@ -1397,6 +1403,11 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             | Some result -> Map.add node.Id result.Range seeds
             | None -> seeds) boundarySeeds
     let boundarySeeds =
+        // Logical string bytes have a source codomain independently of any
+        // offered storage width. Keep this fact at the exact read occurrence.
+        Clef.Compiler.Baker.Ingredients.StringBytes.logicalReadRanges graph
+        |> Map.fold (fun seeds site range -> Map.add site range seeds) boundarySeeds
+    let boundarySeeds =
         ordered |> List.fold (fun seeds node ->
             match StringByteStorage.readRange graph node.Id with
             | Some range -> Map.add node.Id range seeds
@@ -1582,9 +1593,12 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Assignments = program.Assignments
         Effects = program.Effects |> Map.map (fun _ effect -> effect.Definitions, effect.Unknown) }
     let graph, loops = LoopRanges.recognize inputs program.Graph
+    let graph, sequences = SequenceAccumulations.recognize inputs graph
     let program = { program with
                         Graph = graph
                         LoopRecognition = loops
+                        SequenceAccumulations = sequences
+                        SequenceAccumulationTargets = sequences |> List.collect (fun item -> [item.Cell, item; item.Update, item]) |> Map.ofList
                         LoopAccumulations = loops.Accumulations |> List.collect (fun item -> [item.Cell, item; item.Update, item]) |> Map.ofList
                         LoopLinear = loops.Linear |> List.collect (fun item -> item.Targets |> List.map (fun (id, index) -> id, (item, index))) |> Map.ofList }
     { program with Refinements = refinementsOf program }
@@ -1934,6 +1948,13 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
             match LoopRecipes.saturate (current state) recurrence with
             | Result.Ok result -> Some(ValueRange.meet range (ValueRange.Bounded(result.Invariant.Lower, result.Invariant.Upper)))
             | Result.Error _ -> Some range
+        | _ -> computed
+    let computed =
+        match computed, program.SequenceAccumulationTargets.TryFind node.Id with
+        | Some range, Some recurrence ->
+            match SequenceAccumulation.saturate (current state) recurrence with
+            | Some invariant -> Some(ValueRange.meet range (ValueRange.Bounded(invariant.Lower, invariant.Upper)))
+            | None -> Some range
         | _ -> computed
     let computed =
         match computed, program.LoopLinear.TryFind node.Id with
@@ -2629,7 +2650,8 @@ let private runValidated (context: PlatformContext option) (graph: SemanticGraph
     let graph = { graph with Nodes = nodes; FieldRanges = lazy fieldRanges; ElementRanges = lazy elementRanges; Escaping = lazy program.EscapingLambdas }
     let graph = LazyEffectRanges.settle (program.LazyEffects.Values |> Seq.distinctBy _.Cell |> Seq.toList) graph
     let graph = FiniteCellRanges.settle (program.FiniteCells.Values |> Seq.distinctBy _.Cell |> Seq.toList) graph
-    (LoopRanges.saturate (current state) program.LoopRecognition graph, diagnostics)
+    let graph = LoopRanges.saturate (current state) program.LoopRecognition graph
+    (SequenceAccumulations.saturate (current state) program.SequenceAccumulations graph, diagnostics)
 
 /// Fresh logical source facts for a Baker recipe checking current premises.
 /// This computes the existing range rules without publishing annotations,
@@ -2638,6 +2660,14 @@ let sourceFacts (graph: SemanticGraph) : Map<NodeId, ValueRange> =
     match OrdinaryDemand.tryRead graph with
     | Result.Error _ -> Map.empty
     | Result.Ok _ -> readProgram graph.Platform graph |> fixpoint
+
+/// Re-read the complete current source call/effect/origin and consumer census
+/// before a representation rewrite transports a finite-pull proof. This does
+/// not run the range fixed point, publish annotations or select a carrier.
+let sequenceAccumulationFacts (graph: SemanticGraph) : SequenceAccumulation.Accumulation list option =
+    match OrdinaryDemand.tryRead graph with
+    | Result.Error _ -> None
+    | Result.Ok _ -> Some (readProgram graph.Platform graph).SequenceAccumulations
 
 /// The commitment sites are the values the settled demand projection retains.
 /// A demand relation that disagrees with the current use proof is reported

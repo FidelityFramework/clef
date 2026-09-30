@@ -9,6 +9,12 @@ module FlowOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins
 module Flows = Clef.Compiler.PSGSaturation.SemanticGraph.CallableFlows
 
 module private CallableFlowFixture =
+    let demand graph =
+        let graph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize graph
+        match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead graph with
+        | Ok _ -> graph
+        | Result.Error failures -> failwithf "Expected current ordinary-demand premises before callable flow settlement: %A" failures
+
     let create () =
         let builder = NodeBuilder()
         let callbackType = NativeType.TFun(Types.boolType, Types.boolType)
@@ -50,6 +56,8 @@ module private CallableFlowFixture =
         let raw, startupErrors = Clef.Compiler.Nanopass.ProgramInitialization.normalize [main.Id] (builder.Build [main.Id, DeclRoot.EntryPoint])
         Assert.Empty startupErrors
         Assert.True((Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read raw).IsSome)
+        // This raw fixture owns the upstream stages normally run by checking.
+        let raw = demand raw
         let carriers, errors = FlowCarriers.settle { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty } raw
         Assert.Empty errors
         let inputs: Flows.Inputs =
@@ -82,6 +90,7 @@ type CallableFlowCases() =
             { original with Nodes = original.Nodes.Add(markerId, marker).Add(callId, call)
                             Edges = edges @ kindEdges markerId marker.Kind }
             |> Clef.Compiler.Nanopass.EagerDemand.normalize
+            |> CallableFlowFixture.demand
         let ingress = Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.analyze graph
         let evidence = Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.tryEvidence ingress formal |> Option.get
         Assert.Contains(markerId, evidence.Participants)
@@ -123,6 +132,8 @@ type CallableFlowCases() =
     [<InlineData("redirected-alias")>]
     member _.``Changed actual invocation or alias retracts the retained complete boundary`` defect =
         let graph, _, formal, read, _, calls, opaque = CallableFlowFixture.create ()
+        for occurrence in [formal; read] do
+            Assert.True(Flows.validate graph graph.Codata.Value.CallableFlows[occurrence])
         let changed =
             match defect with
             | "redirected-alias" ->
@@ -135,6 +146,9 @@ type CallableFlowCases() =
                     let args = if defect = "partial-call" then [] else [opaque]
                     { graph with Nodes = graph.Nodes.Add(node.Id, { node with Kind = SemanticKind.Application(callee, args); Children = callee :: args }) }
                 | _ -> failwith "Missing fixture application"
+        // Refresh only demand evidence; retain the old callable flow to test
+        // that its complete call/alias boundary is rejected after this edit.
+        let changed = CallableFlowFixture.demand changed
         Assert.False(Flows.validate changed graph.Codata.Value.CallableFlows[read])
         if defect <> "redirected-alias" then Assert.False(Flows.validate changed graph.Codata.Value.CallableFlows[formal])
 

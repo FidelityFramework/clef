@@ -160,6 +160,86 @@ type SequenceProgramCases() =
         Assert.True((SequencePrograms.programInstance damaged binding.Id).IsNone, mutation)
         Assert.True((SequencePrograms.programInstance graph binding.Id).IsSome)
 
+    [<Theory>]
+    [<InlineData("missing-owned-layout-row")>]
+    [<InlineData("wrong-owned-extent")>]
+    [<InlineData("wrong-owned-child-layout")>]
+    [<InlineData("wrong-prefix-alignment")>]
+    [<InlineData("missing-owned-child-support")>]
+    [<InlineData("foreign-region-child")>]
+    member _.``Owned region layout changes retract the final program instance`` mutation =
+        let graph = SequenceProgramFixture.check """
+let input = seq { yield true }
+let outer = seq { yield! input }
+[<EntryPoint>]
+let main _ = ignore outer; 0
+"""
+        // Every refusal starts with complete source admission and both actual
+        // static instances. A missing unchanged instance cannot pass a negative.
+        let input = SequenceProgramFixture.instance graph "input"
+        let outer = SequenceProgramFixture.instance graph "outer"
+        let binding = SequenceProgramFixture.binding "outer" graph
+        let frame = graph.Codata.Value.ContinuationFrames[outer.Owner]
+        let region = graph.Edges |> List.filter (fun edge ->
+            edge.Role = EdgeRole.ContinuationRegion && edge.Sources = [outer.Owner; input.Owner; frame.Formal]) |> Assert.Single
+        let proof = frame.Obligations |> List.map (fun id -> graph.Nodes[id]) |> List.filter (fun node ->
+            match node.Kind with
+            | SemanticKind.Obligation { Body = ObligationBody.ContinuationLayout(fields, extent, _) } ->
+                extent = frame.Bytes && fields.Length = frame.Slots.Length + 1
+            | _ -> false) |> Assert.Single
+        let info, fields, extent, alignment =
+            match proof.Kind with
+            | SemanticKind.Obligation info ->
+                match info.Body with
+                | ObligationBody.ContinuationLayout(fields, extent, alignment) -> info, fields, extent, alignment
+                | _ -> failwith "Expected owned-region layout body"
+            | _ -> failwith "Expected owned-region layout obligation"
+        let support = graph.Edges |> List.filter (fun edge ->
+            edge.Role = EdgeRole.Constrains && edge.Target = proof.Id) |> Assert.Single
+        Assert.Contains(input.Owner, support.Sources)
+        Assert.Contains(region.Target, support.Sources)
+        let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Target, edge.Sources
+        let changeProof fields extent =
+            let changed = { info with Body = ObligationBody.ContinuationLayout(fields, extent, alignment) }
+            let replacement = { proof with Kind = SemanticKind.Obligation changed }
+            { graph with Nodes = graph.Nodes.Add(proof.Id, replacement) }
+        let damaged =
+            match mutation with
+            | "missing-owned-layout-row" -> { graph with Edges = graph.Edges |> List.filter (fun edge -> key edge <> key support) }
+            | "wrong-owned-extent" -> changeProof fields (extent + alignment)
+            | "wrong-owned-child-layout" ->
+                let offset, bytes, align = List.last fields
+                changeProof (List.take (fields.Length - 1) fields @ [offset, bytes + align, align]) extent
+            | "wrong-prefix-alignment" ->
+                let prefix = graph.Nodes[frame.Obligations.Head]
+                let replacement =
+                    match prefix.Kind with
+                    | SemanticKind.Obligation info ->
+                        match info.Body with
+                        | ObligationBody.ContinuationLayout(fields, bytes, align) ->
+                            Assert.True(align > 1)
+                            Assert.Contains(fields, fun (_, _, fieldAlignment) -> fieldAlignment = align)
+                            let changed = { info with Body = ObligationBody.ContinuationLayout(fields, bytes, align / 2) }
+                            { prefix with Kind = SemanticKind.Obligation changed }
+                        | _ -> failwith "Expected persistent prefix layout"
+                    | _ -> failwith "Expected persistent prefix obligation"
+                { graph with Nodes = graph.Nodes.Add(prefix.Id, replacement) }
+            | "missing-owned-child-support" ->
+                let edges = graph.Edges |> List.map (fun edge ->
+                    if key edge = key support then { edge with Sources = edge.Sources |> List.filter ((<>) input.Owner) } else edge)
+                { graph with Edges = edges }
+            | "foreign-region-child" ->
+                let edges = graph.Edges |> List.map (fun edge ->
+                    if key edge = key region then { edge with Sources = [outer.Owner; outer.Owner; frame.Formal] } else edge)
+                { graph with Edges = edges }
+            | _ -> failwith "Unknown owned-region mutation"
+        let storageRows (value: SemanticGraph) = value.Edges |> List.filter (fun edge ->
+            edge.Role = EdgeRole.SequenceProgramStorage && edge.Target = outer.Allocation)
+        Assert.NotEmpty(storageRows graph)
+        Assert.True((storageRows graph |> List.map key) = (storageRows damaged |> List.map key))
+        Assert.True((SequencePrograms.programInstance damaged binding.Id).IsNone, mutation)
+        Assert.True((SequencePrograms.programInstance graph binding.Id).IsSome)
+
     [<Fact>]
     member _.``Complete factory destinations retain distinct caller storage through aliases``() =
         let graph = SequenceProgramFixture.check """

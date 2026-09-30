@@ -628,6 +628,8 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.StringUtf8Constant(a0) -> Fidelity.PSG.EdgeRole.StringUtf8Constant(a0)
     | S.EdgeRole.LoopInduction(a0, a1) -> Fidelity.PSG.EdgeRole.LoopInduction(a0, a1)
     | S.EdgeRole.LoopAccumulation -> Fidelity.PSG.EdgeRole.LoopAccumulation
+    | S.EdgeRole.SequencePullBound -> Fidelity.PSG.EdgeRole.SequencePullBound
+    | S.EdgeRole.SequenceAccumulation -> Fidelity.PSG.EdgeRole.SequenceAccumulation
     | S.EdgeRole.LoopRangePending(a0) -> Fidelity.PSG.EdgeRole.LoopRangePending(mapLoopRangeResidual a0)
     | S.EdgeRole.Callee -> Fidelity.PSG.EdgeRole.Callee
     | S.EdgeRole.Argument -> Fidelity.PSG.EdgeRole.Argument
@@ -829,6 +831,21 @@ and mapFiniteLoopTripModel (value: S.FiniteLoopTripModel) : Fidelity.PSG.FiniteL
         Inclusive = value.Inclusive
         MaximumIterations = value.MaximumIterations
     } : Fidelity.PSG.FiniteLoopTripModel)
+
+and mapFiniteSequencePullModel (value: S.FiniteSequencePullModel) : Fidelity.PSG.FiniteSequencePullModel =
+    ({
+        Entry = value.Entry
+        MaximumPulls = value.MaximumPulls
+        Steps = (value.Steps |> List.map (fun x -> mapFiniteSequencePullStep x))
+    } : Fidelity.PSG.FiniteSequencePullModel)
+
+and mapFiniteSequencePullStep (value: S.FiniteSequencePullStep) : Fidelity.PSG.FiniteSequencePullStep =
+    ({
+        Label = value.Label
+        Suspend = value.Suspend
+        Successors = value.Successors
+        Remaining = value.Remaining
+    } : Fidelity.PSG.FiniteSequencePullStep)
 
 and mapFunctionPointerPlan (value: S.FunctionPointerPlan) : Fidelity.PSG.FunctionPointerPlan =
     match value with
@@ -1639,6 +1656,7 @@ and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
     | S.ObligationBody.Pending reasons -> invalidOp ("A pending obligation cannot be published: " + String.concat "; " reasons)
     | S.ObligationBody.ProgramInitializationOrder(a0, a1, a2) -> Fidelity.PSG.ObligationBody.ProgramInitializationOrder(a0, a1, a2)
     | S.ObligationBody.FiniteLoopTrip(a0) -> Fidelity.PSG.ObligationBody.FiniteLoopTrip(mapFiniteLoopTripModel a0)
+    | S.ObligationBody.FiniteSequencePull(a0) -> Fidelity.PSG.ObligationBody.FiniteSequencePull(mapFiniteSequencePullModel a0)
     | S.ObligationBody.AdditiveLoopInvariant(a0) -> Fidelity.PSG.ObligationBody.AdditiveLoopInvariant(mapAdditiveLoopInvariantModel a0)
     | S.ObligationBody.MappedElementSpan(a0) -> Fidelity.PSG.ObligationBody.MappedElementSpan(mapMappedSpanModel a0)
     | S.ObligationBody.IntegerLiteralRange(a0, a1, a2) -> Fidelity.PSG.ObligationBody.IntegerLiteralRange(a0, a1, a2)

@@ -56,12 +56,24 @@ type RangeLoopCases() =
         let source = (RangeLoops.source range).Replace("[<EntryPoint>]", binding + "[<EntryPoint>]")
         let result = RangeLoops.parse source
         Assert.True(CheckResult.hasErrors result)
-        let diagnostic = result.Diagnostics |> List.filter (fun diagnostic ->
-            diagnostic.Code = "CCS8401" && Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error) |> Assert.Single
+        let diagnostics = CheckResult.errors result
+        let rangeMessage = "CCS source checking did not settle an elaboration for this range expression 'a..b': a range outside a counted for loop has no native graph form."
+        let iterationMessage = "This iteration source has no admitted native sequence elaboration"
+        Assert.Equal<string list>(List.sort [rangeMessage; iterationMessage], diagnostics |> List.map _.Message |> List.sort)
         let line = if binding = "" then 7 else 8
         let column = "    for index in ".Length
-        Assert.Equal<SourceRange>(
-            { File = "range-loops.clef"; Start = { Line = line; Column = column }; End = { Line = line; Column = column + range.Length } },
-            diagnostic.Range)
+        let expectedRange =
+            { File = "range-loops.clef"; Start = { Line = line; Column = column }; End = { Line = line; Column = column + range.Length } }
+        for diagnostic in diagnostics do
+            Assert.Equal("CCS8401", diagnostic.Code)
+            Assert.Equal<SourceRange>(expectedRange, diagnostic.Range)
+            if diagnostic.Message = rangeMessage then Assert.Empty diagnostic.RelatedNodes
+            else
+                let refusedSource = result.Graph.Nodes[Assert.Single diagnostic.RelatedNodes]
+                Assert.True(refusedSource.IsReachable)
+                Assert.Equal<SourceRange>(expectedRange, refusedSource.Range)
+                match refusedSource.Kind with
+                | SemanticKind.Error message -> Assert.Equal(rangeMessage, message)
+                | kind -> failwithf "Iteration refusal must retain its exact unelaborated range source, got %A" kind
         let nodes = result.Graph.Nodes.Values |> Seq.filter (fun node -> node.IsReachable) |> Seq.toList
         Assert.DoesNotContain(nodes, fun node -> match node.Kind with SemanticKind.WhileLoop _ | SemanticKind.ForEach _ -> true | _ -> false)

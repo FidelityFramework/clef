@@ -5,6 +5,7 @@ open Xunit
 open Clef.Compiler.NativeService
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+module StringComparisonRecipes = Clef.Compiler.Baker.Recipes.StringComparisonRecipes
 
 module private SelectedMatch =
     exception RequirementFailed of diagnostic: string * trace: int64 list
@@ -19,7 +20,7 @@ module private SelectedMatch =
         graph.Nodes.Values |> Seq.filter (fun node ->
             node.IsReachable && match node.Kind with SemanticKind.Binding(actual, _, _, _) -> actual = name | _ -> false) |> Assert.Single
 
-    type Value = Number of int64 | Real of float | Text of string | Character of char | Boolean of bool | Unit | Union of int * Value option | Tuple of Value list | Record of Map<string, Value>
+    type Value = Number of int64 | Real of float | Text of string | Bytes of byte array | Character of char | Boolean of bool | Unit | Union of int * Value option | Tuple of Value list | Record of Map<string, Value>
 
     // Interpret the admitted primitive decision algebra, recording observable
     // source assignments. A payload read from a different active case fails;
@@ -27,6 +28,16 @@ module private SelectedMatch =
     let evaluate (graph: SemanticGraph) root =
         let values = Dictionary<NodeId, Value>()
         let trace = ResizeArray<int64>()
+        let traceBindings =
+            graph.Nodes.Values
+            |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.Binding("trace", true, _, _) when node.IsReachable -> Some node.Id
+                | _ -> None)
+            |> Set.ofSeq
+        // A malformed generated loop must fail the bounded oracle, not hang it.
+        // This is test execution fuel, never a source range or trip-count premise.
+        let mutable fuel = 100000
         let literal = function
             | NativeLiteral.Int(number, _) -> Number number
             | NativeLiteral.Float(number, _) -> Real number
@@ -36,6 +47,8 @@ module private SelectedMatch =
             | NativeLiteral.Unit -> Unit
             | other -> failwithf "Unsupported oracle literal: %A" other
         let rec value id =
+            fuel <- fuel - 1
+            if fuel < 0 then failwith "Decision oracle exhausted its execution fuel"
             let node = graph.Nodes[id]
             match node.Kind with
             | SemanticKind.Literal source -> literal source
@@ -47,6 +60,14 @@ module private SelectedMatch =
                 match values.TryGetValue source with true, actual -> actual | _ -> value source
             | SemanticKind.TypeAnnotation(source, _) -> value source
             | SemanticKind.Sequential elements -> elements |> List.map value |> List.last
+            | SemanticKind.StringByteBorrow source ->
+                match value source with
+                | Text text -> Bytes(System.Text.Encoding.UTF8.GetBytes text)
+                | other -> failwithf "Invalid string byte borrow: %A" other
+            | SemanticKind.IndexGet(buffer, index) ->
+                match value buffer, value index with
+                | Bytes bytes, Number index when 0L <= index && index < bytes.LongLength -> Number(int64 bytes[int index])
+                | other -> failwithf "Invalid byte read in decision oracle: %A" other
             | SemanticKind.TupleExpr elements -> Tuple(List.map value elements)
             | SemanticKind.TupleGet(source, ordinal) ->
                 match value source with Tuple fields -> fields[ordinal] | other -> failwithf "Invalid tuple projection: %A" other
@@ -60,17 +81,48 @@ module private SelectedMatch =
                 | other -> failwithf "Payload read preceded case %d selection: %A" expected other
             | SemanticKind.Set(target, source) ->
                 let actual = value source
-                match graph.Nodes[target].Kind, actual with
-                | SemanticKind.VarRef(_, Some declaration), Number event -> values[declaration] <- actual; trace.Add event; Unit
+                match graph.Nodes[target].Kind with
+                | SemanticKind.VarRef(_, Some declaration) ->
+                    match graph.Nodes[declaration].Kind with
+                    | SemanticKind.Binding(_, true, _, _) -> ()
+                    | other -> failwithf "Assignment target is not a mutable binding: %A" other
+                    values[declaration] <- actual
+                    if traceBindings.Contains declaration then
+                        match actual with
+                        | Number event -> trace.Add event
+                        | other -> failwithf "Invalid source trace event: %A" other
+                    Unit
                 | _ -> failwith "Unexpected assignment in guard oracle"
             | SemanticKind.IfThenElse(condition, yes, Some no) ->
                 match value condition with Boolean true -> value yes | Boolean false -> value no | other -> failwithf "Invalid guard %A" other
+            | SemanticKind.WhileLoop(condition, body) ->
+                let mutable running = true
+                while running do
+                    match value condition with
+                    | Boolean true -> value body |> ignore
+                    | Boolean false -> running <- false
+                    | other -> failwithf "Invalid loop guard %A" other
+                Unit
+            | SemanticKind.Application(callee, [source]) ->
+                match graph.Nodes[callee].Kind, value source with
+                | SemanticKind.Intrinsic info, Text text when info.Module = IntrinsicModule.String && info.Operation = "length" ->
+                    Number(int64 (System.Text.Encoding.UTF8.GetByteCount text))
+                | SemanticKind.Intrinsic info, Bytes bytes when info.Module = IntrinsicModule.Array && info.Operation = "length" ->
+                    Number bytes.LongLength
+                | other -> failwithf "Unexpected unary operation in decision oracle: %A" other
             | SemanticKind.Application(callee, [left; right]) ->
                 match graph.Nodes[callee].Kind with
-                | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Operators && info.Operation = "op_Equality" ->
-                    match value left, value right with
-                    | Real left, Real right -> Boolean(left = right)
-                    | left, right -> Boolean(left = right)
+                | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Operators ->
+                    match info.Operation, value left, value right with
+                    | "op_Equality", Text _, _ | "op_Equality", _, Text _
+                    | "op_Equality", Bytes _, _ | "op_Equality", _, Bytes _ ->
+                        failwith "String equality must execute Baker's primitive byte traversal"
+                    | "op_Equality", Real left, Real right -> Boolean(left = right)
+                    | "op_Equality", left, right -> Boolean(left = right)
+                    | "op_LessThan", Number left, Number right -> Boolean(left < right)
+                    | "op_GreaterThanOrEqual", Number left, Number right -> Boolean(left >= right)
+                    | "op_Addition", Number left, Number right -> Number(left + right)
+                    | other -> failwithf "Unexpected primitive operation in decision oracle: %A" other
                 | other -> failwithf "Unexpected operation in decision oracle: %A" other
             | SemanticKind.Require(condition, diagnostic) ->
                 Clef.Compiler.PSGSaturation.SemanticGraph.Requirements.tryRequirement graph id
@@ -125,13 +177,36 @@ type MatchDecisionCases() =
             | id :: rest when Set.contains id visited -> descendants rest visited
             | id :: rest -> descendants (graph.Nodes[id].Children @ rest) (Set.add id visited)
         let actual = descendants [(SelectedMatch.binding "observed" graph).Id] Set.empty
-        let equalities = actual |> Seq.choose (fun id ->
-            match graph.Nodes[id].Kind with
-            | SemanticKind.Application(callee, [left; right]) ->
-                match graph.Nodes[callee].Kind with
-                | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Operators && info.Operation = "op_Equality" -> Some(callee, left, right)
-                | _ -> None
-            | _ -> None)
+        let equalities =
+            if ty = "string" then
+                // The source comparison was rewritten to primitive byte traversal
+                // or a proved length-only comparison. Validate its retained source
+                // correspondence; generated numeric comparisons are not source arms.
+                let traversals =
+                    StringComparisonRecipes.constructions graph
+                    |> List.filter (fun construction -> actual.Contains construction.Site)
+                    |> List.map (fun construction ->
+                        Assert.True(StringComparisonRecipes.validStructure graph construction)
+                        construction.Callee, construction.Left, construction.Right)
+                let lengths =
+                    StringComparisonRecipes.lengthConstructions graph
+                    |> List.filter (fun construction -> actual.Contains construction.Site)
+                    |> List.map (fun construction ->
+                        match StringComparisonRecipes.validLengthStructure graph construction with
+                        | Ok true -> ()
+                        | other -> failwithf "Invalid retained length comparison: %A" other
+                        construction.Callee, construction.Left, construction.Right)
+                traversals @ lengths
+            else
+                actual
+                |> Seq.choose (fun id ->
+                    match graph.Nodes[id].Kind with
+                    | SemanticKind.Application(callee, [left; right]) ->
+                        match graph.Nodes[callee].Kind with
+                        | SemanticKind.Intrinsic info when info.Module = IntrinsicModule.Operators && info.Operation = "op_Equality" -> Some(callee, left, right)
+                        | _ -> None
+                    | _ -> None)
+                |> Seq.toList
         let inputBinding = SelectedMatch.binding "input" graph
         let rec reachesInput seen id =
             if id = inputBinding.Id then true

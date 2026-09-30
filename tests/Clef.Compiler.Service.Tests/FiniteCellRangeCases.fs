@@ -9,12 +9,39 @@ module FiniteCells = Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges
 module CellRanges = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis
 
 module private FiniteCellFixture =
+    let private parse source =
+        parseAndCheck ("module FiniteCells\n" + source) "finite-cells.clef"
+
     let check source =
-        match parseAndCheck ("module FiniteCells\n" + source) "finite-cells.clef" with
+        match parse source with
         | Success result | CheckFailure result ->
             Assert.Empty(result.Diagnostics |> List.filter (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error))
             result.Graph
         | ParseFailure errors -> failwithf "%A" errors
+
+    let rejected recursive source =
+        match parse source with
+        | CheckFailure result ->
+            let message subject owner =
+                sprintf "The range of '%s' in '%s' cannot be observed; bound it with a comparison, a modulus or a clamp" subject owner
+            let shift = if recursive then 1 else 0
+            let expected =
+                [ message "state" "__clef_program_entry", 2, 12, 2, 17
+                  message "the result of '*'" "record", 3, 28, 3, 38
+                  message "main" "main", 6 + shift, 4, 7 + shift, 9
+                  message "main …" "__clef_program_entry", 4 + shift, 0, 4 + shift, 0 ]
+            let actual = CheckResult.errors result |> List.map (fun diagnostic ->
+                Assert.Equal("CCS8011", diagnostic.Code)
+                Assert.Equal("finite-cells.clef", diagnostic.Range.File)
+                let node = result.Graph.Nodes[Assert.Single diagnostic.RelatedNodes]
+                Assert.True(node.IsReachable)
+                Assert.True((node.Range = diagnostic.Range), "The refusal must identify its actual source node")
+                Assert.True(node.ValueRange |> Option.exists (ValueRange.isObservable >> not), "The rejected source node must remain nonobservable")
+                diagnostic.Message, diagnostic.Range.Start.Line, diagnostic.Range.Start.Column,
+                diagnostic.Range.End.Line, diagnostic.Range.End.Column)
+            Assert.Equal<(string * int * int * int * int) list>(List.sort expected, List.sort actual)
+            result.Graph
+        | result -> failwithf "Expected the four located finite-cell source refusals: %A" result
 
     let source = """
 let mutable state = 0
@@ -83,10 +110,16 @@ let main _ =
             | "callback" -> "Seq.iter record (seq { yield 1 })\n    state"
             | _ -> "state <- state * state\n    state"
         let recursive = if defect = "recursion" then "let rec repeat x = record x; repeat x\n" else ""
-        let graph = FiniteCellFixture.check (
+        let source =
             "let mutable state = 0\nlet record digit = state <- state * 10 + digit\n" + recursive +
-            "[<EntryPoint>]\nlet main _ =\n    " + body + "\n")
+            "[<EntryPoint>]\nlet main _ =\n    " + body + "\n"
+        let graph =
+            if defect = "unknown-update" then FiniteCellFixture.check source
+            else FiniteCellFixture.rejected (defect = "recursion") source
         Assert.Empty(FiniteCells.recognize graph)
+        if defect <> "unknown-update" then
+            Assert.Empty(FiniteCellFixture.obligations graph)
+            Assert.True((FiniteCellFixture.cell graph).ValueRange |> Option.exists (ValueRange.isObservable >> not))
 
     [<Fact>]
     member _.``Startup authority and source type edits retract the current conclusion`` () =

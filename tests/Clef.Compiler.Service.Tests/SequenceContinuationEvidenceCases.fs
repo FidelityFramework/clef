@@ -70,8 +70,8 @@ module private ContinuationFacts =
         edges |> List.filter (fun (edge: Hyperedge) -> edge.Role = role && edge.Target = target) |> Assert.Single
     let fields (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
 
-    let programCell () =
-        let source = """
+    let programCellSource update =
+        let prefix = """
 type MemorySpace = { Name: string; Kind: string; Capacity: int; Alignment: int; Granularity: int; Growth: string; Access: string; Base: int option }
 type ProgramLifetimeSpaces = { Immutable: string; Mutable: string option }
 type PlatformDescription = { Id: string; Spaces: MemorySpace array; ProgramLifetime: ProgramLifetimeSpaces option }
@@ -79,8 +79,13 @@ let image = { Name = "image"; Kind = "rodata"; Capacity = 1024; Alignment = 16; 
 let state = { Name = "state"; Kind = "data"; Capacity = 1024; Alignment = 16; Granularity = 16; Growth = "fixed"; Access = "rw"; Base = None }
 let description = { Id = "evidence"; Spaces = [| image; state |]; ProgramLifetime = Some { Immutable = "image"; Mutable = Some "state" } }
 let mutable shared = 1
-let outer = seq { yield shared; shared <- shared + 1; yield shared }
 """
+        prefix + "let outer = seq { yield shared; shared <- " + update + "; yield shared }\n"
+
+    let programCell () =
+        // This reusable producer needs a source bound independently of the
+        // residence contract. Arbitrarily many enumerations can update shared.
+        let source = programCellSource "(shared + 1) % 100"
         let fixture = fixture source
         let context: PlatformContext = {
             PlatformId = "evidence"; Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
@@ -348,6 +353,24 @@ type SequenceContinuationEvidenceCases() =
         | Ok _ -> failwith "External mutable declaration acquired unproven residence"
 
     [<Fact>]
+    member _.``Unbounded program-cell recurrence is refused before residence admission``() =
+        let result =
+            DimensionalCases.check
+                (ContinuationFacts.programCellSource "shared + 1" + "\n[<EntryPoint>]\nlet main _ = ignore outer; 0\n")
+        let errors = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.CheckResult.errors result
+        Assert.Equal(2, errors.Length)
+        let sites = errors |> List.map (fun diagnostic ->
+            Assert.Equal("CCS8011", diagnostic.Code)
+            Assert.Equal("dimensions.clef", diagnostic.Range.File)
+            Assert.Contains("cannot be observed", diagnostic.Message)
+            let node = result.Graph.Nodes[Assert.Single diagnostic.RelatedNodes]
+            Assert.True(node.IsReachable)
+            Assert.Equal(node.Range, diagnostic.Range)
+            Assert.True(node.ValueRange |> Option.exists (ValueRange.isObservable >> not))
+            diagnostic.Range.Start.Line, diagnostic.Range.Start.Column, diagnostic.Range.End.Line, diagnostic.Range.End.Column)
+        Assert.Equal<(int * int * int * int) list>([(11, 12, 11, 18); (12, 42, 12, 52)], List.sort sites)
+
+    [<Fact>]
     member _.``A resident scalar program cell survives suspension with its exact startup authority``() =
         let fixture, shared = ContinuationFacts.programCell ()
         Assert.Contains(fixture.Control.LiveAcross.Values, fun live -> live.Contains shared)
@@ -365,6 +388,7 @@ type SequenceContinuationEvidenceCases() =
     [<InlineData("descriptor-value")>]
     member _.``Program cell residence cannot bypass missing authority or prove descriptor backing`` defect =
         let fixture, shared = ContinuationFacts.programCell ()
+        ContinuationFacts.evidence fixture |> ignore
         let graph =
             match defect with
             | "missing-authority" ->

@@ -7,6 +7,8 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module LazyRangeAnalysis = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis
 module LazyRangeValues = Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues
 module LazyRangeElaboration = Clef.Compiler.Nanopass.LazyElaboration
+module LazyRangeDemand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
+module LazyRangeDemandPass = Clef.Compiler.Nanopass.OrdinaryDemand
 
 module private LazyRanges =
     let check source =
@@ -19,6 +21,19 @@ module private LazyRanges =
         | ParseFailure errors -> failwithf "Lazy range source failed parsing: %A" errors
 
     let analyze graph = LazyRangeAnalysis.run graph.Platform graph |> fst
+    let renewDemand graph =
+        let failures =
+            match LazyRangeDemand.tryRead graph with
+            | Result.Error failures -> Assert.NotEmpty failures; failures
+            | Result.Ok _ -> failwith "The changed lazy body must invalidate its old complete-use rows"
+        let untouched, diagnostics = LazyRangeAnalysis.run graph.Platform graph
+        Assert.Same(graph, untouched)
+        Assert.Equal<Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.Diagnostic list>(
+            LazyRangeDemand.diagnostics graph failures, diagnostics)
+        let current = LazyRangeDemandPass.normalize graph
+        Assert.True(LazyRangeDemand.tryRead current |> Result.isOk)
+        current
+
     let protocols graph = (LazyRangeValues.settle graph).Forces.Values |> Seq.toList
     let binding name (graph: SemanticGraph) =
         graph.Nodes.Values |> Seq.filter (fun node ->
@@ -168,7 +183,21 @@ let main _ =
                     else edge)
                 { original with Edges = edges }
         Assert.NotEmpty((LazyRangeValues.settle changed).Residuals)
-        let graph = LazyRanges.analyze changed
+        let current =
+            if defect = "guard" || defect = "store" then LazyRanges.renewDemand changed else changed
+        // Renew only the owning prerequisite. Keep old cache annotations and
+        // memoization incidence so this pass must actually withdraw them.
+        for id in [instance.Cached; force.CachedRead] do
+            Assert.Equal(changed.Nodes[id].ValueRange, current.Nodes[id].ValueRange)
+        let memoizationRows (graph: SemanticGraph) =
+            graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.LazyMemoization)
+            |> List.map (fun edge -> edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target)
+        Assert.Equal<_ list>(memoizationRows changed, memoizationRows current)
+        Assert.NotEmpty((LazyRangeValues.settle current).Residuals)
+        let graph, diagnostics = LazyRangeAnalysis.run current.Platform current
+        // Invalid numeric cache access may remain unobservable; a stale
+        // demand refusal must not stand in for range recomputation.
+        Assert.All(diagnostics, fun diagnostic -> Assert.Equal("CCS8011", diagnostic.Code))
         Assert.Equal(Some ValueRange.Unbounded, graph.Nodes[instance.Cached].ValueRange)
         Assert.Equal(Some ValueRange.Unbounded, graph.Nodes[force.CachedRead].ValueRange)
 

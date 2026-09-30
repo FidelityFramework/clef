@@ -46,8 +46,9 @@ type MemorySpace = { Name: string; Kind: string; Capacity: int; Alignment: int; 
 type ProgramLifetimeSpaces = { Immutable: string; Mutable: string option }
 type PlatformDescription = { Id: string; Core: TargetCore option; Spaces: MemorySpace array; ProgramLifetime: ProgramLifetimeSpaces option }
 let image = { Name="encoding-image"; Kind="rodata"; Capacity=4096; Alignment=16; Granularity=16; Growth="fixed"; Access="r"; Base=None }
+let stack = { Name="encoding-stack"; Kind="stack"; Capacity=4096; Alignment=16; Granularity=16; Growth="down"; Access="rw"; Base=None }
 let core: TargetCore = { Widths = [| """ + widths + " |]; Representations = [| " + representations + """ |] }
-let description = { Id="encoding-test"; Core=Some core; Spaces=[|image|]; ProgramLifetime=Some { Immutable="encoding-image"; Mutable=None } }
+let description = { Id="encoding-test"; Core=Some core; Spaces=[|image;stack|]; ProgramLifetime=Some { Immutable="encoding-image"; Mutable=None } }
 """
 
     let checkWith context body =
@@ -119,12 +120,45 @@ let description = { Id="encoding-test"; Core=Some core; Spaces=[|image|]; Progra
         let expectedRange = span (prelude + body) expression
         let edges = storageEdges graph
         Assert.NotEmpty edges
+        // Array construction transports a byte-storage row to its allocation.
+        // Walk that exact current lineage before checking the source conversion.
+        let rec conversionSite (visited: Set<NodeId>) (edge: Hyperedge) =
+            Assert.False(Set.contains edge.Target visited, "Cyclic derived encoding lineage")
+            let visited = Set.add edge.Target visited
+            let allocationRows =
+                graph.Edges |> List.choose (fun row ->
+                    match row.Role with
+                    | EdgeRole.ArrayAllocationConstruction construction when construction.Site = edge.Target -> Some(row, construction)
+                    | _ -> None)
+            match edge.Sources, allocationRows with
+            | copySite :: allocation :: parentSources, _ when allocation = edge.Target && not (List.isEmpty allocationRows) ->
+                let allocationRow, construction = Assert.Single allocationRows
+                Assert.Equal(copySite, construction.Owner)
+                sameEdge (Clef.Compiler.Baker.Ingredients.MemoryValues.allocationConstructionRow construction) allocationRow
+                let copyRow, copy =
+                    graph.Edges |> List.choose (fun row ->
+                        match row.Role with
+                        | EdgeRole.ArrayCopyConstruction copy when copy.Site = copySite && copy.Allocation = Some allocation -> Some(row, copy)
+                        | _ -> None)
+                    |> Assert.Single
+                sameEdge (Clef.Compiler.Baker.Ingredients.MemoryValues.copyConstructionRow copy) copyRow
+                let parent =
+                    edges |> List.filter (fun row ->
+                        row.Target = copySite && row.Class = edge.Class && row.Role = edge.Role &&
+                        row.Ordinal = edge.Ordinal && row.Sources = parentSources)
+                    |> Assert.Single
+                conversionSite visited parent
+            | site :: _, [] ->
+                match graph.Nodes[edge.Target].Kind with
+                | SemanticKind.ArrayAllocate _ -> failwithf "Missing derived encoding allocation authority: %A" edge
+                | _ -> site
+            | _ -> failwithf "Incomplete derived encoding lineage: %A" edge
         for edge in edges do
             match edge.Role, edge.Sources with
-            | EdgeRole.StringByteStorage(lower, upper, representation), site :: operand :: origin :: _ ->
+            | EdgeRole.StringByteStorage(lower, upper, representation), _ :: operand :: origin :: _ ->
                 Assert.True(0I <= lower && lower <= upper && upper <= 255I)
                 Assert.Equal(byteRepresentation, representation)
-                Assert.Equal<SourceRange>(expectedRange, graph.Nodes[site].Range)
+                Assert.Equal<SourceRange>(expectedRange, graph.Nodes[conversionSite Set.empty edge].Range)
                 Assert.True(graph.Nodes.ContainsKey operand)
                 Assert.True(graph.Nodes.ContainsKey origin)
                 Assert.Equal(Some (SettledSlot.Integer(8, Some byteRepresentation)), ByteStorage.element graph edge.Target)
@@ -136,13 +170,41 @@ let description = { Id="encoding-test"; Core=Some core; Spaces=[|image|]; Progra
     let rejectedWith context reason body expression =
         let result = checkWith context body
         Assert.True(CheckResult.hasErrors result, "Invalid encoding input reached successful checking")
+        let errors = CheckResult.errors result
         let diagnostic =
-            result.Diagnostics
-            |> List.filter (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error)
+            errors |> List.filter (fun diagnostic -> diagnostic.Code = "CCS8404")
             |> Assert.Single
         Assert.Equal("CCS8404", diagnostic.Code)
         Assert.Equal<SourceRange>(span (prelude + body) expression, diagnostic.Range)
         Assert.Equal("String.fromBytes requires proved byte storage: " + reason, diagnostic.Message)
+        // Invalid encoding also leaves the exact source memory prerequisites
+        // unproved. Check those refusals completely; do not suppress them.
+        let allocationExpression =
+            body.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("let bytes: int array = "))
+            |> Assert.Single
+            |> fun line -> line.Substring(line.IndexOf(" = ", System.StringComparison.Ordinal) + 3)
+        let memory reason = "Source settlement is required before witnessing: MemoryPublication: " + reason
+        let allocationReason =
+            if allocationExpression.StartsWith("Array.zeroCreate ") then
+                "The dynamic array's complete use family has no admitted local storage lifetime."
+            else "The array's complete use family escapes or observes address identity; a source residence contract is required."
+        let expected =
+            [ yield "CCS8404", "String.fromBytes requires proved byte storage: " + reason, span (prelude + body) expression
+              yield "CCS8403", memory "A string view requires its unique complete source snapshot relation.", span (prelude + body) expression
+              yield "CCS8403", memory allocationReason, span (prelude + body) allocationExpression
+              if reason = "the platform must offer an unsigned 8-bit representation." then
+                  yield "CCS8403", memory "The string extent lacks its settled scalar carrier or explicit byte representation.", span (prelude + body) "String.length text" ]
+        let signature (code, message, range: SourceRange) =
+            code, message, range.File, range.Start.Line, range.Start.Column, range.End.Line, range.End.Column
+        let actual = errors |> List.map (fun error ->
+            if error.Code = "CCS8403" then
+                let node = result.Graph.Nodes[Assert.Single error.RelatedNodes]
+                Assert.True(node.IsReachable)
+                Assert.Equal<SourceRange>(node.Range, error.Range)
+            error.Code, error.Message, error.Range)
+        Assert.Equal<(string * string * string * int * int * int * int) list>(
+            expected |> List.map signature |> List.sort,
+            actual |> List.map signature |> List.sort)
         Assert.Empty(storageEdges result.Graph)
 
     let rejected reason body expression = rejectedWith (Some platform) reason body expression
@@ -202,12 +264,35 @@ type StringEncodingCases() =
         let body = "[<Measure>] type m\n[<EntryPoint>]\nlet main _ =\n    let bytes: int<m> array = [| 65<m> |]\n    let text = String.fromBytes bytes\n    String.length text\n"
         let result = EncodingFixture.checkWith None body
         Assert.True(CheckResult.hasErrors result)
+        let errors = CheckResult.errors result
         let diagnostic =
-            result.Diagnostics
-            |> List.filter (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error)
+            errors |> List.filter (fun diagnostic -> diagnostic.Code = "CCS8040")
             |> Assert.Single
         Assert.Equal("CCS8040", diagnostic.Code)
         Assert.Equal<SourceRange>(EncodingFixture.span (EncodingFixture.prelude + body) "String.fromBytes bytes", diagnostic.Range)
+        Assert.Equal("Measure mismatch: '1' vs 'm'; the residual '1 / m' is not 1", diagnostic.Message)
+        Assert.Empty diagnostic.RelatedNodes
+        // Type refusal grants no logical string extent. Source checking still
+        // reports the unobservable length and its synthetic entry-call result.
+        let entry = EncodingFixture.span (EncodingFixture.prelude + body) "[<EntryPoint>]"
+        let expected =
+            [ "CCS8040", diagnostic.Message, diagnostic.Range
+              "CCS8011", "The range of 'the result of 'length'' in 'main' cannot be observed; bound it with a comparison, a modulus or a clamp",
+                  EncodingFixture.span (EncodingFixture.prelude + body) "String.length text"
+              "CCS8011", "The range of 'main …' in '__clef_program_entry' cannot be observed; bound it with a comparison, a modulus or a clamp",
+                  {entry with End=entry.Start} ]
+        let signature (code,message,range:SourceRange) =
+            code,message,range.File,range.Start.Line,range.Start.Column,range.End.Line,range.End.Column
+        let actual = errors |> List.map (fun error ->
+            if error.Code="CCS8011" then
+                let node = result.Graph.Nodes[Assert.Single error.RelatedNodes]
+                Assert.True(node.IsReachable)
+                Assert.Equal<SourceRange>(node.Range,error.Range)
+                Assert.True(node.ValueRange |> Option.exists (ValueRange.isObservable >> not))
+            error.Code,error.Message,error.Range)
+        Assert.Equal<(string * string * string * int * int * int * int) list>(
+            expected |> List.map signature |> List.sort,
+            actual |> List.map signature |> List.sort)
         Assert.Empty(EncodingFixture.storageEdges result.Graph)
 
     [<Theory>]
@@ -317,3 +402,162 @@ type StringEncodingCases() =
         Assert.Equal(graph.Nodes.Count, settledAgain.Nodes.Count)
         let repeated = settledAgain.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.StringToBytesSnapshot) |> Assert.Single
         EncodingFixture.sameEdge formation repeated
+
+module LogicalShapes = Clef.Compiler.Baker.Ingredients.ArrayShapes
+
+module private LogicalEncodingFixture =
+
+    let check expression =
+        EncodingFixture.checkWith None
+            ($"[<EntryPoint>]\nlet main _ =\n    let text = String.fromBytes {expression}\n    String.length text\n")
+
+    let identities (graph:SemanticGraph) =
+        let site = EncodingFixture.value "text" graph
+        let callee, input =
+            match site.Kind with
+            | SemanticKind.Application(callee,[input]) -> callee,input
+            | other -> failwithf "The logical constructor changed: %A" other
+        let length = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable &&
+            match node.Kind, LogicalShapes.intrinsicApplication graph node.Id with
+            | SemanticKind.Application _, Some({Module=IntrinsicModule.String;Operation="length"},[_],_) -> true
+            | _ -> false) |> Assert.Single
+        site,callee,input,length
+
+    let noStorage (graph:SemanticGraph) =
+        Assert.True(graph.Platform.IsNone)
+        Assert.Empty(EncodingFixture.storageEdges graph)
+        Assert.DoesNotContain(graph.Edges, fun edge -> edge.Role=EdgeRole.StringByteSnapshot || edge.Role=EdgeRole.StringByteRead)
+        for edge in graph.Edges do
+            match edge.Role with
+            | EdgeRole.StringExtent extent -> Assert.Empty extent.StaticOrigins
+            | _ -> ()
+
+    let admitted expression count =
+        let result = check expression
+        Assert.False(CheckResult.hasErrors result, sprintf "%A" result.Diagnostics)
+        let graph = result.Graph
+        let site,callee,input,length = identities graph
+        let extent = LogicalShapes.reader graph site.Id |> Option.defaultWith (fun () -> failwith "Missing logical extent")
+        Assert.Equal<LogicalShapes.Length list>([LogicalShapes.Length.Constant count],extent.Sources)
+        Assert.Equal<Set<NodeId>>(Set.singleton site.Id,extent.StringSources)
+        for participant in site.Id::callee::input::graph.Nodes[input].Children do
+            Assert.Contains(participant,extent.Participants)
+        Assert.Equal<ValueRange option>(Some(ValueRange.point count),length.ValueRange)
+        noStorage graph
+        graph,site,callee,input,length
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "StringEncoding")>]
+type LogicalStringExtentCases() =
+    [<Theory>]
+    [<InlineData("[| 65 |]",1)>]
+    [<InlineData("[| 195; 169 |]",2)>]
+    [<InlineData("[||]",0)>]
+    member _.``Private constant encoding has its byte count without storage authority``(expression:string,count:int) =
+        LogicalEncodingFixture.admitted expression (bigint count) |> ignore
+
+    [<Theory>]
+    [<InlineData("[| -1 |]")>]
+    [<InlineData("[| 256 |]")>]
+    [<InlineData("[| 195 |]")>]
+    [<InlineData("[| 169 |]")>]
+    member _.``Invalid logical byte payloads do not acquire an extent``(expression:string) =
+        let result = LogicalEncodingFixture.check expression
+        let site,_,_,_ = LogicalEncodingFixture.identities result.Graph
+        Assert.True(CheckResult.hasErrors result)
+        Assert.True((LogicalShapes.reader result.Graph site.Id).IsNone)
+        LogicalEncodingFixture.noStorage result.Graph
+
+    [<Theory>]
+    [<InlineData("constructor-children")>]
+    [<InlineData("array-children")>]
+    [<InlineData("array-type")>]
+    [<InlineData("argument-parent")>]
+    [<InlineData("invalid-current-byte")>]
+    [<InlineData("extra-kind-reference")>]
+    [<InlineData("extra-attached-reference")>]
+    [<InlineData("extra-recorded-reference")>]
+    [<InlineData("unexpected-argument-incidence")>]
+    [<InlineData("mismatched-array-incidence")>]
+    [<InlineData("duplicate-argument-incidence")>]
+    [<InlineData("extra-literal-incidence")>]
+    [<InlineData("captured-input")>]
+    [<InlineData("unknown-array-capture")>]
+    member _.``Logical encoding rereads current inline structure and complete input uses``(mutation:string) =
+        // The unchanged graph must pass before any mutation can discriminate.
+        // This tests the source reader itself, not admission of a damaged graph.
+        let graph,site,_,input,length = LogicalEncodingFixture.admitted "[| 65 |]" 1I
+        let array = graph.Nodes[input]
+        let replace (node:SemanticNode) = {graph with Nodes=graph.Nodes.Add(node.Id,node)}
+        let argument =
+            match length.Kind with
+            | SemanticKind.Application(_,[argument]) -> graph.Nodes[argument]
+            | other -> failwithf "Missing length argument: %A" other
+        let mutated =
+            match mutation with
+            | "constructor-children" -> replace {site with Children=[]}
+            | "array-children" -> replace {array with Children=[]}
+            | "array-type" -> replace {array with Type=Types.stringType}
+            | "argument-parent" -> replace {array with Parent=None}
+            | "invalid-current-byte" ->
+                let value = graph.Nodes[array.Children |> Assert.Single]
+                match value.Kind with
+                | SemanticKind.Literal(NativeLiteral.Int(_,kind)) ->
+                    replace {value with Kind=SemanticKind.Literal(NativeLiteral.Int(169L,kind))}
+                | other -> failwithf "Missing scalar byte: %A" other
+            | "extra-kind-reference" ->
+                replace {argument with Kind=SemanticKind.VarRef("extra",Some input);Type=array.Type}
+            | "extra-attached-reference" -> replace {argument with Children=[input]}
+            | "extra-recorded-reference" ->
+                let edge = Hyperedge.edge1 EdgeClass.Reference EdgeRole.Definition 0 input argument.Id
+                {graph with Edges=edge::graph.Edges}
+            | "unexpected-argument-incidence" ->
+                let edge = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence site
+                           |> List.filter (fun edge -> edge.Role=EdgeRole.Argument) |> Assert.Single
+                {graph with Edges={edge with Ordinal=edge.Ordinal+1}::graph.Edges}
+            | "mismatched-array-incidence" ->
+                let edge = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence array |> Assert.Single
+                {graph with Edges={edge with Ordinal=edge.Ordinal+1}::graph.Edges}
+            | "duplicate-argument-incidence" ->
+                let edge = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence site
+                           |> List.filter (fun edge -> edge.Role=EdgeRole.Argument) |> Assert.Single
+                {graph with Edges=edge::edge::graph.Edges}
+            | "extra-literal-incidence" ->
+                let value = array.Children |> Assert.Single
+                let edge = Hyperedge.edge1 EdgeClass.Reference EdgeRole.Definition 0 input value
+                {graph with Edges=edge::graph.Edges}
+            | "captured-input" | "unknown-array-capture" ->
+                let main = EncodingFixture.value "main" graph
+                let capture:CaptureInfo =
+                    {Name="input";Type=array.Type;IsMutable=false
+                     SourceNodeId=if mutation="captured-input" then Some input else None}
+                match main.Kind with
+                | SemanticKind.Lambda(formals,body,captures,arg,returnType) ->
+                    replace {main with Kind=SemanticKind.Lambda(formals,body,capture::captures,arg,returnType)}
+                | other -> failwithf "Missing entry source lambda: %A" other
+            | other -> failwithf "Unknown mutation: %s" other
+        // A changed complete use census may first invalidate ordinary demand.
+        // Prove that refusal, then renew only its owning rows before checking
+        // the extent owner. The old numeric annotation remains, not evidence.
+        match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead mutated with
+        | Result.Error failures ->
+            Assert.NotEmpty failures
+            let untouched,diagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run None mutated
+            Assert.Same(mutated,untouched)
+            Assert.Equal<Diagnostic list>(Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.diagnostics mutated failures,diagnostics)
+        | Result.Ok _ -> ()
+        let current = Clef.Compiler.Nanopass.OrdinaryDemand.normalize mutated
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead current |> Result.isOk)
+        Assert.Equal<ValueRange option>(Some(ValueRange.point 1I),mutated.Nodes[length.Id].ValueRange)
+        Assert.Equal<ValueRange option>(mutated.Nodes[length.Id].ValueRange,current.Nodes[length.Id].ValueRange)
+        Assert.True((LogicalShapes.reader current site.Id).IsNone,mutation)
+        if mutation = "invalid-current-byte" then
+            let analyzed, diagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run None current
+            Assert.True(analyzed.Nodes[length.Id].ValueRange |> Option.exists (ValueRange.isObservable >> not))
+            Assert.Contains(diagnostics, fun diagnostic ->
+                diagnostic.Code = "CCS8011" && diagnostic.RelatedNodes = [length.Id] && diagnostic.Range = length.Range)
+
+    [<Fact>]
+    member _.``A fresh logical payload changes the observed length``() =
+        LogicalEncodingFixture.admitted "[| 65 |]" 1I |> ignore
+        LogicalEncodingFixture.admitted "[| 65; 66 |]" 2I |> ignore

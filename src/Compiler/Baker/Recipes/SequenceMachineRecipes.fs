@@ -169,7 +169,7 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
                 return! write id input
             | SemanticKind.Set (reference, value) ->
                 match graph.Nodes[reference].Kind with
-                | SemanticKind.VarRef (name, Some declaration) ->
+                | SemanticKind.VarRef (_, Some declaration) ->
                     let! input = read value
                     if persistent.Contains declaration || scratch.Contains declaration then
                         return! write declaration input
@@ -177,7 +177,18 @@ let build (graph: SemanticGraph) (control: Control.Control) (frame: Continuation
                         // The source resolves this existing cell outside the
                         // owner. Preserve that identity instead of allocating
                         // a private copy or discarding its observable write.
-                        return! C.assign declaration name graph.Nodes[declaration].Type input
+                        // Runtime construction follows range settlement, so the
+                        // replacement target must retain the source reference's
+                        // numeric facts and rewrite correspondence as well.
+                        let targetSource = graph.Nodes[reference]
+                        let! state = getUserState
+                        let target = mkNode state targetSource.Kind targetSource.Type []
+                        let target = { target with ValueRange = targetSource.ValueRange
+                                                   SRTPResolution = targetSource.SRTPResolution
+                                                   Range = targetSource.Range
+                                                   Metadata = target.Metadata.Add(sourceKey, MetadataValue.NodeId targetSource.Id) }
+                        do! emit target
+                        return! C.create (SemanticKind.Set(target.Id, input)) Types.unitType [target.Id; input]
                 | other -> return! fail (XParsec.ErrorType.Message (sprintf "CCS source checking did not settle a declaration identity for assignment %d in continuation owner %d: target is %A" (NodeId.value id) (NodeId.value owner.Id) other))
             | _ when isSymbolic graph Set.empty id ->
                 return! C.create (SemanticKind.Literal NativeLiteral.Unit) Types.unitType []

@@ -62,6 +62,12 @@ let main _ =
         let unsigned = { site with Kind = SemanticKind.Literal(NativeLiteral.UInt(System.UInt64.MaxValue, NTUKind.NTUuint(NTUWidth.Fixed 64)))
                                    Type = Types.uint64Type; ValueRange = Some (ValueRange.point value) }
         let graph = { result.Graph with Nodes = result.Graph.Nodes |> Map.add site.Id unsigned }
+        // Changing the literal type invalidates the old formal-demand proof;
+        // refresh its owner before inspecting this raw literal's obligation.
+        let graph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize graph
+        match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead graph with
+        | Ok _ -> ()
+        | Result.Error failures -> failwithf "Expected current ordinary-demand premises before integer obligation elaboration: %A" failures
         let enrichment, diagnostics = IntegerElaboration.elaborateSettled graph
         Assert.Empty diagnostics
         Assert.Contains(enrichment.NewNodes, fun node ->

@@ -52,18 +52,27 @@ let outer = seq { yield! input }
 let main _ = ignore outer; 0
 """
 
+    let provenProgramDelegation () =
+        let graph = programDelegation ()
+        let reading = SequenceResidence.analyzeWithRegions graph graph.Codata.Value.SequenceDestinations Map.empty
+        Assert.Empty reading.Unresolved
+        for name in ["input"; "outer"] do
+            let declaration = binding name graph
+            let instance = Clef.Compiler.Nanopass.SequenceProgramInstances.programInstance graph declaration.Id
+            Assert.True(instance.IsSome, sprintf "Missing final program instance for %s" name)
+            Assert.Equal(Assert.Single declaration.Children, instance.Value.Owner)
+        graph, reading
+
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceResidence")>]
 type SequenceResidenceCases() =
     [<Fact>]
     member _.``Program delegation retains exact ordered global read and current slot residence``() =
-        let graph = Residence.programDelegation ()
+        let graph, reading = Residence.provenProgramDelegation ()
         let input = Assert.Single (Residence.binding "input" graph).Children
         let outer = graph.Nodes[Assert.Single (Residence.binding "outer" graph).Children]
         match outer.Kind with
         | SemanticKind.SeqExpr(_, captures) -> Assert.Empty captures
         | _ -> failwith "Expected source sequence constructor"
-        let reading = SequenceResidence.analyzeWithRegions graph graph.Codata.Value.SequenceDestinations Map.empty
-        Assert.Empty reading.Unresolved
         Assert.True(reading.Sites.ContainsKey input)
         let globalReads = reading.Evidence |> List.filter (fun edge -> edge.Role = EdgeRole.SequenceProgramBorrow && edge.Target = outer.Id)
         Assert.NotEmpty globalReads
@@ -86,6 +95,24 @@ type SequenceResidenceCases() =
         Assert.NotEmpty slots
         Assert.Contains(slots, fun edge -> not graph.Nodes[edge.Sources[5]].IsReachable && graph.Nodes[edge.Target].IsReachable)
         Assert.DoesNotContain(reading.Evidence, fun edge -> edge.Role = EdgeRole.SequenceTemplateBorrow && edge.Target = outer.Id)
+        let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Target, edge.Sources
+        for edge in globalReads @ slots do
+            Assert.Contains(graph.Edges, fun stored -> key stored = key edge)
+        for name in ["input"; "outer"] do
+            let binding = Residence.binding name graph
+            let instance = Clef.Compiler.Nanopass.SequenceProgramInstances.programInstance graph binding.Id |> Option.get
+            let required = globalReads @ slots |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList
+            Assert.True(Set.isSubset required instance.Participants)
+            let inventory = graph.Codata.Value.ProgramStorage.Entries[ProgramStorageIdentity.Allocation instance.Allocation]
+            Assert.True(Set.isSubset required inventory.Participants)
+            let witness = graph.Codata.Value.WitnessEmission.Value.Storage.SequencePrograms[binding.Id]
+            Assert.True(Set.isSubset required witness.Participants)
+        // Fresh residence alone cannot authorize a stale stored instance.
+        let withdrawn =
+            let missing = key slots.Head
+            { graph with Edges = graph.Edges |> List.filter (fun edge -> key edge <> missing) }
+        Assert.Empty((SequenceResidence.analyzeWithRegions withdrawn withdrawn.Codata.Value.SequenceDestinations Map.empty).Unresolved)
+        Assert.True((Clef.Compiler.Nanopass.SequenceProgramInstances.programInstance withdrawn (Residence.binding "outer" graph).Id).IsNone)
 
     [<Theory>]
     [<InlineData("missing-program-value")>]
@@ -102,8 +129,19 @@ type SequenceResidenceCases() =
     [<InlineData("captured-scratch-root")>]
     [<InlineData("captured-eager-scratch-alias")>]
     [<InlineData("unknown-scratch-capture")>]
+    [<InlineData("formal-missing-live-across")>]
+    [<InlineData("formal-wrong-cut")>]
+    [<InlineData("formal-missing-region")>]
+    [<InlineData("formal-wrong-region-parent")>]
+    [<InlineData("formal-wrong-region-child")>]
+    [<InlineData("formal-wrong-region-formal")>]
+    [<InlineData("formal-missing-acquisition-origin")>]
+    [<InlineData("formal-missing-access")>]
+    [<InlineData("formal-extra-read-consumer")>]
+    [<InlineData("formal-invalid-transport")>]
+    [<InlineData("formal-invalid-acquisition-children")>]
     member _.``Program delegation refuses changed authority order and current slot uses``(defect: string) =
-        let graph = Residence.programDelegation ()
+        let graph, _ = Residence.provenProgramDelegation ()
         let inputBinding = Residence.binding "input" graph
         let outerBinding = Residence.binding "outer" graph
         let input = Assert.Single inputBinding.Children
@@ -120,6 +158,24 @@ type SequenceResidenceCases() =
             graph.Edges |> List.filter (fun edge ->
                 edge.Role = EdgeRole.ContinuationSlotAccess &&
                 edge.Sources[0] = outer.Id && graph.Nodes[edge.Sources[3]].Type = graph.Nodes[input].Type) |> Assert.Single
+        let formal =
+            match graph.Nodes[generator].Kind with
+            | SemanticKind.Lambda([_, _, formal], _, _, _, _) -> formal
+            | _ -> failwith "Expected exact continuation formal"
+        let formalReads =
+            graph.Edges |> List.filter (fun edge ->
+                edge.Role = EdgeRole.ContinuationSlotAccess && edge.Sources[0] = outer.Id && edge.Sources[2] = formal &&
+                (match graph.Nodes[edge.Sources[3]].Kind, graph.Nodes[edge.Sources[3]].Type with
+                 | SemanticKind.Binding(_, false, _, None), NativeType.TSeqEnumerator _ -> true
+                 | _ -> false))
+        Assert.Equal(2, formalReads.Length)
+        let formalAccess = formalReads.Head
+        let retainedAcquisition = Assert.Single graph.Nodes[formalAccess.Sources[3]].Children
+        let currentAcquisition =
+            graph.Edges |> List.filter (fun edge ->
+                edge.Role = EdgeRole.ContinuationValue && edge.Sources = [retainedAcquisition] &&
+                (match graph.Nodes[edge.Target].Kind with SemanticKind.Application _ -> graph.Nodes[edge.Target].IsReachable | _ -> false))
+            |> Assert.Single |> _.Target
         let changeNode node = { graph with Nodes = graph.Nodes.Add(node.Id, node) }
         let damaged =
             match defect with
@@ -166,6 +222,48 @@ type SequenceResidenceCases() =
                         { edge with Sources = List.take 5 edge.Sources @ [outer.Id] } else edge)
                 { graph with Edges = edges }
             | "extra-read-consumer" -> { graph with Edges = Hyperedge.edge1 EdgeClass.Reference EdgeRole.Symbol 0 access.Target plan.EntryCall :: graph.Edges }
+            | "formal-missing-live-across" ->
+                { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.SuspensionLiveAcross || edge.Target <> formalAccess.Sources[3]) }
+            | "formal-wrong-cut" ->
+                let edges = graph.Edges |> List.map (fun edge ->
+                    if edge.Role = EdgeRole.SuspensionLiveAcross && edge.Target = formalAccess.Sources[3] then
+                        { edge with Sources = [outer.Id; generator; input] } else edge)
+                { graph with Edges = edges }
+            | "formal-missing-region" ->
+                { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.ContinuationRegion || edge.Target <> retainedAcquisition) }
+            | "formal-wrong-region-parent" | "formal-wrong-region-child" | "formal-wrong-region-formal" ->
+                let edges = graph.Edges |> List.map (fun edge ->
+                    if edge.Role = EdgeRole.ContinuationRegion && edge.Target = retainedAcquisition then
+                        let parent = if defect = "formal-wrong-region-parent" then input else outer.Id
+                        let child = if defect = "formal-wrong-region-child" then outer.Id else input
+                        let root = if defect = "formal-wrong-region-formal" then access.Sources[2] else formal
+                        { edge with Sources = [parent; child; root] }
+                    else edge)
+                { graph with Edges = edges }
+            | "formal-missing-acquisition-origin" ->
+                { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.ContinuationValue || edge.Target <> currentAcquisition) }
+            | "formal-missing-access" ->
+                { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.ContinuationSlotAccess || edge.Target <> formalAccess.Target) }
+            | "formal-extra-read-consumer" ->
+                { graph with Edges = Hyperedge.edge1 EdgeClass.Reference EdgeRole.Symbol 0 formalReads.Tail.Head.Target plan.EntryCall :: graph.Edges }
+            | "formal-invalid-acquisition-children" ->
+                let acquisition = graph.Nodes[currentAcquisition]
+                changeNode { acquisition with Children = [] }
+            | "formal-invalid-transport" ->
+                let writer = graph.Nodes[formalAccess.Sources[4]]
+                let value = formalAccess.Sources[5]
+                let invalid = { graph.Nodes[value] with Id = NodeId.fresh(); Kind = SemanticKind.TypeAnnotation(value, Types.boolType); Children = [value]; Parent = None }
+                let writer =
+                    match writer.Kind with
+                    | SemanticKind.FrameWrite(frame, source, _) -> { writer with Kind = SemanticKind.FrameWrite(frame, source, invalid.Id); Children = [frame; invalid.Id] }
+                    | _ -> failwith "Expected exact formal writer"
+                let edges = graph.Edges |> List.map (fun edge ->
+                    if edge.Role = EdgeRole.ContinuationSlotAccess && edge.Sources[2] = formal && edge.Sources[3] = formalAccess.Sources[3] then
+                        { edge with Sources = List.take 5 edge.Sources @ [invalid.Id] } else edge)
+                let changed = { graph with Nodes = graph.Nodes.Add(invalid.Id, invalid).Add(writer.Id, writer); Edges = edges }
+                let ingress = Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.analyze changed
+                Assert.True((Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.tryAccess ingress formalAccess.Target).IsSome)
+                changed
             | "captured-scratch-root" | "captured-eager-scratch-alias" | "unknown-scratch-capture" ->
                 let root = graph.Nodes[access.Sources[2]]
                 let graph, captured =

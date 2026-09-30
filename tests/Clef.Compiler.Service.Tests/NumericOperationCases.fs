@@ -352,3 +352,146 @@ type StringExtentCases() =
         match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare changed with
         | Error _ -> ()
         | Ok _ -> failwith "String length survived missing source descriptor evidence."
+
+module private LogicalStringBytes =
+    let byteRange = ValueRange.bounded 0I 255I
+
+    let body left right ordinaryArray =
+        let values = if ordinaryArray then "    let values = [| 4096 |]\n" else ""
+        let result = if ordinaryArray then "values[0]" else "0"
+        "let left = \"" + left + "\"\nlet right = \"" + right + "\"\n[<EntryPoint>]\nlet main _ =\n" +
+        values + "    if left = right then " + result + " else 1\n"
+
+    let reads (graph: SemanticGraph) =
+        graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable &&
+            match node.Kind with
+            | SemanticKind.IndexGet(buffer, _) ->
+                match graph.Nodes[buffer].Kind with SemanticKind.StringByteBorrow _ -> true | _ -> false
+            | _ -> false) |> Seq.toList
+
+    let admitted left right ordinaryArray =
+        let result = DimensionalCases.check (body left right ordinaryArray)
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        Assert.True(graph.Platform.IsNone)
+        Assert.True(graph.StaticStringPool.IsNone)
+        Assert.DoesNotContain(graph.Edges, fun edge ->
+            match edge.Role with EdgeRole.StringByteStorage _ | EdgeRole.StringByteView _ -> true | _ -> false)
+        let actualReads = reads graph
+        Assert.Equal(2, actualReads.Length)
+        for read in actualReads do
+            let buffer, index = match read.Kind with SemanticKind.IndexGet(buffer, index) -> buffer, index | _ -> failwith "Expected byte read"
+            Assert.Equal<NodeId list>([buffer; index], read.Children)
+            Assert.Equal(Some byteRange, read.ValueRange)
+            let guard = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.MemoryAccessGuard && edge.Target = read.Id) |> Assert.Single
+            match guard.Class, guard.Ordinal, guard.Sources with
+            | EdgeClass.Provenance, 0, [actualBuffer; actualIndex; _; _; _; _; predicate; required; frontier] ->
+                Assert.Equal(buffer, actualBuffer)
+                Assert.Equal(index, actualIndex)
+                Assert.Equal<NodeId list>([required; read.Id], graph.Nodes[frontier].Children)
+                Assert.Equal(SemanticKind.Sequential [required; read.Id], graph.Nodes[frontier].Kind)
+                Assert.Equal(Some byteRange, graph.Nodes[frontier].ValueRange)
+                match graph.Nodes[required].Kind with
+                | SemanticKind.Require(condition, _) -> Assert.Equal(predicate, condition)
+                | kind -> failwithf "The byte bound replaced its source guard: %A" kind
+            | _ -> failwithf "The byte read lost its exact source guard: %A" guard
+        graph
+
+    let ordinaryRead (graph: SemanticGraph) =
+        graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable &&
+            match node.Kind with
+            | SemanticKind.IndexGet(buffer, _) ->
+                match graph.Nodes[buffer].Kind with SemanticKind.StringByteBorrow _ -> false | _ -> true
+            | _ -> false) |> Assert.Single
+
+    let sourceEdge (edge: Hyperedge) = edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference
+    let fields (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+    let rewrite (node: SemanticNode) (graph: SemanticGraph) =
+        let retained = graph.Edges |> List.filter (fun edge -> edge.Target <> node.Id || not (sourceEdge edge))
+        let current = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node |> List.filter sourceEdge
+        { graph with Nodes = graph.Nodes.Add(node.Id, node); Edges = retained @ current }
+
+    let fresh (graph: SemanticGraph) =
+        let current = Clef.Compiler.Nanopass.OrdinaryDemand.normalize graph
+        match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead current with
+        | Ok _ -> ()
+        | Result.Error failures -> failwithf "Expected current demand before fresh logical ranges: %A" failures
+        let facts = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.sourceFacts current
+        Assert.NotEmpty facts
+        facts
+
+type LogicalStringByteRangeCases() =
+    [<Theory>]
+    [<InlineData("ascii")>]
+    [<InlineData("utf8")>]
+    [<InlineData("nul")>]
+    member _.``Platform-free string comparisons retain logical byte ranges without storage authority`` text =
+        let left, right =
+            match text with
+            | "ascii" -> "one", "two"
+            | "utf8" -> "é", "Ω"
+            | "nul" -> "a\\000b", "a\\000c"
+            | _ -> failwithf "Unknown text case: %s" text
+        LogicalStringBytes.admitted left right false |> ignore
+
+    [<Fact>]
+    member _.``Logical string byte ranges do not narrow an ordinary integer array``() =
+        let graph = LogicalStringBytes.admitted "one" "two" true
+        let ordinary = LogicalStringBytes.ordinaryRead graph
+        Assert.Equal(Some(ValueRange.point 4096I), ordinary.ValueRange)
+        let fresh = LogicalStringBytes.fresh graph
+        Assert.Equal(ValueRange.point 4096I, fresh[ordinary.Id])
+        for read in LogicalStringBytes.reads graph do Assert.Equal(LogicalStringBytes.byteRange, fresh[read.Id])
+
+    [<Theory>]
+    [<InlineData("read-buffer")>]
+    [<InlineData("read-kind")>]
+    [<InlineData("read-children")>]
+    [<InlineData("read-relation")>]
+    [<InlineData("borrow-kind")>]
+    [<InlineData("borrow-source")>]
+    [<InlineData("borrow-children")>]
+    [<InlineData("borrow-relation")>]
+    member _.``Changed direct borrow premises withdraw a stale logical byte range`` defect =
+        let graph = LogicalStringBytes.admitted "one" "two" true
+        let read = LogicalStringBytes.reads graph |> List.head
+        let view, index = match read.Kind with SemanticKind.IndexGet(view, index) -> view, index | _ -> failwith "Expected byte read"
+        let borrow = graph.Nodes[view]
+        let source = match borrow.Kind with SemanticKind.StringByteBorrow source -> source | _ -> failwith "Expected byte borrow"
+        let ordinary = LogicalStringBytes.ordinaryRead graph
+        let ordinaryBuffer = match ordinary.Kind with SemanticKind.IndexGet(buffer, _) -> buffer | _ -> failwith "Expected ordinary array read"
+        Assert.Equal(borrow.Type, graph.Nodes[ordinaryBuffer].Type)
+        Assert.Equal(Some(ValueRange.point 4096I), ordinary.ValueRange)
+        let literal = graph.Nodes.Values |> Seq.find (fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.Literal(NativeLiteral.Int(4096L, _)) -> true | _ -> false)
+        let relation target source =
+            graph.Edges |> List.filter (fun edge ->
+                LogicalStringBytes.sourceEdge edge && edge.Target = target && edge.Sources = [source]) |> Assert.Single
+        let changed =
+            match defect with
+            | "read-buffer" ->
+                LogicalStringBytes.rewrite { read with Kind = SemanticKind.IndexGet(ordinaryBuffer, index); Children = [ordinaryBuffer; index] } graph
+            | "read-kind" -> LogicalStringBytes.rewrite { read with Kind = literal.Kind; Children = [] } graph
+            | "read-children" -> { graph with Nodes = graph.Nodes.Add(read.Id, { read with Children = [] }) }
+            | "read-relation" ->
+                let row = relation read.Id view
+                let edges = graph.Edges |> List.map (fun edge ->
+                    if LogicalStringBytes.fields edge = LogicalStringBytes.fields row then { edge with Ordinal = edge.Ordinal + 1 } else edge)
+                { graph with Edges = edges }
+            | "borrow-kind" ->
+                let ordinarySource = graph.Nodes[ordinaryBuffer]
+                LogicalStringBytes.rewrite { borrow with Kind = ordinarySource.Kind; Children = ordinarySource.Children } graph
+            | "borrow-source" ->
+                LogicalStringBytes.rewrite { borrow with Kind = SemanticKind.StringByteBorrow literal.Id; Children = [literal.Id] } graph
+            | "borrow-children" -> { graph with Nodes = graph.Nodes.Add(view, { borrow with Children = [] }) }
+            | "borrow-relation" -> { graph with Edges = relation view source :: graph.Edges }
+            | _ -> failwithf "Unknown direct borrow mutation: %s" defect
+        // Deliberately retain the old annotation. Only actual upstream demand
+        // normalization precedes the range owner's independent fresh reading.
+        Assert.Equal(Some LogicalStringBytes.byteRange, changed.Nodes[read.Id].ValueRange)
+        let fresh = LogicalStringBytes.fresh changed
+        Assert.True(fresh.ContainsKey read.Id, "A missing entire source-facts map is not range retraction")
+        Assert.False(ValueRange.contains LogicalStringBytes.byteRange fresh[read.Id], sprintf "Stale byte bound survived %s: %A" defect fresh[read.Id])
+        Assert.Equal(ValueRange.point 4096I, fresh[ordinary.Id])

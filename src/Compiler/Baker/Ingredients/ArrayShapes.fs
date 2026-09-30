@@ -4,6 +4,7 @@
 module Clef.Compiler.Baker.Ingredients.ArrayShapes
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
+open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Origins = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins
 module Boundaries = Clef.Compiler.Baker.Recipes.BoundaryDeclarations
@@ -23,6 +24,73 @@ let intrinsicApplication (graph:SemanticGraph) start =
             | Some({Kind=SemanticKind.Intrinsic info},path) -> Some(info,arguments,Set.union seen path)
             | _ -> None
     follow Set.empty start []
+
+/// Source-only logical extent, not byte storage, immutable residency or a borrow.
+/// A private inline constant array has no intervening writes. Its whole UTF-8
+/// payload must be valid; the descriptor length counts bytes, not characters.
+/// The consumer/absence census is reread from the current graph. Participants
+/// are direct support, not a sufficient key for selective proof reuse.
+let private inlineStringExtent (graph:SemanticGraph) site input =
+    let arrayType = NativeType.TApp(Types.arrayTyCon, [Types.intType])
+    let live id = graph.Nodes.TryFind id |> Option.filter _.IsReachable
+    let sourceEdge (edge:Hyperedge) = edge.Class=EdgeClass.Structural || edge.Class=EdgeClass.Reference
+    let key (edge:Hyperedge) = edge.Class,edge.Role,edge.Ordinal,edge.Target,edge.Sources
+    let intact (node:SemanticNode) =
+        let actual = graph.Edges |> List.filter (fun edge -> edge.Target=node.Id && sourceEdge edge) |> List.map key |> List.sort
+        let expected = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node |> List.filter sourceEdge |> List.map key |> List.sort
+        // Native F stores explicit enrichments. Kind/Children provide current
+        // syntax incidence; optional recorded copies must be unique and agree.
+        actual.Length=(List.distinct actual).Length && List.forall (fun row -> List.contains row expected) actual
+    let onlyArgument (edge:Hyperedge) =
+        edge.Class=EdgeClass.Structural && edge.Role=EdgeRole.Argument &&
+        edge.Ordinal=0 && edge.Target=site && edge.Sources=[input]
+    let privateInput () =
+        let capturesInput (capture:CaptureInfo) =
+            match capture.SourceNodeId with
+            | Some source -> source=input
+            | None -> applySubst capture.Type=arrayType
+        let active = graph.Nodes.Values |> Seq.filter _.IsReachable |> Seq.toList
+        let uncaptured =
+            active |> List.forall (fun node ->
+                let captures =
+                    match node.Kind with
+                    | SemanticKind.Lambda(_,_,captures,_,_)
+                    | SemanticKind.LazyExpr(_,captures) | SemanticKind.SeqExpr(_,captures) -> captures
+                    | _ -> []
+                not (List.exists capturesInput captures))
+        let implied =
+            active |> List.collect Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence
+            |> List.filter (fun edge -> List.contains input edge.Sources)
+        let recorded =
+            graph.Edges |> List.filter (fun edge ->
+                (edge.Class=EdgeClass.Structural || edge.Class=EdgeClass.Reference) &&
+                List.contains input edge.Sources && (live edge.Target |> Option.isSome))
+        uncaptured && implied.Length=1 && List.forall onlyArgument implied &&
+        recorded.Length<=1 && List.forall onlyArgument recorded
+    match graph.Platform, live site, live input with
+    | None, Some call, Some array when applySubst call.Type=Types.stringType && applySubst array.Type=arrayType ->
+        match call.Kind, array.Kind with
+        | SemanticKind.Application(callee,[argument]), SemanticKind.ArrayExpr values
+            when argument=input && call.Children=[callee;input] && array.Children=values && array.Parent=Some site &&
+                 intact call && intact array ->
+            match live callee with
+            | Some ({Kind=SemanticKind.Intrinsic {Module=IntrinsicModule.String;Operation="fromBytes"};Children=[];Type=ty} as target)
+                when applySubst ty=NativeType.TFun(arrayType,Types.stringType) && intact target && privateInput () ->
+                let bytes = values |> List.map (fun value ->
+                    match live value with
+                    | Some ({Kind=SemanticKind.Literal(NativeLiteral.Int(number,kind));Children=[];Parent=Some parent;Type=ty} as literal)
+                        when parent=input && applySubst ty=Types.intType &&
+                             Some kind=Types.tryGetNTUKind Types.intType && 0L<=number && number<=255L && intact literal -> Some(byte number)
+                    | _ -> None)
+                if List.exists Option.isNone bytes then None else
+                try
+                    System.Text.UTF8Encoding(false,true).GetCharCount(bytes |> List.choose id |> List.toArray) |> ignore
+                    Some {Sources=[Length.Constant(bigint values.Length)]; StringSources=Set.singleton site
+                          Participants=Set.ofList(site::callee::input::values)}
+                with :? System.Text.DecoderFallbackException -> None
+            | _ -> None
+        | _ -> None
+    | _ -> None
 
 let reader (graph:SemanticGraph) =
     let flow=Origins.resolve graph
@@ -71,6 +139,7 @@ let reader (graph:SemanticGraph) =
                 match rows with
                 | [row] -> follow seen snapshot |> Option.map(fun extent ->
                     {extent with StringSources=Set.singleton id; Participants=Set.union extent.Participants (Set.ofList(id::row.Target::row.Sources))})
+                | [] -> inlineStringExtent graph id snapshot
                 | _ -> None
             | _ ->
                 match flow.Calls.TryFind id with
@@ -78,8 +147,29 @@ let reader (graph:SemanticGraph) =
                     targets |> List.map(fun target -> follow seen target.Body |> Option.map(fun extent ->
                         {extent with Participants=Set.union extent.Participants (Set.ofList(target.Lambda::target.Body::target.Arguments))})) |> combine |> add
                 | _ -> None
-        | Some {Kind=SemanticKind.StringByteBorrow source} ->
-            follow seen source |> add
+        | Some ({Kind=SemanticKind.StringByteBorrow source} as borrow) ->
+            if graph.Platform.IsSome then follow seen source |> add else
+            let sourceEdge (edge:Hyperedge) = edge.Class=EdgeClass.Structural || edge.Class=EdgeClass.Reference
+            let key (edge:Hyperedge) = edge.Class,edge.Role,edge.Ordinal,edge.Target,edge.Sources
+            let actual = graph.Edges |> List.filter (fun edge -> edge.Target=id && sourceEdge edge) |> List.map key |> List.sort
+            let expected = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence borrow |> List.filter sourceEdge |> List.map key |> List.sort
+            let agrees = actual.Length=(List.distinct actual).Length && List.forall (fun row -> List.contains row expected) actual
+            match graph.Nodes.TryFind source with
+            | Some value when borrow.IsReachable && value.IsReachable && borrow.Children=[source] && agrees &&
+                              borrow.Type=Types.mkArrayType Types.intType && Types.isStringType value.Type ->
+                // Reuse the owning source origin contract, including its lazy
+                // protocol and complete formal-input validation. No new cache
+                // semantics or physical byte-view authority is supplied here.
+                match Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin graph flow id source with
+                | Ok(Some(identity,origins,participants)) when not origins.IsEmpty ->
+                    Some {Sources=origins.Values |> Seq.map Length.Constant |> Seq.toList
+                          StringSources=origins.Keys |> Set.ofSeq
+                          Participants=Set.ofList(id::source::identity::(participants |> List.collect (fun p -> [p.Node;p.Group])))}
+                | Ok None -> follow seen source |> add
+                // An origin error cannot fall back to weaker descriptor flow.
+                // StringBorrowRecipes reports that exact error at its own site.
+                | Error _ | Ok(Some _) -> None
+            | _ -> None
         | _ -> None
     follow Set.empty
 

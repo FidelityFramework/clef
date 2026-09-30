@@ -7,6 +7,27 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.NodeBuilder
 module Meets = Clef.Compiler.PSGSaturation.SemanticGraph.Meets
 
 module private ContinuationMeetFixture =
+    // Integer meets consume the source selector's declared target domain.
+    // Ranges alone must not invent a platform or an operand representation.
+    let context : PlatformContext =
+        let integer name family bits minimum maximum : NumericRepresentation =
+            { Name = name; Capability = "native"; Family = family; Bits = bits
+              MinMagnitude = minimum; MaxMagnitude = maximum; Boundary = "wrap" }
+        let offered =
+            [ integer "signed8" "int" 8 "-128" "127"
+              integer "signed16" "int" 16 "-32768" "32767"
+              integer "signed64" "int" 64 "-9223372036854775808" "9223372036854775807"
+              integer "unsigned8" "uint" 8 "0" "255"
+              integer "unsigned16" "uint" 16 "0" "65535"
+              integer "unsigned64" "uint" 64 "0" "18446744073709551615" ]
+        { PlatformId = "continuation-meet-test"
+          Dimensions = Map.ofList ["Pointer", 64; "Register", 64]
+          Representations = offered |> List.map (fun representation -> representation.Name, representation) |> Map.ofList
+          EndpointReturns = Map.empty; PlatformLibraryPath = None; PlatformDescription = None
+          PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.empty
+          Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
+          AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+
     let build valueType valueRange readType readRange sourceType sourceRange holds scratchHolds =
         let builder = NodeBuilder()
         let node name ty = builder.Create(SemanticKind.PatternBinding name, ty, dummyRange)
@@ -27,13 +48,13 @@ module private ContinuationMeetFixture =
             let field = match kind with CaptureSlotKind.Scalar field -> field | _ -> SettledSlot.Pointer 5
             { Source = source.Id; ValueType = sourceType; Holds = kind; IsCapture = true
               Field = { Name = "source"; Slot = field; Offset = None; Size = None; Align = None } }
-        // Only scalar representation facts are needed here. Placement and
-        // generator construction are deliberately not asserted by this fixture.
+        // This is a scalar meet unit fixture, not frame placement or generator
+        // admission. The explicit platform above supplies integer selection.
         let plan: ContinuationFrame =
             { Owner = owner.Id; Generator = owner.Id; Formal = frame.Id; State = source.Id; Current = source.Id
               Slots = [slot holds]; Bytes = 0; Alignment = 1; ScratchSlots = [slot scratchHolds]
               ScratchBytes = 0; ScratchAlignment = 1; Initializers = []; ResumeStates = []; Obligations = [] }
-        let raw = builder.Build []
+        let raw = builder.BuildWithPlatform([], context)
         let ranges = Map.ofList [source.Id, sourceRange; value.Id, valueRange; read.Id, readRange; current.Id, readRange]
         let graph =
             { raw with Nodes = raw.Nodes |> Map.map (fun id node -> { node with IsReachable = true; ValueRange = ranges |> Map.tryFind id |> Option.flatten })
@@ -139,3 +160,45 @@ type SequenceContinuationMeetCases() =
         let graph, frames, origins, storage, _, _, _, _, _ =
             ContinuationMeetFixture.build native None native None native None view view
         Assert.Empty(Meets.continuations frames origins storage Map.empty graph)
+
+    [<Fact>]
+    member _.``Continuation integer meets refuse a missing platform instead of inventing widths`` () =
+        let scalar = CaptureSlotKind.Scalar(SettledSlot.Integer(64, None))
+        let graph, frames, origins, storage, _, write, _, _, value =
+            ContinuationMeetFixture.build Types.intType (Some(ValueRange.Bounded(0I, 255I)))
+                Types.intType (Some(ValueRange.Bounded(0I, 255I)))
+                Types.intType (Some(ValueRange.Bounded(0I, 255I))) scalar scalar
+        ContinuationMeetFixture.one (Meets.continuations frames origins storage Map.empty graph)
+            write value 8 64 MeetKind.ExtendUnsigned
+        let missing = { graph with Platform = None }
+        Assert.Empty(Meets.continuations frames origins storage Map.empty missing)
+
+    [<Fact>]
+    member _.``Continuation writes require an observable operand range`` () =
+        let scalar = CaptureSlotKind.Scalar(SettledSlot.Integer(64, None))
+        let graph, frames, origins, storage, _, write, scratchWrite, _, value =
+            ContinuationMeetFixture.build Types.intType (Some(ValueRange.Bounded(0I, 255I)))
+                Types.intType (Some(ValueRange.Bounded(0I, 255I)))
+                Types.intType (Some(ValueRange.Bounded(0I, 255I))) scalar scalar
+        ContinuationMeetFixture.one (Meets.continuations frames origins storage Map.empty graph)
+            write value 8 64 MeetKind.ExtendUnsigned
+        let missing = { graph with Nodes = graph.Nodes.Add(value, { graph.Nodes[value] with ValueRange = None }) }
+        let actual = Meets.continuations frames origins storage Map.empty missing
+        Assert.False(actual.ContainsKey write)
+        Assert.False(actual.ContainsKey scratchWrite)
+
+    [<Fact>]
+    member _.``Continuation operands select from the actual offered representations`` () =
+        let scalar = CaptureSlotKind.Scalar(SettledSlot.Integer(64, None))
+        let graph, frames, origins, storage, _, write, _, _, value =
+            ContinuationMeetFixture.build Types.intType (Some(ValueRange.Bounded(0I, 255I)))
+                Types.intType (Some(ValueRange.Bounded(0I, 255I)))
+                Types.intType (Some(ValueRange.Bounded(0I, 255I))) scalar scalar
+        ContinuationMeetFixture.one (Meets.continuations frames origins storage Map.empty graph)
+            write value 8 64 MeetKind.ExtendUnsigned
+        let context =
+            { ContinuationMeetFixture.context with
+                Representations = ContinuationMeetFixture.context.Representations.Remove("unsigned8").Remove("signed8") }
+        let changed = { graph with Platform = Some context }
+        ContinuationMeetFixture.one (Meets.continuations frames origins storage Map.empty changed)
+            write value 16 64 MeetKind.ExtendUnsigned

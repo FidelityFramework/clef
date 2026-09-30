@@ -6,6 +6,38 @@ open Clef.Compiler.NativeTypedTree.Expressions.Intrinsics
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module PlatformResolution = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 
+/// A successful read of a string's logical UTF-8 byte view is in 0..255.
+/// This supplies no allocation, bounds, lifetime or physical representation
+/// permission. Re-read exact current source structure; old ranges and storage
+/// conclusions are not premises. Ordinary arrays retain their own element rules.
+let logicalReadRanges (graph: SemanticGraph) =
+    let sourceEdge (edge: Hyperedge) =
+        edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference
+    let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+    let incoming =
+        graph.Edges |> List.filter sourceEdge |> List.groupBy _.Target
+        |> List.map (fun (id, edges) -> id, edges |> List.map key |> List.sort) |> Map.ofList
+    let exact (node: SemanticNode) =
+        let expected = Closures.structuralIncidence node |> List.filter sourceEdge |> List.map key |> List.sort
+        (incoming.TryFind node.Id |> Option.defaultValue []) = expected
+    graph.Nodes |> Map.fold (fun ranges id node ->
+        match node.Kind with
+        | SemanticKind.IndexGet(view, index)
+            when node.IsReachable && node.Type = Types.intType && node.Children = [view; index] && exact node ->
+            match graph.Nodes.TryFind view, graph.Nodes.TryFind index with
+            | Some borrow, Some subscript
+                when borrow.IsReachable && borrow.Type = Types.mkArrayType Types.intType &&
+                     subscript.IsReachable && Types.isIntegerType subscript.Type && exact borrow ->
+                match borrow.Kind with
+                | SemanticKind.StringByteBorrow source when borrow.Children = [source] ->
+                    match graph.Nodes.TryFind source with
+                    | Some value when value.IsReachable && Types.isStringType value.Type ->
+                        Map.add id (ValueRange.bounded 0I 255I) ranges
+                    | _ -> ranges
+                | _ -> ranges
+            | _ -> ranges
+        | _ -> ranges) Map.empty
+
 /// Shared by copying String.toBytes and borrowing string.Bytes. The logical
 /// array element remains native int; this declaration settles its byte carrier.
 let byteRepresentation (graph: SemanticGraph) =

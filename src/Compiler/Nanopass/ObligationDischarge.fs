@@ -54,6 +54,30 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
         let beyond = if model.Inclusive then ">" else ">="
         [ sprintf "(assert (= %s (and (> %s 0) (>= %s 0) (%s (+ %s (* %s %s)) %s))))" id step count beyond start count step limit
           sprintf "(assert (not %s))" id ]
+    | ObligationBody.FiniteSequencePull model ->
+        let steps = model.Steps |> List.map (fun step -> step.Label, step) |> Map.ofList
+        let wellShaped =
+            not model.Steps.IsEmpty && steps.Count = model.Steps.Length &&
+            steps.ContainsKey model.Entry &&
+            (model.Steps |> List.forall (fun step -> step.Successors |> List.forall steps.ContainsKey))
+        let conclusion =
+            if not wellShaped then "false"
+            else
+                let clauses =
+                    [ yield sprintf "(>= %s 0)" (integer model.MaximumPulls)
+                      yield sprintf "(<= %s %s)" (integer steps[model.Entry].Remaining) (integer model.MaximumPulls)
+                      for step in model.Steps do
+                          let remaining = integer step.Remaining
+                          let weight = if step.Suspend then "1" else "0"
+                          yield sprintf "(>= %s 0)" remaining
+                          match step.Successors with
+                          | [] -> yield sprintf "(>= %s %s)" remaining weight
+                          | successors ->
+                              for successor in successors do
+                                  yield sprintf "(>= %s (+ %s %s))" remaining weight (integer steps[successor].Remaining) ]
+                sprintf "(and %s)" (String.concat " " clauses)
+        [ sprintf "(assert (= %s %s))" id conclusion
+          sprintf "(assert (not %s))" id ]
     | ObligationBody.AdditiveLoopInvariant model ->
         let lo, hi = integer model.InitialLower, integer model.InitialUpper
         let dlo, dhi = integer model.DeltaLower, integer model.DeltaUpper

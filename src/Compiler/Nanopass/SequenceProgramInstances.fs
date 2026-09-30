@@ -81,7 +81,9 @@ let private factoryCalls (graph: SemanticGraph) (inputs: Inputs) =
                     | _ -> None))
         | _ -> None) |> Map.ofList
 
-let private validFrame (graph: SemanticGraph) (inputs: Inputs) owner (family: SequenceFamily) =
+let rec private validFrame seen (graph: SemanticGraph) (inputs: Inputs) owner (family: SequenceFamily) =
+    if Set.contains owner seen then false else
+    let seen = Set.add owner seen
     match inputs.Frames.TryFind owner, family.Members.TryFind owner, graph.Nodes.TryFind owner with
     | Some frame, Some memberContract, Some { Kind = SemanticKind.SeqExpr(generator, _); Type = NativeType.TSeq item; IsReachable = true }
         when frame.Owner = owner && frame.Generator = generator && generator = memberContract.Generator &&
@@ -108,21 +110,73 @@ let private validFrame (graph: SemanticGraph) (inputs: Inputs) owner (family: Se
             | _ -> false
         let fields (slots: ContinuationSlot list) =
             slots |> List.map (fun slot -> slot.Field.Offset, slot.Field.Size, slot.Field.Align)
-        let proof id slots bytes alignment =
+        let layout id =
             let rows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = id)
             match graph.Nodes.TryFind id, rows with
             | Some { Kind = SemanticKind.Obligation info }, [row] when row.Class = EdgeClass.Obligation && row.Ordinal = 0 && row.Sources |> List.contains owner ->
                 match info.Body with
-                | ObligationBody.ContinuationLayout(actual, extent, align) ->
-                    extent = bytes && align = alignment &&
-                    (actual |> List.map (fun (offset, size, align) -> Some offset, Some size, Some align)) = fields slots &&
-                    slots |> List.forall (fun slot -> row.Sources |> List.contains slot.Source)
-                | _ -> false
+                | ObligationBody.ContinuationLayout(actual, extent, align) when row.Sources |> List.forall graph.Nodes.ContainsKey ->
+                    Some(actual, extent, align, row.Sources)
+                | _ -> None
+            | _ -> None
+        let proof id slots bytes alignment =
+            layout id |> Option.exists (fun (actual, extent, align, sources) ->
+                extent = bytes && align = alignment &&
+                (actual |> List.map (fun (offset, size, align) -> Some offset, Some size, Some align)) = fields slots &&
+                slots |> List.forall (fun slot -> sources |> List.contains slot.Source))
+        let regionRows =
+            graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ContinuationRegion && List.tryHead edge.Sources = Some owner)
+            |> List.sortBy _.Target
+        // An owned child extends the selected persistent prefix; it does not
+        // replace that proof or the independent activation-local layout.
+        // Family-envelope extensions remain a separate unsupported contract.
+        let ownedProof persistent owned =
+            match layout persistent, layout owned with
+            | Some(prefix, prefixBytes, prefixAlignment, _), Some(actual, extent, alignment, sources)
+                when family.Members.Count = 1 && not regionRows.IsEmpty &&
+                     proof persistent frame.Slots prefixBytes prefixAlignment && prefixAlignment > 0 ->
+                let roundUp value align = ((value + align - 1L) / align) * align
+                let prefixEnd = prefix |> List.fold (fun finish (offset, bytes, _) -> max finish (int64 offset + int64 bytes)) 0L
+                let prefixFieldsAgree =
+                    not prefix.IsEmpty &&
+                    (prefix |> List.forall (fun (offset, bytes, align) ->
+                        offset >= 0 && bytes > 0 && align > 0 && (align &&& (align - 1)) = 0 && offset % align = 0)) &&
+                    prefixAlignment = (prefix |> List.map (fun (_, _, align) -> align) |> List.max)
+                let selected = regionRows |> List.mapi (fun ordinal row ->
+                    match row.Class, row.Ordinal, row.Sources with
+                    | EdgeClass.Suspension, actualOrdinal, [parent; child; formal]
+                        when actualOrdinal = ordinal && parent = owner && formal = frame.Formal && graph.Nodes.ContainsKey row.Target ->
+                        let families = inputs.Families.Values |> Seq.filter (fun value -> value.Members.ContainsKey child) |> Seq.toList
+                        match inputs.Frames.TryFind child, families with
+                        | Some childFrame, [childFamily] when childFrame.Bytes > 0 && childFrame.Alignment > 0 &&
+                            (childFamily.Members |> Map.forall (fun memberOwner _ -> validFrame seen graph inputs memberOwner childFamily)) ->
+                            Some(row.Target, child, childFrame.Bytes, childFrame.Alignment)
+                        | _ -> None
+                    | _ -> None)
+                if selected |> List.exists Option.isNone then false else
+                let children = selected |> List.choose id
+                let suffix, finish, align =
+                    children |> List.fold (fun (placed, finish, align) (_, _, bytes, childAlign) ->
+                        let offset = roundUp finish (int64 childAlign)
+                        (offset, int64 bytes, childAlign) :: placed, offset + int64 bytes, max align childAlign)
+                        ([], prefixEnd, prefixAlignment)
+                let expectedExtent = roundUp finish (int64 align)
+                let expectedSources = List.distinct (owner :: (frame.Slots |> List.map _.Source) @
+                                                        (children |> List.map (fun (site, _, _, _) -> site)) @
+                                                        (children |> List.map (fun (_, child, _, _) -> child)))
+                prefixFieldsAgree && int64 prefixBytes = roundUp prefixEnd (int64 prefixAlignment) &&
+                expectedExtent <= int64 System.Int32.MaxValue &&
+                actual = prefix @ (List.rev suffix |> List.map (fun (offset, bytes, align) -> int offset, int bytes, align)) &&
+                extent = int expectedExtent && alignment = align &&
+                frame.Bytes = extent && frame.Alignment = alignment && sources = expectedSources
             | _ -> false
         let proofs =
             match frame.Obligations with
-            | [persistent; scratch] -> proof persistent frame.Slots frame.Bytes frame.Alignment &&
-                                       proof scratch frame.ScratchSlots frame.ScratchBytes frame.ScratchAlignment
+            | [persistent; scratch] when regionRows.IsEmpty ->
+                proof persistent frame.Slots frame.Bytes frame.Alignment &&
+                proof scratch frame.ScratchSlots frame.ScratchBytes frame.ScratchAlignment
+            | [persistent; scratch; owned] ->
+                proof scratch frame.ScratchSlots frame.ScratchBytes frame.ScratchAlignment && ownedProof persistent owned
             | _ -> false
         let slots =
             frame.Slots @ frame.ScratchSlots |> List.forall (fun slot ->
@@ -136,14 +190,22 @@ let private validFrame (graph: SemanticGraph) (inputs: Inputs) owner (family: Se
              |> Option.exists (fun declared -> declared |> List.filter (fst >> captures.Contains) = actual)) &&
             actual |> List.forall (fun (slot, value) -> graph.Nodes.ContainsKey slot && graph.Nodes.ContainsKey value))
         signature && rowAgrees && proofs && slots && initialized &&
+        (Set.ofList frame.Obligations).Count = frame.Obligations.Length &&
         captures = memberContract.Captures &&
         (frame.Slots |> List.filter (fun slot -> not slot.IsCapture && slot.Source <> frame.State) |> List.map _.Source |> Set.ofList) = memberContract.Uninitialized
     | _ -> false
 
-let private backing (graph: SemanticGraph) (inputs: Inputs) owner allocation =
+let private edgeKey (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Target, edge.Sources
+
+let private isBorrow (edge: Hyperedge) =
+    match edge.Role with
+    | EdgeRole.SequenceTemplateBorrow | EdgeRole.SequenceProgramBorrow | EdgeRole.SequenceSlotBorrow -> true
+    | _ -> false
+
+let private backing (graph: SemanticGraph) (inputs: Inputs) (residence: Residence.Reading) owner allocation =
     let families = inputs.Families.Values |> Seq.filter (fun family -> family.Members.ContainsKey owner) |> Seq.toList
     match families, Authority.authority graph allocation with
-    | [family], Some(authority, participants) when family.Members |> Map.forall (fun owner _ -> validFrame graph inputs owner family) ->
+    | [family], Some(authority, participants) when family.Members |> Map.forall (fun owner _ -> validFrame Set.empty graph inputs owner family) ->
         let powerOfTwo value = value > 0 && (value &&& (value - 1)) = 0
         let space = authority.Space
         let bytes, granularity = bigint family.Bytes, bigint space.Granularity
@@ -152,14 +214,35 @@ let private backing (graph: SemanticGraph) (inputs: Inputs) owner allocation =
            not (Platform.read graph).Findings.IsEmpty then None
         else
             let frame = inputs.Frames[owner]
+            let rec frameOwners seen owner =
+                if Set.contains owner seen then seen else
+                let seen = Set.add owner seen
+                graph.Edges |> List.fold (fun found edge ->
+                    match edge.Role, edge.Sources with
+                    | EdgeRole.ContinuationRegion, [parent; child; _] when parent = owner -> frameOwners found child
+                    | _ -> found) seen
+            let owners = family.Members.Keys |> Seq.fold frameOwners Set.empty
             let dependencies =
-                family.Members |> Map.toList |> List.collect (fun (memberOwner, memberContract) ->
-                    memberOwner :: memberContract.Generator :: memberContract.Formal :: memberContract.State ::
-                    ((memberContract.Slots |> List.map _.Source) @ memberContract.Obligations @
+                owners |> Set.toList |> List.collect (fun memberOwner ->
+                    let memberFrame = inputs.Frames[memberOwner]
+                    let regions = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ContinuationRegion && List.tryHead edge.Sources = Some memberOwner)
+                    memberOwner :: memberFrame.Generator :: memberFrame.Formal :: memberFrame.State ::
+                    (((memberFrame.Slots @ memberFrame.ScratchSlots) |> List.map _.Source) @ memberFrame.Obligations @
+                     (regions |> List.collect (fun edge -> edge.Target :: edge.Sources)) @
                      (inputs.Initializers[memberOwner] |> List.collect (fun (slot, value) -> [slot; value]))))
+            // Keep the full recursive proof associated with this allocation.
+            // Filtering the flattened evidence by target would lose borrowed
+            // templates and the current reads used while proving its owner.
+            let residenceSupport =
+                Set.add allocation owners |> Set.toList |> List.collect (fun site ->
+                    residence.EvidenceBySite.TryFind site |> Option.defaultValue []
+                    |> List.collect (fun edge -> edge.Target :: edge.Sources))
+            let proofSupport =
+                graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains && List.contains edge.Target dependencies)
+                |> List.collect (fun edge -> edge.Target :: edge.Sources)
             Some { Class = EdgeClass.Provenance; Role = EdgeRole.SequenceProgramStorage; Target = allocation; Ordinal = 0
                    Sources = List.distinct ([allocation; owner; frame.Generator; frame.Formal; authority.Initializer.Binding; family.Identity] @
-                                            dependencies @ (participants |> Set.toList)) }
+                                            dependencies @ (participants |> Set.toList) @ residenceSupport @ proofSupport) }
     | _ -> None
 
 /// Placement grants static residence only to the source allocation. Acquisition
@@ -189,10 +272,11 @@ let prepare (graph: SemanticGraph) inputs (factoryMap: Map<NodeId, NodeId>) (res
                 else Some owner
             | _ -> None
         owner |> Option.bind (fun owner ->
-            if residence.Sites.ContainsKey site then backing graph inputs owner site |> Option.map (fun row -> site, row)
+            if residence.Sites.ContainsKey site then backing graph inputs residence owner site |> Option.map (fun row -> site, row)
             else None))
     let edges = candidates |> List.map snd
-    let graph = { graph with Edges = graph.Edges @ edges }
+    let currentBorrows = residence.Evidence |> List.filter isBorrow |> List.distinctBy edgeKey
+    let graph = { graph with Edges = (graph.Edges |> List.filter (isBorrow >> not)) @ currentBorrows @ edges }
     graph, (candidates |> List.fold (fun sites (site, _) -> Map.add site EscapeKind.StaticLifetime sites) residences)
 
 /// Explicit-input reader for program inventory settlement before final Codata
@@ -206,6 +290,13 @@ let allocations (graph: SemanticGraph) inputs (residences: Map<NodeId, EscapeKin
     if residences.IsEmpty then Map.empty else
     let calls = factoryCalls graph inputs
     let residence = Residence.analyzeWithRegions graph inputs.Destinations (calls |> Map.map (fun _ (_, allocation, _) -> allocation))
+    // Absence, extra rows and changed role/ordinal/order remain observable.
+    // This inventory check is conservative across accepted source sites;
+    // per-instance participants retain only their complete derivation.
+    let currentBorrows = residence.Evidence |> List.filter isBorrow |> List.map edgeKey
+    let storedBorrows = graph.Edges |> List.filter isBorrow |> List.map edgeKey
+    if currentBorrows.Length <> storedBorrows.Length ||
+       (currentBorrows |> List.exists (fun expected -> storedBorrows |> List.filter ((=) expected) |> List.length <> 1)) then Map.empty else
     residences |> Map.toList |> List.choose (fun (allocation, kind) ->
         if kind <> EscapeKind.StaticLifetime || not (residence.Sites.ContainsKey allocation) then None else
         let owner =
@@ -213,7 +304,7 @@ let allocations (graph: SemanticGraph) inputs (residences: Map<NodeId, EscapeKin
             | Some { Kind = SemanticKind.SeqExpr _ } when not (inputs.Destinations.ContainsKey allocation) -> Some allocation
             | Some { Kind = SemanticKind.ContinuationAllocate owner } when calls |> Map.exists (fun _ (actualOwner, site, _) -> actualOwner = owner && site = allocation) -> Some owner
             | _ -> None
-        owner |> Option.bind (fun owner -> backing graph inputs owner allocation |> Option.bind (fun expected ->
+        owner |> Option.bind (fun owner -> backing graph inputs residence owner allocation |> Option.bind (fun expected ->
             let rows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.SequenceProgramStorage && edge.Target = allocation)
             match rows with
             | [row] when row.Class = expected.Class && row.Ordinal = expected.Ordinal && row.Sources = expected.Sources ->

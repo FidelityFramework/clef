@@ -18,6 +18,7 @@ module Origins = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins
 module Evidence = Clef.Compiler.Baker.Recipes.SequenceContinuationEvidence
 module LayoutProof = Clef.Compiler.Baker.Recipes.ContinuationObligationRecipes
 module Families = Clef.Compiler.Nanopass.SequenceFamilies
+module Accumulations = Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes
 
 type Settlement = {
     Frames: Map<NodeId, ContinuationFrame>
@@ -237,6 +238,12 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
             | SemanticKind.SeqExpr _ when node.IsReachable ->
                 match Control.forOwner graph node with Ok control -> Some(node.Id, control) | Result.Error _ -> None
             | _ -> None) |> Map.ofSeq
+        let freshAccumulations =
+            if (graph.Edges |> List.exists (fun edge -> edge.Role = EdgeRole.SequencePullBound || edge.Role = EdgeRole.SequenceAccumulation)) ||
+               (graph.Nodes.Values |> Seq.exists Accumulations.hasProof) then
+                Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.sequenceAccumulationFacts graph
+            else Some []
+        let graph, accumulationFailures = Accumulations.handoff graph controls freshAccumulations
         let familyPlan = Families.plan graph (Origins.describe graph originFacts) controls
         trace "family-plan"
         let planned =
@@ -253,7 +260,8 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
                             residence.Regions origins familyPlan.ByOwner
         let plans = plans |> List.map (fun (control, frame, slots, proof) -> control, regionPlan.Frames[frame.Owner], slots, proof)
         let diagnostics =
-            (snapshots.Unresolved |> List.map (fun (site, consumer) -> residual graph.Nodes[site] [consumer] "The Option current snapshot lacks a finite covering activation for every use."))
+            (accumulationFailures |> List.map (fun (site, reason) -> residual graph.Nodes[site] [] reason))
+            @ (snapshots.Unresolved |> List.map (fun (site, consumer) -> residual graph.Nodes[site] [consumer] "The Option current snapshot lacks a finite covering activation for every use."))
             @ (regionPlan.Unresolved |> List.map (fun pending -> residual graph.Nodes[pending.Site] [] pending.Reason))
             @ (familyPlan.Unresolved |> List.map (fun pending -> residual graph.Nodes[pending.Site] [] pending.Reason))
             @ (planned |> List.choose (function Result.Error diagnostic -> Some diagnostic | _ -> None))
@@ -280,6 +288,12 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
         let rewritten =
             if byGenerator.IsEmpty then graph
             else FoldIn.foldIn (FanOut.fanOut "SequenceRuntime" (fun node -> byGenerator.ContainsKey node.Id) create graph) graph
+        let rewritten = realized |> List.fold (fun graph result ->
+            match result with
+            | Ok(frame, machine, proof) ->
+                let supports = (machine.Nodes @ proof.NewNodes) |> List.map _.Id
+                Accumulations.retainMachineSupports frame.Owner supports graph
+            | Result.Error _ -> graph) rewritten
         // These source placements precede this representation-only recipe.
         // It adds no source aggregate type and preserves every existing slot.
         let rewritten = { rewritten with FieldRanges = graph.FieldRanges; ElementRanges = graph.ElementRanges

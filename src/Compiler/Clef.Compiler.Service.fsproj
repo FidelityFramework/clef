@@ -395,6 +395,8 @@
     <Compile Include="Baker\Recipes\ObligationRecipes.fs" />
     <Compile Include="Baker\Recipes\LoopRangeRecipes.fs" />
     <Compile Include="Nanopass\LoopRanges.fs" />
+    <Compile Include="Baker\Recipes\SequenceAccumulationRecipes.fs" />
+    <Compile Include="Nanopass\SequenceAccumulations.fs" />
     <!-- Nanopass passes - must come after Baker -->
     <Compile Include="Nanopass\IntrinsicElaboration.fs" />
     <Compile Include="Nanopass\ProgramInitialization.fs" />
