@@ -664,38 +664,42 @@ let checkTypeApp
 // Lambda Expression
 //-------------------------------------------------------------------------
 
-/// Collect all VarRef names from a semantic node tree (recursive traversal)
-/// Made public for reuse in checkLazy (PRD-14)
-let collectVarRefs (builder: NodeBuilder) (nodeId: NodeId) : Set<string> =
+/// Keep the source declaration selected during body checking. A nested binding
+/// can have the same spelling as an outer capture without referring to it.
+let private collectVarRefOrigins (builder: NodeBuilder) (nodeId: NodeId) : Set<string * NodeId option> =
     let nodes = builder.Nodes
-    let rec collect (nodeId: NodeId) (acc: Set<string>) : Set<string> =
+    let rec collect (nodeId: NodeId) (acc: Set<string * NodeId option>) =
         match Map.tryFind nodeId nodes with
         | None -> acc
         | Some node ->
             let acc =
                 match node.Kind with
-                | SemanticKind.VarRef(name, _) -> Set.add name acc
+                | SemanticKind.VarRef(name, source) -> Set.add (name, source) acc
                 | _ -> acc
             // Recurse into children
             node.Children |> List.fold (fun a childId -> collect childId a) acc
     collect nodeId Set.empty
+
+/// Collect all VarRef names from a semantic node tree (recursive traversal).
+let collectVarRefs (builder: NodeBuilder) (nodeId: NodeId) : Set<string> =
+    collectVarRefOrigins builder nodeId |> Set.map fst
 
 /// Compute captures for a body node, excluding given parameter names
 /// Reusable for Lambda (checkLambda) and Lazy (checkLazy) capture analysis
 /// PRD-14: Both Lambda and Lazy use MLKit-style flat closures with inlined captures
 /// CRITICAL: Only LOCAL bindings are captured; module-level bindings are referenced by address
 let computeCaptures (builder: NodeBuilder) (env: TypeEnv) (bodyNodeId: NodeId) (excludeNames: Set<string>) : CaptureInfo list =
-    let bodyVarRefs = collectVarRefs builder bodyNodeId
-    let capturedNames = Set.difference bodyVarRefs excludeNames
-    capturedNames
+    let bodyVarRefs = collectVarRefOrigins builder bodyNodeId
+    bodyVarRefs
+    |> Set.filter (fun (name, _) -> not (Set.contains name excludeNames))
     |> Set.toList
-    |> List.choose (fun name ->
+    |> List.choose (fun (name, source) ->
         match tryLookupBinding name env with
         | Some binding ->
-            // PRD-14: Module-level bindings are NOT captured - they're referenced by address
-            // Only local bindings (from enclosing function scopes) become closure captures
-            if binding.IsModuleLevel then
-                None  // Reference by address, not capture
+            // Module values are referenced by address. A same-name declaration
+            // introduced inside the body is not the enclosing local binding.
+            if binding.IsModuleLevel || binding.NodeId <> source then
+                None
             else
                 Some {
                     CaptureInfo.Name = name

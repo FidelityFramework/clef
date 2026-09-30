@@ -653,21 +653,24 @@ let checkLazy
     let innerNode = checkExpr { env with EnclosingSeqExpr = None } builder innerExpr
     let lazyType = NativeTypes.Types.mkLazyType innerNode.Type
 
-    // Capture analysis: find VarRefs in body that are NOT the unit parameter
-    // These are variables captured from the enclosing scope
-    // PRD-14: Lazy values are "extended flat closures" with inlined captures
-    let unitParamName = "_unit"
-    let captures = computeCaptures builder env innerNode.Id (Set.singleton unitParamName)
+    // The ignored thunk formal is not a source binder. The body was checked
+    // in its original scope, including any source binding named _unit.
+    let captures = computeCaptures builder env innerNode.Id Set.empty
 
     // Create a thunk Lambda: unit -> 'T
     // The thunk takes a unit parameter and returns the lazy body
     // Thunk captures the same variables as the lazy expression
     let thunkType = NativeType.TFun(Types.unitType, innerNode.Type)
+    let unitParameter = builder.Create(
+        SemanticKind.PatternBinding "_unit", Types.unitType,
+        { range with End = range.Start }, arena = env.CurrentArena)
     let thunkLambda = builder.Create(
-        SemanticKind.Lambda([("_unit", Types.unitType, NodeId -1)], innerNode.Id, captures, env.EnclosingFunction, LambdaContext.LazyThunk),
+        SemanticKind.Lambda([("_unit", Types.unitType, unitParameter.Id)], innerNode.Id, captures, env.EnclosingFunction, LambdaContext.LazyThunk),
         thunkType,
         range,
-        children = [innerNode.Id])
+        children = [unitParameter.Id; innerNode.Id])
+    builder.SetParent(unitParameter.Id, thunkLambda.Id)
+    builder.SetParent(innerNode.Id, thunkLambda.Id)
 
     // Architectural fix (January 2026): Mark Lambda body as SeparateFunction
     // Pass capture count so SSA assignment starts body SSAs after capture extraction
@@ -675,11 +678,13 @@ let checkLazy
 
     // Create LazyExpr with the thunk as the body
     // LazyExpr stores the same captures (they're inlined in the lazy struct)
-    builder.Create(
+    let owner = builder.Create(
         SemanticKind.LazyExpr(thunkLambda.Id, captures),
         lazyType,
         range,
         children = [thunkLambda.Id])
+    builder.SetParent(thunkLambda.Id, owner.Id)
+    owner
 
 //-------------------------------------------------------------------------
 // Sequence Expressions (PRD-15)

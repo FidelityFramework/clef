@@ -36,6 +36,7 @@
     <Compile Include="ClosedCallbackCases.fs" />
     <Compile Include="ClosureValueCases.fs" />
     <Compile Include="UnitLambdaCases.fs" />
+    <Compile Include="LazyThunkIdentityCases.fs" />
     <Compile Include="EagerSyntaxCases.fs" />
     <Compile Include="FoldInReferenceCases.fs" />
     <Compile Include="DirectCaptureCases.fs" />
