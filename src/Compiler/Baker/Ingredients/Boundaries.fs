@@ -20,6 +20,11 @@ let platformPremise (platform: PlatformContext option) =
 /// Closed immutable observations; native types become identities before any
 /// later inference-cell mutation can occur. Only settlement calls readers.
 let premise (node: SemanticNode) : BoundarySourcePremise =
+    let captures =
+        match node.Kind with
+        | SemanticKind.Lambda(_, _, values, _, _) | SemanticKind.SeqExpr(_, values)
+        | SemanticKind.LazyExpr(_, values) -> values
+        | _ -> []
     let literal = function
         | NativeLiteral.String value -> "string", [value], []
         | NativeLiteral.Int(value, kind) -> "integer", [string kind], [bigint value]
@@ -41,12 +46,22 @@ let premise (node: SemanticNode) : BoundarySourcePremise =
         | SemanticKind.DUConstruct(name, index, _, _) -> "settled-case", [name], [bigint index]
         | SemanticKind.Literal value -> literal value
         | SemanticKind.VarRef(name, _) -> "reference", [name], []
-        | SemanticKind.Binding(name, mutable', recursive', _) -> "binding", [name], [if mutable' then 1I else 0I; if recursive' then 1I else 0I]
+        | SemanticKind.Binding(name, mutable', recursive', root) ->
+            let rootTag =
+                match root with
+                | None -> "no-declaration-root"
+                | Some DeclRoot.EntryPoint -> "entry-point"
+                | Some DeclRoot.HardwareModule -> "hardware-module"
+                | Some DeclRoot.KernelModule -> "kernel-module"
+            "binding", [name; rootTag], [if mutable' then 1I else 0I; if recursive' then 1I else 0I]
         | SemanticKind.TypeAnnotation _ -> "annotation", [], []
         | SemanticKind.Quote _ -> "quotation", [], []
         | SemanticKind.Application _ -> "application", [], []
         | SemanticKind.ContinuationDispatch(_, cases, _) -> "continuation-dispatch", [], cases |> List.map (fst >> bigint)
         | SemanticKind.FieldGet(_, name) -> "field", [name], []
+        | SemanticKind.FieldSet(_, name, _) -> "field-set", [name], []
+        | SemanticKind.TupleGet(_, index) -> "tuple-get", [], [bigint index]
+        | SemanticKind.DUEliminate(_, tag, name, _) -> "union-eliminate", [name], [bigint tag]
         | SemanticKind.StringByteBorrow _ -> "string-byte-borrow", [], []
         | SemanticKind.CellAddress _ -> "cell-address", [], []
         | SemanticKind.ElementAddress _ -> "element-address", [], []
@@ -54,6 +69,25 @@ let premise (node: SemanticNode) : BoundarySourcePremise =
         | SemanticKind.Reborrow _ -> "reborrow", [], []
         | SemanticKind.Intrinsic info -> "intrinsic", [string info.Module; info.Operation], []
         | SemanticKind.Lambda(formals, _, captures, _, context) -> "lambda", string context :: List.map (fun (name, _, _) -> name) formals, [bigint formals.Length; bigint captures.Length]
+        | SemanticKind.PatternBinding name -> "pattern-binding", [name], []
+        | SemanticKind.LazyValue _ -> "lazy-value", [], []
+        | SemanticKind.LazyEnvironment(_, initializers) -> "lazy-environment", [], [bigint initializers.Length]
+        | SemanticKind.LazyAllocate _ -> "lazy-allocation", [], []
+        | SemanticKind.LazyEnvironmentReference _ -> "lazy-environment-reference", [], []
+        | SemanticKind.LazyRead _ -> "lazy-read", [], []
+        | SemanticKind.LazyBorrow _ -> "lazy-borrow", [], []
+        | SemanticKind.LazyWrite _ -> "lazy-write", [], []
+        | SemanticKind.LazyExpr _ -> "unsettled-lazy", [], []
+        | SemanticKind.LazyForce _ -> "unsettled-force", [], []
+        | SemanticKind.Sequential _ -> "sequential", [], []
+        | SemanticKind.IfThenElse _ -> "conditional", [], []
+        | SemanticKind.EagerExpr _ -> "eager", [], []
+        | SemanticKind.EnvironmentCreate(_, initializers) -> "environment-create", [], [bigint initializers.Length]
+        | SemanticKind.EnvironmentRead _ -> "environment-read", [], []
+        | SemanticKind.EnvironmentBorrow _ -> "environment-borrow", [], []
+        | SemanticKind.EnvironmentWrite _ -> "environment-write", [], []
+        | SemanticKind.EnvironmentReference _ -> "environment-reference", [], []
+        | SemanticKind.ClosureValue _ -> "closure-value", [], []
         | SemanticKind.ModuleDef(name, _) -> "module", [name], []
         | SemanticKind.TypeDef(name, kind, _) ->
             match kind with
@@ -68,10 +102,13 @@ let premise (node: SemanticNode) : BoundarySourcePremise =
             | TypeDefKind.ClassDef -> "class-definition", [name], []
             | TypeDefKind.StructDef -> "struct-definition", [name], []
             | TypeDefKind.InterfaceDef -> "interface-definition", [name], []
-        | _ -> "other-incidence", [], []
+        | kind ->
+            let case, _ = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(kind, typeof<SemanticKind>)
+            case.Name, [], []
     let embeddedTypes =
         match node.Kind with
         | SemanticKind.Lambda(formals, _, captures, _, _) -> (formals |> List.map (fun (_, ty, _) -> ty)) @ (captures |> List.map _.Type)
+        | SemanticKind.SeqExpr(_, captures) | SemanticKind.LazyExpr(_, captures) -> captures |> List.map _.Type
         | SemanticKind.TypeAnnotation(_, ty) -> [ty]
         | SemanticKind.TypeDef(_, TypeDefKind.RecordDef fields, _) -> fields |> List.map snd
         | SemanticKind.TypeDef(_, TypeDefKind.UnionDef cases, _) -> cases |> List.collect (snd >> List.map snd)
@@ -104,8 +141,19 @@ let premise (node: SemanticNode) : BoundarySourcePremise =
             | MetadataValue.Type ty -> Some (["type"], [], [], Some (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType ty))
             | _ -> None // No boundary rule reads floating/source-location/specialization metadata.
         match fact with Some value -> Map.add name value facts | None -> facts) Map.empty
-    { Shape = { Form = form; Text = text; Numbers = numbers
-                References = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node |> List.collect _.Sources
+    let captureNumbers =
+        match node.Kind with
+        | SemanticKind.Lambda _ | SemanticKind.SeqExpr _ | SemanticKind.LazyExpr _ ->
+            bigint captures.Length :: (captures |> List.collect (fun capture ->
+                [if capture.IsMutable then 1I else 0I; if capture.SourceNodeId.IsSome then 1I else 0I]))
+        | _ -> []
+    { Shape = { Form = form; Text = text @ (captures |> List.map _.Name)
+                Numbers = numbers @ captureNumbers
+                References =
+                    (Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node |> List.collect _.Sources) @
+                    (match node.Kind with
+                     | SemanticKind.LazyEnvironment(_, initializers) | SemanticKind.EnvironmentCreate(_, initializers) -> List.map fst initializers
+                     | _ -> []) @ (captures |> List.choose _.SourceNodeId)
                 Children = node.Children; Parent = node.Parent
                 SourceType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type }
       EmbeddedTypes = embeddedTypes |> List.map Clef.Compiler.NativeTypedTree.TypeIdentities.ofType

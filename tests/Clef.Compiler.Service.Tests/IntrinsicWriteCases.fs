@@ -300,7 +300,307 @@ let main _ =
             |> List.map _.Node)
         |> List.sort
 
+module private ConditionalStringOriginFixture =
+    let source guard other =
+        "module ConditionalStringOrigin\nlet writeChoice (flag: bool) =\n" +
+        "    let text = if " + guard + " then \"é\" else \"" + other + "\"\n" +
+        "    let _ = Sys.write 1 text.Bytes text.Length\n    ()\n" +
+        "[<EntryPoint>]\nlet main _ =\n    writeChoice true\n    writeChoice false\n    0\n"
+
+    let check source = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.writableAuthority source
+
+    let conditional (graph: SemanticGraph) =
+        graph.Nodes.Values |> Seq.find (fun node ->
+            Types.isStringType node.Type && match node.Kind with SemanticKind.IfThenElse _ -> true | _ -> false)
+
+    let tuple site participants =
+        participants |> List.filter (fun participant -> participant.Group = site && participant.Role = ParticipantRole.Construction)
+        |> List.sortBy _.Ordinal |> List.map (fun participant -> participant.Ordinal, participant.Node)
+
+module private LazyStringOriginFixture =
+    let source cohort =
+        let declaration, body =
+            match cohort with
+            | "capture" -> "", "    let original = \"é\"\n    let delayed = lazy original\n    write (Lazy.force delayed)\n    write (Lazy.force delayed)\n"
+            | "factory" -> "let make () = lazy \"é\"\n", "    let first = make ()\n    let second = make ()\n    let alias = first\n    write (Lazy.force alias)\n    write (Lazy.force second)\n"
+            | _ -> "", "    let delayed = lazy \"é\"\n    write (Lazy.force delayed)\n    write (Lazy.force delayed)\n"
+        "module LazyStringOrigin\nlet write (s: string) =\n    let _ = Sys.write 1 s.Bytes s.Length\n    ()\n" +
+        declaration + "[<EntryPoint>]\nlet main _ =\n" + body + "    0\n"
+
+    let check source =
+        // Lazy environment storage names the platform's octet offer uint8.
+        // This fixture declares that same 8-bit, 0..255 offer explicitly.
+        let platform =
+            let octet = IntrinsicWriteFixture.platform.Representations["octet"]
+            { IntrinsicWriteFixture.platform with
+                Representations = IntrinsicWriteFixture.platform.Representations.Remove("octet").Add("uint8", { octet with Name = "uint8" }) }
+        let parse text path =
+            match parseStringWithDefaults text path with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "%A" errors
+        checkParsedInputsWithPlatform
+            [ parse (IntrinsicWriteFixture.writableAuthority.Replace("\"octet\"", "\"uint8\"")) "write-authority.clef"
+              parse source "intrinsic-write.clef" ] (Some platform)
+
 type IntrinsicWriteCases() =
+    [<Theory>]
+    [<InlineData("flag", "plane", 5)>]
+    [<InlineData("flag", "xy", 2)>]
+    [<InlineData("true", "plane", 5)>]
+    [<InlineData("false", "plane", 5)>]
+    member _.``Conditional string origins retain both exact UTF8 branches before and after range settlement`` (guard, other, length: int) =
+        let graph, projection =
+            ConditionalStringOriginFixture.source guard other |> ConditionalStringOriginFixture.check
+            |> IntrinsicWriteFixture.graphAndProjection
+        let conditional = ConditionalStringOriginFixture.conditional graph
+        let condition, yes, no =
+            match conditional.Kind with SemanticKind.IfThenElse(condition, yes, Some no) -> condition, yes, no | _ -> failwith "Missing complete conditional"
+        let expectedOrigins = Map.ofList [yes, 2I; no, bigint length]
+        let expectedTuple = [0, conditional.Id; 1, condition; 2, yes; 3, no]
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let view = projection.ByteViews[call.Buffer]
+        let extent = projection.StringExtents[call.Count]
+        Assert.Equal<Map<NodeId, bigint>>(expectedOrigins, view.StaticOrigins)
+        Assert.Equal<Map<NodeId, bigint>>(expectedOrigins, extent.StaticOrigins)
+        Assert.Equal(conditional.Id, view.ExtentSource)
+        Assert.Equal(view.ExtentSource, extent.ExtentSource)
+        Assert.Equal(Some(ValueRange.bounded 2I (bigint length)), graph.Nodes[call.Count].ValueRange)
+        for participants in [view.Participants; extent.Participants] do
+            let occurrences = IntrinsicWriteFixture.established participants
+            Assert.Equal<(int * NodeId) list>(expectedTuple, ConditionalStringOriginFixture.tuple conditional.Id occurrences)
+            for branch in [yes; no] do
+                Assert.Contains(occurrences, fun participant -> participant.Node = branch && participant.Role = ParticipantRole.Origin && participant.Group = branch)
+        let histories = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringBorrowHistory history when history.Site = view.Site || history.Site = extent.Site -> Some history | _ -> None)
+        Assert.Equal(2, histories.Length)
+        for history in histories do
+            Assert.Equal<(int * NodeId) list>(expectedTuple, ConditionalStringOriginFixture.tuple conditional.Id history.Early.Derived)
+        let bounds = [2I,2I,3I; bigint length,bigint length,bigint length + 1I] |> List.sort
+        Assert.Contains(projection.IntrinsicWriteProofs[call.Site], fun proof ->
+            match proof.Body with ObligationBody.StringBorrowBound actual -> List.sort actual = bounds | _ -> false)
+
+    [<Fact>]
+    member _.``Conditional string origins preserve both branches through a complete formal input`` () =
+        let source = "module ConditionalFormal\nlet write (text: string) =\n    let _ = Sys.write 1 text.Bytes text.Length\n    ()\nlet choose (flag: bool) =\n    write (if flag then \"é\" else \"plane\")\n[<EntryPoint>]\nlet main _ =\n    choose true\n    choose false\n    0\n"
+        let graph, projection = ConditionalStringOriginFixture.check source |> IntrinsicWriteFixture.graphAndProjection
+        let conditional = ConditionalStringOriginFixture.conditional graph
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let view = projection.ByteViews[call.Buffer]
+        let expected = Map.ofList [IntrinsicWriteFixture.literal graph "é", 2I; IntrinsicWriteFixture.literal graph "plane", 5I]
+        Assert.Equal<Map<NodeId,bigint>>(expected, view.StaticOrigins)
+        Assert.Equal<Map<NodeId,bigint>>(expected, projection.StringExtents[call.Count].StaticOrigins)
+        Assert.Equal(Some(ValueRange.bounded 2I 5I), graph.Nodes[call.Count].ValueRange)
+        Assert.Contains(IntrinsicWriteFixture.established view.Participants, fun participant -> participant.Node = conditional.Id && participant.Role = ParticipantRole.ReachingActual)
+
+    [<Theory>]
+    [<InlineData("unknown")>]
+    [<InlineData("mutable")>]
+    [<InlineData("absent")>]
+    [<InlineData("missing-else")>]
+    [<InlineData("child-order")>]
+    [<InlineData("guard-type")>]
+    member _.``A conditional origin refuses an incomplete branch or altered source tuple`` defect =
+        let graph, _ = ConditionalStringOriginFixture.source "flag" "plane" |> ConditionalStringOriginFixture.check |> IntrinsicWriteFixture.graphAndProjection
+        let conditional = ConditionalStringOriginFixture.conditional graph
+        let guard, yes, no = match conditional.Kind with SemanticKind.IfThenElse(g,y,Some n) -> g,y,n | _ -> failwith "Missing complete conditional"
+        let change id rewrite = { graph with Nodes = graph.Nodes.Add(id, rewrite graph.Nodes[id]) }
+        let changed =
+            match defect with
+            | "unknown" -> change yes (fun node -> { node with Kind = SemanticKind.VarRef("unknown",None); Children = [] })
+            | "mutable" -> change yes (fun node -> { node with Kind = SemanticKind.Binding("mutable-source",true,false,None); Children = [no] })
+            | "absent" -> { graph with Nodes = graph.Nodes.Remove no }
+            | "missing-else" -> change conditional.Id (fun node -> { node with Kind = SemanticKind.IfThenElse(guard,yes,None); Children = [guard;yes] })
+            | "child-order" -> change conditional.Id (fun node -> { node with Children = [guard;no;yes] })
+            | _ -> change guard (fun node -> { node with Type = Types.stringType })
+        let flow = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
+        Assert.Equal(Ok None, Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin changed flow conditional.Id conditional.Id)
+        Assert.True(IntrinsicBoundary.project changed |> Result.isError)
+
+    [<Fact>]
+    member _.``Conditional origin authority rejects reordered complete branches and a replaced guard`` () =
+        let graph, _ = ConditionalStringOriginFixture.source "flag" "plane" |> ConditionalStringOriginFixture.check |> IntrinsicWriteFixture.graphAndProjection
+        let conditional = ConditionalStringOriginFixture.conditional graph
+        let guard, yes, no = match conditional.Kind with SemanticKind.IfThenElse(g,y,Some n) -> g,y,n | _ -> failwith "Missing complete conditional"
+        let swapped = { conditional with Kind = SemanticKind.IfThenElse(guard,no,Some yes); Children = [guard;no;yes] }
+        let guardNode = { graph.Nodes[guard] with Kind = SemanticKind.Literal(NativeLiteral.Bool true); Children = [] }
+        for nodes in [graph.Nodes.Add(conditional.Id,swapped); graph.Nodes.Add(guard,guardNode)] do
+            Assert.True(IntrinsicBoundary.project { graph with Nodes = nodes } |> Result.isError)
+
+    [<Fact>]
+    member _.``Boundary capture observations preserve the literal payload read by kernel transport`` () =
+        let graph, _ = IntrinsicWriteFixture.admitted ()
+        let template = graph.Nodes.Values |> Seq.find (fun node ->
+            match node.Kind with SemanticKind.Literal(NativeLiteral.Int _) -> true | _ -> false)
+        let literal = { template with Kind = SemanticKind.Literal(NativeLiteral.Int(16L, NTUKind.NTUint(NTUWidth.Fixed 16))); Children = [] }
+        let shape = (Clef.Compiler.Baker.Ingredients.Boundaries.premise literal).Shape
+        // KernelDeclarations decodes this exact singleton payload. Capture
+        // metadata belongs only to lambda/sequence/lazy shapes, even when empty.
+        let transported =
+            match shape with
+            | { Form = ("integer" | "unsigned-integer"); Numbers = [value] } -> Some value
+            | _ -> None
+        Assert.Equal(Some 16I, transported)
+        Assert.Equal<bigint list>([16I], shape.Numbers)
+
+    [<Fact>]
+    member _.``Boundary source premise retains ordered raw capture identity and mutability`` () =
+        let graph, _ = IntrinsicWriteFixture.admitted ()
+        let node = graph.Nodes.Values |> Seq.find (fun node -> match node.Kind with SemanticKind.Lambda _ -> true | _ -> false)
+        let formals, body, enclosing, context =
+            match node.Kind with
+            | SemanticKind.Lambda(formals, body, _, enclosing, context) -> formals, body, enclosing, context
+            | _ -> failwith "Missing lambda"
+        let captures : CaptureInfo list =
+            [ { Name = "first"; Type = node.Type; IsMutable = false; SourceNodeId = Some node.Id }
+              { Name = "second"; Type = node.Type; IsMutable = false; SourceNodeId = Some body } ]
+        let mutations =
+            [ { captures.Head with SourceNodeId = Some body } :: captures.Tail
+              { captures.Head with SourceNodeId = None } :: captures.Tail
+              { captures.Head with IsMutable = true } :: captures.Tail
+              List.rev captures ]
+        for shape in [ (fun values -> SemanticKind.Lambda(formals, body, values, enclosing, context))
+                       (fun values -> SemanticKind.SeqExpr(body, values))
+                       (fun values -> SemanticKind.LazyExpr(body, values)) ] do
+            let original = { node with Kind = shape captures }
+            let expected = Clef.Compiler.Baker.Ingredients.Boundaries.premise original
+            for changed in mutations do
+                let actual = Clef.Compiler.Baker.Ingredients.Boundaries.premise { node with Kind = shape changed }
+                Assert.NotEqual<BoundarySourcePremise>(expected, actual)
+
+    [<Fact>]
+    member _.``Lazy zero-length comparison retains source origin authority through extent rows`` () =
+        let source = "module LazyEmptyOrigin\n[<EntryPoint>]\nlet main _ =\n    let delayed = lazy \"\"\n    if Lazy.force delayed = \"\" then 0 else 1\n"
+        let graph, projection = LazyStringOriginFixture.check source |> IntrinsicWriteFixture.graphAndProjection
+        Assert.Empty projection.ByteViews
+        Assert.Contains(projection.StringExtents.Values, fun extent ->
+            IntrinsicWriteFixture.established extent.Participants |> List.exists (fun participant -> participant.Role = ParticipantRole.LazyStringOrigin))
+        let domain = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.BoundaryDomain value -> Some value | _ -> None) |> Assert.Single
+        Assert.True(domain.StringOriginRelations.IsSome)
+        let changed = { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.LazyMemoization) }
+        Assert.True(IntrinsicBoundary.project changed |> Result.isError)
+
+    [<Theory>]
+    [<InlineData("missing")>]
+    [<InlineData("duplicate")>]
+    [<InlineData("ordinal")>]
+    [<InlineData("class")>]
+    [<InlineData("source-order")>]
+    [<InlineData("capture-mode")>]
+    [<InlineData("extra-consumer")>]
+    [<InlineData("list-order")>]
+    [<InlineData("declaration-root")>]
+    [<InlineData("unsupported-payload")>]
+    [<InlineData("marker-missing")>]
+    member _.``Boundary snapshot refuses changed lazy provenance with unchanged nodes`` defect =
+        let graph, _ =
+            LazyStringOriginFixture.source "capture" |> LazyStringOriginFixture.check
+            |> IntrinsicWriteFixture.graphAndProjection
+        let force = graph.Edges |> List.find (fun edge -> edge.Role = EdgeRole.LazyMemoization)
+        let replace changed = graph.Edges |> List.map (fun edge -> if obj.ReferenceEquals(edge, force) then changed else edge)
+        let edges =
+            match defect with
+            | "missing" -> graph.Edges |> List.filter (fun edge -> not (obj.ReferenceEquals(edge, force)))
+            | "duplicate" -> force :: graph.Edges
+            | "ordinal" -> replace { force with Ordinal = force.Ordinal + 1 }
+            | "class" -> replace { force with Class = EdgeClass.Reference }
+            | "source-order" -> replace { force with Sources = List.rev force.Sources }
+            | "list-order" -> List.rev graph.Edges
+            | "capture-mode" -> graph.Edges |> List.map (fun edge -> match edge.Role with EdgeRole.LazyCapture false -> { edge with Role = EdgeRole.LazyCapture true } | _ -> edge)
+            | "unsupported-payload" -> { force with Class = EdgeClass.Reference; Role = EdgeRole.StringByteRange(1I, 2I) } :: graph.Edges
+            | "marker-missing" -> graph.Edges |> List.map (fun edge ->
+                match edge.Role with
+                | EdgeRole.StringByteView view ->
+                    let participants = IntrinsicWriteFixture.established view.Participants |> List.filter (fun value -> value.Role <> ParticipantRole.LazyStringOrigin)
+                    Clef.Compiler.Baker.Ingredients.StringBytes.viewRow { view with Participants = ParticipantEvidence.Established participants }
+                | _ -> edge)
+            | _ -> { Class = EdgeClass.Reference; Role = EdgeRole.Definition; Ordinal = 0; Sources = [force.Target]; Target = force.Target } :: graph.Edges
+        let changed =
+            if defect = "declaration-root" then { graph with DeclarationRoots = (force.Target, DeclRoot.EntryPoint) :: graph.DeclarationRoots }
+            else { graph with Edges = edges }
+        Assert.Same(graph.Nodes, changed.Nodes)
+        Assert.True(IntrinsicBoundary.project changed |> Result.isError)
+
+    [<Theory>]
+    [<InlineData("read-kind")>]
+    [<InlineData("store-order")>]
+    [<InlineData("guard")>]
+    [<InlineData("unguarded-read")>]
+    [<InlineData("conditional-result")>]
+    member _.``Lazy string origins refuse a damaged force even when the literal is resident`` defect =
+        let graph, _ = LazyStringOriginFixture.source "capture" |> LazyStringOriginFixture.check |> IntrinsicWriteFixture.graphAndProjection
+        let force = (Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues.settle graph).Forces.Values |> Seq.head
+        let change id rewrite = { graph with Nodes = graph.Nodes.Add(id, rewrite graph.Nodes[id]) }
+        let changed =
+            match defect with
+            | "read-kind" -> change force.CachedRead (fun node ->
+                match node.Kind with
+                | SemanticKind.LazyRead(environment, slot) -> { node with Kind = SemanticKind.LazyBorrow(environment, slot) }
+                | _ -> failwith "Missing cached read")
+            | "store-order" -> change force.UncachedBranch (fun node ->
+                match node.Kind with
+                | SemanticKind.Sequential [binding; store; publication; result] ->
+                    { node with Kind = SemanticKind.Sequential [binding; publication; store; result]; Children = [binding; publication; store; result] }
+                | _ -> failwith "Missing uncached spine")
+            | "guard" -> change force.Conditional (fun node ->
+                match node.Kind with
+                | SemanticKind.IfThenElse(_, yes, no) -> { node with Kind = SemanticKind.IfThenElse(force.CachedRead, yes, no) }
+                | _ -> failwith "Missing force guard")
+            | "conditional-result" -> change force.Conditional (fun node ->
+                { node with Kind = SemanticKind.Literal(NativeLiteral.String "é"); Children = [] })
+            | _ ->
+                let id = NodeId.fresh()
+                { graph with Nodes = graph.Nodes.Add(id, { graph.Nodes[force.CachedRead] with Id = id; Parent = None }) }
+        Assert.NotEmpty((Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues.settle changed).Residuals)
+        Assert.True(IntrinsicBoundary.project changed |> Result.isError)
+        let failed =
+            try
+                let flow = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve changed
+                match Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin changed flow force.Site force.Site with
+                | Ok (Some _) -> false
+                | _ -> true
+            with :? System.InvalidOperationException -> true // Stale ordinary-demand incidence is also a source refusal.
+        Assert.True(failed)
+
+    [<Fact>]
+    member _.``Lazy string boundary retains the embedded declaration root independently of root rows`` () =
+        let graph, _ = LazyStringOriginFixture.source "capture" |> LazyStringOriginFixture.check |> IntrinsicWriteFixture.graphAndProjection
+        let binding = graph.Nodes.Values |> Seq.find (fun node -> match node.Kind with SemanticKind.Binding(_, _, _, Some _) -> true | _ -> false)
+        let changedBinding =
+            match binding.Kind with
+            | SemanticKind.Binding(name, mutable', recursive', _) -> { binding with Kind = SemanticKind.Binding(name, mutable', recursive', None) }
+            | _ -> failwith "Missing declaration binding"
+        let changed = { graph with Nodes = graph.Nodes.Add(binding.Id, changedBinding) }
+        Assert.Equal<(NodeId * DeclRoot) list>(graph.DeclarationRoots, changed.DeclarationRoots)
+        Assert.True(IntrinsicBoundary.project changed |> Result.isError)
+
+    [<Theory>]
+    [<InlineData("literal")>]
+    [<InlineData("capture")>]
+    [<InlineData("factory")>]
+    member _.``Two lazy forces retain the exact immutable UTF8 origin and complete protocol participants`` cohort =
+        let graph, projection =
+            LazyStringOriginFixture.source cohort |> LazyStringOriginFixture.check
+            |> IntrinsicWriteFixture.graphAndProjection
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let view = projection.ByteViews[call.Buffer]
+        let extent = projection.StringExtents[call.Count]
+        let origin = IntrinsicWriteFixture.literal graph "é"
+        Assert.Equal<Map<NodeId, bigint>>(Map.ofList [origin, 2I], view.StaticOrigins)
+        Assert.Equal(view.ExtentSource, extent.ExtentSource)
+        Assert.Equal<Map<NodeId, bigint>>(view.StaticOrigins, extent.StaticOrigins)
+        Assert.Equal(Some(ValueRange.bounded 2I 2I), graph.Nodes[call.Count].ValueRange)
+        let forces = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.LazyMemoization)
+        Assert.Equal(2, forces.Length)
+        let viewParticipants = IntrinsicWriteFixture.established view.Participants |> List.map _.Node |> Set.ofList
+        let extentParticipants = IntrinsicWriteFixture.established extent.Participants |> List.map _.Node |> Set.ofList
+        for force in forces do
+            Assert.True((Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues.force graph force.Target).IsSome)
+            for participant in force.Target :: force.Sources do
+                Assert.Contains(participant, viewParticipants)
+                Assert.Contains(participant, extentParticipants)
+        Assert.Empty((Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues.settle graph).Residuals)
+        Assert.Contains(projection.IntrinsicWriteProofs[call.Site], fun proof ->
+            proof.Body = ObligationBody.StringBorrowBound [(2I, 2I, 3I)])
+
     [<Fact>]
     member _.``Source preserves exact extent through nested formals and ordered three operand write`` () =
         let graph, projection = IntrinsicWriteFixture.admitted ()

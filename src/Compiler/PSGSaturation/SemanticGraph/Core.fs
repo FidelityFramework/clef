@@ -169,7 +169,7 @@ module SemanticGraph =
     /// old snapshot. Re-publication belongs to source settlement.
     let invalidateWitness (graph: SemanticGraph) : SemanticGraph =
         let previous = graph.Codata
-        { graph with Codata = lazy { previous.Value with WitnessEmission = None; WitnessSegmentation = None }
+        { graph with Codata = lazy { previous.Value with WitnessEmission = None; WitnessSegmentation = None; ProofDispatch = None }
                      WitnessProvenance = None }
 
     /// Set the platform context on a graph

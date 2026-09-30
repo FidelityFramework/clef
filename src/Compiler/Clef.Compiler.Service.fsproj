@@ -343,19 +343,20 @@
     <Compile Include="PSGSaturation\SemanticGraph\ScopedCallbacks.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableDispatch.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\LazyContracts.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\LazyValues.fs" />
     <Compile Include="Baker\Recipes\BoundaryDeclarations.fs" />
     <Compile Include="Baker\Recipes\KernelDeclarations.fs" />
     <Compile Include="Baker\Ingredients\BindingDemand.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\OrdinaryDemand.fs" />
     <Compile Include="Baker\Ingredients\FormalDemand.fs" />
     <Compile Include="Baker\Ingredients\Participants.fs" />
+    <Compile Include="Baker\Ingredients\StringOrigins.fs" />
     <Compile Include="Baker\Recipes\StringComparisonRecipes.fs" />
     <Compile Include="Baker\Recipes\StringBorrowRecipes.fs" />
     <Compile Include="Baker\Ingredients\MemoryValues.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\StaticStringLayout.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableCarriers.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\MutableCallableStorage.fs" />
-    <Compile Include="PSGSaturation\SemanticGraph\LazyValues.fs" />
     <Compile Include="Baker\Recipes\ClosureRecipes.fs" />
     <Compile Include="Baker\Recipes\ClosureEnvironmentRecipes.fs" />
     <Compile Include="Baker\Recipes\CallableDispatchRecipes.fs" />
@@ -480,6 +481,7 @@
     <Compile Include="Nanopass\BoundarySettlement.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\BoundaryEmission.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\WitnessSegmentation.fs" />
+    <Compile Include="Baker\Recipes\ProofDispatchRecipes.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\WitnessEmission.fs" />
     <!-- Publication: the one place a graph leaves CCS, as a Fidelity.PSG revision -->
     <Compile Include="PSGSaturation\Publication\RevisionMappers.fs" />

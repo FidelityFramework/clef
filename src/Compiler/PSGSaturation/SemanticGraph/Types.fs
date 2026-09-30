@@ -744,6 +744,8 @@ type ParticipantRole =
     | Site | Source | ExtentSource | RepresentationDeclaration | Path | Formal
     | ReachingCall | ReachingActual | OmittedCall | OmittedCallActual | OmissionSite | OmittedActual
     | Callee | CalleeBody | CalleeArgument | CalleeParameter | Ingress | Origin | Construction
+    /// The source origin recipe consumed this exact lazy force protocol.
+    | LazyStringOrigin
 
 /// One occurrence in a relation: the node, its role, its ordinal within the role (an
 /// argument or parameter position; 0 for a role without positions) and its group. The
@@ -1230,6 +1232,26 @@ type SpatialModuleDomain = {
     Unresolved: Map<NodeId, string>
 }
 
+/// Exact relation observations used by the bounded lazy string-origin owner.
+/// Named roles are nullary cases only; payload-bearing observations stay typed.
+[<RequireQualifiedAccess>]
+type StringOriginRelationKind =
+    | Named of string
+    | ContinuationCase of int
+    | EnvironmentCapture of bool
+    | LazyCapture of bool
+    | EagerDemand of EagerFrontier
+    | BoundaryImplementation of NodeId
+
+type StringOriginRelation = {
+    Recorded: bool
+    Class: EdgeClass
+    Flavor: StringOriginRelationKind
+    Ordinal: int
+    Sources: NodeId list
+    Target: NodeId
+}
+
 type BoundaryDomain = {
     Premises: Map<NodeId, BoundarySourcePremise>
     Platform: BoundaryPlatformPremise option
@@ -1239,6 +1261,10 @@ type BoundaryDomain = {
     Calls: NodeId list
     ByteViews: BoundaryByteView list
     StringExtents: BoundaryStringExtent list
+    /// Present only when Baker consumed a validated lazy string origin.
+    /// None grants no lazy-origin authority; Some retains exact relation membership.
+    StringOriginRelations: StringOriginRelation list option
+    StringOriginRoots: (NodeId * DeclRoot) list option
     StringComparisons: (NodeId * bool * NodeId list) list
     StringLengthComparisons: (NodeId * bool * NodeId list) list
     StringComparisonReads: MemoryArrayAccessWitness list
@@ -2642,6 +2668,15 @@ type WitnessRegion = {
 
 type WitnessSegmentation = { Version: int; Regions: WitnessRegion list }
 
+/// Baker's complete current dispatch inventory. This is not a proof-support
+/// completeness certificate and grants no authority to reuse a solver result.
+type ProofDispatchPlan = {
+    Required: (NodeId * ObligationInfo) list
+    Constrains: Hyperedge list
+    SourceGroups: Map<NodeId, NodeId list list>
+    Query: Result<string, (NodeId * string list) list>
+}
+
 /// The codata the graph carries for emission, settled once at the end of saturation.
 type Codata = {
     Escapes: Map<NodeId, EscapeKind>
@@ -2666,6 +2701,7 @@ type Codata = {
     OrdinaryDemand: OrdinaryDemandProjection
     WitnessEmission: WitnessEmissionProjection option
     WitnessSegmentation: WitnessSegmentation option
+    ProofDispatch: ProofDispatchPlan option
     ContinuationFrames: Map<NodeId, ContinuationFrame>
     /// A unique sequence constructor at a use, established in Baker. This
     /// evidence permits elision of the known function half of (fn, env).
@@ -2720,6 +2756,7 @@ module Codata =
         OrdinaryDemand = OrdinaryDemandProjection.empty
         WitnessEmission = None
         WitnessSegmentation = None
+        ProofDispatch = None
         ContinuationFrames = Map.empty
         SequenceOrigins = Map.empty
         SequenceFlows = Map.empty

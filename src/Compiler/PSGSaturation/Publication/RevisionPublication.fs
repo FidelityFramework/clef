@@ -7,10 +7,10 @@
 /// (Fidelity.PSG.Revision) holds every fact a witness may read, as data. A reader of a
 /// revision holds no reference to this assembly and calls no function in it.
 ///
-/// Debt carried here, to be retired into Baker recipes: the projections read below
-/// (WitnessEmission, BorrowedViews, MappedSpans, MappedBindings, Mmio, ExplicitDemand)
-/// compute at publication what saturation should already have settled on the graph.
-/// They run here, under the source owner, so that no reader runs them.
+/// Witness emission and proof dispatch copy Baker's materialized facts. Remaining
+/// debt to retire into Baker recipes is the computation in BorrowedViews,
+/// MappedSpans, MappedBindings, Mmio, ExplicitDemand and implied structural edges.
+/// These still run here, under the source owner, so that no reader runs them.
 module Clef.Compiler.PSGSaturation.Publication.RevisionPublication
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
@@ -173,13 +173,6 @@ let private publishDemand (graph: SemanticGraph) : Fidelity.PSG.ExplicitDemandPr
         |> List.map (fun (target, rows) -> target, List.map snd rows)
     { Operands = Map.ofList operands; Relations = Map.ofList relations }
 
-let private publishObligationSources (graph: SemanticGraph) : Map<Fidelity.PSG.NodeId, Fidelity.PSG.NodeId list list> =
-    graph.Edges
-    |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains)
-    |> List.groupBy (fun edge -> edge.Target)
-    |> List.map (fun (target, edges) -> nodeId target, edges |> List.map (fun edge -> List.map nodeId edge.Sources))
-    |> Map.ofList
-
 /// The entire edge set. Relations implied by a node's kind are projected here once,
 /// under the source owner, so that no reader derives them from kinds.
 let private publishEdges (graph: SemanticGraph) : Fidelity.PSG.Hyperedge list =
@@ -199,11 +192,16 @@ let private publishReady (platform: PlatformContext) (graph: SemanticGraph) : Re
     match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.tryRead graph with
     | Error reason -> Error [ refusal None ("Source emission admission: " + reason) ]
     | Ok projection ->
-        match publishNodes graph with
-        | Error failures -> Error failures
-        | Ok nodes ->
+        match graph.Codata.Value.ProofDispatch with
+        | None -> Error [ refusal None "Source proof dispatch is absent." ]
+        | Some { Query = Error unavailable } ->
+            Error (unavailable |> List.map (fun (id, reasons) ->
+                refusal (Some id) ("Source proof dispatch is unavailable: " + String.concat "; " reasons)))
+        | Some ({ Query = Ok query } as dispatch) ->
+          match publishNodes graph with
+          | Error failures -> Error failures
+          | Ok nodes ->
             try
-                let obligations = Clef.Compiler.Nanopass.ObligationDischarge.ofGraph graph
                 Ok ({ Header = { Schema = Contract.Schema; Producer = Producer }
                       Nodes = nodes
                       Edges = publishEdges graph
@@ -224,9 +222,12 @@ let private publishReady (platform: PlatformContext) (graph: SemanticGraph) : Re
                       Emission = mapWitnessEmissionProjection projection
                       Foreign = publishForeign graph
                       Demand = publishDemand graph
-                      Obligations = List.map mapObligationInfo obligations
-                      ObligationSources = publishObligationSources graph
-                      ObligationQuery = Clef.Compiler.Nanopass.ObligationDischarge.smtLib obligations } : Fidelity.PSG.Revision)
+                      Obligations = dispatch.Required |> List.map (snd >> mapObligationInfo)
+                      ObligationSources =
+                        dispatch.SourceGroups |> Map.toList
+                        |> List.map (fun (target, groups) -> nodeId target, groups |> List.map (List.map nodeId))
+                        |> Map.ofList
+                      ObligationQuery = query } : Fidelity.PSG.Revision)
             with failure -> Error [ refusal None ("The graph cannot be published: " + failure.Message) ]
 
 /// Read Baker's stored readiness before copying any node into the contract.

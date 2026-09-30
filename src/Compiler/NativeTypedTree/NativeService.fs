@@ -1329,6 +1329,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 OrdinaryDemand = ordinaryDemand
                 WitnessEmission = None
                 WitnessSegmentation = None
+                ProofDispatch = None
                 ContinuationFrames = sequences.Frames
                 SequenceOrigins = sequences.Origins
                 SequenceFlows = sequences.Flows

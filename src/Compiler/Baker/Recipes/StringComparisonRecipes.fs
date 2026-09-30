@@ -15,6 +15,8 @@ module Closures = Clef.Compiler.Baker.Ingredients.Closures
 module CallableOrigins = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins
 module FormalDemand = Clef.Compiler.Baker.Ingredients.FormalDemand
 module Participants = Clef.Compiler.Baker.Ingredients.Participants
+module LazyValues = Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues
+module ExplicitDemand = Clef.Compiler.PSGSaturation.SemanticGraph.ExplicitDemand
 
 /// Canonical identity stops at a formal: each invocation carries its own extent.
 /// Origin enumeration follows the existing complete callable-flow relation over
@@ -28,6 +30,28 @@ module Participants = Clef.Compiler.Baker.Ingredients.Participants
 /// complete static origin.
 let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (group: NodeId) source =
     let inputs = FormalDemand.reader graph flow
+    let lazyFacts = lazy (LazyValues.settle graph)
+    let capturedSource = lazy (LazyValues.tryCapturedSourceReference graph)
+    let force id =
+        let facts = lazyFacts.Value
+        if facts.Residuals.IsEmpty then facts.Forces.TryFind id else None
+    let captured id =
+        capturedSource.Value id |> Option.filter (fun declaration ->
+            match graph.Nodes.TryFind declaration with
+            | Some { Kind = SemanticKind.Binding(_, false, _, _) | SemanticKind.PatternBinding _ } -> true
+            | _ -> false)
+    // A conditional descriptor retains its own identity. Both complete immutable
+    // branches contribute, even for a constant guard: this is not path inference.
+    let conditional id =
+        match graph.Nodes.TryFind id with
+        | Some { Kind = SemanticKind.IfThenElse(guard, yes, Some no); Children = children; Type = ty }
+            when Types.isStringType ty && children = [guard; yes; no] ->
+            match graph.Nodes.TryFind guard, graph.Nodes.TryFind yes, graph.Nodes.TryFind no with
+            | Some condition, Some left, Some right
+                when Types.tryGetNTUKind condition.Type = Some NTUKind.NTUbool &&
+                     Types.isStringType left.Type && Types.isStringType right.Type -> Some(guard, yes, no)
+            | _ -> None
+        | _ -> None
     let rec canonical seen id =
         if Set.contains id seen then None else
         let seen = Set.add id seen
@@ -35,6 +59,10 @@ let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (grou
         | Some { Kind = SemanticKind.VarRef(_, Some binding) } -> canonical seen binding
         | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> canonical seen value
         | Some { Kind = SemanticKind.TypeAnnotation(value, _) } -> canonical seen value
+        | Some { Kind = SemanticKind.EagerExpr value } when ExplicitDemand.operand graph id = Some value -> canonical seen value
+        | Some { Kind = SemanticKind.Sequential _ } when (force id).IsSome -> Some(id, seen)
+        | Some { Kind = SemanticKind.IfThenElse _ } when (conditional id).IsSome -> Some(id, seen)
+        | Some { Kind = SemanticKind.LazyRead _ } -> captured id |> Option.bind (canonical seen)
         | Some { Kind = SemanticKind.Literal(NativeLiteral.String _) }
         | Some { Kind = SemanticKind.PatternBinding _ } -> Some(id, seen)
         | _ -> None
@@ -48,6 +76,48 @@ let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (grou
         | Some { Kind = SemanticKind.VarRef(_, Some binding) } -> origins seen group binding |> path
         | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] }
         | Some { Kind = SemanticKind.TypeAnnotation(value, _) } -> origins seen group value |> path
+        | Some { Kind = SemanticKind.EagerExpr value } when ExplicitDemand.operand graph id = Some value -> origins seen group value |> path
+        | Some { Kind = SemanticKind.IfThenElse _ } ->
+            match conditional id with
+            | Some(guard, yes, no) ->
+                match origins seen yes yes, origins seen no no with
+                | Error failure, _ | _, Error failure -> Error failure
+                | Ok (Some(left, leftParticipants)), Ok (Some(right, rightParticipants))
+                    when not left.IsEmpty && not right.IsEmpty ->
+                    let values = Map.fold (fun values origin length -> Map.add origin length values) left right
+                    let joint = [id; guard; yes; no] |> List.mapi (fun ordinal node ->
+                        Participants.occurrence node ParticipantRole.Construction ordinal id)
+                    Ok (Some(values, joint @ leftParticipants @ rightParticipants)) |> path
+                | _ -> Ok None
+            | None -> Ok None
+        | Some { Kind = SemanticKind.Sequential _ } when not lazyFacts.Value.Residuals.IsEmpty -> Ok None
+        | Some { Kind = SemanticKind.Sequential values } ->
+            match force id with
+            | Some protocol ->
+                let contract = lazyFacts.Value.Instances[protocol.Formation]
+                let protocolNodes =
+                    [ protocol.Site; protocol.Operand; protocol.Formation; protocol.EnvironmentBinding
+                      protocol.Condition; protocol.CachedRead; protocol.Invocation; protocol.ResultBinding
+                      protocol.ResultStore; protocol.Publication; protocol.UncachedBranch; protocol.Conditional
+                      contract.Thunk; contract.ThunkBody; contract.Environment; contract.Formal
+                      contract.Computed; contract.Cached; contract.InitialComputed ]
+                origins seen protocol.Invocation contract.ThunkBody
+                |> Result.map (Option.map (fun (values, participants) ->
+                    let marker = Participants.occurrence id ParticipantRole.LazyStringOrigin 0 group
+                    let protocolParticipants = protocolNodes |> List.mapi (fun ordinal node ->
+                        Participants.occurrence node ParticipantRole.Construction ordinal protocol.Site)
+                    values, marker :: (protocolParticipants @ participants)))
+                |> path
+            | None ->
+                // Only the result expression contributes bytes. A damaged force
+                // still ends in its conditional/cache read, neither admitted here.
+                List.tryLast values |> Option.map (origins seen group) |> Option.defaultValue (Ok None) |> path
+        | Some { Kind = SemanticKind.LazyRead _ } ->
+            if not lazyFacts.Value.Residuals.IsEmpty then Ok None else
+            captured id |> Option.map (origins seen group) |> Option.defaultValue (Ok None)
+            |> Result.map (Option.map (fun (values, participants) ->
+                values, Participants.occurrence id ParticipantRole.LazyStringOrigin 0 group :: participants))
+            |> path
         | Some { Kind = SemanticKind.PatternBinding _ } ->
             match inputs id with
             | Some formal ->
@@ -97,7 +167,11 @@ let private zeroEvidence graph left right =
     let flow = CallableOrigins.resolve graph
     [left;right] |> List.map (fun source ->
         stringOrigin graph flow source source |> Result.map (Option.bind (fun (_,origins,participants) ->
-            if not origins.IsEmpty && origins.Values |> Seq.forall ((=) 0I) then Some(Set.ofList (Participants.nodes participants)) else None)))
+            if not origins.IsEmpty && origins.Values |> Seq.forall ((=) 0I) then
+                // Both extent rows retain the lazy marker. It activates the
+                // complete joint node/relation/root premise at source settlement.
+                participants |> Participants.nodes |> Set.ofList |> Some
+            else None)))
     |> List.fold (fun state fact ->
         match state, fact with
         | Error failure, _ | _, Error failure -> Error failure

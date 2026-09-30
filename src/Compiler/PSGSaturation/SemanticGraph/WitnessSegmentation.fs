@@ -4,6 +4,7 @@ module Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation
 
 open System
 open System.Collections
+open System.Collections.Concurrent
 open System.Globalization
 open System.Reflection
 open System.Security.Cryptography
@@ -13,14 +14,42 @@ open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 
 let private flags = BindingFlags.Public ||| BindingFlags.NonPublic
-let private typeName (t: Type) = t.FullName |> Option.ofObj |> Option.defaultWith (fun () -> invalidOp "Unnamed source input type")
+let private names = ConcurrentDictionary<Type, string>()
+let private typeName (t: Type) = names.GetOrAdd(t, fun t -> t.FullName |> Option.ofObj |> Option.defaultWith (fun () -> invalidOp "Unnamed source input type"))
+let private properties = ConcurrentDictionary<Type * string, PropertyInfo>()
 let private property name (value: obj) =
-    let field = value.GetType().GetProperty(name) |> Option.ofObj |> Option.defaultWith (fun () -> invalidOp ("Missing structural field " + name))
+    let field = properties.GetOrAdd((value.GetType(), name), fun (key: Type * string) ->
+        let ty, name = key
+        ty.GetProperty(name) |> Option.ofObj |> Option.defaultWith (fun () -> invalidOp ("Missing structural field " + name)))
     field.GetValue value
-let private generic (t: Type) = if t.IsGenericType then typeName (t.GetGenericTypeDefinition()) else ""
+let private generics = ConcurrentDictionary<Type, string>()
+let private generic (t: Type) = generics.GetOrAdd(t, fun t -> if t.IsGenericType then typeName (t.GetGenericTypeDefinition()) else "")
 let private isMap t = (generic t).StartsWith "Microsoft.FSharp.Collections.FSharpMap"
 let private isSet t = (generic t).StartsWith "Microsoft.FSharp.Collections.FSharpSet"
 let private isList t = (generic t).StartsWith "Microsoft.FSharp.Collections.FSharpList"
+// Only CLR Type metadata/readers are cached. Source values, checker cells,
+// TypeIdentity conversions and identity maps are always freshly evaluated.
+let private tuples = ConcurrentDictionary<Type, bool>()
+let private records = ConcurrentDictionary<Type, bool>()
+let private unions = ConcurrentDictionary<Type, bool>()
+let private isTuple ty = tuples.GetOrAdd(ty, fun ty -> FSharpType.IsTuple ty)
+let private isRecord ty = records.GetOrAdd(ty, fun ty -> FSharpType.IsRecord(ty, flags))
+let private isUnion ty = unions.GetOrAdd(ty, fun ty -> FSharpType.IsUnion(ty, flags))
+let private tupleReaders = ConcurrentDictionary<Type, obj -> objnull array>()
+let private recordReaders = ConcurrentDictionary<Type, obj -> objnull array>()
+let private recordFields = ConcurrentDictionary<Type, PropertyInfo array>()
+let private unionReaders = ConcurrentDictionary<Type, (obj -> int) * Map<int, UnionCaseInfo * (obj -> objnull array)>>()
+let private tupleValues (value: obj) = tupleReaders.GetOrAdd(value.GetType(), Func<Type, obj -> objnull array>(fun ty -> FSharpValue.PreComputeTupleReader ty)) value
+let private recordValues (value: obj) = recordReaders.GetOrAdd(value.GetType(), Func<Type, obj -> objnull array>(fun ty -> FSharpValue.PreComputeRecordReader(ty, flags))) value
+let private fields (ty: Type) = recordFields.GetOrAdd(ty, fun (ty: Type) -> FSharpType.GetRecordFields(ty, flags))
+let private unionValues ty (value: obj) =
+    let tag, cases = unionReaders.GetOrAdd(ty, fun ty ->
+        FSharpValue.PreComputeUnionTagReader(ty, flags),
+        FSharpType.GetUnionCases(ty, flags)
+        |> Array.map (fun case -> case.Tag, (case, FSharpValue.PreComputeUnionReader(case, flags)))
+        |> Map.ofArray)
+    let case, reader = cases[tag value]
+    case, reader value
 
 /// Length-delimited, culture-independent structural encoding. Types are frozen
 /// here, while Baker still owns checker substitutions. Unknown identities or
@@ -52,11 +81,11 @@ let private encoder (identities: Map<NodeId, string>) =
                 // rows. Enumerate the spine; reflecting each Cons recurses once
                 // per row and exhausts the host stack on real programs.
                 (value :?> IEnumerable) |> Seq.cast<objnull> |> Seq.map encode |> String.concat "" |> tagged
-            elif FSharpType.IsTuple ty then FSharpValue.GetTupleFields value |> Array.map (fun field -> encode field) |> String.concat "" |> tagged
-            elif FSharpType.IsRecord(ty, flags) then
-                FSharpValue.GetRecordFields(value, flags) |> Array.map (fun field -> encode field) |> String.concat "" |> tagged
-            elif FSharpType.IsUnion(ty, flags) then
-                let case, fields = FSharpValue.GetUnionFields(value, ty, flags)
+            elif isTuple ty then tupleValues value |> Array.map (fun field -> encode field) |> String.concat "" |> tagged
+            elif isRecord ty then
+                recordValues value |> Array.map (fun field -> encode field) |> String.concat "" |> tagged
+            elif isUnion ty then
+                let case, fields = unionValues ty value
                 atom case.Name + (fields |> Array.map encode |> String.concat "") |> tagged
             elif ty.IsArray then
                 (value :?> IEnumerable) |> Seq.cast<objnull> |> Seq.map encode |> String.concat "" |> tagged
@@ -95,8 +124,8 @@ let private scoped (members: Set<NodeId>) (types: Set<TypeIdentity>) encode (val
         elif isSet ty && ty.GetGenericArguments()[0] = typeof<NodeId> then
             (value :?> IEnumerable) |> Seq.cast<NodeId> |> Seq.filter members.Contains
             |> Seq.map (box >> encode) |> Seq.sort |> String.concat "|"
-        elif FSharpType.IsRecord(ty, flags) then
-            FSharpType.GetRecordFields(ty, flags)
+        elif isRecord ty then
+            fields ty
             |> Array.map (fun field -> field.Name + "=" + walk (field.GetValue value))
             |> String.concat ";"
         else encode value
@@ -138,7 +167,7 @@ let private nodeInput (node: SemanticNode) =
          node.IsReachable, node.EmissionStrategy, node.ValueRange)
 
 let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) : WitnessSegmentation =
-    let codata = { graph.Codata.Value with WitnessEmission = None; WitnessSegmentation = None }
+    let codata = { graph.Codata.Value with WitnessEmission = None; WitnessSegmentation = None; ProofDispatch = None }
     // Evidence supports remain current graph citizens and are discharged anew
     // for every revision. The witness key compares the settled interface those
     // proofs justify, rather than carrying a previous revision's proof receipt.

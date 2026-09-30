@@ -13,6 +13,15 @@ module NumericOperationFixture =
         let facts = OperationPublication.project result.Graph |> function Ok facts -> facts | Error failures -> failwithf "%A" failures
         result.Graph, facts
     let operation kind (facts: NumericWitnessProjection) = facts.Operations.Values |> Seq.filter (fun operation -> operation.Kind = kind) |> Assert.Single
+    let selectedBranches (graph: SemanticGraph) left right =
+        let yes, no =
+            graph.Nodes.Values |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.IfThenElse(_, yes, Some no) when Types.isStringType node.Type -> Some(yes, no)
+                | _ -> None) |> Assert.Single
+        Assert.Equal(SemanticKind.Literal(NativeLiteral.String left), graph.Nodes[yes].Kind)
+        Assert.Equal(SemanticKind.Literal(NativeLiteral.String right), graph.Nodes[no].Kind)
+        yes, no
 
 type NumericOperationCases() =
     [<Fact>]
@@ -160,8 +169,25 @@ type NumericOperationCases() =
         let result = IntrinsicWriteFixture.checkSource IntrinsicWriteFixture.authority program
         DimensionalCases.noErrors result
         let boundary = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project result.Graph |> function Ok facts -> facts | Error errors -> failwithf "%A" errors
-        Assert.Contains(boundary.ByteViews.Values, fun view -> view.StaticOrigins.IsEmpty)
-        Assert.Contains(boundary.StringExtents.Values, fun extent -> extent.StaticOrigins.IsEmpty)
+        let yes, no = NumericOperationFixture.selectedBranches result.Graph "a\000b" "a\000c"
+        let origins = Map.ofList [yes, 3I; no, 3I]
+        let construction = Clef.Compiler.Baker.Recipes.StringComparisonRecipes.constructions result.Graph |> Assert.Single
+        Assert.True(Clef.Compiler.Baker.Recipes.StringComparisonRecipes.validStructure result.Graph construction)
+        Assert.Equal(2, boundary.ByteViews.Count)
+        Assert.Equal(2, boundary.StringExtents.Count)
+        let view, extent = boundary.ByteViews[construction.LeftView], boundary.StringExtents[construction.LeftLength]
+        Assert.Equal<Map<NodeId, bigint>>(origins, view.StaticOrigins)
+        Assert.Equal<Map<NodeId, bigint>>(origins, extent.StaticOrigins)
+        Assert.Equal(construction.LeftSource, view.Source)
+        Assert.Equal(construction.LeftSource, view.ExtentSource)
+        Assert.Equal(view.Source, extent.Source)
+        Assert.Equal(view.ExtentSource, extent.ExtentSource)
+        Assert.DoesNotContain(view.ExtentSource, origins.Keys)
+        let memory = Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project result.Graph |> function Ok facts -> facts | Error errors -> failwithf "%A" errors
+        let reads = memory.Operations.Values |> Seq.choose (function MemoryWitnessOperation.ArrayAccess read -> Some read | _ -> None) |> Seq.toList
+        Assert.Equal(2, reads.Length)
+        for read in reads do
+            Assert.Contains(result.Graph.Edges, fun edge -> edge.Target = read.Site && edge.Role = EdgeRole.MemoryAccessGuard)
         Assert.Empty boundary.Imports
 
     [<Theory>]
@@ -178,7 +204,20 @@ type NumericOperationCases() =
         Assert.Equal(Ok true, Clef.Compiler.Baker.Recipes.StringComparisonRecipes.validLengthStructure result.Graph construction)
         let boundary = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project result.Graph |> function Ok facts -> facts | Error errors -> failwithf "%A" errors
         Assert.Empty boundary.ByteViews
-        Assert.Contains(boundary.StringExtents.Values,fun extent -> extent.StaticOrigins.IsEmpty)
+        let yes, no = NumericOperationFixture.selectedBranches result.Graph "" "a\000b"
+        let selectedSource, selectedLength, emptyLength =
+            if emptyFirst then construction.RightSource, construction.RightLength, construction.LeftLength
+            else construction.LeftSource, construction.LeftLength, construction.RightLength
+        Assert.Equal(2, boundary.StringExtents.Count)
+        let extent = boundary.StringExtents[selectedLength]
+        Assert.Equal<Map<NodeId, bigint>>(Map.ofList [yes, 0I; no, 3I], extent.StaticOrigins)
+        Assert.Equal(selectedSource, extent.Source)
+        Assert.Equal(selectedSource, extent.ExtentSource)
+        Assert.DoesNotContain(extent.ExtentSource, extent.StaticOrigins.Keys)
+        let empty = boundary.StringExtents[emptyLength]
+        Assert.Equal<bigint>(0I, empty.StaticOrigins.Values |> Assert.Single)
+        let memory = Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project result.Graph |> function Ok facts -> facts | Error errors -> failwithf "%A" errors
+        Assert.DoesNotContain(memory.Operations.Values, function MemoryWitnessOperation.ArrayAccess _ -> true | _ -> false)
         let changed = { result.Graph with Edges=result.Graph.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.StringLengthComparison _ -> false | _ -> true) }
         match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare changed with
         | Error _ -> ()

@@ -8,6 +8,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Ingredients = Clef.Compiler.Baker.Ingredients.Boundaries
 module Declarations = Clef.Compiler.Baker.Recipes.BoundaryDeclarations
 module Bytes = Clef.Compiler.Baker.Ingredients.StringBytes
+module StringOrigins = Clef.Compiler.Baker.Ingredients.StringOrigins
 
 let private failure occurrence participants reason =
     { Occurrence = occurrence; Participants = participants; Reason = "BoundaryEmission: " + reason }
@@ -25,6 +26,13 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
             stale "A source boundary premise, membership, scope, type, range, platform claim or numeric meet changed; Baker must settle the new source graph."
         elif not domain.Failures.IsEmpty then
             Error (domain.Failures |> List.map (fun (site, participants, reason) -> failure (Some site) participants reason))
+        elif (match domain.StringOriginRelations with
+              | Some expected ->
+                  StringOrigins.relations graph <> Ok expected || domain.StringOriginRoots <> Some graph.DeclarationRoots
+              | None ->
+                  (domain.ByteViews |> List.exists (fun view -> StringOrigins.used view.Participants)) ||
+                  (domain.StringExtents |> List.exists (fun extent -> StringOrigins.used extent.Participants))) then
+            stale "The lazy string-origin relation premises changed; Baker must settle the new source graph."
         elif (not domain.StringComparisonReads.IsEmpty || not domain.StringComparisonSnapshots.IsEmpty || not domain.StringComparisonCopies.IsEmpty) &&
              (match MemoryPublication.project graph with
               | Error _ -> true

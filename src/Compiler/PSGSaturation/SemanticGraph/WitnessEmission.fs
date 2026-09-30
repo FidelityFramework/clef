@@ -4,6 +4,7 @@
 module Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission
 
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+module ProofDispatch = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes
 
 type Projection = WitnessEmissionProjection
 
@@ -54,23 +55,27 @@ let prepare (graph: SemanticGraph) : Result<SemanticGraph, WitnessProjectionFail
     match project graph with
     | Error failures -> Error failures
     | Ok projection ->
-        let facts = {
-            graph.Codata.Value with OrdinaryDemand = projection.Ordinary
-                                    WitnessEmission = Some projection
-                                    WitnessSegmentation = Some (WitnessSegmentation.project graph projection) }
-        // Force semantic lazy computations under their source owner. A consumer
-        // must not execute a deferred layout/index/classification computation.
-        let settled = {
-            graph with
-                Types = materialized graph.Types.Value
-                ModuleClassifications = materialized graph.ModuleClassifications.Value
-                FieldRanges = materialized graph.FieldRanges.Value
-                ElementRanges = materialized graph.ElementRanges.Value
-                Layouts = materialized graph.Layouts.Value
-                Escaping = materialized graph.Escaping.Value
-                Codata = materialized facts
-                WitnessProvenance = None }
-        Ok { settled with WitnessProvenance = Some { PreparedRoots = settled } }
+        match ProofDispatch.materialize graph with
+        | Error failures -> Error failures
+        | Ok dispatch ->
+            let facts = {
+                graph.Codata.Value with OrdinaryDemand = projection.Ordinary
+                                        WitnessEmission = Some projection
+                                        WitnessSegmentation = Some (WitnessSegmentation.project graph projection)
+                                        ProofDispatch = Some dispatch }
+            // Force semantic lazy computations under their source owner. A consumer
+            // must not execute a deferred layout/index/classification computation.
+            let settled = {
+                graph with
+                    Types = materialized graph.Types.Value
+                    ModuleClassifications = materialized graph.ModuleClassifications.Value
+                    FieldRanges = materialized graph.FieldRanges.Value
+                    ElementRanges = materialized graph.ElementRanges.Value
+                    Layouts = materialized graph.Layouts.Value
+                    Escaping = materialized graph.Escaping.Value
+                    Codata = materialized facts
+                    WitnessProvenance = None }
+            Ok { settled with WitnessProvenance = Some { PreparedRoots = settled } }
 
 /// Compare only the retained input roots. This neither forces lazy source
 /// computations nor reconstructs their premises. Every root participates,
@@ -123,14 +128,19 @@ let admit (graph: SemanticGraph) : Result<unit, WitnessProjectionFailure list> =
         if facts.OrdinaryDemand <> projection.Ordinary || facts.WitnessEmission <> Some projection then
             Error [{ Occurrence = None; Participants = Set.empty
                      Reason = "Witness projection differs from the current source snapshot." }]
-        elif facts.WitnessSegmentation <> Some (WitnessSegmentation.project graph projection) then
-            Error [{ Occurrence = None; Participants = Set.empty
-                     Reason = "Witness segmentation differs from the current source snapshot." }]
-        elif not (isMaterialized graph) then
-            Error [{ Occurrence = None; Participants = Set.empty
-                     Reason = "Witness input contains deferred source computations." }]
         else
-            Ok ()
+            match ProofDispatch.materialize graph with
+            | Error failures -> Error failures
+            | Ok current when facts.ProofDispatch |> Option.exists (fun held -> ProofDispatch.matches held current) |> not ->
+                Error [{ Occurrence = None; Participants = Set.empty
+                         Reason = "Proof dispatch differs from the current source snapshot." }]
+            | Ok _ when facts.WitnessSegmentation <> Some (WitnessSegmentation.project graph projection) ->
+                Error [{ Occurrence = None; Participants = Set.empty
+                         Reason = "Witness segmentation differs from the current source snapshot." }]
+            | Ok _ when not (isMaterialized graph) ->
+                Error [{ Occurrence = None; Participants = Set.empty
+                         Reason = "Witness input contains deferred source computations." }]
+            | Ok _ -> Ok ()
 
 let tryOrdinary graph = tryRead graph |> Result.map _.Ordinary
 let tryCallable graph = tryRead graph |> Result.map _.Callable

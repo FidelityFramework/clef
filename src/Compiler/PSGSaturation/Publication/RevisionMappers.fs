@@ -182,6 +182,8 @@ and mapBoundaryDomain (value: S.BoundaryDomain) : Fidelity.PSG.BoundaryDomain =
         Calls = (value.Calls |> List.map (fun x -> nodeId x))
         ByteViews = (value.ByteViews |> List.map (fun x -> mapBoundaryByteView x))
         StringExtents = (value.StringExtents |> List.map (fun x -> mapBoundaryStringExtent x))
+        StringOriginRelations = (value.StringOriginRelations |> Option.map (fun x -> (x |> List.map (fun x -> mapStringOriginRelation x))))
+        StringOriginRoots = (value.StringOriginRoots |> Option.map (fun x -> (x |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapDeclRoot t1))))))
         StringComparisons = (value.StringComparisons |> List.map (fun x -> (let (t0, t1, t2) = x in (nodeId t0, t1, (t2 |> List.map (fun x -> nodeId x))))))
         StringLengthComparisons = (value.StringLengthComparisons |> List.map (fun x -> (let (t0, t1, t2) = x in (nodeId t0, t1, (t2 |> List.map (fun x -> nodeId x))))))
         StringComparisonReads = (value.StringComparisonReads |> List.map (fun x -> mapMemoryArrayAccessWitness x))
@@ -1770,6 +1772,7 @@ and mapParticipantRole (value: S.ParticipantRole) : Fidelity.PSG.ParticipantRole
     | S.ParticipantRole.Ingress -> Fidelity.PSG.ParticipantRole.Ingress
     | S.ParticipantRole.Origin -> Fidelity.PSG.ParticipantRole.Origin
     | S.ParticipantRole.Construction -> Fidelity.PSG.ParticipantRole.Construction
+    | S.ParticipantRole.LazyStringOrigin -> Fidelity.PSG.ParticipantRole.LazyStringOrigin
 
 and mapPattern (value: S.Pattern) : Fidelity.PSG.Pattern =
     match value with
@@ -2216,6 +2219,25 @@ and mapStorageWitnessProjection (value: S.StorageWitnessProjection) : Fidelity.P
         ProgramStorage = mapProgramStorageInventory value.ProgramStorage
         LiteralPoolAnchors = value.LiteralPoolAnchors
     } : Fidelity.PSG.StorageWitnessProjection)
+
+and mapStringOriginRelation (value: S.StringOriginRelation) : Fidelity.PSG.StringOriginRelation =
+    ({
+        Recorded = value.Recorded
+        Class = mapEdgeClass value.Class
+        Flavor = mapStringOriginRelationKind value.Flavor
+        Ordinal = value.Ordinal
+        Sources = (value.Sources |> List.map (fun x -> nodeId x))
+        Target = nodeId value.Target
+    } : Fidelity.PSG.StringOriginRelation)
+
+and mapStringOriginRelationKind (value: S.StringOriginRelationKind) : Fidelity.PSG.StringOriginRelationKind =
+    match value with
+    | S.StringOriginRelationKind.Named(a0) -> Fidelity.PSG.StringOriginRelationKind.Named(a0)
+    | S.StringOriginRelationKind.ContinuationCase(a0) -> Fidelity.PSG.StringOriginRelationKind.ContinuationCase(a0)
+    | S.StringOriginRelationKind.EnvironmentCapture(a0) -> Fidelity.PSG.StringOriginRelationKind.EnvironmentCapture(a0)
+    | S.StringOriginRelationKind.LazyCapture(a0) -> Fidelity.PSG.StringOriginRelationKind.LazyCapture(a0)
+    | S.StringOriginRelationKind.EagerDemand(a0) -> Fidelity.PSG.StringOriginRelationKind.EagerDemand(mapEagerFrontier a0)
+    | S.StringOriginRelationKind.BoundaryImplementation(a0) -> Fidelity.PSG.StringOriginRelationKind.BoundaryImplementation(nodeId a0)
 
 and mapSubstrateKind (value: N.SubstrateKind) : Fidelity.PSG.SubstrateKind =
     match value with
