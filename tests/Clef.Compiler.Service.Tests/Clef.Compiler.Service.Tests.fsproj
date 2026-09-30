@@ -86,6 +86,7 @@
     <Compile Include="StorageWitnessCases.fs" />
     <Compile Include="EnvironmentFactoryResultsCases.fs" />
     <Compile Include="ProgramStorageInventoryCases.fs" />
+    <Compile Include="ProgramInitializationOrderCases.fs" />
     <Compile Include="ProgramStorageOwnershipCases.fs" />
     <Compile Include="SequenceEvaluationCases.fs" />
     <Compile Include="SequenceControlCases.fs" />
@@ -111,6 +112,7 @@
     <Compile Include="IntrinsicWriteCases.fs" />
     <Compile Include="NumericPublicationCases.fs" />
     <Compile Include="PublicationContractCases.fs" />
+    <Compile Include="PendingObligationCases.fs" />
     <Compile Include="NumericOperationCases.fs" />
     <Compile Include="MemoryAccessCases.fs" />
     <Compile Include="ScalarRangeRenewalCases.fs" />

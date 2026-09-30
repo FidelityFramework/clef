@@ -288,6 +288,12 @@ type FiniteLinearRecurrenceModel = {
 
 [<RequireQualifiedAccess>]
 type ObligationBody =
+    /// Baker retained the obligation, but cannot supply its complete premises.
+    /// No solver term or published obligation exists for this state.
+    | Pending of reasons: string list
+    /// Finite program initialization phases supplied by Baker. This arithmetic
+    /// checks order only; source incidence and lowering preservation are separate.
+    | ProgramInitializationOrder of initializerOrdinal: int * initializerCount: int * useOrdinals: int list
     | FiniteLoopTrip of FiniteLoopTripModel
     | AdditiveLoopInvariant of AdditiveLoopInvariantModel
     /// The additive/index step after successful native mapping guards establish
@@ -722,6 +728,10 @@ type BoundaryOperand = { Actual: NodeId; Formal: NodeId; Abi: BoundaryScalar; Ad
 /// The role of one occurrence in a relation over nodes (`Participant`).
 [<RequireQualifiedAccess>]
 type ParticipantRole =
+    /// Ordered startup and complete source reads of one runtime callable binding.
+    | InitializationBinding | InitializationValue | InitializationSpine | InitializationEntry
+    | InitializationUse | InitializationScope | InitializationParent | InitializationPhase
+    | InitializationCaller | InitializationCallee | InitializationPremise
     /// Environment reservation occurrences; grouped by allocation, except factory
     /// correspondence grouped by its actual call. Ordinals retain source order.
     | EnvironmentAllocation | EnvironmentBinding | EnvironmentInitializer
@@ -1424,6 +1434,10 @@ type EdgeRole =
     /// Required reservation at its Baker firing, including rejected proposals.
     /// Target is the obligation; Sources are the participant occurrences in order.
     | EnvironmentReservation of participants: Participant list
+    /// Current startup/read-order premises. Target is the required obligation.
+    | ProgramInitializationOrder of participants: Participant list
+    /// The scope present when the requirement was born, separate from current premises.
+    | ProgramInitializationOrderHistory of participants: Participant list
     /// Required caller destination: [factory implementation; closure owner;
     /// destination formal] -> exact EnvironmentCreate constructor.
     | EnvironmentResultDestination

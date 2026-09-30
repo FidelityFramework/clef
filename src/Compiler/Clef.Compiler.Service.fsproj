@@ -373,6 +373,8 @@
     <Compile Include="Baker\Recipes\SequenceElementRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceEffectRecipes.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ProgramActivation.fs" />
+    <Compile Include="Baker\Ingredients\ProgramValueUses.fs" />
+    <Compile Include="Baker\Recipes\ProgramInitializationOrderRecipes.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\LazyResidence.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\SequenceResidence.fs" />
     <Compile Include="Baker\Recipes\ContinuationObligationRecipes.fs" />
@@ -392,6 +394,7 @@
     <!-- Nanopass passes - must come after Baker -->
     <Compile Include="Nanopass\IntrinsicElaboration.fs" />
     <Compile Include="Nanopass\ProgramInitialization.fs" />
+    <Compile Include="Nanopass\ProgramInitializationOrder.fs" />
     <Compile Include="Nanopass\BakerSaturation.fs" />
     <Compile Include="Nanopass\CallableApplications.fs" />
     <Compile Include="Nanopass\ClosureElaboration.fs" />

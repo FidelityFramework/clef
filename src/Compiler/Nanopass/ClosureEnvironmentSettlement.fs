@@ -17,6 +17,7 @@ module Platform = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 module Carriers = Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers
 module Demand = Clef.Compiler.PSGSaturation.SemanticGraph.ExplicitDemand
 module ProgramStorageAuthority = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramStorageAuthority
+module ProgramValueUses = Clef.Compiler.Baker.Ingredients.ProgramValueUses
 
 type Settlement = {
     Layouts: Map<NodeId, EnvironmentLayout>
@@ -288,6 +289,7 @@ let programInstance (graph: SemanticGraph) binding : ProgramInstance option =
                 if not (sameType id source) then None else
                 actual seen source |> Option.map (fun (implementation, allocation, participants) -> implementation, allocation, id :: participants)
             match nodes.TryFind id, carrier id with
+            | Some _, Some _ when Program.isSlotBinding graph id && not (ProgramValueUses.current graph id) -> None
             | Some node, Some current ->
                 match node.Kind with
                 | SemanticKind.VarRef(_, Some source) when node.Children.IsEmpty ->
@@ -338,7 +340,7 @@ let programInstance (graph: SemanticGraph) binding : ProgramInstance option =
             plan.ValueBindings |> Set.toList |> List.choose (fun binding ->
                 match nodes.TryFind binding, Program.tryValueAuthority graph binding, carrier binding with
                 | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [initializer] }, Some authority, Some held
-                    when authority.Initializer.Initializer = initializer ->
+                    when authority.Initializer.Initializer = initializer && ProgramValueUses.current graph binding ->
                     actual Set.empty initializer |> Option.bind (fun (implementation, allocation, participants) ->
                         let backing =
                             match allocation, held.Environment with

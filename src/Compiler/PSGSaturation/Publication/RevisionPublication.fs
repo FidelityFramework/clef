@@ -194,7 +194,7 @@ let private publishWidths (platform: PlatformContext) : Fidelity.PSG.PlatformWid
 
 /// Publish the prepared graph as one revision. The graph must carry the complete
 /// source witness projection (WitnessEmission.prepare); a graph that does not is refused.
-let publish (platform: PlatformContext) (graph: SemanticGraph) : Result<Fidelity.PSG.Revision, PublicationFailure list> =
+let private publishReady (platform: PlatformContext) (graph: SemanticGraph) : Result<Fidelity.PSG.Revision, PublicationFailure list> =
     match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.tryRead graph with
     | Error reason -> Error [ refusal None ("Source emission admission: " + reason) ]
     | Ok projection ->
@@ -227,3 +227,16 @@ let publish (platform: PlatformContext) (graph: SemanticGraph) : Result<Fidelity
                       ObligationSources = publishObligationSources graph
                       ObligationQuery = Clef.Compiler.Nanopass.ObligationDischarge.smtLib obligations } : Fidelity.PSG.Revision)
             with failure -> Error [ refusal None ("The graph cannot be published: " + failure.Message) ]
+
+/// Read Baker's stored readiness before copying any node into the contract.
+/// Missing premises remain source failures; publication supplies none of them.
+let publish (platform: PlatformContext) (graph: SemanticGraph) : Result<Fidelity.PSG.Revision, PublicationFailure list> =
+    let pending =
+        graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
+            match node.Kind with
+            | SemanticKind.Obligation { Id = anchor; Body = ObligationBody.Pending reasons } ->
+                Some (refusal (Some id) (sprintf "Required obligation '%s' premises are unavailable: %s" anchor (String.concat "; " reasons)))
+            | _ -> None)
+    match pending with
+    | [] -> publishReady platform graph
+    | failures -> Error failures

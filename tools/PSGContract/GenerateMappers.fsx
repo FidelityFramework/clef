@@ -3,7 +3,8 @@
 // type, case and field is visible in it and checked by the compiler.
 //
 // A contract type with no CCS twin, or whose cases or fields differ from its
-// twin, stops generation with the difference named. Nothing is skipped.
+// twin, stops generation with the difference named. The sole native-only case,
+// ObligationBody.Pending, generates an explicit refusal instead of a value.
 //
 // usage: dotnet fsi GenerateMappers.fsx <Clef.Compiler.Service.dll> <Fidelity.PSG.dll> <output.fs>
 
@@ -158,24 +159,30 @@ let unionMapper (target: Type) (source: Type) alias =
     if not missing.IsEmpty then failwithf "Union %s: published cases %A have no CCS case" target.Name missing
     let cases =
         sources |> Array.map (fun case ->
-            if not (targets.ContainsKey case.Name) then
-                failwithf "Union %s: CCS case %s has no published case" target.Name case.Name
-            let published = targets.[case.Name]
-            let sourceFields = case.GetFields()
-            let targetFields = published.GetFields()
-            if sourceFields.Length <> targetFields.Length then
-                failwithf "Union %s.%s: field count differs" target.Name case.Name
-            if sourceFields.Length = 0 then
-                sprintf "    | %s.%s -> %s.%s" (sourceName source alias) case.Name (targetName target) case.Name
+            if target.Name = "ObligationBody" && case.Name = "Pending" then
+                let fields = case.GetFields()
+                if targets.ContainsKey "Pending" || fields.Length <> 1 || fields[0].PropertyType <> typeof<string list> then
+                    failwith "Pending obligations must remain a native-only list of missing-premise reasons"
+                sprintf "    | %s.Pending reasons -> invalidOp (\"A pending obligation cannot be published: \" + String.concat \"; \" reasons)" (sourceName source alias)
             else
-                let names = sourceFields |> Array.mapi (fun index _ -> sprintf "a%d" index)
-                let converted =
-                    Array.map3 (fun (s: PropertyInfo) (t: PropertyInfo) name ->
-                        convert (sprintf "%s.%s" target.Name case.Name) s.PropertyType t.PropertyType name
-                        |> Option.defaultValue name) sourceFields targetFields names
-                sprintf "    | %s.%s(%s) -> %s.%s(%s)"
-                    (sourceName source alias) case.Name (String.Join(", ", names))
-                    (targetName target) case.Name (String.Join(", ", converted)))
+                if not (targets.ContainsKey case.Name) then
+                    failwithf "Union %s: CCS case %s has no published case" target.Name case.Name
+                let published = targets.[case.Name]
+                let sourceFields = case.GetFields()
+                let targetFields = published.GetFields()
+                if sourceFields.Length <> targetFields.Length then
+                    failwithf "Union %s.%s: field count differs" target.Name case.Name
+                if sourceFields.Length = 0 then
+                    sprintf "    | %s.%s -> %s.%s" (sourceName source alias) case.Name (targetName target) case.Name
+                else
+                    let names = sourceFields |> Array.mapi (fun index _ -> sprintf "a%d" index)
+                    let converted =
+                        Array.map3 (fun (s: PropertyInfo) (t: PropertyInfo) name ->
+                            convert (sprintf "%s.%s" target.Name case.Name) s.PropertyType t.PropertyType name
+                            |> Option.defaultValue name) sourceFields targetFields names
+                    sprintf "    | %s.%s(%s) -> %s.%s(%s)"
+                        (sourceName source alias) case.Name (String.Join(", ", names))
+                        (targetName target) case.Name (String.Join(", ", converted)))
     sprintf "%s (value: %s) : %s =\n    match value with\n%s"
         (mapper target) (sourceName source alias) (targetName target) (String.Join("\n", cases))
 

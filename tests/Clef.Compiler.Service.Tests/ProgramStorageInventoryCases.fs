@@ -153,6 +153,52 @@ module private EnvironmentReservationFixture =
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "EnvironmentReservations")>]
 type EnvironmentReservationCases() =
     [<Fact>]
+    member _.``A program alias cannot read a later uninitialized closure slot`` () =
+        let source = """
+module ProgramAliasOrder
+let make (flag: bool) = fun (value: bool) -> if flag then value else not value
+let first = make true
+let second = make false
+let alias = first
+let later = make true
+[<EntryPoint>]
+let main _ = if alias true && second false && later true then 0 else 1
+"""
+        let graph = LazyResidenceFixture.programWith (Some source)
+        let first = LazyResidenceFixture.binding "first" graph
+        let alias = LazyResidenceFixture.binding "alias" graph
+        let later = LazyResidenceFixture.binding "later" graph
+        let read graph binding = Clef.Compiler.Nanopass.ClosureEnvironmentSettlement.programInstance graph binding
+        let firstInstance = read graph first |> Option.get
+        let aliasInstance = read graph alias |> Option.get
+        let laterInstance = read graph later |> Option.get
+        Assert.Equal(firstInstance.Allocation, aliasInstance.Allocation)
+        Assert.NotEqual(firstInstance.Allocation, laterInstance.Allocation)
+        let plan = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read graph |> Option.get
+        let aliasRow = plan.Initializers |> List.find (fun row -> row.Binding = alias)
+        let laterRow = plan.Initializers |> List.find (fun row -> row.Binding = later)
+        Assert.True(aliasRow.Ordinal < laterRow.Ordinal)
+        let reference = graph.Nodes[aliasRow.Initializer]
+        match reference.Kind with
+        | SemanticKind.VarRef(_, Some source) -> Assert.Equal(first, source)
+        | kind -> failwithf "Expected an admitted alias reference: %A" kind
+        let definitions = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Definition && edge.Target = reference.Id)
+        match definitions with
+        | [] -> ()
+        | [{ Class = EdgeClass.Reference; Sources = [source]; Ordinal = 0 }] -> Assert.Equal(first, source)
+        | rows -> failwithf "Expected exact alias definition incidence: %A" rows
+        let changed =
+            { graph with
+                Nodes = graph.Nodes.Add(reference.Id, { reference with Kind = SemanticKind.VarRef("later", Some later) })
+                Edges = graph.Edges |> List.map (fun edge ->
+                    if edge.Role = EdgeRole.Definition && edge.Target = reference.Id then { edge with Sources = [later] }
+                    else edge) }
+        // Slot order and reference incidence still agree; only the alias now
+        // demands a program value whose initializer has not executed yet.
+        Assert.Equal(Some plan, Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read changed)
+        Assert.True((read changed alias).IsNone, "Alias accepted a closure slot initialized later in the startup spine")
+
+    [<Fact>]
     member _.``Factory reservation birth keeps distinct allocations and call grouped occurrences`` () =
         let graph = ProgramInventoryFixture.graph "closure"
         let rows = EnvironmentReservationFixture.rows graph

@@ -1022,11 +1022,13 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         if PhaseConfig.useSoftDeleteReachability() then
             let markedGraph = markUnreachable graph
             let markedGraph = NodeProofs.create markedGraph (Map.keys markedGraph.Nodes)
+            let markedGraph = Clef.Compiler.Nanopass.ProgramInitializationOrder.birth markedGraph
             emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability markedGraph diagnostics
             markedGraph
         else
             let prunedGraph = pruneUnreachable graph
             let prunedGraph = NodeProofs.create prunedGraph (Map.keys prunedGraph.Nodes)
+            let prunedGraph = Clef.Compiler.Nanopass.ProgramInitializationOrder.birth prunedGraph
             emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability prunedGraph diagnostics
             prunedGraph
 
@@ -1252,6 +1254,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize finalGraph
     let finalGraph, premiseDiagnostics = Clef.Compiler.Nanopass.PremiseEstablishment.normalize finalGraph
     let finalGraph, lazies = Clef.Compiler.Nanopass.LazyRuntime.settleWhenSourceAdmitted sourceAdmitted finalGraph
+    let finalGraph, initializationOrderDiagnostics = Clef.Compiler.Nanopass.ProgramInitializationOrder.settle finalGraph
     tracePhase "lazy-settlement"
     let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
     let mmio, mmioDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.DeviceAccess.settle (diagnostics @ residual @ rangeDiagnostics) finalGraph
@@ -1384,7 +1387,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ initializationOrderDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 

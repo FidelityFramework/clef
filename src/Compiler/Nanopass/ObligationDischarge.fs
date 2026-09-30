@@ -38,6 +38,17 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
         let signed = if numerator.Sign < 0 then sprintf "(- %s)" magnitude else magnitude
         if value.Denominator = 1I then signed else sprintf "(/ %s %s.0)" signed (string value.Denominator)
     match body with
+    | ObligationBody.Pending reasons ->
+        invalidArg "body" ("A pending obligation has no solver term: " + String.concat "; " reasons)
+    | ObligationBody.ProgramInitializationOrder(initializerOrdinal, initializerCount, useOrdinals) ->
+        let ordinal, count = integer (bigint initializerOrdinal), integer (bigint initializerCount)
+        let clauses =
+            [ sprintf "(<= 0 %s)" ordinal; sprintf "(< %s %s)" ordinal count ]
+            @ (useOrdinals |> List.collect (fun useOrdinal ->
+                let usePhase = integer (bigint useOrdinal)
+                [ sprintf "(< %s %s)" ordinal usePhase; sprintf "(<= %s %s)" usePhase count ]))
+        [ sprintf "(assert (= %s (and %s)))" id (String.concat " " clauses)
+          sprintf "(assert (not %s))" id ]
     | ObligationBody.FiniteLoopTrip model ->
         let start, limit, step, count = integer model.InitialLower, integer model.LimitUpper, integer model.MinimumStep, integer model.MaximumIterations
         let beyond = if model.Inclusive then ">" else ">="
@@ -386,7 +397,7 @@ let private bodyToSmtLib (id: string) (body: ObligationBody) : string list =
 
 /// The solver-ready artifact: one scope per obligation; `unsat` on every
 /// (check-sat) means every obligation holds.
-let smtLib (obligations: ObligationInfo list) : string =
+let private readySmtLib (obligations: ObligationInfo list) : string =
     obligations
     |> List.map (fun ob ->
         String.concat "\n"
@@ -398,13 +409,44 @@ let smtLib (obligations: ObligationInfo list) : string =
              @ [ "(check-sat)"; "(reset)" ]))
     |> String.concat "\n\n"
 
+/// Missing premises are evidence of unavailability, never Boolean conclusions.
+type UnavailableObligation = {
+    Anchor: string
+    Source: string
+    MissingPremises: string list
+}
+
+let unavailable (obligations: ObligationInfo list) : UnavailableObligation list =
+    obligations |> List.choose (fun obligation ->
+        match obligation.Body with
+        | ObligationBody.Pending reasons ->
+            Some { Anchor = obligation.Id; Source = obligation.Source; MissingPremises = reasons }
+        | _ -> None)
+
+let trySmtLib (obligations: ObligationInfo list) : Result<string, UnavailableObligation list> =
+    match unavailable obligations with
+    | [] -> Ok (readySmtLib obligations)
+    | pending -> Error pending
+
+/// Existing ready callers retain their exact text. A caller requiring a query
+/// cannot accidentally submit an incomplete inventory or a surrogate predicate.
+let smtLib (obligations: ObligationInfo list) : string =
+    match trySmtLib obligations with
+    | Ok query -> query
+    | Error pending ->
+        pending
+        |> List.map (fun item -> sprintf "'%s' (%s): %s" item.Anchor item.Source (String.concat "; " item.MissingPremises))
+        |> String.concat "; "
+        |> sprintf "Required obligations have unavailable premises: %s"
+        |> invalidOp
+
 //=============================================================================
 // LEDGER RENDERING
 //=============================================================================
 
 /// The ledger: id, kind, logic, statement, source, refs -- the demo and audit
 /// surface, and the anchor list the build-time dispatch is paired against.
-let ledgerJson (obligations: ObligationInfo list) : string =
+let private readyLedgerJson (obligations: ObligationInfo list) : string =
     let ledger =
         {| version = "1.0"
            description = "Proof obligations: born in the PSG as graph citizens, design-time form"
@@ -414,6 +456,24 @@ let ledgerJson (obligations: ObligationInfo list) : string =
                     statement = ob.Statement; source = ob.Source
                     refs = ob.Refs |} ] |}
     JsonSerializer.Serialize(ledger, JsonSerializerOptions(WriteIndented = true))
+
+let ledgerJson (obligations: ObligationInfo list) : string =
+    match unavailable obligations with
+    | [] -> readyLedgerJson obligations
+    | _ ->
+        let ledger =
+            {| version = "1.1"
+               description = "Proof obligations: born in the PSG as graph citizens, design-time form"
+               obligations =
+                 [ for ob in obligations do
+                     let state, reasons =
+                         match ob.Body with
+                         | ObligationBody.Pending reasons -> "pending", reasons
+                         | _ -> "ready", []
+                     yield {| id = ob.Id; kind = ob.Kind; logic = ob.Logic
+                              statement = ob.Statement; source = ob.Source; refs = ob.Refs
+                              state = state; missingPremises = reasons |} ] |}
+        JsonSerializer.Serialize(ledger, JsonSerializerOptions(WriteIndented = true))
 
 //=============================================================================
 // PROJECTION AND EMISSION
@@ -433,5 +493,14 @@ let emit (graph: SemanticGraph) : unit =
             let dir = getOutputDir ()
             Directory.CreateDirectory dir |> ignore
             File.WriteAllText(Path.Combine(dir, "06a_obligations.json"), ledgerJson obs)
-            File.WriteAllText(Path.Combine(dir, "06b_obligations.smt2"), smtLib obs + "\n")
-            if isVerbose () then printfn "[CCS] Wrote obligations: 06a_obligations.json, 06b_obligations.smt2 (%d obligations)" obs.Length
+            let queryPath = Path.Combine(dir, "06b_obligations.smt2")
+            let unavailablePath = Path.Combine(dir, "06b_obligations.unavailable.json")
+            match trySmtLib obs with
+            | Ok query ->
+                File.Delete unavailablePath
+                File.WriteAllText(queryPath, query + "\n")
+                if isVerbose () then printfn "[CCS] Wrote obligations: 06a_obligations.json, 06b_obligations.smt2 (%d obligations)" obs.Length
+            | Error pending ->
+                File.Delete queryPath
+                File.WriteAllText(unavailablePath, JsonSerializer.Serialize(pending, JsonSerializerOptions(WriteIndented = true)))
+                if isVerbose () then printfn "[CCS] Wrote obligation ledger; query unavailable for %d pending obligations" pending.Length

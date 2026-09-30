@@ -680,6 +680,8 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.LazyLayout -> Fidelity.PSG.EdgeRole.LazyLayout
     | S.EdgeRole.EnvironmentResidence -> Fidelity.PSG.EdgeRole.EnvironmentResidence
     | S.EdgeRole.EnvironmentReservation(a0) -> Fidelity.PSG.EdgeRole.EnvironmentReservation((a0 |> List.map (fun x -> mapParticipant x)))
+    | S.EdgeRole.ProgramInitializationOrder(a0) -> Fidelity.PSG.EdgeRole.ProgramInitializationOrder((a0 |> List.map (fun x -> mapParticipant x)))
+    | S.EdgeRole.ProgramInitializationOrderHistory(a0) -> Fidelity.PSG.EdgeRole.ProgramInitializationOrderHistory((a0 |> List.map (fun x -> mapParticipant x)))
     | S.EdgeRole.EnvironmentResultDestination -> Fidelity.PSG.EdgeRole.EnvironmentResultDestination
     | S.EdgeRole.EnvironmentResultCall -> Fidelity.PSG.EdgeRole.EnvironmentResultCall
     | S.EdgeRole.SequenceCaptureFormation -> Fidelity.PSG.EdgeRole.SequenceCaptureFormation
@@ -1621,6 +1623,8 @@ and mapNumericWitnessProjection (value: S.NumericWitnessProjection) : Fidelity.P
 
 and mapObligationBody (value: S.ObligationBody) : Fidelity.PSG.ObligationBody =
     match value with
+    | S.ObligationBody.Pending reasons -> invalidOp ("A pending obligation cannot be published: " + String.concat "; " reasons)
+    | S.ObligationBody.ProgramInitializationOrder(a0, a1, a2) -> Fidelity.PSG.ObligationBody.ProgramInitializationOrder(a0, a1, a2)
     | S.ObligationBody.FiniteLoopTrip(a0) -> Fidelity.PSG.ObligationBody.FiniteLoopTrip(mapFiniteLoopTripModel a0)
     | S.ObligationBody.AdditiveLoopInvariant(a0) -> Fidelity.PSG.ObligationBody.AdditiveLoopInvariant(mapAdditiveLoopInvariantModel a0)
     | S.ObligationBody.MappedElementSpan(a0) -> Fidelity.PSG.ObligationBody.MappedElementSpan(mapMappedSpanModel a0)
@@ -1704,6 +1708,17 @@ and mapParticipantEvidence (value: S.ParticipantEvidence) : Fidelity.PSG.Partici
 
 and mapParticipantRole (value: S.ParticipantRole) : Fidelity.PSG.ParticipantRole =
     match value with
+    | S.ParticipantRole.InitializationBinding -> Fidelity.PSG.ParticipantRole.InitializationBinding
+    | S.ParticipantRole.InitializationValue -> Fidelity.PSG.ParticipantRole.InitializationValue
+    | S.ParticipantRole.InitializationSpine -> Fidelity.PSG.ParticipantRole.InitializationSpine
+    | S.ParticipantRole.InitializationEntry -> Fidelity.PSG.ParticipantRole.InitializationEntry
+    | S.ParticipantRole.InitializationUse -> Fidelity.PSG.ParticipantRole.InitializationUse
+    | S.ParticipantRole.InitializationScope -> Fidelity.PSG.ParticipantRole.InitializationScope
+    | S.ParticipantRole.InitializationParent -> Fidelity.PSG.ParticipantRole.InitializationParent
+    | S.ParticipantRole.InitializationPhase -> Fidelity.PSG.ParticipantRole.InitializationPhase
+    | S.ParticipantRole.InitializationCaller -> Fidelity.PSG.ParticipantRole.InitializationCaller
+    | S.ParticipantRole.InitializationCallee -> Fidelity.PSG.ParticipantRole.InitializationCallee
+    | S.ParticipantRole.InitializationPremise -> Fidelity.PSG.ParticipantRole.InitializationPremise
     | S.ParticipantRole.EnvironmentAllocation -> Fidelity.PSG.ParticipantRole.EnvironmentAllocation
     | S.ParticipantRole.EnvironmentBinding -> Fidelity.PSG.ParticipantRole.EnvironmentBinding
     | S.ParticipantRole.EnvironmentInitializer -> Fidelity.PSG.ParticipantRole.EnvironmentInitializer
