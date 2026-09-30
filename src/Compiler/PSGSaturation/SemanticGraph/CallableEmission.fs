@@ -33,10 +33,13 @@ let private declarations (graph: SemanticGraph) =
                 if anonymous then CallableSymbolName.Anonymous node.Id
                 else node.Parent |> Option.bind symbols.TryFind |> Option.defaultValue (CallableSymbolName.Anonymous node.Id)
             symbols <- symbols.Add(node.Id, name)
-            let participants = Set.ofList (node.Id :: body :: ((parameters |> List.map (fun (_, _, id) -> id)) @ Option.toList node.Parent @ (captures |> List.choose _.SourceNodeId)))
-            declarations <- declarations.Add(node.Id,
-                { Lookup = node.Id; Implementation = node.Id; Parameters = parameters; Result = body
-                  Context = context; Captures = captures; Name = name; Parent = node.Parent; Participants = participants })
+            // Generic lazy templates remain source history. Only their live
+            // specializations have the storage authority of executable thunks.
+            if context <> LambdaContext.LazyThunk || node.IsReachable then
+                let participants = Set.ofList (node.Id :: body :: ((parameters |> List.map (fun (_, _, id) -> id)) @ Option.toList node.Parent @ (captures |> List.choose _.SourceNodeId)))
+                declarations <- declarations.Add(node.Id,
+                    { Lookup = node.Id; Implementation = node.Id; Parameters = parameters; Result = body
+                      Context = context; Captures = captures; Name = name; Parent = node.Parent; Participants = participants })
         | _ -> ()
     let rec code seen id =
         if Set.contains id seen then None else
@@ -169,6 +172,18 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
                 | _ -> None
             | _ -> None)
     let symbols, declarations = declarations graph
+    if graph.Platform.IsSome then
+        for declaration in declarations.Values do
+            if declaration.Context = LambdaContext.LazyThunk &&
+               declaration.Lookup = declaration.Implementation && graph.Nodes[declaration.Implementation].IsReachable then
+                let hasLayout =
+                    codata.LazyLayouts |> Map.exists (fun owner layout ->
+                        owner = layout.Owner && layout.Thunk = declaration.Implementation &&
+                        Clef.Compiler.Nanopass.LazyRuntime.validate graph layout)
+                if not hasLayout then
+                    errors.Add { Occurrence = Some declaration.Implementation
+                                 Participants = declaration.Participants
+                                 Reason = "Live lazy thunk declaration has no current validated storage layout." }
     let rec directCallee seen id =
         if Set.contains id seen then None else
         match graph.Nodes.TryFind id with
@@ -252,7 +267,7 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
     let arguments =
         graph.Nodes |> choose (fun implementation node ->
             match node.Kind with
-            | SemanticKind.Lambda(parameters, _, _, _, _) ->
+            | SemanticKind.Lambda(parameters, _, _, _, _) when declarations.ContainsKey implementation ->
                 let omitted = ordinary.Parameters.TryFind implementation |> Option.defaultValue Set.empty
                 let components =
                     parameters |> List.map (fun (_, _, formal) ->
