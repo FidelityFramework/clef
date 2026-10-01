@@ -494,11 +494,11 @@ let elaborate (graph: SemanticGraph) : Enrichment =
                 let errors = if outcome = BoundaryProofOutcome.Proven then errors else
                                 (call.Site, call.Participants, "The boundary range obligation is refuted: source range is not covered by its declared destination.") :: errors
                 Enrichment.combine enrichment proof, errors) (enrichment, errors)) (Enrichment.empty, errors)
-    let lazyOrigins =
+    let observedOrigins =
         (intrinsic.Views |> List.exists (fun view -> StringOrigins.used view.Participants)) ||
         (intrinsic.Extents |> List.exists (fun extent -> StringOrigins.used extent.Participants))
     let originRelations, errors =
-        if not lazyOrigins then None, errors else
+        if not observedOrigins then None, errors else
         match StringOrigins.relations graph with
         | Ok relations -> Some relations, errors
         | Error reason -> None, (anchor.Id, Map.keys graph.Nodes |> Set.ofSeq, reason) :: errors
@@ -508,7 +508,7 @@ let elaborate (graph: SemanticGraph) : Enrichment =
           Imports = Map.keys imports |> Seq.toList; Calls = Map.keys calls |> Seq.toList
           ByteViews = intrinsic.Views; StringExtents = intrinsic.Extents; IntrinsicDeclarations = intrinsic.Declarations
           StringOriginRelations = originRelations
-          StringOriginRoots = if lazyOrigins then Some graph.DeclarationRoots else None
+          StringOriginRoots = if observedOrigins then Some graph.DeclarationRoots else None
           StringComparisons = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringComparisonConstruction negated -> Some(edge.Target,negated,edge.Sources) | _ -> None)
           StringLengthComparisons = graph.Edges |> List.choose (fun edge -> match edge.Role with EdgeRole.StringLengthComparison negated -> Some(edge.Target,negated,edge.Sources) | _ -> None)
           StringComparisonReads = localReads

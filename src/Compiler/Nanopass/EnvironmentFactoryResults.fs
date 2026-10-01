@@ -189,4 +189,9 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) =
                                     not (changed.Contains edge.Target &&
                                         (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference || edge.Class = EdgeClass.Evaluation))))
                                         @ edges @ (changed |> Set.toList |> List.collect (fun id -> Incidence.structuralIncidence folded.Nodes[id])) }
-    updated, updatedCurry
+    // Factory destinations change formal/actual incidence. Renew the ordinary
+    // demand owner before the string recipe transfers its previously valid
+    // descriptor-only proofs across this exact source rewrite boundary.
+    let demanded = OrdinaryDemand.normalize updated
+    let transferred = Clef.Compiler.Baker.Recipes.StringComparisonRecipes.transferLengthAfterFactoryRewrite graph demanded
+    transferred, updatedCurry

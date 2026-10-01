@@ -16,7 +16,8 @@ let rec private elaborate graph =
         let folded = FoldIn.foldIn (FanOut.fanOut "String.equality" (fun node -> node.Id=source.Id) create graph) graph
         // The next comparison's origins read the resident ordinary-demand rows,
         // whose participants this rewrite changed. Settle them for this graph.
-        elaborate (OrdinaryDemand.normalize { folded with Edges=edges })
+        let demanded = OrdinaryDemand.normalize { folded with Edges=edges }
+        elaborate (Recipes.settleMaterializedLength graph demanded candidate)
 
 let normalize graph =
     let result = elaborate graph

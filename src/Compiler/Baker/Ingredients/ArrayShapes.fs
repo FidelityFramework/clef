@@ -113,6 +113,15 @@ let reader (graph:SemanticGraph) =
         | Some {Kind=SemanticKind.ArrayAllocate value} -> count value
         | Some {Kind=SemanticKind.VarRef(_,Some value) | SemanticKind.TypeAnnotation(value,_) | SemanticKind.EagerExpr value} -> follow seen value |> add
         | Some {Kind=SemanticKind.Binding(_,false,_,_);Children=[value]} -> follow seen value |> add
+        | Some {Kind=SemanticKind.EnvironmentRead _;Type=ty} when Types.isStringType ty ->
+            // Logical bytes follow the same scoped capture and complete input
+            // authority as string origins. This grants no storage or borrow.
+            match Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin graph flow id id with
+            | Ok(Some(identity,origins,participants)) when not origins.IsEmpty ->
+                Some {Sources=origins.Values |> Seq.map Length.Constant |> Seq.toList
+                      StringSources=origins.Keys |> Set.ofSeq
+                      Participants=Set.ofList(id::identity::(participants |> List.collect (fun p -> [p.Node;p.Group])))}
+            | _ -> None
         | Some {Kind=SemanticKind.Sequential values} -> List.tryLast values |> Option.bind(follow seen) |> add
         | Some {Kind=SemanticKind.IfThenElse(_,yes,Some no)} -> combine[follow seen yes;follow seen no] |> add
         | Some {Kind=SemanticKind.PatternBinding _} ->

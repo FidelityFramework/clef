@@ -1710,6 +1710,71 @@ let private indexBelow (n: ValueRange) : ValueRange =
 type private AggregateProjection =
     | TupleSlot of int
     | UnionPayload of int * string
+    | RecordField of TypeIdentity * string
+
+/// Kind/Children own syntax incidence. Native F can omit cached copies, but
+/// every recorded copy must agree and must occur only once.
+let private recordIncidenceAgrees (program: Program) (node: SemanticNode) =
+    let sourceEdge (edge: Hyperedge) = edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference
+    let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Target, edge.Sources
+    let actual =
+        program.Graph.Edges
+        |> List.filter (fun edge -> edge.Target = node.Id && sourceEdge edge)
+        |> List.map key
+    let expected =
+        Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node
+        |> List.filter sourceEdge
+        |> List.map key
+    actual.Length = (List.distinct actual).Length && List.forall (fun row -> List.contains row expected) actual
+
+/// A construction can supply an aggregate-valued field only when the exact
+/// source declaration makes that field immutable. Mutable field stores need a
+/// separate complete write census; a cached scalar FieldRanges entry is not it.
+let private immutableRecordField (program: Program) recordId field =
+    match Map.tryFind recordId program.Reachable with
+    | Some receiver ->
+        match applySubst receiver.Type with
+        | NativeType.TApp(constructor, _) ->
+            let nominal = NominalTypeIdentity.ofConstructor constructor
+            match RecordInstances.tryDefinition nominal program.Graph with
+            | Some declaration ->
+                match declaration.Kind, declaration.Metadata.TryFind "TypeDef.MutableFields" with
+                | SemanticKind.TypeDef(_, TypeDefKind.RecordDef _, _), Some(MetadataValue.StringList mutableFields)
+                    when not (List.contains field mutableFields) ->
+                    let affects receiverId name =
+                        name = field &&
+                        (match Map.tryFind receiverId program.Reachable with
+                         | Some target ->
+                             match applySubst target.Type with
+                             | NativeType.TApp(actual, _) -> NominalTypeIdentity.ofConstructor actual = nominal
+                             | _ -> true
+                         | None -> true)
+                    let written =
+                        program.Ordered
+                        |> List.exists (fun node ->
+                            match node.Kind with
+                            | SemanticKind.FieldSet(receiver, name, _) | SemanticKind.FieldAddress(receiver, name) -> affects receiver name
+                            | SemanticKind.Set(target, _) ->
+                                match Map.tryFind target program.Reachable with
+                                | Some { Kind = SemanticKind.FieldGet(receiver, name) } -> affects receiver name
+                                | _ -> false
+                            | SemanticKind.AddressOf(target, _) ->
+                                match Map.tryFind target program.Reachable with
+                                | Some { Kind = SemanticKind.FieldGet(receiver, name) } -> affects receiver name
+                                // No address-origin algebra is claimed by this
+                                // bounded immutable-field reader.
+                                | _ -> true
+                            | SemanticKind.CellAddress _ -> true
+                            | _ -> false)
+                    if written then None
+                    else
+                        match RecordInstances.tryFields receiver.Type program.Graph |> Option.map (List.filter (fst >> (=) field)) with
+                        | Some [_, fieldType] -> Some(RecordInstances.layoutKey receiver.Type, RecordInstances.layoutKey fieldType)
+                        | _ -> None
+                | _ -> None
+            | None -> None
+        | _ -> None
+    | None -> None
 
 /// The range of a projection of an aggregate-valued expression, read through the constructions the
 /// expression can evaluate to (a tuple is not a node with one range; its elements are joined by
@@ -1740,6 +1805,21 @@ let rec private aggregateElement (program: Program) (state: State) (visited: Set
                     | Some elementId -> project elementId rest
                     | None -> ValueRange.Unbounded
                 | _ -> ValueRange.Unbounded
+            | SemanticKind.RecordExpr(fields, copied) ->
+                match path with
+                | RecordField(expected, field) :: rest
+                    when node.Children = (Option.toList copied @ List.map snd fields) && recordIncidenceAgrees program node ->
+                    match immutableRecordField program node.Id field with
+                    | Some(actual, fieldType) when actual = expected ->
+                        match fields |> List.filter (fst >> (=) field) with
+                        | [_, value] ->
+                            match Map.tryFind value program.Reachable with
+                            | Some valueNode when RecordInstances.layoutKey valueNode.Type = fieldType -> project value rest
+                            | _ -> ValueRange.Unbounded
+                        | [] -> copied |> Option.map recurse |> Option.defaultValue ValueRange.Unbounded
+                        | _ -> ValueRange.Unbounded
+                    | _ -> ValueRange.Unbounded
+                | _ -> ValueRange.Unbounded
             | SemanticKind.UnionCase(name, tag, payload)
             | SemanticKind.DUConstruct(name, tag, payload, _) ->
                 match path with
@@ -1750,6 +1830,12 @@ let rec private aggregateElement (program: Program) (state: State) (visited: Set
                 | _ -> ValueRange.Unbounded
             | SemanticKind.DUEliminate(value, tag, name, _) -> project value (UnionPayload(tag, name) :: path)
             | SemanticKind.TupleGet(value, index) -> project value (TupleSlot index :: path)
+            | SemanticKind.FieldGet(value, field) ->
+                match immutableRecordField program value field with
+                | Some(identity, fieldType)
+                    when node.Children = [value] && RecordInstances.layoutKey node.Type = fieldType && recordIncidenceAgrees program node ->
+                    project value (RecordField(identity, field) :: path)
+                | _ -> ValueRange.Unbounded
             | SemanticKind.VarRef (_, Some defId) -> recurse defId
             | SemanticKind.Binding (_, isMutable, _, _) ->
                 let value =

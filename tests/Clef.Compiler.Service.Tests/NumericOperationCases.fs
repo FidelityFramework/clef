@@ -233,7 +233,52 @@ type NumericOperationCases() =
         let program = "module CapturedEquality\nlet make expected = fun actual -> expected = actual\n[<EntryPoint>]\nlet main _ =\n    let same = make \"a\\000b\"\n    if same \"a\\000b\" then 0 else 1\n"
         let authority = IntrinsicWriteFixture.authority.Replace("Name = \"octet\"", "Name = \"uint8\"")
         let result = IntrinsicWriteFixture.checkSource authority program
-        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Message.Contains("Captured callable environment requires further settlement: UnknownInputRegion"))
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let read = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceResidence.analyzeEnvironments
+        let baseline = read graph
+        Assert.Empty baseline.Unresolved
+        let call = graph.Edges |> List.filter (fun row -> row.Role = EdgeRole.EnvironmentResultCall) |> Assert.Single
+        let allocation = call.Sources[3]
+        Assert.True(baseline.Sites.ContainsKey allocation)
+        let pool = graph.StaticStringPool.Value
+        let entry = pool.Entries |> Assert.Single
+        Assert.Equal("a\000b", entry.Content)
+        Assert.Equal(3, entry.Length)
+        Assert.Equal<byte list>([97uy; 0uy; 98uy], pool.Bytes |> List.skip entry.Offset |> List.take entry.Length)
+        Assert.Contains(baseline.Evidence, fun row ->
+            row.Role = EdgeRole.EnvironmentResidence && List.contains allocation row.Sources &&
+            List.contains call.Target row.Sources && List.contains pool.DeclarationNode row.Sources)
+        let capture = graph.Nodes.Values |> Seq.filter (fun node ->
+            match node.Kind with SemanticKind.EnvironmentRead _ -> Types.isStringType node.Type | _ -> false) |> Assert.Single
+        let origins graph =
+            let flow = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
+            match Clef.Compiler.Baker.Recipes.StringComparisonRecipes.stringOrigin graph flow capture.Id capture.Id with
+            | Ok(Some(identity, values, _)) ->
+                Assert.Equal(capture.Id, identity)
+                values
+            | other -> failwithf "Missing logical captured-string origin: %A" other
+        let expected = origins graph
+        Assert.Single expected |> ignore
+        Assert.Equal<bigint>(3I, expected.Values |> Assert.Single)
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project graph |> Result.isOk)
+        // The literal now has independent backing authority. Retaining its
+        // exact logical byte count must not license stale physical storage.
+        for changed in [
+            { graph with StaticStringPool = None }
+            { graph with StaticStringPool = Some { pool with Bytes = 255uy :: List.tail pool.Bytes } }
+            { graph with Nodes = graph.Nodes.Remove pool.DeclarationNode }
+        ] do
+            Assert.Equal<Map<NodeId, bigint>>(expected, origins changed)
+            let retracted = read changed
+            Assert.False(retracted.Sites.ContainsKey allocation)
+            Assert.Contains(retracted.Unresolved, fun failure ->
+                failure.Site = allocation &&
+                match failure.Reason with
+                | Clef.Compiler.PSGSaturation.SemanticGraph.SequenceResidence.ResidualReason.UnknownInputRegion _ -> true
+                | _ -> false)
+            Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission.project changed |> Result.isError)
+            Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare changed |> Result.isError)
 
     [<Fact>]
     member _.``Selected strings compare through their actual runtime descriptor extent`` () =

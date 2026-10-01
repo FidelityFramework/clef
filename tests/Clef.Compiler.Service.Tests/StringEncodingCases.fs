@@ -116,10 +116,51 @@ let description = { Id="encoding-test"; Core=Some core; Spaces=[|image;stack|]; 
         graph.Edges |> List.filter (fun edge ->
             match edge.Role with EdgeRole.StringByteStorage _ -> true | _ -> false)
 
+    let memory (graph: SemanticGraph) =
+        match Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project graph with
+        | Result.Ok facts -> facts
+        | Result.Error failures -> failwithf "Encoding memory authority is not current: %A" failures
+
+    // This resolves aliases, but deliberately retains a source Sequential
+    // wrapper. Allocation identity comes from its current construction row.
+    let sourceValue (graph: SemanticGraph) id =
+        Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.valueOf graph id
+        |> Option.defaultWith (fun () -> failwithf "Encoding operand lost its exact source value: %A" id)
+
+    let guardedAccess (graph: SemanticGraph) (facts: MemoryWitnessProjection) (source: SemanticNode) =
+        match source.Kind with
+        | SemanticKind.Sequential [required; operation] ->
+            match facts.Operations.TryFind operation with
+            | Some(MemoryWitnessOperation.ArrayAccess access) ->
+                let guard = access.Bounds.Requirement
+                Assert.Equal(operation, access.Site)
+                Assert.Equal(operation, guard.Continuation)
+                Assert.Equal(source.Id, guard.Frontier)
+                Assert.Equal(required, guard.Site)
+                Assert.Equal(SemanticKind.Require(guard.Condition, guard.Diagnostic), graph.Nodes[required].Kind)
+                let correspondence =
+                    graph.Edges
+                    |> List.filter (fun edge -> edge.Role = EdgeRole.MemoryAccessGuard && edge.Target = operation)
+                    |> Assert.Single
+                Assert.Equal(EdgeClass.Provenance, correspondence.Class)
+                Assert.Equal(0, correspondence.Ordinal)
+                match correspondence.Sources with
+                | [buffer; index; _length; _zero; _lower; _upper; condition; requirement; frontier] ->
+                    Assert.Equal(access.Buffer, buffer)
+                    Assert.Equal(access.Index, index)
+                    Assert.Equal(guard.Condition, condition)
+                    Assert.Equal(required, requirement)
+                    Assert.Equal(source.Id, frontier)
+                | other -> failwithf "Encoding access lost its exact source-to-continuation correspondence: %A" other
+                access
+            | other -> failwithf "Encoding operation has no exact current array-access witness: %A" other
+        | other -> failwithf "Encoding source access lost its guard and success operation: %A" other
+
     let evidence body expression (graph: SemanticGraph) =
         let expectedRange = span (prelude + body) expression
         let edges = storageEdges graph
         Assert.NotEmpty edges
+        let facts = memory graph
         // Array construction transports a byte-storage row to its allocation.
         // Walk that exact current lineage before checking the source conversion.
         let rec conversionSite (visited: Set<NodeId>) (edge: Hyperedge) =
@@ -135,13 +176,35 @@ let description = { Id="encoding-test"; Core=Some core; Spaces=[|image;stack|]; 
                 let allocationRow, construction = Assert.Single allocationRows
                 Assert.Equal(copySite, construction.Owner)
                 sameEdge (Clef.Compiler.Baker.Ingredients.MemoryValues.allocationConstructionRow construction) allocationRow
-                let copyRow, copy =
+                let copies =
                     graph.Edges |> List.choose (fun row ->
                         match row.Role with
                         | EdgeRole.ArrayCopyConstruction copy when copy.Site = copySite && copy.Allocation = Some allocation -> Some(row, copy)
                         | _ -> None)
-                    |> Assert.Single
-                sameEdge (Clef.Compiler.Baker.Ingredients.MemoryValues.copyConstructionRow copy) copyRow
+                match construction.Default with
+                | None ->
+                    let copyRow, copy = Assert.Single copies
+                    sameEdge (Clef.Compiler.Baker.Ingredients.MemoryValues.copyConstructionRow copy) copyRow
+                    Assert.Equal(Some allocation, facts.ArrayCopies[copySite].Allocation)
+                | Some zero ->
+                    // zeroCreate has its own source initialization, not a copy.
+                    Assert.Empty copies
+                    match graph.Nodes[zero].Kind with
+                    | SemanticKind.Literal(NativeLiteral.Int(0L, _)) -> ()
+                    | other -> failwithf "Encoding zero allocation lost its explicit integer default: %A" other
+                    let allocated =
+                        match facts.Operations[allocation] with
+                        | MemoryWitnessOperation.ArrayAllocation allocation -> allocation
+                        | other -> failwithf "Encoding allocation has no current memory witness: %A" other
+                    Assert.Equal(construction.Guard.Requirement, allocated.Requirement.Site)
+                    Assert.Equal(construction.Guard.Frontier, allocated.Requirement.Frontier)
+                    match construction.Initialization with
+                    | Some initialization ->
+                        let write = guardedAccess graph facts graph.Nodes[initialization.Write]
+                        Assert.Equal(initialization.Buffer, write.Buffer)
+                        Assert.Equal(initialization.Current, write.Index)
+                        Assert.Equal(Some zero, write.Value)
+                    | None -> Assert.Equal(0I, allocated.MaximumCount)
                 let parent =
                     edges |> List.filter (fun row ->
                         row.Target = copySite && row.Class = edge.Class && row.Role = edge.Role &&
@@ -247,10 +310,19 @@ type StringEncodingCases() =
         Assert.Contains(edges, fun edge -> List.contains origin.Id edge.Sources)
         DimensionalCases.same (NativeType.TApp(Types.arrayTyCon, [Types.intType])) origin.Type
         let observed = EncodingFixture.value "observed" graph
-        let read = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.StringByteRead && edge.Target = observed.Id) |> Assert.Single
+        let memory = EncodingFixture.memory graph
+        let access = EncodingFixture.guardedAccess graph memory observed
+        Assert.Equal<NodeId option>(None, access.Value)
+        let read =
+            graph.Edges
+            |> List.filter (fun edge -> edge.Role = EdgeRole.StringByteRead && edge.Target = access.Site)
+            |> Assert.Single
         Assert.Contains(origin.Id, read.Sources)
         Assert.Equal<SourceRange>(EncodingFixture.span (EncodingFixture.prelude + body) "bytes[1]", observed.Range)
+        Assert.Equal<SourceRange>(observed.Range, graph.Nodes[access.Site].Range)
+        Assert.Equal(Some (SettledSlot.Integer(8, Some EncodingFixture.byteRepresentation)), ByteStorage.element graph access.Buffer)
         Assert.True(observed.ValueRange |> Option.exists (ValueRange.contains (ValueRange.bounded 0I 255I)))
+        Assert.True(graph.Nodes[access.Site].ValueRange |> Option.exists (ValueRange.contains (ValueRange.bounded 0I 255I)))
 
     [<Theory>]
     [<InlineData("-1")>]
@@ -344,29 +416,67 @@ type StringEncodingCases() =
         let graph = EncodingFixture.admitted body
         let origin = EncodingFixture.allocation "bytes" graph
         let edges = EncodingFixture.evidence body "String.fromBytes bytes" graph
-        let writes = graph.Nodes.Values |> Seq.filter (fun node ->
-            match node.Kind with
-            | SemanticKind.Application(callee, [_; _; _]) when node.IsReachable ->
-                match graph.Nodes[callee].Kind with
-                | SemanticKind.Intrinsic { Module = IntrinsicModule.Array; Operation = "set" } -> true
-                | _ -> false
-            | _ -> false) |> Seq.toList
+        let memory = EncodingFixture.memory graph
+        let originalAllocationRow, originalAllocation =
+            graph.Edges
+            |> List.choose (fun row ->
+                match row.Role with
+                | EdgeRole.ArrayAllocationConstruction construction when construction.Owner = origin.Id -> Some(row, construction)
+                | _ -> None)
+            |> Assert.Single
+        EncodingFixture.sameEdge
+            (Clef.Compiler.Baker.Ingredients.MemoryValues.allocationConstructionRow originalAllocation) originalAllocationRow
+        Assert.True(originalAllocation.Default.IsSome)
+        match memory.Operations.TryFind originalAllocation.Site with
+        | Some(MemoryWitnessOperation.ArrayAllocation allocation) ->
+            Assert.Equal(originalAllocation.Site, allocation.Site)
+            Assert.Equal(originalAllocation.Count.Reference, allocation.Count)
+            Assert.Equal(originalAllocation.Guard.Requirement, allocation.Requirement.Site)
+        | other -> failwithf "Original byte storage has no current allocation witness: %A" other
+        let writes =
+            [ "Array.set alias 0 65", 65I; "Array.set alias 0 66", 66I ]
+            |> List.map (fun (expression, value) ->
+                let expectedRange = EncodingFixture.span (EncodingFixture.prelude + body) expression
+                let access =
+                    memory.Operations.Values
+                    |> Seq.choose (function
+                        | MemoryWitnessOperation.ArrayAccess access
+                            when access.Value.IsSome && graph.Nodes[access.Bounds.Requirement.Frontier].Range = expectedRange -> Some access
+                        | _ -> None)
+                    |> Assert.Single
+                let source = graph.Nodes[access.Bounds.Requirement.Frontier]
+                Assert.True(source.IsReachable)
+                Assert.Equal(access, EncodingFixture.guardedAccess graph memory source)
+                Assert.Equal<SourceRange>(expectedRange, source.Range)
+                Assert.Equal(Some(ValueRange.point value), graph.Nodes[access.Value.Value].ValueRange)
+                Assert.Equal(origin.Id, (EncodingFixture.sourceValue graph access.Buffer).Id)
+                // Byte-storage premises name the current IndexSet writer.
+                // Its unique guard row above retains the original source ID
+                // and span; the frontier itself no longer performs the store.
+                Assert.Contains(edges, fun edge -> List.contains access.Site edge.Sources)
+                source)
         Assert.Equal(2, writes.Length)
-        for write in writes do Assert.Contains(edges, fun edge -> List.contains write.Id edge.Sources)
-        let snapshots = graph.Nodes.Values |> Seq.filter (fun node ->
-            match node.Kind with
-            | SemanticKind.Application(callee, _) ->
-                match graph.Nodes[callee].Kind with
-                | SemanticKind.Intrinsic { Module = IntrinsicModule.Array; Operation = "sub" } -> true
-                | _ -> false
-            | _ -> false) |> Seq.toList
-        let snapshot = Assert.Single snapshots
-        Assert.NotEqual(origin.Id, snapshot.Id)
-        Assert.Equal(Some (SettledSlot.Integer(8, Some EncodingFixture.byteRepresentation)), ByteStorage.element graph snapshot.Id)
-        let formation = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.StringByteSnapshot) |> Assert.Single
+        Assert.NotEqual(writes[0].Id, writes[1].Id)
+        let formation =
+            graph.Edges
+            |> List.filter (fun edge -> edge.Role = EdgeRole.StringByteSnapshot)
+            |> Assert.Single
         match formation.Sources with
         | [input; copy] ->
-            Assert.Equal(snapshot.Id, copy)
+            let snapshot = memory.ArrayCopies[copy]
+            Assert.Equal(copy, snapshot.Site)
+            Assert.NotEqual(origin.Id, copy)
+            Assert.Equal(Some (SettledSlot.Integer(8, Some EncodingFixture.byteRepresentation)), ByteStorage.element graph copy)
+            let allocation = snapshot.Allocation |> Option.defaultWith (fun () -> failwith "Snapshot lost its distinct allocation")
+            Assert.NotEqual(origin.Id, allocation)
+            Assert.NotEqual(originalAllocation.Site, allocation)
+            let read = snapshot.Read |> Option.defaultWith (fun () -> failwith "Nonempty snapshot lost its source read")
+            let write = snapshot.Write |> Option.defaultWith (fun () -> failwith "Nonempty snapshot lost its destination store")
+            Assert.Equal(Some read.Site, write.Value)
+            Assert.Equal(origin.Id, (EncodingFixture.sourceValue graph snapshot.Source).Id)
+            Assert.Equal(origin.Id, (EncodingFixture.sourceValue graph read.Buffer).Id)
+            Assert.Equal(snapshot.Destination, write.Buffer)
+            Assert.Equal(allocation, (EncodingFixture.sourceValue graph write.Buffer).Id)
             Assert.NotEqual(input, copy)
             Assert.Contains(edges, fun edge -> edge.Sources |> List.contains input)
             Assert.Equal<SourceRange>(EncodingFixture.span (EncodingFixture.prelude + body) "String.fromBytes bytes", graph.Nodes[formation.Target].Range)

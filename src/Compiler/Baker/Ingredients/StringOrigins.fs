@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-/// Conservative source observations for validated lazy string origins.
-/// This records facts; it grants no lazy protocol, residence or borrow proof.
+/// Conservative source observations for validated lazy and captured string origins.
+/// This records facts; it grants no protocol, residence or borrow proof.
 module Clef.Compiler.Baker.Ingredients.StringOrigins
 
 open Microsoft.FSharp.Reflection
@@ -13,17 +13,19 @@ let used participants =
         match participants with
         | ParticipantEvidence.Established values -> values
         | ParticipantEvidence.Pending early -> early.Derived
-    occurrences |> List.exists (fun participant -> participant.Role = ParticipantRole.LazyStringOrigin)
+    occurrences |> List.exists (fun participant ->
+        participant.Role = ParticipantRole.LazyStringOrigin || participant.Role = ParticipantRole.CapturedStringOrigin)
 
 /// The complete recorded incidence census, including duplicates and extra
 /// consumers, plus every provenance/demand relation read by the origin readers.
 /// Payload-bearing roles are explicitly typed; an unexpected incidence payload
-/// cannot be reduced to its name. Non-lazy origins never invoke this snapshot.
+/// cannot be reduced to its name. Only explicitly marked derivations invoke it.
 let relations (graph: SemanticGraph) : Result<StringOriginRelation list, string> =
     let selected = function
         | EdgeRole.LazyInstance | EdgeRole.LazyMemoization | EdgeRole.LazyResultDestination
         | EdgeRole.CaptureReferenceOrigin | EdgeRole.EnvironmentFormal | EdgeRole.CaptureOrigin
         | EdgeRole.EnvironmentResultDestination | EdgeRole.CallableReferenceOrigin
+        | EdgeRole.SequenceCaptureFormation
         | EdgeRole.ContinuationSlotAccess | EdgeRole.ContinuationValue | EdgeRole.SuspensionLiveAcross
         | EdgeRole.OrdinaryUnusedFormal | EdgeRole.OrdinaryUnusedActual | EdgeRole.EnrichedWith
         | EdgeRole.ProgramInitialization | EdgeRole.ProgramEntryCall | EdgeRole.ProgramInitializer
@@ -41,13 +43,14 @@ let relations (graph: SemanticGraph) : Result<StringOriginRelation list, string>
             match edge.Role with
             | EdgeRole.LazyCapture value -> Ok (Some(StringOriginRelationKind.LazyCapture value))
             | EdgeRole.EnvironmentCapture value -> Ok (Some(StringOriginRelationKind.EnvironmentCapture value))
+            | EdgeRole.SequenceCaptureInitializer value -> Ok (Some(StringOriginRelationKind.SequenceCaptureInitializer value))
             | EdgeRole.EagerDemand value -> Ok (Some(StringOriginRelationKind.EagerDemand value))
             | EdgeRole.BoundaryDeclaration value -> Ok (Some(StringOriginRelationKind.BoundaryImplementation value.Implementation))
             | EdgeRole.ContinuationCase value when incidence -> Ok (Some(StringOriginRelationKind.ContinuationCase value))
             | role when not recorded || incidence || selected role ->
                 let case, fields = FSharpValue.GetUnionFields(role, typeof<EdgeRole>)
                 if fields.Length = 0 then Ok (Some(StringOriginRelationKind.Named case.Name))
-                else Error ("A lazy string origin has an unsupported recorded incidence payload: " + case.Name + ".")
+                else Error ("A string origin has an unsupported recorded incidence payload: " + case.Name + ".")
             | _ -> Ok None
         match state, flavor with
         | Error reason, _ | _, Error reason -> Error reason
@@ -60,5 +63,5 @@ let relations (graph: SemanticGraph) : Result<StringOriginRelation list, string>
 // The complete source-node census is BoundaryDomain.Premises. These ordered
 // relations and DeclarationRoots supplement that joint premise, including its
 // negative dependencies. A view retains its actual derivation occurrences and
-// LazyStringOrigin marker; repeating the global census in early participants
+// explicit origin marker; repeating the global census in early participants
 // would accidentally depend on later numeric/memory proof-node allocation.

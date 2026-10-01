@@ -32,7 +32,7 @@ let project (graph: SemanticGraph) : Result<BoundaryEmissionProjection, WitnessP
               | None ->
                   (domain.ByteViews |> List.exists (fun view -> StringOrigins.used view.Participants)) ||
                   (domain.StringExtents |> List.exists (fun extent -> StringOrigins.used extent.Participants))) then
-            stale "The lazy string-origin relation premises changed; Baker must settle the new source graph."
+            stale "The string-origin relation premises changed; Baker must settle the new source graph."
         elif (not domain.StringComparisonReads.IsEmpty || not domain.StringComparisonSnapshots.IsEmpty || not domain.StringComparisonCopies.IsEmpty) &&
              (match MemoryPublication.project graph with
               | Error _ -> true

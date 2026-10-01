@@ -903,61 +903,9 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
                     if resolved.Unknown || matches.IsEmpty then None
                     else Some(call :: formal :: actual :: participants)))
         | _ -> None
-    // A capture read belongs to the exact environment formal of its containing
-    // implementation. A formation sharing that formal's schema is not the
-    // invocation's environment. Retain every alias and structural scope premise.
-    let stringCapture (read: SemanticNode) environment slot =
-        let rec formalPath seen id =
-            if Set.contains id seen then None else
-            let seen = Set.add id seen
-            let follow source = formalPath seen source |> Option.map (fun (formal, path) -> formal, id :: path)
-            match nodes.TryFind id with
-            | Some node when applySubst node.Type = ClosureEnvironments.environmentType ->
-                match node.Kind with
-                | SemanticKind.PatternBinding _ -> Some(id, [id])
-                | SemanticKind.VarRef(_, Some source) when node.Children.IsEmpty ->
-                    match graph.Edges |> List.filter (fun edge -> edge.Target = id && edge.Role = EdgeRole.Definition) with
-                    | [] -> follow source
-                    | [{ Class = EdgeClass.Reference; Sources = [actual]; Ordinal = 0 }] when actual = source -> follow source
-                    | _ -> None
-                | SemanticKind.TypeAnnotation(source, declared)
-                    when applySubst declared = ClosureEnvironments.environmentType && node.Children = [source] -> follow source
-                | SemanticKind.Binding(_, false, _, _) when node.Children.Length = 1 -> follow node.Children.Head
-                | SemanticKind.EagerExpr source when ExplicitDemand.operand graph id = Some source -> follow source
-                | _ -> None
-            | _ -> None
-        let rec scopePath owner seen id =
-            if id = owner then Some [id]
-            elif Set.contains id seen then None
-            else
-                match nodes.TryFind id, parents.TryFind id with
-                | Some { Kind = SemanticKind.Lambda _ }, _ -> None
-                | Some _, Some enclosing when not enclosing.IsEmpty ->
-                    enclosing |> List.fold (fun proof parent ->
-                        Option.map2 (@) proof (scopePath owner (Set.add id seen) parent)) (Some [id])
-                | _ -> None
-        if read.Children <> [environment] then None else
-        formalPath Set.empty environment |> Option.bind (fun (formal, path) ->
-            let rows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.EnvironmentFormal && edge.Target = formal)
-            match rows with
-            | [{ Class = EdgeClass.Provenance; Sources = [owner; implementation]; Ordinal = 0 }] ->
-                match nodes.TryFind owner, nodes.TryFind implementation, nodes.TryFind slot with
-                | Some { Kind = SemanticKind.ClosureValue(actualImplementation, constructor) },
-                  Some { Kind = SemanticKind.Lambda(parameters, _, [], _, _) }, Some declaration
-                    when actualImplementation = implementation && applySubst declaration.Type = applySubst read.Type &&
-                         (parameters |> List.filter (fun (_, _, id) -> id = formal)
-                          |> function [(_, ty, _)] -> applySubst ty = ClosureEnvironments.environmentType | _ -> false) ->
-                    match ClosureEnvironments.capturedInitializers graph owner, scopePath implementation Set.empty read.Id with
-                    | Some captures, Some scope ->
-                        match captures |> List.filter (fun (source, _, _) -> source = slot) with
-                        | [(_, value, false)] ->
-                            nodes.TryFind value |> Option.bind (fun initializer ->
-                                if applySubst initializer.Type <> applySubst read.Type then None else
-                                Some(owner :: implementation :: constructor :: slot :: (path @ scope), [value]))
-                        | _ -> None
-                    | _ -> None
-                | _ -> None
-            | _ -> None)
+    let capturedStrings = Clef.Compiler.Baker.Ingredients.CapturedStrings.reader graph
+    let stringCapture (read: SemanticNode) _environment _slot =
+        capturedStrings read.Id |> Option.map (fun capture -> capture.Support, [capture.Initializer])
     let staticStringsFor context = StaticStringLayout.retainedViews graph (fun node ->
         match node.Kind with
         | SemanticKind.EnvironmentRead(environment, slot) -> stringCapture node environment slot

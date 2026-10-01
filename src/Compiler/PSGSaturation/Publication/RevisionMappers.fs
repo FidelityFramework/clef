@@ -1793,6 +1793,7 @@ and mapParticipantRole (value: S.ParticipantRole) : Fidelity.PSG.ParticipantRole
     | S.ParticipantRole.Origin -> Fidelity.PSG.ParticipantRole.Origin
     | S.ParticipantRole.Construction -> Fidelity.PSG.ParticipantRole.Construction
     | S.ParticipantRole.LazyStringOrigin -> Fidelity.PSG.ParticipantRole.LazyStringOrigin
+    | S.ParticipantRole.CapturedStringOrigin -> Fidelity.PSG.ParticipantRole.CapturedStringOrigin
 
 and mapPattern (value: S.Pattern) : Fidelity.PSG.Pattern =
     match value with
@@ -2255,6 +2256,7 @@ and mapStringOriginRelationKind (value: S.StringOriginRelationKind) : Fidelity.P
     | S.StringOriginRelationKind.Named(a0) -> Fidelity.PSG.StringOriginRelationKind.Named(a0)
     | S.StringOriginRelationKind.ContinuationCase(a0) -> Fidelity.PSG.StringOriginRelationKind.ContinuationCase(a0)
     | S.StringOriginRelationKind.EnvironmentCapture(a0) -> Fidelity.PSG.StringOriginRelationKind.EnvironmentCapture(a0)
+    | S.StringOriginRelationKind.SequenceCaptureInitializer(a0) -> Fidelity.PSG.StringOriginRelationKind.SequenceCaptureInitializer(a0)
     | S.StringOriginRelationKind.LazyCapture(a0) -> Fidelity.PSG.StringOriginRelationKind.LazyCapture(a0)
     | S.StringOriginRelationKind.EagerDemand(a0) -> Fidelity.PSG.StringOriginRelationKind.EagerDemand(mapEagerFrontier a0)
     | S.StringOriginRelationKind.BoundaryImplementation(a0) -> Fidelity.PSG.StringOriginRelationKind.BoundaryImplementation(nodeId a0)

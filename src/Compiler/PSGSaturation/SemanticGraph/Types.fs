@@ -764,6 +764,8 @@ type ParticipantRole =
     | Callee | CalleeBody | CalleeArgument | CalleeParameter | Ingress | Origin | Construction
     /// The source origin recipe consumed this exact lazy force protocol.
     | LazyStringOrigin
+    /// The source origin recipe consumed this exact scoped immutable environment read.
+    | CapturedStringOrigin
 
 /// One occurrence in a relation: the node, its role, its ordinal within the role (an
 /// argument or parameter position; 0 for a role without positions) and its group. The
@@ -1250,13 +1252,14 @@ type SpatialModuleDomain = {
     Unresolved: Map<NodeId, string>
 }
 
-/// Exact relation observations used by the bounded lazy string-origin owner.
+/// Exact relation observations used by the bounded lazy/captured string-origin owner.
 /// Named roles are nullary cases only; payload-bearing observations stay typed.
 [<RequireQualifiedAccess>]
 type StringOriginRelationKind =
     | Named of string
     | ContinuationCase of int
     | EnvironmentCapture of bool
+    | SequenceCaptureInitializer of bool
     | LazyCapture of bool
     | EagerDemand of EagerFrontier
     | BoundaryImplementation of NodeId
@@ -1279,8 +1282,8 @@ type BoundaryDomain = {
     Calls: NodeId list
     ByteViews: BoundaryByteView list
     StringExtents: BoundaryStringExtent list
-    /// Present only when Baker consumed a validated lazy string origin.
-    /// None grants no lazy-origin authority; Some retains exact relation membership.
+    /// Present only when Baker consumed a validated lazy or captured string origin.
+    /// None grants no such origin authority; Some retains exact relation membership.
     StringOriginRelations: StringOriginRelation list option
     StringOriginRoots: (NodeId * DeclRoot) list option
     StringComparisons: (NodeId * bool * NodeId list) list

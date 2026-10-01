@@ -350,6 +350,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\OrdinaryDemand.fs" />
     <Compile Include="Baker\Ingredients\FormalDemand.fs" />
     <Compile Include="Baker\Ingredients\Participants.fs" />
+    <Compile Include="Baker\Ingredients\CapturedStrings.fs" />
     <Compile Include="Baker\Ingredients\StringOrigins.fs" />
     <Compile Include="Baker\Recipes\StringComparisonRecipes.fs" />
     <Compile Include="Baker\Recipes\StringBorrowRecipes.fs" />

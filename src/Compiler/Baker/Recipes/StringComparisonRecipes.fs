@@ -17,6 +17,7 @@ module FormalDemand = Clef.Compiler.Baker.Ingredients.FormalDemand
 module Participants = Clef.Compiler.Baker.Ingredients.Participants
 module LazyValues = Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues
 module ExplicitDemand = Clef.Compiler.PSGSaturation.SemanticGraph.ExplicitDemand
+module CapturedStrings = Clef.Compiler.Baker.Ingredients.CapturedStrings
 
 /// Canonical identity stops at a formal: each invocation carries its own extent.
 /// Origin enumeration follows the existing complete callable-flow relation over
@@ -30,6 +31,7 @@ module ExplicitDemand = Clef.Compiler.PSGSaturation.SemanticGraph.ExplicitDemand
 /// complete static origin.
 let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (group: NodeId) source =
     let inputs = FormalDemand.reader graph flow
+    let capturedString = lazy (CapturedStrings.reader graph)
     let lazyFacts = lazy (LazyValues.settle graph)
     let capturedSource = lazy (LazyValues.tryCapturedSourceReference graph)
     let force id =
@@ -63,6 +65,9 @@ let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (grou
         | Some { Kind = SemanticKind.Sequential _ } when (force id).IsSome -> Some(id, seen)
         | Some { Kind = SemanticKind.IfThenElse _ } when (conditional id).IsSome -> Some(id, seen)
         | Some { Kind = SemanticKind.LazyRead _ } -> captured id |> Option.bind (canonical seen)
+        // Preserve the current invocation's read identity. The initializer
+        // enumerates possible bytes; it does not replace the environment read.
+        | Some { Kind = SemanticKind.EnvironmentRead _ } -> capturedString.Value id |> Option.map (fun _ -> id, seen)
         | Some { Kind = SemanticKind.Literal(NativeLiteral.String _) }
         | Some { Kind = SemanticKind.PatternBinding _ } -> Some(id, seen)
         | _ -> None
@@ -118,6 +123,17 @@ let stringOrigin (graph: SemanticGraph) (flow: CallableOrigins.Resolution) (grou
             |> Result.map (Option.map (fun (values, participants) ->
                 values, Participants.occurrence id ParticipantRole.LazyStringOrigin 0 group :: participants))
             |> path
+        | Some { Kind = SemanticKind.EnvironmentRead _ } ->
+            match capturedString.Value id with
+            | Some capture ->
+                origins seen capture.Constructor capture.Initializer
+                |> Result.map (Option.map (fun (values, participants) ->
+                    let marker = Participants.occurrence id ParticipantRole.CapturedStringOrigin 0 group
+                    let support = capture.Support |> List.mapi (fun ordinal node ->
+                        Participants.occurrence node ParticipantRole.Construction ordinal id)
+                    values, marker :: (support @ participants)))
+                |> path
+            | None -> Ok None
         | Some { Kind = SemanticKind.PatternBinding _ } ->
             match inputs id with
             | Some formal ->
@@ -168,7 +184,7 @@ let private zeroEvidence graph left right =
     [left;right] |> List.map (fun source ->
         stringOrigin graph flow source source |> Result.map (Option.bind (fun (_,origins,participants) ->
             if not origins.IsEmpty && origins.Values |> Seq.forall ((=) 0I) then
-                // Both extent rows retain the lazy marker. It activates the
+                // Both extent rows retain any lazy/captured origin marker. It activates the
                 // complete joint node/relation/root premise at source settlement.
                 participants |> Participants.nodes |> Set.ofList |> Some
             else None)))
@@ -316,9 +332,7 @@ let private calleeMatches graph negated callee =
         operation=(if negated then "op_Inequality" else "op_Equality")
     | _ -> false
 
-/// Whether the construction still has its source structure and its zero-extent
-/// evidence, or the failure of the origins that evidence is derived from.
-let validLengthStructure (graph: SemanticGraph) (c: LengthConstruction) =
+let private lengthStructure (graph: SemanticGraph) (c: LengthConstruction) =
     let kind id = graph.Nodes.TryFind id |> Option.map _.Kind
     let binding actual id = match graph.Nodes.TryFind id with Some { Kind=SemanticKind.Binding(_,false,_,_); Children=[value] } -> value=actual | _ -> false
     let reference binding id = match kind id with Some(SemanticKind.VarRef(_,Some actual)) -> actual=binding | _ -> false
@@ -333,11 +347,74 @@ let validLengthStructure (graph: SemanticGraph) (c: LengthConstruction) =
         | Some(SemanticKind.IfThenElse(test,yes,Some no)) ->
             test=c.Test && kind yes=Some(SemanticKind.Literal(NativeLiteral.Bool false)) && kind no=Some(SemanticKind.Literal(NativeLiteral.Bool true))
         | _ -> false
+    calleeMatches graph c.Negated c.Callee && kind c.Site=Some(SemanticKind.Sequential [c.LeftBinding;c.RightBinding;c.Decision]) &&
+    binding c.Left c.LeftBinding && binding c.Right c.RightBinding && reference c.LeftBinding c.LeftSource && reference c.RightBinding c.RightSource &&
+    length c.LeftSource c.LeftLength && length c.RightSource c.RightLength && test && decision
+
+/// Whether the construction still has its source structure and its zero-extent
+/// evidence, or the failure of the origins that evidence is derived from.
+let validLengthStructure (graph: SemanticGraph) (c: LengthConstruction) =
     zeroEvidence graph c.Left c.Right |> Result.map (fun evidence ->
-        calleeMatches graph c.Negated c.Callee && kind c.Site=Some(SemanticKind.Sequential [c.LeftBinding;c.RightBinding;c.Decision]) &&
-        binding c.Left c.LeftBinding && binding c.Right c.RightBinding && reference c.LeftBinding c.LeftSource && reference c.RightBinding c.RightSource &&
-        length c.LeftSource c.LeftLength && length c.RightSource c.RightLength && test && decision &&
-        evidence=Some(Set.ofList c.Evidence))
+        lengthStructure graph c && evidence=Some(Set.ofList c.Evidence))
+
+/// Complete only this recipe's just-folded rewrite, after ordinary demand is
+/// current. The operand bindings add structural scope participants. Retain every
+/// earlier premise and the exact construction prefix; never repair an arbitrary
+/// late/stale row. A failed derivation keeps the original row so the existing
+/// owning validation reports the same located failure (including origin errors).
+let settleMaterializedLength (before: SemanticGraph) (current: SemanticGraph)
+    (source: SemanticNode, operation, callee, left, right) =
+    let own (edge: Hyperedge) =
+        edge.Target=source.Id &&
+        (match edge.Role with EdgeRole.StringLengthComparison _ -> true | _ -> false)
+    let rows = current.Edges |> List.filter own
+    let facts = lengthConstructions current |> List.filter (fun fact -> fact.Site=source.Id)
+    match rows, facts with
+    | [row], [fact] when fact.Callee=callee && fact.Left=left && fact.Right=right &&
+                        fact.Negated=(operation=NumericOperationKind.NotEqual) && lengthStructure current fact ->
+        match zeroEvidence before left right, zeroEvidence current left right with
+        | Result.Ok(Some early), Result.Ok(Some settled)
+            when early=Set.ofList fact.Evidence && Set.isSubset early settled ->
+            let sources = (row.Sources |> List.take 11) @ Set.toList settled
+            let replacement = { row with Sources=sources }
+            let edges = current.Edges |> List.map (fun edge -> if own edge then replacement else edge)
+            { current with Edges=edges }
+        | _ -> current
+    | _ -> current
+
+/// Transfer only already-valid length constructions across the factory result
+/// destination rewrite. That owner replaces a source call by an ordered storage
+/// prefix and a new invocation, so current call/formal premises replace the old
+/// ones. The exact construction row must itself be untouched. Both source
+/// graphs are checked; this is not a late stale-proof refresh for publication.
+let transferLengthAfterFactoryRewrite (before: SemanticGraph) (current: SemanticGraph) =
+    let own (edge: Hyperedge) =
+        match edge.Role with EdgeRole.StringLengthComparison _ -> true | _ -> false
+    let rows (graph: SemanticGraph) site =
+        graph.Edges |> List.filter (fun edge -> edge.Target=site && own edge)
+    let key (edge: Hyperedge) = edge.Class,edge.Role,edge.Ordinal,edge.Target,edge.Sources
+    let replacements =
+        lengthConstructions before |> List.choose (fun fact ->
+            match rows before fact.Site, rows current fact.Site with
+            | [oldRow], [newRow] when key oldRow=key newRow ->
+                match validLengthStructure before fact with
+                | Result.Ok true when lengthStructure current fact ->
+                    match zeroEvidence current fact.Left fact.Right with
+                    | Result.Ok(Some settled) ->
+                        let sources = (newRow.Sources |> List.take 11) @ Set.toList settled
+                        Some(fact.Site, { newRow with Sources=sources })
+                    | _ -> None
+                | _ -> None
+            | _ -> None)
+        |> Map.ofList
+    if replacements.IsEmpty then current else
+    let edges = current.Edges |> List.map (fun edge ->
+        match replacements.TryFind edge.Target with
+        | Some replacement when own edge -> replacement
+        | _ -> edge)
+    // Preserve failed rows so the existing owner reports their exact source
+    // failure. Existing factory rewrite nodes, incidence and metadata remain.
+    { current with Edges=edges }
 
 /// Identity and lifetime of this view are the containing comparison's actual
 /// string value, independently of where that string's backing bytes were made.

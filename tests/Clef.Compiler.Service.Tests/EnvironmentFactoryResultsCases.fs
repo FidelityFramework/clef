@@ -667,3 +667,349 @@ let main _ =
         Assert.Empty(EnvironmentFactories.relations EdgeRole.EnvironmentResultCall prepared)
         let partial = EnvironmentFactories.binding "partial" original
         Assert.Equal<NodeId list>(partial.Children, prepared.Nodes[partial.Id].Children)
+
+module private CapturedStringOriginFixture =
+    module Origin = Clef.Compiler.Baker.Recipes.StringComparisonRecipes
+    module Flow = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins
+    module Boundary = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryEmission
+    module Demand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
+
+    let constructions = Origin.constructions
+    let lengthConstructions = Origin.lengthConstructions
+    let validLengthStructure = Origin.validLengthStructure
+    let project = Boundary.project
+
+    type Capture = {
+        Read: SemanticNode
+        Environment: NodeId
+        Formal: NodeId
+        Owner: NodeId
+        Implementation: NodeId
+        Constructor: NodeId
+        Slot: NodeId
+        Initializer: NodeId
+        FormalRow: Hyperedge
+        CaptureRow: Hyperedge
+        OriginRow: Hyperedge
+    }
+
+    let source text =
+        sprintf "module CapturedUtf8\nlet make (prefix: string) = fun (value: string) -> if prefix = value then 1 else 0\nlet first = make %A\nlet second = make \"World\"\n[<EntryPoint>]\nlet main _ =\n    ignore (first \"probe\")\n    ignore (second \"probe\")\n    0\n" text
+
+    let check text = LazyResidenceFixture.programWith (Some(source text))
+
+    let literal text (graph: SemanticGraph) =
+        graph.Nodes.Values
+        |> Seq.filter (fun node -> node.IsReachable && node.Kind = SemanticKind.Literal(NativeLiteral.String text))
+        |> Assert.Single
+        |> _.Id
+
+    let capturedRead (graph: SemanticGraph) =
+        graph.Nodes.Values
+        |> Seq.filter (fun node ->
+            node.IsReachable && Types.isStringType node.Type &&
+            match node.Kind with SemanticKind.EnvironmentRead _ -> true | _ -> false)
+        |> Assert.Single
+
+    let requireOrigin (graph: SemanticGraph) site =
+        match Origin.stringOrigin graph (Flow.resolve graph) site site with
+        | Ok(Some fact) -> fact
+        | result -> failwithf "Missing complete captured source-string origin: %A" result
+
+    let capture (graph: SemanticGraph) =
+        let read = capturedRead graph
+        let environment, slot =
+            match read.Kind with
+            | SemanticKind.EnvironmentRead(environment, slot) -> environment, slot
+            | _ -> failwith "Missing captured string read"
+        Assert.Equal<NodeId list>([environment], read.Children)
+        let formal =
+            match graph.Nodes[environment].Kind with
+            | SemanticKind.VarRef(_, Some formal) -> formal
+            | kind -> failwithf "Missing environment formal reference: %A" kind
+        let formalRow =
+            graph.Edges
+            |> List.filter (fun row -> row.Role = EdgeRole.EnvironmentFormal && row.Target = formal)
+            |> Assert.Single
+        let owner, implementation =
+            match formalRow.Class, formalRow.Ordinal, formalRow.Sources with
+            | EdgeClass.Provenance, 0, [owner; implementation] -> owner, implementation
+            | _ -> failwith "Lost exact environment formal authority"
+        let constructor =
+            match graph.Nodes[owner].Kind with
+            | SemanticKind.ClosureValue(actual, constructor) when actual = implementation -> constructor
+            | kind -> failwithf "Lost matching closure owner: %A" kind
+        let captureRow =
+            graph.Edges
+            |> List.filter (fun row ->
+                row.Target = constructor &&
+                match row.Role, row.Sources with
+                | EdgeRole.EnvironmentCapture _, [_; actual; _] -> actual = slot
+                | _ -> false)
+            |> Assert.Single
+        let initializer =
+            match captureRow.Class, captureRow.Role, captureRow.Sources with
+            | EdgeClass.Provenance, EdgeRole.EnvironmentCapture false, [actual; declaration; value]
+                when actual = owner && declaration = slot -> value
+            | _ -> failwith "Lost exact immutable initializer authority"
+        let originRow =
+            graph.Edges
+            |> List.filter (fun row -> row.Role = EdgeRole.CaptureReferenceOrigin && row.Target = read.Id)
+            |> Assert.Single
+        Assert.Equal<NodeId list>([owner; slot], originRow.Sources)
+        { Read = read; Environment = environment; Formal = formal; Owner = owner
+          Implementation = implementation; Constructor = constructor; Slot = slot
+          Initializer = initializer; FormalRow = formalRow; CaptureRow = captureRow; OriginRow = originRow }
+
+    let projection graph =
+        match Boundary.project graph with
+        | Ok projection -> projection
+        | Error failures -> failwithf "Missing current string boundary: %A" failures
+
+    let private key (row: Hyperedge) = row.Class, row.Role, row.Ordinal, row.Sources, row.Target
+    let replaceRow (before: Hyperedge) (after: Hyperedge option) (graph: SemanticGraph) =
+        { graph with
+            Edges =
+                graph.Edges
+                |> List.collect (fun row -> if key row = key before then Option.toList after else [row]) }
+
+    let refreshDemand (graph: SemanticGraph) =
+        let refreshed =
+            match Demand.tryRead graph with
+            | Ok _ -> graph
+            | Error failures ->
+                Assert.NotEmpty failures
+                Clef.Compiler.Nanopass.OrdinaryDemand.normalize graph
+        match Demand.tryRead refreshed with
+        | Ok _ -> refreshed
+        | Error failures -> failwithf "Owning ordinary-demand refresh failed: %A" failures
+
+    let refused graph site =
+        let current = refreshDemand graph
+        match Origin.stringOrigin current (Flow.resolve current) site site with
+        | Ok(Some value) -> failwithf "Malformed captured origin was retained: %A" value
+        | Ok None | Error _ -> ()
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "CapturedStringOrigin")>]
+type CapturedStringOriginCases() =
+    [<Theory>]
+    [<InlineData("é", 2)>]
+    [<InlineData("", 0)>]
+    member _.``Captured factory strings retain exact UTF8 alternatives and distinct destinations``(text: string, bytes: int) =
+        let graph = CapturedStringOriginFixture.check text
+        let capture = CapturedStringOriginFixture.capture graph
+        let expected =
+            Map.ofList [CapturedStringOriginFixture.literal text graph, bigint bytes
+                        CapturedStringOriginFixture.literal "World" graph, 5I]
+        let identity, origins, participants = CapturedStringOriginFixture.requireOrigin graph capture.Read.Id
+        Assert.Equal(capture.Read.Id, identity)
+        Assert.Equal<Map<NodeId, bigint>>(expected, origins)
+        for origin in expected.Keys do
+            Assert.Contains(participants, fun participant -> participant.Node = origin && participant.Role = ParticipantRole.Origin)
+        for id in [capture.Read.Id; capture.Environment; capture.Formal; capture.Owner; capture.Implementation
+                   capture.Constructor; capture.Slot; capture.Initializer] do
+            Assert.Contains(participants, fun participant -> participant.Node = id)
+        let projection = CapturedStringOriginFixture.projection graph
+        let extentSites =
+            (CapturedStringOriginFixture.constructions graph
+             |> List.choose (fun construction ->
+                 if construction.Left = capture.Read.Id then Some(construction.LeftSource, construction.LeftLength)
+                 elif construction.Right = capture.Read.Id then Some(construction.RightSource, construction.RightLength)
+                 else None))
+            @ (CapturedStringOriginFixture.lengthConstructions graph
+               |> List.choose (fun construction ->
+                   if construction.Left = capture.Read.Id then Some(construction.LeftSource, construction.LeftLength)
+                   elif construction.Right = capture.Read.Id then Some(construction.RightSource, construction.RightLength)
+                   else None))
+        Assert.NotEmpty extentSites
+        for source, site in extentSites do
+            let extent = projection.StringExtents[site]
+            Assert.Equal(source, extent.Source)
+            Assert.Equal<Map<NodeId, bigint>>(expected, extent.StaticOrigins)
+            Assert.Equal<ValueRange option>(Some(ValueRange.bounded (bigint bytes) 5I), graph.Nodes[extent.Site].ValueRange)
+        let calls = EnvironmentFactories.relations EdgeRole.EnvironmentResultCall graph
+        Assert.Equal(2, calls.Length)
+        Assert.Equal(2, calls |> List.map (fun row -> row.Sources[3]) |> Set.ofList |> Set.count)
+
+    [<Theory>]
+    [<InlineData("mutable-capture")>]
+    [<InlineData("missing-formal")>]
+    [<InlineData("duplicate-formal")>]
+    [<InlineData("missing-capture")>]
+    [<InlineData("capture-ordinal")>]
+    [<InlineData("missing-source-origin")>]
+    [<InlineData("duplicate-source-origin")>]
+    [<InlineData("schema-environment")>]
+    member _.``Captured string authority mutations retract stored and freshly read origins``(defect: string) =
+        let graph = CapturedStringOriginFixture.check "é"
+        let capture = CapturedStringOriginFixture.capture graph
+        CapturedStringOriginFixture.requireOrigin graph capture.Read.Id |> ignore
+        CapturedStringOriginFixture.projection graph |> ignore
+        let changed =
+            match defect with
+            | "mutable-capture" ->
+                CapturedStringOriginFixture.replaceRow capture.CaptureRow
+                    (Some { capture.CaptureRow with Role = EdgeRole.EnvironmentCapture true }) graph
+            | "missing-formal" -> CapturedStringOriginFixture.replaceRow capture.FormalRow None graph
+            | "duplicate-formal" -> { graph with Edges = capture.FormalRow :: graph.Edges }
+            | "missing-capture" -> CapturedStringOriginFixture.replaceRow capture.CaptureRow None graph
+            | "capture-ordinal" ->
+                CapturedStringOriginFixture.replaceRow capture.CaptureRow
+                    (Some { capture.CaptureRow with Ordinal = capture.CaptureRow.Ordinal + 1 }) graph
+            | "missing-source-origin" -> CapturedStringOriginFixture.replaceRow capture.OriginRow None graph
+            | "duplicate-source-origin" -> { graph with Edges = capture.OriginRow :: graph.Edges }
+            | "schema-environment" ->
+                let changedRead =
+                    { capture.Read with Kind = SemanticKind.EnvironmentRead(capture.Constructor, capture.Slot)
+                                        Children = [capture.Constructor] }
+                { graph with Nodes = graph.Nodes.Add(capture.Read.Id, changedRead) }
+            | other -> failwithf "Unknown capture defect: %s" other
+        if defect <> "schema-environment" then Assert.Same(graph.Nodes, changed.Nodes)
+        Assert.True(CapturedStringOriginFixture.project changed |> Result.isError)
+        CapturedStringOriginFixture.refused changed capture.Read.Id
+        CapturedStringOriginFixture.requireOrigin graph capture.Read.Id |> ignore
+
+    [<Fact>]
+    member _.``Captured literal text changes withdraw old extent without claiming new backing``() =
+        let graph = CapturedStringOriginFixture.check "é"
+        let capture = CapturedStringOriginFixture.capture graph
+        let origin = CapturedStringOriginFixture.literal "é" graph
+        let _, before, _ = CapturedStringOriginFixture.requireOrigin graph capture.Read.Id
+        Assert.Equal(2I, before[origin])
+        CapturedStringOriginFixture.projection graph |> ignore
+        let changedLiteral = { graph.Nodes[origin] with Kind = SemanticKind.Literal(NativeLiteral.String "plane") }
+        let changed = { graph with Nodes = graph.Nodes.Add(origin, changedLiteral) }
+        // The old pool and derived rows remain. Only fresh logical source
+        // observation may succeed; this does not authorize their physical use.
+        Assert.True(CapturedStringOriginFixture.project changed |> Result.isError)
+        let current = CapturedStringOriginFixture.refreshDemand changed
+        let _, after, _ = CapturedStringOriginFixture.requireOrigin current capture.Read.Id
+        Assert.Equal<Map<NodeId, bigint>>(before.Add(origin, 5I), after)
+
+    [<Fact>]
+    member _.``An unknown supplied string prevents a partial captured origin map``() =
+        let graph = CapturedStringOriginFixture.check "é"
+        let capture = CapturedStringOriginFixture.capture graph
+        let unknown = CapturedStringOriginFixture.literal "é" graph
+        let retained = CapturedStringOriginFixture.literal "World" graph
+        let _, before, _ = CapturedStringOriginFixture.requireOrigin graph capture.Read.Id
+        Assert.True(before.ContainsKey unknown && before.ContainsKey retained)
+        CapturedStringOriginFixture.projection graph |> ignore
+        let opaque = { graph.Nodes[unknown] with Kind = SemanticKind.PatternBinding "unknown_string"; Children = [] }
+        let changed = { graph with Nodes = graph.Nodes.Add(unknown, opaque) }
+        Assert.Equal(graph.Nodes[retained].Kind, changed.Nodes[retained].Kind)
+        Assert.True(CapturedStringOriginFixture.project changed |> Result.isError)
+        CapturedStringOriginFixture.refused changed capture.Read.Id
+
+    [<Fact>]
+    member _.``Generated immutable forwarding reads need no fabricated source reference row``() =
+        let source =
+            "module CapturedForwarding\n[<EntryPoint>]\nlet main _ =\n    let prefix = \"é\"\n    let outer = fun (expected: string) ->\n        let callback = fun (value: string) -> if prefix = value then 1 else 0\n        callback expected\n    outer \"probe\"\n"
+        let graph = LazyResidenceFixture.programWith (Some source)
+        let access =
+            graph.Nodes.Values
+            |> Seq.collect (fun node ->
+                match node.Kind with
+                | SemanticKind.EnvironmentCreate(_, initializers) ->
+                    initializers
+                    |> List.choose (fun (_, value) ->
+                        match graph.Nodes[value].Kind with
+                        | SemanticKind.EnvironmentRead _ when Types.isStringType graph.Nodes[value].Type -> Some graph.Nodes[value]
+                        | _ -> None)
+                | _ -> [])
+            |> Assert.Single
+        Assert.DoesNotContain(graph.Edges, fun row -> row.Role = EdgeRole.CaptureReferenceOrigin && row.Target = access.Id)
+        let _, origins, _ = CapturedStringOriginFixture.requireOrigin graph access.Id
+        Assert.Equal<Map<NodeId, bigint>>(Map.ofList [CapturedStringOriginFixture.literal "é" graph, 2I], origins)
+        CapturedStringOriginFixture.projection graph |> ignore
+
+    [<Fact>]
+    member _.``Captured empty comparison retains length-only authority and withdraws stale emptiness``() =
+        let source =
+            "module CapturedEmpty\nlet make (prefix: string) = fun (value: string) -> if prefix = value then 1 else 0\nlet callback = make \"\"\n[<EntryPoint>]\nlet main _ = callback \"probe\"\n"
+        let graph = LazyResidenceFixture.programWith (Some source)
+        let capture = CapturedStringOriginFixture.capture graph
+        let empty = CapturedStringOriginFixture.literal "" graph
+        let identity, origins, _ = CapturedStringOriginFixture.requireOrigin graph capture.Read.Id
+        Assert.Equal(capture.Read.Id, identity)
+        Assert.Equal<Map<NodeId, bigint>>(Map.ofList [empty, 0I], origins)
+        let construction =
+            CapturedStringOriginFixture.lengthConstructions graph
+            |> List.filter (fun construction -> construction.Left = capture.Read.Id || construction.Right = capture.Read.Id)
+            |> Assert.Single
+        Assert.DoesNotContain(CapturedStringOriginFixture.constructions graph, fun current -> current.Site = construction.Site)
+        match CapturedStringOriginFixture.validLengthStructure graph construction with
+        | Ok true -> ()
+        | other -> failwithf "Missing current empty-comparison authority: %A" other
+        let projection = CapturedStringOriginFixture.projection graph
+        let site = if construction.Left = capture.Read.Id then construction.LeftLength else construction.RightLength
+        Assert.Equal<Map<NodeId, bigint>>(origins, projection.StringExtents[site].StaticOrigins)
+        for changed in [
+            CapturedStringOriginFixture.replaceRow capture.OriginRow None graph
+            { graph with Edges = capture.FormalRow :: graph.Edges }
+        ] do
+            Assert.Same(graph.Nodes, changed.Nodes)
+            Assert.True(CapturedStringOriginFixture.project changed |> Result.isError)
+            CapturedStringOriginFixture.refused changed capture.Read.Id
+        let changedLiteral = { graph.Nodes[empty] with Kind = SemanticKind.Literal(NativeLiteral.String "é") }
+        let changed = { graph with Nodes = graph.Nodes.Add(empty, changedLiteral) }
+        Assert.True(CapturedStringOriginFixture.project changed |> Result.isError)
+        let current = CapturedStringOriginFixture.refreshDemand changed
+        let _, revised, _ = CapturedStringOriginFixture.requireOrigin current capture.Read.Id
+        Assert.Equal<Map<NodeId, bigint>>(Map.ofList [empty, 2I], revised)
+        match CapturedStringOriginFixture.validLengthStructure current construction with
+        | Ok false -> ()
+        | other -> failwithf "A nonempty capture retained the empty-comparison shortcut: %A" other
+
+        // A fresh empty source is insufficient to repair an already-stale
+        // proof. Transfer must require the prior construction's exact evidence.
+        let row =
+            graph.Edges
+            |> List.filter (fun row ->
+                row.Target = construction.Site &&
+                match row.Role with EdgeRole.StringLengthComparison _ -> true | _ -> false)
+            |> Assert.Single
+        Assert.True(row.Sources.Length > 11)
+        let malformedRow = { row with Sources = List.take 11 row.Sources }
+        let malformed = CapturedStringOriginFixture.replaceRow row (Some malformedRow) graph
+        let _, stillEmpty, _ = CapturedStringOriginFixture.requireOrigin malformed capture.Read.Id
+        Assert.Equal<Map<NodeId, bigint>>(origins, stillEmpty)
+        let malformedConstruction =
+            CapturedStringOriginFixture.lengthConstructions malformed
+            |> List.filter (fun current -> current.Site = construction.Site)
+            |> Assert.Single
+        Assert.Empty malformedConstruction.Evidence
+        match CapturedStringOriginFixture.validLengthStructure malformed malformedConstruction with
+        | Ok false -> ()
+        | other -> failwithf "Missing evidence did not invalidate the old construction: %A" other
+        let transferred =
+            Clef.Compiler.Baker.Recipes.StringComparisonRecipes.transferLengthAfterFactoryRewrite malformed malformed
+        let retainedRow =
+            transferred.Edges
+            |> List.filter (fun row ->
+                row.Target = construction.Site &&
+                match row.Role with EdgeRole.StringLengthComparison _ -> true | _ -> false)
+            |> Assert.Single
+        Assert.Equal<EdgeClass>(malformedRow.Class, retainedRow.Class)
+        Assert.Equal<EdgeRole>(malformedRow.Role, retainedRow.Role)
+        Assert.Equal(malformedRow.Ordinal, retainedRow.Ordinal)
+        Assert.Equal(malformedRow.Target, retainedRow.Target)
+        Assert.Equal<NodeId list>(malformedRow.Sources, retainedRow.Sources)
+        match CapturedStringOriginFixture.validLengthStructure transferred malformedConstruction with
+        | Ok false -> ()
+        | other -> failwithf "Factory transfer repaired a stale prior proof: %A" other
+        Assert.True(CapturedStringOriginFixture.project transferred |> Result.isError)
+
+    [<Fact>]
+    member _.``Immutable capture reader rejects an additional environment convention``() =
+        let graph = CapturedStringOriginFixture.check "é"
+        let capture = CapturedStringOriginFixture.capture graph
+        let read = Clef.Compiler.Baker.Ingredients.CapturedStrings.reader
+        Assert.True(read graph capture.Read.Id |> Option.isSome)
+        let extra = { capture.FormalRow with Target = capture.Slot }
+        Assert.NotEqual(capture.Formal, extra.Target)
+        let changed = { graph with Edges = extra :: graph.Edges }
+        Assert.Same(graph.Nodes, changed.Nodes)
+        Assert.True(CapturedStringOriginFixture.project changed |> Result.isError)
+        Assert.True(read changed capture.Read.Id |> Option.isNone)
+        CapturedStringOriginFixture.refused changed capture.Read.Id
