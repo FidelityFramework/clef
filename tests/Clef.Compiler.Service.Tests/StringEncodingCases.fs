@@ -240,35 +240,17 @@ let description = { Id="encoding-test"; Core=Some core; Spaces=[|image;stack|]; 
         Assert.Equal("CCS8404", diagnostic.Code)
         Assert.Equal<SourceRange>(span (prelude + body) expression, diagnostic.Range)
         Assert.Equal("String.fromBytes requires proved byte storage: " + reason, diagnostic.Message)
-        // Invalid encoding also leaves the exact source memory prerequisites
-        // unproved. Check those refusals completely; do not suppress them.
-        let allocationExpression =
-            body.Split('\n') |> Array.filter (fun line -> line.TrimStart().StartsWith("let bytes: int array = "))
-            |> Assert.Single
-            |> fun line -> line.Substring(line.IndexOf(" = ", System.StringComparison.Ordinal) + 3)
-        let memory reason = "Source settlement is required before witnessing: MemoryPublication: " + reason
-        let allocationReason =
-            if allocationExpression.StartsWith("Array.zeroCreate ") then
-                "The dynamic array's complete use family has no admitted local storage lifetime."
-            else "The array's complete use family escapes or observes address identity; a source residence contract is required."
-        let expected =
-            [ yield "CCS8404", "String.fromBytes requires proved byte storage: " + reason, span (prelude + body) expression
-              yield "CCS8403", memory "A string view requires its unique complete source snapshot relation.", span (prelude + body) expression
-              yield "CCS8403", memory allocationReason, span (prelude + body) allocationExpression
-              if reason = "the platform must offer an unsigned 8-bit representation." then
-                  yield "CCS8403", memory "The string extent lacks its settled scalar carrier or explicit byte representation.", span (prelude + body) "String.length text" ]
-        let signature (code, message, range: SourceRange) =
-            code, message, range.File, range.Start.Line, range.Start.Column, range.End.Line, range.End.Column
-        let actual = errors |> List.map (fun error ->
-            if error.Code = "CCS8403" then
-                let node = result.Graph.Nodes[Assert.Single error.RelatedNodes]
-                Assert.True(node.IsReachable)
-                Assert.Equal<SourceRange>(node.Range, error.Range)
-            error.Code, error.Message, error.Range)
-        Assert.Equal<(string * string * string * int * int * int * int) list>(
-            expected |> List.map signature |> List.sort,
-            actual |> List.map signature |> List.sort)
+        // Source admission owns this refusal. Missing physical snapshot and
+        // residence facts cannot become independent witness diagnostics, and
+        // stopping before publication must not certify those absent facts.
+        Assert.Single(errors) |> ignore
         Assert.Empty(storageEdges result.Graph)
+        Assert.DoesNotContain(result.Graph.Edges, fun edge -> edge.Role = EdgeRole.StringByteSnapshot)
+        Assert.True(result.Graph.Codata.Value.WitnessEmission.IsNone)
+        Assert.True(result.Graph.WitnessProvenance.IsNone)
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project result.Graph |> Result.isError)
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.tryRead result.Graph |> Result.isError)
+        Assert.True(Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.PlatformContext.Value result.Graph |> Result.isError)
 
     let rejected reason body expression = rejectedWith (Some platform) reason body expression
     let byteReason = "every stored integer must be proved within 0..255."
@@ -330,6 +312,24 @@ type StringEncodingCases() =
     member _.``Out of domain integers fail at the full encoding call`` value =
         let body = $"[<EntryPoint>]\nlet main _ =\n    let bytes: int array = [| {value} |]\n    let text = String.fromBytes bytes\n    String.length text\n"
         EncodingFixture.rejected EncodingFixture.byteReason body "String.fromBytes bytes"
+
+    [<Fact>]
+    member _.``Rejected encoding retains an independent source measure error``() =
+        let body = "[<Measure>] type m\n[<Measure>] type s\n[<EntryPoint>]\nlet main _ =\n    let bytes: int array = [| 256 |]\n    let text = String.fromBytes bytes\n    let mismatch = 1<m> + 2<s>\n    if mismatch > 0<m> then String.length text else 0\n"
+        let result = EncodingFixture.check body
+        let errors = CheckResult.errors result
+        Assert.Equal<string list>(["CCS8040"; "CCS8404"], errors |> List.map _.Code |> List.sort)
+        let encoding = errors |> List.filter (fun error -> error.Code = "CCS8404") |> Assert.Single
+        Assert.Equal("String.fromBytes requires proved byte storage: " + EncodingFixture.byteReason, encoding.Message)
+        Assert.Equal<SourceRange>(EncodingFixture.span (EncodingFixture.prelude + body) "String.fromBytes bytes", encoding.Range)
+        let measure = errors |> List.filter (fun error -> error.Code = "CCS8040") |> Assert.Single
+        Assert.Equal<SourceRange>(EncodingFixture.span (EncodingFixture.prelude + body) "1<m> + 2<s>", measure.Range)
+        let independent = EncodingFixture.check (body.Replace("[| 256 |]", "[| 65 |]")) |> CheckResult.errors |> Assert.Single
+        Assert.Equal(independent.Code, measure.Code)
+        Assert.Equal(independent.Message, measure.Message)
+        Assert.Equal<SourceRange>(independent.Range, measure.Range)
+        Assert.Empty(EncodingFixture.storageEdges result.Graph)
+        Assert.True(Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.PlatformContext.Value result.Graph |> Result.isError)
 
     [<Fact>]
     member _.``Encoding units are dimensionless before physical storage selection``() =

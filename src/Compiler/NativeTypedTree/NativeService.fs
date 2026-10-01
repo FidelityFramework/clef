@@ -1227,8 +1227,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     let finalGraph, bindingDemandDiagnostics = Clef.Compiler.Nanopass.BindingDemand.settle finalGraph
 
-    // A selected source declaration and its static storage must be valid before
-    // physical preparation consumes their authority. Keep the final declaration
+    // A selected source declaration and its static/encoding storage must be
+    // valid before physical preparation consumes their authority. A refused
+    // byte-storage plan supplies no snapshot for witness preparation to consume.
+    // Keep the final declaration
     // check below: later settlement can introduce additional carrier sites.
     // An unselected catalogue remains ordinary target-free editor source.
     let selectedDeclarationAdmitted =
@@ -1236,7 +1238,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         (Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.read finalGraph).Findings.IsEmpty
     let sourceAdmitted =
         selectedDeclarationAdmitted &&
-        ((taggedDiagnostics @ programInitializationDiagnostics @ kernelIngressDiagnostics @ bindingDemandDiagnostics @ staticLayoutDiagnostics)
+        ((taggedDiagnostics @ programInitializationDiagnostics @ kernelIngressDiagnostics @ bindingDemandDiagnostics @ staticLayoutDiagnostics @ stringByteDiagnostics)
          |> List.exists (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error)
          |> not)
     let finalGraph, programStorageDiagnostics = Clef.Compiler.Nanopass.ProgramInitialization.settleValueAuthority sourceAdmitted finalGraph
