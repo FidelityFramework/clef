@@ -164,10 +164,10 @@ let main _ = if distances.[0] = 1<m> && durations.[0] = 4096<s> then 0 else 1
     [<InlineData("Cell", true)>]
     member _.``A descriptor seeds only its exact nominal declaration and ambiguous names retain no authority``(declared: string, ambiguous: bool) =
         let descriptor = """module Descriptors
-type FieldDescriptor = { Name: string; Repr: string }
+type FieldDescriptor = { Name: string; Repr: string; Offset: int; Count: int }
 type PeripheralLayout = { Fields: FieldDescriptor array; Size: int; Alignment: int }
 type StructDescriptor = { Name: string; Layout: PeripheralLayout }
-let descriptor: Expr<StructDescriptor> = <@ {Name="DECLARED"; Layout={Fields=[|{Name="Value"; Repr="u8"}|]; Size=1; Alignment=1}} @>
+let descriptor: Expr<StructDescriptor> = <@ {Name="DECLARED"; Layout={Fields=[|{Name="Value"; Repr="u8"; Offset=0; Count=1}|]; Size=1; Alignment=1}} @>
 """
         let result = NominalFixture.check [
             "left.clef", "module Left\ntype Cell = {Value:int}\nlet cell = {Value=1}\n"
@@ -186,6 +186,37 @@ let descriptor: Expr<StructDescriptor> = <@ {Name="DECLARED"; Layout={Fields=[|{
             Assert.Empty read.Findings
             Assert.Equal(ValueRange.unsignedOf 8, result.Graph.FieldRanges.Value[{Module=["Left"]; Name="Cell"}]["Value"])
             Assert.Equal(ValueRange.point 4096I, result.Graph.FieldRanges.Value[{Module=["Right"]; Name="Cell"}]["Value"])
+            let physical = Assert.Single layout.PhysicalFields
+            Assert.Equal("Value", physical.Name)
+            Assert.Equal("u8", physical.Repr)
+            Assert.Equal(0, physical.Offset)
+            Assert.Equal(1, physical.Count)
+            let fieldNode = result.Graph.Nodes[physical.Node]
+            let fields, recordName =
+                match fieldNode.Kind with
+                | SemanticKind.RecordExpr(fields, name) -> fields, name
+                | other -> failwithf "Missing physical field declaration: %A" other
+            // Numeric representation and nominal identity do not supply the
+            // absent physical facts. Keep old graph data to test this reader.
+            for missing in ["Offset"; "Count"] do
+                let retained = fields |> List.filter (fun (name, _) -> name <> missing)
+                let changed =
+                    { fieldNode with
+                        Kind = SemanticKind.RecordExpr(retained, recordName)
+                        Children = List.map snd retained }
+                let damaged = { result.Graph with Nodes = result.Graph.Nodes.Add(changed.Id, changed) }
+                let reading = IdentityDescriptors.readDescriptors damaged
+                let incomplete = Assert.Single reading.Layouts
+                Assert.Equal<NominalTypeIdentity option>(Some expected, incomplete.RecordType)
+                Assert.Empty incomplete.PhysicalFields
+                let finding = Assert.Single reading.Findings
+                Assert.Equal(IdentityDescriptors.DeclarationDefect.Malformed, finding.Defect)
+                Assert.Equal(fieldNode.Id, finding.Node)
+                Assert.Equal<SourceRange>(fieldNode.Range, finding.Range)
+                Assert.Equal("the field 'Value' must declare its Offset and Count as integer literals", finding.Message)
+            let restored = Assert.Single (IdentityDescriptors.readDescriptors result.Graph).Layouts
+            Assert.Empty (IdentityDescriptors.readDescriptors result.Graph).Findings
+            Assert.Equal<IdentityDescriptors.DeclaredPhysicalField>(physical, Assert.Single restored.PhysicalFields)
 
     [<Fact>]
     member _.``Abbreviations cannot replace nominal definition authority in a new graph snapshot``() =
