@@ -17,6 +17,9 @@ type Evidence = {
     Formals: Set<NodeId>
     Implementations: Set<NodeId>
     Participants: Set<NodeId>
+    /// Consuming any of these protocols requires current whole-graph lazy
+    /// validation; Participants is not an exhaustive selective proof key.
+    UsedLazyForces: Set<NodeId>
     Uses: Map<NodeId, Hyperedge list>
     Calls: Call list
 }
@@ -33,7 +36,7 @@ type Reading = private {
     Correspondence: NodeId -> NodeId -> Set<NodeId> option
     ClosedImplementation: NodeId -> Evidence option
 }
-type private Closed = { Dependencies: Set<NodeId>; Callers: Set<NodeId>; Participants: Set<NodeId>; Calls: Call list; Valid: bool }
+type private Closed = { Dependencies: Set<NodeId>; Callers: Set<NodeId>; Participants: Set<NodeId>; UsedLazyForces: Set<NodeId>; Calls: Call list; Valid: bool }
 
 let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
@@ -102,7 +105,8 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                 | _ -> []
             captures |> List.choose (fun capture -> capture.SourceNodeId |> Option.map (fun source -> source, (node, capture))))
         |> Seq.groupBy fst |> Seq.map (fun (source, rows) -> source, rows |> Seq.map snd |> Seq.toList) |> Map.ofSeq
-    let emptyClosed = { Dependencies = Set.empty; Callers = Set.empty; Participants = Set.empty; Calls = []; Valid = true }
+    let lazyThunk = LazyValues.closedThunk graph
+    let emptyClosed = { Dependencies = Set.empty; Callers = Set.empty; Participants = Set.empty; UsedLazyForces = Set.empty; Calls = []; Valid = true }
     let classify implementation =
         let mutable proof = emptyClosed
         let reject () = proof <- { proof with Valid = false }
@@ -154,6 +158,14 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                         | SemanticKind.Lambda(parameters, _, _, _, _), EdgeRole.Parameter
                             when parameters |> List.exists (fun (_, _, formal) -> formal = id) -> ()
                         | SemanticKind.ClosureValue(code, _), EdgeRole.Body when code = id -> forward node.Id
+                        | SemanticKind.LazyValue(code, _), EdgeRole.Body when code = id ->
+                            match lazyThunk code with
+                            | Some lazyProof when lazyProof.Scope = LazyValues.IngressScope.WholeCurrentGraph && lazyProof.Formations.Contains node.Id ->
+                                proof <-
+                                    { proof with
+                                        Participants = Set.union proof.Participants lazyProof.Participants
+                                        UsedLazyForces = Set.union proof.UsedLazyForces lazyProof.UsedLazyForces }
+                            | _ -> reject ()
                         | SemanticKind.EnvironmentReference value, EdgeRole.Subject when value = id ->
                             // Only the proven environment actual of an exact call
                             // can consume this projection as part of the value.
@@ -251,11 +263,12 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
             let value = findClosed implementation
             closedCache.Add(implementation, value)
             value
-    let empty = { Entry = entry; Roots = graph.DeclarationRoots; Formals = Set.empty; Implementations = Set.empty; Participants = Set.empty; Uses = Map.empty; Calls = [] }
+    let empty = { Entry = entry; Roots = graph.DeclarationRoots; Formals = Set.empty; Implementations = Set.empty; Participants = Set.empty; UsedLazyForces = Set.empty; Uses = Map.empty; Calls = [] }
     let merge left right =
         { left with Formals = Set.union left.Formals right.Formals
                     Implementations = Set.union left.Implementations right.Implementations
                     Participants = Set.union left.Participants right.Participants
+                    UsedLazyForces = Set.union left.UsedLazyForces right.UsedLazyForces
                     Calls = List.distinct (left.Calls @ right.Calls) }
     let continuationRows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ContinuationSlotAccess) |> List.groupBy _.Target |> Map.ofList
     let originalRows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.ContinuationValue) |> List.groupBy _.Target |> Map.ofList
@@ -472,8 +485,10 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                         if supplied.IsEmpty || rows |> List.exists Option.isNone then None else
                         all (supplied |> List.map snd) |> Option.map (fun (proof, leaves) ->
                             let participantSet = required |> Set.fold (fun found code -> Set.union found candidates[code].Participants) proof.Participants
+                            let lazyForces = required |> Set.fold (fun found code -> Set.union found candidates[code].UsedLazyForces) proof.UsedLazyForces
                             { proof with Formals = Set.add id proof.Formals; Implementations = Set.union required proof.Implementations
                                          Participants = participantSet
+                                         UsedLazyForces = lazyForces
                                          Calls = List.distinct (proof.Calls @ (rows |> List.choose (fun value -> value) |> List.concat)
                                                                @ (required |> Set.toList |> List.collect (fun code -> candidates[code].Calls))) }, leaves)))
             | _ -> None
@@ -504,7 +519,9 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
     let closedImplementation implementation =
         closed implementation |> Option.map (fun required ->
             let participants = required |> Set.fold (fun found code -> Set.union found candidates[code].Participants) Set.empty
+            let lazyForces = required |> Set.fold (fun found code -> Set.union found candidates[code].UsedLazyForces) Set.empty
             { empty with Implementations = required; Participants = participants
+                         UsedLazyForces = lazyForces
                          Calls = required |> Set.toList |> List.collect (fun code -> candidates[code].Calls) |> List.distinct
                          Uses = participants |> Set.toList |> List.map (fun id -> id, observedUses id) |> Map.ofList })
     { Evidence = evidence; RetainedEvidence = retained; Access = access

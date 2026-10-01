@@ -359,4 +359,9 @@ let programInstance (graph: SemanticGraph) binding : ProgramInstance option =
                                             Participants = Set.ofList (binding :: (authority.Evidence.Sources @ participants @ backing)) })))
                 | _ -> None)
             |> Map.ofList
-    programReadings.GetValue(graph, read).TryFind binding
+    // Carrier projection requires the current ordinary-demand relation. Its
+    // owning reader retains the located failure; this optional instance reader
+    // reports unavailable without fabricating or refreshing that prerequisite.
+    match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead graph with
+    | Result.Error _ -> None
+    | Result.Ok _ -> programReadings.GetValue(graph, read).TryFind binding

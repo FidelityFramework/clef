@@ -1013,3 +1013,46 @@ type CapturedStringOriginCases() =
         Assert.True(CapturedStringOriginFixture.project changed |> Result.isError)
         Assert.True(read changed capture.Read.Id |> Option.isNone)
         CapturedStringOriginFixture.refused changed capture.Read.Id
+
+type ProgramInstanceDemandCases() =
+    [<Theory>]
+    [<InlineData("missing")>]
+    [<InlineData("ordinal")>]
+    [<InlineData("class")>]
+    [<InlineData("sources")>]
+    member _.``Stale ordinary demand makes a program instance unavailable without erasing its diagnostic`` defect =
+        let source = "module ProgramInstanceDemand\nlet make (prefix: string) = fun (value: string) -> if prefix = value then 1 else 0\nlet first = make \"first\"\nlet second = make \"second\"\n[<EntryPoint>]\nlet main _ = first \"first\" + second \"second\"\n"
+        let graph = LazyResidenceFixture.programWith (Some source)
+        let first = EnvironmentFactories.binding "first" graph
+        let read current =
+            Clef.Compiler.Nanopass.ClosureEnvironmentSettlement.programInstance current first.Id
+        let original = read graph |> Option.get
+        let demand =
+            graph.Edges
+            |> List.find (fun edge -> edge.Role = EdgeRole.OrdinaryUnusedActual)
+        let changedRows =
+            graph.Edges
+            |> List.choose (fun edge ->
+                if not (obj.ReferenceEquals(edge, demand)) then Some edge
+                else
+                    match defect with
+                    | "missing" -> None
+                    | "ordinal" -> Some { edge with Ordinal = edge.Ordinal + 1 }
+                    | "class" -> Some { edge with Class = EdgeClass.Provenance }
+                    | "sources" -> Some { edge with Sources = edge.Sources @ [edge.Target] }
+                    | _ -> failwithf "Unknown demand mutation %s" defect)
+        let changed = { graph with Edges = changedRows }
+        // The owning source diagnostic remains available. The optional instance
+        // reader must refuse this prerequisite, not throw or settle a new row.
+        match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.projectValidated changed with
+        | Result.Error failures -> Assert.NotEmpty failures
+        | Result.Ok _ -> failwith "Changed demand was accepted before instance validation."
+        Assert.True((read changed).IsNone)
+        match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.projectValidated changed with
+        | Result.Error failures -> Assert.NotEmpty failures
+        | Result.Ok _ -> failwith "Instance reading erased or refreshed the demand failure."
+        let unavailableCodata = lazy (failwith "Stale demand must refuse before reading codata.")
+        let guarded = { changed with Codata = unavailableCodata }
+        Assert.True((read guarded).IsNone)
+        Assert.False(unavailableCodata.IsValueCreated)
+        Assert.Equal(original.Allocation, (read graph |> Option.get).Allocation)

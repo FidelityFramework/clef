@@ -33,7 +33,13 @@ let ofInputs (formal: NodeId) (inputs: FormalDemand.Inputs) : Participant list =
         match demanded @ omitted with
         | [] -> []
         | _ -> inputs.Participants |> Set.toList |> List.map (fun node -> occurrence node ParticipantRole.Ingress 0 formal)
-    demanded @ omitted @ ingress
+    // Origin enumeration consumed these memoization protocols to close its
+    // callers, even when the actual string itself is a plain literal. This
+    // marker activates the exact whole-graph relation/root snapshot; the
+    // navigation participants above are not a selective proof/cache key.
+    let lazyIngress = inputs.UsedLazyForces |> Set.toList |> List.map (fun site ->
+        occurrence site ParticipantRole.LazyStringOrigin 0 formal)
+    demanded @ omitted @ ingress @ lazyIngress
 
 /// A call whose targets the participant form cannot state (`ofTargets`).
 [<RequireQualifiedAccess>]

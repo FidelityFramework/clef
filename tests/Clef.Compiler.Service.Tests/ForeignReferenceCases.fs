@@ -227,11 +227,11 @@ let main _ = if threadIdentity () = 0 then 1 else 0
     member _.``Opaque foreign pointee marker is not a record laid out by its companion descriptor``() =
         let result = ForeignCases.check """
 type Mutex = private | OpaqueMutex
-type FieldDescriptor = { Name: string; Repr: string; BitFields: int array }
+type FieldDescriptor = { Name: string; Repr: string; Offset: int; Count: int; BitFields: int array }
 type PeripheralLayout = { Fields: FieldDescriptor array }
 type StructDescriptor = { Name: string; Layout: PeripheralLayout }
 let mutexLayout : StructDescriptor =
-    { Name = "Mutex"; Layout = { Fields = [| { Name = "Storage"; Repr = "u8"; BitFields = [||] } |] } }
+    { Name = "Mutex"; Layout = { Fields = [| { Name = "Storage"; Repr = "u8"; Offset = 0; Count = 1; BitFields = [||] } |] } }
 [<EntryPoint>]
 let main _ = 0
 """
@@ -239,3 +239,36 @@ let main _ = 0
         let descriptors = ForeignDeclarations.readDescriptors result.Graph
         Assert.Empty descriptors.Findings
         Assert.True((Assert.Single descriptors.Layouts).RecordType.IsNone)
+        let layout = Assert.Single descriptors.Layouts
+        let physical = Assert.Single layout.PhysicalFields
+        Assert.Equal("Storage", physical.Name)
+        Assert.Equal("u8", physical.Repr)
+        Assert.Equal(0, physical.Offset)
+        Assert.Equal(1, physical.Count)
+        let fieldNode = result.Graph.Nodes[physical.Node]
+        let fields, recordName =
+            match fieldNode.Kind with
+            | SemanticKind.RecordExpr(fields, name) -> fields, name
+            | other -> failwithf "Missing physical field declaration: %A" other
+        // Opaque nominal identity neither supplies missing field measurements
+        // nor turns the marker into a source record. Keep old graph data.
+        for missing in ["Offset"; "Count"] do
+            let retained = fields |> List.filter (fun (name, _) -> name <> missing)
+            let changed =
+                { fieldNode with
+                    Kind = SemanticKind.RecordExpr(retained, recordName)
+                    Children = List.map snd retained }
+            let damaged = { result.Graph with Nodes = result.Graph.Nodes.Add(changed.Id, changed) }
+            let reading = ForeignDeclarations.readDescriptors damaged
+            let incomplete = Assert.Single reading.Layouts
+            Assert.True(incomplete.RecordType.IsNone)
+            Assert.Empty incomplete.PhysicalFields
+            let finding = Assert.Single reading.Findings
+            Assert.Equal(ForeignDeclarations.DeclarationDefect.Malformed, finding.Defect)
+            Assert.Equal(fieldNode.Id, finding.Node)
+            Assert.Equal<SourceRange>(fieldNode.Range, finding.Range)
+            Assert.Equal("the field 'Storage' must declare its Offset and Count as integer literals", finding.Message)
+        let restored = Assert.Single (ForeignDeclarations.readDescriptors result.Graph).Layouts
+        Assert.True(restored.RecordType.IsNone)
+        Assert.Empty (ForeignDeclarations.readDescriptors result.Graph).Findings
+        Assert.Equal<ForeignDeclarations.DeclaredPhysicalField>(physical, Assert.Single restored.PhysicalFields)

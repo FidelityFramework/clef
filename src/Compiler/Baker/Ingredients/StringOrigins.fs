@@ -22,7 +22,7 @@ let used participants =
 /// cannot be reduced to its name. Only explicitly marked derivations invoke it.
 let relations (graph: SemanticGraph) : Result<StringOriginRelation list, string> =
     let selected = function
-        | EdgeRole.LazyInstance | EdgeRole.LazyMemoization | EdgeRole.LazyResultDestination
+        | EdgeRole.LazyInstance | EdgeRole.LazyMemoization | EdgeRole.LazyResultDestination | EdgeRole.LazyResultCall
         | EdgeRole.CaptureReferenceOrigin | EdgeRole.EnvironmentFormal | EdgeRole.CaptureOrigin
         | EdgeRole.EnvironmentResultDestination | EdgeRole.CallableReferenceOrigin
         | EdgeRole.SequenceCaptureFormation

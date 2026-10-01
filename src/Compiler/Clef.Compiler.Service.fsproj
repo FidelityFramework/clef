@@ -338,12 +338,12 @@
     <Compile Include="PSGSaturation\SemanticGraph\DirectCaptures.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ClosureEnvironments.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\SchemeInstances.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\LazyContracts.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\LazyValues.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableIngress.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableInstantiations.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ScopedCallbacks.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableDispatch.fs" />
-    <Compile Include="PSGSaturation\SemanticGraph\LazyContracts.fs" />
-    <Compile Include="PSGSaturation\SemanticGraph\LazyValues.fs" />
     <Compile Include="Baker\Recipes\BoundaryDeclarations.fs" />
     <Compile Include="Baker\Recipes\KernelDeclarations.fs" />
     <Compile Include="Baker\Ingredients\BindingDemand.fs" />

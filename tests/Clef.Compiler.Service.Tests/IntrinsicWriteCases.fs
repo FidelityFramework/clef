@@ -947,7 +947,7 @@ let main _ =
         let call : Clef.Compiler.Baker.Ingredients.FormalDemand.Input = { Call = NodeId 10; Ordinal = 0; Actual = NodeId 11 }
         let evidence (omissions: OrdinaryOmission list) =
             let inputs : Clef.Compiler.Baker.Ingredients.FormalDemand.Inputs =
-                { Demanded = []; Omitted = [ { Input = call; Omissions = omissions } ]; Participants = Set.empty }
+                { Demanded = []; Omitted = [ { Input = call; Omissions = omissions } ]; Participants = Set.empty; UsedLazyForces = Set.empty }
             Clef.Compiler.Baker.Ingredients.Participants.ordered (NodeId 1) (Clef.Compiler.Baker.Ingredients.Participants.ofInputs (NodeId 2) inputs)
         let stated : OrdinaryOmission list = [ { Site = NodeId 20; Ordinal = 0; Actual = NodeId 21 }; { Site = NodeId 30; Ordinal = 0; Actual = NodeId 31 } ]
         let crossed : OrdinaryOmission list = [ { Site = NodeId 20; Ordinal = 0; Actual = NodeId 31 }; { Site = NodeId 30; Ordinal = 0; Actual = NodeId 21 } ]
@@ -1425,3 +1425,92 @@ type PremiseEstablishmentCases() =
             Assert.True(match row.Participants with ParticipantEvidence.Pending _ -> true | _ -> false)
         let histories = PremiseEstablishmentFixture.histories normalized |> List.filter (fun history -> history.Site = view.Site)
         Assert.Empty histories
+
+module private LazyThunkWriteIngressFixture =
+    let source = String.concat "\n" [
+        "module LazyThunkWriteIngress"
+        "let write (s: string) ="
+        "    let _ = Sys.write 1 s.Bytes s.Length"
+        "    ()"
+        "[<EntryPoint>]"
+        "let main _ ="
+        "    let left = lazy (write \"left-cold\"; false)"
+        "    let right = lazy (write \"right-cold\"; true)"
+        "    let alias = left"
+        "    if Lazy.force alias then 1 else"
+        "        if Lazy.force right then"
+        "            if Lazy.force left then 1 else"
+        "                if Lazy.force right then 0 else 1"
+        "        else 1"
+        "" ]
+
+    let checkedGraph () =
+        let graph, projection =
+            source |> LazyStringOriginFixture.check |> IntrinsicWriteFixture.graphAndProjection
+        let call = Assert.Single projection.IntrinsicWrites.Values
+        let view = projection.ByteViews[call.Buffer]
+        let extent = projection.StringExtents[call.Count]
+        let expected = Map.ofList [
+            IntrinsicWriteFixture.literal graph "left-cold", 9I
+            IntrinsicWriteFixture.literal graph "right-cold", 10I ]
+        Assert.Equal<Map<NodeId, bigint>>(expected, view.StaticOrigins)
+        Assert.Equal<Map<NodeId, bigint>>(expected, extent.StaticOrigins)
+        Assert.Equal(view.ExtentSource, extent.ExtentSource)
+        Assert.Equal(Some(ValueRange.bounded 9I 10I), graph.Nodes[call.Count].ValueRange)
+        IntrinsicWriteFixture.established view.Participants |> Assert.NotEmpty
+        IntrinsicWriteFixture.established extent.Participants |> Assert.NotEmpty
+        let instances = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.LazyInstance)
+        let forces = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.LazyMemoization)
+        Assert.Equal(2, instances.Length)
+        Assert.Equal(4, forces.Length)
+        Assert.Equal(2, instances |> List.map _.Target |> List.distinct |> List.length)
+        for instance in instances do
+            Assert.Equal(7, instance.Sources.Length)
+            Assert.Equal(2, forces |> List.filter (fun force -> List.tryHead force.Sources = Some instance.Target) |> List.length)
+        for force in forces do
+            Assert.True((Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues.force graph force.Target).IsSome)
+        Assert.Contains(projection.IntrinsicWriteProofs[call.Site], fun proof ->
+            match proof.Body with
+            | ObligationBody.StringBorrowBound rows -> List.sort rows = [9I, 9I, 10I; 10I, 10I, 11I]
+            | _ -> false)
+        graph
+
+type LazyThunkWriteIngressCases() =
+    [<Fact>]
+    member _.``Writes inside distinct Boolean lazy thunks retain both exact immutable origins`` () =
+        LazyThunkWriteIngressFixture.checkedGraph () |> ignore
+
+    [<Theory>]
+    [<InlineData("instance-missing")>]
+    [<InlineData("instance-ordinal")>]
+    [<InlineData("memoization-missing")>]
+    [<InlineData("memoization-ordinal")>]
+    [<InlineData("memoization-class")>]
+    [<InlineData("memoization-source-order")>]
+    [<InlineData("result-call-added")>]
+    member _.``Lazy thunk write authority rejects relation changes with unchanged source nodes`` (defect: string) =
+        // This baseline proves that a different admission failure cannot make
+        // a relation mutation pass. No owner is resettled after the mutation.
+        let graph = LazyThunkWriteIngressFixture.checkedGraph ()
+        let role = if defect.StartsWith("instance-", System.StringComparison.Ordinal) then EdgeRole.LazyInstance else EdgeRole.LazyMemoization
+        let selected = graph.Edges |> List.find (fun edge -> edge.Role = role)
+        let mutate (edge: Hyperedge) =
+            if defect.EndsWith("ordinal", System.StringComparison.Ordinal) then { edge with Ordinal = edge.Ordinal + 1 }
+            elif defect.EndsWith("class", System.StringComparison.Ordinal) then { edge with Class = EdgeClass.Reference }
+            else { edge with Sources = List.rev edge.Sources }
+        let revised =
+            graph.Edges |> List.choose (fun edge ->
+                if not (obj.ReferenceEquals(edge, selected)) then Some edge
+                elif defect.EndsWith("missing", System.StringComparison.Ordinal) then None
+                else Some(mutate edge))
+        let edges =
+            if defect = "result-call-added" then { selected with Role = EdgeRole.LazyResultCall } :: graph.Edges
+            else revised
+        let changed = { graph with Edges = edges }
+        Assert.Same(graph.Nodes, changed.Nodes)
+        Assert.Same(graph.DeclarationRoots, changed.DeclarationRoots)
+        match IntrinsicBoundary.project changed with
+        | Result.Error failures ->
+            Assert.Contains(failures, fun failure ->
+                failure.Reason.Contains("string-origin relation premises changed", System.StringComparison.Ordinal))
+        | Result.Ok _ -> failwith "Changed lazy ingress relations retained the old boundary authority."

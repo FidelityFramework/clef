@@ -30,6 +30,9 @@ type Inputs = {
     Omitted: OmittedInput list
     /// The complete ingress of the formal (`CallableIngress.closedFormalInputs`).
     Participants: Set<NodeId>
+    /// Exact consumed lazy protocols; their authority reads the whole current
+    /// source graph, including absent/extra uses and relation membership.
+    UsedLazyForces: Set<NodeId>
 }
 
 /// The inputs of each closed formal. A call of the formal is a call of the
@@ -53,4 +56,4 @@ let reader (graph: SemanticGraph) (flow: CallableOrigins.Resolution) =
             let omitted, demanded = inputs |> Set.partition (fun input -> deferrals.ContainsKey input.Call)
             { Demanded = Set.toList demanded
               Omitted = omitted |> Set.toList |> List.map (fun input -> { Input = input; Omissions = Set.toList deferrals[input.Call] })
-              Participants = ingress.Participants })
+              Participants = ingress.Participants; UsedLazyForces = ingress.Closure.UsedLazyForces })

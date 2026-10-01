@@ -244,3 +244,131 @@ let main _ =
         let openGraph = { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.ProgramInitialization) }
         let openReading = Ingress.analyze openGraph
         for formal in formals do Assert.False(Ingress.allowsOccurrence openReading formal.Id)
+
+module private LazyIngressFixture =
+    let create () =
+        let result = DimensionalCases.check """
+let observe (value: bool) = value
+[<EntryPoint>]
+let main _ =
+    let left = lazy (observe false)
+    let right = lazy (observe true)
+    let alias = left
+    let first = Lazy.force alias
+    let second = Lazy.force right
+    let repeated = Lazy.force left
+    if first || repeated then 1 elif second then 0 else 1
+"""
+        DimensionalCases.noErrors result
+        let graph = result.Graph
+        let formal = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && node.Kind = SemanticKind.PatternBinding "value") |> Assert.Single
+        graph, formal.Id
+
+    let inputs graph formal =
+        let resolution = IngressOrigins.resolve graph
+        Ingress.closedFormalInputs graph resolution (Ingress.analyzeWith graph resolution) formal
+
+    let admitted graph formal =
+        let inputs = inputs graph formal |> Option.defaultWith (fun () -> failwith "Lazy thunk callers have no closed formal ingress")
+        Assert.Equal(2, inputs.Inputs.Length)
+        inputs
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "CallableIngress")>]
+type LazyCallableIngressCases() =
+    [<Fact>]
+    member _.``Lazy thunk ingress retains both actuals and the complete formation and force participants`` () =
+        let graph, formal = LazyIngressFixture.create ()
+        let graph = { graph with Codata = lazy (failwith "Source ingress must not force downstream codata") }
+        let inputs = LazyIngressFixture.admitted graph formal
+        let rows = graph.Edges |> List.filter (fun edge ->
+            edge.Role = EdgeRole.LazyInstance || edge.Role = EdgeRole.LazyMemoization)
+        Assert.Equal(5, rows.Length)
+        for row in rows do
+            for participant in row.Target :: row.Sources do Assert.Contains(participant, inputs.Participants)
+        let values = inputs.Inputs |> List.map (fun (_, actual) ->
+            match graph.Nodes[actual].Kind with SemanticKind.Literal(NativeLiteral.Bool value) -> value | _ -> failwith "Expected exact Boolean actual") |> Set.ofList
+        Assert.Equal<Set<bool>>(Set.ofList [false; true], values)
+
+    [<Theory>]
+    [<InlineData("missing-instance")>]
+    [<InlineData("duplicate-instance")>]
+    [<InlineData("missing-force")>]
+    [<InlineData("force-order")>]
+    [<InlineData("formation-children")>]
+    [<InlineData("extra-reference")>]
+    [<InlineData("extra-invocation")>]
+    [<InlineData("escaping-descriptor")>]
+    member _.``Lazy thunk ingress refuses incomplete protocols and unexplained uses`` defect =
+        let graph, formal = LazyIngressFixture.create ()
+        LazyIngressFixture.admitted graph formal |> ignore
+
+        let settlement = Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues.settle graph
+        Assert.Empty settlement.Residuals
+        let force = settlement.Forces.Values |> Seq.head
+        let instance = settlement.Instances[force.Formation]
+        let row = graph.Edges |> List.find (fun edge -> edge.Role = EdgeRole.LazyInstance && edge.Target = instance.Formation)
+        let changed =
+            match defect with
+            | "missing-instance" -> { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.LazyInstance || edge.Target <> instance.Formation) }
+            | "duplicate-instance" -> { graph with Edges = row :: graph.Edges }
+            | "missing-force" -> { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.LazyMemoization || edge.Target <> force.Site) }
+            | "force-order" ->
+                let branch = graph.Nodes[force.UncachedBranch]
+                let actions = [force.ResultBinding; force.Publication; force.ResultStore; List.last branch.Children]
+                { graph with Nodes = graph.Nodes.Add(branch.Id, { branch with Kind = SemanticKind.Sequential actions; Children = actions }) }
+            | "formation-children" ->
+                let formation = graph.Nodes[instance.Formation]
+                { graph with Nodes = graph.Nodes.Add(formation.Id, { formation with Children = [] }) }
+            | "extra-reference" ->
+                let edge = { Sources = [instance.Thunk]; Target = formal; Class = EdgeClass.Reference; Role = EdgeRole.Definition; Ordinal = 0 }
+                { graph with Edges = edge :: graph.Edges }
+            | "escaping-descriptor" ->
+                let builder = NodeBuilder()
+                let descriptor = graph.Nodes[instance.Formation]
+                let consumer = builder.Create(SemanticKind.PatternBinding "unknown_consumer", NativeType.TFun(descriptor.Type, Types.unitType), dummyRange)
+                let call = builder.Create(SemanticKind.Application(consumer.Id, [descriptor.Id]), Types.unitType, dummyRange)
+                let initialization = IngressInitialization.read graph |> Option.get
+                let body = graph.Nodes[initialization.OriginalBody]
+                let actions = match body.Kind with SemanticKind.Sequential actions -> call.Id :: actions | _ -> failwith "Missing source entry sequence"
+                let nodes = builder.Nodes |> Map.fold (fun nodes id node -> Map.add id node nodes) graph.Nodes
+                { graph with Nodes = nodes.Add(body.Id, { body with Kind = SemanticKind.Sequential actions; Children = actions }) }
+            | _ ->
+                // The extra invocation is live in the entry body and uses the
+                // very same known thunk and argument as an admitted force.
+                let invocation = graph.Nodes[force.Invocation]
+                let id = NodeId.fresh()
+                let initialization = IngressInitialization.read graph |> Option.get
+                let body = graph.Nodes[initialization.OriginalBody]
+                let actions = match body.Kind with SemanticKind.Sequential actions -> id :: actions | _ -> failwith "Missing source entry sequence"
+                { graph with Nodes = graph.Nodes.Add(id, { invocation with Id = id }).Add(body.Id, { body with Kind = SemanticKind.Sequential actions; Children = actions }) }
+        Assert.True((IngressInitialization.read changed).IsSome, "The mutation must preserve startup authority")
+        if defect = "extra-invocation" then
+            Assert.Empty((Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues.settle changed).Residuals)
+            Assert.True((IngressOrigins.resolve changed).Calls.Count > (IngressOrigins.resolve graph).Calls.Count)
+        if defect = "escaping-descriptor" then
+            Assert.Empty((Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues.settle changed).Residuals)
+        Assert.True((LazyIngressFixture.inputs changed formal).IsNone, defect)
+        LazyIngressFixture.admitted graph formal |> ignore
+
+    [<Fact>]
+    member _.``Array extent admission requires its own lazy protocol freshness authority`` () =
+        for deferred in [false; true] do
+            let body =
+                if deferred then "    let delayed = lazy (length [| true; false |])\n    if Lazy.force delayed = 2 then 0 else 1\n"
+                else "    if length [| true; false |] = 2 then 0 else 1\n"
+            let result = DimensionalCases.check ("let length (values: bool array) = values.Length\n[<EntryPoint>]\nlet main _ =\n" + body)
+            let graph = result.Graph
+            let formal = graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable && node.Kind = SemanticKind.PatternBinding "values") |> Assert.Single
+            let resolution = IngressOrigins.resolve graph
+            let inputs = Clef.Compiler.Baker.Ingredients.FormalDemand.reader graph resolution formal.Id |> Option.get
+            let extent = Clef.Compiler.Baker.Ingredients.ArrayShapes.reader graph formal.Id
+            if deferred then
+                Assert.NotEmpty inputs.UsedLazyForces
+                Assert.True(extent.IsNone, "An owner without lazy relation freshness must not retain this newly closed extent")
+            else
+                DimensionalCases.noErrors result
+                Assert.Empty inputs.UsedLazyForces
+                let extent = extent |> Option.get
+                Assert.Equal<Clef.Compiler.Baker.Ingredients.ArrayShapes.Length list>([Clef.Compiler.Baker.Ingredients.ArrayShapes.Length.Constant 2I], extent.Sources)

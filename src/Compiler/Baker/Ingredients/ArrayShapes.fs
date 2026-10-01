@@ -126,7 +126,11 @@ let reader (graph:SemanticGraph) =
         | Some {Kind=SemanticKind.IfThenElse(_,yes,Some no)} -> combine[follow seen yes;follow seen no] |> add
         | Some {Kind=SemanticKind.PatternBinding _} ->
             match inputs id with
-            | Some formal ->
+            | Some formal when formal.UsedLazyForces.IsEmpty ->
+                // Array extent/memory domains do not yet retain the complete
+                // lazy protocol relation census. Closing those callers alone
+                // cannot grant this owner a reusable finite extent. String
+                // origins have a separate, explicitly retained protocol scope.
                 // A call in an omitted actual supplies no extent; the omission relations that contain it are premises.
                 let omitted (input: FormalDemand.OmittedInput) =
                     Some {Sources=[];StringSources=Set.empty;Participants=input.Omissions |> List.collect (fun omission -> [omission.Site;omission.Actual]) |> Set.ofList}

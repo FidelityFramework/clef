@@ -308,3 +308,179 @@ let settle (graph: SemanticGraph) : Settlement =
     for site in forceSites do
         if not (proofs.ContainsKey site) then reject site [] "Lazy memoization incidence disagrees with the actual guard, invocation, store, or publication."
     { Instances = contracts; Forces = proofs; CaptureUses = captureUses; Residuals = List.ofSeq residuals }
+
+/// Memoization admission reads the current graph-wide access/consumer census.
+/// Named participants are observations, not a selective dependency/cache key.
+[<RequireQualifiedAccess>]
+type IngressScope = WholeCurrentGraph
+
+type ClosedThunk = {
+    Scope: IngressScope
+    Formations: Set<NodeId>
+    UsedLazyForces: Set<NodeId>
+    Participants: Set<NodeId>
+}
+
+/// A formation's code association is not a call or an escaping ordinary code
+/// value. Its exact invocations still need the caller's ordinary closed-ingress
+/// proof. Delay the global lazy read until an actual lazy association needs it.
+let closedThunk (graph: SemanticGraph) =
+    let settled = lazy (settle graph)
+    let calls = lazy (CallableOrigins.resolve graph)
+    let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+    let currentIncidence id =
+        match live graph id with
+        | None -> false
+        | Some node ->
+            let children =
+                match node.Kind with
+                | SemanticKind.LazyValue(code, environment) -> Some [code; environment]
+                // Captures are independent reference inputs, retained without
+                // evaluating them at formation. Only the computed bit is an
+                // owned initializer expression (LazyRecipes.formation).
+                | SemanticKind.LazyEnvironment(_, initializers) -> Some(initializers |> List.tryHead |> Option.map snd |> Option.toList)
+                | SemanticKind.Lambda(parameters, body, _, _, _) -> Some((parameters |> List.map (fun (_, _, formal) -> formal)) @ [body])
+                | SemanticKind.Sequential values -> Some values
+                | SemanticKind.IfThenElse(condition, yes, no) -> Some(condition :: yes :: Option.toList no)
+                | SemanticKind.Application(callee, arguments) -> Some(callee :: arguments)
+                | SemanticKind.LazyEnvironmentReference value | SemanticKind.LazyRead(value, _)
+                | SemanticKind.LazyBorrow(value, _) | SemanticKind.TypeAnnotation(value, _)
+                | SemanticKind.EagerExpr value -> Some [value]
+                | SemanticKind.LazyWrite(environment, _, value) -> Some [environment; value]
+                | SemanticKind.VarRef _ | SemanticKind.PatternBinding _ | SemanticKind.Literal _ -> Some []
+                | _ -> None
+            let expected = structuralIncidence node |> List.filter (fun edge -> edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference) |> List.map key
+            let recorded =
+                graph.Edges
+                |> List.filter (fun edge -> edge.Target = id && (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference))
+                |> List.map key
+            (children |> Option.forall ((=) node.Children)) &&
+            List.distinct recorded = recorded && (recorded |> List.forall (fun edge -> List.contains edge expected))
+    let descriptorUses = lazy (
+        let liveNodes = graph.Nodes.Values |> Seq.filter _.IsReachable |> Seq.toList
+        let actual =
+            liveNodes |> List.collect structuralIncidence
+            |> List.filter (fun edge -> edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference)
+        let recorded = graph.Edges |> List.filter (fun edge ->
+            (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference) &&
+            (match graph.Nodes.TryFind edge.Target with Some node -> node.IsReachable | None -> true))
+        let grouped (edges: Hyperedge list) =
+            edges |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge)) |> List.groupBy fst
+            |> List.map (fun (source, rows) -> source, rows |> List.map snd |> List.distinctBy key) |> Map.ofList
+        liveNodes, grouped actual, grouped (actual @ recorded))
+    let localDescriptor (facts: Settlement) owner =
+        let liveNodes, actualUses, allUses = descriptorUses.Value
+        let descriptorType = applySubst graph.Nodes[owner].Type
+        let sameType (node: SemanticNode) = applySubst node.Type = descriptorType
+        let rec follow (pending: NodeId list) (seen: Set<NodeId>) =
+            match pending with
+            | [] -> Some seen
+            | id :: rest when seen.Contains id -> follow rest seen
+            | id :: rest ->
+                match live graph id with
+                | None -> None
+                | Some source when not (sameType source) || not (currentIncidence id) -> None
+                | Some _ ->
+                    let seen = Set.add id seen
+                    let captured = liveNodes |> List.exists (fun node ->
+                        let captures =
+                            match node.Kind with
+                            | SemanticKind.Lambda(_, _, captures, _, _) | SemanticKind.LazyExpr(_, captures)
+                            | SemanticKind.SeqExpr(_, captures) -> captures
+                            | _ -> []
+                        captures |> List.exists (fun capture ->
+                            capture.SourceNodeId = Some id ||
+                            (capture.SourceNodeId.IsNone && applySubst capture.Type = descriptorType)))
+                    if captured then None else
+                    let expected = actualUses.TryFind id |> Option.defaultValue [] |> List.map key
+                    let uses = allUses.TryFind id |> Option.defaultValue []
+                    let next = uses |> List.fold (fun state edge ->
+                        state |> Option.bind (fun next ->
+                            match live graph edge.Target with
+                            | Some target when List.contains (key edge) expected && currentIncidence target.Id ->
+                                let forward () = if sameType target then Some(target.Id :: next) else None
+                                match edge.Class, edge.Role, target.Kind with
+                                | EdgeClass.Reference, EdgeRole.Definition, SemanticKind.VarRef(_, Some source)
+                                    when source = id -> forward ()
+                                | EdgeClass.Structural, _, SemanticKind.Binding(_, false, false, None)
+                                    when target.Children = [id] -> forward ()
+                                | EdgeClass.Structural, _, SemanticKind.TypeAnnotation(source, declared)
+                                    when source = id && applySubst declared = descriptorType -> forward ()
+                                | EdgeClass.Structural, _, SemanticKind.EagerExpr source
+                                    when source = id && ExplicitDemand.operand graph target.Id = Some id -> forward ()
+                                | EdgeClass.Structural, EdgeRole.Element, SemanticKind.Sequential values
+                                    when List.tryItem edge.Ordinal values = Some id ->
+                                    if edge.Ordinal = values.Length - 1 then forward () else Some next
+                                | EdgeClass.Structural, EdgeRole.Subject, SemanticKind.LazyEnvironmentReference operand
+                                    when operand = id ->
+                                    let forces = facts.Forces.Values |> Seq.filter (fun force ->
+                                        force.Formation = owner && force.Operand = id &&
+                                        (live graph force.EnvironmentBinding |> Option.exists (fun binding -> binding.Children = [target.Id]))) |> Seq.toList
+                                    match forces with [_] -> Some next | _ -> None
+                                | _ -> None
+                            | _ -> None)) (Some rest)
+                    next |> Option.bind (fun next -> follow next seen)
+        follow [owner] Set.empty
+    fun implementation ->
+        let formationIds =
+            (graph.Nodes.Values |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.LazyValue(thunk, _) when node.IsReachable && thunk = implementation -> Some node.Id
+                | _ -> None) |> Set.ofSeq)
+            |> Set.union (graph.Edges |> List.choose (fun edge ->
+                match edge.Role, edge.Sources with
+                | EdgeRole.LazyInstance, thunk :: _ when thunk = implementation -> Some edge.Target
+                | _ -> None) |> Set.ofList)
+        if formationIds.IsEmpty then None else
+        let facts = settled.Value
+        let instanceRows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.LazyInstance)
+        let memoRows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.LazyMemoization)
+        let captures = graph.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.LazyCapture _ -> true | _ -> false)
+        let environments = facts.Instances.Values |> Seq.map _.Environment |> Set.ofSeq
+        let completeInventory =
+            instanceRows.Length = facts.Instances.Count &&
+            (instanceRows |> List.forall (fun edge -> facts.Instances.ContainsKey edge.Target)) &&
+            memoRows.Length = facts.Forces.Count &&
+            (memoRows |> List.forall (fun edge -> facts.Forces.ContainsKey edge.Target)) &&
+            (captures |> List.forall (fun edge -> environments.Contains edge.Target))
+        let exactFormations = formationIds |> Set.forall (fun owner ->
+            facts.Instances.TryFind owner |> Option.exists (fun instance -> instance.Thunk = implementation))
+        let descriptors =
+            if exactFormations then
+                formationIds |> Set.fold (fun state owner ->
+                    match state, localDescriptor facts owner with
+                    | Some prior, Some current -> Some(Set.union prior current)
+                    | _ -> None) (Some Set.empty)
+            else None
+        let forces = facts.Forces.Values |> Seq.filter (fun force -> formationIds.Contains force.Formation) |> Seq.toList
+        let invocations = forces |> List.map _.Invocation
+        let actual =
+            calls.Value.Calls |> Map.toList |> List.filter (fun (_, call) ->
+                call.Targets |> List.exists (fun target -> target.Lambda = implementation))
+        let exactCalls =
+            not invocations.IsEmpty && List.distinct invocations = invocations &&
+            (actual |> List.map fst |> List.sort) = List.sort invocations &&
+            (actual |> List.forall (fun (_, call) ->
+                call.Complete && not call.Unknown &&
+                (match call.Targets with [target] -> target.Lambda = implementation | _ -> false)))
+        let protocolRows =
+            graph.Edges |> List.filter (fun edge ->
+                match edge.Role with
+                | EdgeRole.LazyInstance | EdgeRole.LazyMemoization | EdgeRole.LazyCapture _
+                | EdgeRole.LazyResultDestination | EdgeRole.LazyResultCall -> true
+                | _ -> false)
+        let support =
+            (protocolRows |> List.collect (fun edge -> edge.Target :: edge.Sources)) @
+            (facts.CaptureUses.Values |> Seq.collect id |> Seq.toList)
+            |> Set.ofList
+        // Inner reference/literal occurrences are real operands of the stated
+        // protocol nodes, not reconstructed instance identities.
+        let checkedNodes =
+            support |> Set.fold (fun found id ->
+                match live graph id with
+                | Some node -> Set.union found (Set.ofList node.Children)
+                | None -> found) support
+        if not facts.Residuals.IsEmpty || not completeInventory || not exactFormations ||
+           descriptors.IsNone || not exactCalls || not (checkedNodes |> Set.forall currentIncidence) then None else
+        Some { Scope = IngressScope.WholeCurrentGraph; Formations = formationIds
+               UsedLazyForces = facts.Forces.Keys |> Set.ofSeq; Participants = Set.union checkedNodes descriptors.Value }
