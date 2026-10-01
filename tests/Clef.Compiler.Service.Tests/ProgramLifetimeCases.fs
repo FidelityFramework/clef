@@ -8,16 +8,20 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 module ProgramDeclaration = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 module ProgramLayout = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout
 module ProgramObligations = Clef.Compiler.Nanopass.ObligationElaboration
+module ProgramWitness = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission
+module ProgramRevision = Clef.Compiler.PSGSaturation.Publication.RevisionPublication
 
 module private ProgramStorageFixture =
-    // A selected fabric profile isolates declaration validation from unrelated
-    // CPU numeric-representation offerings. No native image is emitted here.
+    // The unchanged string comparison needs source-declared byte carriers as
+    // well as program storage. Select an explicit CPU test target; leave its
+    // dimensions/offerings empty here so the source declaration supplies them.
+    // These declaration tests make no native-image or FPGA acceptance claim.
     let context: PlatformContext = {
         PlatformId = "storage-test"; Dimensions = Map.empty; Representations = Map.empty
         EndpointReturns = Map.empty; PlatformLibraryPath = None
         PlatformDescription = Some "StorageAuthority.description"
         PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.singleton (System.IO.Path.GetFullPath "program-storage.clef")
-        Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = Some SubstrateKind.FPGA; RuntimeModel = None
+        Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = Some SubstrateKind.CPU; RuntimeModel = None
         AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
 
     let check source =
@@ -27,14 +31,20 @@ module private ProgramStorageFixture =
             let result = checkParsedInputsWithPlatform [input] (Some context)
             if CheckResult.hasErrors result then CheckFailure result else Success result
 
+    let byteOffering = """{ Name = "uint8"; Capability = "native"; Family = "uint"; Bits = 8; MinMagnitude = "0"; MaxMagnitude = "255"; Boundary = "wrap" }"""
+
     let source designation =
         """module StorageAuthority
+type WidthDeclaration = { Name: string; Bits: int }
+type Representation = { Name: string; Capability: string; Family: string; Bits: int; MinMagnitude: string; MaxMagnitude: string; Boundary: string }
+type TargetCore = { Widths: WidthDeclaration array; Representations: Representation array }
 type MemorySpace = { Name: string; Kind: string; Capacity: int; Alignment: int; Granularity: int; Growth: string; Access: string; Base: int option }
 type ProgramLifetimeSpaces = { Immutable: string; Mutable: string option }
-type PlatformDescription = { Id: string; Spaces: MemorySpace array; ProgramLifetime: ProgramLifetimeSpaces option }
+type PlatformDescription = { Id: string; Core: TargetCore option; Spaces: MemorySpace array; ProgramLifetime: ProgramLifetimeSpaces option }
 let image = { Name = "constant-image"; Kind = "rodata"; Capacity = 1024; Alignment = 16; Granularity = 16; Growth = "fixed"; Access = "r"; Base = None }
 let state = { Name = "state-storage"; Kind = "data"; Capacity = 1024; Alignment = 16; Granularity = 16; Growth = "fixed"; Access = "rw"; Base = None }
-let description = { Id = "storage-test"; Spaces = [| image; state |]; ProgramLifetime = """ + designation + """ }
+let core = { Widths = [| { Name = "Pointer"; Bits = 64 }; { Name = "Register"; Bits = 64 } |]; Representations = [| """ + byteOffering + """; { Name = "signed64"; Capability = "native"; Family = "int"; Bits = 64; MinMagnitude = "-9223372036854775808"; MaxMagnitude = "9223372036854775807"; Boundary = "wrap" } |] }
+let description = { Id = "storage-test"; Core = Some core; Spaces = [| image; state |]; ProgramLifetime = """ + designation + """ }
 [<EntryPoint>]
 let main _ = if "hello" = "world" then 0 else 1
 """
@@ -62,6 +72,16 @@ let main _ = if "hello" = "world" then 0 else 1
 
     let standard = "Some { Immutable = \"constant-image\"; Mutable = Some \"state-storage\" }"
     let graph () = source standard |> admitted
+
+    let refusedPublication (graph: SemanticGraph) =
+        Assert.True(graph.WitnessProvenance.IsNone)
+        match ProgramWitness.tryRead graph with
+        | Result.Error message -> Assert.Equal("The current graph has no complete source witness projection.", message)
+        | Result.Ok _ -> failwith "Refused source acquired witness authority"
+        match ProgramRevision.publish graph.Platform.Value graph with
+        | Result.Error failures ->
+            Assert.Contains(failures, fun failure -> failure.Reason = "Source emission admission: The current graph has no complete source witness projection.")
+        | Result.Ok _ -> failwith "Refused source acquired revision authority"
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ProgramLifetime")>]
 type ProgramLifetimeCases() =
@@ -195,3 +215,147 @@ type ProgramLifetimeCases() =
         Assert.Equal(original.Range, finding.Range)
         let settled, _ = ProgramLayout.settle damaged
         Assert.True(settled.StaticStringPool.IsNone)
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ProgramLifetime")>]
+type ProgramLifetimeAuthorityCases() =
+    [<Fact>]
+    member _.``Program storage designation does not supply an undeclared byte carrier``() =
+        let source = ProgramStorageFixture.source ProgramStorageFixture.standard
+        let withoutByte = source.Replace(ProgramStorageFixture.byteOffering + "; ", "")
+        Assert.NotEqual<string>(source, withoutByte)
+        let result =
+            match ProgramStorageFixture.check withoutByte with
+            | CheckFailure result -> result
+            | other -> failwithf "An undeclared byte carrier did not refuse the comparison: %A" other
+        let graph = result.Graph
+        let platform = ProgramDeclaration.resolve graph |> Option.get
+        let roles = platform.ProgramLifetime |> Option.get
+        let pool = graph.StaticStringPool |> Option.get
+        Assert.Equal("constant-image", pool.SpaceName)
+        Assert.Equal(roles.Immutable.Space.Node, pool.DeclarationNode)
+        Assert.DoesNotContain(platform.Core.Value.Representations, fun row -> row.Representation.Bits = 8)
+        Assert.True(Clef.Compiler.Baker.Ingredients.StringBytes.byteRepresentation graph |> Option.isNone)
+        let extents =
+            graph.Edges
+            |> List.choose (fun row ->
+                match row.Role with
+                | EdgeRole.StringExtent extent -> Some extent
+                | _ -> None)
+        Assert.Equal(2, extents.Length)
+        let failures =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph with
+            | Result.Error failures -> failures
+            | Result.Ok _ -> failwith "Numeric witnessing admitted a comparison without byte authority"
+        let reason = "NumericPublication: No offered source representation covers the operation and every admitted input carrier."
+        let errors = CheckResult.errors result
+        Assert.NotEmpty errors
+        Assert.All(errors, fun diagnostic -> Assert.Equal("CCS8403", diagnostic.Code))
+        Assert.NotEmpty failures
+        for failure in failures do
+            Assert.Equal(reason, failure.Reason)
+            let site = failure.Occurrence |> Option.get
+            Assert.Equal<Set<NodeId>>(Set.singleton site, failure.Participants)
+            Assert.Equal("program-storage.clef", graph.Nodes[site].Range.File)
+            Assert.Equal(13, graph.Nodes[site].Range.Start.Line)
+            Assert.Contains(errors, fun diagnostic ->
+                diagnostic.Message = "Source settlement is required before witnessing: " + reason &&
+                diagnostic.Range = graph.Nodes[site].Range &&
+                diagnostic.RelatedNodes = [site])
+        ProgramStorageFixture.refusedPublication graph
+
+    [<Fact>]
+    member _.``Explicit source storage and numeric authority admit witness and revision publication``() =
+        let graph = ProgramStorageFixture.graph ()
+        Assert.True(graph.WitnessProvenance.IsSome)
+        match ProgramWitness.tryRead graph with
+        | Result.Ok _ -> ()
+        | Result.Error failure -> failwith failure
+        match ProgramRevision.publish graph.Platform.Value graph with
+        | Result.Ok _ -> ()
+        | Result.Error failures -> failwithf "Valid storage could not publish: %A" failures
+
+    [<Fact>]
+    member _.``Invalid selected designation is refused before physical witness preparation``() =
+        let source, expected =
+            ProgramStorageFixture.source "Some { Immutable = «\"missing\"»; Mutable = None }"
+            |> ProgramStorageFixture.marked
+        match ProgramStorageFixture.check source with
+        | CheckFailure result ->
+            let diagnostic = CheckResult.errors result |> Assert.Single
+            Assert.Equal("CCS8207", diagnostic.Code)
+            Assert.Equal(expected, diagnostic.Range)
+            Assert.True(result.Graph.StaticStringPool.IsNone)
+            ProgramStorageFixture.refusedPublication result.Graph
+        | other -> failwithf "Invalid declaration was admitted: %A" other
+
+    [<Fact>]
+    member _.``Insufficient declared storage is refused before physical witness preparation``() =
+        let source =
+            ProgramStorageFixture.source ProgramStorageFixture.standard
+            |> fun text -> text.Replace("Capacity = 1024", "Capacity = 1")
+        match ProgramStorageFixture.check source with
+        | CheckFailure result ->
+            let graph = result.Graph
+            Assert.Empty((ProgramDeclaration.read graph).Findings)
+            let image = (ProgramDeclaration.resolve graph).Value.ProgramLifetime.Value.Immutable.Space.Node
+            let diagnostic = CheckResult.errors result |> Assert.Single
+            Assert.Equal("CCS8206", diagnostic.Code)
+            Assert.Equal("Cannot settle BAREWire static string storage: literal_0: allocation endpoint exceeds the declared space capacity", diagnostic.Message)
+            Assert.Equal(graph.Nodes[image].Range, diagnostic.Range)
+            Assert.Equal<NodeId list>([image], diagnostic.RelatedNodes)
+            Assert.True(graph.StaticStringPool.IsNone)
+            ProgramStorageFixture.refusedPublication graph
+        | other -> failwithf "Insufficient storage was admitted: %A" other
+
+    [<Fact>]
+    member _.``Unselected platform catalogue remains ordinary target-free editor source``() =
+        // Check the catalogue itself. An executable integer-returning entry
+        // point separately requires the target's numeric representations.
+        let source =
+            ProgramStorageFixture.source "Some { Immutable = \"missing\"; Mutable = None }"
+            |> fun text -> text.Substring(0, text.IndexOf("[<EntryPoint>]"))
+        let result =
+            match parseStringWithDefaults source "program-storage.clef" with
+            | ParseSuccess input -> checkParsedInputsWithPlatform [input] None
+            | ParseError errors -> failwithf "Catalogue did not parse: %A" errors
+        DimensionalCases.noErrors result
+        Assert.True(result.Graph.Platform.IsNone)
+        Assert.True(result.Graph.WitnessProvenance.IsNone)
+        Assert.True(result.Graph.StaticStringPool.IsNone)
+
+    [<Theory>]
+    [<InlineData("clock")>]
+    [<InlineData("calibration")>]
+    member _.``Program storage authority does not supply an undeclared FPGA timing budget`` missing =
+        // Exercise the temporal owner directly on an admitted source graph.
+        // This does not claim that its CPU core is an admitted FPGA target.
+        let graph = ProgramStorageFixture.graph ()
+        let selected = graph.Platform |> Option.get
+        Assert.Empty(Clef.Compiler.PSGSaturation.SemanticGraph.DepthAnalysis.analyze (Some selected) graph)
+        match Clef.Compiler.PSGSaturation.SemanticGraph.DepthAnalysis.computeThreshold (Some 100) (Some 0.5) with
+        | Result.Ok threshold -> Assert.Equal(20, threshold)
+        | Result.Error error -> failwithf "Explicit timing did not establish its arithmetic budget: %s" error
+        let requested =
+            { selected with
+                SubstrateKind = Some SubstrateKind.FPGA
+                ClockFrequencyMhz = if missing = "clock" then None else Some 100
+                NsPerWeightUnit = if missing = "calibration" then None else Some 0.5 }
+        let diagnostic =
+            Clef.Compiler.PSGSaturation.SemanticGraph.DepthAnalysis.analyze (Some requested) graph
+            |> Assert.Single
+        let absent =
+            if missing = "clock" then "FPGA clock frequency (platform clock_mhz or the project clock override)"
+            else "FPGA fabric calibration (platform ns_per_weight_unit)"
+        Assert.Equal("CCS8207", diagnostic.Code)
+        Assert.Equal(NativeDiagnosticSeverity.Error, Diagnostic.effectiveSeverity diagnostic)
+        let expectedMessage =
+            "The platform description of 'storage-test': PSG settlement (PlatformResolution) did not settle the " +
+            absent + ": the combinational temporal budget (CCS0100) cannot be computed."
+        Assert.Equal(expectedMessage, diagnostic.Message)
+        Assert.Empty diagnostic.RelatedNodes
+        Assert.Equal("", diagnostic.Range.File)
+        Assert.Equal(0, diagnostic.Range.Start.Line)
+        Assert.Equal(0, diagnostic.Range.Start.Column)
+        Assert.Equal(0, diagnostic.Range.End.Line)
+        Assert.Equal(0, diagnostic.Range.End.Column)
+        Assert.Equal("constant-image", graph.StaticStringPool.Value.SpaceName)
