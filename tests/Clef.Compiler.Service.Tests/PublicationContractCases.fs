@@ -81,6 +81,80 @@ module private PublicationFixture =
 
 type PublicationContractCases() =
     [<Theory>]
+    [<InlineData("unchanged", "passive")>]
+    [<InlineData("unchanged", "publication")>]
+    [<InlineData("removed", "passive")>]
+    [<InlineData("removed", "publication")>]
+    [<InlineData("replaced", "passive")>]
+    [<InlineData("replaced", "publication")>]
+    member _.``Cached publication retains the exact sequence authority root`` change boundary =
+        let graph = SequenceProgramFixture.check """
+[<EntryPoint>]
+let main _ =
+    let bias = 2<m>
+    let mutable offset = 7<m>
+    let mapper = fun (value: int<m>) -> value + offset + bias
+    let mapped = Seq.map mapper (seq { yield 1<m> })
+    let mutable total = 0<m>
+    for value in mapped do total <- total + value
+    if total = 10<m> then 0 else 1
+"""
+        let receipt = graph.SequenceRangeProvenance |> Option.defaultWith (fun () -> failwith "Fixture lacks checked sequence authority")
+        let admitted original =
+            match Emission.tryRead original with
+            | Result.Ok _ -> ()
+            | Result.Error reason -> failwithf "Original passive read refused: %s" reason
+            match Publication.publish SequenceProgramFixture.context original with
+            | Result.Ok _ -> ()
+            | Result.Error failures -> failwithf "Original publication refused: %A" failures
+        admitted graph
+        let nextReceipt =
+            match change with
+            | "unchanged" -> graph.SequenceRangeProvenance
+            | "removed" -> None
+            | "replaced" ->
+                let replacement = { receipt with Relations = List.map id receipt.Relations }
+                Assert.NotSame(receipt, replacement)
+                Assert.Equal<SequenceRangeAuthority>(receipt, replacement)
+                Some replacement
+            | _ -> failwithf "Unknown authority change %s" change
+        let changed = { graph with SequenceRangeProvenance = nextReceipt }
+        Assert.Same(graph.Nodes, changed.Nodes)
+        Assert.Same(graph.Edges, changed.Edges)
+        Assert.Same(graph.Codata, changed.Codata)
+        let passive = Emission.tryRead changed
+        let published = Publication.publish SequenceProgramFixture.context changed
+        // Validate the retained original after both changed-input reads, before
+        // inspecting either outcome. Neither read may consume its authority.
+        admitted graph
+        match boundary, change, passive, published with
+        | "passive", "unchanged", Result.Ok _, _
+        | "publication", "unchanged", _, Result.Ok _ -> ()
+        | "passive", ("removed" | "replaced"), Result.Error reason, _ ->
+            Assert.Contains("differs from its source witness projection input", reason)
+        | "publication", ("removed" | "replaced"), _, Result.Error failures ->
+            Assert.Contains(failures, fun failure -> failure.Reason.StartsWith "Source emission admission: The current graph differs from its source witness projection input")
+        | _ -> failwithf "Unexpected %s result after %s receipt: passive=%A; publication=%A" boundary change (passive |> Result.map (fun _ -> "admitted")) (published |> Result.map (fun _ -> "published"))
+
+    [<Fact>]
+    member _.``Every semantic graph root has an explicit prepared identity policy``() =
+        let fields = Microsoft.FSharp.Reflection.FSharpType.GetRecordFields typeof<SemanticGraph>
+        let expected = fields |> Array.map _.Name |> Set.ofArray
+        let compared = Emission.preparedRootIdentities |> List.map fst
+        let exceptions = Emission.preparedRootExceptions |> List.map fst
+        let decisions = compared @ exceptions
+        Assert.Equal(decisions.Length, (Set.ofList decisions).Count)
+        Assert.True((expected = Set.ofList decisions),
+                    sprintf "SemanticGraph roots require an explicit identity or invalidation decision. Missing: %A; obsolete: %A"
+                        (Set.difference expected (Set.ofList decisions)) (Set.difference (Set.ofList decisions) expected))
+        Assert.Equal<string list>(["WitnessProvenance"], exceptions)
+        for _, reason in Emission.preparedRootExceptions do Assert.False(System.String.IsNullOrWhiteSpace reason)
+        let graph = PublicationFixture.check "root-policy" PublicationFixture.programs["scalar"]
+        for name, read in Emission.preparedRootIdentities do
+            let field = fields |> Array.find (fun field -> field.Name = name)
+            Assert.Same(field.GetValue graph, read graph)
+
+    [<Theory>]
     [<InlineData("scalar")>]
     [<InlineData("record")>]
     [<InlineData("lazy")>]

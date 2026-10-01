@@ -77,26 +77,39 @@ let prepare (graph: SemanticGraph) : Result<SemanticGraph, WitnessProjectionFail
                     WitnessProvenance = None }
             Ok { settled with WitnessProvenance = Some { PreparedRoots = settled } }
 
+/// The complete identity policy for prepared input roots. Keeping names next
+/// to typed accessors lets the maintenance test check this policy against the
+/// SemanticGraph record without adding reflection to passive publication.
+let internal preparedRootIdentities : (string * (SemanticGraph -> obj | null)) list =
+    [ "Nodes", (fun graph -> box graph.Nodes)
+      "DeclarationRoots", (fun graph -> box graph.DeclarationRoots)
+      "Modules", (fun graph -> box graph.Modules)
+      "Types", (fun graph -> box graph.Types)
+      "Platform", (fun graph -> box graph.Platform)
+      "ModuleClassifications", (fun graph -> box graph.ModuleClassifications)
+      "FieldRanges", (fun graph -> box graph.FieldRanges)
+      "ElementRanges", (fun graph -> box graph.ElementRanges)
+      "Layouts", (fun graph -> box graph.Layouts)
+      "StaticStringPool", (fun graph -> box graph.StaticStringPool)
+      "LiteralStorage", (fun graph -> box graph.LiteralStorage)
+      "Escaping", (fun graph -> box graph.Escaping)
+      "Codata", (fun graph -> box graph.Codata)
+      "Edges", (fun graph -> box graph.Edges)
+      "SequenceRangeProvenance", (fun graph -> box graph.SequenceRangeProvenance) ]
+
+/// This root supplies the retained inputs being compared. tryRead explicitly
+/// requires it; prepare's retained graph intentionally has no self-reference.
+let internal preparedRootExceptions =
+    [ ("WitnessProvenance", "Required and opened by tryRead; its PreparedRoots are the identity comparison baseline.") ]
+
 /// Compare only the retained input roots. This neither forces lazy source
 /// computations nor reconstructs their premises. Every root participates,
 /// including relation and declaration membership. Shared checker cells remain
 /// a separate immutable-input requirement; this evidence does not freeze them
 /// or identify the accepted source revision.
 let private samePreparedRoots (prepared: SemanticGraph) (graph: SemanticGraph) =
-    obj.ReferenceEquals(prepared.Nodes, graph.Nodes) &&
-    obj.ReferenceEquals(prepared.DeclarationRoots, graph.DeclarationRoots) &&
-    obj.ReferenceEquals(prepared.Modules, graph.Modules) &&
-    obj.ReferenceEquals(prepared.Types, graph.Types) &&
-    obj.ReferenceEquals(prepared.Platform, graph.Platform) &&
-    obj.ReferenceEquals(prepared.ModuleClassifications, graph.ModuleClassifications) &&
-    obj.ReferenceEquals(prepared.FieldRanges, graph.FieldRanges) &&
-    obj.ReferenceEquals(prepared.ElementRanges, graph.ElementRanges) &&
-    obj.ReferenceEquals(prepared.Layouts, graph.Layouts) &&
-    obj.ReferenceEquals(prepared.StaticStringPool, graph.StaticStringPool) &&
-    obj.ReferenceEquals(prepared.LiteralStorage, graph.LiteralStorage) &&
-    obj.ReferenceEquals(prepared.Escaping, graph.Escaping) &&
-    obj.ReferenceEquals(prepared.Codata, graph.Codata) &&
-    obj.ReferenceEquals(prepared.Edges, graph.Edges)
+    preparedRootIdentities |> List.forall (fun (_, read) ->
+        obj.ReferenceEquals(read prepared, read graph))
 
 let private isMaterialized (graph: SemanticGraph) =
     graph.Codata.IsValueCreated && graph.Types.IsValueCreated &&
