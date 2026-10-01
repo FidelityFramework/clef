@@ -372,3 +372,56 @@ type LazyCallableIngressCases() =
                 Assert.Empty inputs.UsedLazyForces
                 let extent = extent |> Option.get
                 Assert.Equal<Clef.Compiler.Baker.Ingredients.ArrayShapes.Length list>([Clef.Compiler.Baker.Ingredients.ArrayShapes.Length.Constant 2I], extent.Sources)
+
+    [<Theory>]
+    [<InlineData("shared-projection")>]
+    [<InlineData("fresh-binding-reference")>]
+    member _.``Lazy thunk ingress rejects an extra consumer of the exact extracted environment`` (defect: string) =
+        let graph, formal = LazyIngressFixture.create ()
+        LazyIngressFixture.admitted graph formal |> ignore
+        let settled = Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues.settle graph
+        Assert.Empty settled.Residuals
+        let force = settled.Forces.Values |> Seq.head
+        let environmentId = Assert.Single(graph.Nodes[force.EnvironmentBinding].Children)
+        let environment = graph.Nodes[environmentId]
+        match environment.Kind with
+        | SemanticKind.LazyEnvironmentReference operand -> Assert.Equal(force.Operand, operand)
+        | _ -> failwith "Expected the exact extracted environment of this force"
+        let builder = NodeBuilder()
+        let argument =
+            if defect = "shared-projection" then environment.Id else
+            let alias = builder.Create(SemanticKind.VarRef("escaped_environment", Some force.EnvironmentBinding), environment.Type, dummyRange)
+            alias.Id
+        let consumer = builder.Create(SemanticKind.PatternBinding "unknown_environment_consumer", NativeType.TFun(environment.Type, Types.unitType), dummyRange)
+        let call = builder.Create(SemanticKind.Application(consumer.Id, [argument]), Types.unitType, dummyRange)
+        let initialization = IngressInitialization.read graph |> Option.get
+        let body = graph.Nodes[initialization.OriginalBody]
+        let actions =
+            match body.Kind with
+            | SemanticKind.Sequential actions -> (actions |> List.take (actions.Length - 1)) @ [call.Id; List.last actions]
+            | _ -> failwith "Missing source entry sequence"
+        let nodes = builder.Nodes |> Map.fold (fun nodes id node -> Map.add id node nodes) graph.Nodes
+        let changed = { graph with Nodes = nodes.Add(body.Id, { body with Kind = SemanticKind.Sequential actions; Children = actions }) }
+        Assert.Same(graph.Nodes[environment.Id], changed.Nodes[environment.Id])
+        Assert.True((IngressInitialization.read changed).IsSome)
+        let descriptorIds = graph.Nodes.Values |> Seq.choose (fun node ->
+            match node.Type with NativeType.TLazy _ -> Some node.Id | _ -> None) |> Set.ofSeq
+        let descriptorUses (source: SemanticGraph) =
+            source.Nodes.Values |> Seq.filter _.IsReachable
+            |> Seq.collect Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence
+            |> Seq.filter (fun edge ->
+                (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference) &&
+                (edge.Sources |> List.exists descriptorIds.Contains))
+            |> Seq.map (fun edge -> edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target)
+            |> Seq.sort |> Seq.toList
+        Assert.True((descriptorUses graph = descriptorUses changed), "The original descriptor-use census is unchanged")
+        let after = Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues.settle changed
+        Assert.Empty after.Residuals
+        Assert.Equal<Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues.Force>(force, after.Forces[force.Site])
+        let callTargets source =
+            (IngressOrigins.resolve source).Calls |> Map.toList |> List.choose (fun (site, value) ->
+                if value.Targets |> List.exists (fun target -> target.Lambda = settled.Instances[force.Formation].Thunk) then Some site else None)
+        Assert.Equal<NodeId list>(callTargets graph, callTargets changed)
+        Assert.True((LazyIngressFixture.inputs changed formal).IsNone,
+                    "A separately escaping environment occurrence is not closed force ingress")
+        LazyIngressFixture.admitted graph formal |> ignore

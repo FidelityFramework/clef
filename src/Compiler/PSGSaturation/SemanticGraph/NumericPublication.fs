@@ -13,7 +13,10 @@ let project (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessPro
     match domains with
     | [anchor, domain] ->
         let participants = Map.keys domain.Premises |> Set.ofSeq
-        if domain.Premises <> Numeric.premises graph || domain.Platform <> Boundary.platformPremise graph.Platform ||
+        if Numeric.finiteCellRelations graph <> Ok domain.FiniteCellRelations ||
+           Numeric.finiteCellObligations graph <> domain.FiniteCellObligations then
+            reject (Some anchor) participants "finite-cell relation premises changed; source numeric settlement is required."
+        elif domain.Premises <> Numeric.premises graph || domain.Platform <> Boundary.platformPremise graph.Platform ||
            domain.Roots <> graph.DeclarationRoots || domain.Escaping <> graph.Escaping.Value || domain.Layouts <> graph.Layouts.Value ||
            domain.ElementRanges <> graph.ElementRanges.Value || domain.ByteRanges <> Numeric.byteRanges graph ||
            domain.ByteReadRanges <> Numeric.byteReadRanges graph || domain.ByteViews <> Numeric.byteViews graph || domain.StringExtents <> Numeric.stringExtents graph then

@@ -11,6 +11,50 @@ let premises (graph: SemanticGraph) =
         if owned node || Boundaries.ownedNode node || node.Metadata.ContainsKey "Baker.MemoryPublicationOwned" || node.Metadata.ContainsKey "Baker.SpatialPublicationOwned" then values
         else Map.add id (Boundaries.premise node) values) Map.empty
 
+let finiteCellObligations (graph: SemanticGraph) =
+    graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
+        match node.Kind with
+        | SemanticKind.Obligation info when info.Kind = "finite-cell-effects" -> Some(id, info)
+        | _ -> None)
+
+/// Complete recorded relation census for finite-cell source readers. Keep
+/// ordering, duplicate rows and typed payloads; participant IDs alone omit
+/// contradictory incidence and the absence of additional uses.
+/// Scope is the whole current source graph. The additional snapshot is active
+/// only while finite-cell range or certificate evidence is resident.
+let finiteCellRelations (graph: SemanticGraph) : Result<FiniteCellSourceRelation list option, string> =
+    let obligations = finiteCellObligations graph |> List.map fst |> Set.ofList
+    let active = not obligations.IsEmpty || (graph.Edges |> List.exists (fun edge -> edge.Role = EdgeRole.FiniteCellRange))
+    if not active then Ok None else
+    let sourceTarget (edge: Hyperedge) =
+        graph.Nodes.TryFind edge.Target |> Option.forall (fun node ->
+            not (owned node || Boundaries.ownedNode node || node.Metadata.ContainsKey "Baker.MemoryPublicationOwned" ||
+                 node.Metadata.ContainsKey "Baker.SpatialPublicationOwned"))
+    let selected (edge: Hyperedge) =
+        sourceTarget edge &&
+        (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference ||
+         match edge.Role with
+         | EdgeRole.ProgramInitialization | EdgeRole.ProgramEntryCall | EdgeRole.ProgramInitializer
+         | EdgeRole.ProgramValueIntent | EdgeRole.EnvironmentFormal | EdgeRole.EnvironmentCapture _
+         | EdgeRole.FiniteCellRange -> true
+         | EdgeRole.Constrains -> obligations.Contains edge.Target
+         | _ -> false)
+    graph.Edges |> List.filter selected |> List.fold (fun state (edge: Hyperedge) ->
+        let kind =
+            match edge.Role with
+            | EdgeRole.ContinuationCase tag -> Ok(FiniteCellRelationKind.ContinuationCase tag)
+            | EdgeRole.EnvironmentCapture mutable' -> Ok(FiniteCellRelationKind.EnvironmentCapture mutable')
+            | role ->
+                let case, fields = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(role, typeof<EdgeRole>)
+                if fields.Length = 0 then Ok(FiniteCellRelationKind.Named case.Name)
+                else Error("Finite-cell source incidence has an unsupported payload: " + case.Name + ".")
+        match state, kind with
+        | Error reason, _ | _, Error reason -> Error reason
+        | Ok rows, Ok kind ->
+            Ok({ Class = edge.Class; Kind = kind; Ordinal = edge.Ordinal
+                 Sources = edge.Sources; Target = edge.Target } :: rows)) (Ok [])
+    |> Result.map (List.rev >> Some)
+
 let row role sources target = { Class = EdgeClass.Range; Role = role; Ordinal = 0; Sources = sources; Target = target }
 let byteRanges (graph: SemanticGraph) = graph.Edges |> List.choose (fun edge ->
     match edge.Role with

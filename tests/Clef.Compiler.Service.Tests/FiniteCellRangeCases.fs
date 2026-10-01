@@ -196,3 +196,149 @@ let main _ =
                                     Children = []; Parent = None }
         let changed = { graph with Nodes = graph.Nodes.Add(escaped.Id, escaped) }
         Assert.Empty(FiniteCells.recognize changed)
+
+open Clef.Compiler.PSGSaturation.SemanticGraph.NodeBuilder
+module private LocalFiniteCellFixture =
+    module Incidence = Clef.Compiler.Baker.Ingredients.Closures
+    module Initialization = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization
+
+    let statements = "    let mutable state = 0\n    state <- state + 1\n    state <- state + 2\n    state\n"
+    let source = "[<EntryPoint>]\nlet main _ =\n" + statements
+    let repeated = "let run () =\n" + statements + "[<EntryPoint>]\nlet main _ = run () + run ()\n"
+
+    let check source activations =
+        let graph = FiniteCellFixture.check source
+        let cell = FiniteCellFixture.cell graph
+        let startup = Initialization.read graph |> Option.get
+        Assert.DoesNotContain(cell.Id, startup.ValueBindings)
+        let proof = FiniteCellFixture.proof graph
+        Assert.Equal(cell.Id, proof.Cell)
+        Assert.Equal(2, proof.Writes.Length)
+        Assert.Equal<bigint list>([activations; activations], proof.Writes |> List.map _.MaximumActivations |> List.sort)
+        Assert.Equal(2I * activations, proof.Certificate.MaximumIterations)
+        Assert.Equal<bigint list>([4I * activations; 1I], proof.Certificate.Upper)
+        let initializer = Assert.Single cell.Children
+        Assert.Contains(initializer, proof.Participants)
+        Assert.Contains(cell.Id, proof.Participants)
+        Assert.Contains(startup.EntryLambda, proof.Participants)
+        match cell.ValueRange with
+        | Some(ValueRange.Bounded(lower, upper)) -> Assert.True(lower >= 0I && upper <= 4I * activations)
+        | actual -> failwithf "The local cell must have a proved finite source range: %A" actual
+        let obligation = FiniteCellFixture.obligations graph |> Assert.Single
+        let row = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = obligation.Id) |> Assert.Single
+        Assert.Equal<Set<NodeId>>(proof.Participants, Set.ofList row.Sources)
+        graph, proof
+
+    let replace (graph: SemanticGraph) (node: SemanticNode) =
+        let edges =
+            graph.Edges |> List.filter (fun edge ->
+                edge.Target <> node.Id || (edge.Class <> EdgeClass.Structural && edge.Class <> EdgeClass.Reference))
+        { graph with Nodes = graph.Nodes.Add(node.Id, node)
+                     Edges = edges @ Incidence.structuralIncidence node }
+
+    let prepend graph (added: SemanticNode list) action =
+        let startup = Initialization.read graph |> Option.get
+        let body = graph.Nodes[startup.OriginalBody]
+        let values = match body.Kind with SemanticKind.Sequential values -> values | _ -> failwith "Missing entry sequence"
+        let nodes = added |> List.fold (fun nodes node -> Map.add node.Id node nodes) graph.Nodes
+        let changed = { graph with Nodes = nodes; Edges = graph.Edges @ (added |> List.collect Incidence.structuralIncidence) }
+        let ordered = action :: values
+        let changed = replace changed { body with Kind = SemanticKind.Sequential ordered; Children = ordered }
+        Assert.True((Initialization.read changed).IsSome, "This mutation must preserve startup authority")
+        changed
+
+    let refused graph =
+        let fresh = FiniteCells.recognize graph
+        Assert.Empty fresh
+        let refreshed = FiniteCells.settle fresh graph
+        Assert.Empty(FiniteCellFixture.obligations refreshed)
+        Assert.DoesNotContain(refreshed.Edges, fun edge -> edge.Role = EdgeRole.FiniteCellRange)
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "FiniteCellRanges")>]
+type LocalFiniteCellRangeCases() =
+    [<Fact>]
+    member _.``A local cell retains its declaration activation and every finite writer`` () =
+        LocalFiniteCellFixture.check LocalFiniteCellFixture.source 1I |> ignore
+
+    [<Fact>]
+    member _.``A local cell in a twice called ordinary function counts both activations`` () =
+        let graph, proof = LocalFiniteCellFixture.check LocalFiniteCellFixture.repeated 2I
+        let run = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.Binding("run", false, _, _) -> true | _ -> false) |> Assert.Single
+        let implementation = Assert.Single run.Children
+        Assert.Contains(implementation, proof.Participants)
+
+    [<Fact>]
+    member _.``A repeated store occurrence enlarges the local cell certificate`` () =
+        let graph, original = LocalFiniteCellFixture.check LocalFiniteCellFixture.source 1I
+        let store = original.Writes.Head.Store
+        let parent = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.Sequential values -> List.contains store values | _ -> false) |> Assert.Single
+        let values = match parent.Kind with SemanticKind.Sequential values -> values | _ -> failwith "Missing store scope"
+        Assert.Equal(1, values |> List.filter ((=) store) |> List.length)
+        let repeated = values |> List.collect (fun value -> if value = store then [value; value] else [value])
+        let changed = LocalFiniteCellFixture.replace graph { parent with Kind = SemanticKind.Sequential repeated; Children = repeated }
+        Assert.True((Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read changed).IsSome)
+        let fresh = FiniteCellFixture.proof changed
+        Assert.Equal(3I, fresh.Certificate.MaximumIterations)
+        Assert.Equal<bigint list>([1I; 2I], fresh.Writes |> List.map _.MaximumActivations |> List.sort)
+        Assert.Equal<bigint list>([6I; 1I], fresh.Certificate.Upper)
+        let renewed = FiniteCells.settle [fresh] changed
+        let obligation = FiniteCellFixture.obligations renewed |> Assert.Single
+        match obligation.Kind with
+        | SemanticKind.Obligation info -> Assert.Equal(ObligationBody.FiniteLinearRecurrence fresh.Certificate, info.Body)
+        | _ -> failwith "Missing replacement finite-cell obligation"
+        Assert.NotEqual((FiniteCellFixture.obligations graph |> Assert.Single).Id, obligation.Id)
+        LocalFiniteCellFixture.check LocalFiniteCellFixture.source 1I |> ignore
+
+    [<Fact>]
+    member _.``Unbounded repeated initialization retracts a local cell despite finite writer sites`` () =
+        let graph, proof = LocalFiniteCellFixture.check LocalFiniteCellFixture.source 1I
+        let cell = graph.Nodes[proof.Cell]
+        let builder = NodeBuilder()
+        let condition = builder.Create(SemanticKind.Literal(NativeLiteral.Bool true), Types.boolType, cell.Range)
+        let unit = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, cell.Range)
+        // The very same declaration also appears in an unproved loop; no
+        // writer occurrence is added or moved. A finite write count alone
+        // must not authorize unbounded allocation/initialization of this cell.
+        let body = builder.Create(SemanticKind.Sequential [cell.Id; unit.Id], Types.unitType, cell.Range)
+        let loop = builder.Create(SemanticKind.WhileLoop(condition.Id, body.Id), Types.unitType, cell.Range)
+        let changed = LocalFiniteCellFixture.prepend graph (builder.Nodes.Values |> Seq.toList) loop.Id
+        let sets (current: SemanticGraph) = current.Nodes.Values |> Seq.choose (fun node ->
+            match node.IsReachable, node.Kind with true, SemanticKind.Set _ -> Some node.Id | _ -> None) |> Set.ofSeq
+        Assert.Equal<Set<NodeId>>(sets graph, sets changed)
+        LocalFiniteCellFixture.refused changed
+
+    [<Theory>]
+    [<InlineData("capture")>]
+    [<InlineData("address")>]
+    [<InlineData("lowered-address")>]
+    member _.``A captured or address exposed local cell cannot retain finite ordinary authority`` defect =
+        let graph, proof = LocalFiniteCellFixture.check LocalFiniteCellFixture.source 1I
+        let cell = graph.Nodes[proof.Cell]
+        let builder = NodeBuilder()
+        let extra =
+            if defect = "capture" then
+                let formal = builder.Create(SemanticKind.PatternBinding "unused", Types.unitType, cell.Range)
+                let body = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, cell.Range)
+                let capture = { Name = "state"; Type = cell.Type; IsMutable = true; SourceNodeId = Some cell.Id }
+                builder.Create(SemanticKind.Lambda(["unused", Types.unitType, formal.Id], body.Id, [capture], None, LambdaContext.RegularClosure),
+                               NativeType.TFun(Types.unitType, Types.unitType), cell.Range)
+            elif defect = "lowered-address" then
+                builder.Create(SemanticKind.CellAddress cell.Id, NativeType.TByref(cell.Type, ByrefKind.InOut), cell.Range)
+            else
+                let read = builder.Create(SemanticKind.VarRef("state", Some cell.Id), cell.Type, cell.Range)
+                builder.Create(SemanticKind.AddressOf(read.Id, true), NativeType.TByref(cell.Type, ByrefKind.InOut), cell.Range)
+        let changed = LocalFiniteCellFixture.prepend graph (builder.Nodes.Values |> Seq.toList) extra.Id
+        LocalFiniteCellFixture.refused changed
+
+    [<Fact>]
+    member _.``Finite writer counts do not authorize a local use before its initialization`` () =
+        let graph, proof = LocalFiniteCellFixture.check LocalFiniteCellFixture.source 1I
+        let scope = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.Sequential values -> List.contains proof.Cell values | _ -> false) |> Assert.Single
+        let values = match scope.Kind with SemanticKind.Sequential values -> values | _ -> failwith "Missing declaration scope"
+        let reordered = (values |> List.filter ((<>) proof.Cell)) @ [proof.Cell]
+        let changed = LocalFiniteCellFixture.replace graph { scope with Kind = SemanticKind.Sequential reordered; Children = reordered }
+        Assert.True((Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read changed).IsSome)
+        LocalFiniteCellFixture.refused changed

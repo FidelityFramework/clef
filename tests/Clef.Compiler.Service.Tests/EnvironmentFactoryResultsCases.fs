@@ -385,19 +385,54 @@ let main _ = first "first" + second "second"
             | SemanticKind.RecordExpr(fields, _) -> fields |> List.find (fst >> (=) "Capacity") |> snd
             | _ -> failwith "Expected declared mutable-space record"
         let largest = inventory.Entries.Values |> Seq.map _.Bytes |> Seq.max
+        let total = inventory.Entries.Values |> Seq.sumBy _.Bytes
+        Assert.True(largest > 0 && total > largest, "This fixture requires multiple positive reservations.")
+        // Each request fits independently, but their combined payload cannot.
+        let insufficient = total - 1
+        Assert.True(largest <= insufficient && insufficient < total)
         let capacityNode = graph.Nodes[capacity]
         let smaller =
             match capacityNode.Kind with
             | SemanticKind.Literal(NativeLiteral.Int(_, kind)) ->
-                { capacityNode with Kind = SemanticKind.Literal(NativeLiteral.Int(int64 (largest + 16), kind)) }
+                { capacityNode with Kind = SemanticKind.Literal(NativeLiteral.Int(int64 insufficient, kind)) }
             | _ -> failwith "Expected declared capacity literal"
         let changed = { graph with Nodes = graph.Nodes.Add(capacity, smaller) }
         Assert.True((read changed).IsNone)
         let pending = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramStorage.settle changed
-        Assert.Equal(2, pending.Entries.Count)
+        // A raw declaration mutation invalidates each retained per-allocation
+        // reservation proof before the aggregate reservation can be attempted.
+        Assert.Empty pending.Entries
         Assert.Equal(2, pending.Unresolved.Count)
         Assert.Empty pending.Reservations
-        Assert.All(pending.Unresolved.Values, fun reason -> Assert.Contains("capacity-exceeded", reason))
+        Assert.Equal<Set<ProgramStorageIdentity>>(inventory.Entries |> Map.keys |> Set.ofSeq, pending.Unresolved |> Map.keys |> Set.ofSeq)
+        Assert.All(pending.Unresolved.Values, fun reason -> Assert.Contains("not jointly established", reason))
+        // Fresh source compilation must establish current individual proofs,
+        // then refuse the combined inventory. No stale codata is restamped.
+        let overfullResult = LazyResidenceFixture.checkProgramWithCapacity insufficient (Some source)
+        let errors = overfullResult.Diagnostics |> List.filter (fun value -> value.Severity = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.NativeDiagnosticSeverity.Error)
+        Assert.Equal(2, errors.Length)
+        Assert.All(errors, fun error ->
+            Assert.Equal("CCS8403", error.Code)
+            Assert.Contains("capacity-exceeded", error.Message)
+            Assert.Equal("lazy-program.clef", error.Range.File))
+        Assert.Equal<Set<int>>(Set.ofList [4; 5], errors |> List.map (fun error -> error.Range.Start.Line) |> Set.ofList)
+        let overfullGraph = overfullResult.Graph
+        let overfull = read overfullGraph |> Option.get
+        Assert.Equal(2, overfull.Entries.Count)
+        Assert.Equal(total, overfull.Entries.Values |> Seq.sumBy _.Bytes)
+        Assert.All(overfull.Entries.Values, fun entry ->
+            Assert.Equal(int64 insufficient, entry.Space.Capacity)
+            Assert.True(int64 entry.Bytes <= entry.Space.Capacity))
+        Assert.Equal(2, overfull.Unresolved.Count)
+        for identity in overfull.Unresolved.Keys do
+            let site = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramStorage.sourceOf identity
+            Assert.Single(errors |> List.filter (fun error -> List.contains site error.RelatedNodes)) |> ignore
+        Assert.Empty overfull.Reservations
+        Assert.All(overfull.Unresolved.Values, fun reason -> Assert.Contains("capacity-exceeded", reason))
+        let fitting = LazyResidenceFixture.programWithCapacity total (Some source) |> read |> Option.get
+        Assert.Equal(2, fitting.Entries.Count)
+        Assert.Empty fitting.Unresolved
+        Assert.Equal(int64 total, (Assert.Single fitting.Reservations.Values).PayloadSize)
         let withoutStartup =
             let edges = graph.Edges |> List.filter (fun row -> row.Role <> EdgeRole.ProgramInitialization)
             { graph with Edges = edges }
@@ -1056,3 +1091,179 @@ type ProgramInstanceDemandCases() =
         Assert.True((read guarded).IsNone)
         Assert.False(unavailableCodata.IsValueCreated)
         Assert.Equal(original.Allocation, (read graph |> Option.get).Allocation)
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "FiniteCellAuthority")>]
+type FiniteCellAuthorityCases() =
+    [<Theory>]
+    [<InlineData(false, "startup")>]
+    [<InlineData(false, "reference")>]
+    [<InlineData(true, "startup")>]
+    [<InlineData(true, "reference")>]
+    member _.``Numeric publication retracts finite cell authority on relation only changes`` local defect =
+        let body =
+            if local then """[<EntryPoint>]
+let main _ =
+    let mutable state = 0
+    state <- state + 1
+    state <- state + 2
+    state
+"""
+            else """let mutable state = 0
+let record digit = state <- state + digit
+[<EntryPoint>]
+let main _ =
+    record 1
+    record 2
+    state
+"""
+        let graph = LazyResidenceFixture.programWith (Some("module FiniteCellAuthority\n" + body))
+        let bound = Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.recognize graph |> Assert.Single
+        let project = Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project
+        match project graph with
+        | Result.Ok _ -> ()
+        | Result.Error failures -> failwithf "Missing original numeric authority: %A" failures
+        let changed =
+            if defect = "startup" then
+                { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.ProgramInitialization) }
+            else
+                let reference = graph.Nodes.Values |> Seq.find (fun node ->
+                    node.IsReachable && match node.Kind with SemanticKind.VarRef(_, Some cell) -> cell = bound.Cell | _ -> false)
+                let row = { Class = EdgeClass.Reference; Role = EdgeRole.Definition; Ordinal = 0
+                            Sources = [bound.Writes.Head.Value]; Target = reference.Id }
+                { graph with Edges = row :: graph.Edges }
+        Assert.Same(graph.Nodes, changed.Nodes)
+        Assert.Empty(Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.recognize changed)
+        // Query the old numeric domain directly: no range pass or normalization
+        // may refresh the authority before this refusal.
+        match project changed with
+        | Result.Error failures ->
+            Assert.Contains(failures, fun failure -> failure.Reason.Contains("finite-cell relation premises changed"))
+        | Result.Ok _ -> failwith "Stale finite-cell ranges crossed numeric publication."
+        match project graph with
+        | Result.Ok _ -> ()
+        | Result.Error failures -> failwithf "The original immutable revision lost authority: %A" failures
+
+    [<Theory>]
+    [<InlineData("certificate")>]
+    [<InlineData("constraint")>]
+    member _.``Numeric renewal cannot bless an altered finite recurrence certificate`` defect =
+        let source = """module FiniteCertificateAuthority
+let mutable state = 0
+let record digit = state <- state + digit
+[<EntryPoint>]
+let main _ =
+    record 1
+    record 2
+    state
+"""
+        let graph = LazyResidenceFixture.programWith (Some source)
+        let project = Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project
+        let admitted source =
+            match project source with
+            | Result.Ok _ -> ()
+            | Result.Error failures -> failwithf "Missing original numeric authority: %A" failures
+        admitted graph
+        admitted (Clef.Compiler.Nanopass.NumericSettlement.normalize graph)
+        let proof = graph.Nodes.Values |> Seq.filter (fun node ->
+            match node.Kind with SemanticKind.Obligation info -> info.Kind = "finite-cell-effects" | _ -> false) |> Assert.Single
+        let changed =
+            if defect = "certificate" then
+                let kind =
+                    match proof.Kind with
+                    | SemanticKind.Obligation info ->
+                        match info.Body with
+                        | ObligationBody.FiniteLinearRecurrence model ->
+                            SemanticKind.Obligation { info with Body = ObligationBody.FiniteLinearRecurrence { model with MaximumIterations = model.MaximumIterations + 1I } }
+                        | _ -> failwith "Missing finite recurrence model"
+                    | _ -> failwith "Missing source obligation"
+                { graph with Nodes = graph.Nodes.Add(proof.Id, { proof with Kind = kind }) }
+            else
+                let edges = graph.Edges |> List.map (fun edge ->
+                    if edge.Role = EdgeRole.Constrains && edge.Target = proof.Id then { edge with Ordinal = edge.Ordinal + 1 } else edge)
+                { graph with Edges = edges }
+        for KeyValue(id, node) in graph.Nodes do Assert.Equal(node.ValueRange, changed.Nodes[id].ValueRange)
+        match project changed with
+        | Result.Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains("finite-cell relation premises changed"))
+        | Result.Ok _ -> failwith "An altered finite certificate crossed numeric publication."
+        // Refreshing only the carrier domain cannot repair the source proof.
+        let renewed = Clef.Compiler.Nanopass.NumericSettlement.normalize changed
+        match project renewed with
+        | Result.Error failures -> Assert.NotEmpty failures
+        | Result.Ok _ -> failwith "Numeric renewal silently blessed an altered source certificate."
+        admitted graph
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Repeated numeric renewal cannot forget wholly withdrawn finite cell evidence`` local =
+        let body =
+            if local then """[<EntryPoint>]
+let main _ =
+    let mutable state = 0
+    state <- state + 1
+    state <- state + 2
+    state
+"""
+            else """let mutable state = 0
+let record digit = state <- state + digit
+[<EntryPoint>]
+let main _ =
+    record 1
+    record 2
+    state
+"""
+        let graph = LazyResidenceFixture.programWith (Some("module WithdrawnFiniteCellEvidence\n" + body))
+        let project = Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project
+        let admitted source =
+            match project source with
+            | Result.Ok _ -> ()
+            | Result.Error failures -> failwithf "Missing original numeric authority: %A" failures
+        admitted graph
+        admitted (Clef.Compiler.Nanopass.NumericSettlement.normalize graph)
+        let proofs =
+            graph.Nodes.Values
+            |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.Obligation info when info.Kind = "finite-cell-effects" -> Some node.Id
+                | _ -> None)
+            |> Set.ofSeq
+        Assert.Single proofs |> ignore
+        let oldDomain =
+            graph.Edges
+            |> List.choose (fun edge -> match edge.Role with EdgeRole.NumericDomain domain -> Some domain | _ -> None)
+            |> Assert.Single
+        Assert.True(oldDomain.FiniteCellRelations.IsSome)
+        Assert.Single oldDomain.FiniteCellObligations |> ignore
+        let nodes = graph.Nodes |> Map.filter (fun id _ -> not (proofs.Contains id))
+        // Keep the historical numeric domain until its real owner renews it.
+        // Remove every finite certificate and all its current range/proof rows.
+        let edges = graph.Edges |> List.filter (fun edge ->
+            edge.Role <> EdgeRole.FiniteCellRange && not (proofs.Contains edge.Target))
+        let changed = { graph with Nodes = nodes; Edges = edges }
+        for KeyValue(id, node) in changed.Nodes do Assert.Equal(graph.Nodes[id].ValueRange, node.ValueRange)
+        Assert.DoesNotContain(changed.Edges, fun edge -> edge.Role = EdgeRole.FiniteCellRange)
+        Assert.DoesNotContain(changed.Nodes.Values, fun node ->
+            match node.Kind with SemanticKind.Obligation info -> info.Kind = "finite-cell-effects" | _ -> false)
+        // The source transitions remain recognizable, but their independently
+        // required proof inventory is absent. Held range annotations cannot replace it.
+        Assert.Single(Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.recognize changed) |> ignore
+        Assert.False(Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.evidenceCurrent changed)
+        match project changed with
+        | Result.Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains("finite-cell relation premises changed"))
+        | Result.Ok _ -> failwith "Deleting finite source evidence crossed numeric publication."
+        let refused source =
+            match project source with
+            | Result.Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains("finite-cell relation premises changed", System.StringComparison.OrdinalIgnoreCase))
+            | Result.Ok _ -> failwith "Numeric renewal forgot the withdrawn finite-cell proof requirement."
+        let once = Clef.Compiler.Nanopass.NumericSettlement.normalize changed
+        refused once
+        let twice = Clef.Compiler.Nanopass.NumericSettlement.normalize once
+        refused twice
+        // The owning recurrence recipe can restore current evidence. Failed
+        // numeric renewals must not permanently taint a subsequently valid graph.
+        let restored =
+            Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.settle
+                (Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.recognize twice) twice
+            |> Clef.Compiler.Nanopass.NumericSettlement.normalize
+        admitted restored
+        admitted graph

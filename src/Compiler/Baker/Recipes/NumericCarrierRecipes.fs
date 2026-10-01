@@ -68,7 +68,7 @@ let private elementSlot (graph: SemanticGraph) (node: SemanticNode) =
             | _ -> None
     | _ -> None
 
-let elaborate (graph: SemanticGraph) =
+let elaborateWithFiniteReview (inheritedFiniteReview: bool) (graph: SemanticGraph) =
     let enrichId = Elaboration.freshId ()
     let anchor = Boundary.anchor enrichId graph |> fun node -> { node with Metadata = node.Metadata.Remove "Baker.BoundaryOwned" } |> Numeric.markOwned
     let demand = OrdinaryDemand.project graph
@@ -77,6 +77,17 @@ let elaborate (graph: SemanticGraph) =
         if node.IsReachable && not (demand.DeferredOnly.Contains id) && not (declarations.Contains id) && scalarKind node.Type then Set.add id ids else ids) Set.empty
     let sourceReading = PlatformResolution.read graph
     let sourceCore = sourceReading.Platform |> Option.bind _.Core
+    let finiteRelations = Numeric.finiteCellRelations graph
+    let finiteObligations = Numeric.finiteCellObligations graph
+    let currentFiniteActive =
+        match finiteRelations with
+        | Ok None -> false
+        | _ -> true
+    let finiteActive = inheritedFiniteReview || currentFiniteActive
+    // Re-reading logical facts here prevents numeric settlement from blessing
+    // old finite annotations merely by taking a new relation snapshot.
+    let freshFacts = if finiteActive then Some(RangeAnalysis.sourceFacts graph) else None
+    let finiteProofsCurrent = not finiteActive || FiniteCellRanges.evidenceCurrent graph
     let select (node: SemanticNode) =
         let participants declaration = Set.ofList (anchor.Id :: node.Id :: (Option.toList declaration) @ (kindEdges node.Id node.Kind |> List.collect _.Sources))
         let fact slot range representation declaration =
@@ -88,15 +99,21 @@ let elaborate (graph: SemanticGraph) =
         | Some kind when NTUKind.isInteger kind ->
             match node.ValueRange, RangeAnalysis.heldWidth graph node.Id with
             | Some(ValueRange.Bounded(lo, hi) as range), Some bits when lo <= hi && bits > 0 ->
-                match RangeAnalysis.selectedRepresentation graph node.Id, sourceCore with
-                | Some representation, Some core when sourceReading.Findings.IsEmpty ->
-                    match core.Representations |> List.filter (fun declaration -> declaration.Representation = representation) with
-                    | [declaration] when NumericRepresentation.isOffered representation && representation.Bits = bits ->
-                        Ok(fact (SettledSlot.Integer(bits, Some representation.Name)) range (Some representation) (Some declaration.Node))
-                    | _ -> Error "The held scalar has no unique matching offered representation declaration."
-                | None, _ when graph.Platform |> Option.exists (fun context -> PlatformContext.substrateKind context = SubstrateKind.FPGA) ->
-                    Ok(fact (SettledSlot.Integer(bits, None)) range None None)
-                | _ -> Error "The held integer carrier lacks its source representation/declaration authority."
+                let current = freshFacts |> Option.forall (fun facts ->
+                    match facts.TryFind node.Id with
+                    | Some(ValueRange.Bounded _ as fresh) -> ValueRange.contains range fresh
+                    | _ -> false)
+                if not current then Error "Finite-cell relation premises changed or current source facts no longer fit the held integer range."
+                else
+                    match RangeAnalysis.selectedRepresentation graph node.Id, sourceCore with
+                    | Some representation, Some core when sourceReading.Findings.IsEmpty ->
+                        match core.Representations |> List.filter (fun declaration -> declaration.Representation = representation) with
+                        | [declaration] when NumericRepresentation.isOffered representation && representation.Bits = bits ->
+                            Ok(fact (SettledSlot.Integer(bits, Some representation.Name)) range (Some representation) (Some declaration.Node))
+                        | _ -> Error "The held scalar has no unique matching offered representation declaration."
+                    | None, _ when graph.Platform |> Option.exists (fun context -> PlatformContext.substrateKind context = SubstrateKind.FPGA) ->
+                        Ok(fact (SettledSlot.Integer(bits, None)) range None None)
+                    | _ -> Error "The held integer carrier lacks its source representation/declaration authority."
             | _ -> Error "The required integer carrier has no finite observable range and settled positive width."
         | Some(NTUKind.NTUfloat width) ->
             let selected =
@@ -193,8 +210,17 @@ let elaborate (graph: SemanticGraph) =
                 | _ -> refuse "The dispatch selector lacks a finite source integer carrier for index transport."
             | _ -> refuse "The dispatch selector lacks its source carrier or selected platform Pointer declaration.")
             (Enrichment.empty, [], unresolved)
+    let unresolved =
+        match finiteRelations with
+        | Error reason -> unresolved.Add(anchor.Id, reason)
+        | Ok _ when not finiteProofsCurrent ->
+            unresolved.Add(anchor.Id, "Finite-cell relation premises changed or the retained recurrence certificate no longer matches current source transitions.")
+        | Ok _ -> unresolved
     let domain =
-        { Premises = Numeric.premises graph; Platform = Boundary.platformPremise graph.Platform
+        { RequiresFiniteCellReview = currentFiniteActive || (inheritedFiniteReview && not unresolved.IsEmpty)
+          FiniteCellRelations = finiteRelations |> Result.defaultValue None
+          FiniteCellObligations = finiteObligations
+          Premises = Numeric.premises graph; Platform = Boundary.platformPremise graph.Platform
           Roots = graph.DeclarationRoots; Escaping = graph.Escaping.Value; Layouts = graph.Layouts.Value
           Required = required; ResultSites = required |> Set.filter (fun id -> resultSite graph.Nodes[id])
           SourceTypes = Numeric.premises graph |> Map.map (fun _ premise -> premise.Shape.SourceType)
@@ -209,3 +235,6 @@ let elaborate (graph: SemanticGraph) =
     Enrichment.combine (Enrichment.combine (Enrichment.combine proofs operationEnrichment) indexEnrichment)
         { NewNodes = [anchor]; Annotated = []
           NewEdges = Numeric.domainRow anchor.Id domain :: Numeric.domainRewrite anchor.Id domain :: (domain.Values |> List.map Numeric.carrierRow) }
+
+/// Initial numeric settlement retains the existing current-source activation rule.
+let elaborate graph = elaborateWithFiniteReview false graph

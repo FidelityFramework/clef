@@ -41,7 +41,7 @@ let main _ =
           SubstrateKind = None; RuntimeModel = None; AvailableMemorySpaces = []; DefaultMemorySpace = None
           ClockFrequencyMhz = None; NsPerWeightUnit = None }
 
-    let programWith source =
+    let checkProgramWithCapacity (mutableCapacity: int) source =
         let authority = """
 module LazyAuthority
 type WidthDeclaration = { Name: string; Bits: int }
@@ -51,10 +51,11 @@ type MemorySpace = { Name: string; Kind: string; Capacity: int; Alignment: int; 
 type ProgramLifetimeSpaces = { Immutable: string; Mutable: string option }
 type PlatformDescription = { Id: string; Core: TargetCore option; Spaces: MemorySpace array; ProgramLifetime: ProgramLifetimeSpaces option }
 let image = { Name = "constant-image"; Kind = "rodata"; Capacity = 1024; Alignment = 16; Granularity = 16; Growth = "fixed"; Access = "r"; Base = None }
-let state = { Name = "state-storage"; Kind = "data"; Capacity = 1024; Alignment = 16; Granularity = 16; Growth = "fixed"; Access = "rw"; Base = None }
+let state = { Name = "state-storage"; Kind = "data"; Capacity = __MUTABLE_CAPACITY__; Alignment = 16; Granularity = 16; Growth = "fixed"; Access = "rw"; Base = None }
 let core = { Widths = [| { Name = "Pointer"; Bits = 64 }; { Name = "Register"; Bits = 64 } |]; Representations = [| { Name = "signed64"; Capability = "native"; Family = "int"; Bits = 64; MinMagnitude = "-9223372036854775808"; MaxMagnitude = "9223372036854775807"; Boundary = "wrap" }; { Name = "uint8"; Capability = "native"; Family = "uint"; Bits = 8; MinMagnitude = "0"; MaxMagnitude = "255"; Boundary = "wrap" } |] }
 let description = { Id = "lazy-runtime-test"; Core = Some core; Spaces = [| image; state |]; ProgramLifetime = Some { Immutable = "constant-image"; Mutable = Some "state-storage" } }
 """
+        let authority = authority.Replace("__MUTABLE_CAPACITY__", string mutableCapacity)
         let source = defaultArg source """
 module ProgramLazy
 let make (value: bool) = lazy value
@@ -85,10 +86,14 @@ let main _ =
                 Representations = Map.ofList [signed.Name, signed] }
         // Source-declared program storage and a byte-addressed CPU layout are
         // required together; this fixture makes no native emission claim.
-        let result = checkParsedInputsWithPlatform inputs (Some context)
+        checkParsedInputsWithPlatform inputs (Some context)
+
+    let programWithCapacity capacity source =
+        let result = checkProgramWithCapacity capacity source
         DimensionalCases.noErrors result
         result.Graph
 
+    let programWith source = programWithCapacity 1024 source
     let program () = programWith None
 
     let binding name (graph: SemanticGraph) =

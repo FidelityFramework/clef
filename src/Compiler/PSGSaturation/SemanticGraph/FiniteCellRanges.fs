@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-/// Finite ordinary activations bound affine updates to program-owned cells.
+/// Finite ordinary activations bound affine updates to program and local cells.
 /// Counts are conservative upper bounds, not demands to execute an expression.
 /// Unknown calls, escaping storage and repeated activations without a proof
 /// remain unresolved. This owner selects no runtime width or memory capacity.
@@ -228,15 +228,59 @@ let recognize (graph: SemanticGraph) : Bound list =
                     | _ -> None
                 multiply left right |> Option.orElseWith (fun () -> multiply right left)
             | _ -> None
-    startup.ValueBindings |> Set.toList |> List.choose (fun cell ->
+    // A local declaration must initialize before every use in its one lexical
+    // sequence. Inspect all actual containment paths, not the advisory Parent
+    // field. This admits no captured storage or invocation through a closure.
+    let localInitialization cell =
+        match parents cell with
+        | [declaration] when valid declaration.Target ->
+            match nodes[declaration.Target].Kind, count Set.empty cell with
+            | SemanticKind.Sequential values, Some(activations, activationSources)
+                when activations > 0I && declaration.Role = EdgeRole.Element &&
+                     List.tryItem declaration.Ordinal values = Some cell ->
+                let rec after seen id =
+                    if Set.contains id seen || not (valid id) then None else
+                    let seen = Set.add id seen
+                    let incoming = parents id
+                    if incoming.IsEmpty then None else
+                    incoming |> List.fold (fun state edge ->
+                        let next =
+                            if not (valid edge.Target) then None
+                            elif edge.Target = declaration.Target then
+                                if edge.Role = EdgeRole.Element && edge.Ordinal > declaration.Ordinal &&
+                                   List.tryItem edge.Ordinal values = Some id then Some(Set.ofList [id; edge.Target]) else None
+                            else
+                                match nodes[edge.Target].Kind with
+                                | SemanticKind.Lambda _ | SemanticKind.SeqExpr _ | SemanticKind.LazyExpr _ -> None
+                                | _ -> after seen edge.Target |> Option.map (Set.add id)
+                        match state, next with
+                        | Some prior, Some required -> Some(Set.union prior required)
+                        | _ -> None) (Some Set.empty)
+                uses.TryFind cell |> Option.defaultValue [] |> List.fold (fun state edge ->
+                    let next =
+                        if key edge = key declaration then Some(Set.ofList [cell; declaration.Target]) else
+                        match nodes.TryFind edge.Target, edge.Class, edge.Role with
+                        | Some { Kind = SemanticKind.VarRef(_, Some source) }, EdgeClass.Reference, EdgeRole.Definition
+                            when source = cell && same cell edge.Target -> after Set.empty edge.Target
+                        | _ -> None
+                    match state, next with
+                    | Some prior, Some required -> Some(Set.union prior required)
+                    | _ -> None) (Some activationSources)
+            | _ -> None
+        | _ -> None
+    nodes.Keys |> Seq.toList |> List.choose (fun cell ->
         match nodes.TryFind cell with
         | Some node when valid cell && Types.isIntegerType node.Type && not (captures.Contains cell) ->
             match node.Kind, node.Children with
             | SemanticKind.Binding(_, true, false, None), [initializer] ->
+                let initialization =
+                    if startup.ValueBindings.Contains cell then Some startupParticipants
+                    else localInitialization cell
                 let dangerous = nodes.Values |> Seq.exists (fun useNode ->
                     match useNode.Kind with
                     | SemanticKind.VarRef(_, Some source) when source = cell -> not (same cell useNode.Id)
                     | SemanticKind.AddressOf(value, _) -> readCell cell value
+                    | SemanticKind.CellAddress source -> source = cell
                     | _ -> false)
                 let invalidUses =
                     uses.TryFind cell |> Option.defaultValue [] |> List.exists (fun edge -> not (valid edge.Target)) ||
@@ -247,7 +291,7 @@ let recognize (graph: SemanticGraph) : Bound list =
                     match store.Kind with
                     | SemanticKind.Set(target, value) when readCell cell target -> Some(store.Id, target, value)
                     | _ -> None) |> Seq.toList
-                if dangerous || invalidUses || writes.IsEmpty then None else
+                if initialization.IsNone || dangerous || invalidUses || writes.IsEmpty then None else
                 match constant Set.empty (applySubst node.Type) initializer with
                 | None -> None
                 | Some(seed, initialDependencies) ->
@@ -269,7 +313,7 @@ let recognize (graph: SemanticGraph) : Bound list =
                     | Error _ -> None
                     | Ok(certificate, _) ->
                         Some { Cell = cell; Writes = writes; Certificate = certificate
-                               Participants = Set.unionMany (startupParticipants :: initialDependencies :: (contributions |> List.map snd)) }
+                               Participants = Set.unionMany (startupParticipants :: initialization.Value :: initialDependencies :: (contributions |> List.map snd)) }
             | _ -> None
         | _ -> None)
 
@@ -308,3 +352,35 @@ let settle (bounds: Bound list) (graph: SemanticGraph) =
         for target in bound.Cell :: (bound.Writes |> List.map _.Value) do
             edges <- { Class = EdgeClass.Range; Role = EdgeRole.FiniteCellRange; Sources = sources; Target = target; Ordinal = 0 } :: edges
     { graph with Nodes = nodes; Edges = edges }
+
+/// Re-establish the complete current finite-cell certificate/row inventory in
+/// Baker before another owner may retain held ranges. This invokes source
+/// recognition, so publication must not call it.
+let evidenceCurrent (graph: SemanticGraph) =
+    let obligations =
+        graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
+            match node.Kind with
+            | SemanticKind.Obligation info when info.Kind = "finite-cell-effects" -> Some(id, info)
+            | _ -> None)
+    let bounds = recognize graph
+    let sameRows expected actual =
+        let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+        (expected |> List.map key |> List.sort) = (actual |> List.map key |> List.sort)
+    let expectedRangeRows =
+        bounds |> List.collect (fun bound ->
+            let sources = Set.toList bound.Participants
+            bound.Cell :: (bound.Writes |> List.map _.Value)
+            |> List.map (fun target ->
+                { Class = EdgeClass.Range; Role = EdgeRole.FiniteCellRange; Ordinal = 0
+                  Sources = sources; Target = target }))
+    bounds.Length = obligations.Length &&
+    sameRows expectedRangeRows (graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.FiniteCellRange)) &&
+    (bounds |> List.forall (fun bound ->
+        let name = sprintf "finite_cell_%d" (NodeId.value bound.Cell)
+        match obligations |> List.filter (fun (_, info) -> info.Id = name) with
+        | [id, info] when info.Logic = "QF_LIA" && info.Body = ObligationBody.FiniteLinearRecurrence bound.Certificate ->
+            let expected : Hyperedge =
+                { Class = EdgeClass.Obligation; Role = EdgeRole.Constrains; Ordinal = 0
+                  Sources = Set.toList bound.Participants; Target = id }
+            sameRows [expected] (graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = id))
+        | _ -> false))

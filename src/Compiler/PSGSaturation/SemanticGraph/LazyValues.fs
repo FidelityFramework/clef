@@ -372,6 +372,49 @@ let closedThunk (graph: SemanticGraph) =
         let liveNodes, actualUses, allUses = descriptorUses.Value
         let descriptorType = applySubst graph.Nodes[owner].Type
         let sameType (node: SemanticNode) = applySubst node.Type = descriptorType
+        // A valid force spine does not by itself make its extracted environment
+        // private. Close every actual/reference use of the projection, binding,
+        // and five authored operands; optional recorded copies may add no use.
+        let forceEnvironment (force: Force) projection =
+            let reference id =
+                match live graph id with
+                | Some { Kind = SemanticKind.VarRef(_, Some binding); Children = []; Type = ty }
+                    when binding = force.EnvironmentBinding && applySubst ty = environmentType && currentIncidence id -> Some id
+                | _ -> None
+            let operand site =
+                match live graph site with
+                | Some { Kind = SemanticKind.LazyRead(environment, _) | SemanticKind.LazyWrite(environment, _, _) } -> reference environment
+                | Some { Kind = SemanticKind.Application(_, [environment]) } -> reference environment
+                | _ -> None
+            let accesses =
+                [ force.Condition, EdgeRole.Subject; force.CachedRead, EdgeRole.Subject
+                  force.Invocation, EdgeRole.Argument; force.ResultStore, EdgeRole.Subject
+                  force.Publication, EdgeRole.Subject ]
+                |> List.map (fun (site, role) -> operand site |> Option.map (fun source -> source, site, role))
+            if (accesses |> List.exists Option.isNone) then false else
+            let accesses = accesses |> List.choose id
+            let referenceIds = accesses |> List.map (fun (source, _, _) -> source)
+            let exactUses source expected =
+                let actual = actualUses.TryFind source |> Option.defaultValue [] |> List.map key |> List.sort
+                let observed = allUses.TryFind source |> Option.defaultValue [] |> List.map key |> List.sort
+                actual = List.sort expected && observed = List.sort expected
+            let participants = Set.ofList (projection :: force.EnvironmentBinding :: referenceIds)
+            let captured = liveNodes |> List.exists (fun node ->
+                let captures =
+                    match node.Kind with
+                    | SemanticKind.Lambda(_, _, captures, _, _) | SemanticKind.LazyExpr(_, captures)
+                    | SemanticKind.SeqExpr(_, captures) -> captures
+                    | _ -> []
+                captures |> List.exists (fun capture ->
+                    (capture.SourceNodeId |> Option.exists participants.Contains) ||
+                    (capture.SourceNodeId.IsNone && applySubst capture.Type = environmentType)))
+            not captured && List.distinct referenceIds = referenceIds &&
+            exactUses projection [EdgeClass.Structural, EdgeRole.Attached, 0, [projection], force.EnvironmentBinding] &&
+            exactUses force.EnvironmentBinding
+                ((EdgeClass.Structural, EdgeRole.Element, 0, [force.EnvironmentBinding], force.Site) ::
+                 (referenceIds |> List.map (fun reference -> EdgeClass.Reference, EdgeRole.Definition, 0, [force.EnvironmentBinding], reference))) &&
+            (accesses |> List.forall (fun (reference, site, role) ->
+                exactUses reference [EdgeClass.Structural, role, 0, [reference], site]))
         let rec follow (pending: NodeId list) (seen: Set<NodeId>) =
             match pending with
             | [] -> Some seen
@@ -416,7 +459,9 @@ let closedThunk (graph: SemanticGraph) =
                                     let forces = facts.Forces.Values |> Seq.filter (fun force ->
                                         force.Formation = owner && force.Operand = id &&
                                         (live graph force.EnvironmentBinding |> Option.exists (fun binding -> binding.Children = [target.Id]))) |> Seq.toList
-                                    match forces with [_] -> Some next | _ -> None
+                                    match forces with
+                                    | [force] when forceEnvironment force target.Id -> Some next
+                                    | _ -> None
                                 | _ -> None
                             | _ -> None)) (Some rest)
                     next |> Option.bind (fun next -> follow next seen)

@@ -925,35 +925,6 @@ type BoundaryPlatformPremise = {
     EndpointReturns: Map<string, ReturnBound>
 }
 
-type NumericDomain = {
-    Premises: Map<NodeId, BoundarySourcePremise>
-    Platform: BoundaryPlatformPremise option
-    Roots: (NodeId * DeclRoot) list
-    Escaping: Map<NodeId, string>
-    Layouts: Map<TypeIdentity, SettledLayout>
-    Required: Set<NodeId>
-    ResultSites: Set<NodeId>
-    SourceTypes: Map<NodeId, TypeIdentity>
-    Elements: Map<NodeId, SettledSlot>
-    ElementTypes: Map<TypeIdentity, SettledSlot>
-    DeclaredScalars: Map<NTUKind, SettledSlot>
-    OccurrenceRepresentations: Map<NodeId, Result<ValueRepresentation, string>>
-    TypeRepresentations: Map<TypeIdentity, Result<ValueRepresentation, string>>
-    ElementRanges: Map<TypeIdentity, ValueRange>
-    ByteRanges: (NodeId * NodeId list * bigint * bigint * string) list
-    ByteReadRanges: (NodeId * NodeId list * bigint * bigint) list
-    ByteViews: BoundaryByteView list
-    StringExtents: BoundaryStringExtent list
-    Values: ScalarCarrier list
-    Operations: NumericOperationWitness list
-    OperationRequired: Set<NodeId>
-    OperationMeets: Map<NodeId, Meet list>
-    OperationProofs: NumericOperationProof list
-    IndexTransports: NumericIndexTransport list
-    IndexRequired: Set<NodeId>
-    Unresolved: Map<NodeId, string>
-}
-
 [<RequireQualifiedAccess>]
 type EdgeClass =
     /// Containment: the source is structurally part of the target.
@@ -984,6 +955,52 @@ type EdgeClass =
     | Boundary
     /// Source-settled hardware/kernel declaration and complete spatial plan.
     | Spatial
+
+[<RequireQualifiedAccess>]
+type FiniteCellRelationKind =
+    | Named of string
+    | ContinuationCase of int
+    | EnvironmentCapture of bool
+
+type FiniteCellSourceRelation = {
+    Class: EdgeClass
+    Kind: FiniteCellRelationKind
+    Ordinal: int
+    Sources: NodeId list
+    Target: NodeId
+}
+
+type NumericDomain = {
+    RequiresFiniteCellReview: bool
+    FiniteCellRelations: FiniteCellSourceRelation list option
+    FiniteCellObligations: (NodeId * ObligationInfo) list
+    Premises: Map<NodeId, BoundarySourcePremise>
+    Platform: BoundaryPlatformPremise option
+    Roots: (NodeId * DeclRoot) list
+    Escaping: Map<NodeId, string>
+    Layouts: Map<TypeIdentity, SettledLayout>
+    Required: Set<NodeId>
+    ResultSites: Set<NodeId>
+    SourceTypes: Map<NodeId, TypeIdentity>
+    Elements: Map<NodeId, SettledSlot>
+    ElementTypes: Map<TypeIdentity, SettledSlot>
+    DeclaredScalars: Map<NTUKind, SettledSlot>
+    OccurrenceRepresentations: Map<NodeId, Result<ValueRepresentation, string>>
+    TypeRepresentations: Map<TypeIdentity, Result<ValueRepresentation, string>>
+    ElementRanges: Map<TypeIdentity, ValueRange>
+    ByteRanges: (NodeId * NodeId list * bigint * bigint * string) list
+    ByteReadRanges: (NodeId * NodeId list * bigint * bigint) list
+    ByteViews: BoundaryByteView list
+    StringExtents: BoundaryStringExtent list
+    Values: ScalarCarrier list
+    Operations: NumericOperationWitness list
+    OperationRequired: Set<NodeId>
+    OperationMeets: Map<NodeId, Meet list>
+    OperationProofs: NumericOperationProof list
+    IndexTransports: NumericIndexTransport list
+    IndexRequired: Set<NodeId>
+    Unresolved: Map<NodeId, string>
+}
 
 type MemoryExtentWitness = {
     Site: NodeId
