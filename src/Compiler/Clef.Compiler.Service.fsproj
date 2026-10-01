@@ -297,6 +297,7 @@
     <Compile Include="NativeTypedTree\ClefExpr.fs" />
     <!-- Infrastructure - Nanopass phase configuration and intermediate emission -->
     <Compile Include="NativeTypedTree\Infrastructure\PhaseConfig.fs" />
+    <Compile Include="CheckExecution.fs" />
     <Compile Include="NativeTypedTree\Infrastructure\PhaseTypes.fs" />
     <Compile Include="NativeTypedTree\Infrastructure\PhaseEmitter.fs" />
     <!-- Nanopass - Generic elaboration infrastructure (Recipe, FanOut, FoldIn) -->
@@ -497,6 +498,7 @@
     <Compile Include="Project\FidprojLoader.fs" />
     <Compile Include="Project\SourceResolver.fs" />
     <Compile Include="Project\ProjectChecker.fs" />
+    <Compile Include="Project\ProjectWorkspace.fs" />
 
     <!-- Optimize.fs removed - IL optimization not applicable to native compilation.
          Semantic optimizations (inlining, SRTP resolution, monomorphization) are performed
@@ -558,6 +560,7 @@
   <ItemGroup>
     <!-- Core F# runtime -->
     <PackageReference Include="FSharp.Core" Version="10.1.401" />
+    <PackageReference Include="Fidelity.FSharp.Incremental.Hosting" Version="0.1.0-preview.5" />
 
     <!-- XParsec - Parser combinators for Baker saturation (Phase 4.0: XParsec migration) -->
     <PackageReference Include="XParsec" Version="0.3.0" />

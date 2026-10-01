@@ -62,6 +62,7 @@ module SourceResolver =
     /// depPath is always a fidproj file path — resolution from directory paths happens
     /// in FidprojLoader.parseDependency, not here.
     let rec private getDependencySourcesRec
+        (load: string -> Result<FidprojOptions, string>)
         (depName: string)
         (depPath: string)
         (completedPaths: Set<string>)
@@ -80,7 +81,7 @@ module SourceResolver =
                 Error (DependencyFidprojNotFound (depName, normalizedPath))
             else
                 // Load the dependency project file to get authoritative source ordering
-                match FidprojLoader.load normalizedPath with
+                match load normalizedPath with
                 | Error msg ->
                     Error (DependencyFidprojLoadError (depName, normalizedPath, msg))
                 | Ok depOptions ->
@@ -97,7 +98,7 @@ module SourceResolver =
                             | Error e, _ -> Error e
                             | Ok _, None -> Error (DependencyPathNotDeclared dep.Name)
                             | Ok (accSources, accLibraries, accVisited), Some path ->
-                                match getDependencySourcesRec dep.Name path accVisited newActive newChain with
+                                match getDependencySourcesRec load dep.Name path accVisited newActive newChain with
                                 | Error e -> Error e
                                 | Ok (depSources, depLibraries, depVisited) ->
                                     Ok (accSources @ depSources, accLibraries @ depLibraries, depVisited)
@@ -149,7 +150,7 @@ module SourceResolver =
     /// Dependencies with paths are resolved; dependencies without paths are skipped
     /// (they may be package references resolved elsewhere).
     /// Handles transitive dependencies and avoids duplicates from shared dependencies.
-    let getSourcesAndLibraries (options: FidprojOptions): Result<ResolvedSources, SourceResolutionError> =
+    let internal getSourcesAndLibrariesWith load (options: FidprojOptions): Result<ResolvedSources, SourceResolutionError> =
         // Resolve all dependency sources in order, tracking visited paths across all dependencies
         // This ensures shared transitive dependencies aren't duplicated
         let dependencySourcesResult =
@@ -159,7 +160,7 @@ module SourceResolver =
                 | Error e, _ -> Error e  // Short-circuit on first error
                 | Ok _, None -> Error (DependencyPathNotDeclared dep.Name)
                 | Ok (accSources, accLibraries, visited), Some path ->
-                    match getDependencySourcesRec dep.Name path visited (Set.singleton (normalizePath options.ProjectPath)) [options.Name] with
+                    match getDependencySourcesRec load dep.Name path visited (Set.singleton (normalizePath options.ProjectPath)) [options.Name] with
                     | Error e -> Error e
                     | Ok (depSources, depLibraries, newVisited) ->
                         Ok (accSources @ depSources, accLibraries @ depLibraries, newVisited)
@@ -179,7 +180,7 @@ module SourceResolver =
                 let platformSources =
                     match options.PlatformPath with
                     | Some path ->
-                        getDependencySourcesRec "platform" path Set.empty Set.empty []
+                        getDependencySourcesRec load "platform" path Set.empty Set.empty []
                         |> Result.map (fun (paths, _, _) -> Set.ofList paths)
                     | None when options.PlatformMetadata.IsSome -> Ok (Set.ofList sources)
                     | None -> Ok Set.empty
@@ -187,6 +188,8 @@ module SourceResolver =
                     { SourcePaths = sources
                       PlatformSourcePaths = platformSources
                       LinkedLibraries = List.distinct (options.LinkedLibraries @ dependencyLibraries) })
+
+    let getSourcesAndLibraries options = getSourcesAndLibrariesWith FidprojLoader.load options
 
     /// Source-only compatibility API. Dependency and link metadata share one
     /// traversal so a malformed transitive declaration cannot be dropped.

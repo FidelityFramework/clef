@@ -162,96 +162,98 @@ let private implFileToInput (fileName: string) (implFile: ParsedImplFile) : Pars
 /// Returns:
 ///   ParseResult - Either ParseSuccess with the ParsedInput, or ParseError with error messages
 let parseString (source: string) (fileName: string) (options: ParseOptions) : ParseResult =
-    try
-        // Create the lexbuf from the source string
-        let strictIndentation = if options.IndentationAware then Some true else None
-        let lexbuf = StringAsLexbuf(false, LanguageVersion.Default, strictIndentation, source)
+    Clef.Compiler.CheckExecution.synchronized (fun () ->
+        try
+            // Create the lexbuf from the source string
+            let strictIndentation = if options.IndentationAware then Some true else None
+            let lexbuf = StringAsLexbuf(false, LanguageVersion.Default, strictIndentation, source)
 
-        // Set up position info with the file name
-        resetLexbufPos fileName lexbuf
+            // Set up position info with the file name
+            resetLexbufPos fileName lexbuf
 
-        // Create the diagnostics logger for capturing errors, and install it, with the Parse phase,
-        // for the duration of the parse: the parser reports through the thread-installed logger
-        // (ParseHelpers.reportParseErrorAt is `errorR`), not through the logger handed to the lexer,
-        // so without this installation every parse error went to the discarding default logger and
-        // a damaged tree reached the checker with no diagnostic (found 2026-09-04 by the dimensional
-        // vetting harness: a syntax error surfaced downstream as "No declaration roots found in PSG").
-        let diagnosticsLogger = CapturingDiagnosticsLogger("parseString")
-        use _installedLogger = UseDiagnosticsLogger diagnosticsLogger
-        use _installedPhase = UseBuildPhase BuildPhase.Parse
+            // Create the diagnostics logger for capturing errors, and install it, with the Parse phase,
+            // for the duration of the parse: the parser reports through the thread-installed logger
+            // (ParseHelpers.reportParseErrorAt is `errorR`), not through the logger handed to the lexer,
+            // so without this installation every parse error went to the discarding default logger and
+            // a damaged tree reached the checker with no diagnostic (found 2026-09-04 by the dimensional
+            // vetting harness: a syntax error surfaced downstream as "No declaration roots found in PSG").
+            let diagnosticsLogger = CapturingDiagnosticsLogger("parseString")
+            use _installedLogger = UseDiagnosticsLogger diagnosticsLogger
+            use _installedPhase = UseBuildPhase BuildPhase.Parse
 
-        // Create lexer arguments
-        let resourceManager = LexResourceManager()
-        let indentationSyntaxStatus = IndentationAwareSyntaxStatus(options.IndentationAware, warn = true)
-        let lexargs = mkLexargs(
-            options.Defines,
-            indentationSyntaxStatus,
-            resourceManager,
-            [],  // ifdefStack
-            diagnosticsLogger,
-            PathMap.empty,  // pathMap
-            true  // applyLineDirectives
-        )
+            // Create lexer arguments
+            let resourceManager = LexResourceManager()
+            let indentationSyntaxStatus = IndentationAwareSyntaxStatus(options.IndentationAware, warn = true)
+            let lexargs = mkLexargs(
+                options.Defines,
+                indentationSyntaxStatus,
+                resourceManager,
+                [],  // ifdefStack
+                diagnosticsLogger,
+                PathMap.empty,  // pathMap
+                true  // applyLineDirectives
+            )
 
-        // Create the raw lexer function
-        // skipWhitespaceTokens = true (as in FCS) - critical for proper parsing
-        let skipWhitespaceTokens = true
-        let rawLexer (lexbuf: LexBuffer<char>) =
-            Clef.Compiler.Lexer.token lexargs skipWhitespaceTokens lexbuf
+            // Create the raw lexer function
+            // skipWhitespaceTokens = true (as in FCS) - critical for proper parsing
+            let skipWhitespaceTokens = true
+            let rawLexer (lexbuf: LexBuffer<char>) =
+                Clef.Compiler.Lexer.token lexargs skipWhitespaceTokens lexbuf
 
-        // Create the LexFilter for indentation-aware parsing
-        let lexFilter = LexFilter(
-            indentationSyntaxStatus,
-            false,  // compilingFSharpCore
-            rawLexer,
-            lexbuf,
-            false   // debug
-        )
+            // Create the LexFilter for indentation-aware parsing
+            let lexFilter = LexFilter(
+                indentationSyntaxStatus,
+                false,  // compilingFSharpCore
+                rawLexer,
+                lexbuf,
+                false   // debug
+            )
 
-        // Create the token function for the parser
-        let tokenFunc (_lexbuf: LexBuffer<char>) =
-            lexFilter.GetToken()
+            // Create the token function for the parser
+            let tokenFunc (_lexbuf: LexBuffer<char>) =
+                lexFilter.GetToken()
 
-        // Parse the implementation file
-        let parsedImplFile = Clef.Compiler.Parser.implementationFile tokenFunc lexbuf
+            // Parse the implementation file
+            let parsedImplFile = Clef.Compiler.Parser.implementationFile tokenFunc lexbuf
 
-        // Convert to ParsedImplFileInput and wrap in ParsedInput
-        let implFileInput = implFileToInput fileName parsedImplFile
-        let parsedInput = ParsedInput.ImplFile implFileInput
+            // Convert to ParsedImplFileInput and wrap in ParsedInput
+            let implFileInput = implFileToInput fileName parsedImplFile
+            let parsedInput = ParsedInput.ImplFile implFileInput
 
-        // Every error-severity diagnostic the parse logged is a parse failure. The message is
-        // located where the exception carries a range; the parser family takes its CCS codes with
-        // the step-4 mapping table (Dimensional_Vetting_Plan.md D3), so no code is minted here.
-        // An inherited lexer or parser diagnostic keeps its F# number under the CCS prefix
-        // (error-handling.md, the CCS code table): F# number 10 is CCS0010, 58 is CCS0058.
-        let located (number: int) (m: range) (text: string) =
-            sprintf "CCS%04d: %s(%d,%d): %s" number m.FileName m.StartLine (m.StartColumn + 1) text
-        let rec render (exn: exn) =
-            match exn with
-            | DiagnosticWithText(number, text, m) -> located number m text
-            | Clef.Compiler.ParseHelpers.IndentationProblem(text, m) -> located 58 m text
-            | Clef.Compiler.ParseHelpers.SyntaxError(_, m) -> located 10 m "Syntax error: unexpected token"
-            | WrappedError(inner, m) ->
-                match inner with
-                | DiagnosticWithText _ | Clef.Compiler.ParseHelpers.IndentationProblem _ | Clef.Compiler.ParseHelpers.SyntaxError _ -> render inner
-                | _ -> located 0 m inner.Message
-            | _ -> exn.Message
-        let errors =
-            diagnosticsLogger.Diagnostics
-            |> List.choose (fun diag ->
-                if diag.Severity = Clef.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error then
-                    Some (render diag.Exception)
-                else
-                    None)
+            // Every error-severity diagnostic the parse logged is a parse failure. The message is
+            // located where the exception carries a range; the parser family takes its CCS codes with
+            // the step-4 mapping table (Dimensional_Vetting_Plan.md D3), so no code is minted here.
+            // An inherited lexer or parser diagnostic keeps its F# number under the CCS prefix
+            // (error-handling.md, the CCS code table): F# number 10 is CCS0010, 58 is CCS0058.
+            let located (number: int) (m: range) (text: string) =
+                sprintf "CCS%04d: %s(%d,%d): %s" number m.FileName m.StartLine (m.StartColumn + 1) text
+            let rec render (exn: exn) =
+                match exn with
+                | DiagnosticWithText(number, text, m) -> located number m text
+                | Clef.Compiler.ParseHelpers.IndentationProblem(text, m) -> located 58 m text
+                | Clef.Compiler.ParseHelpers.SyntaxError(_, m) -> located 10 m "Syntax error: unexpected token"
+                | WrappedError(inner, m) ->
+                    match inner with
+                    | DiagnosticWithText _ | Clef.Compiler.ParseHelpers.IndentationProblem _ | Clef.Compiler.ParseHelpers.SyntaxError _ -> render inner
+                    | _ -> located 0 m inner.Message
+                | _ -> exn.Message
+            let errors =
+                diagnosticsLogger.Diagnostics
+                |> List.choose (fun diag ->
+                    if diag.Severity = Clef.Compiler.Diagnostics.FSharpDiagnosticSeverity.Error then
+                        Some (render diag.Exception)
+                    else
+                        None)
 
-        if List.isEmpty errors then
-            ParseSuccess parsedInput
-        else
-            ParseError errors
+            if List.isEmpty errors then
+                ParseSuccess parsedInput
+            else
+                ParseError errors
 
-    with
-    | ex ->
-        ParseError [sprintf "Parse error: %s" ex.Message]
+        with
+        | ex ->
+            ParseError [sprintf "Parse error: %s" ex.Message]
+    )
 
 /// Parse F# source code from a string using default options.
 let parseStringWithDefaults (source: string) (fileName: string) : ParseResult =
@@ -2660,22 +2662,24 @@ and private checkModuleDecls (env: TypeEnv) (builder: NodeBuilder) (ctx: ModuleC
 
 /// Check a list of module declarations (public API)
 let checkModuleDeclarations (decls: SynModuleDecl list) : CheckResult =
-    let env = createTypeEnv()
-    let builder = NodeBuilder()
-    NodeId.reset()
-    solvedConstraintCount <- 0
+    Clef.Compiler.CheckExecution.synchronized (fun () ->
+        let env = createTypeEnv()
+        let builder = NodeBuilder()
+        NodeId.reset()
+        solvedConstraintCount <- 0
 
-    let ctx = { Path = []; IsRecursive = false }
-    let (finalEnv, nodes) = checkModuleDecls env builder ctx decls
-    // The checker's own diagnostics are reported with the constraint diagnostics, never drained.
-    let reported = solveAndGetDiagnostics finalEnv !(env.Constraints) @ List.rev !(env.Diagnostics)
-    let diagnostics = reported @ residualDiagnostics builder reported
+        let ctx = { Path = []; IsRecursive = false }
+        let (finalEnv, nodes) = checkModuleDecls env builder ctx decls
+        // The checker's own diagnostics are reported with the constraint diagnostics, never drained.
+        let reported = solveAndGetDiagnostics finalEnv !(env.Constraints) @ List.rev !(env.Diagnostics)
+        let diagnostics = reported @ residualDiagnostics builder reported
 
-    buildResult builder nodes Map.empty diagnostics None Set.empty
+        buildResult builder nodes Map.empty diagnostics None Set.empty
 
-//-------------------------------------------------------------------------
-// Type Checking: Module or Namespace Level
-//-------------------------------------------------------------------------
+    //-------------------------------------------------------------------------
+    // Type Checking: Module or Namespace Level
+    //-------------------------------------------------------------------------
+    )
 
 /// Check a module or namespace and return updated environment and semantic nodes
 let private checkModuleOrNamespace (env: TypeEnv) (builder: NodeBuilder) (moduleOrNs: SynModuleOrNamespace) : TypeEnv * ModulePath * SemanticNode list =
@@ -2727,38 +2731,40 @@ let private checkModuleOrNamespace (env: TypeEnv) (builder: NodeBuilder) (module
 
 /// Check a parsed implementation file
 let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
-    let (ParsedImplFileInput(fileName, _isScript, qualifiedNameOfFile, _hashDirectives, contents, _flags, _trivia, _identifiers)) = implFile
+    Clef.Compiler.CheckExecution.synchronized (fun () ->
+        let (ParsedImplFileInput(fileName, _isScript, qualifiedNameOfFile, _hashDirectives, contents, _flags, _trivia, _identifiers)) = implFile
 
-    let initialEnv = createTypeEnv()
-    let builder = NodeBuilder()
-    NodeId.reset()
-    solvedConstraintCount <- 0
+        let initialEnv = createTypeEnv()
+        let builder = NodeBuilder()
+        NodeId.reset()
+        solvedConstraintCount <- 0
 
-    // Track which file we're processing (for diagnostics)
-    let _ = fileName  // Could be added to CheckResult metadata
-    let _ = qualifiedNameOfFile  // The qualified name can be used for module resolution
+        // Track which file we're processing (for diagnostics)
+        let _ = fileName  // Could be added to CheckResult metadata
+        let _ = qualifiedNameOfFile  // The qualified name can be used for module resolution
 
-    // Process each module or namespace in the file, threading environment
-    let (finalEnv, moduleResults) =
-        contents |> List.fold (fun (accEnv, accResults) moduleOrNs ->
-            let (updatedEnv, path, nodes) = checkModuleOrNamespace accEnv builder moduleOrNs
-            (updatedEnv, (path, nodes) :: accResults)
-        ) (initialEnv, [])
+        // Process each module or namespace in the file, threading environment
+        let (finalEnv, moduleResults) =
+            contents |> List.fold (fun (accEnv, accResults) moduleOrNs ->
+                let (updatedEnv, path, nodes) = checkModuleOrNamespace accEnv builder moduleOrNs
+                (updatedEnv, (path, nodes) :: accResults)
+            ) (initialEnv, [])
 
-    // Collect all nodes and build module path mapping (reverse to preserve order)
-    let moduleResultsOrdered = List.rev moduleResults
-    let allNodes = moduleResultsOrdered |> List.collect snd
-    let modulePaths =
-        moduleResultsOrdered
-        |> List.map (fun (path, nodes) -> (path, nodes |> List.map (fun n -> n.Id)))
-        |> List.fold (fun paths (path, nodes) ->
-            Map.change path (fun previous -> Some (Option.defaultValue [] previous @ nodes)) paths) Map.empty
+        // Collect all nodes and build module path mapping (reverse to preserve order)
+        let moduleResultsOrdered = List.rev moduleResults
+        let allNodes = moduleResultsOrdered |> List.collect snd
+        let modulePaths =
+            moduleResultsOrdered
+            |> List.map (fun (path, nodes) -> (path, nodes |> List.map (fun n -> n.Id)))
+            |> List.fold (fun paths (path, nodes) ->
+                Map.change path (fun previous -> Some (Option.defaultValue [] previous @ nodes)) paths) Map.empty
 
-    let solved = solveAndGetDiagnostics finalEnv !(initialEnv.Constraints)
-    let reported = solved @ List.rev !(initialEnv.Diagnostics)
-    let diagnostics = reported @ residualDiagnostics builder reported
+        let solved = solveAndGetDiagnostics finalEnv !(initialEnv.Constraints)
+        let reported = solved @ List.rev !(initialEnv.Diagnostics)
+        let diagnostics = reported @ residualDiagnostics builder reported
 
-    buildResult builder allNodes modulePaths diagnostics None Set.empty
+        buildResult builder allNodes modulePaths diagnostics None Set.empty
+    )
 
 /// Check multiple parsed implementation files together with optional platform context.
 /// Files are processed in order, with earlier files' bindings available to later files.
@@ -2768,56 +2774,58 @@ let checkImplFile (implFile: ParsedImplFileInput) : CheckResult =
 /// platformContext: Optional platform context. When Some, enables entry point elaboration
 /// for freestanding builds (adds _start wrapper that calls main).
 let checkParsedInputsWithPlatformAndSources (inputs: ParsedInput list) (platformContext: PlatformContext option) (ownedSources: Set<string>) : CheckResult =
-    let initialEnv = createTypeEnv()
-    let builder = NodeBuilder()
-    NodeId.reset()
-    solvedConstraintCount <- 0
+    Clef.Compiler.CheckExecution.synchronized (fun () ->
+        let initialEnv = createTypeEnv()
+        let builder = NodeBuilder()
+        NodeId.reset()
+        solvedConstraintCount <- 0
 
-    // Process all files in order, threading environment
-    let (finalEnv, allModuleResults) =
-        inputs |> List.fold (fun (accEnv, accResults) input ->
-            match input with
-            | ParsedInput.ImplFile implFile ->
-                let (ParsedImplFileInput(_, _, _, _, contents, _, _, _)) = implFile
-                // Process each module in this file
-                let (updatedEnv, fileResults) =
-                    contents |> List.fold (fun (env, results) moduleOrNs ->
-                        let (newEnv, path, nodes) = checkModuleOrNamespace env builder moduleOrNs
-                        (newEnv, (path, nodes) :: results)
-                    ) (accEnv, [])
-                // Both accumulators are reversed. Preserve that invariant
-                // across file boundaries; the single reversal below restores
-                // file order and declaration order within each file together.
-                (updatedEnv, fileResults @ accResults)
-            | ParsedInput.SigFile sigFile ->
-                // A signature file has no checker; it is an error, never a silently skipped input
-                // (as checkParsedInput reports it).
-                addDiagnostic {
-                    Severity = NativeDiagnosticSeverity.Error
-                    Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
-                    Message = "CCS source checking did not settle this signature file '" + sigFile.FileName + "': signature files have no checker; the file contributes nothing."
-                    Range = rangeToSourceRange input.Range
-                    RelatedNodes = []
-                    Reachability = ReachabilityContext.Unknown
-                } accEnv
-                (accEnv, accResults)
-        ) (initialEnv, [])
+        // Process all files in order, threading environment
+        let (finalEnv, allModuleResults) =
+            inputs |> List.fold (fun (accEnv, accResults) input ->
+                match input with
+                | ParsedInput.ImplFile implFile ->
+                    let (ParsedImplFileInput(_, _, _, _, contents, _, _, _)) = implFile
+                    // Process each module in this file
+                    let (updatedEnv, fileResults) =
+                        contents |> List.fold (fun (env, results) moduleOrNs ->
+                            let (newEnv, path, nodes) = checkModuleOrNamespace env builder moduleOrNs
+                            (newEnv, (path, nodes) :: results)
+                        ) (accEnv, [])
+                    // Both accumulators are reversed. Preserve that invariant
+                    // across file boundaries; the single reversal below restores
+                    // file order and declaration order within each file together.
+                    (updatedEnv, fileResults @ accResults)
+                | ParsedInput.SigFile sigFile ->
+                    // A signature file has no checker; it is an error, never a silently skipped input
+                    // (as checkParsedInput reports it).
+                    addDiagnostic {
+                        Severity = NativeDiagnosticSeverity.Error
+                        Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+                        Message = "CCS source checking did not settle this signature file '" + sigFile.FileName + "': signature files have no checker; the file contributes nothing."
+                        Range = rangeToSourceRange input.Range
+                        RelatedNodes = []
+                        Reachability = ReachabilityContext.Unknown
+                    } accEnv
+                    (accEnv, accResults)
+            ) (initialEnv, [])
 
-    // Collect all nodes and build module path mapping
-    let moduleResultsOrdered = List.rev allModuleResults
-    let allNodes = moduleResultsOrdered |> List.collect snd
-    let modulePaths =
-        moduleResultsOrdered
-        |> List.map (fun (path, nodes) -> (path, nodes |> List.map (fun n -> n.Id)))
-        |> List.fold (fun paths (path, nodes) ->
-            Map.change path (fun previous -> Some (Option.defaultValue [] previous @ nodes)) paths) Map.empty
+        // Collect all nodes and build module path mapping
+        let moduleResultsOrdered = List.rev allModuleResults
+        let allNodes = moduleResultsOrdered |> List.collect snd
+        let modulePaths =
+            moduleResultsOrdered
+            |> List.map (fun (path, nodes) -> (path, nodes |> List.map (fun n -> n.Id)))
+            |> List.fold (fun paths (path, nodes) ->
+                Map.change path (fun previous -> Some (Option.defaultValue [] previous @ nodes)) paths) Map.empty
 
-    // Solve constraints - now using ref cells, all environment copies share same constraints
-    let constraintDiags = solveAndGetDiagnostics finalEnv !(initialEnv.Constraints)
-    let reported = constraintDiags @ (List.rev !(initialEnv.Diagnostics))
-    let allDiagnostics = reported @ residualDiagnostics builder reported
+        // Solve constraints - now using ref cells, all environment copies share same constraints
+        let constraintDiags = solveAndGetDiagnostics finalEnv !(initialEnv.Constraints)
+        let reported = constraintDiags @ (List.rev !(initialEnv.Diagnostics))
+        let allDiagnostics = reported @ residualDiagnostics builder reported
 
-    buildResult builder allNodes modulePaths allDiagnostics platformContext ownedSources
+        buildResult builder allNodes modulePaths allDiagnostics platformContext ownedSources
+    )
 
 /// The general checking API has no project ownership facts, so it does not
 /// classify public declarations as unused application helpers.

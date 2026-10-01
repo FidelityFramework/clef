@@ -8,6 +8,7 @@ src/Compiler/*.resx
 
 # Packages and local SDK/tool caches
 *.nupkg
+!/vendor/Fidelity.FSharp.Incremental/*.nupkg
 *.snupkg
 .dotnet/
 .packages/

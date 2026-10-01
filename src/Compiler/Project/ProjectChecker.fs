@@ -19,8 +19,20 @@ type ProjectCheckResult = {
     CheckResult: SGDiag.CheckResult
     /// All source files that were checked (absolute path, content).
     SourceFiles: (string * string) list
+    /// Exact source and metadata bytes consumed by this check, captured before parsing.
+    InputFiles: (string * string) list
+    /// Selected binding's declared backend, parsed from the same captured metadata.
+    PlatformTarget: TargetPlatform option
     /// Parse errors by file (if any).
     ParseErrors: Map<string, string list>
+}
+
+type internal PreparedProject = private {
+    Options: FidprojOptions
+    PlatformSources: Set<string>
+    PlatformTarget: TargetPlatform option
+    Sources: (string * string) list
+    Inputs: (string * string) list
 }
 
 module ProjectChecker =
@@ -107,6 +119,17 @@ module ProjectChecker =
     let private normalizePath (path: string) =
         Path.GetFullPath(path).Replace('\\', '/')
 
+    /// Aliases may identify the same source, but cannot assign it two texts.
+    let internal normalizeOverrides (volatileContent: Map<string, string>) =
+        try
+            volatileContent |> Map.toList |> List.fold (fun result (path, text) ->
+                result |> Result.bind (fun inputs ->
+                    let path = normalizePath path
+                    match Map.tryFind path inputs with
+                    | Some previous when previous <> text -> Error $"Conflicting volatile input aliases: {path}"
+                    | _ -> Ok(Map.add path text inputs))) (Ok Map.empty)
+        with error -> Error $"Invalid volatile input path: {error.Message}"
+
     /// Only declarations owned by this executable can be reported as unused helpers.
     /// Dependency/platform sources remain public library surface, even when compiled together.
     let private ownedApplicationSources (options: FidprojOptions) =
@@ -114,203 +137,87 @@ module ProjectChecker =
         | TargetPlatform.Library, _ | _, DeploymentMode.Library -> Set.empty
         | _ -> options.SourceFiles |> List.map (fun file -> normalizePath (Path.Combine(options.ProjectDirectory, file))) |> Set.ofList
 
-    /// Reads a source file, returning (path, content).
-    let private readSourceFile (path: string): Result<string * string, string> =
-        let normalizedPath = normalizePath path
-        if File.Exists normalizedPath then
-            try
-                let content = File.ReadAllText normalizedPath
-                Ok (normalizedPath, content)
-            with ex ->
-                Error $"Failed to read {normalizedPath}: {ex.Message}"
-        else
-            Error $"Source file not found: {normalizedPath}"
+    /// Capture every loader read once. Dependency/platform options and the checker
+    /// consume these same bytes; no post-check discovery or cross-edit hash reuse.
+    let internal prepare (fidprojPath: string) (volatileContent: Map<string, string>) : Result<PreparedProject, string> =
+        try
+            let mutable diskInputs = Map.empty
+            let read path =
+                let path = normalizePath path
+                match Map.tryFind path diskInputs with
+                | Some text -> text
+                | None ->
+                    let text = File.ReadAllText path
+                    diskInputs <- Map.add path text diskInputs
+                    text
+            let overrides = normalizeOverrides volatileContent |> Result.defaultWith invalidOp
+            match FidprojLoader.loadWith read fidprojPath with
+            | Error error -> Error error
+            | Ok options ->
+                match SourceResolver.getSourcesAndLibrariesWith (FidprojLoader.loadWith read) options with
+                | Error error -> Error(SourceResolutionError.format error)
+                | Ok resolved when List.isEmpty resolved.SourcePaths -> Error $"No source files found for project {options.Name}"
+                | Ok resolved ->
+                    let platformTarget =
+                        match options.PlatformPath with
+                        | None -> Ok None
+                        | Some path -> FidprojLoader.loadWith read path |> Result.map (fun platform -> Some platform.TargetPlatform)
+                    match platformTarget with
+                    | Error error -> Error error
+                    | Ok platformTarget ->
+                        let sources = resolved.SourcePaths |> List.map (fun path ->
+                            let path = normalizePath path
+                            let text =
+                                match Map.tryFind path overrides, Map.tryFind path diskInputs with
+                                | Some text, Some metadata when text <> metadata ->
+                                    invalidOp $"Volatile source conflicts with captured project metadata: {path}"
+                                | Some text, _ -> text
+                                | None, _ -> read path
+                            path, text)
+                        // Detect edits during capture. All subsequent semantic work uses
+                        // this immutable capture, even when files change after validation.
+                        let changed = diskInputs |> Map.toList |> List.tryFind (fun (path, text) -> File.ReadAllText path <> text)
+                        match changed with
+                        | Some (path, _) -> Error $"Project input changed while being captured: {path}"
+                        | None ->
+                            Ok { Options = { options with LinkedLibraries = resolved.LinkedLibraries }
+                                 PlatformSources = resolved.PlatformSourcePaths
+                                 PlatformTarget = platformTarget
+                                 Sources = sources
+                                 Inputs = List.fold (fun inputs (path, text) -> Map.add path text inputs) diskInputs sources |> Map.toList }
+        with error -> Error $"Could not capture project inputs: {error.Message}"
 
-    /// Parses a source file, returning the parsed input.
-    let private parseSourceFile (path: string) (content: string): Result<ParsedInput, string list> =
-        match parseStringWithDefaults content path with
-        | ParseSuccess parsed -> Ok parsed
-        | ParseError errors -> Error errors
+    let private emptyGraph : SemanticGraph = {
+        Nodes = Map.empty; DeclarationRoots = []; Modules = Map.empty
+        Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty
+        FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Layouts = lazy Map.empty
+        StaticStringPool = None; LiteralStorage = Map.empty; Escaping = lazy Map.empty
+        Codata = lazy Codata.empty; Edges = []; WitnessProvenance = None
+    }
 
-    /// Load and check a project from .fidproj path.
-    /// - Parses .fidproj
-    /// - Resolves all source files (Alloy + project)
-    /// - Reads all source content
-    /// - Parses and checks with shared type environment
-    /// - Returns unified result with consistent paths
-    let checkProject (fidprojPath: string): Result<ProjectCheckResult, string> =
-        // Load project configuration
-        match FidprojLoader.load fidprojPath with
-        | Error msg -> Error msg
-        | Ok options ->
-            // Resolve all source files in order - MUST succeed, no silent fallbacks
-            match SourceResolver.getSourcesAndLibraries options with
-            | Error srcError ->
-                // Source resolution failed - this is a hard error, not a warning
-                Error (SourceResolutionError.format srcError)
-            | Ok resolved ->
-                let options = { options with LinkedLibraries = resolved.LinkedLibraries }
-                let allSourcePaths = resolved.SourcePaths
-                if List.isEmpty allSourcePaths then
-                    Error $"No source files found for project {options.Name}"
+    let internal checkPrepared (prepared: PreparedProject) : ProjectCheckResult =
+        Clef.Compiler.CheckExecution.synchronized (fun () ->
+            let parsed = prepared.Sources |> List.map (fun (path, content) -> path, parseStringWithDefaults content path)
+            let errors = parsed |> List.choose (function path, ParseError errors -> Some(path, errors) | _ -> None) |> Map.ofList
+            // A malformed file does not authorize checking a silently shortened project.
+            let checkedInputs: SGDiag.CheckResult =
+                if not (Map.isEmpty errors) then
+                    { Graph = emptyGraph; Diagnostics = []; PlatformContext = None }
                 else
-                    // Read all source files
-                    let readResults =
-                        allSourcePaths
-                        |> List.map readSourceFile
+                    let inputs = parsed |> List.choose (function _, ParseSuccess input -> Some input | _ -> None)
+                    checkParsedInputsWithPlatformAndSources inputs
+                        (buildPlatformContext prepared.Options prepared.PlatformSources)
+                        (ownedApplicationSources prepared.Options)
+            { Options = prepared.Options
+              CheckResult = { checkedInputs with Diagnostics = checkedInputs.Diagnostics @ unusedPlatformKeyDiagnostics prepared.Options }
+              SourceFiles = prepared.Sources; InputFiles = prepared.Inputs
+              PlatformTarget = prepared.PlatformTarget; ParseErrors = errors })
 
-                    let readErrors =
-                        readResults
-                        |> List.choose (function Result.Error e -> Some e | Result.Ok _ -> None)
+    /// Existing synchronous API uses the same immutable capture and process gate.
+    let checkProjectWithVolatile fidprojPath volatileContent : Result<ProjectCheckResult, string> =
+        prepare fidprojPath volatileContent |> Result.map checkPrepared
 
-                    if not (List.isEmpty readErrors) then
-                        Error (String.concat "\n" readErrors)
-                    else
-                        let sourceFiles =
-                            readResults
-                            |> List.choose (function Result.Ok f -> Some f | Result.Error _ -> None)
-
-                        // Parse all source files
-                        let parseResults =
-                            sourceFiles
-                            |> List.map (fun (path, content) ->
-                                match parseSourceFile path content with
-                                | Ok parsed -> (path, Result.Ok parsed)
-                                | Error errors -> (path, Result.Error errors))
-
-                        let parseErrors =
-                            parseResults
-                            |> List.choose (fun (path, result) ->
-                                match result with
-                                | Result.Error errors -> Some (path, errors)
-                                | Result.Ok _ -> None)
-                            |> Map.ofList
-
-                        let parsedInputs =
-                            parseResults
-                            |> List.choose (fun (_, result) ->
-                                match result with
-                                | Result.Ok parsed -> Some parsed
-                                | Result.Error _ -> None)
-
-                        if Map.isEmpty parseErrors |> not then
-                            // Return partial result with parse errors
-                            let emptyGraph: SemanticGraph = {
-                                Nodes = Map.empty
-                                DeclarationRoots = []
-                                Modules = Map.empty
-                                Types = lazy Map.empty
-                                Platform = None
-                                ModuleClassifications = lazy Map.empty
-                                FieldRanges = lazy Map.empty
-                                ElementRanges = lazy Map.empty
-                                Layouts = lazy Map.empty
-                                StaticStringPool = None
-                                LiteralStorage = Map.empty
-                                Escaping = lazy Map.empty
-                                Codata = lazy Codata.empty
-                                Edges = []
-                                WitnessProvenance = None
-                            }
-                            Ok {
-                                Options = options
-                                CheckResult = { Graph = emptyGraph; Diagnostics = []; PlatformContext = None }
-                                SourceFiles = sourceFiles
-                                ParseErrors = parseErrors
-                            }
-                        else
-                            let platformContext = buildPlatformContext options resolved.PlatformSourcePaths
-
-                            // Check all parsed inputs together with platform context
-                            // The platform context is set on the graph BEFORE entry point elaboration
-                            let checkedInputs = checkParsedInputsWithPlatformAndSources parsedInputs platformContext (ownedApplicationSources options)
-                            let checkResult = { checkedInputs with Diagnostics = checkedInputs.Diagnostics @ unusedPlatformKeyDiagnostics options }
-
-                            Ok {
-                                Options = options
-                                CheckResult = checkResult
-                                SourceFiles = sourceFiles
-                                ParseErrors = Map.empty
-                            }
-
-    /// Check a project with volatile content override.
-    /// volatileContent: Map from absolute file path to in-memory content.
-    /// Used by LSP servers for unsaved file changes.
-    let checkProjectWithVolatile
-        (fidprojPath: string)
-        (volatileContent: Map<string, string>)
-        : Result<ProjectCheckResult, string> =
-
-        // Load project configuration
-        match FidprojLoader.load fidprojPath with
-        | Error msg -> Error msg
-        | Ok options ->
-            // Resolve all source files in order - MUST succeed, no silent fallbacks
-            match SourceResolver.getSourcesAndLibraries options with
-            | Error srcError ->
-                // Source resolution failed - this is a hard error, not a warning
-                Error (SourceResolutionError.format srcError)
-            | Ok resolved ->
-                let options = { options with LinkedLibraries = resolved.LinkedLibraries }
-                let allSourcePaths = resolved.SourcePaths
-                if List.isEmpty allSourcePaths then
-                    Error $"No source files found for project {options.Name}"
-                else
-                    // Read all source files, using volatile content where available
-                    let readResults =
-                        allSourcePaths
-                        |> List.map (fun path ->
-                            let normalizedPath = normalizePath path
-                            match Map.tryFind normalizedPath volatileContent with
-                            | Some content ->
-                                // Use volatile (unsaved) content
-                                Result.Ok (normalizedPath, content)
-                            | None ->
-                                // Read from disk
-                                readSourceFile path)
-                    // Each read failure is reported with its own reason, never collapsed.
-                    let readErrors = readResults |> List.choose (function Result.Error e -> Some e | Result.Ok _ -> None)
-                    let sourceFiles = readResults |> List.choose (function Result.Ok f -> Some f | Result.Error _ -> None)
-
-                    if not (List.isEmpty readErrors) then
-                        Error (String.concat "\n" readErrors)
-                    else
-                        // Parse all source files
-                        let parseResults =
-                            sourceFiles
-                            |> List.map (fun (path, content) ->
-                                match parseSourceFile path content with
-                                | Ok parsed -> (path, Result.Ok parsed)
-                                | Error errors -> (path, Result.Error errors))
-
-                        let parseErrors =
-                            parseResults
-                            |> List.choose (fun (path, result) ->
-                                match result with
-                                | Result.Error errors -> Some (path, errors)
-                                | Result.Ok _ -> None)
-                            |> Map.ofList
-
-                        let parsedInputs =
-                            parseResults
-                            |> List.choose (fun (_, result) ->
-                                match result with
-                                | Result.Ok parsed -> Some parsed
-                                | Result.Error _ -> None)
-
-                        // Build platform context BEFORE checking
-                        let platformContext = buildPlatformContext options resolved.PlatformSourcePaths
-
-                        // Check all parsed inputs together with platform context
-                        let checkedInputs = checkParsedInputsWithPlatformAndSources parsedInputs platformContext (ownedApplicationSources options)
-                        let checkResult = { checkedInputs with Diagnostics = checkedInputs.Diagnostics @ unusedPlatformKeyDiagnostics options }
-
-                        Ok {
-                            Options = options
-                            CheckResult = checkResult
-                            SourceFiles = sourceFiles
-                            ParseErrors = parseErrors
-                        }
+    let checkProject fidprojPath = checkProjectWithVolatile fidprojPath Map.empty
 
     /// Get diagnostics for a specific file from a checked project.
     let getDiagnosticsForFile (result: ProjectCheckResult) (filePath: string): SGDiag.Diagnostic list =
@@ -338,6 +245,18 @@ module ProjectChecker =
             |> List.map (fun d -> $"{d.Range.File}:{d.Range.Start.Line}: {d.Message}")
 
         parseErrorMsgs @ checkErrorMsgs
+
+    /// CCS owns admission and the sole graph-to-revision publication boundary.
+    /// A reader receives Fidelity.PSG; it does not invoke Publication itself.
+    let publish (result: ProjectCheckResult) : Result<Fidelity.PSG.Revision, string> =
+        Clef.Compiler.CheckExecution.synchronized (fun () ->
+            if hasErrors result then Error(String.concat "\n" (getErrorMessages result))
+            else
+                match result.CheckResult.Graph.Platform with
+                | None -> Error "A checked platform context is required to publish a project revision."
+                | Some platform ->
+                    Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish platform result.CheckResult.Graph
+                    |> Result.mapError (fun failures -> sprintf "%A" failures))
 
     /// Check if a project check result has any warnings.
     /// Uses effective severity (unreachable warnings demoted to info).

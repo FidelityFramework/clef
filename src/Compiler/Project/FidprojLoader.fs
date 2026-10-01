@@ -238,15 +238,17 @@ module FidprojLoader =
 
     /// Loads the [platform] section from a binding's .fidproj file.
     /// The binding IS the specification — this reads what the platform provides.
-    let loadBindingPlatformSection (fidprojPath: string) : Result<PlatformSection, string> =
+    let private loadBindingPlatformSectionWith (readText: string -> string) (fidprojPath: string) : Result<PlatformSection, string> =
         let path = normalizePath fidprojPath
         if not (File.Exists path) then
             Error $"Platform .fidproj not found: {path}"
         else
-            let content = File.ReadAllText(path)
+            let content = readText path
             match Toml.parse content with
             | Error msg -> Error $"Failed to parse binding fidproj {path}: {msg}"
             | Ok doc -> parsePlatformSection doc
+
+    let loadBindingPlatformSection path = loadBindingPlatformSectionWith File.ReadAllText path
 
     /// Parses a dependency from a TOML value.
     // A dependency entry whose fields are present but malformed is refused; a malformed path,
@@ -292,12 +294,12 @@ module FidprojLoader =
             Error $"Dependency '%s{name}' must be a version string or an inline table"
 
     /// Loads a .fidproj file.
-    let load (fidprojPath: string): Result<FidprojOptions, string> =
+    let internal loadWith (readText: string -> string) (fidprojPath: string): Result<FidprojOptions, string> =
         let absPath = normalizePath fidprojPath
         if not (File.Exists absPath) then
             Error $"Project file not found: {absPath}"
         else
-            let content = File.ReadAllText(absPath)
+            let content = readText absPath
             match Toml.parse content with
             | Error msg -> Error $"Failed to parse {absPath}: {msg}"
             | Ok doc ->
@@ -394,7 +396,7 @@ module FidprojLoader =
                 // fall back to the project's own [platform] section as metadata source.
                 let platformMetadataResult =
                     match platformPath with
-                    | Some path -> loadBindingPlatformSection path |> Result.map Some
+                    | Some path -> loadBindingPlatformSectionWith readText path |> Result.map Some
                     | None ->
                         // A missing section is allowed; a present malformed section is not.
                         match Toml.getTable "platform" doc with
@@ -426,6 +428,8 @@ module FidprojLoader =
                     PlatformMetadata = platformMetadata
                     ClockMhzOverride = clockMhzOverride
                 }
+
+    let load path = loadWith File.ReadAllText path
 
     /// Finds the .fidproj file containing a source file.
     let findProjectForSourceFile (sourceFile: string) (projects: FidprojOptions list): FidprojOptions option =

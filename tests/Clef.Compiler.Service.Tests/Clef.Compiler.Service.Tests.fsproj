@@ -125,6 +125,7 @@
     <Compile Include="ModuleScopeCases.fs" />
     <Compile Include="ModuleScopeTests.fs" />
     <Compile Include="ProjectLinkTests.fs" />
+    <Compile Include="ProjectWorkspaceTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
