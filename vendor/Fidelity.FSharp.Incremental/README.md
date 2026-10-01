@@ -1,8 +1,8 @@
 # Fidelity.FSharp.Incremental package input
 
-These MIT packages are the explicit preview.5 dependency for the first compiler
+These MIT packages are the explicit preview.6 dependency for the compiler
 and provider integration. They were packed from implementation commit
-`87c77d91ab24c8e4d065e4e726f8c06abc3180c4` in
+`3b86e2dac96ad55cb965341bfc04395061d09c46` in
 [Fidelity.FSharp.Incremental](https://forge.spkez.dev/FidelityFramework/Fidelity.FSharp.Incremental).
 `SHA256SUMS` identifies the exact archives; their nuspecs identify the source.
 The identical archives are retained in each consumer's local feed so restoring

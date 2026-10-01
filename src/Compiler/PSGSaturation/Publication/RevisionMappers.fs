@@ -673,6 +673,7 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.LoopInduction(a0, a1) -> Fidelity.PSG.EdgeRole.LoopInduction(a0, a1)
     | S.EdgeRole.LoopAccumulation -> Fidelity.PSG.EdgeRole.LoopAccumulation
     | S.EdgeRole.SequencePullBound -> Fidelity.PSG.EdgeRole.SequencePullBound
+    | S.EdgeRole.SequencePullComposition(a0, a1) -> Fidelity.PSG.EdgeRole.SequencePullComposition(a0, a1)
     | S.EdgeRole.SequenceAccumulation -> Fidelity.PSG.EdgeRole.SequenceAccumulation
     | S.EdgeRole.LoopRangePending(a0) -> Fidelity.PSG.EdgeRole.LoopRangePending(mapLoopRangeResidual a0)
     | S.EdgeRole.Callee -> Fidelity.PSG.EdgeRole.Callee

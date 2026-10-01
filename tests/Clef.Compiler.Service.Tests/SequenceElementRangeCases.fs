@@ -716,3 +716,244 @@ let main _ = if sum () = 30 then (if sumAgain () = 30 then 0 else 1) else 1
         Assert.Single others |> ignore
         let _, failures = SequenceAccumulationFixture.handoff changed
         Assert.NotEmpty failures
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceAccumulation")>]
+type MappedSequenceAccumulationCases() =
+    [<Fact>]
+    member _.``Mapped singleton preserves finite accumulation with mutable and immutable dimensional captures``() =
+        // Exact editor closure-environment source: no target offer, eager
+        // rewrite, modulus or annotation is added to manufacture a carrier.
+        let source =
+            String.concat "\n"
+                [ "module ClosureEnvironments"
+                  "[<Measure>] type m"
+                  "[<Measure>] type s"
+                  "[<EntryPoint>]"
+                  "let main _ ="
+                  "    let bias = 2<m>"
+                  "    let mutable offset = 7<m>"
+                  "    let mapper = fun (value: int<m>) -> value + offset + bias"
+                  "    let mapped = Seq.map mapper (seq { yield 1<m> })"
+                  "    let mutable total = 0<m>"
+                  "    for value in mapped do total <- total + value"
+                  "    if total = 10<m> then 0 else 1" ]
+        let result =
+            match parseAndCheck source "mapped-closure-accumulation.clef" with
+            | Success result | CheckFailure result -> result
+            | ParseFailure errors -> failwithf "Mapped closure fixture did not parse: %A" errors
+        let cells = SequenceAccumulationFixture.cells "total" result.Graph
+        let errors = CheckResult.errors result
+        Assert.True(errors.IsEmpty, sprintf "Source errors: %A\nAccumulator ranges: %A" errors (cells |> List.map (fun node -> node.Id, node.ValueRange)))
+        Assert.True(result.Graph.Platform.IsNone)
+        let cell = Assert.Single cells
+        Assert.Equal(Some(ValueRange.Bounded(0I, 10I)), cell.ValueRange)
+        SequenceAccumulationFixture.evidence 1I result.Graph cell
+
+module private MappedAccumulationFixture =
+    let source input afterFormation comparison =
+        String.concat "\n"
+            ([ "module MappedAccumulation"
+               "[<Measure>] type m"
+               "[<EntryPoint>]"
+               "let main _ ="
+               "    let bias = 2<m>"
+               "    let mutable offset = 7<m>"
+               "    let mapper = fun (value: int<m>) -> value + offset + bias"
+               "    let mapped = Seq.map mapper (" + input + ")" ]
+             @ (afterFormation |> List.map (fun line -> "    " + line))
+             @ [ "    let mutable total = 0<m>"
+                 "    for value in mapped do total <- total + value"
+                 "    if total = " + comparison + "<m> then 0 else 1" ])
+
+    let checkSource source =
+        match parseAndCheck source "mapped-accumulation.clef" with
+        | Success result | CheckFailure result -> result
+        | ParseFailure errors -> failwithf "Mapped accumulation did not parse: %A" errors
+
+    let check input afterFormation comparison = checkSource (source input afterFormation comparison)
+
+    let admittedSource source =
+        let result = checkSource source
+        Assert.True((CheckResult.errors result).IsEmpty, sprintf "%A" (CheckResult.errors result))
+        Assert.True(result.Graph.Platform.IsNone)
+        result.Graph
+
+    let admitted input afterFormation comparison = admittedSource (source input afterFormation comparison)
+
+    let composition (graph: SemanticGraph) =
+        graph.Edges |> List.filter (fun edge ->
+            match edge.Role with EdgeRole.SequencePullComposition _ -> true | _ -> false)
+
+    let raw () =
+        let graph = admitted "seq { yield 1<m> }" [] "10"
+        let cell = SequenceAccumulationFixture.cells "total" graph |> Assert.Single
+        Assert.Equal(Some(ValueRange.Bounded(0I, 10I)), cell.ValueRange)
+        SequenceAccumulationFixture.evidence 1I graph cell
+        Assert.NotEmpty(composition graph)
+        let _, failures = SequenceAccumulationFixture.handoff graph
+        Assert.Empty failures
+        graph
+
+    let innerProof (graph: SemanticGraph) =
+        graph.Nodes.Values |> Seq.filter (fun node ->
+            match node.Kind with SemanticKind.Obligation info -> info.Kind = "sequence-inner-finite-pulls" | _ -> false)
+        |> Assert.Single
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceAccumulation")>]
+type MappedSequenceCompositionCases() =
+    [<Fact>]
+    member _.``Two mapped yields derive two pulls and cover every accumulation prefix``() =
+        let graph = MappedAccumulationFixture.admitted "seq { yield 1<m>; yield 2<m> }" [] "21"
+        let cell = SequenceAccumulationFixture.cells "total" graph |> Assert.Single
+        Assert.Equal(Some(ValueRange.Bounded(0I, 22I)), cell.ValueRange)
+        SequenceAccumulationFixture.evidence 2I graph cell
+        let proof = MappedAccumulationFixture.innerProof graph
+        match proof.Kind with
+        | SemanticKind.Obligation { Body = ObligationBody.FiniteSequencePull model } -> Assert.Equal(2I, model.MaximumPulls)
+        | kind -> failwithf "Missing inner finite control certificate: %A" kind
+
+    [<Fact>]
+    member _.``Mapped mutable capture is read at invocation after formation``() =
+        let source =
+            (MappedAccumulationFixture.source "seq { yield 1<m> }" ["offset <- 1000<m>"] "1003")
+                .Replace("let mapper = fun (value: int<m>) -> value + offset + bias", "let mapper = eager (fun (value: int<m>) -> value + offset + bias)")
+                .Replace("let mapped = Seq.map mapper (seq { yield 1<m> })", "let mapped = eager (Seq.map mapper (seq { yield 1<m> }))")
+        let graph = MappedAccumulationFixture.admittedSource source
+        let cell = SequenceAccumulationFixture.cells "total" graph |> Assert.Single
+        match cell.ValueRange with
+        | Some(ValueRange.Bounded(lower, upper)) -> Assert.True(lower <= 0I && upper >= 1003I)
+        | range -> failwithf "Invocation-time capture lost its finite range: %A" range
+        let offset = SequenceAccumulationFixture.cells "offset" graph |> Assert.Single
+        Assert.Contains(graph.Edges, fun edge ->
+            match edge.Role, edge.Sources with
+            | EdgeRole.EnvironmentCapture true, [_owner; slot; value] -> slot = offset.Id || value = offset.Id
+            | _ -> false)
+        SequenceAccumulationFixture.evidence 1I graph cell
+
+    [<Fact>]
+    member _.``Selected platform retains both finite proofs through sequence representation``() =
+        let body =
+            (MappedAccumulationFixture.source "seq { yield 1<m> }" [] "10").Split('\n')
+            |> Array.skip 2 // The existing platform fixture supplies its module and m declaration.
+            |> String.concat "\n"
+        let graph = SequenceAccumulationFixture.admitted body
+        let cell = SequenceAccumulationFixture.cells "total" graph |> Assert.Single
+        Assert.Equal(Some(ValueRange.Bounded(0I, 10I)), cell.ValueRange)
+        SequenceAccumulationFixture.evidence 1I graph cell
+        Assert.NotEmpty(MappedAccumulationFixture.composition graph)
+        MappedAccumulationFixture.innerProof graph |> ignore
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project graph with
+        | Ok _ -> ()
+        | Result.Error failures -> failwithf "Selected source numeric publication must remain current: %A" failures
+
+    [<Fact>]
+    member _.``Composition exceeding its bounded proof graph remains explicitly unadmitted``() =
+        // This deliberately exceeds the 4096-state product budget for the
+        // current map control; finite source is not a license for unbounded
+        // compiler work or a guessed accumulator carrier.
+        let input = "seq { " + String.concat "; " (List.replicate 80 "yield 1<m>") + " }"
+        let result = MappedAccumulationFixture.check input [] "800"
+        let cell = SequenceAccumulationFixture.cells "total" result.Graph |> Assert.Single
+        Assert.Contains(CheckResult.errors result, fun diagnostic -> diagnostic.Code = "CCS8011" && List.contains cell.Id diagnostic.RelatedNodes)
+        Assert.Empty(MappedAccumulationFixture.composition result.Graph)
+        Assert.DoesNotContain(result.Graph.Edges, fun edge -> edge.Role = EdgeRole.SequenceAccumulation && edge.Target = cell.Id)
+        Assert.False(cell.ValueRange |> Option.exists ValueRange.isObservable)
+
+    [<Fact>]
+    member _.``A mapped unbounded producer cannot lend a finite accumulation certificate``() =
+        let result = MappedAccumulationFixture.check "seq { while true do yield 1<m> }" [] "10"
+        let cell = SequenceAccumulationFixture.cells "total" result.Graph |> Assert.Single
+        Assert.Contains(CheckResult.errors result, fun diagnostic -> diagnostic.Code = "CCS8011" && List.contains cell.Id diagnostic.RelatedNodes)
+        Assert.DoesNotContain(result.Graph.Edges, fun edge -> edge.Role = EdgeRole.SequenceAccumulation && edge.Target = cell.Id)
+        Assert.Empty(MappedAccumulationFixture.composition result.Graph)
+        Assert.False(cell.ValueRange |> Option.exists ValueRange.isObservable)
+
+    [<Theory>]
+    [<InlineData("missing-product-row")>]
+    [<InlineData("changed-source-occurrence")>]
+    [<InlineData("changed-budget")>]
+    [<InlineData("changed-origin")>]
+    [<InlineData("missing-inner-proof")>]
+    [<InlineData("changed-inner-bound")>]
+    member _.``Composition handoff refuses stale correspondence or inner finite authority`` scenario =
+        let graph = MappedAccumulationFixture.raw ()
+        let row = MappedAccumulationFixture.composition graph |> List.head
+        let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+        let rewrite transform =
+            let edges = graph.Edges |> List.map (fun edge -> if key edge = key row then transform edge else edge)
+            { graph with Edges = edges }
+        let changed =
+            match scenario with
+            | "missing-product-row" -> { graph with Edges = graph.Edges |> List.filter (fun edge -> key edge <> key row) }
+            | "changed-source-occurrence" ->
+                rewrite (fun edge ->
+                    match edge.Role with
+                    | EdgeRole.SequencePullComposition(label, budget) -> { edge with Role = EdgeRole.SequencePullComposition(label + 1, budget) }
+                    | _ -> failwith "Expected product correspondence")
+            | "changed-budget" ->
+                rewrite (fun edge ->
+                    match edge.Role with
+                    | EdgeRole.SequencePullComposition(label, budget) -> { edge with Role = EdgeRole.SequencePullComposition(label, budget + 1I) }
+                    | _ -> failwith "Expected product correspondence")
+            | "changed-origin" ->
+                rewrite (fun edge -> { edge with Sources = List.take 6 edge.Sources @ [edge.Target] })
+            | "missing-inner-proof" ->
+                let proof = MappedAccumulationFixture.innerProof graph
+                { graph with
+                    Nodes = graph.Nodes.Remove proof.Id
+                    Edges = graph.Edges |> List.filter (fun edge -> edge.Target <> proof.Id && not (List.contains proof.Id edge.Sources)) }
+            | "changed-inner-bound" ->
+                let proof = MappedAccumulationFixture.innerProof graph
+                let kind =
+                    match proof.Kind with
+                    | SemanticKind.Obligation ({ Body = ObligationBody.FiniteSequencePull model } as info) ->
+                        SemanticKind.Obligation { info with Body = ObligationBody.FiniteSequencePull { model with MaximumPulls = model.MaximumPulls + 1I } }
+                    | _ -> failwith "Expected inner finite obligation"
+                { graph with Nodes = graph.Nodes.Add(proof.Id, { proof with Kind = kind }) }
+            | _ -> failwithf "Unknown mutation: %s" scenario
+        let _, failures = SequenceAccumulationFixture.handoff changed
+        Assert.NotEmpty failures
+
+    [<Theory>]
+    [<InlineData("shared-guard-reference")>]
+    [<InlineData("unknown-enumerator-capture")>]
+    [<InlineData("missing-inner-evaluation")>]
+    member _.``Rechecking changed inner iterator premises withdraws held product and range`` scenario =
+        let graph = MappedAccumulationFixture.raw ()
+        let row = MappedAccumulationFixture.composition graph |> List.head
+        let outer, inner, enumerator, guard, loop =
+            match row.Sources with
+            | [outer; inner; enumerator; _acquisition; guard; loop; _origin] -> outer, inner, enumerator, guard, loop
+            | sources -> failwithf "Incomplete product correspondence: %A" sources
+        let generator = match graph.Nodes[outer].Kind with SemanticKind.SeqExpr(generator, _) -> generator | _ -> failwith "Missing producer"
+        let parameters, body, captures, enclosing, context =
+            match graph.Nodes[generator].Kind with
+            | SemanticKind.Lambda(parameters, body, captures, enclosing, context) -> parameters, body, captures, enclosing, context
+            | _ -> failwith "Missing generator"
+        let changed =
+            match scenario with
+            | "shared-guard-reference" ->
+                let argument = match graph.Nodes[guard].Kind with SemanticKind.Application(_, [argument]) -> argument | _ -> failwith "Missing moveNext"
+                SequenceAccumulationFixture.rewrite body (SemanticKind.Sequential [enumerator; argument; loop]) [enumerator; argument; loop] graph
+                |> Clef.Compiler.Nanopass.SequenceEvaluation.normalize
+            | "unknown-enumerator-capture" ->
+                let capture = { Name = "unknown-enumerator"; Type = graph.Nodes[enumerator].Type; IsMutable = false; SourceNodeId = None }
+                let changed = { graph.Nodes[generator] with Kind = SemanticKind.Lambda(parameters, body, captures @ [capture], enclosing, context) }
+                { graph with Nodes = graph.Nodes.Add(generator, changed) }
+            | "missing-inner-evaluation" ->
+                let flow = graph.Edges |> List.find (fun edge -> edge.Class = EdgeClass.Evaluation && List.tryHead edge.Sources = Some inner)
+                let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+                { graph with Edges = graph.Edges |> List.filter (fun edge -> key edge <> key flow) }
+            | _ -> failwithf "Unknown source mutation: %s" scenario
+        let changed = Clef.Compiler.Nanopass.OrdinaryDemand.normalize changed
+        match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead changed with
+        | Ok _ -> ()
+        | Result.Error failures -> failwithf "Fresh ordinary demand is a required upstream premise: %A" failures
+        let oldProofs = changed.Nodes.Values |> Seq.filter Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes.hasProof |> Seq.map _.Id |> Seq.toList
+        Assert.Equal(3, oldProofs.Length)
+        let ranged, _ = ElementRanges.run None changed
+        Assert.Empty(MappedAccumulationFixture.composition ranged)
+        Assert.DoesNotContain(ranged.Edges, fun edge -> edge.Role = EdgeRole.SequenceAccumulation)
+        for id in oldProofs do Assert.False(ranged.Nodes.ContainsKey id)
+        let cell = SequenceAccumulationFixture.cells "total" ranged |> Assert.Single
+        Assert.False(cell.ValueRange |> Option.exists ValueRange.isObservable)

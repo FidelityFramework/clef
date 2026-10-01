@@ -239,7 +239,7 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
                 match Control.forOwner graph node with Ok control -> Some(node.Id, control) | Result.Error _ -> None
             | _ -> None) |> Map.ofSeq
         let freshAccumulations =
-            if (graph.Edges |> List.exists (fun edge -> edge.Role = EdgeRole.SequencePullBound || edge.Role = EdgeRole.SequenceAccumulation)) ||
+            if (graph.Edges |> List.exists Accumulations.isRelation) ||
                (graph.Nodes.Values |> Seq.exists Accumulations.hasProof) then
                 Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.sequenceAccumulationFacts graph
             else Some []
@@ -374,6 +374,20 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
         trace "program-storage-and-copies"
         let rewritten = ObligationElaboration.foldIn copyEvidence rewritten
         let diagnostics = diagnostics @ (familyResiduals @ copyResiduals |> List.map (fun pending -> residual rewritten.Nodes[pending.Site] [] pending.Reason))
+        // Transfer finite source authority only through the checked machines
+        // for every producer used by the bound, including its inner budget.
+        // Numeric settlement may compare this receipt; it cannot author it.
+        let requiredOwners =
+            rewritten.Edges |> List.collect (fun edge ->
+                match edge.Role, edge.Sources with
+                | EdgeRole.SequencePullBound, owner :: _ -> [owner]
+                | EdgeRole.SequencePullComposition _, outer :: inner :: _ -> [outer; inner]
+                | _ -> []) |> Set.ofList
+        let realizedOwners = machines |> List.map (fun (frame, _) -> frame.Owner) |> Set.ofList
+        let rewritten =
+            if accumulationFailures.IsEmpty && Set.isSubset requiredOwners realizedOwners then
+                Clef.Compiler.Baker.Ingredients.NumericValues.recordSequenceRangeHandoff rewritten
+            else { rewritten with SequenceRangeProvenance = None }
         rewritten, {
             Frames = frames
             Origins = propagated; Flows = flows; Families = families; TemplateCopies = copies

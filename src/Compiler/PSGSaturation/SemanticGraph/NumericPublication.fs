@@ -13,7 +13,14 @@ let project (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessPro
     match domains with
     | [anchor, domain] ->
         let participants = Map.keys domain.Premises |> Set.ofSeq
-        if Numeric.finiteCellRelations graph <> Ok domain.FiniteCellRelations ||
+        let sequenceCurrent =
+            match domain.SequenceRangeAuthority, graph.SequenceRangeProvenance with
+            | Some expected, Some current when expected = current -> Numeric.sequenceRangeCurrent graph expected
+            | None, None -> not domain.RequiresSequenceReview && not (Numeric.sequenceRangeActive graph)
+            | _ -> false
+        if not sequenceCurrent then
+            reject (Some anchor) participants "Finite-sequence relation premises changed or the source-to-machine range authority is absent; source settlement is required."
+        elif Numeric.finiteCellRelations graph <> Ok domain.FiniteCellRelations ||
            Numeric.finiteCellObligations graph <> domain.FiniteCellObligations then
             reject (Some anchor) participants "finite-cell relation premises changed; source numeric settlement is required."
         elif domain.Premises <> Numeric.premises graph || domain.Platform <> Boundary.platformPremise graph.Platform ||

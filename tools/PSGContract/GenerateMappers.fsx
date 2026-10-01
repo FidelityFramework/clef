@@ -2,9 +2,10 @@
 // PSG contract (Fidelity.PSG). The generated file is explicit F#: every mapped
 // type, case and field is visible in it and checked by the compiler.
 //
-// A contract type with no CCS twin, or whose cases or fields differ from its
-// twin, stops generation with the difference named. The sole native-only case,
-// ObligationBody.Pending, generates an explicit refusal instead of a value.
+// A contract type with no CCS twin, or an undeclared case/field difference,
+// stops generation with the difference named. Native-only record fields are
+// listed and type-checked below. The native-only ObligationBody.Pending case
+// generates an explicit refusal instead of a value.
 //
 // usage: dotnet fsi GenerateMappers.fsx <Clef.Compiler.Service.dll> <Fidelity.PSG.dll> <output.fs>
 
@@ -76,6 +77,27 @@ let targetName (target: Type) = "Fidelity.PSG." + target.Name
 let nativeType = ccs.GetType("Clef.Compiler.NativeTypedTree.NativeTypes+NativeType", true)
 let sourceNodeId = ccs.GetType("Clef.Compiler.NativeTypedTree.NativeTypes+NodeId", true)
 
+/// Baker's freshness guards are checked by NumericPublication before projection;
+/// they are not published numeric facts. Keep each exclusion explicit and typed:
+/// removing, changing or publishing one requires reviewing this policy too.
+let nativeOnlyRecordFields =
+    let semanticType name = ccs.GetType("Clef.Compiler.PSGSaturation.SemanticGraph.Types+" + name, true)
+    let listOf element = typedefof<list<_>>.MakeGenericType [| element |]
+    let optionOf element = typedefof<option<_>>.MakeGenericType [| element |]
+    dict [
+        "Clef.Compiler.PSGSaturation.SemanticGraph.Types+NumericDomain",
+        [ "RequiresFiniteCellReview", typeof<bool>
+          "FiniteCellRelations", optionOf (listOf (semanticType "FiniteCellSourceRelation"))
+          "FiniteCellObligations", listOf (FSharpType.MakeTupleType [| sourceNodeId; semanticType "ObligationInfo" |])
+          "RequiresSequenceReview", typeof<bool>
+          "SequenceRangeAuthority", optionOf (semanticType "SequenceRangeAuthority") ]
+    ]
+
+for sourceName in nativeOnlyRecordFields.Keys do
+    if not (twins |> Array.exists (fun (target, source, _) ->
+        source.FullName = sourceName && FSharpType.IsRecord(target, flags) && FSharpType.IsRecord(source, flags))) then
+        failwithf "Native-only record policy %s has no mapped CCS record" sourceName
+
 let isGeneric (definition: Type) (t: Type) = t.IsGenericType && t.GetGenericTypeDefinition() = definition
 
 /// The expression converting `value` from its CCS type to the contract type, or
@@ -137,8 +159,23 @@ let escape (name: string) = if keyword.Contains name then "``" + name + "``" els
 let recordMapper (target: Type) (source: Type) alias =
     let sources = FSharpType.GetRecordFields(source, flags) |> Array.map (fun field -> field.Name, field) |> dict
     let targets = FSharpType.GetRecordFields(target, flags)
+    let nativeOnly =
+        match nativeOnlyRecordFields.TryGetValue source.FullName with
+        | true, fields ->
+            for name, expected in fields do
+                if not (sources.ContainsKey name) then
+                    failwithf "Record %s: declared native-only field %s has no CCS field" target.Name name
+                if sources.[name].PropertyType <> expected then
+                    failwithf "Record %s: native-only field %s changed type from %s to %s"
+                        target.Name name expected.FullName sources.[name].PropertyType.FullName
+                if targets |> Array.exists (fun field -> field.Name = name) then
+                    failwithf "Record %s: declared native-only field %s now has a published field" target.Name name
+            fields |> List.map fst |> Set.ofList
+        | _ -> Set.empty
     let unpublished =
-        sources.Keys |> Seq.filter (fun name -> targets |> Array.forall (fun field -> field.Name <> name)) |> Seq.toList
+        sources.Keys
+        |> Seq.filter (fun name -> not (nativeOnly.Contains name) && (targets |> Array.forall (fun field -> field.Name <> name)))
+        |> Seq.toList
     if not unpublished.IsEmpty then
         failwithf "Record %s: CCS fields %A have no published field" target.Name unpublished
     let fields =

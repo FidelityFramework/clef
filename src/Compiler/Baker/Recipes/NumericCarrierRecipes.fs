@@ -68,7 +68,8 @@ let private elementSlot (graph: SemanticGraph) (node: SemanticNode) =
             | _ -> None
     | _ -> None
 
-let elaborateWithFiniteReview (inheritedFiniteReview: bool) (graph: SemanticGraph) =
+let elaborateWithRangeReview (inheritedFiniteReview: bool) (inheritedSequenceReview: bool)
+                             (inheritedSequenceAuthority: SequenceRangeAuthority option) (graph: SemanticGraph) =
     let enrichId = Elaboration.freshId ()
     let anchor = Boundary.anchor enrichId graph |> fun node -> { node with Metadata = node.Metadata.Remove "Baker.BoundaryOwned" } |> Numeric.markOwned
     let demand = OrdinaryDemand.project graph
@@ -88,6 +89,12 @@ let elaborateWithFiniteReview (inheritedFiniteReview: bool) (graph: SemanticGrap
     // old finite annotations merely by taking a new relation snapshot.
     let freshFacts = if finiteActive then Some(RangeAnalysis.sourceFacts graph) else None
     let finiteProofsCurrent = not finiteActive || FiniteCellRanges.evidenceCurrent graph
+    let sequenceActive = inheritedSequenceReview || Numeric.sequenceRangeActive graph
+    let sequenceAuthority =
+        match graph.SequenceRangeProvenance with Some authority -> Some authority | None -> inheritedSequenceAuthority
+    let sequenceCurrent =
+        not sequenceActive ||
+        (graph.SequenceRangeProvenance |> Option.exists (Numeric.sequenceRangeCurrent graph))
     let select (node: SemanticNode) =
         let participants declaration = Set.ofList (anchor.Id :: node.Id :: (Option.toList declaration) @ (kindEdges node.Id node.Kind |> List.collect _.Sources))
         let fact slot range representation declaration =
@@ -216,8 +223,13 @@ let elaborateWithFiniteReview (inheritedFiniteReview: bool) (graph: SemanticGrap
         | Ok _ when not finiteProofsCurrent ->
             unresolved.Add(anchor.Id, "Finite-cell relation premises changed or the retained recurrence certificate no longer matches current source transitions.")
         | Ok _ -> unresolved
+    let unresolved =
+        if sequenceCurrent then unresolved
+        else unresolved.Add(anchor.Id, "Finite-sequence relation premises changed or the source-to-machine range authority is missing; renew the owning source proof and representation handoff.")
     let domain =
-        { RequiresFiniteCellReview = currentFiniteActive || (inheritedFiniteReview && not unresolved.IsEmpty)
+        { RequiresSequenceReview = sequenceActive
+          SequenceRangeAuthority = sequenceAuthority
+          RequiresFiniteCellReview = currentFiniteActive || (inheritedFiniteReview && not unresolved.IsEmpty)
           FiniteCellRelations = finiteRelations |> Result.defaultValue None
           FiniteCellObligations = finiteObligations
           Premises = Numeric.premises graph; Platform = Boundary.platformPremise graph.Platform
@@ -237,4 +249,7 @@ let elaborateWithFiniteReview (inheritedFiniteReview: bool) (graph: SemanticGrap
           NewEdges = Numeric.domainRow anchor.Id domain :: Numeric.domainRewrite anchor.Id domain :: (domain.Values |> List.map Numeric.carrierRow) }
 
 /// Initial numeric settlement retains the existing current-source activation rule.
-let elaborate graph = elaborateWithFiniteReview false graph
+let elaborateWithFiniteReview inheritedFiniteReview graph =
+    elaborateWithRangeReview inheritedFiniteReview false None graph
+
+let elaborate graph = elaborateWithRangeReview false false None graph

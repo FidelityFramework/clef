@@ -340,6 +340,7 @@ let foldIn (recipeSet: RecipeSet) (graph: SemanticGraph) : SemanticGraph =
                         else e.Sources |> List.map (updateRef replacementMap)
                     Target = updateRef replacementMap e.Target })
         WitnessProvenance = None
+        SequenceRangeProvenance = None
     }
 
     // NOTE: Reachability validation removed (Feb 2026)

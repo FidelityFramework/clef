@@ -265,3 +265,113 @@ let main _ =
         let node = graph.Nodes[formal]
         let damaged = { graph with Nodes = graph.Nodes.Add(formal, { node with Type = Types.boolType }) }
         Assert.True((SequencePrograms.programInstance damaged (SequenceProgramFixture.binding "first" graph).Id).IsNone)
+
+module private SequenceNumericFreshnessFixture =
+    let graph () =
+        SequenceProgramFixture.check """
+[<EntryPoint>]
+let main _ =
+    let bias = 2<m>
+    let mutable offset = 7<m>
+    let mapper = fun (value: int<m>) -> value + offset + bias
+    let mapped = Seq.map mapper (seq { yield 1<m> })
+    let mutable total = 0<m>
+    for value in mapped do total <- total + value
+    if total = 10<m> then 0 else 1
+"""
+
+    let project = Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project
+    let admitted graph =
+        match project graph with
+        | Result.Ok _ -> ()
+        | Result.Error failures -> failwithf "The original represented sequence lacks numeric authority: %A" failures
+
+    let refused graph =
+        match project graph with
+        | Result.Error failures -> Assert.NotEmpty failures
+        | Result.Ok _ -> failwith "Changed finite-sequence premises retained numeric authority."
+
+    let proofIds (graph: SemanticGraph) =
+        graph.Nodes.Values |> Seq.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.Obligation { Kind = "finite-sequence-pulls" | "sequence-inner-finite-pulls" | "sequence-additive-invariant" } -> Some node.Id
+            | _ -> None) |> Set.ofSeq
+
+    let changed scenario (graph: SemanticGraph) =
+        let product = graph.Edges |> List.find (fun edge ->
+            match edge.Role with EdgeRole.SequencePullComposition _ -> true | _ -> false)
+        let inner = product.Sources[1]
+        let proofs = proofIds graph
+        let row =
+            match scenario with
+            | "product" -> product
+            | "evaluation" -> graph.Edges |> List.find (fun edge -> edge.Class = EdgeClass.Evaluation && List.tryHead edge.Sources = Some inner)
+            | "constraint" -> graph.Edges |> List.find (fun edge -> edge.Role = EdgeRole.Constrains && proofs.Contains edge.Target)
+            | _ -> failwithf "Unknown mutation %s" scenario
+        let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+        let edges = graph.Edges |> List.map (fun edge -> if key edge = key row then { edge with Ordinal = edge.Ordinal + 1 } else edge)
+        { graph with Edges = edges }
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceNumericFreshness")>]
+type SequenceNumericPublicationCases() =
+    [<Theory>]
+    [<InlineData("product")>]
+    [<InlineData("evaluation")>]
+    [<InlineData("constraint")>]
+    member _.``Numeric publication refuses relation only changes to represented finite sequence authority`` scenario =
+        let graph = SequenceNumericFreshnessFixture.graph ()
+        SequenceNumericFreshnessFixture.admitted graph
+        Assert.NotEmpty graph.Codata.Value.ContinuationFrames
+        let changed = SequenceNumericFreshnessFixture.changed scenario graph
+        Assert.Same(graph.Nodes, changed.Nodes)
+        SequenceNumericFreshnessFixture.refused changed
+        SequenceNumericFreshnessFixture.admitted graph
+
+    [<Theory>]
+    [<InlineData("product")>]
+    [<InlineData("evaluation")>]
+    [<InlineData("constraint")>]
+    member _.``Repeated numeric renewal cannot bless changed represented sequence premises`` scenario =
+        let graph = SequenceNumericFreshnessFixture.graph ()
+        SequenceNumericFreshnessFixture.admitted graph
+        SequenceNumericFreshnessFixture.admitted (Clef.Compiler.Nanopass.NumericSettlement.normalize graph)
+        let changed = SequenceNumericFreshnessFixture.changed scenario graph
+        let once = Clef.Compiler.Nanopass.NumericSettlement.normalize changed
+        let twice = Clef.Compiler.Nanopass.NumericSettlement.normalize once
+        SequenceNumericFreshnessFixture.refused once
+        SequenceNumericFreshnessFixture.refused twice
+        SequenceNumericFreshnessFixture.admitted graph
+
+    [<Fact>]
+    member _.``Numeric renewal refuses changed protected continuation proof body``() =
+        let graph = SequenceNumericFreshnessFixture.graph ()
+        SequenceNumericFreshnessFixture.admitted graph
+        let authority = graph.SequenceRangeProvenance |> Option.defaultWith (fun () -> failwith "Missing actual source-to-machine handoff")
+        let id, info = authority.Obligations |> List.find (fun (_, info) -> info.Kind = "continuation-state-range")
+        let proof = graph.Nodes[id]
+        let changedProof = { proof with Kind = SemanticKind.Obligation { info with Body = ObligationBody.Pending ["Withdrawn continuation state premise"] } }
+        let changed = { graph with Nodes = graph.Nodes.Add(id, changedProof) }
+        Assert.Same(graph.Edges, changed.Edges)
+        SequenceNumericFreshnessFixture.refused changed
+        SequenceNumericFreshnessFixture.refused (Clef.Compiler.Nanopass.NumericSettlement.normalize changed)
+        SequenceNumericFreshnessFixture.admitted graph
+
+    [<Fact>]
+    member _.``Numeric renewal remembers wholly withdrawn represented sequence proof inventory``() =
+        let graph = SequenceNumericFreshnessFixture.graph ()
+        SequenceNumericFreshnessFixture.admitted graph
+        let proofs = SequenceNumericFreshnessFixture.proofIds graph
+        Assert.Equal(3, proofs.Count)
+        let edges = graph.Edges |> List.filter (fun edge ->
+            not (proofs.Contains edge.Target) &&
+            match edge.Role with
+            | EdgeRole.SequencePullBound | EdgeRole.SequencePullComposition _ | EdgeRole.SequenceAccumulation -> false
+            | _ -> true)
+        let changed = { graph with Nodes = graph.Nodes |> Map.filter (fun id _ -> not (proofs.Contains id)); Edges = edges }
+        for KeyValue(id, node) in changed.Nodes do Assert.Equal(graph.Nodes[id].ValueRange, node.ValueRange)
+        SequenceNumericFreshnessFixture.refused changed
+        let once = Clef.Compiler.Nanopass.NumericSettlement.normalize changed
+        let twice = Clef.Compiler.Nanopass.NumericSettlement.normalize once
+        SequenceNumericFreshnessFixture.refused once
+        SequenceNumericFreshnessFixture.refused twice
+        SequenceNumericFreshnessFixture.admitted graph

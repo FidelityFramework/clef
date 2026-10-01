@@ -560,7 +560,7 @@
   <ItemGroup>
     <!-- Core F# runtime -->
     <PackageReference Include="FSharp.Core" Version="10.1.401" />
-    <PackageReference Include="Fidelity.FSharp.Incremental.Hosting" Version="0.1.0-preview.5" />
+    <PackageReference Include="Fidelity.FSharp.Incremental.Hosting" Version="0.1.0-preview.6" />
 
     <!-- XParsec - Parser combinators for Baker saturation (Phase 4.0: XParsec migration) -->
     <PackageReference Include="XParsec" Version="0.3.0" />

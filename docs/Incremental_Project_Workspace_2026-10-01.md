@@ -1,7 +1,38 @@
 # CCS project workspace — 2026-10-01
 
+## Current source checkpoint
+
+The aligned preview.6 compiler builds, and the finite-sequence integration cohort
+passes **52/52** (`sequence-freshness-checkpoint.trx` in the external validation
+workspace). This includes the mapped closure regression, explicit formation before
+a mutable-capture write, target-specific publication, bounded-product refusal,
+relationship-only corruption, repeated renewal after proof deletion, and changed
+protected machine-proof bodies. Seven freshness cases first reproduced actual
+acceptance of stale evidence before the repair.
+
+Baker retains the inner finite-pull proof and a bounded product of outer control
+occurrence and remaining inner pulls. PSG schema 12 publishes the correspondence;
+its schema/integrity suite passes 103/103. Canonical generation reproduces both
+the integrity traversal and all 206 publication mappers exactly. Product labels
+are proof states, not source identities; more than 4,096 reachable states remains
+unresolved, and a pull bound does not establish callback termination.
+
+The source-to-machine handoff now records native range provenance only after the
+source certificate and supporting machines are checked. Numeric renewal compares
+that retained authority and cannot mint it. The receipt conservatively retains
+the complete source census and protected obligation bodies; it is not a claim of
+partial Baker scheduling. Publication copies the settled public facts.
+
+Full compiler regression comparison and validation of the final native/provider
+closure remain pending at this anchor point. The earlier full-suite numbers below
+identify their earlier input. Composer's editor fixture now distinguishes explicit
+lexical observations from ordinary deferred bindings; the separate branch-local
+ordinary-demand activation gap remains open. See the
+[cross-project audit entry](../../Bozzetto/docs/Incremental_Provider_Checkpoint_2026-10-01.md)
+for exact consumer receipts and remaining work.
+
 CCS now owns a cold, shared **whole-project checking** coordinator through
-`Fidelity.FSharp.Incremental.Hosting` **0.1.0-preview.5**. This is a compiler-host
+`Fidelity.FSharp.Incremental.Hosting` **0.1.0-preview.6**. This is a compiler-host
 integration boundary. It does not implement partial Baker rechecking, cross-edit
 proof caching, or Clef's native `Incremental<'T>` lowering.
 
@@ -19,7 +50,10 @@ proof caching, or Clef's native `Incremental<'T>` lowering.
 
 The package is pinned in [Clef.Compiler.Service.fsproj](../src/Compiler/Clef.Compiler.Service.fsproj)
 and supplied by the [vendored feed](../vendor/Fidelity.FSharp.Incremental/README.md).
-Preview.5 adds atomic state/watch observation used here to avoid missed wakeups.
+Preview.5 introduced atomic state/watch observation used here to avoid missed wakeups.
+The aligned preview.6 package also supplies the exact-task completion bridge
+required by Composer's editor proof owner; its source and archive identities are
+recorded in the vendored feed.
 Its graph transition rules are not a new compiler proof-validity rule.
 
 The language alignment source is `spec/incremental-computation.md`, revision

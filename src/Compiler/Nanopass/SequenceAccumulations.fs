@@ -9,10 +9,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Recipes = Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes
 
 let recognize inputs (graph: SemanticGraph) =
-    let old = graph.Nodes |> Map.filter (fun _ node ->
-        match node.Kind with
-        | SemanticKind.Obligation { Kind = "finite-sequence-pulls" | "sequence-additive-invariant" } -> true
-        | _ -> false)
+    let old = graph.Nodes |> Map.filter (fun _ node -> Recipes.hasProof node)
     let ids = old |> Map.keys |> Set.ofSeq
     let names = old.Values |> Seq.choose (fun node ->
         match node.Kind with SemanticKind.Obligation info -> Some info.Id | _ -> None) |> Set.ofSeq
@@ -23,8 +20,10 @@ let recognize inputs (graph: SemanticGraph) =
         | _ -> node)
     let edges = graph.Edges |> List.filter (fun edge ->
         not (ids.Contains edge.Target) && not (edge.Sources |> List.exists ids.Contains) &&
-        edge.Role <> EdgeRole.SequencePullBound && edge.Role <> EdgeRole.SequenceAccumulation)
-    let graph = { graph with Nodes = nodes; Edges = edges }
+        not (Recipes.isRelation edge))
+    // A new source recognition must earn a new representation handoff. Old
+    // range annotations or the prior numeric domain cannot renew this receipt.
+    let graph = { graph with Nodes = nodes; Edges = edges; SequenceRangeProvenance = None }
     let recognized = Recipes.recognize graph inputs
     { graph with Edges = graph.Edges @ Recipes.relations recognized }, recognized
 

@@ -6,6 +6,11 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 module Numeric = Clef.Compiler.Baker.Ingredients.NumericValues
 
 let normalize (graph: SemanticGraph) =
+    let previousSequenceDomains = graph.Edges |> List.choose (fun edge ->
+        match edge.Role with EdgeRole.NumericDomain domain -> Some domain | _ -> None)
+    let inheritedSequenceReview = previousSequenceDomains |> List.exists (fun domain ->
+        domain.RequiresSequenceReview || domain.SequenceRangeAuthority.IsSome)
+    let inheritedSequenceAuthority = previousSequenceDomains |> List.tryPick _.SequenceRangeAuthority
     // Read the prior dependency before retiring numeric-owned rows. A failed
     // renewal must retain this requirement even if every current proof is gone.
     let inheritedFiniteReview = graph.Edges |> List.exists (fun edge ->
@@ -27,7 +32,8 @@ let normalize (graph: SemanticGraph) =
         let own = match edge.Role with EdgeRole.NumericDomain _ | EdgeRole.NumericCarrier _ | EdgeRole.NumericProof _ | EdgeRole.NumericOperation _ | EdgeRole.NumericOperationProof _ | EdgeRole.NumericIndexTransport _ -> true | _ -> false
         not own && not (retired.Contains edge.Target) && not (edge.Sources |> List.exists retired.Contains))
     let graph = { graph with Nodes = graph.Nodes |> Map.filter (fun id _ -> not (retired.Contains id)); Edges = edges } |> SemanticGraph.invalidateWitness
-    let enrichment = Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.elaborateWithFiniteReview inheritedFiniteReview graph
+    let enrichment = Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.elaborateWithRangeReview
+                        inheritedFiniteReview inheritedSequenceReview inheritedSequenceAuthority graph
     let graph = graph |> SemanticGraph.addNodes enrichment.NewNodes |> SemanticGraph.addNodes enrichment.Annotated |> SemanticGraph.addEdges enrichment.NewEdges
     let operationMeets = enrichment.NewEdges |> List.choose (fun edge -> match edge.Role with EdgeRole.NumericDomain domain -> Some domain.OperationMeets | _ -> None)
     let meets = operationMeets |> List.fold (fun values own -> Map.fold (fun values site meets ->

@@ -970,7 +970,37 @@ type FiniteCellSourceRelation = {
     Target: NodeId
 }
 
+[<RequireQualifiedAccess>]
+type SequenceRangeRelationKind =
+    | Named of string
+    | ContinuationCase of int
+    | EnvironmentCapture of bool
+    | Composition of sourceLabel: int * remainingPulls: bigint
+    | EvaluationOperand of EvaluationAccess
+    | EvaluationFlow of EvaluationPort * EvaluationPort * EvaluationTransfer
+
+type SequenceRangeSourceRelation = {
+    Class: EdgeClass
+    Kind: SequenceRangeRelationKind
+    Ordinal: int
+    Sources: NodeId list
+    Target: NodeId
+}
+
+/// Native Baker handoff receipt. SequenceRuntime records it only after the
+/// current source certificate and its generated machines have been checked.
+/// Numeric renewal may compare this evidence; it cannot mint or refresh it.
+type SequenceRangeAuthority = internal {
+    Participants: Set<NodeId>
+    Enumerators: Set<NodeId>
+    Premises: Map<NodeId, BoundarySourcePremise>
+    Relations: SequenceRangeSourceRelation list
+    Obligations: (NodeId * ObligationInfo) list
+}
+
 type NumericDomain = {
+    RequiresSequenceReview: bool
+    SequenceRangeAuthority: SequenceRangeAuthority option
     RequiresFiniteCellReview: bool
     FiniteCellRelations: FiniteCellSourceRelation list option
     FiniteCellObligations: (NodeId * ObligationInfo) list
@@ -1416,6 +1446,13 @@ type EdgeRole =
     /// followed by direct support/navigation identities. Full current source
     /// revalidation remains required; this is not a scoped proof-cache key.
     | SequencePullBound
+    /// Range-class correspondence for one finite product-model state. Ordinal
+    /// is the model label; sourceLabel names an actual outer control occurrence.
+    /// Sources are outer producer, inner producer, fresh enumerator, acquisition,
+    /// guard, loop and actual control-step origin; target is the consumer current.
+    /// The remaining budget belongs to that enumerator. Complete source control
+    /// and iterator-census revalidation remain required for the certificate.
+    | SequencePullComposition of sourceLabel: int * remainingPulls: bigint
     /// Target: accumulator cell. Sources begin with ordinary lambda, loop,
     /// seed, store, update, delta and current read, then direct support identities.
     /// Complete write/effect authority comes from current source revalidation.
@@ -2991,6 +3028,8 @@ type SemanticGraph = {
     /// Source-owned transport provenance for the exact prepared input roots.
     /// This does not freeze checker cells or authorize an accepted revision.
     WitnessProvenance: WitnessProvenance option
+    /// Source-owned finite-sequence proof transfer across continuation rewriting.
+    SequenceRangeProvenance: SequenceRangeAuthority option
 }
 
 /// The retained source roots have no provenance of their own. Only the source

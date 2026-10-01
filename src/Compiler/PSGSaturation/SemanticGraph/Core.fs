@@ -144,6 +144,7 @@ module SemanticGraph =
         Codata = lazy Codata.empty
         Edges = []
         WitnessProvenance = None
+        SequenceRangeProvenance = None
     }
 
     /// Create an empty semantic graph with platform context
@@ -163,6 +164,7 @@ module SemanticGraph =
         Codata = lazy Codata.empty
         Edges = []
         WitnessProvenance = None
+        SequenceRangeProvenance = None
     }
 
     /// Source graph edits invalidate witness publication while preserving the
