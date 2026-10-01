@@ -188,3 +188,526 @@ let second = higher (fun value -> not value)
             (node.Metadata.TryFind ClosureMetadata.RequiresClosurePair = Some(MetadataValue.Bool true) ||
              node.Metadata.TryFind ClosureMetadata.LambdaExpression = Some(MetadataValue.Bool true)))
         Assert.Empty marked
+
+// These tests exercise source callable origins, not closure residence or native
+// admission. The raw controls use the same typed DU guard as ResultRecipes.
+module private CallableResultOriginFixture =
+    type Model =
+        { Graph: SemanticGraph
+          Call: NodeId
+          First: NodeId
+          Fallback: NodeId
+          Constructor: NodeId
+          ErrorPayload: NodeId
+          ExpectedTag: NodeId }
+
+    let create mode =
+        let builder = NodeBuilder()
+        let callable = NativeType.TFun(Types.boolType, Types.boolType)
+        let resultType =
+            NativeType.TApp(Clef.Compiler.NativeTypedTree.Expressions.Types.resultTycon,
+                            [callable; Types.boolType])
+        let pendingFactory =
+            if mode = "late-factory" then
+                let ty = NativeType.TFun(Types.unitType, resultType)
+                let read = builder.Create(SemanticKind.PatternBinding "lateFactory", ty, dummyRange)
+                let binding = builder.Create(SemanticKind.Binding("lateFactory", false, false, None), ty, dummyRange)
+                Some(read, binding, ty)
+            else None
+        // These identifiers precede their producing constructor. Their facts
+        // arrive on a later fixed-point pass, not in the first map traversal.
+        let delayedRead = builder.Create(SemanticKind.PatternBinding "delayed", resultType, dummyRange)
+        let delayedBinding = builder.Create(SemanticKind.Binding("delayed", false, false, None), resultType, dummyRange)
+        let functionValue name result =
+            let parameter = builder.Create(SemanticKind.PatternBinding name, Types.boolType, dummyRange)
+            let body = builder.Create(SemanticKind.Literal(NativeLiteral.Bool result), Types.boolType, dummyRange)
+            let code =
+                builder.Create(SemanticKind.Lambda([name, Types.boolType, parameter.Id], body.Id,
+                                                  [], None, LambdaContext.RegularClosure), callable, dummyRange)
+            builder.SetParent(parameter.Id, code.Id)
+            builder.SetParent(body.Id, code.Id)
+            code
+        let first = functionValue "firstArgument" true
+        let fallback = functionValue "fallbackArgument" false
+        let errorPayload = builder.Create(SemanticKind.Literal(NativeLiteral.Bool false), Types.boolType, dummyRange)
+        let okValue = builder.Create(SemanticKind.DUConstruct("Ok", 0, Some first.Id, None), resultType, dummyRange)
+        let errorValue = builder.Create(SemanticKind.DUConstruct("Error", 1, Some errorPayload.Id, None), resultType, dummyRange)
+        let opaque = builder.Create(SemanticKind.PatternBinding "opaqueResult", resultType, dummyRange)
+        let condition = builder.Create(SemanticKind.PatternBinding "condition", Types.boolType, dummyRange)
+        builder.CompleteNode(delayedRead.Id, SemanticKind.VarRef("delayed", Some delayedBinding.Id), []) |> ignore
+        let delayedValue =
+            if mode = "cycle" then delayedRead.Id
+            elif mode = "alias" then okValue.Id
+            else errorValue.Id
+        builder.CompleteNode(delayedBinding.Id, delayedBinding.Kind, [delayedValue]) |> ignore
+        let input =
+            match mode with
+            | "known" -> okValue
+            | "mixed" ->
+                builder.Create(SemanticKind.IfThenElse(condition.Id, okValue.Id, Some errorValue.Id), resultType, dummyRange)
+            | "opaque" ->
+                builder.Create(SemanticKind.IfThenElse(condition.Id, okValue.Id, Some opaque.Id), resultType, dummyRange)
+            | "late" ->
+                builder.Create(SemanticKind.IfThenElse(condition.Id, okValue.Id, Some delayedRead.Id), resultType, dummyRange)
+            | "cycle" -> builder.Nodes[delayedRead.Id]
+            | "alias" -> builder.Nodes[delayedRead.Id]
+            | "late-factory" ->
+                let read, binding, factoryType = Option.get pendingFactory
+                let formal = builder.Create(SemanticKind.PatternBinding "factoryUnit", Types.unitType, dummyRange)
+                let factory =
+                    builder.Create(SemanticKind.Lambda(["factoryUnit", Types.unitType, formal.Id], okValue.Id,
+                                                      [], None, LambdaContext.RegularClosure), factoryType, dummyRange)
+                builder.SetParent(formal.Id, factory.Id)
+                builder.CompleteNode(read.Id, SemanticKind.VarRef("lateFactory", Some binding.Id), []) |> ignore
+                builder.CompleteNode(binding.Id, binding.Kind, [factory.Id]) |> ignore
+                let unitValue = builder.Create(SemanticKind.Literal NativeLiteral.Unit, Types.unitType, dummyRange)
+                let invocation = builder.Create(SemanticKind.Application(read.Id, [unitValue.Id]), resultType, dummyRange)
+                builder.Create(SemanticKind.IfThenElse(condition.Id, okValue.Id, Some invocation.Id), resultType, dummyRange)
+            | other -> failwithf "Unexpected origin fixture mode: %s" other
+        let tag = builder.Create(SemanticKind.DUGetTag(input.Id, resultType), Types.int8Type, dummyRange)
+        let expected =
+            builder.Create(SemanticKind.Literal(NativeLiteral.Int(0L, NTUKind.NTUint(NTUWidth.Fixed 8))),
+                           Types.int8Type, dummyRange)
+        let equality =
+            builder.Create(SemanticKind.Intrinsic
+                { Module = IntrinsicModule.Operators; Operation = "op_Equality"
+                  Category = IntrinsicCategory.Comparison; FullName = "op_Equality" },
+                NativeType.TFun(Types.int8Type, NativeType.TFun(Types.int8Type, Types.boolType)), dummyRange)
+        let guard = builder.Create(SemanticKind.Application(equality.Id, [tag.Id; expected.Id]), Types.boolType, dummyRange)
+        let payload = builder.Create(SemanticKind.DUEliminate(input.Id, 0, "Ok", callable), callable, dummyRange)
+        let choice = builder.Create(SemanticKind.IfThenElse(guard.Id, payload.Id, Some fallback.Id), callable, dummyRange)
+        let actual = builder.Create(SemanticKind.Literal(NativeLiteral.Bool true), Types.boolType, dummyRange)
+        let call = builder.Create(SemanticKind.Application(choice.Id, [actual.Id]), Types.boolType, dummyRange)
+        { Graph = builder.Build []; Call = call.Id; First = first.Id; Fallback = fallback.Id
+          Constructor = okValue.Id; ErrorPayload = errorPayload.Id; ExpectedTag = expected.Id }
+
+    let targets (resolved: FlowOrigins.ResolvedCall) =
+        resolved.Targets |> List.map _.Lambda |> Set.ofList
+
+    let complete expected (resolved: FlowOrigins.ResolvedCall) =
+        Assert.False resolved.Unknown
+        Assert.True resolved.Complete
+        Assert.Equal<Set<NodeId>>(Set.ofList expected, targets resolved)
+
+    let source ok =
+        let constructor = if ok then "Ok first" else "Error false"
+        let text =
+            "module CallableResultOrigins\n" +
+            "let first (value: bool) = value\n" +
+            "let fallback (value: bool) = false\n" +
+            "let input () : Result<bool -> bool, bool> = " + constructor + "\n" +
+            "let observed = Result.defaultValue fallback (input ()) true\n" +
+            "[<EntryPoint>]\nlet main _ = if observed = first true then 0 else 1\n"
+        let result =
+            match Clef.Compiler.NativeService.parseAndCheck text "callable-result-origins.clef" with
+            | Clef.Compiler.NativeService.Success result
+            | Clef.Compiler.NativeService.CheckFailure result -> result
+            | Clef.Compiler.NativeService.ParseFailure errors -> failwithf "Unexpected source parse refusal: %A" errors
+        let graph = result.Graph
+        let choices =
+            graph.Nodes.Values
+            |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.IfThenElse(guard, yes, Some no) when node.IsReachable ->
+                    match graph.Nodes[yes].Kind with
+                    | SemanticKind.DUEliminate(input, 0, "Ok", callable) ->
+                        match callable with
+                        | NativeType.TFun _ ->
+                            match graph.Nodes[guard].Kind with
+                            | SemanticKind.Application(compare, [tag; expected]) ->
+                                match graph.Nodes[compare].Kind, graph.Nodes[tag].Kind, graph.Nodes[expected].Kind with
+                                | SemanticKind.Intrinsic info, SemanticKind.DUGetTag(original, carrier),
+                                  SemanticKind.Literal(NativeLiteral.Int(0L, _)) ->
+                                    Assert.Equal(IntrinsicModule.Operators, info.Module)
+                                    Assert.Equal("op_Equality", info.Operation)
+                                    Assert.Equal(input, original)
+                                    DimensionalCases.same graph.Nodes[input].Type carrier
+                                    Some(node.Id, no)
+                                | kinds -> failwithf "Result lost its canonical typed tag guard: %A" kinds
+                            | kind -> failwithf "Result lost its canonical guard application: %A" kind
+                        | _ -> None
+                    | _ -> None
+                | _ -> None)
+            |> Seq.toList
+        let choice, fallback = Assert.Single choices
+        let call =
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                node.IsReachable &&
+                match node.Kind with
+                | SemanticKind.Application(callee, [_]) -> callee = choice
+                | _ -> false)
+            |> Assert.Single
+        let named name =
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                node.IsReachable &&
+                match node.Kind with
+                | SemanticKind.Binding(actual, false, _, _) -> actual = name || actual.EndsWith("." + name)
+                | _ -> false)
+            |> Assert.Single
+        result, call.Id, (named "first").Id, fallback
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "CallableFlow")>]
+type CallableResultOriginCases() =
+    [<Fact>]
+    member _.``A late same-tag factory cannot leave a second target beside a final branch selection`` () =
+        let model = CallableResultOriginFixture.create "late-factory"
+        let reference =
+            model.Graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with SemanticKind.VarRef("lateFactory", Some _) -> true | _ -> false)
+            |> Assert.Single
+        let binding =
+            match reference.Kind with
+            | SemanticKind.VarRef(_, Some binding) -> model.Graph.Nodes[binding]
+            | _ -> failwith "Expected the exact late factory reference"
+        let implementation = Assert.Single binding.Children
+        Assert.True(NodeId.value reference.Id < NodeId.value binding.Id)
+        Assert.True(NodeId.value binding.Id < NodeId.value implementation)
+        let current = FlowOrigins.resolveCallableBranches model.Graph
+        let observation = (Assert.Single current.Branches).Value
+        let alternative = Assert.Single observation.Alternatives
+        Assert.Equal(model.Constructor, alternative.Constructor)
+        Assert.Equal(0, alternative.Tag)
+        // The late call returns the same Ok constructor. A final singleton
+        // branch observation must agree with the surviving callable facts.
+        CallableResultOriginFixture.complete [model.First] current.Calls[model.Call]
+        Assert.Empty current.FirstBoundaries[model.Call].UnknownOrigins
+
+    [<Theory>]
+    [<InlineData(true)>]
+    [<InlineData(false)>]
+    member _.``Known Result case selects exactly its source callable with complete origins`` (ok: bool) =
+        let result, call, first, fallback = CallableResultOriginFixture.source ok
+        let origins = FlowOrigins.resolveCallableBranches result.Graph
+        let expectedValue, declaration =
+            if ok then
+                let payload =
+                    result.Graph.Nodes.Values
+                    |> Seq.choose (fun node ->
+                        match node.Kind with
+                        | SemanticKind.DUConstruct("Ok", 0, Some payload, None) when node.IsReachable -> Some payload
+                        | _ -> None)
+                    |> Assert.Single
+                payload, first
+            else
+                let declaration =
+                    result.Graph.Nodes.Values
+                    |> Seq.filter (fun node ->
+                        node.IsReachable &&
+                        match node.Kind with
+                        | SemanticKind.Binding(name, false, _, _) -> name = "fallback" || name.EndsWith(".fallback")
+                        | _ -> false)
+                    |> Assert.Single
+                fallback, declaration.Id
+        // Stored source functions are eta-expanded. The constructor payload
+        // (or exact fallback arm) owns that implementation, not the original
+        // named lambda. Verify the wrapper's source call independently of the
+        // resolver whose selected target is under test.
+        let code, parameters, body, captures = CallableTestContracts.shape result.Graph expectedValue
+        Assert.Empty captures
+        let _, _, formal = Assert.Single parameters
+        match result.Graph.Nodes[body].Kind with
+        | SemanticKind.Application(callee, [argument]) ->
+            CallableTestContracts.referenceTo result.Graph declaration callee
+            CallableTestContracts.referenceTo result.Graph formal argument
+        | kind -> failwithf "Stored Result callable lost exact source forwarding: %A" kind
+        CallableResultOriginFixture.complete [code.Id] origins.Calls[call]
+        Assert.Empty origins.FirstBoundaries[call].UnknownOrigins
+        // The direct-reader assertion runs even when source checking reported
+        // the old defect; successful resolution must not waive other errors.
+        DimensionalCases.noErrors result
+
+    [<Fact>]
+    member _.``Default callable resolution keeps conservative joins without branch observations`` () =
+        let model = CallableResultOriginFixture.create "known"
+        let conservative = FlowOrigins.resolve model.Graph
+        CallableResultOriginFixture.complete [model.First; model.Fallback] conservative.Calls[model.Call]
+        Assert.Empty conservative.Branches
+        let finalReading = FlowOrigins.resolveCallableBranches model.Graph
+        CallableResultOriginFixture.complete [model.First] finalReading.Calls[model.Call]
+        Assert.Single finalReading.Branches |> ignore
+
+    [<Theory>]
+    [<InlineData("wrong-binding-type")>]
+    [<InlineData("missing-binding-value")>]
+    [<InlineData("contradictory-binding-edge")>]
+    member _.``Malformed intermediate transport cannot authorize a callable branch`` (mutation: string) =
+        let model = CallableResultOriginFixture.create "alias"
+        let baseline = FlowOrigins.resolveCallableBranches model.Graph
+        CallableResultOriginFixture.complete [model.First] baseline.Calls[model.Call]
+        Assert.Single baseline.Branches |> ignore
+        let binding =
+            model.Graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with SemanticKind.Binding("delayed", false, _, _) -> true | _ -> false)
+            |> Assert.Single
+        let changed =
+            match mutation with
+            | "wrong-binding-type" ->
+                { model.Graph with Nodes = model.Graph.Nodes.Add(binding.Id, { binding with Type = Types.boolType }) }
+            | "missing-binding-value" ->
+                { model.Graph with Nodes = model.Graph.Nodes.Add(binding.Id, { binding with Children = [] }) }
+            | "contradictory-binding-edge" ->
+                let wrong = Hyperedge.edge1 EdgeClass.Structural EdgeRole.Attached 0 model.ErrorPayload binding.Id
+                { model.Graph with Edges = wrong :: model.Graph.Edges }
+            | other -> failwithf "Unexpected transport mutation: %s" other
+        let current = FlowOrigins.resolveCallableBranches changed
+        Assert.True current.Calls[model.Call].Unknown
+        Assert.False current.Calls[model.Call].Complete
+        Assert.Empty current.Branches
+
+    [<Fact>]
+    member _.``Mixed known Result constructors retain both complete callable alternatives`` () =
+        let model = CallableResultOriginFixture.create "mixed"
+        let origins = FlowOrigins.resolveCallableBranches model.Graph
+        CallableResultOriginFixture.complete [model.First; model.Fallback] origins.Calls[model.Call]
+        Assert.Empty origins.FirstBoundaries[model.Call].UnknownOrigins
+
+    [<Fact>]
+    member _.``Known Result beside an opaque alternative cannot become complete callable evidence`` () =
+        let model = CallableResultOriginFixture.create "opaque"
+        let origins = FlowOrigins.resolveCallableBranches model.Graph
+        let call = origins.Calls[model.Call]
+        Assert.True call.Unknown
+        Assert.False call.Complete
+        Assert.Equal<Set<NodeId>>(Set.ofList [model.First; model.Fallback], CallableResultOriginFixture.targets call)
+        Assert.NotEmpty origins.FirstBoundaries[model.Call].UnknownOrigins
+
+    [<Fact>]
+    member _.``An opposing Result constructor arriving on a later pass widens callable selection`` () =
+        let model = CallableResultOriginFixture.create "late"
+        let origins = FlowOrigins.resolveCallableBranches model.Graph
+        CallableResultOriginFixture.complete [model.First; model.Fallback] origins.Calls[model.Call]
+        Assert.Empty origins.FirstBoundaries[model.Call].UnknownOrigins
+
+    [<Fact>]
+    member _.``An empty Result origin cycle cannot establish a callable branch selection`` () =
+        let model = CallableResultOriginFixture.create "cycle"
+        let origins = FlowOrigins.resolveCallableBranches model.Graph
+        let call = origins.Calls[model.Call]
+        Assert.True call.Unknown
+        Assert.False call.Complete
+        Assert.Equal<Set<NodeId>>(Set.singleton model.Fallback, CallableResultOriginFixture.targets call)
+        Assert.NotEmpty origins.FirstBoundaries[model.Call].UnknownOrigins
+
+    [<Theory>]
+    [<InlineData("guard-tag")>]
+    [<InlineData("constructor-tag")>]
+    member _.``Current guard or constructor edits retract a prior exact Result callable selection`` (mutation: string) =
+        let model = CallableResultOriginFixture.create "known"
+        let model =
+            { model with
+                Graph =
+                    { model.Graph with
+                        Edges = kindEdges model.Constructor model.Graph.Nodes[model.Constructor].Kind } }
+        let before = FlowOrigins.resolveCallableBranches model.Graph
+        CallableResultOriginFixture.complete [model.First] before.Calls[model.Call]
+        let changed =
+            match mutation with
+            | "guard-tag" ->
+                let node = model.Graph.Nodes[model.ExpectedTag]
+                let kind =
+                    match node.Kind with
+                    | SemanticKind.Literal(NativeLiteral.Int(_, representation)) ->
+                        SemanticKind.Literal(NativeLiteral.Int(1L, representation))
+                    | other -> failwithf "Expected source guard tag literal: %A" other
+                { model.Graph with Nodes = model.Graph.Nodes.Add(node.Id, { node with Kind = kind }) }
+            | "constructor-tag" ->
+                let node = model.Graph.Nodes[model.Constructor]
+                let changed =
+                    { node with
+                        Kind = SemanticKind.DUConstruct("Error", 1, Some model.ErrorPayload, None)
+                        Children = [model.ErrorPayload] }
+                let edges =
+                    model.Graph.Edges
+                    |> List.filter (fun edge -> edge.Target <> node.Id || edge.Class <> EdgeClass.Structural)
+                { model.Graph with
+                    Nodes = model.Graph.Nodes.Add(node.Id, changed)
+                    Edges = edges @ kindEdges node.Id changed.Kind }
+            | other -> failwithf "Unexpected mutation: %s" other
+        Assert.Equal<NodeId list>(model.Graph.Nodes |> Map.keys |> Seq.toList, changed.Nodes |> Map.keys |> Seq.toList)
+        let after = FlowOrigins.resolveCallableBranches changed
+        CallableResultOriginFixture.complete [model.Fallback] after.Calls[model.Call]
+        Assert.Empty after.FirstBoundaries[model.Call].UnknownOrigins
+        Assert.DoesNotContain(model.First, CallableResultOriginFixture.targets after.Calls[model.Call])
+
+    [<Fact>]
+    member _.``Contradictory current constructor incidence cannot authorize a Result branch selection`` () =
+        let model = CallableResultOriginFixture.create "known"
+        let constructor = model.Graph.Nodes[model.Constructor]
+        let original =
+            { model.Graph with Edges = kindEdges constructor.Id constructor.Kind }
+        CallableResultOriginFixture.complete [model.First] (FlowOrigins.resolveCallableBranches original).Calls[model.Call]
+        let changedConstructor =
+            { constructor with
+                Kind = SemanticKind.DUConstruct("Error", 1, Some model.ErrorPayload, None)
+                Children = [model.ErrorPayload] }
+        // Deliberately retain the old recorded Payload incidence. This differs
+        // from a legitimate constructor edit, which changes all source facts.
+        let changed = { original with Nodes = original.Nodes.Add(constructor.Id, changedConstructor) }
+        let retained = Assert.Single changed.Edges
+        Assert.Equal(EdgeClass.Structural, retained.Class)
+        Assert.Equal(EdgeRole.Payload, retained.Role)
+        Assert.Equal<NodeId list>([model.First], retained.Sources)
+        Assert.Equal<NodeId list>([model.ErrorPayload], changed.Nodes[model.Constructor].Children)
+        let origins = FlowOrigins.resolveCallableBranches changed
+        Assert.True origins.Calls[model.Call].Unknown
+        Assert.False origins.Calls[model.Call].Complete
+        Assert.NotEmpty origins.FirstBoundaries[model.Call].UnknownOrigins
+
+module BranchAuthorityRecipe = Clef.Compiler.Baker.Recipes.CallableBranchRecipes
+module BranchAuthoritySettlement = Clef.Compiler.Nanopass.CallableBranchSettlement
+
+module private CallableBranchAuthorityFixture =
+    let refusal =
+        "Callable branch authority is missing or differs from the current whole-revision origin census; Baker branch settlement is required."
+
+    let current graph =
+        match BranchAuthorityRecipe.validate graph with
+        | Result.Ok authority -> authority
+        | Result.Error failures -> failwithf "Expected current branch authority: %A" failures
+
+    let refused graph =
+        match BranchAuthorityRecipe.validate graph with
+        | Result.Ok _ -> failwith "Stale whole-revision branch authority was accepted"
+        | Result.Error failures ->
+            Assert.Contains(failures, fun failure -> failure.Reason = refusal)
+
+    let settle graph =
+        let settled, carrierResiduals, flowResiduals = BranchAuthoritySettlement.normalize graph
+        Assert.Empty carrierResiduals
+        Assert.Empty flowResiduals
+        Assert.NotEmpty (current settled).Observations
+        settled
+
+    let create () =
+        let model = CallableResultOriginFixture.create "known"
+        let builder = NodeBuilder()
+        let resultType = model.Graph.Nodes[model.Constructor].Type
+        let condition = builder.Create(SemanticKind.PatternBinding "condition", Types.boolType, dummyRange)
+        // The two identical arms make this transport complete without needing
+        // a guard fact. The final callable choice is a separate canonical tag test.
+        let transport =
+            builder.Create(SemanticKind.IfThenElse(condition.Id, model.Constructor, Some model.Constructor),
+                           resultType, dummyRange)
+        let binding =
+            builder.Create(SemanticKind.Binding("resultInput", false, false, None), resultType,
+                           dummyRange, children = [transport.Id])
+        let read = builder.Create(SemanticKind.VarRef("resultInput", Some binding.Id), resultType, dummyRange)
+        builder.SetParent(condition.Id, transport.Id)
+        builder.SetParent(transport.Id, binding.Id)
+        let nodes =
+            model.Graph.Nodes
+            |> Map.map (fun _ node ->
+                match node.Kind with
+                | SemanticKind.DUGetTag(subject, carrier) when subject = model.Constructor ->
+                    { node with Kind = SemanticKind.DUGetTag(read.Id, carrier); Children = [read.Id] }
+                | SemanticKind.DUEliminate(subject, index, name, payload) when subject = model.Constructor ->
+                    { node with Kind = SemanticKind.DUEliminate(read.Id, index, name, payload); Children = [read.Id] }
+                | _ -> node)
+        let nodes = builder.Nodes |> Map.fold (fun state id node -> Map.add id node state) nodes
+        let graph = { model.Graph with Nodes = nodes } |> CallableFlowFixture.demand
+        model, transport.Id, graph
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "CallableFlow")>]
+type CallableBranchAuthorityCases() =
+    [<Fact>]
+    member _.``Final callable settlement preserves source identities and conservative early origins`` () =
+        let model, _, graph = CallableBranchAuthorityFixture.create ()
+        CallableResultOriginFixture.complete [model.First; model.Fallback] (FlowOrigins.resolve graph).Calls[model.Call]
+        let settled = CallableBranchAuthorityFixture.settle graph
+        CallableResultOriginFixture.complete [model.First] (FlowOrigins.resolveCallableBranches settled).Calls[model.Call]
+        CallableResultOriginFixture.complete [model.First; model.Fallback] (FlowOrigins.resolve settled).Calls[model.Call]
+        Assert.Same(graph.Nodes, settled.Nodes)
+        Assert.Same(graph.Edges, settled.Edges)
+        Assert.Same(graph.DeclarationRoots, settled.DeclarationRoots)
+        Assert.Same(graph.Codata.Value.CallableJoins, settled.Codata.Value.CallableJoins)
+        Assert.Same(graph.Codata.Value.MutableCallableStorage, settled.Codata.Value.MutableCallableStorage)
+        let authority = CallableBranchAuthorityFixture.current settled
+        Assert.Equal(CallableBranchScope.WholeRevision, authority.Scope)
+        let row = authority.Observations |> Map.toList |> Assert.Single |> snd
+        let direct =
+            [ ParticipantRole.BranchChoice, row.Choice
+              ParticipantRole.BranchGuard, row.Guard
+              ParticipantRole.BranchOperator, row.Operator
+              ParticipantRole.BranchTagRead, row.TagRead
+              ParticipantRole.BranchSubject, row.Subject
+              ParticipantRole.BranchLiteral, row.Literal
+              ParticipantRole.BranchTrueArm, row.TrueArm
+              ParticipantRole.BranchFalseArm, row.FalseArm
+              ParticipantRole.BranchSelectedArm, row.SelectedArm ]
+            |> List.map (fun (role, node) ->
+                { Node = node; Role = role; Ordinal = 0; Group = row.Choice } : Participant)
+        let alternatives =
+            row.Alternatives
+            |> List.mapi (fun ordinal alternative ->
+                { Node = alternative.Constructor; Role = ParticipantRole.BranchConstructor
+                  Ordinal = ordinal; Group = row.Choice }
+                :: (alternative.Payloads
+                    |> List.mapi (fun position payload ->
+                        { Node = payload; Role = ParticipantRole.BranchPayload
+                          Ordinal = position; Group = alternative.Constructor })))
+            |> List.concat
+        Assert.Equal<Participant list>(direct @ alternatives, row.Participants)
+        let selected = row.Participants |> List.filter (fun occurrence -> occurrence.Role = ParticipantRole.BranchSelectedArm) |> Assert.Single
+        Assert.Equal(row.TrueArm, selected.Node)
+        Assert.Equal(2, row.Participants |> List.filter (fun occurrence -> occurrence.Node = row.TrueArm) |> List.length)
+        Assert.Contains(model.Call, authority.CallUses)
+
+    [<Theory>]
+    [<InlineData("missing-observation")>]
+    [<InlineData("wrong-arm")>]
+    [<InlineData("missing-call-use")>]
+    member _.``Missing or altered stored branch authority cannot be reconstructed by its reader`` (mutation: string) =
+        let model, _, raw = CallableBranchAuthorityFixture.create ()
+        let graph = CallableBranchAuthorityFixture.settle raw
+        let authority = CallableBranchAuthorityFixture.current graph
+        let key, row = authority.Observations |> Map.toList |> Assert.Single
+        let changedAuthority =
+            match mutation with
+            | "missing-observation" -> { authority with Observations = Map.empty }
+            | "wrong-arm" ->
+                Assert.Equal(row.TrueArm, row.SelectedArm)
+                { authority with Observations = authority.Observations.Add(key, { row with SelectedArm = row.FalseArm }) }
+            | "missing-call-use" -> { authority with CallUses = authority.CallUses.Remove model.Call }
+            | other -> failwithf "Unexpected authority mutation: %s" other
+        let changed = { graph with Codata = lazy { graph.Codata.Value with CallableBranches = changedAuthority } }
+        Assert.Same(graph.Nodes, changed.Nodes)
+        Assert.Same(graph.Edges, changed.Edges)
+        CallableBranchAuthorityFixture.refused changed
+        Assert.Equal<CallableBranchAuthority>(changedAuthority, changed.Codata.Value.CallableBranches)
+        Assert.Equal<CallableBranchAuthority>(authority, CallableBranchAuthorityFixture.current graph)
+
+    [<Fact>]
+    member _.``Opaque origin outside recorded participants withdraws whole-revision branch authority`` () =
+        let model, transportId, raw = CallableBranchAuthorityFixture.create ()
+        let graph = CallableBranchAuthorityFixture.settle raw
+        let authority = CallableBranchAuthorityFixture.current graph
+        let row = authority.Observations |> Map.toList |> Assert.Single |> snd
+        let participantNodes = row.Participants |> List.collect (fun occurrence -> [occurrence.Node; occurrence.Group]) |> Set.ofList
+        Assert.DoesNotContain(transportId, participantNodes)
+        let before = FlowOrigins.resolveCallableBranches graph
+        CallableResultOriginFixture.complete [model.First] before.Calls[model.Call]
+        let transport = graph.Nodes[transportId]
+        let builder = NodeBuilder()
+        let opaque = builder.Create(SemanticKind.PatternBinding "newOpaqueResult", transport.Type, dummyRange)
+        let changedTransport =
+            match transport.Kind with
+            | SemanticKind.IfThenElse(condition, yes, Some _) ->
+                { transport with Kind = SemanticKind.IfThenElse(condition, yes, Some opaque.Id)
+                                 Children = [condition; yes; opaque.Id] }
+            | other -> failwithf "Expected immutable alternative transport: %A" other
+        let changed = { graph with Nodes = graph.Nodes.Add(transportId, changedTransport).Add(opaque.Id, opaque) }
+        Assert.DoesNotContain(opaque.Id, participantNodes)
+        for id in participantNodes do Assert.Same(graph.Nodes[id], changed.Nodes[id])
+        let after = FlowOrigins.resolveCallableBranches changed
+        Assert.Equal<Set<NodeId>>(before.Calls |> Map.keys |> Set.ofSeq, after.Calls |> Map.keys |> Set.ofSeq)
+        Assert.True after.Calls[model.Call].Unknown
+        Assert.False after.Calls[model.Call].Complete
+        Assert.Equal<Set<NodeId>>(Set.ofList [model.First; model.Fallback], CallableResultOriginFixture.targets after.Calls[model.Call])
+        Assert.Empty after.Branches
+        CallableBranchAuthorityFixture.refused changed
+        Assert.Equal<CallableBranchAuthority>(authority, changed.Codata.Value.CallableBranches)
+        Assert.Equal<CallableBranchAuthority>(authority, CallableBranchAuthorityFixture.current graph)

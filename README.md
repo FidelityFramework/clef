@@ -81,7 +81,9 @@ actor Sensor (mailbox: Mailbox<Reading>) =
 These examples describe the intended language surface. Exact implemented scope,
 pending actor/CE work and compiler acceptance are tracked in Composer's
 [PRD index](../Composer/docs/PRDs/README.md) and
-[coverage waypoints](../Composer/docs/Language_Coverage_Waypoints.md).
+[coverage waypoints](../Composer/docs/Language_Coverage_Waypoints.md). Current
+source, proof and native checkpoints are separated in the
+[FidelityHello progress sentinel](../Composer/docs/FidelityHello_Progress_Sentinel.md).
 
 ## The Compilation Pipeline
 

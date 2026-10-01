@@ -1281,12 +1281,13 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.settle
                 { Layouts = environments.Layouts; Origins = environmentOrigins; Known = knownCallables } finalGraph
         else Map.empty, []
-    let callableCarrierDiagnostics =
-        callableCarrierResiduals |> List.map (fun pending ->
+    let carrierDiagnostics (graph: SemanticGraph) (residuals: Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.Residual list) =
+        residuals |> List.map (fun pending ->
             { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8403"
               Message = "Callable boundary requires further settlement: " + pending.Reason
-              Range = finalGraph.Nodes[pending.Occurrence].Range; RelatedNodes = [pending.Occurrence]
+              Range = graph.Nodes[pending.Occurrence].Range; RelatedNodes = [pending.Occurrence]
               Reachability = ReachabilityContext.Reachable })
+    let callableCarrierDiagnostics = carrierDiagnostics finalGraph callableCarrierResiduals
     tracePhase "callable-carriers"
     let mutableCallables =
         Clef.Compiler.PSGSaturation.SemanticGraph.MutableCallableStorage.settle callableCarriers environments.Layouts finalGraph
@@ -1294,12 +1295,13 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         Clef.Compiler.PSGSaturation.SemanticGraph.CallableFlows.settle
             { Carriers = callableCarriers; Joins = mutableCallables.Joins; Layouts = environments.Layouts
               SequenceFlows = sequences.Flows; SequenceFamilies = sequences.Families } finalGraph
-    let callableFlowDiagnostics =
-        callableFlowResiduals |> List.map (fun pending ->
+    let flowDiagnostics (graph: SemanticGraph) (residuals: Clef.Compiler.PSGSaturation.SemanticGraph.CallableFlows.Residual list) =
+        residuals |> List.map (fun pending ->
             { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8403"
               Message = "Callable value flow requires further settlement: " + pending.Reason
-              Range = finalGraph.Nodes[pending.Occurrence].Range; RelatedNodes = [pending.Occurrence]
+              Range = graph.Nodes[pending.Occurrence].Range; RelatedNodes = [pending.Occurrence]
               Reachability = ReachabilityContext.Reachable })
+    let callableFlowDiagnostics = flowDiagnostics finalGraph callableFlowResiduals
     tracePhase "callable-flows"
     let allocationResidences =
         Escape.analyze finalGraph
@@ -1335,6 +1337,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 CallableCarriers = callableCarriers
                 CallableJoins = mutableCallables.Joins
                 CallableFlows = callableFlows
+                CallableBranches = CallableBranchAuthority.empty
                 MutableCallableStorage = mutableCallables.Storage
                 OrdinaryDemand = ordinaryDemand
                 WitnessEmission = None
@@ -1368,6 +1371,15 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph = Clef.Compiler.Nanopass.MemorySettlement.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.SpatialSettlement.normalize finalGraph
     let finalGraph = Clef.Compiler.Nanopass.BoundarySettlement.normalize finalGraph
+    // Final source rewrites have completed. Baker writes the branch inventory;
+    // witness preparation validates it and publication only copies it.
+    let finalGraph, callableCarrierDiagnostics, callableFlowDiagnostics =
+        if not sourceAdmitted || finalGraph.Platform.IsNone then
+            finalGraph, callableCarrierDiagnostics, callableFlowDiagnostics
+        else
+            let refined, carrierResiduals, flowResiduals =
+                Clef.Compiler.Nanopass.CallableBranchSettlement.normalize finalGraph
+            refined, carrierDiagnostics refined carrierResiduals, flowDiagnostics refined flowResiduals
     let storagePremiseDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout.premiseGuard finalGraph
     ObligationDischarge.emit finalGraph
     tracePhase "obligations"

@@ -316,3 +316,149 @@ type PublicationContractCases() =
         let invalidated = Emission.invalidate graph
         Assert.True(graph.Codata.Value.ProofDispatch.IsSome)
         Assert.True(invalidated.Codata.Value.ProofDispatch.IsNone)
+
+module private CallableBranchPublicationFixture =
+    // Result's canonical tag guard names int8. Declare that source offer in
+    // this fixture rather than relying on a host register representation.
+    let private tagRepresentation : NumericRepresentation =
+        { Name = "int8"; Capability = "native"; Family = "int"; Bits = 8
+          MinMagnitude = "-128"; MaxMagnitude = "127"; Boundary = "wrap" }
+
+    let platform =
+        { PublicationFixture.platform with
+            Representations = PublicationFixture.platform.Representations.Add(tagRepresentation.Name, tagRepresentation) }
+
+    let private authority =
+        PublicationFixture.authority.Replace(
+            "Representations = [| ",
+            "Representations = [| { Name = \"int8\"; Capability = \"native\"; Family = \"int\"; Bits = 8; MinMagnitude = \"-128\"; MaxMagnitude = \"127\"; Boundary = \"wrap\" }; ")
+
+    let source =
+        "module BranchPublication\n" +
+        "let first (value: bool) = value\n" +
+        "let fallback (value: bool) = false\n" +
+        "let input () : Result<bool -> bool, bool> = Ok first\n" +
+        "[<EntryPoint>]\nlet main _ =\n" +
+        "    let observed = Result.defaultValue fallback (input ()) true\n" +
+        "    if observed = first true then 0 else 1\n"
+
+    let check () =
+        let parse text path =
+            match Clef.Compiler.NativeService.parseStringWithDefaults text path with
+            | Clef.Compiler.NativeService.ParseSuccess input -> input
+            | Clef.Compiler.NativeService.ParseError errors -> failwithf "%A" errors
+        let result =
+            Clef.Compiler.NativeService.checkParsedInputsWithPlatform
+                [parse authority "write-authority.clef"; parse source "branch-publication.clef"]
+                (Some platform)
+        DimensionalCases.noErrors result
+        result.Graph
+
+    let publish graph =
+        match Publication.publish platform graph with
+        | Result.Ok revision -> revision
+        | Result.Error failures -> failwithf "Publication refused: %A" failures
+
+    let node id = Fidelity.PSG.NodeId(NodeId.value id)
+    let nodes ids = ids |> Set.map node
+    let branchParticipant (value: Participant) : Fidelity.PSG.Participant =
+        let role =
+            match value.Role with
+            | ParticipantRole.BranchChoice -> Fidelity.PSG.ParticipantRole.BranchChoice
+            | ParticipantRole.BranchGuard -> Fidelity.PSG.ParticipantRole.BranchGuard
+            | ParticipantRole.BranchOperator -> Fidelity.PSG.ParticipantRole.BranchOperator
+            | ParticipantRole.BranchTagRead -> Fidelity.PSG.ParticipantRole.BranchTagRead
+            | ParticipantRole.BranchSubject -> Fidelity.PSG.ParticipantRole.BranchSubject
+            | ParticipantRole.BranchLiteral -> Fidelity.PSG.ParticipantRole.BranchLiteral
+            | ParticipantRole.BranchTrueArm -> Fidelity.PSG.ParticipantRole.BranchTrueArm
+            | ParticipantRole.BranchFalseArm -> Fidelity.PSG.ParticipantRole.BranchFalseArm
+            | ParticipantRole.BranchSelectedArm -> Fidelity.PSG.ParticipantRole.BranchSelectedArm
+            | ParticipantRole.BranchConstructor -> Fidelity.PSG.ParticipantRole.BranchConstructor
+            | ParticipantRole.BranchPayload -> Fidelity.PSG.ParticipantRole.BranchPayload
+            | unexpected -> failwithf "Unexpected branch observation role: %A" unexpected
+        { Node = node value.Node; Role = role; Ordinal = value.Ordinal; Group = node value.Group }
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "Publication")>]
+type CallableBranchPublicationCases() =
+    [<Fact>]
+    member _.``Whole-revision callable authority is copied passively and prevents scalar partition reuse`` () =
+        let graph = CallableBranchPublicationFixture.check ()
+        let held = graph.Codata.Value.CallableBranches
+        Assert.NotEmpty held.Observations
+        let repeated, carrierResiduals, flowResiduals =
+            Clef.Compiler.Nanopass.CallableBranchSettlement.normalize graph
+        Assert.Empty carrierResiduals
+        Assert.Empty flowResiduals
+        Assert.Same(graph.Nodes, repeated.Nodes)
+        Assert.Same(graph.Edges, repeated.Edges)
+        Assert.Same(graph.DeclarationRoots, repeated.DeclarationRoots)
+        Assert.Same(graph.Codata.Value.CallableJoins, repeated.Codata.Value.CallableJoins)
+        Assert.Same(graph.Codata.Value.MutableCallableStorage, repeated.Codata.Value.MutableCallableStorage)
+        let obligations =
+            graph.Nodes.Values
+            |> Seq.filter (fun node -> match node.Kind with SemanticKind.Obligation _ -> true | _ -> false)
+            |> Seq.toList
+        Assert.NotEmpty obligations
+        for obligation in obligations do Assert.Same(obligation, repeated.Nodes[obligation.Id])
+        Assert.Equal<CallableBranchAuthority>(held, repeated.Codata.Value.CallableBranches)
+        let revision = CallableBranchPublicationFixture.publish graph
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let published = revision.Codata.CallableBranches
+        Assert.Equal<Fidelity.PSG.CallableBranchAuthority>(published, revision.Emission.Callable.Branches)
+        Assert.Equal(Fidelity.PSG.CallableBranchScope.WholeRevision, published.Scope)
+        Assert.Equal<Set<Fidelity.PSG.NodeId>>(
+            held.Observations |> Map.keys |> Set.ofSeq |> CallableBranchPublicationFixture.nodes,
+            published.Observations |> Map.keys |> Set.ofSeq)
+        for KeyValue(id, row) in held.Observations do
+            let copied = published.Observations[CallableBranchPublicationFixture.node id]
+            let nativeIds =
+                [row.Choice; row.Guard; row.Operator; row.TagRead; row.Subject; row.Literal
+                 row.TrueArm; row.FalseArm; row.SelectedArm]
+            let publicIds =
+                [copied.Choice; copied.Guard; copied.Operator; copied.TagRead; copied.Subject; copied.Literal
+                 copied.TrueArm; copied.FalseArm; copied.SelectedArm]
+            Assert.Equal<Fidelity.PSG.NodeId list>(List.map CallableBranchPublicationFixture.node nativeIds, publicIds)
+            Assert.Equal(row.ExpectedTag, copied.ExpectedTag)
+            Assert.Equal(Fidelity.PSG.CallableBranchComparison.Equal, copied.Comparison)
+            Assert.Equal<Fidelity.PSG.Participant list>(
+                List.map CallableBranchPublicationFixture.branchParticipant row.Participants, copied.Participants)
+            let alternatives =
+                row.Alternatives
+                |> List.map (fun alternative ->
+                    CallableBranchPublicationFixture.node alternative.Constructor,
+                    alternative.Tag,
+                    List.map CallableBranchPublicationFixture.node alternative.Payloads)
+            let copiedAlternatives = copied.Alternatives |> List.map (fun alternative -> alternative.Constructor, alternative.Tag, alternative.Payloads)
+            Assert.Equal<(Fidelity.PSG.NodeId * int * Fidelity.PSG.NodeId list) list>(alternatives, copiedAlternatives)
+        for original, copied in
+            [held.CarrierUses, published.CarrierUses
+             held.FlowUses, published.FlowUses
+             held.CallUses, published.CallUses] do
+            Assert.Equal<Set<Fidelity.PSG.NodeId>>(CallableBranchPublicationFixture.nodes original, copied)
+        let segmentation = revision.Codata.WitnessSegmentation |> Option.get
+        let common = Assert.Single segmentation.Regions
+        Assert.Equal(Fidelity.PSG.WitnessRegionKind.Common, common.Flavor)
+        Assert.Equal<Set<Fidelity.PSG.NodeId>>(revision.Nodes |> Map.keys |> Set.ofSeq, common.Members)
+
+    [<Fact>]
+    member _.``Neither source projection nor passive publication reconstructs withdrawn callable authority`` () =
+        let graph = CallableBranchPublicationFixture.check ()
+        Assert.NotEmpty graph.Codata.Value.CallableBranches.Observations
+        CallableBranchPublicationFixture.publish graph |> ignore
+        let changed =
+            { graph with Codata = lazy { graph.Codata.Value with CallableBranches = CallableBranchAuthority.empty } }
+        Assert.Same(graph.Nodes, changed.Nodes)
+        Assert.Same(graph.Edges, changed.Edges)
+        match Emission.prepare changed with
+        | Result.Ok _ -> failwith "Projection reconstructed missing source branch authority"
+        | Result.Error failures ->
+            Assert.Contains(failures, fun failure ->
+                failure.Reason = "Callable branch authority is missing or differs from the current whole-revision origin census; Baker branch settlement is required.")
+        match Publication.publish CallableBranchPublicationFixture.platform changed with
+        | Result.Ok _ -> failwith "Publication reconstructed missing source branch authority"
+        | Result.Error failures ->
+            Assert.Contains(failures, fun failure ->
+                failure.Reason.StartsWith "Source emission admission: The current graph differs from its source witness projection input")
+        Assert.Empty changed.Codata.Value.CallableBranches.Observations
+        Assert.NotEmpty graph.Codata.Value.CallableBranches.Observations
+        CallableBranchPublicationFixture.publish graph |> ignore

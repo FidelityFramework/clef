@@ -180,8 +180,7 @@ type CallInstance = {
 /// A physical direct call can still carry a quantified shared code signature.
 /// Its concrete source instance comes from the actual callee/environment path,
 /// including a fully validated continuation access, never from code identity.
-let callReader (graph: SemanticGraph) =
-    let resolution = CallableOrigins.resolve graph
+let callReaderWith (resolution: CallableOrigins.Resolution) (graph: SemanticGraph) =
     let ingress = CallableIngress.analyzeWith graph resolution
     let instance = readerWith graph resolution ingress
     let known = ClosureEnvironments.knownCallables graph
@@ -274,6 +273,9 @@ let callReader (graph: SemanticGraph) =
                                Participants = Set.unionMany [proof.Participants; participants; Set.ofList (site :: callee :: implementation :: (data @ arguments))] }))
             | _ -> None
         | _ -> None
+
+/// Earlier source readers keep conservative invocation origins.
+let callReader graph = callReaderWith (CallableOrigins.resolve graph) graph
 
 /// Validate an exact immutable transport step without changing either value.
 /// The caller still checks actual implementation/environment and SSA identity.

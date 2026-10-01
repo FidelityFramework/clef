@@ -337,7 +337,11 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) : Witne
                     with :? InvalidOperationException -> None
                 | _ -> None
         | _ -> None
-    let candidates = emission.Callable.Declarations.Values |> Seq.choose candidate |> Seq.toList
+    // Whole-revision origin authority includes negative/absence membership.
+    // No scalar subregion may drop that shared dependency or reuse it locally.
+    let candidates =
+        if not emission.Callable.Branches.Observations.IsEmpty then []
+        else emission.Callable.Declarations.Values |> Seq.choose candidate |> Seq.toList
     // Ambiguous names are never an identity transport authority.
     let regions = candidates |> List.groupBy _.Identity |> List.choose (fun (_, group) -> if group.Length = 1 then Some group.Head else None)
     let owned = regions |> List.fold (fun all region -> Set.union all region.Members) Set.empty

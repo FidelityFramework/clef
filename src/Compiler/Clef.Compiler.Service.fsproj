@@ -461,6 +461,8 @@
     <Compile Include="Nanopass\ClosureEnvironmentSettlement.fs" />
     <Compile Include="Nanopass\LazyRuntime.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ProgramStorage.fs" />
+    <Compile Include="Baker\Recipes\CallableBranchRecipes.fs" />
+    <Compile Include="Nanopass\CallableBranchSettlement.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableEmission.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\StorageWitness.fs" />
     <Compile Include="Baker\Ingredients\ValueRepresentations.fs" />

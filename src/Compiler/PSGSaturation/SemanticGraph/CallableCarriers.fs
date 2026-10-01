@@ -146,8 +146,7 @@ let private signatureResult parameters ty =
 /// Only actual source callable values with a uniquely established boundary are
 /// seeded here. Opaque functions and intrinsics do not acquire an invented form;
 /// a consumer requiring their carrier must request owning-stage settlement.
-let settle (inputs: Inputs) (graph: SemanticGraph) : Map<NodeId, CallableCarrier> * Residual list =
-    let resolution = CallableOrigins.resolve graph
+let settleWithResolution (resolution: CallableOrigins.Resolution) (inputs: Inputs) (graph: SemanticGraph) : Map<NodeId, CallableCarrier> * Residual list =
     let lambdas = resolution.Lambdas
     let ingress = CallableIngress.analyzeWith graph resolution
     let instance = CallableInstantiations.readerWith graph resolution ingress
@@ -266,3 +265,7 @@ let settle (inputs: Inputs) (graph: SemanticGraph) : Map<NodeId, CallableCarrier
                 | None -> None
         | _ -> None) |> Map.ofList
     carriers, List.rev residuals
+
+/// Default source analyses retain their conservative origin interpretation.
+let settle inputs graph =
+    settleWithResolution (CallableOrigins.resolve graph) inputs graph

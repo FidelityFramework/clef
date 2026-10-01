@@ -94,6 +94,7 @@ let private publishCodata (facts: Codata) : Fidelity.PSG.Codata =
       CallableCarriers = rows mapCallableCarrier facts.CallableCarriers
       CallableJoins = rows mapCallableJoin facts.CallableJoins
       CallableFlows = rows mapCallableFlow facts.CallableFlows
+      CallableBranches = mapCallableBranchAuthority facts.CallableBranches
       MutableCallableStorage = rows mapMutableCallableStorage facts.MutableCallableStorage
       ContinuationFrames = rows mapContinuationFrame facts.ContinuationFrames
       SequenceOrigins = ids facts.SequenceOrigins

@@ -67,17 +67,21 @@ let private declarations (graph: SemanticGraph) =
 let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection) : Result<CallableEmissionProjection, WitnessProjectionFailure list> =
     let codata = graph.Codata.Value
     let errors = ResizeArray<WitnessProjectionFailure>()
+    match Clef.Compiler.Baker.Recipes.CallableBranchRecipes.validate graph with
+    | Result.Ok _ -> ()
+    | Result.Error failures -> errors.AddRange failures
     let sameRows name current held =
         let keys = Set.union (current |> Map.keys |> Set.ofSeq) (held |> Map.keys |> Set.ofSeq)
         for id in keys do
             if Map.tryFind id current <> Map.tryFind id held then
                 errors.Add({ Occurrence = Some id; Participants = Set.singleton id
                              Reason = $"{name} at {NodeId.value id} is missing or does not match its current source participants." })
+    let resolution = CallableOrigins.resolveCallableBranches graph
     let origins = ClosureEnvironments.origins graph
     let known = ClosureEnvironments.knownCallables graph
-    let carriers, _ = CallableCarriers.settle { Layouts = codata.EnvironmentLayouts; Origins = origins; Known = known } graph
+    let carriers, _ = CallableCarriers.settleWithResolution resolution { Layouts = codata.EnvironmentLayouts; Origins = origins; Known = known } graph
     let storage = MutableCallableStorage.settle carriers codata.EnvironmentLayouts graph
-    let flows, _ = CallableFlows.settle
+    let flows, _ = CallableFlows.settleWithResolution resolution
                         { Carriers = carriers; Joins = storage.Joins; Layouts = codata.EnvironmentLayouts
                           SequenceFlows = codata.SequenceFlows; SequenceFamilies = codata.SequenceFamilies } graph
     sameRows "Callable carrier" carriers codata.CallableCarriers
@@ -92,7 +96,6 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
             let participants = carrier.Result :: (carrier.Parameters |> List.map (fun (_, _, id) -> id))
             implementation, participants |> List.filter (CallableInstantiations.allowsSignatureData graph carrier) |> Set.ofList)
         |> Map.ofSeq
-    let resolution = CallableOrigins.resolve graph
     let ingress = CallableIngress.analyzeWith graph resolution
     let instance = CallableInstantiations.readerWith graph resolution ingress
     let instances =
@@ -140,7 +143,7 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
         collect Set.empty [destination]
     let transports =
         callableOccurrences |> Seq.map (fun destination -> destination, transportPath destination) |> Map.ofSeq
-    let callInstance = CallableInstantiations.callReader graph
+    let callInstance = CallableInstantiations.callReaderWith resolution graph
     let completedCalls, completedFailures = Curry.completedCalls graph codata.Curry resolution
     errors.AddRange completedFailures
     let calls =
@@ -354,6 +357,7 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
         |> List.groupBy fst |> List.map (fun (id, values) -> id, values |> List.map snd |> Set.unionMany) |> Map.ofList
     if errors.Count > 0 then Result.Error(List.ofSeq errors) else
     Result.Ok {
+        Branches = codata.CallableBranches
         Carriers = codata.CallableCarriers; Joins = codata.CallableJoins; Flows = codata.CallableFlows
         MutableStorage = codata.MutableCallableStorage; ValueShapes = shapes; SignatureData = signatureData
         Calls = calls; Transports = transports; Declarations = declarations; Symbols = symbols

@@ -20,10 +20,9 @@ type Residual = { Occurrence: NodeId; Reason: string }
 type private Step = { Inputs: NodeId list; Calls: CallableFlowCall list; Opaque: bool }
 type private Facts = { Leaves: Set<NodeId>; Unknown: Set<NodeId> }
 
-let private settleCore (inputs: Inputs) (graph: SemanticGraph) : Map<NodeId, CallableFlow> * Residual list =
+let private settleCore (resolution: CallableOrigins.Resolution) (inputs: Inputs) (graph: SemanticGraph) : Map<NodeId, CallableFlow> * Residual list =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let tracked = nodes |> Map.filter (fun _ node -> match applySubst node.Type with NativeType.TFun _ -> true | _ -> false)
-    let resolution = CallableOrigins.resolve graph
     let ingress = CallableIngress.analyzeWith graph resolution
     let admitted id = CallableIngress.allowsOccurrence ingress id
     let exact id = inputs.Carriers.ContainsKey id && admitted id
@@ -187,8 +186,13 @@ let private settleCore (inputs: Inputs) (graph: SemanticGraph) : Map<NodeId, Cal
                        Alternatives = alternatives; Dependencies = dependencies; Calls = calls })) |> Map.ofList
     flows, List.rev residuals
 
+let settleWithResolution resolution inputs graph =
+    if inputs.Carriers.IsEmpty then Map.empty, [] else settleCore resolution inputs graph
+
+/// Default source analyses retain their conservative origin interpretation.
 let settle inputs graph =
-    if inputs.Carriers.IsEmpty then Map.empty, [] else settleCore inputs graph
+    if inputs.Carriers.IsEmpty then Map.empty, []
+    else settleWithResolution (CallableOrigins.resolve graph) inputs graph
 
 let private validationCache =
     System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Map<NodeId, CallableFlow>>()

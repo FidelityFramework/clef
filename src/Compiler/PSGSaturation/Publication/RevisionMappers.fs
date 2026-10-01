@@ -292,6 +292,49 @@ and mapByrefKind (value: N.ByrefKind) : Fidelity.PSG.ByrefKind =
     | N.ByrefKind.Out -> Fidelity.PSG.ByrefKind.Out
     | N.ByrefKind.InOut -> Fidelity.PSG.ByrefKind.InOut
 
+and mapCallableBranchAlternative (value: S.CallableBranchAlternative) : Fidelity.PSG.CallableBranchAlternative =
+    ({
+        Constructor = nodeId value.Constructor
+        Tag = value.Tag
+        Payloads = (value.Payloads |> List.map (fun x -> nodeId x))
+    } : Fidelity.PSG.CallableBranchAlternative)
+
+and mapCallableBranchAuthority (value: S.CallableBranchAuthority) : Fidelity.PSG.CallableBranchAuthority =
+    ({
+        Scope = mapCallableBranchScope value.Scope
+        Observations = (value.Observations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapCallableBranchObservation v) |> Map.ofSeq)
+        CarrierUses = (value.CarrierUses |> Set.map (fun x -> nodeId x))
+        FlowUses = (value.FlowUses |> Set.map (fun x -> nodeId x))
+        CallUses = (value.CallUses |> Set.map (fun x -> nodeId x))
+    } : Fidelity.PSG.CallableBranchAuthority)
+
+and mapCallableBranchComparison (value: S.CallableBranchComparison) : Fidelity.PSG.CallableBranchComparison =
+    match value with
+    | S.CallableBranchComparison.Equal -> Fidelity.PSG.CallableBranchComparison.Equal
+    | S.CallableBranchComparison.NotEqual -> Fidelity.PSG.CallableBranchComparison.NotEqual
+
+and mapCallableBranchObservation (value: S.CallableBranchObservation) : Fidelity.PSG.CallableBranchObservation =
+    ({
+        Choice = nodeId value.Choice
+        Guard = nodeId value.Guard
+        Operator = nodeId value.Operator
+        Comparison = mapCallableBranchComparison value.Comparison
+        TagRead = nodeId value.TagRead
+        Subject = nodeId value.Subject
+        Literal = nodeId value.Literal
+        ExpectedTag = value.ExpectedTag
+        UnionType = mapTypeIdentity value.UnionType
+        TrueArm = nodeId value.TrueArm
+        FalseArm = nodeId value.FalseArm
+        SelectedArm = nodeId value.SelectedArm
+        Alternatives = (value.Alternatives |> List.map (fun x -> mapCallableBranchAlternative x))
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.CallableBranchObservation)
+
+and mapCallableBranchScope (value: S.CallableBranchScope) : Fidelity.PSG.CallableBranchScope =
+    match value with
+    | S.CallableBranchScope.WholeRevision -> Fidelity.PSG.CallableBranchScope.WholeRevision
+
 and mapCallableCarrier (value: S.CallableCarrier) : Fidelity.PSG.CallableCarrier =
     ({
         Occurrence = nodeId value.Occurrence
@@ -331,6 +374,7 @@ and mapCallableEmissionDeclaration (value: S.CallableEmissionDeclaration) : Fide
 
 and mapCallableEmissionProjection (value: S.CallableEmissionProjection) : Fidelity.PSG.CallableEmissionProjection =
     ({
+        Branches = mapCallableBranchAuthority value.Branches
         Carriers = (value.Carriers |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapCallableCarrier v) |> Map.ofSeq)
         Joins = (value.Joins |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapCallableJoin v) |> Map.ofSeq)
         Flows = (value.Flows |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapCallableFlow v) |> Map.ofSeq)
@@ -1794,6 +1838,17 @@ and mapParticipantRole (value: S.ParticipantRole) : Fidelity.PSG.ParticipantRole
     | S.ParticipantRole.Construction -> Fidelity.PSG.ParticipantRole.Construction
     | S.ParticipantRole.LazyStringOrigin -> Fidelity.PSG.ParticipantRole.LazyStringOrigin
     | S.ParticipantRole.CapturedStringOrigin -> Fidelity.PSG.ParticipantRole.CapturedStringOrigin
+    | S.ParticipantRole.BranchChoice -> Fidelity.PSG.ParticipantRole.BranchChoice
+    | S.ParticipantRole.BranchGuard -> Fidelity.PSG.ParticipantRole.BranchGuard
+    | S.ParticipantRole.BranchOperator -> Fidelity.PSG.ParticipantRole.BranchOperator
+    | S.ParticipantRole.BranchTagRead -> Fidelity.PSG.ParticipantRole.BranchTagRead
+    | S.ParticipantRole.BranchSubject -> Fidelity.PSG.ParticipantRole.BranchSubject
+    | S.ParticipantRole.BranchLiteral -> Fidelity.PSG.ParticipantRole.BranchLiteral
+    | S.ParticipantRole.BranchTrueArm -> Fidelity.PSG.ParticipantRole.BranchTrueArm
+    | S.ParticipantRole.BranchFalseArm -> Fidelity.PSG.ParticipantRole.BranchFalseArm
+    | S.ParticipantRole.BranchSelectedArm -> Fidelity.PSG.ParticipantRole.BranchSelectedArm
+    | S.ParticipantRole.BranchConstructor -> Fidelity.PSG.ParticipantRole.BranchConstructor
+    | S.ParticipantRole.BranchPayload -> Fidelity.PSG.ParticipantRole.BranchPayload
 
 and mapPattern (value: S.Pattern) : Fidelity.PSG.Pattern =
     match value with
