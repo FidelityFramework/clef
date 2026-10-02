@@ -32,3 +32,19 @@ let publish (graph: SemanticGraph) : Result<Fidelity.PSG.Revision, PublicationFa
                  Codata = rows.Codata; Emission = rows.Emission; Foreign = rows.Foreign; Demand = rows.Demand
                  Obligations = rows.Obligations; CurrentClaims = rows.CurrentClaims
                  ObligationSources = rows.ObligationSources; ObligationQuery = rows.ObligationQuery }
+
+/// The same source-owned publication exit, with an explicitly demanded
+/// occurrence-only diagnostic reading. Baker owns both selection and refusal;
+/// no receiver can obtain the retained semantic graph through this operation.
+let prepareOccurrences (graph: SemanticGraph) =
+    match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.tryRead graph with
+    | Error reason -> Error("Source emission admission: " + reason)
+    | Ok _ ->
+        match graph.Codata.Value.WitnessPublishedRows with
+        | None -> Error "Baker's frozen publication rows are absent."
+        | Some rows -> Clef.Compiler.Baker.Recipes.WitnessPublishedRowsRecipes.occurrenceRows rows
+
+/// Only binds caller identity to the immutable source reading; no graph or
+/// deferred source computation is retained by the diagnostic consumer.
+let publishOccurrences revision demand rows =
+    Clef.Compiler.Baker.Recipes.WitnessPublishedRowsRecipes.occurrences revision demand rows

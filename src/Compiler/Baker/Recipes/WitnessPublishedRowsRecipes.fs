@@ -110,3 +110,80 @@ let matches (held: WitnessPublishedRows) (current: WitnessPublishedRows) =
     held.Foreign = current.Foreign && held.Demand = current.Demand &&
     held.Obligations = current.Obligations && held.CurrentClaims = current.CurrentClaims &&
     held.ObligationSources = current.ObligationSources && held.ObligationQuery = current.ObligationQuery
+
+/// An explicitly demanded diagnostic reading of Baker's already selected live
+/// occurrences. This does not copy retained premises, edges, claims or codata,
+/// and cannot establish semantic, proof or artifact completeness. Unknown
+/// references refuse this diagnostic stage rather than expanding its scope.
+type OccurrenceRows = {
+    Occurrences: Map<Fidelity.PSG.NodeId, Fidelity.PSG.LiveOccurrence>
+    ContextHeaders: Fidelity.PSG.SourceContextHeader list
+    ContextRoots: Fidelity.PSG.NodeId list
+}
+
+let occurrenceRows (rows: WitnessPublishedRows) =
+    let readings = rows.SourceReadings
+    let bodies = rows.Nodes |> Map.map (fun id body ->
+        ({ Body = body; Children = readings.Children[id]
+           OccurrenceContexts = readings.Contexts[id] } : Fidelity.PSG.LiveOccurrence))
+    let known = Set.union (bodies.Keys |> Set.ofSeq) (readings.ContextHeaders.Keys |> Set.ofSeq)
+    let omitted (occurrence: Fidelity.PSG.LiveOccurrence) =
+        occurrence.Children |> List.choose (fun child ->
+            match child.Traversal with
+            | Fidelity.PSG.ChildTraversal.SourceOmitted(_, id) -> Some id
+            | _ -> None) |> Set.ofList
+    let unknownBodies =
+        bodies |> Map.toSeq |> Seq.collect (fun (id, occurrence) ->
+            let permitted = Set.union known (omitted occurrence)
+            Fidelity.PSG.IntegrityNamed.nodeReferences occurrence.Body
+            |> Seq.filter (permitted.Contains >> not)
+            |> Seq.map (fun missing -> sprintf "Occurrence %A requires unavailable identity %A." id missing))
+    let unknownHeaders =
+        readings.ContextHeaders.Values |> Seq.collect (fun header ->
+            Fidelity.PSG.IntegrityNamed.contextHeaderReferences header
+            |> Seq.filter (known.Contains >> not)
+            |> Seq.map (fun missing -> sprintf "Context %A requires unavailable identity %A." header.Identity missing))
+    let failures = Seq.append unknownBodies unknownHeaders |> Seq.truncate 33 |> Seq.toList
+    if not failures.IsEmpty then
+        let messages = failures |> List.truncate 32
+        let suffix = if failures.Length > 32 then " [Additional unavailable identities omitted.]" else ""
+        Error(String.concat " " messages + suffix)
+    else
+        let roots = readings.Contexts |> Map.toList |> List.choose (fun (id, paths) ->
+            if paths |> List.contains [] then Some id else None)
+        Ok { Occurrences = bodies; ContextHeaders = readings.ContextHeaders.Values |> Seq.toList; ContextRoots = roots }
+
+/// Bind an immutable source reading to its actual workspace revision and
+/// consumer demand. This operation has no native graph or compiler cells.
+let occurrences (revision: Fidelity.PSG.CheckedRevisionId) (demand: string) (rows: OccurrenceRows) =
+    let bodies = rows.Occurrences
+    let content: Fidelity.PSG.ScopeContentStamp =
+        { Identity = "ccs:live-occurrences:" + revision.Session; Version = revision.Ordinal }
+    let supports =
+        bodies.Values |> Seq.collect (fun occurrence -> occurrence.Children)
+        |> Seq.choose (fun child ->
+            match child.Traversal with
+            | Fidelity.PSG.ChildTraversal.SourceOmitted(support, _) -> Some support
+            | _ -> None) |> Set.ofSeq
+    let descriptor: Fidelity.PSG.ScopeDescriptor =
+        { Content = content; LiveOccurrences = bodies.Keys |> Set.ofSeq
+          ContextBreadcrumbs = bodies |> Map.map (fun _ occurrence -> occurrence.OccurrenceContexts)
+          RequiredBoundaries = Set.empty; RequiredSupports = supports; OwnedArtifacts = Set.empty }
+    let authorization: Fidelity.PSG.ScopeAuthorization =
+        { Content = content; CheckedRevision = revision; Boundaries = []
+          Supports = supports |> Set.toList |> List.map (fun key -> { Key = key; Version = revision.Ordinal }) }
+    let delivery: Fidelity.PSG.OccurrenceDelivery =
+        { Transaction =
+            { BaseCursor = { Subscription = demand; Ordinal = 0UL }; BaseRevision = revision
+              TargetCursor = { Subscription = demand; Ordinal = 1UL }; TargetRevision = revision
+              Changes = [Fidelity.PSG.ScopeChange.Add descriptor]; Authorizations = [authorization]
+              Withdrawals = []; ArtifactTransitions = [] }
+          Sections = [{ Descriptor = descriptor; Occurrences = bodies }] }
+    match Fidelity.PSG.ScopedPublication.start demand revision with
+    | Error errors -> Error(sprintf "Occurrence diagnostic identity refused: %A" errors)
+    | Ok catalog ->
+        match Fidelity.PSG.ScopedPublication.apply delivery.Transaction catalog,
+              Fidelity.PSG.OccurrenceDelivery.check delivery with
+        | Ok _, [] -> Ok(delivery, rows.ContextHeaders, rows.ContextRoots)
+        | transaction, sections ->
+            Error(sprintf "Occurrence diagnostic structure refused: %A; %A" (transaction |> Result.map ignore) sections)

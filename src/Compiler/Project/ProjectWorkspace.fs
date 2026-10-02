@@ -41,9 +41,10 @@ type ProjectReservation internal (revision: int64, operation: AsyncMailbox.Opera
 /// One consumer's interest. Observation cancellation never withdraws this handle.
 /// ReleaseAsync is repeatable and owns the withdrawal independently of observers.
 type ProjectDemand<'View> internal
-    (revision: int64, observe: unit -> Async<Result<'View, ProjectWorkspaceError>>,
+    (revision: int64, identity: string, observe: unit -> Async<Result<'View, ProjectWorkspaceError>>,
      release: unit -> Async<Result<unit, ProjectWorkspaceError>>) =
     member _.Revision = revision
+    member _.Identity = identity
     member _.ObserveAsync() = observe ()
     member _.ReleaseAsync() = release ()
 
@@ -66,6 +67,7 @@ type ProjectWorkspace<'View> internal
      prepare: string -> Map<string, string> -> Result<PreparedProject, string>) =
 
     let gate = obj()
+    let identity = Guid.NewGuid().ToString("N")
     let capacity = 256
     let mutable revision = 0L
     let mutable nextDemand = 0UL
@@ -151,6 +153,7 @@ type ProjectWorkspace<'View> internal
         ProjectWorkspace(projectPath, project, defaultArg configuration PhaseConfig.defaultConfig, ProjectChecker.prepare)
 
     member _.Revision = lock gate (fun () -> revision)
+    member _.Identity = identity
     member _.Current = lock gate currentOutput
     /// Includes failures from withdrawn work; a successful close is a cleanup
     /// receipt and does not erase evaluation diagnostics.
@@ -269,7 +272,7 @@ type ProjectWorkspace<'View> internal
                                 | Some error -> return Error error
                                 | None -> return! observeResult ()
                             }
-                            ProjectDemand(requested, observe, release))))
+                            ProjectDemand(requested, identity + ":" + string nextDemand, observe, release))))
 
     /// Convenience owns its demand. Cancellation stops observation and begins
     /// release; CloseAsync remains the physical drain boundary for compiler work.

@@ -43,6 +43,46 @@ module private PreparedScopeFixture =
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "WitnessPreparedScope")>]
 type WitnessPreparedScopeTests() =
     [<Fact>]
+    member _.``Demanded occurrence diagnostics retain source scope without dormant graph inventory``() =
+        let graph = PreparedScopeFixture.dormantLibraryGraph 64 true
+        let frozen = graph.Codata.Value.WitnessPublishedRows.Value
+        let reading = Publication.prepareOccurrences graph |> Result.defaultWith failwith
+        let revision: Fidelity.PSG.CheckedRevisionId = { Session = "source-workspace"; Ordinal = 37UL }
+        let delivery, headers, roots = Publication.publishOccurrences revision "source-workspace:9" reading |> Result.defaultWith failwith
+        Assert.Equal(revision, delivery.Transaction.TargetRevision)
+        Assert.Equal("source-workspace:9", delivery.Transaction.TargetCursor.Subscription)
+        Assert.Equal(37UL, delivery.Sections.Head.Descriptor.Content.Version)
+        Assert.Empty(Fidelity.PSG.OccurrenceDelivery.check delivery)
+        Assert.Single(delivery.Sections) |> ignore
+        let section = delivery.Sections.Head
+        Assert.Equal<Set<_>>(frozen.Nodes.Keys |> Set.ofSeq, section.Descriptor.LiveOccurrences)
+        Assert.True(section.Occurrences.Count < graph.Nodes.Count)
+        for pair in section.Occurrences do
+            Assert.Same(frozen.Nodes[pair.Key], pair.Value.Body)
+            Assert.Equal<Fidelity.PSG.ChildDisposition list>(frozen.SourceReadings.Children[pair.Key], pair.Value.Children)
+            Assert.True(pair.Value.Body.IsReachable)
+            Assert.False(pair.Value.Body.Range.File.EndsWith "dormant-library.clef")
+        Assert.Equal<Fidelity.PSG.SourceContextHeader list>(frozen.SourceReadings.ContextHeaders.Values |> Seq.toList, headers)
+        Assert.Equal<Fidelity.PSG.NodeId list>(frozen.SourceReadings.Contexts |> Map.toList |> List.choose (fun (id, paths) ->
+            if List.contains [] paths then Some id else None), roots)
+        Assert.Empty section.Descriptor.RequiredBoundaries
+        Assert.Empty section.Descriptor.OwnedArtifacts
+
+    [<Fact>]
+    member _.``Occurrence diagnostic refuses unknown references without enlarging source scope``() =
+        let graph = PreparedScopeFixture.graph ()
+        let held = graph.Codata.Value.WitnessPublishedRows.Value
+        let key, body = held.Nodes |> Map.toSeq |> Seq.head
+        let missing = Fidelity.PSG.NodeId System.Int32.MaxValue
+        let changed = { held with Nodes = held.Nodes.Add(key, { body with Kind = Fidelity.PSG.SemanticKind.VarRef("missing", Some missing) }) }
+        let result = Clef.Compiler.Baker.Recipes.WitnessPublishedRowsRecipes.occurrenceRows changed
+        match result with
+        | Error reason -> Assert.Contains("unavailable identity", reason)
+        | Ok _ -> failwith "Unknown boundary reference acquired an occurrence diagnostic body."
+        Assert.False(held.Nodes.ContainsKey missing)
+        Assert.True(Publication.prepareOccurrences graph |> Result.isOk)
+
+    [<Fact>]
     member _.``Prepared roots carry Baker live scope without inactive source bodies``() =
         let graph = PreparedScopeFixture.graph ()
         let held = graph.Codata.Value.WitnessLiveScope |> Option.defaultWith (fun () -> failwith "Prepared source scope was absent")

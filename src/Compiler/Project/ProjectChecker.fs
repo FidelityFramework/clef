@@ -258,6 +258,20 @@ module ProjectChecker =
                     Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.CheckResult.Graph
                     |> Result.mapError (fun failures -> sprintf "%A" failures))
 
+    /// An explicit diagnostic demand reads the same Baker-owned frozen rows as
+    /// publication, without constructing or pruning a whole semantic revision.
+    let prepareOccurrences (result: ProjectCheckResult) =
+        Clef.Compiler.CheckExecution.synchronized (fun () ->
+            try
+                if hasErrors result then Error(String.concat "\n" (getErrorMessages result))
+                else
+                    Clef.Compiler.PSGSaturation.Publication.RevisionPublication.prepareOccurrences result.CheckResult.Graph
+            with error -> Error("Occurrence diagnostic reading failed: " + error.Message))
+
+    /// Bind a previously frozen reading. This never revisits the checker graph.
+    let publishOccurrences revision demand rows =
+        Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publishOccurrences revision demand rows
+
     /// Check if a project check result has any warnings.
     /// Uses effective severity (unreachable warnings demoted to info).
     let hasWarnings (result: ProjectCheckResult): bool =
