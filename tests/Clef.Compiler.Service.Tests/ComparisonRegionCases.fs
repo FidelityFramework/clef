@@ -91,7 +91,9 @@ type ComparisonRegionCases() =
         let before = ComparisonRegionFixture.get ComparisonRegionFixture.first graph
         let platform = graph.Platform.Value
         let changed = { graph with Platform = Some { platform with Dimensions = platform.Dimensions.Add("Register", 32) } }
-        let after = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.project changed graph.Codata.Value.WitnessEmission.Value
+        let emission = graph.Codata.Value.WitnessEmission.Value
+        let sourceScope = Clef.Compiler.Baker.Recipes.WitnessScopeRecipes.projectWithEmission emission changed |> Result.defaultWith (sprintf "%A" >> failwith)
+        let after = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.project changed emission sourceScope
         let current = after.Regions |> List.find (fun region -> region.Identity = before.Identity)
         Assert.NotEqual<string>(before.Fingerprint, current.Fingerprint)
         Assert.True(RegionEmission.admit changed |> Result.isError)
@@ -111,14 +113,15 @@ type ComparisonRegionCases() =
         Assert.True(parent.Parent.IsNone)
         Assert.Contains(parent.Id, region.Supports)
         let common = (ComparisonRegionFixture.regions graph).Item "common"
-        Assert.Contains(parent.Id, common.Members)
+        Assert.DoesNotContain(parent.Id, common.Members)
         let changed =
             match defect, parent.Kind with
             | "live", _ -> { parent with IsReachable = true }
             | "different-prefix", SemanticKind.Application(callee, _) -> { parent with Kind = SemanticKind.Application(callee, [second]); Children = [callee; second] }
             | _ -> { parent with Children = parent.Children @ [second] }
         let stale = { graph with Nodes = graph.Nodes.Add(parent.Id, changed) }
-        let segmentation = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.project stale emission
+        let sourceScope = Clef.Compiler.Baker.Recipes.WitnessScopeRecipes.projectWithEmission emission stale |> Result.defaultWith (sprintf "%A" >> failwith)
+        let segmentation = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.project stale emission sourceScope
         Assert.DoesNotContain(segmentation.Regions, fun row -> row.Identity = region.Identity)
         Assert.True(RegionEmission.admit stale |> Result.isError)
 

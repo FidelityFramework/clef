@@ -7,8 +7,95 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module StorageProjection = Clef.Compiler.PSGSaturation.SemanticGraph.StorageWitness
 module PublishedWitness = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission
 
+module private PoolInventoryFixture =
+    let graph () =
+        LazyResidenceFixture.programWith (Some """
+module PoolInventory
+let consume (left: string) (right: string) = if left = right then 1 else 0
+[<EntryPoint>]
+let main _ = consume "first" "second" + consume "first" "first"
+""")
+
+    let literal (graph: SemanticGraph) =
+        graph.StaticStringPool.Value.Entries
+        |> List.find (fun entry -> entry.Content = "first")
+        |> _.NodeIds |> List.head
+
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "StorageWitness")>]
 type StorageWitnessCases() =
+    [<Fact>]
+    member _.``Pool inventory contains every source literal obligation including duplicate occurrences``() =
+        let graph = PoolInventoryFixture.graph ()
+        let pool = graph.StaticStringPool |> Option.defaultWith (fun () -> failwith "Source pool is missing")
+        let projection =
+            StorageProjection.project graph
+            |> Result.defaultWith (fun failures -> failwithf "Source pool inventory failed: %A" failures)
+        let literalIds = pool.Entries |> List.collect _.NodeIds |> Set.ofList
+        let obligations =
+            graph.Edges |> List.choose (fun edge ->
+                match graph.Nodes.TryFind edge.Target with
+                | Some { Kind = SemanticKind.Obligation info }
+                    when edge.Class = EdgeClass.Obligation && List.exists literalIds.Contains edge.Sources -> Some info
+                | _ -> None)
+        Assert.Contains(obligations, fun info -> info.Kind = "storage-reservation")
+        Assert.Contains(obligations, fun info -> info.Kind = "view-containment")
+        Assert.Contains(obligations, fun info -> info.Kind = "terminator-sentinel")
+        Assert.Contains("layout_user_strings", projection.LiteralPoolAnchors)
+        Assert.All(obligations, fun info -> Assert.Contains(info.Id, projection.LiteralPoolAnchors))
+        Assert.Equal<Set<string>>(Set.ofList ("layout_user_strings" :: List.map _.Id obligations), Set.ofList projection.LiteralPoolAnchors)
+        let duplicate = pool.Entries |> List.find (fun entry -> entry.Content = "first")
+        Assert.True(duplicate.NodeIds.Length > 1)
+        Assert.Equal(projection.LiteralPoolAnchors.Length, (Set.ofList projection.LiteralPoolAnchors).Count)
+
+    [<Fact>]
+    member _.``Detached layout proof body cannot authorize the pool after its current incidence and annotations withdraw``() =
+        let graph = PoolInventoryFixture.graph ()
+        let pool = graph.StaticStringPool.Value
+        let layout = graph.Nodes.Values |> Seq.find (fun node ->
+            match node.Kind with SemanticKind.Obligation info -> info.Id = "layout_user_strings" | _ -> false)
+        let nodes = graph.Nodes |> Map.map (fun _ node ->
+            match node.Metadata.TryFind ObligationMetadata.Anchors with
+            | Some(MetadataValue.StringList anchors) ->
+                { node with Metadata = node.Metadata.Add(ObligationMetadata.Anchors,
+                    MetadataValue.StringList(anchors |> List.filter ((<>) "layout_user_strings"))) }
+            | _ -> node)
+        let revised = { graph with Nodes = nodes; Edges = graph.Edges |> List.filter (fun edge -> edge.Target <> layout.Id) }
+        Assert.True(revised.Nodes.ContainsKey layout.Id)
+        match StorageProjection.project revised with
+        | Ok _ -> failwith "A detached historical layout proof body authorized current allocation"
+        | Error failures -> Assert.Contains(failures, fun failure ->
+            failure.Occurrence = Some pool.DeclarationNode && failure.Reason.Contains("matching current source layout obligation"))
+
+    [<Theory>]
+    [<InlineData("missing-anchor")>]
+    [<InlineData("duplicate-anchor")>]
+    [<InlineData("withdrawn-obligation")>]
+    [<InlineData("missing-obligation-body")>]
+    member _.``Pool inventory rejects changed current literal obligation authority at its source`` defect =
+        let graph = PoolInventoryFixture.graph ()
+        let id = PoolInventoryFixture.literal graph
+        let literal = graph.Nodes[id]
+        let names =
+            match literal.Metadata.TryFind ObligationMetadata.Anchors with
+            | Some(MetadataValue.StringList names) when not names.IsEmpty -> names
+            | other -> failwithf "Source literal has no obligation inventory: %A" other
+        let edge = graph.Edges |> List.find (fun edge -> edge.Class = EdgeClass.Obligation && List.contains id edge.Sources)
+        let revised =
+            match defect with
+            | "missing-anchor" ->
+                { graph with Nodes = graph.Nodes.Add(id,
+                    { literal with Metadata = literal.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList(List.tail names)) }) }
+            | "duplicate-anchor" ->
+                { graph with Nodes = graph.Nodes.Add(id,
+                    { literal with Metadata = literal.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList(names.Head :: names)) }) }
+            | "withdrawn-obligation" -> { graph with Edges = graph.Edges |> List.filter ((<>) edge) }
+            | _ -> { graph with Nodes = graph.Nodes.Remove edge.Target }
+        match StorageProjection.project revised with
+        | Ok _ -> failwith "A changed literal proof inventory was admitted"
+        | Error failures ->
+            Assert.Contains(failures, fun failure -> failure.Occurrence = Some id &&
+                (failure.Reason.Contains("obligation anchor inventory") || failure.Reason.Contains("malformed current obligation")))
+
     [<Fact>]
     member _.``Publication retains actual lazy program instances startup and writable inventory``() =
         let graph = LazyResidenceFixture.programWith None

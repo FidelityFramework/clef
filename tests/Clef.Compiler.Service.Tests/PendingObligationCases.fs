@@ -45,16 +45,24 @@ type PendingObligationCases() =
         Assert.Equal("ready", rows[0].GetProperty("state").GetString())
         Assert.Equal("pending", rows[1].GetProperty("state").GetString())
         Assert.Equal(2, rows[1].GetProperty("missingPremises").GetArrayLength())
-        // Guard reads the pending state before demanding the emission projection.
+        // Baker owns the unavailable proof account. The copy-only publisher
+        // refuses an unprepared graph without forcing its source computations.
+        let dispatch = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.materialize retained |> Result.defaultWith (sprintf "%A" >> failwith)
+        match dispatch.Query with
+        | Error unavailable ->
+            let occurrence, missing = Assert.Single unavailable
+            Assert.Equal(id, occurrence)
+            Assert.Equal<string list>(reasons, missing)
+        | Ok query -> failwithf "Pending source premises produced a dispatch: %s" query
         let blocked = { retained with Codata = lazy (failwith "Pending publication forced semantic analysis") }
         match Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish IntrinsicWriteFixture.platform blocked with
         | Ok _ -> failwith "A pending obligation was published"
         | Error failures ->
             let failure = Assert.Single failures
-            Assert.Equal(Some id, failure.Occurrence)
-            for reason in reasons do Assert.Contains(reason, failure.Reason)
+            Assert.Contains("Source emission admission", failure.Reason)
+            Assert.False(blocked.Codata.IsValueCreated)
         Assert.Throws<InvalidOperationException>(fun () ->
-            Clef.Compiler.PSGSaturation.Publication.RevisionMappers.mapObligationInfo pending |> ignore) |> ignore
+            Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapObligationInfo pending |> ignore) |> ignore
 
     [<Fact>]
     member _.``Pending emission removes stale solver text and settling removes unavailable evidence`` () =

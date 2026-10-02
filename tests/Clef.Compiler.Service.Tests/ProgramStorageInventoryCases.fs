@@ -223,10 +223,10 @@ let main _ = if alias true && second false && later true then 0 else 1
             // The same allocation has an own occurrence and a call-input occurrence.
             Assert.Equal(2, participants |> List.filter (fun p -> p.Node = site && p.Role = ParticipantRole.EnvironmentAllocation) |> List.length)
             Assert.Contains(graph.Edges, fun row -> row.Role = EdgeRole.EnvironmentResidence && row.Sources |> List.contains edge.Target)
-            let mapped = Clef.Compiler.PSGSaturation.Publication.RevisionMappers.mapEdgeRole edge.Role
+            let mapped = Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapEdgeRole edge.Role
             match mapped with
             | Fidelity.PSG.EdgeRole.EnvironmentReservation actual ->
-                Assert.Equal<Fidelity.PSG.Participant list>(participants |> List.map Clef.Compiler.PSGSaturation.Publication.RevisionMappers.mapParticipant, actual)
+                Assert.Equal<Fidelity.PSG.Participant list>(participants |> List.map Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapParticipant, actual)
             | _ -> failwith "Publication dropped the role-bearing reservation"
 
     [<Theory>]

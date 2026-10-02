@@ -488,9 +488,13 @@
     <Compile Include="PSGSaturation\SemanticGraph\BoundaryEmission.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\WitnessSegmentation.fs" />
     <Compile Include="Baker\Recipes\ProofDispatchRecipes.fs" />
+    <Compile Include="Baker\Recipes\WitnessScopeRecipes.fs" />
+    <Compile Include="Baker\Recipes\WitnessForeignDemandRecipes.fs" />
+    <Compile Include="Baker\Recipes\WitnessLiveRowsRecipes.fs" />
+    <Compile Include="Baker\Ingredients\PublishedFactRows.fs" />
+    <Compile Include="Baker\Recipes\WitnessPublishedRowsRecipes.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\WitnessEmission.fs" />
     <!-- Publication: the one place a graph leaves CCS, as a Fidelity.PSG revision -->
-    <Compile Include="PSGSaturation\Publication\RevisionMappers.fs" />
     <Compile Include="PSGSaturation\Publication\RevisionPublication.fs" />
     <Compile Include="NativeTypedTree\NativeService.fs" />
 

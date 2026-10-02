@@ -124,6 +124,9 @@
     <Compile Include="LocalUnusedCases.fs" />
     <Compile Include="ModuleScopeCases.fs" />
     <Compile Include="ModuleScopeTests.fs" />
+    <Compile Include="OpenDemandCases.fs" />
+    <Compile Include="WitnessLiveScopeCases.fs" />
+    <Compile Include="WitnessPreparedScopeCases.fs" />
     <Compile Include="ProjectLinkTests.fs" />
     <Compile Include="ProjectWorkspaceTests.fs" />
   </ItemGroup>

@@ -1347,6 +1347,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 OrdinaryDemand = ordinaryDemand
                 WitnessEmission = None
                 WitnessSegmentation = None
+                WitnessLiveScope = None
+                WitnessPreparedRows = None
+                WitnessLiveRows = None
+                WitnessPublishedRows = None
                 ProofDispatch = None
                 ContinuationFrames = sequences.Frames
                 SequenceOrigins = sequences.Origins

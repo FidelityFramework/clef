@@ -220,10 +220,54 @@ let project (graph: SemanticGraph) : Result<StorageWitnessProjection, WitnessPro
             let expected = ObligationBody.StaticStorageLayout(
                 pool.Entries |> List.map (fun entry -> entry.Offset, entry.StorageLength, 1),
                 pool.UsedSize, pool.Size, pool.Alignment, pool.Capacity, pool.SpaceAlignment, pool.Granularity)
-            let anchors = graph.Nodes.Values |> Seq.choose (fun node ->
-                match node.Kind with SemanticKind.Obligation info when info.Body = expected -> Some info.Id | _ -> None) |> Seq.toList
-            if anchors.IsEmpty then reject pool.DeclarationNode "Static string pool has no matching source layout obligation."
-            anchors
+            let pooledIds = pool.Entries |> List.collect _.NodeIds |> Set.ofList
+            let declaredAuthority =
+                (Declaration.read graph).Platform |> Option.map Declaration.immutableProgramAuthority |> Option.defaultValue []
+            let layoutParticipants = Set.union (Set.ofList declaredAuthority) (pooledIds.Add pool.DeclarationNode)
+            let layoutAnchors = graph.Edges |> List.choose (fun edge ->
+                match edge.Class, graph.Nodes.TryFind edge.Target with
+                | EdgeClass.Obligation, Some { Kind = SemanticKind.Obligation info } when info.Body = expected ->
+                    if System.String.IsNullOrWhiteSpace info.Id || not (Set.isSubset layoutParticipants (Set.ofList edge.Sources)) then
+                        reject pool.DeclarationNode "Static string pool layout does not retain its complete current literal and declaration participants."
+                        None
+                    else Some info.Id
+                | _ -> None)
+            if layoutAnchors.IsEmpty then reject pool.DeclarationNode "Static string pool has no matching current source layout obligation."
+            // The allocation owns every pooled literal's obligation anchors,
+            // including duplicate text occurrences. Read and validate them here
+            // under the source owner; emission never requests their node bodies
+            // merely to recover this already settled inventory.
+            let currentByLiteral =
+                graph.Edges |> List.fold (fun rows edge ->
+                    if edge.Class <> EdgeClass.Obligation then rows else
+                    let sources = edge.Sources |> List.filter pooledIds.Contains
+                    if sources.IsEmpty then rows else
+                    match graph.Nodes.TryFind edge.Target with
+                    | Some { Kind = SemanticKind.Obligation info } when not (System.String.IsNullOrWhiteSpace info.Id) ->
+                        sources |> List.fold (fun rows id ->
+                            rows |> Map.change id (fun names -> Some(Set.add info.Id (Option.defaultValue Set.empty names)))) rows
+                    | _ ->
+                        sources |> List.iter (fun id -> reject id "Pooled literal refers to a missing or malformed current obligation.")
+                        rows) Map.empty
+            let literalAnchors =
+                pool.Entries |> List.collect (fun entry ->
+                    entry.NodeIds |> List.collect (fun id ->
+                        match graph.Nodes.TryFind id with
+                        | Some ({ Kind = SemanticKind.Literal(NativeLiteral.String content) } as literal) when content = entry.Content ->
+                            let current = currentByLiteral |> Map.tryFind id |> Option.defaultValue Set.empty
+                            match literal.Metadata.TryFind ObligationMetadata.Anchors with
+                            | None when current.IsEmpty -> []
+                            | Some(MetadataValue.StringList names)
+                                when names.Length = (Set.ofList names).Count &&
+                                     not (names |> List.exists System.String.IsNullOrWhiteSpace) &&
+                                     Set.ofList names = current -> names
+                            | _ ->
+                                reject id "Pooled literal lacks the complete current source-owned obligation anchor inventory."
+                                [])
+                        | _ ->
+                            reject id "Static string pool has no matching current backing literal."
+                            []))
+            List.distinct (layoutAnchors @ literalAnchors)
     if errors.Count > 0 then Error(List.ofSeq errors) else
     Ok { Lazies = lazyContracts; LazyOccurrences = lazyOccurrences; LazyValues = lazyValues
          DefinitionOnlyThunks = definitionOnlyThunks; LazyPrograms = lazyPrograms

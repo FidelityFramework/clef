@@ -2809,6 +2809,26 @@ type WitnessEmissionProjection = {
     Spatial: SpatialModuleProjection
 }
 
+[<RequireQualifiedAccess>]
+type WitnessOccurrencePort = StructuralChild | ModuleDeclaration
+
+/// Original source position within a Baker-stamped port. The extent and stamp
+/// retain source membership correspondence without a dormant sibling census.
+type WitnessOccurrenceBreadcrumb = {
+    Parent: NodeId
+    Port: WitnessOccurrencePort
+    Ordinal: int
+    Extent: int
+    Stamp: string
+}
+
+/// Until precise source support is recorded, recheck the complete owner. This
+/// account grants neither body residency nor authority under another revision.
+[<RequireQualifiedAccess>]
+type WitnessScopeSupportPolicy = WholePreparedOwner
+
+type WitnessScopeSupport = { Identity: string; Policy: WitnessScopeSupportPolicy }
+
 /// Baker's independently witnessed source domains. Unsupported shared structure
 /// remains in Common; a consumer cannot split it by guessing dependencies.
 [<RequireQualifiedAccess>]
@@ -2820,15 +2840,89 @@ type WitnessRegion = {
     Root: NodeId option
     Anchor: NodeId option
     /// Actual structural breadcrumbs, nearest parent first.
-    Path: (NodeId * NodeId list * NodeId list) list
+    Path: WitnessOccurrenceBreadcrumb list
     Members: Set<NodeId>
     /// Complete source observations underlying the bounded reuse admission.
     Supports: Set<NodeId>
+    OwnerSupport: WitnessScopeSupport
     Fingerprint: string
     Dependencies: Set<string>
 }
 
 type WitnessSegmentation = { Version: int; Regions: WitnessRegion list }
+
+[<RequireQualifiedAccess>]
+type WitnessChildTraversal =
+    | SourceLive of NodeId
+    | SourceOmitted of WitnessScopeSupport * NodeId
+
+type WitnessChildDisposition = { Ordinal: int; Traversal: WitnessChildTraversal }
+
+[<RequireQualifiedAccess>]
+type WitnessBindingClass = Formal | ImmutableValue | MutableCell
+
+/// A variable use reads this settled classification rather than demanding its
+/// declaration body. Slot intent and physical authority remain distinct facts.
+type WitnessBindingUseContract = {
+    Binding: NodeId
+    Name: string
+    Class: WitnessBindingClass
+    IsProgramSlotIntent: bool
+    HasProgramSlotAuthority: bool
+    IsFunctionBinding: bool
+    IsCallableDeclaration: bool
+    IsPartialApplication: bool
+}
+
+[<RequireQualifiedAccess>]
+type WitnessEntryReason = ExecutableRoot | DetachedDefinition | BoundaryScope | SpatialRoot
+
+type WitnessSourceEntry = {
+    Focus: NodeId
+    Reason: WitnessEntryReason
+    Context: WitnessOccurrenceBreadcrumb list
+}
+
+/// Lexical containers establish positional context without becoming live
+/// bodies. Each port carries its original source extent and membership stamp.
+type WitnessSourcePortAccount = {
+    Extent: int
+    Stamp: string
+    /// Only authorized positions, retaining original ordinals and identities.
+    Positions: Map<int, NodeId>
+}
+
+type WitnessSourceContextHeader = {
+    Identity: NodeId
+    Name: string
+    Ports: Map<WitnessOccurrencePort, WitnessSourcePortAccount>
+}
+
+[<NoComparison; NoEquality>]
+type WitnessLiveOccurrence = {
+    Body: SemanticNode
+    Children: WitnessChildDisposition list
+    /// Actual paths, nearest parent first. A DAG occurrence keeps each path;
+    /// an empty path denotes a source-plan root, not an executable entry point.
+    Contexts: WitnessOccurrenceBreadcrumb list list
+}
+
+/// A Baker-authored live body inventory, not a filtered SemanticGraph/Revision.
+/// Identity candidates below grant no settled boundary or lookup authority.
+[<NoComparison; NoEquality>]
+type WitnessLiveScopePlan = {
+    Occurrences: Map<NodeId, WitnessLiveOccurrence>
+    Entries: WitnessSourceEntry list
+    ContextHeaders: Map<NodeId, WitnessSourceContextHeader>
+    Ports: Map<NodeId * WitnessOccurrencePort, WitnessSourcePortAccount>
+    /// Complete actual contexts for bodies and the headers anchoring them.
+    Contexts: Map<NodeId, WitnessOccurrenceBreadcrumb list list>
+    BindingUses: Map<NodeId, WitnessBindingUseContract>
+    ContextIdentities: Set<NodeId>
+    InterfaceIdentityCandidates: Set<NodeId>
+    HistoricalIdentities: Set<NodeId>
+    Support: WitnessScopeSupport
+}
 
 /// Baker's complete current dispatch inventory. This is not a proof-support
 /// completeness certificate and grants no authority to reuse a solver result.
@@ -2837,6 +2931,159 @@ type ProofDispatchPlan = {
     Constrains: Hyperedge list
     SourceGroups: Map<NodeId, NodeId list list>
     Query: Result<string, (NodeId * string list) list>
+}
+
+/// Native source rows settled by Baker before passive PSG publication.
+type WitnessBorrowedViewLayout = {
+    Schema: string
+    ElementBits: int
+    Range: ValueRange
+    Alignment: int
+    Access: string
+}
+
+type WitnessBorrowedViewOperation = {
+    Site: NodeId
+    Operation: string
+    View: NodeId
+    Arguments: NodeId list
+    Layout: Result<WitnessBorrowedViewLayout, string>
+    Span: Result<MappedSpanModel, string>
+}
+
+type WitnessMmioOperation = { Site: NodeId; Operation: string; Arguments: NodeId list }
+
+type WitnessForeignStorage = {
+    BorrowedViews: Map<NodeId, WitnessBorrowedViewOperation>
+    Mmio: Map<NodeId, WitnessMmioOperation>
+    MappedCalls: Set<NodeId>
+}
+
+type WitnessEagerDemandRelation = {
+    Sources: NodeId list
+    Ordinal: int
+    Frontier: EagerFrontier option
+    IsDemand: bool
+}
+
+type WitnessExplicitDemand = {
+    Operands: Map<NodeId, NodeId>
+    Relations: Map<NodeId, WitnessEagerDemandRelation list>
+}
+
+/// Complete owner preparation, not a source-selected transport scope. Layout
+/// errors remain explicit rows; publication supplies neither premises nor repair.
+type WitnessPreparedRows = {
+    Foreign: WitnessForeignStorage
+    Demand: WitnessExplicitDemand
+    Edges: Hyperedge list
+}
+
+/// A source string's view into the BAREWire-owned static byte pool.
+type StaticStringEntry = {
+    NodeIds: NodeId list
+    Content: string
+    Offset: int
+    Length: int
+    StorageLength: int
+}
+
+/// One immutable allocation plan shared by obligations and native emission.
+/// Offsets are pool-relative; the linker assigns its aligned absolute origin.
+type StaticStringPool = {
+    Symbol: string
+    Bytes: byte list
+    Alignment: int
+    Size: int
+    UsedSize: int
+    Entries: StaticStringEntry list
+    SpaceName: string
+    Capacity: int64
+    SpaceAlignment: int
+    Granularity: int
+    DeclarationNode: NodeId
+}
+
+[<RequireQualifiedAccess>]
+type LiteralStorage =
+    | Materialized of entry: int
+    | NotMaterialized of premise: StoragePremise
+
+/// Selected source-owned facts for passive witnessing. Analysis and preparation
+/// products have no place in this record, and no field authorizes a node body.
+type WitnessLiveCodata = {
+    WitnessSegmentation: WitnessSegmentation option
+    Escapes: Map<NodeId, EscapeKind>
+    Curry: CurryInfo
+    Meets: Map<NodeId, Meet list>
+    ReturnMeets: Map<NodeId, Meet>
+    Closures: Map<NodeId, ClosurePlacement>
+    EnvironmentLayouts: Map<NodeId, EnvironmentLayout>
+    EnvironmentDestinations: Map<NodeId, NodeId>
+    EnvironmentOrigins: Map<NodeId, NodeId>
+    LazyLayouts: Map<NodeId, LazyLayout>
+    LazyOrigins: Map<NodeId, NodeId>
+    LazyDestinations: Map<NodeId, NodeId>
+    KnownCallables: Map<NodeId, KnownCallable>
+    CallableCarriers: Map<NodeId, CallableCarrier>
+    CallableJoins: Map<NodeId, CallableJoin>
+    CallableFlows: Map<NodeId, CallableFlow>
+    CallableBranches: CallableBranchAuthority
+    MutableCallableStorage: Map<NodeId, MutableCallableStorage>
+    ContinuationFrames: Map<NodeId, ContinuationFrame>
+    SequenceOrigins: Map<NodeId, NodeId>
+    SequenceFlows: Map<NodeId, SequenceFlow>
+    SequenceFamilies: Map<NodeId, SequenceFamily>
+    SequenceTemplateCopies: Map<NodeId, SequenceTemplateCopy>
+    ContinuationStorage: Map<NodeId, NodeId>
+    ContinuationRegions: Map<NodeId, ContinuationRegion>
+    SequenceInitializers: Map<NodeId, (NodeId * NodeId) list>
+    SequenceDestinations: Map<NodeId, NodeId>
+    SequenceCurrentReads: Set<NodeId>
+    Pins: PinMapping option
+    DeclarationRootLambdas: Map<NodeId, DeclRoot>
+    FunctionPointers: Map<NodeId, FunctionPointerPlan>
+    Mmio: Map<NodeId, MmioAccessEvidence>
+    ProgramStorage: ProgramStorageInventory
+}
+
+/// The complete source-selected fact account. References preserve complete row
+/// premises, but never promote support or historical identities into bodies.
+type WitnessLiveRows = {
+    FactIdentities: Set<NodeId>
+    TypeIdentities: Set<TypeIdentity>
+    Codata: WitnessLiveCodata
+    Emission: WitnessEmissionProjection
+    Foreign: WitnessForeignStorage
+    Demand: WitnessExplicitDemand
+    Edges: Hyperedge list
+    DeclarationRoots: (NodeId * DeclRoot) list
+    ModuleClassifications: Map<NodeId, ModuleClassification>
+    StaticStringPool: StaticStringPool option
+    LiteralStorage: Map<NodeId, LiteralStorage>
+}
+
+/// Baker's frozen leaf tables. No checker type, lazy computation, native graph,
+/// revision value or source callback can enter this publication account.
+[<NoComparison; NoEquality>]
+type WitnessPublishedRows = {
+    SourcePlatform: PlatformContext
+    Nodes: Map<Fidelity.PSG.NodeId, Fidelity.PSG.SemanticNode>
+    SourceReadings: Fidelity.PSG.WitnessSourceReadings
+    Edges: Fidelity.PSG.Hyperedge list
+    DeclarationRoots: (Fidelity.PSG.NodeId * Fidelity.PSG.DeclRoot) list
+    ModuleClassifications: Map<Fidelity.PSG.NodeId, Fidelity.PSG.ModuleClassification>
+    Platform: Fidelity.PSG.PlatformWidths
+    StaticStringPool: Fidelity.PSG.StaticStringPool option
+    LiteralStorage: Map<Fidelity.PSG.NodeId, Fidelity.PSG.LiteralStorage>
+    Codata: Fidelity.PSG.Codata
+    Emission: Fidelity.PSG.WitnessEmissionProjection
+    Foreign: Fidelity.PSG.ForeignStorageProjection
+    Demand: Fidelity.PSG.ExplicitDemandProjection
+    Obligations: Fidelity.PSG.ObligationInfo list
+    CurrentClaims: Map<Fidelity.PSG.NodeId, Fidelity.PSG.ObligationInfo>
+    ObligationSources: Map<Fidelity.PSG.NodeId, Fidelity.PSG.NodeId list list>
+    ObligationQuery: string
 }
 
 /// The codata the graph carries for emission, settled once at the end of saturation.
@@ -2864,7 +3111,11 @@ type Codata = {
     OrdinaryDemand: OrdinaryDemandProjection
     WitnessEmission: WitnessEmissionProjection option
     WitnessSegmentation: WitnessSegmentation option
+    WitnessLiveScope: WitnessLiveScopePlan option
     ProofDispatch: ProofDispatchPlan option
+    WitnessPreparedRows: WitnessPreparedRows option
+    WitnessLiveRows: WitnessLiveRows option
+    WitnessPublishedRows: WitnessPublishedRows option
     ContinuationFrames: Map<NodeId, ContinuationFrame>
     /// A unique sequence constructor at a use, established in Baker. This
     /// evidence permits elision of the known function half of (fn, env).
@@ -2920,7 +3171,11 @@ module Codata =
         OrdinaryDemand = OrdinaryDemandProjection.empty
         WitnessEmission = None
         WitnessSegmentation = None
+        WitnessLiveScope = None
         ProofDispatch = None
+        WitnessPreparedRows = None
+        WitnessLiveRows = None
+        WitnessPublishedRows = None
         ContinuationFrames = Map.empty
         SequenceOrigins = Map.empty
         SequenceFlows = Map.empty
@@ -2937,42 +3192,6 @@ module Codata =
         Mmio = Map.empty
         ProgramStorage = ProgramStorageInventory.empty
     }
-
-/// A source string's view into the BAREWire-owned static byte pool.
-type StaticStringEntry = {
-    NodeIds: NodeId list
-    Content: string
-    Offset: int
-    Length: int
-    StorageLength: int
-}
-
-/// One immutable allocation plan shared by obligations and native emission.
-/// Offsets are pool-relative; the linker assigns its aligned absolute origin.
-type StaticStringPool = {
-    Symbol: string
-    Bytes: byte list
-    Alignment: int
-    Size: int
-    UsedSize: int
-    Entries: StaticStringEntry list
-    SpaceName: string
-    Capacity: int64
-    SpaceAlignment: int
-    Granularity: int
-    DeclarationNode: NodeId
-}
-
-/// Whether the storage of a string literal was materialized in the static string
-/// pool. The pool layout (StaticStringLayout.settle) writes one row for each
-/// reachable string literal, from the same demand reading that decides the pool.
-[<RequireQualifiedAccess>]
-type LiteralStorage =
-    /// The literal's bytes are the entry at this position of `StaticStringPool.Entries`.
-    | Materialized of entry: int
-    /// No demanded position reads the literal: the premise states the omission
-    /// relations whose omitted actual contains it (`OrdinaryDemand.deferrals`).
-    | NotMaterialized of premise: StoragePremise
 
 /// The complete semantic graph output
 [<NoComparison; NoEquality>]

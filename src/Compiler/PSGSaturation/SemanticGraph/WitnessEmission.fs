@@ -5,6 +5,10 @@ module Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission
 
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module ProofDispatch = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes
+module LiveScopes = Clef.Compiler.Baker.Recipes.WitnessScopeRecipes
+module PreparedRows = Clef.Compiler.Baker.Recipes.WitnessForeignDemandRecipes
+module LiveRows = Clef.Compiler.Baker.Recipes.WitnessLiveRowsRecipes
+module PublishedRows = Clef.Compiler.Baker.Recipes.WitnessPublishedRowsRecipes
 
 type Projection = WitnessEmissionProjection
 
@@ -58,24 +62,37 @@ let prepare (graph: SemanticGraph) : Result<SemanticGraph, WitnessProjectionFail
         match ProofDispatch.materialize graph with
         | Error failures -> Error failures
         | Ok dispatch ->
-            let facts = {
-                graph.Codata.Value with OrdinaryDemand = projection.Ordinary
-                                        WitnessEmission = Some projection
-                                        WitnessSegmentation = Some (WitnessSegmentation.project graph projection)
-                                        ProofDispatch = Some dispatch }
-            // Force semantic lazy computations under their source owner. A consumer
-            // must not execute a deferred layout/index/classification computation.
-            let settled = {
-                graph with
-                    Types = materialized graph.Types.Value
-                    ModuleClassifications = materialized graph.ModuleClassifications.Value
-                    FieldRanges = materialized graph.FieldRanges.Value
-                    ElementRanges = materialized graph.ElementRanges.Value
-                    Layouts = materialized graph.Layouts.Value
-                    Escaping = materialized graph.Escaping.Value
-                    Codata = materialized facts
-                    WitnessProvenance = None }
-            Ok { settled with WitnessProvenance = Some { PreparedRoots = settled } }
+          match LiveScopes.projectWithEmission projection graph with
+          | Error failures -> Error failures
+          | Ok liveScope ->
+            let preparedRows = PreparedRows.project graph
+            let segmentation = WitnessSegmentation.project graph projection liveScope
+            let liveRows = LiveRows.project graph projection liveScope preparedRows segmentation
+            match PublishedRows.project graph liveScope liveRows dispatch with
+            | Error failures -> Error failures
+            | Ok publishedRows ->
+              let facts = {
+                  graph.Codata.Value with OrdinaryDemand = projection.Ordinary
+                                          WitnessEmission = Some projection
+                                          WitnessSegmentation = Some segmentation
+                                          WitnessLiveScope = Some liveScope
+                                          WitnessPreparedRows = Some preparedRows
+                                          WitnessLiveRows = Some liveRows
+                                          WitnessPublishedRows = Some publishedRows
+                                          ProofDispatch = Some dispatch }
+              // Force semantic lazy computations under their source owner. A consumer
+              // must not execute a deferred layout/index/classification computation.
+              let settled = {
+                  graph with
+                      Types = materialized graph.Types.Value
+                      ModuleClassifications = materialized graph.ModuleClassifications.Value
+                      FieldRanges = materialized graph.FieldRanges.Value
+                      ElementRanges = materialized graph.ElementRanges.Value
+                      Layouts = materialized graph.Layouts.Value
+                      Escaping = materialized graph.Escaping.Value
+                      Codata = materialized facts
+                      WitnessProvenance = None }
+              Ok { settled with WitnessProvenance = Some { PreparedRoots = settled } }
 
 /// The complete identity policy for prepared input roots. Keeping names next
 /// to typed accessors lets the maintenance test check this policy against the
@@ -127,7 +144,14 @@ let tryRead (graph: SemanticGraph) =
         Error "The current graph has no materialized source witness projection."
     | Some _ ->
         match graph.Codata.Value.WitnessEmission with
-        | Some projection -> Ok projection
+        | Some _ when graph.Codata.Value.WitnessPreparedRows.IsNone ->
+            Error "The current graph has no Baker-prepared foreign, demand and incidence rows."
+        | Some _ when graph.Codata.Value.WitnessLiveRows.IsNone ->
+            Error "The current graph has no Baker-selected live fact rows."
+        | Some _ when graph.Codata.Value.WitnessPublishedRows.IsNone ->
+            Error "The current graph has no Baker-frozen publication rows."
+        | Some projection when graph.Codata.Value.WitnessLiveScope.IsSome -> Ok projection
+        | Some _ -> Error "The current graph has no source-owned live occurrence scope."
         | None -> Error "The current graph has no complete source witness projection."
 
 /// Validate an already prepared graph without altering its facts. Component
@@ -147,12 +171,41 @@ let admit (graph: SemanticGraph) : Result<unit, WitnessProjectionFailure list> =
             | Ok current when facts.ProofDispatch |> Option.exists (fun held -> ProofDispatch.matches held current) |> not ->
                 Error [{ Occurrence = None; Participants = Set.empty
                          Reason = "Proof dispatch differs from the current source snapshot." }]
-            | Ok _ when facts.WitnessSegmentation <> Some (WitnessSegmentation.project graph projection) ->
+            | Ok _ when
+                (match LiveScopes.projectWithEmission projection graph with
+                 | Ok liveScope -> facts.WitnessSegmentation = Some (WitnessSegmentation.project graph projection liveScope)
+                 | Error _ -> false) |> not ->
                 Error [{ Occurrence = None; Participants = Set.empty
                          Reason = "Witness segmentation differs from the current source snapshot." }]
+            | Ok _ when
+                (match LiveScopes.projectWithEmission projection graph, facts.WitnessLiveScope with
+                 | Ok current, Some held -> LiveScopes.matches held current
+                 | _ -> false) |> not ->
+                Error [{ Occurrence = None; Participants = Set.empty
+                         Reason = "Live occurrence scope differs from the current source snapshot." }]
+            | Ok _ when
+                (facts.WitnessPreparedRows |> Option.exists (fun held -> PreparedRows.matches held (PreparedRows.project graph))) |> not ->
+                Error [{ Occurrence = None; Participants = Set.empty
+                         Reason = "Baker-prepared foreign, demand and incidence rows differ from the current source snapshot." }]
+            | Ok _ when
+                (match facts.WitnessLiveScope, facts.WitnessPreparedRows, facts.WitnessSegmentation, facts.WitnessLiveRows with
+                 | Some scope, Some prepared, Some segmentation, Some held ->
+                     LiveRows.matches held (LiveRows.project graph projection scope prepared segmentation)
+                 | _ -> false) |> not ->
+                Error [{ Occurrence = None; Participants = Set.empty
+                         Reason = "Baker-selected live fact rows differ from the current source snapshot." }]
             | Ok _ when not (isMaterialized graph) ->
                 Error [{ Occurrence = None; Participants = Set.empty
                          Reason = "Witness input contains deferred source computations." }]
+            | Ok dispatch when
+                (match facts.WitnessLiveScope, facts.WitnessLiveRows, facts.WitnessPublishedRows with
+                 | Some scope, Some rows, Some held ->
+                     match PublishedRows.project graph scope rows dispatch with
+                     | Ok current -> PublishedRows.matches held current
+                     | Error _ -> false
+                 | _ -> false) |> not ->
+                Error [{ Occurrence = None; Participants = Set.empty
+                         Reason = "Baker-frozen publication rows differ from the current source snapshot." }]
             | Ok _ -> Ok ()
 
 let tryOrdinary graph = tryRead graph |> Result.map _.Ordinary

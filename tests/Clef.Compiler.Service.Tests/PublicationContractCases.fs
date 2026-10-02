@@ -169,19 +169,22 @@ let main _ =
     [<Theory>]
     [<InlineData("scalar")>]
     [<InlineData("lazy")>]
-    member _.``A published revision carries the entire edge set`` name =
+    member _.``Baker retains complete incidence while passive publication carries current claims`` name =
         let graph = PublicationFixture.check name PublicationFixture.programs[name]
         let revision = PublicationFixture.publish graph
+        let prepared = graph.Codata.Value.WitnessPreparedRows |> Option.defaultWith (fun () -> failwith "Baker incidence rows absent")
+        let dispatch = graph.Codata.Value.ProofDispatch |> Option.defaultWith (fun () -> failwith "Current source claims absent")
         let implied =
             graph.Nodes |> Map.toList
             |> List.sumBy (fun (_, node) -> (Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node).Length)
-        Assert.Equal(implied + graph.Edges.Length, revision.Edges.Length)
-        // Every relation Baker recorded is published with its role.
-        let recorded = graph.Edges |> List.countBy (fun edge -> sprintf "%A" edge.Class) |> Map.ofList
-        let published = revision.Edges |> List.countBy (fun edge -> sprintf "%A" edge.Class) |> Map.ofList
-        for KeyValue(edgeClass, count) in recorded do
-            Assert.True(published.TryFind edgeClass |> Option.exists (fun held -> held >= count),
-                        sprintf "The revision holds fewer %s edges than the graph" edgeClass)
+        Assert.Equal(implied + graph.Edges.Length, prepared.Edges.Length)
+        Assert.Equal<Hyperedge list>(graph.Edges, List.skip implied prepared.Edges)
+        Assert.Empty revision.Edges
+        let id (NodeId value) = Fidelity.PSG.NodeId value
+        Assert.Equal<Set<_>>(dispatch.Required |> List.map (fst >> id) |> Set.ofList,
+                             revision.CurrentClaims.Keys |> Set.ofSeq)
+        let sourceGroups = dispatch.SourceGroups |> Map.toList |> List.map (fun (target, groups) -> id target, List.map (List.map id) groups) |> Map.ofList
+        Assert.Equal<Map<_, _>>(sourceGroups, revision.ObligationSources)
 
     [<Fact>]
     member _.``A graph whose projection was withdrawn is not published`` () =

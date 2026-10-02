@@ -227,8 +227,8 @@ let private nodeInput (node: SemanticNode) =
     box (node.Id, node.Kind, node.Type, node.Children, node.Parent,
          node.IsReachable, node.EmissionStrategy, node.ValueRange)
 
-let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) : WitnessSegmentation =
-    let codata = { graph.Codata.Value with WitnessEmission = None; WitnessSegmentation = None; ProofDispatch = None }
+let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveScope: WitnessLiveScopePlan) : WitnessSegmentation =
+    let codata = { graph.Codata.Value with WitnessEmission = None; WitnessSegmentation = None; WitnessLiveScope = None; WitnessPreparedRows = None; WitnessLiveRows = None; WitnessPublishedRows = None; ProofDispatch = None }
     // Evidence supports remain current graph citizens and are discharged anew
     // for every revision. The witness key compares the settled interface those
     // proofs justify, rather than carrying a previous revision's proof receipt.
@@ -329,11 +329,14 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) : Witne
                               encode (box graph.Platform)
                               ordered |> List.collect (fun id -> kindEdges id graph.Nodes[id].Kind) |> box |> encode ]
                             @ (core |> Option.map (fun value -> [encode (box value)]) |> Option.defaultValue [])
-                        Some { Identity = "callable:" + moduleName + ":" + name
-                               Flavor = WitnessRegionKind.ScalarCallable
-                               Root = Some root; Anchor = Some binding.Id; Path = [binding.Id, [], []]
-                               Members = members; Supports = supports
-                               Fingerprint = hash (String.concat "\n" inputs); Dependencies = Set.empty }
+                        match liveScope.Occurrences.TryFind root with
+                        | Some { Contexts = [path] } ->
+                            Some { Identity = "callable:" + moduleName + ":" + name
+                                   Flavor = WitnessRegionKind.ScalarCallable
+                                   Root = Some root; Anchor = Some(path |> List.tryLast |> Option.map _.Parent |> Option.defaultValue root); Path = path
+                                   Members = members; Supports = supports; OwnerSupport = liveScope.Support
+                                   Fingerprint = hash (String.concat "\n" inputs); Dependencies = Set.empty }
+                        | _ -> None
                     with :? InvalidOperationException -> None
                 | _ -> None
         | _ -> None
@@ -359,7 +362,7 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) : Witne
     // source-bound operations; backend reuse must also compare typed contents.
     let common =
         { Identity = "common"; Flavor = WitnessRegionKind.Common; Root = None; Anchor = None; Path = []
-          Members = Set.difference all owned; Supports = all
+          Members = Set.difference (liveScope.Occurrences.Keys |> Set.ofSeq) owned; Supports = all; OwnerSupport = liveScope.Support
           Fingerprint = commonFingerprint
           Dependencies = regions |> List.map _.Identity |> Set.ofList }
     { Version = 1; Regions = regions @ [common] }
