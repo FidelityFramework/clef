@@ -250,7 +250,7 @@ let description = { Id="encoding-test"; Core=Some core; Spaces=[|image;stack|]; 
         Assert.True(result.Graph.WitnessProvenance.IsNone)
         Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.MemoryPublication.project result.Graph |> Result.isError)
         Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.tryRead result.Graph |> Result.isError)
-        Assert.True(Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.PlatformContext.Value result.Graph |> Result.isError)
+        Assert.True(Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph |> Result.isError)
 
     let rejected reason body expression = rejectedWith (Some platform) reason body expression
     let byteReason = "every stored integer must be proved within 0..255."
@@ -329,7 +329,7 @@ type StringEncodingCases() =
         Assert.Equal(independent.Message, measure.Message)
         Assert.Equal<SourceRange>(independent.Range, measure.Range)
         Assert.Empty(EncodingFixture.storageEdges result.Graph)
-        Assert.True(Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.PlatformContext.Value result.Graph |> Result.isError)
+        Assert.True(Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.Graph |> Result.isError)
 
     [<Fact>]
     member _.``Encoding units are dimensionless before physical storage selection``() =

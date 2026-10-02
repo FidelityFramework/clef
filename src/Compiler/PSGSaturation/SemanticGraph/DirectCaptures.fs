@@ -56,7 +56,7 @@ let tryCaptureFormals (graph: SemanticGraph) (implementation: NodeId) (otherHidd
         if rows.IsEmpty then Some Set.empty
         elif formals.Count <> parameters.Length || children <> (parameters |> List.map (fun (_, _, id) -> id)) @ [body] then None
         else
-            let valid row =
+            let valid (row: Hyperedge) =
                 match row.Class, row.Ordinal, row.Sources with
                 | EdgeClass.Provenance, 0, [owner; source] when owner = implementation && not (formals.Contains source) ->
                     match parameters |> List.tryFindIndex (fun (_, _, formal) -> formal = row.Target),

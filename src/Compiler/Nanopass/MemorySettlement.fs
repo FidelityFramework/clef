@@ -10,6 +10,7 @@ module Boundary = Clef.Compiler.Baker.Ingredients.Boundaries
 
 let normalize (graph: SemanticGraph) =
     let retired = graph.Nodes |> Map.fold (fun ids id node -> if Memory.owned node then Set.add id ids else ids) Set.empty
+    let graph = ObligationElaboration.retireAnchors retired graph
     let edges = graph.Edges |> List.filter (fun edge ->
         let own = match edge.Role with EdgeRole.MemoryDomain _ | EdgeRole.MemoryOperation _ | EdgeRole.MemoryProof _ | EdgeRole.MemoryArrayCopy _ -> true | _ -> false
         not own && not (retired.Contains edge.Target) && not (edge.Sources |> List.exists retired.Contains))
@@ -41,4 +42,4 @@ let normalize (graph: SemanticGraph) =
         let enrichment = Enrichment.combine enrichment
                             { NewNodes = [anchor]; Annotated = []
                               NewEdges = Memory.domainRow anchor.Id domain :: Memory.domainRewrite anchor.Id domain :: (domain.Operations |> List.map Memory.operationRow) @ (copies |> List.map Memory.copyRow) }
-        graph |> SemanticGraph.addNodes enrichment.NewNodes |> SemanticGraph.addNodes enrichment.Annotated |> SemanticGraph.addEdges enrichment.NewEdges
+        ObligationElaboration.foldIn enrichment graph

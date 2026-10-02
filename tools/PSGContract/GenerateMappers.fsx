@@ -2,22 +2,24 @@
 // PSG contract (Fidelity.PSG). The generated file is explicit F#: every mapped
 // type, case and field is visible in it and checked by the compiler.
 //
-// A contract type with no CCS twin, or an undeclared case/field difference,
-// stops generation with the difference named. Native-only record fields are
+// An unclassified contract type, or an undeclared case/field difference,
+// stops generation with the difference named. Explicit contract-only types
+// and native-only record fields are
 // listed and type-checked below. The native-only ObligationBody.Pending case
 // generates an explicit refusal instead of a value.
 //
-// usage: dotnet fsi GenerateMappers.fsx <Clef.Compiler.Service.dll> <Fidelity.PSG.dll> <output.fs>
+// usage: dotnet fsi GenerateMappers.fsx [--check|--preview] <Clef.Compiler.Service.dll> <Fidelity.PSG.dll> <output.fs>
 
 open System
 open System.IO
 open System.Reflection
 open Microsoft.FSharp.Reflection
 
-let ccsPath, contractPath, outputPath =
+let mode, ccsPath, contractPath, outputPath =
     match fsi.CommandLineArgs |> Array.toList with
-    | [ _; ccs; contract; output ] -> ccs, contract, output
-    | _ -> failwith "usage: dotnet fsi GenerateMappers.fsx <Clef.Compiler.Service.dll> <Fidelity.PSG.dll> <output.fs>"
+    | [ _; ccs; contract; output ] -> "write", ccs, contract, output
+    | [ _; ("--check" | "--preview" as mode); ccs; contract; output ] -> mode, ccs, contract, output
+    | _ -> failwith "usage: dotnet fsi GenerateMappers.fsx [--check|--preview] <Clef.Compiler.Service.dll> <Fidelity.PSG.dll> <output.fs>"
 
 let probe = [ Path.GetDirectoryName ccsPath; Path.GetDirectoryName contractPath ]
 AppDomain.CurrentDomain.add_AssemblyResolve(ResolveEventHandler(fun _ args ->
@@ -33,12 +35,36 @@ let contract = Assembly.LoadFrom contractPath
 
 let flags = BindingFlags.Public ||| BindingFlags.NonPublic
 
-/// Contract types assembled by hand in RevisionPublication.fs.
+/// Immutable leaf rows assembled by typed Baker recipes. The compiler checks
+/// their record construction and exhaustive source-case mappings separately.
 let assembledByHand =
     set [ "SemanticNode"; "Revision"; "RevisionHeader"; "Codata"; "PlatformWidths"; "IntegrityViolation"
           "BorrowedViewLayout"; "BorrowedViewOperation"; "MmioOperation"
           "ForeignStorageProjection"; "EagerDemandRelation"; "ExplicitDemandProjection"
+          "WitnessSourceReadings"; "ChildDisposition"; "ChildTraversal"; "SupportKey"
           "NodeId" ]
+
+/// Contract/receiver/transport authority has no native semantic-graph twin.
+/// This is an explicit closed set: a new public contract type requires review.
+let contractOnly =
+    set [ "ArtifactHandle"; "ArtifactOwner"; "ArtifactOwnershipTransition"
+          "BinaryError"; "BinaryLimits"; "BoundaryContractStamp"; "CheckedRevisionId"
+          "DeliveryCursor"; "HistoricalNodeIdentity"; "LiveOccurrence"; "LiveOccurrenceSection"
+          "LiveOccurrenceViolation"; "OccurrenceDelivery"; "OccurrenceDeliveryViolation"
+          "ScopeAuthorization"; "ScopeChange"; "ScopeContentStamp"; "ScopeDescriptor"
+          "ScopedCatalog"; "ScopedPublicationError"; "SourceScopeTransaction"; "SupportStamp" ]
+
+/// Source-prefixed facts whose fields/cases remain structural twins. Renaming
+/// does not bypass the same record-field and union-case checks as ordinary twins.
+let renamedTwins =
+    Map.ofList [ "BindingUseContract", "WitnessBindingUseContract"
+                 "OccurrenceBreadcrumb", "WitnessOccurrenceBreadcrumb"
+                 "OccurrencePort", "WitnessOccurrencePort"
+                 "SourceBindingClass", "WitnessBindingClass"
+                 "SourceContextHeader", "WitnessSourceContextHeader"
+                 "SourceEntryReason", "WitnessEntryReason"
+                 "SourcePortAccount", "WitnessSourcePortAccount"
+                 "SourceWitnessEntry", "WitnessSourceEntry" ]
 
 /// CCS modules whose declarations are published, with the alias the output uses.
 let sourceModules =
@@ -48,11 +74,17 @@ let sourceModules =
 
 let isData (t: Type) = FSharpType.IsRecord(t, flags) || FSharpType.IsUnion(t, flags)
 
-let contractTypes =
+let allContractTypes =
     contract.GetTypes()
     |> Array.filter (fun t -> t.Namespace = "Fidelity.PSG" && not t.IsNested && isData t && not t.IsGenericType)
-    |> Array.filter (fun t -> not (assembledByHand.Contains t.Name))
     |> Array.sortBy (fun t -> t.Name)
+
+let contractNames = allContractTypes |> Array.map _.Name |> Set.ofArray
+for name in Set.unionMany [assembledByHand; contractOnly; renamedTwins.Keys |> Set.ofSeq] do
+    if not (contractNames.Contains name) then failwithf "Declared contract policy %s no longer names a public contract data type" name
+if not (Set.intersect assembledByHand contractOnly).IsEmpty then failwith "Manual and contract-only policies overlap"
+let contractTypes =
+    allContractTypes |> Array.filter (fun t -> not (assembledByHand.Contains t.Name || contractOnly.Contains t.Name))
 
 let twins =
     contractTypes
@@ -63,7 +95,7 @@ let twins =
                 if isNull owner then None
                 else
                     owner.GetNestedTypes(flags)
-                    |> Array.tryFind (fun nested -> nested.Name = target.Name && isData nested)
+                    |> Array.tryFind (fun nested -> nested.Name = (renamedTwins.TryFind target.Name |> Option.defaultValue target.Name) && isData nested)
                     |> Option.map (fun source -> source, alias))
         match found with
         | Some (source, alias) -> target, source, alias
@@ -76,6 +108,18 @@ let targetName (target: Type) = "Fidelity.PSG." + target.Name
 
 let nativeType = ccs.GetType("Clef.Compiler.NativeTypedTree.NativeTypes+NativeType", true)
 let sourceNodeId = ccs.GetType("Clef.Compiler.NativeTypedTree.NativeTypes+NodeId", true)
+let sourceSupport = ccs.GetType("Clef.Compiler.PSGSaturation.SemanticGraph.Types+WitnessScopeSupport", true)
+let sourceSupportPolicy = ccs.GetType("Clef.Compiler.PSGSaturation.SemanticGraph.Types+WitnessScopeSupportPolicy", true)
+let targetSupport = contract.GetType("Fidelity.PSG.SupportKey", true)
+let supportFields = FSharpType.GetRecordFields(sourceSupport, flags) |> Array.map (fun field -> field.Name, field.PropertyType) |> Array.sortBy fst
+if supportFields <> [| "Identity", typeof<string>; "Policy", sourceSupportPolicy |] then
+    failwith "Whole-owner support record changed; review its explicit publication policy"
+match FSharpType.GetUnionCases(sourceSupportPolicy, flags) with
+| [| policy |] when policy.Name = "WholePreparedOwner" && policy.GetFields().Length = 0 -> ()
+| _ -> failwith "Native support policy changed; review its explicit publication mapping"
+match FSharpType.GetUnionCases(targetSupport, flags) |> Array.tryFind (fun case -> case.Name = "WholeOwningAnalysisRegion") with
+| Some whole when whole.GetFields() |> Array.map _.PropertyType = [| typeof<string> |] -> ()
+| _ -> failwith "Published whole-owner support changed its identity contract"
 
 /// Baker's freshness guards are checked by NumericPublication before projection;
 /// they are not published numeric facts. Keep each exclusion explicit and typed:
@@ -108,6 +152,9 @@ let rec convert (path: string) (source: Type) (target: Type) (value: string) : s
         Some (sprintf "freeze %s" value)
     elif source = sourceNodeId then
         Some (sprintf "nodeId %s" value)
+    elif source = sourceSupport then
+        if target <> targetSupport then failwithf "%s: source support has no mapping as %s" path target.Name
+        Some (sprintf "mapWitnessScopeSupport %s" value)
     elif twinOf.ContainsKey source.FullName then
         let expected, _ = twinOf.[source.FullName]
         if expected <> target then failwithf "%s: %s is published as %s, not %s" path source.Name expected.Name target.Name
@@ -234,7 +281,7 @@ let mappers =
 
 let header =
     [ "// Generated by tools/PSGContract/GenerateMappers.fsx from the CCS publication types and"
-      "// the published contract (Fidelity.PSG). Regenerate after either changes; do not edit."
+      "// the published contract (Fidelity.PSG). Review --preview, then regenerate this block."
       ""
       "/// Baker freezes selected source facts into immutable PSG leaf rows. Native"
       "/// checker substitutions are observed here, before passive publication."
@@ -258,7 +305,27 @@ let freeze =
       "/// A checker type crosses as its identity, with the current substitution applied."
       "and freeze (value: N.NativeType) : Fidelity.PSG.TypeIdentity ="
       "    mapTypeIdentity (Clef.Compiler.NativeTypedTree.TypeIdentities.ofType value)"
+      ""
+      "/// The source policy is explicit; this stamp grants no accepted proof authority."
+      "and mapWitnessScopeSupport (value: S.WitnessScopeSupport) : Fidelity.PSG.SupportKey ="
+      "    match value.Policy with"
+      "    | S.WitnessScopeSupportPolicy.WholePreparedOwner -> Fidelity.PSG.SupportKey.WholeOwningAnalysisRegion value.Identity"
       "" ]
 
-File.WriteAllText(outputPath, String.Join("\n", header) + body + "\n" + String.Join("\n", freeze))
-printfn "Generated %d mappers into %s" mappers.Length outputPath
+let generated = String.Join("\n", header) + body + "\n" + String.Join("\n", freeze)
+let boundary = "// END GENERATED MAPPERS; typed Baker source-reading assembly follows."
+if mode = "--preview" then
+    File.WriteAllText(outputPath, generated + boundary + "\n")
+    printfn "Previewed %d structural mappers into %s; no handwritten assembly copied" mappers.Length outputPath
+else
+    let existing = File.ReadAllText outputPath
+    let split = existing.IndexOf(boundary, StringComparison.Ordinal)
+    if split < 0 || existing.LastIndexOf(boundary, StringComparison.Ordinal) <> split then
+        failwith "The mapper file must contain exactly one generated/manual boundary; refusing to erase handwritten assembly"
+    if mode = "--check" then
+        if existing.Substring(0, split) <> generated then
+            failwithf "Generated structural mapper block differs from %s; review --preview before updating" outputPath
+        printfn "Checked %d structural mappers; typed handwritten assembly remains outside generation" mappers.Length
+    else
+        File.WriteAllText(outputPath, generated + existing.Substring split)
+        printfn "Generated %d structural mappers; preserved handwritten assembly in %s" mappers.Length outputPath

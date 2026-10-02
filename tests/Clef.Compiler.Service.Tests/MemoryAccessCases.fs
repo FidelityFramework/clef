@@ -129,6 +129,66 @@ type MemoryAccessCases() =
         | _ -> failwith "The mutable field requires its receiver's actual byte storage place."
 
     [<Fact>]
+    member _.``Reachable nominal declaration remains source authority without an executable publication body`` () =
+        let graph, facts = MemoryAccessFixture.admittedSource MemoryAccessFixture.stackAuthority MemoryAccessFixture.fieldAddress
+        let declaration = graph.Nodes.Values |> Seq.choose (fun node ->
+            match node.Kind with SemanticKind.TypeDef("Cell", TypeDefKind.RecordDef _, _) -> Some node | _ -> None) |> Assert.Single
+        Assert.True declaration.IsReachable
+        Assert.Equal(Some(MetadataValue.StringList ["Value"]), declaration.Metadata.TryFind "TypeDef.MutableFields")
+        let address = facts.Operations.Values |> Seq.choose (function MemoryWitnessOperation.Address fact -> Some fact | _ -> None) |> Assert.Single
+        let receiver, extent, field =
+            match address.Place with
+            | MemoryPlace.RecordField(receiver, extent, field) -> receiver, extent, field
+            | _ -> failwith "The fixture must retain its actual mutable record field."
+        Assert.Contains(declaration.Id, address.Participants)
+        let identity = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType graph.Nodes[receiver].Type
+        let emission = graph.Codata.Value.WitnessEmission |> Option.defaultWith (fun () -> failwith "The source emission account is absent.")
+        let layout = emission.Numeric.Layouts[identity]
+        match layout with
+        | SettledLayout.Record(fields, Some bytes, Some _) ->
+            Assert.Equal<string list>(["Other"; "Value"], fields |> List.map _.Name)
+            Assert.Equal(extent, bytes)
+            Assert.Equal(field, fields |> List.find (fun value -> value.Name = "Value"))
+        | _ -> failwith "The actual nominal record must have a complete settled byte layout."
+        let scope = graph.Codata.Value.WitnessLiveScope |> Option.defaultWith (fun () -> failwith "The source occurrence account is absent.")
+        Assert.False(scope.Occurrences.ContainsKey declaration.Id)
+        Assert.False(scope.Contexts.ContainsKey declaration.Id)
+        let publication = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith (sprintf "%A" >> failwith)
+        let publicId = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId
+        Assert.DoesNotContain(publication.Nodes.Values, fun node -> match node.Kind with Fidelity.PSG.SemanticKind.TypeDef _ -> true | _ -> false)
+        Assert.False(publication.SourceReadings.Contexts.ContainsKey(publicId declaration.Id))
+        Assert.Equal(Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapSettledLayout layout,
+                     publication.Emission.Numeric.Layouts[Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapTypeIdentity identity])
+        Assert.Equal(Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapMemoryWitnessOperation (MemoryWitnessOperation.Address address),
+                     publication.Emission.Memory.Operations[publicId address.Site])
+        let allocation =
+            graph.Nodes.Values
+            |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.RecordExpr _ when node.IsReachable &&
+                                                Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type = identity -> Some node
+                | _ -> None)
+            |> Assert.Single
+        Assert.Equal(Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapEscapeKind graph.Codata.Value.Escapes[allocation.Id],
+                     publication.Codata.Escapes[publicId allocation.Id])
+        let parent, members =
+            graph.Nodes.Values
+            |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.ModuleDef(_, members) when List.contains declaration.Id members -> Some(node.Id, members)
+                | _ -> None)
+            |> Assert.Single
+        let ordinal = members |> List.findIndex ((=) declaration.Id)
+        let port = publication.SourceReadings.Ports[publicId parent, Fidelity.PSG.OccurrencePort.ModuleDeclaration]
+        // Body-free module ports preserve original extent and ordinals. The
+        // semantic declaration's omitted slot has no sparse position or body.
+        Assert.Equal(members.Length, port.Extent)
+        Assert.False(port.Positions.ContainsKey ordinal)
+        Assert.NotEmpty port.Positions
+        for KeyValue(position, child) in port.Positions do
+            Assert.Equal(publicId members[position], child)
+
+    [<Fact>]
     member _.``Effectful ordinary array initializers cannot be converted into eager stores`` () =
         let result = MemoryAccessFixture.check "    let mutable value = 0\n    let values = [| (value <- 1; value) |]\n    values.[0]\n"
         match MemoryPublication.project result.Graph with

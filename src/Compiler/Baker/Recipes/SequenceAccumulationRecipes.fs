@@ -270,7 +270,7 @@ let private sourceControl (graph: SemanticGraph) producer =
                         | Some currentReference, Some(inner, originPath) when inner.Id <> producer.Id && solely currentReference admitted.Target ->
                             let references = nodes.Values |> Seq.choose (fun value -> if reference value.Id = Some enumerator then Some value.Id else None) |> Seq.toList
                             let incidence = nodes.Values |> Seq.collect Closures.structuralIncidence |> Seq.toList
-                            let relevant edge =
+                            let relevant (edge: Hyperedge) =
                                 (edge.Class = EdgeClass.Structural || edge.Role = EdgeRole.Definition) &&
                                 (edge.Sources |> List.exists (fun id -> id = enumerator || id = guardReference || id = currentReference))
                             let canonical = incidence |> List.filter relevant |> List.map edgeKey |> Set.ofList

@@ -125,6 +125,42 @@ type PlatformDescription = { Id: string; Core: TargetCore option }
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "BoundaryEmission")>]
 type BoundaryEmissionCases() =
     [<Fact>]
+    member _.``Quoted boundary descriptor retains declaration evidence without runtime allocation residence``() =
+        let graph = BoundaryEmissionFixture.scalar ()
+        let projection = BoundaryEmissionFixture.project graph
+        let imported = Assert.Single projection.Imports.Values
+        let descriptor =
+            graph.Nodes.Values
+            |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.RecordExpr(fields, _) when imported.DeclarationFacts.ContainsKey node.Id &&
+                                                           (fields |> List.exists (fst >> (=) "CName")) -> Some node
+                | _ -> None)
+            |> Assert.Single
+        Assert.False descriptor.IsReachable
+        Assert.True(graph.Codata.Value.Escapes.ContainsKey descriptor.Id)
+        let selected = graph.Codata.Value.WitnessLiveRows |> Option.defaultWith (fun () -> failwith "The source-selected fact account is absent.")
+        Assert.Contains(descriptor.Id, selected.FactIdentities)
+        Assert.False(selected.Codata.Escapes.ContainsKey descriptor.Id)
+        Assert.False(selected.Emission.Callable.ValueShapes.ContainsKey descriptor.Id)
+        Assert.False(selected.Emission.Callable.AliasTargets.ContainsKey descriptor.Id)
+        Assert.DoesNotContain(descriptor.Id, selected.Emission.Callable.ClosedData)
+        Assert.False(selected.Emission.Callable.Supports.ContainsKey descriptor.Id)
+        Assert.False(selected.Emission.Numeric.SourceTypes.ContainsKey descriptor.Id)
+        Assert.False(selected.Emission.Numeric.OccurrenceRepresentations.ContainsKey descriptor.Id)
+        Assert.False(selected.Demand.Operands.ContainsKey descriptor.Id)
+        Assert.False(selected.Demand.Relations.ContainsKey descriptor.Id)
+        let revision = Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph |> Result.defaultWith (sprintf "%A" >> failwith)
+        let publicId = Clef.Compiler.Baker.Ingredients.PublishedFactRows.nodeId
+        Assert.False(revision.Nodes.ContainsKey(publicId descriptor.Id))
+        Assert.False(revision.Codata.Escapes.ContainsKey(publicId descriptor.Id))
+        Assert.False(revision.Emission.Callable.ValueShapes.ContainsKey(publicId descriptor.Id))
+        Assert.False(revision.Emission.Numeric.SourceTypes.ContainsKey(publicId descriptor.Id))
+        Assert.Equal(Clef.Compiler.Baker.Ingredients.PublishedFactRows.mapBoundaryImport imported,
+                     revision.Emission.Boundary.Imports[publicId imported.Identity])
+        Assert.True(graph.Codata.Value.Escapes.ContainsKey descriptor.Id)
+
+    [<Fact>]
     member _.``Scalar publication preserves descriptor identity module scope and argument order``() =
         let graph = BoundaryEmissionFixture.scalar ()
         let projection = BoundaryEmissionFixture.project graph

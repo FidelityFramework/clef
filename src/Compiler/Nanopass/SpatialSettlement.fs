@@ -9,6 +9,7 @@ module Boundary = Clef.Compiler.Baker.Ingredients.Boundaries
 
 let normalize (graph: SemanticGraph) =
     let retired = graph.Nodes |> Map.fold (fun ids id node -> if Spatial.owned node then Set.add id ids else ids) Set.empty
+    let graph = ObligationElaboration.retireAnchors retired graph
     let edges = graph.Edges |> List.filter (fun edge ->
         let own = match edge.Role with EdgeRole.SpatialModuleDomain _ | EdgeRole.HardwareModule _ | EdgeRole.KernelModule _ | EdgeRole.SpatialProof _ -> true | _ -> false
         not own && not(retired.Contains edge.Target) && not(edge.Sources |> List.exists retired.Contains))
@@ -32,4 +33,4 @@ let normalize (graph: SemanticGraph) =
                             { NewNodes=[anchor]; Annotated=[]
                               NewEdges=Spatial.domainRow anchor.Id domain :: Spatial.domainRewrite anchor.Id domain ::
                                        (hardware |> List.map Spatial.hardwareRow) @ (kernels |> List.map Spatial.kernelRow) }
-        graph |> SemanticGraph.addNodes enrichment.NewNodes |> SemanticGraph.addNodes enrichment.Annotated |> SemanticGraph.addEdges enrichment.NewEdges
+        ObligationElaboration.foldIn enrichment graph

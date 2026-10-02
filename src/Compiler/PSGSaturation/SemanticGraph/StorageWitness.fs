@@ -10,6 +10,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Lazies = Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues
 module LazyRuntime = Clef.Compiler.Nanopass.LazyRuntime
 module SequencePrograms = Clef.Compiler.Nanopass.SequenceProgramInstances
+module Declaration = Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 
 let private edgeKey (edge: Hyperedge) = edge.Class, edge.Role, edge.Sources, edge.Target, edge.Ordinal
 
@@ -263,7 +264,7 @@ let project (graph: SemanticGraph) : Result<StorageWitnessProjection, WitnessPro
                                      Set.ofList names = current -> names
                             | _ ->
                                 reject id "Pooled literal lacks the complete current source-owned obligation anchor inventory."
-                                [])
+                                []
                         | _ ->
                             reject id "Static string pool has no matching current backing literal."
                             []))

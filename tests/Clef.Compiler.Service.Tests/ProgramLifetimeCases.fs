@@ -78,7 +78,7 @@ let main _ = if "hello" = "world" then 0 else 1
         match ProgramWitness.tryRead graph with
         | Result.Error message -> Assert.Equal("The current graph has no complete source witness projection.", message)
         | Result.Ok _ -> failwith "Refused source acquired witness authority"
-        match ProgramRevision.publish graph.Platform.Value graph with
+        match ProgramRevision.publish graph with
         | Result.Error failures ->
             Assert.Contains(failures, fun failure -> failure.Reason = "Source emission admission: The current graph has no complete source witness projection.")
         | Result.Ok _ -> failwith "Refused source acquired revision authority"
@@ -270,7 +270,7 @@ type ProgramLifetimeAuthorityCases() =
         match ProgramWitness.tryRead graph with
         | Result.Ok _ -> ()
         | Result.Error failure -> failwith failure
-        match ProgramRevision.publish graph.Platform.Value graph with
+        match ProgramRevision.publish graph with
         | Result.Ok _ -> ()
         | Result.Error failures -> failwithf "Valid storage could not publish: %A" failures
 

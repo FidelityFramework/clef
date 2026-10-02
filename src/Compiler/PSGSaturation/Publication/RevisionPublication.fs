@@ -16,16 +16,14 @@ type PublicationFailure = { Occurrence: NodeId option; Reason: string }
 
 let private refusal reason : PublicationFailure list = [{ Occurrence = None; Reason = reason }]
 
-/// Read stored source admission and copy its immutable rows. The supplied
-/// target name must agree; physical widths come only from Baker's stored rows.
-let publish (platform: PlatformContext) (graph: SemanticGraph) : Result<Fidelity.PSG.Revision, PublicationFailure list> =
+/// Read stored source admission and copy its immutable rows. Physical target
+/// authority comes only from Baker's prepared source, never from a caller.
+let publish (graph: SemanticGraph) : Result<Fidelity.PSG.Revision, PublicationFailure list> =
     match Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.tryRead graph with
     | Error reason -> Error (refusal ("Source emission admission: " + reason))
     | Ok _ ->
         match graph.Codata.Value.WitnessPublishedRows with
         | None -> Error (refusal "Baker's frozen publication rows are absent.")
-        | Some rows when rows.SourcePlatform.PlatformId <> platform.PlatformId ->
-            Error (refusal "The requested target differs from Baker's prepared source platform.")
         | Some rows ->
             Ok { Header = { Schema = Fidelity.PSG.Revision.Schema; Producer = Producer }
                  Nodes = rows.Nodes; SourceReadings = rows.SourceReadings; Edges = rows.Edges

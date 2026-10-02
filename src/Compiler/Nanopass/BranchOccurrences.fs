@@ -8,7 +8,7 @@ module Clef.Compiler.Nanopass.BranchOccurrences
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Nanopass.Recipe
 
-let private isBranch edge =
+let private isBranch (edge: Hyperedge) =
     edge.Class = EdgeClass.Structural &&
     match edge.Role with
     | EdgeRole.CaseBody | EdgeRole.ThenBranch | EdgeRole.ElseBranch -> true

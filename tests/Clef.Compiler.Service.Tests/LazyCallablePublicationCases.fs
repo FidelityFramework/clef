@@ -23,7 +23,7 @@ module private LazyCallableFixture =
         LazyResidenceFixture.programWith (Some source)
 
     let publish (graph: SemanticGraph) =
-        match LazyCallablePublication.publish (Option.get graph.Platform) graph with
+        match LazyCallablePublication.publish graph with
         | Ok revision -> revision
         | Error failures -> failwithf "Expected source publication: %A" failures
 
@@ -32,7 +32,7 @@ module private LazyCallableFixture =
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "LazyCallablePublication")>]
 type LazyCallablePublicationCases() =
     [<Fact>]
-    member _.``Generic lazy history remains resident without becoming an executable declaration`` () =
+    member _.``Generic lazy history remains source resident without entering the live revision`` () =
         let graph = LazyCallableFixture.check ()
         let original =
             graph.Nodes.Values
@@ -79,12 +79,9 @@ type LazyCallablePublicationCases() =
 
         let revision = LazyCallableFixture.publish graph
         for id in [original.Id; thunkId; formalId; bodyId; trace.SourceDeclaration] do
-            let published = revision.Nodes[LazyCallableFixture.publicId id]
-            Assert.False(published.IsReachable)
-        Assert.Contains(revision.Edges, fun edge ->
-            edge.Role = Fidelity.PSG.EdgeRole.SchemeSpecialization &&
-            edge.Target = LazyCallableFixture.publicId clone.Id &&
-            List.contains (LazyCallableFixture.publicId thunkId) edge.Sources)
+            Assert.False(revision.Nodes.ContainsKey (LazyCallableFixture.publicId id))
+        Assert.Empty revision.Edges
+        Assert.True(revision.Nodes[LazyCallableFixture.publicId clone.Id].IsReachable)
 
         let declarations =
             revision.Emission.Callable.Declarations.Values

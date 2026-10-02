@@ -28,13 +28,14 @@ let normalize (graph: SemanticGraph) =
         if retained.IsEmpty then None else Some(id, retained)) |> Map.ofList
     let graph = { graph with Codata = lazy { facts with Meets = retainedMeets } }
     let retired = graph.Nodes |> Map.fold (fun ids id node -> if Numeric.owned node then Set.add id ids else ids) Set.empty
+    let graph = ObligationElaboration.retireAnchors retired graph
     let edges = graph.Edges |> List.filter (fun edge ->
         let own = match edge.Role with EdgeRole.NumericDomain _ | EdgeRole.NumericCarrier _ | EdgeRole.NumericProof _ | EdgeRole.NumericOperation _ | EdgeRole.NumericOperationProof _ | EdgeRole.NumericIndexTransport _ -> true | _ -> false
         not own && not (retired.Contains edge.Target) && not (edge.Sources |> List.exists retired.Contains))
     let graph = { graph with Nodes = graph.Nodes |> Map.filter (fun id _ -> not (retired.Contains id)); Edges = edges } |> SemanticGraph.invalidateWitness
     let enrichment = Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.elaborateWithRangeReview
                         inheritedFiniteReview inheritedSequenceReview inheritedSequenceAuthority graph
-    let graph = graph |> SemanticGraph.addNodes enrichment.NewNodes |> SemanticGraph.addNodes enrichment.Annotated |> SemanticGraph.addEdges enrichment.NewEdges
+    let graph = ObligationElaboration.foldIn enrichment graph
     let operationMeets = enrichment.NewEdges |> List.choose (fun edge -> match edge.Role with EdgeRole.NumericDomain domain -> Some domain.OperationMeets | _ -> None)
     let meets = operationMeets |> List.fold (fun values own -> Map.fold (fun values site meets ->
         let combined = (values |> Map.tryFind site |> Option.defaultValue []) @ meets |> List.distinct

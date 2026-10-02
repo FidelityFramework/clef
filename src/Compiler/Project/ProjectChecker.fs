@@ -254,8 +254,8 @@ module ProjectChecker =
             else
                 match result.CheckResult.Graph.Platform with
                 | None -> Error "A checked platform context is required to publish a project revision."
-                | Some platform ->
-                    Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish platform result.CheckResult.Graph
+                | Some _ ->
+                    Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish result.CheckResult.Graph
                     |> Result.mapError (fun failures -> sprintf "%A" failures))
 
     /// Check if a project check result has any warnings.

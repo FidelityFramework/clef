@@ -30,6 +30,66 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution
 open Clef.Compiler.Baker.Ingredients.Obligations
 
+/// Reify the consequences of the current owner's obligation incidence on its
+/// actual participants. This writes annotations, never a new claim or premise.
+let projectAnchors (enrichment: Enrichment) (graph: SemanticGraph) : SemanticNode list =
+    let created = enrichment.NewNodes |> List.map (fun node -> node.Id, node) |> Map.ofList
+    let annotated = enrichment.Annotated |> List.map (fun node -> node.Id, node) |> Map.ofList
+    let current id =
+        annotated.TryFind id |> Option.orElseWith (fun () -> created.TryFind id)
+        |> Option.orElseWith (fun () -> graph.Nodes.TryFind id)
+    let anchors =
+        enrichment.NewEdges |> List.fold (fun (rows: Map<NodeId, string list>) edge ->
+            if edge.Class <> EdgeClass.Obligation then rows else
+            match current edge.Target with
+            | Some { Kind = SemanticKind.Obligation info } ->
+                if System.String.IsNullOrWhiteSpace info.Id then
+                    invalidOp (sprintf "Source obligation target %d has no anchor name." (NodeId.value edge.Target))
+                edge.Sources |> List.fold (fun rows source ->
+                    let names = rows.TryFind source |> Option.defaultValue []
+                    rows.Add(source, names @ [info.Id])) rows
+            | _ -> invalidOp (sprintf "Source obligation edge names an absent or non-claim target %d." (NodeId.value edge.Target))) Map.empty
+    anchors |> Map.toList |> List.map (fun (source, names) ->
+        let node =
+            current source |> Option.defaultWith (fun () ->
+                invalidOp (sprintf "Source obligation consequence has no current source participant %d." (NodeId.value source)))
+        let held =
+            match node.Metadata.TryFind ObligationMetadata.Anchors with
+            | None -> []
+            | Some(MetadataValue.StringList names) -> names
+            | Some _ -> invalidOp (sprintf "Source obligation anchors at node %d are not a list of names." (NodeId.value source))
+        { node with Metadata = node.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList(List.distinct (held @ names))) })
+
+/// Retire only this owner's previous claim consequences. An unrelated current
+/// claim remains attached; replacement anchors come from the owner's next fold.
+let retireAnchors (retired: Set<NodeId>) (graph: SemanticGraph) : SemanticGraph =
+    let names =
+        retired |> Seq.choose (fun id ->
+            match graph.Nodes.TryFind id with
+            | Some { Kind = SemanticKind.Obligation info } -> Some info.Id
+            | _ -> None) |> Set.ofSeq
+    if names.IsEmpty then graph else
+    // Claim identities are exact even when display anchor strings coincide.
+    // Preserve an anchor while another current claim still constrains this
+    // same participant; a matching name elsewhere does not preserve it here.
+    let remaining =
+        graph.Edges |> List.fold (fun (rows: Map<NodeId, Set<string>>) edge ->
+            if edge.Class <> EdgeClass.Obligation || retired.Contains edge.Target then rows else
+            match graph.Nodes.TryFind edge.Target with
+            | Some { Kind = SemanticKind.Obligation info } when names.Contains info.Id ->
+                edge.Sources |> List.fold (fun rows source ->
+                    rows |> Map.change source (fun held -> Some(Set.add info.Id (Option.defaultValue Set.empty held)))) rows
+            | _ -> rows) Map.empty
+    let nodes = graph.Nodes |> Map.map (fun id node ->
+        match node.Metadata.TryFind ObligationMetadata.Anchors with
+        | Some(MetadataValue.StringList held) ->
+            let other = remaining.TryFind id |> Option.defaultValue Set.empty
+            let current = held |> List.filter (fun name -> not (names.Contains name) || other.Contains name)
+            if current = held then node
+            else { node with Metadata = node.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList current) }
+        | _ -> node)
+    { graph with Nodes = nodes }
+
 /// This conditional arithmetic theorem starts after the native guards. It does
 /// not establish the driver's allocation extent, multiplication correctness,
 /// callback retirement, or disjointness between workers.

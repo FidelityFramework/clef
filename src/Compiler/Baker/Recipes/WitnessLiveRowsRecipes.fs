@@ -131,6 +131,76 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
     advance ()
     ids
 
+/// Generic value facts are read by executable occurrences, callable signatures
+/// and their explicit storage operands. A retained declaration/provenance ID
+/// alone is not a value consumer: imports and spatial plans carry those facts
+/// in their own typed accounts. Follow only the selected value contracts here.
+let private valueFacts (graph: SemanticGraph) (emission: WitnessEmissionProjection) (scope: WitnessLiveScopePlan) ids =
+    let mutable values =
+        scope.Occurrences |> Map.toSeq |> Seq.choose (fun (id, occurrence) ->
+            match occurrence.Body.Kind with
+            // These live declaration shells consume a settled spatial plan.
+            // Their descriptor child is source metadata, not a runtime record
+            // or an alias read. Actual ordinary uses retain their own roots.
+            | SemanticKind.Binding(_, _, _, Some DeclRoot.HardwareModule)
+            | SemanticKind.Binding(_, _, _, Some DeclRoot.KernelModule) -> None
+            | _ -> Some id) |> Set.ofSeq
+        |> Set.union (scope.BindingUses.Values |> Seq.map _.Binding |> Set.ofSeq)
+    let add id = values <- values.Add id
+    let addMany source = values <- Set.union values (Set.ofSeq source)
+    let shape = function
+        | CallableValueShape.Data id | CallableValueShape.Callable id
+        | CallableValueShape.Sequence id | CallableValueShape.Lazy id -> add id
+    let parameters source = source |> List.iter (fun (_, _, id) -> add id)
+    let slots source = source |> List.iter (fun (slot: ContinuationSlot) -> add slot.Source)
+    let carrier (row: CallableCarrier) =
+        parameters row.Parameters; add row.Result
+        List.iter shape row.ParameterShapes; shape row.ResultShape
+        row.Environment |> Option.iter (fun environment -> add environment.Formal)
+    selected ids emission.Ordinary.Parameters |> Map.iter (fun _ formals -> addMany formals)
+    selected ids emission.Ordinary.Calls |> Map.iter (fun _ call -> addMany call.Actuals)
+    selected ids emission.Callable.Carriers |> Map.iter (fun _ row -> carrier row)
+    selected ids emission.Callable.SignatureData |> Map.iter (fun _ data -> addMany data)
+    selected ids emission.Callable.Declarations |> Map.iter (fun _ row ->
+        parameters row.Parameters; add row.Result
+        row.Captures |> List.iter (fun capture -> Option.iter add capture.SourceNodeId))
+    selected ids emission.Callable.Calls |> Map.iter (fun _ row ->
+        parameters row.Parameters; add row.Result; addMany row.Arguments; addMany row.SignatureData)
+    selected ids emission.Callable.Arguments |> Map.iter (fun _ row -> addMany row.Keys)
+    selected ids emission.Callable.Transports |> Map.iter (fun _ row -> addMany row)
+    selected ids emission.Callable.ProgramInstances |> Map.iter (fun _ row -> carrier row.Carrier)
+    selected ids emission.Callable.Joins |> Map.iter (fun _ row -> add row.Storage; add row.Read; addMany row.Alternatives)
+    selected ids emission.Callable.Flows |> Map.iter (fun _ row ->
+        addMany row.Alternatives
+        row.Calls |> List.iter (fun call -> addMany call.Parameters; addMany call.Arguments; add call.Result))
+    selected ids emission.Callable.MutableStorage |> Map.iter (fun _ row ->
+        let write (value: MutableCallableWrite) = add value.Site; add value.Destination; add value.Value
+        add row.Binding; write row.Initializer; List.iter write row.Writes; addMany row.Reads
+        List.iter carrier row.AlternativeCarriers; addMany row.Captures; addMany row.Borrows)
+    selected ids emission.Storage.Lazies |> Map.iter (fun _ row ->
+        add row.Layout.Formal; add row.Layout.Computed; add row.Layout.Cached; slots row.Layout.Slots)
+    selected ids emission.Storage.Sequences |> Map.iter (fun _ row ->
+        row.Family.Members |> Map.iter (fun _ memberRow ->
+            add memberRow.Formal; add memberRow.State; Option.iter add memberRow.Current; slots memberRow.Slots
+            addMany memberRow.Captures; addMany memberRow.Uninitialized))
+    selected ids graph.Codata.Value.EnvironmentLayouts |> Map.iter (fun _ row -> add row.Formal; slots row.Slots)
+    selected ids graph.Codata.Value.ContinuationFrames |> Map.iter (fun _ row ->
+        add row.Formal; add row.State; add row.Current; slots row.Slots; slots row.ScratchSlots
+        row.Initializers |> List.iter (fun (destination, source) -> add destination; add source))
+    selected ids emission.Boundary.Imports |> Map.iter (fun _ row -> addMany row.SourceTypes.Keys)
+    selected ids emission.Boundary.Calls |> Map.iter (fun _ row ->
+        row.Arguments |> List.iter (fun argument -> add argument.Actual; add argument.Formal))
+    // A module used as a source boundary can carry its exact unit convention
+    // without a body. No declaration child or metadata descriptor is included.
+    scope.ContextHeaders.Keys |> Seq.filter (fun id -> ids.Contains id && emission.Callable.UnitNodes.Contains id) |> addMany
+    let rec references () =
+        let before = values
+        selected before emission.Callable.ValueShapes |> Map.iter (fun _ row -> shape row)
+        selected before emission.Callable.AliasTargets |> Map.iter (fun _ target -> add target)
+        if values <> before then references ()
+    references ()
+    values
+
 let private closeTypes (graph: SemanticGraph) ids (emission: WitnessEmissionProjection) =
     let rec visit seen identity =
         if seen |> Set.contains identity then seen else
@@ -153,9 +223,11 @@ let private closeTypes (graph: SemanticGraph) ids (emission: WitnessEmissionProj
         |> Seq.append (selected ids emission.Boundary.Imports |> Map.values |> Seq.collect (fun row -> row.SourceTypes.Values))
     Seq.fold visit Set.empty identities
 
-let private emissionRows ids types (value: WitnessEmissionProjection) : WitnessEmissionProjection =
+let private emissionRows ids valueIds types (value: WitnessEmissionProjection) : WitnessEmissionProjection =
     let rows table = selected ids table
     let values entries = selectedSet ids entries
+    let valueRows table = selected valueIds table
+    let valueSet entries = selectedSet valueIds entries
     let typeRows table = table |> Map.filter (fun key _ -> Set.contains key types)
     let callables = value.Callable
     let storage = value.Storage
@@ -167,7 +239,7 @@ let private emissionRows ids types (value: WitnessEmissionProjection) : WitnessE
       Callable = {
         Branches = branches ids callables.Branches
         Carriers = rows callables.Carriers; Joins = rows callables.Joins; Flows = rows callables.Flows
-        MutableStorage = rows callables.MutableStorage; ValueShapes = rows callables.ValueShapes
+        MutableStorage = rows callables.MutableStorage; ValueShapes = valueRows callables.ValueShapes
         SignatureData = rows callables.SignatureData; Calls = rows callables.Calls; Transports = rows callables.Transports
         Declarations = rows callables.Declarations; Symbols = rows callables.Symbols
         IntrinsicAliases = values callables.IntrinsicAliases; DirectCallees = rows callables.DirectCallees
@@ -176,8 +248,8 @@ let private emissionRows ids types (value: WitnessEmissionProjection) : WitnessE
         VoidPointers = values callables.VoidPointers; NativeEntries = rows callables.NativeEntries
         FunctionBindings = values callables.FunctionBindings; DefinitionOnlyBindings = values callables.DefinitionOnlyBindings
         DefinitionOnlyLambdas = values callables.DefinitionOnlyLambdas; Arguments = rows callables.Arguments
-        AliasTargets = rows callables.AliasTargets; TakesEnvironment = values callables.TakesEnvironment
-        UnitNodes = values callables.UnitNodes; ClosedData = values callables.ClosedData; Supports = rows callables.Supports }
+        AliasTargets = valueRows callables.AliasTargets; TakesEnvironment = values callables.TakesEnvironment
+        UnitNodes = valueSet callables.UnitNodes; ClosedData = valueSet callables.ClosedData; Supports = valueRows callables.Supports }
       Storage = { Lazies = rows storage.Lazies; LazyOccurrences = rows storage.LazyOccurrences
                   LazyValues = values storage.LazyValues; DefinitionOnlyThunks = values storage.DefinitionOnlyThunks
                   LazyPrograms = rows storage.LazyPrograms; Sequences = rows storage.Sequences; SequenceCopies = rows storage.SequenceCopies
@@ -191,11 +263,11 @@ let private emissionRows ids types (value: WitnessEmissionProjection) : WitnessE
                    IntrinsicWriteProofs = rows boundary.IntrinsicWriteProofs; DeclarationLeaves = values boundary.DeclarationLeaves
                    DeclarationOnly = values boundary.DeclarationOnly
                    Links = imports.Values |> Seq.map _.Library |> Set.ofSeq }
-      Numeric = { Values = rows numeric.Values; Operations = rows numeric.Operations; OperationRequired = values numeric.OperationRequired
+      Numeric = { Values = valueRows numeric.Values; Operations = rows numeric.Operations; OperationRequired = values numeric.OperationRequired
                   IndexTransports = rows numeric.IndexTransports; Required = values numeric.Required; ResultSites = values numeric.ResultSites
-                  Unresolved = rows numeric.Unresolved; SourceTypes = rows numeric.SourceTypes; Layouts = typeRows numeric.Layouts
+                  Unresolved = rows numeric.Unresolved; SourceTypes = valueRows numeric.SourceTypes; Layouts = typeRows numeric.Layouts
                   Elements = rows numeric.Elements; ElementTypes = typeRows numeric.ElementTypes; DeclaredScalars = numeric.DeclaredScalars
-                  OccurrenceRepresentations = rows numeric.OccurrenceRepresentations; TypeRepresentations = typeRows numeric.TypeRepresentations }
+                  OccurrenceRepresentations = valueRows numeric.OccurrenceRepresentations; TypeRepresentations = typeRows numeric.TypeRepresentations }
       Memory = { Operations = rows value.Memory.Operations; ArrayCopies = rows value.Memory.ArrayCopies
                  Required = values value.Memory.Required; Unresolved = rows value.Memory.Unresolved }
       Spatial = { Hardware = rows value.Spatial.Hardware; Kernels = rows value.Spatial.Kernels
@@ -206,21 +278,32 @@ let private emissionRows ids types (value: WitnessEmissionProjection) : WitnessE
 let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (scope: WitnessLiveScopePlan)
             (prepared: WitnessPreparedRows) (segmentation: WitnessSegmentation) : WitnessLiveRows =
     let ids = closeFacts graph emission scope
-    let types = closeTypes graph ids emission
-    let selectedEmission = emissionRows ids types emission
+    let valueIds = valueFacts graph emission scope ids
+    let ids = Set.union ids valueIds
+    let types = closeTypes graph valueIds emission
+    let selectedEmission = emissionRows ids valueIds types emission
     let rows table = selected ids table
     let values entries = selectedSet ids entries
     let facts = graph.Codata.Value
     let live = scope.Occurrences.Keys |> Set.ofSeq
+    let eager = scope.Occurrences |> Map.toSeq |> Seq.choose (fun (id, occurrence) ->
+        match occurrence.Body.Kind with SemanticKind.EagerExpr _ -> Some id | _ -> None) |> Set.ofSeq
     // Common support is a source owner account, not a retained-node census.
     // Its authority is carried by the source scope's WholePreparedOwner stamp.
     let selectedSegmentation =
-        { segmentation with Regions = segmentation.Regions |> List.map (fun region ->
-            { region with Members = Set.intersect live region.Members
-                          Supports = Set.intersect ids region.Supports }) }
+        { segmentation with
+            Regions =
+                segmentation.Regions |> List.map (fun region ->
+                    { region with Members = Set.intersect live region.Members
+                                  Supports = Set.intersect ids region.Supports }) }
     let codata : WitnessLiveCodata = {
         WitnessSegmentation = Some selectedSegmentation
-        Escapes = rows facts.Escapes
+        // Allocation residence is consumed at an actual executable allocation
+        // occurrence. Imported descriptor/design metadata may have a retained
+        // type or correspondence identity without allocating at runtime.
+        // Preserve the complete private analysis while delivering only these
+        // live residence consequences; an absent live fact remains an error.
+        Escapes = selected live facts.Escapes
         Curry = { PartialApplications = rows facts.Curry.PartialApplications; SaturatedCalls = rows facts.Curry.SaturatedCalls
                   PartialAppBindings = values facts.Curry.PartialAppBindings; AbsorbedLambdas = values facts.Curry.AbsorbedLambdas }
         Meets = rows facts.Meets; ReturnMeets = rows facts.ReturnMeets; Closures = rows facts.Closures
@@ -240,7 +323,9 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (scope:
         Mmio = rows facts.Mmio; ProgramStorage = programStorage ids facts.ProgramStorage }
     { FactIdentities = ids; TypeIdentities = types; Codata = codata; Emission = selectedEmission
       Foreign = { BorrowedViews = rows prepared.Foreign.BorrowedViews; Mmio = rows prepared.Foreign.Mmio; MappedCalls = values prepared.Foreign.MappedCalls }
-      Demand = { Operands = rows prepared.Demand.Operands; Relations = rows prepared.Demand.Relations }
+      // Explicit eager demand belongs only to a live marker occurrence. A
+      // declaration's retained identity does not activate its old demand edge.
+      Demand = { Operands = selected eager prepared.Demand.Operands; Relations = selected eager prepared.Demand.Relations }
       // PHG emission reads saturated facts, not the owner's analytical F.
       // Complete relations remain in prepared.Edges for Baker revalidation.
       Edges = []
@@ -256,4 +341,11 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (scope:
         { pool with Entries = pool.Entries |> List.map (fun entry -> { entry with NodeIds = List.filter live.Contains entry.NodeIds }) })
       LiteralStorage = selected live graph.LiteralStorage }
 
-let matches (held: WitnessLiveRows) (current: WitnessLiveRows) = held = current
+let matches (held: WitnessLiveRows) (current: WitnessLiveRows) =
+    let edge (row: Hyperedge) = row.Class, row.Role, row.Sources, row.Target, row.Ordinal
+    held.FactIdentities = current.FactIdentities && held.TypeIdentities = current.TypeIdentities &&
+    held.Codata = current.Codata && held.Emission = current.Emission &&
+    held.Foreign = current.Foreign && held.Demand = current.Demand &&
+    List.map edge held.Edges = List.map edge current.Edges &&
+    held.DeclarationRoots = current.DeclarationRoots && held.ModuleClassifications = current.ModuleClassifications &&
+    held.StaticStringPool = current.StaticStringPool && held.LiteralStorage = current.LiteralStorage

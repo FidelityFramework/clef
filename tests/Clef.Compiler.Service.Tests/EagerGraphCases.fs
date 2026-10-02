@@ -234,7 +234,7 @@ let main _ =
                 Assert.Equal<string list>(["Last"; "Middle"; "First"], List.map fst fields)
                 List.map snd fields
             | kind -> failwithf "Unexpected explicit component frontier: %A" kind
-        Assert.Equal<NodeId list>([operands[0]; operands[2]], List.map (_.Sources >> List.head) components)
+        Assert.Equal<NodeId list>([operands[0]; operands[2]], List.map (fun (edge: Hyperedge) -> List.head edge.Sources) components)
         match graph.Nodes[operands[1]].Kind with
         | SemanticKind.Literal(NativeLiteral.Bool false) -> ()
         | kind -> failwithf "Ordinary sibling changed identity: %A" kind

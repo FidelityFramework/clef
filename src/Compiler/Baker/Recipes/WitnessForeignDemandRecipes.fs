@@ -61,4 +61,7 @@ let project (graph: SemanticGraph) : WitnessPreparedRows =
       Edges = implied @ graph.Edges }
 
 /// Source re-observation, never a publication-time reconstruction.
-let matches (held: WitnessPreparedRows) (current: WitnessPreparedRows) = held = current
+let matches (held: WitnessPreparedRows) (current: WitnessPreparedRows) =
+    let edge (row: Hyperedge) = row.Class, row.Role, row.Sources, row.Target, row.Ordinal
+    held.Foreign = current.Foreign && held.Demand = current.Demand &&
+    List.map edge held.Edges = List.map edge current.Edges

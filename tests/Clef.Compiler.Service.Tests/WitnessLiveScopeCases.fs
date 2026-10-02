@@ -70,10 +70,11 @@ module WitnessLiveScopeCases =
         "Explicit source entries contain demanded definitions rather than a module census", fun () ->
             let graph = project 64 true true
             let plan = admitted graph
-            let entryNames = plan.Entries |> List.choose (fun entry ->
-                match plan.Occurrences.TryFind entry.Focus with
-                | Some { Body = { Kind = SemanticKind.Binding(name, _, _, _) } } -> Some name
-                | _ -> None) |> Set.ofList
+            let entryNames =
+                plan.Entries |> List.choose (fun entry ->
+                    match plan.Occurrences.TryFind entry.Focus with
+                    | Some { Body = { Kind = SemanticKind.Binding(name, _, _, _) } } -> Some name
+                    | _ -> None) |> Set.ofList
             Assert.Contains("chosen", entryNames)
             Assert.Contains("leaf", entryNames)
             Assert.DoesNotContain("dormant", entryNames)
@@ -116,6 +117,33 @@ module WitnessLiveScopeCases =
             for useContract in reads do
                 Assert.True(useContract.IsProgramSlotIntent)
                 Assert.False(useContract.HasProgramSlotAuthority)
+
+        "Generated lazy thunk uses retain their settled callable owner", fun () ->
+            let graph = LazyResidenceFixture.program ()
+            let plan = admitted graph
+            let uses =
+                plan.BindingUses |> Map.toList |> List.filter (fun (_, row) ->
+                    match graph.Nodes[row.Binding].Kind with
+                    | SemanticKind.Lambda(_, _, _, _, LambdaContext.LazyThunk) -> true
+                    | _ -> false)
+            Assert.NotEmpty uses
+            for site, row in uses do
+                Assert.Equal(WitnessBindingClass.ImmutableValue, row.Class)
+                Assert.True(row.IsCallableDeclaration)
+                Assert.False(row.IsProgramSlotIntent)
+                Assert.Contains(row.Binding, graph.Codata.Value.WitnessEmission.Value.Callable.Declarations.Keys)
+                match graph.Nodes[site].Kind with
+                | SemanticKind.VarRef("__lazy_thunk", Some actual) -> Assert.Equal(row.Binding, actual)
+                | other -> failwithf "Generated lazy callable reference changed shape: %A" other
+            let site, row = List.head uses
+            let emission = graph.Codata.Value.WitnessEmission.Value
+            let withheld =
+                { emission with
+                    Callable = { emission.Callable with Declarations = emission.Callable.Declarations.Remove row.Binding } }
+            match LiveScope.projectWithEmission withheld graph with
+            | Result.Error failures ->
+                Assert.Contains(failures, fun failure -> failure.Occurrence = Some site && failure.Participants.Contains row.Binding)
+            | Result.Ok _ -> failwith "A generated thunk reference was admitted without its settled callable declaration."
 
         "A marked proof citizen remains a claim identity instead of an executable body", fun () ->
             let builder = NodeBuilder()

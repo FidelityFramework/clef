@@ -49,7 +49,7 @@ type WitnessPreparedScopeTests() =
         let current = PreparedScopes.project graph |> Result.defaultWith (sprintf "%A" >> failwith)
         Assert.True(PreparedScopes.matches held current)
         Assert.Equal<Set<_>>(graph.Nodes |> Map.toSeq |> Seq.choose (fun (id, node) ->
-                                match node.Kind with SemanticKind.Obligation _ -> None | _ when node.IsReachable -> Some id | _ -> None) |> Set.ofSeq,
+                                match node.Kind with SemanticKind.Obligation _ | SemanticKind.TypeDef _ -> None | _ when node.IsReachable -> Some id | _ -> None) |> Set.ofSeq,
                              held.Occurrences.Keys |> Set.ofSeq)
         Assert.DoesNotContain(held.Occurrences.Values, fun row -> not row.Body.IsReachable)
         Assert.Contains(graph.Nodes.Values, fun node -> not node.IsReachable)
@@ -73,16 +73,16 @@ type WitnessPreparedScopeTests() =
         let held = graph.Codata.Value.WitnessPreparedRows |> Option.defaultWith (fun () -> failwith "Prepared source rows were absent")
         Assert.True(PreparedRows.matches held (PreparedRows.project graph))
         Assert.NotEmpty held.Edges
-        Assert.True(Publication.publish IntrinsicWriteFixture.platform graph |> Result.isOk)
+        Assert.True(Publication.publish graph |> Result.isOk)
         let withdrawn = { graph with Codata = lazy { graph.Codata.Value with WitnessPreparedRows = None } }
         match PreparedEmission.admit withdrawn with
         | Result.Error failures ->
             Assert.Contains(failures, fun failure -> failure.Reason.Contains "Baker-prepared foreign, demand and incidence rows")
         | Result.Ok _ -> failwith "Source admission survived withdrawal of its prepared rows"
-        Assert.True(Publication.publish IntrinsicWriteFixture.platform withdrawn |> Result.isError)
+        Assert.True(Publication.publish withdrawn |> Result.isError)
         let invalidated = SourceGraph.invalidateWitness graph
         Assert.True(invalidated.Codata.Value.WitnessPreparedRows.IsNone)
-        Assert.True(Publication.publish IntrinsicWriteFixture.platform invalidated |> Result.isError)
+        Assert.True(Publication.publish invalidated |> Result.isError)
 
     [<Fact>]
     member _.``Unused open and dormant library growth do not enlarge published body or fact inventories``() =
@@ -92,8 +92,16 @@ type WitnessPreparedScopeTests() =
         let original = List.head cases
         Assert.True((List.last cases).Nodes.Count > original.Nodes.Count)
         let expected = original.Codata.Value.WitnessLiveRows |> Option.defaultWith (fun () -> failwith "Selected source rows absent")
-        let publish graph = Publication.publish IntrinsicWriteFixture.platform graph |> Result.defaultWith (sprintf "%A" >> failwith)
+        let publish graph = Publication.publish graph |> Result.defaultWith (sprintf "%A" >> failwith)
         let first = publish original
+        let limits : Fidelity.PSG.BinaryLimits =
+            { MaxBytes = 4 * 1024 * 1024; MaxCollectionLength = 10000; MaxDepth = 128
+              MaxStringBytes = 1024 * 1024; MaxBigIntegerBytes = 1024; MaxValues = 1000000 }
+        let encodedSize revision =
+            Fidelity.PSG.Binary.encode limits revision
+            |> Result.map Array.length
+            |> Result.defaultWith (sprintf "Selected source payload failed binary integrity: %A" >> failwith)
+        let expectedBytes = encodedSize first
         for graph in cases do
             let selected = graph.Codata.Value.WitnessLiveRows |> Option.defaultWith (fun () -> failwith "Selected source rows absent")
             let revision = publish graph
@@ -103,7 +111,10 @@ type WitnessPreparedScopeTests() =
             Assert.Equal(first.Emission.Callable.AliasTargets.Count, revision.Emission.Callable.AliasTargets.Count)
             Assert.Equal(first.Emission.Numeric.OccurrenceRepresentations.Count, revision.Emission.Numeric.OccurrenceRepresentations.Count)
             Assert.Equal(first.ModuleClassifications.Count, revision.ModuleClassifications.Count)
+            Assert.Equal(expectedBytes, encodedSize revision)
             Assert.Empty revision.Edges
+            Assert.DoesNotContain(revision.Nodes.Values, fun body ->
+                match body.Kind with Fidelity.PSG.SemanticKind.ModuleDef _ -> true | _ -> false)
             Assert.DoesNotContain(revision.Nodes.Values, fun body -> body.Range.File.EndsWith "dormant-library.clef")
             Assert.True(selected.Emission.Callable.ValueShapes.Keys |> Seq.forall selected.FactIdentities.Contains)
             Assert.True(selected.Emission.Numeric.TypeRepresentations.Keys |> Seq.forall selected.TypeIdentities.Contains)
@@ -118,7 +129,7 @@ type WitnessPreparedScopeTests() =
         | Result.Error failures -> Assert.Contains(failures, fun failure -> failure.Reason = "Baker-selected live fact rows differ from the current source snapshot.")
         | Result.Ok _ -> failwith "Source admission survived withdrawal of selected rows"
         Assert.True(PreparedEmission.tryRead changed |> Result.isError)
-        Assert.True(Publication.publish IntrinsicWriteFixture.platform changed |> Result.isError)
+        Assert.True(Publication.publish changed |> Result.isError)
         Assert.True((SourceGraph.invalidateWitness graph).Codata.Value.WitnessLiveRows.IsNone)
 
     [<Theory>]
@@ -142,5 +153,5 @@ type WitnessPreparedScopeTests() =
             Assert.Contains(failures, fun failure -> failure.Reason = "Baker-prepared foreign, demand and incidence rows differ from the current source snapshot.")
         | Result.Ok _ -> failwithf "Source admission accepted corrupt %s rows" domain
         Assert.Equal<WitnessPreparedRows option>(Some changedRows, changed.Codata.Value.WitnessPreparedRows)
-        Assert.True(Publication.publish IntrinsicWriteFixture.platform changed |> Result.isError)
-        Assert.True(Publication.publish IntrinsicWriteFixture.platform graph |> Result.isOk)
+        Assert.True(Publication.publish changed |> Result.isError)
+        Assert.True(Publication.publish graph |> Result.isOk)

@@ -55,7 +55,7 @@ type PendingObligationCases() =
             Assert.Equal<string list>(reasons, missing)
         | Ok query -> failwithf "Pending source premises produced a dispatch: %s" query
         let blocked = { retained with Codata = lazy (failwith "Pending publication forced semantic analysis") }
-        match Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish IntrinsicWriteFixture.platform blocked with
+        match Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish blocked with
         | Ok _ -> failwith "A pending obligation was published"
         | Error failures ->
             let failure = Assert.Single failures

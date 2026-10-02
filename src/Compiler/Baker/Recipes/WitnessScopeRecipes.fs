@@ -64,9 +64,14 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
                        Reason = "WitnessScopes: " + reason }
     if budget.MaxPaths < 0L || budget.MaxFrames < 0L then
         fail None [] "The source host supplied a negative occurrence-context resource budget."
-    // Current proof citizens have their own typed claim account. Even a
-    // source-marked claim is never an executable occurrence body.
-    let bodies = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable && (match node.Kind with SemanticKind.Obligation _ -> false | _ -> true))
+    // Reachability also retains semantic type declarations for Baker's exact
+    // nominal layout and mutable-field checks. Their settled consequences are
+    // carried by Numeric.Layouts and Memory operations, not executable bodies.
+    // Current proof citizens likewise have their separate typed claim account.
+    // Keep the source reachability marks and complete owner premises intact.
+    let bodies = graph.Nodes |> Map.filter (fun _ node ->
+        node.IsReachable &&
+        (match node.Kind with SemanticKind.Obligation _ | SemanticKind.TypeDef _ -> false | _ -> true))
     let incoming = System.Collections.Generic.Dictionary<NodeId, ResizeArray<SourceOccurrenceSlot>>()
     let neededModules = System.Collections.Generic.HashSet<NodeId>()
     let addSlots parent port (slots: NodeId list) =
@@ -205,8 +210,8 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
     if failures.Count = 0 then
         for pair in incoming do
             let rows = pair.Value |> Seq.map (fun row ->
-                { Parent = row.Parent; Port = row.Port; Ordinal = row.Ordinal
-                  Extent = row.Extent; Stamp = row.Stamp }) |> Seq.toList
+                ({ Parent = row.Parent; Port = row.Port; Ordinal = row.Ordinal
+                   Extent = row.Extent; Stamp = row.Stamp } : WitnessOccurrenceBreadcrumb)) |> Seq.toList
             frames.Add(pair.Key, rows)
         for id in order do
             let paths =
@@ -244,7 +249,7 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
             key, { Extent = first.Extent; Stamp = first.Stamp
                    Positions = rows |> List.map (fun (child, row) -> row.Ordinal, child) |> Map.ofList }) |> Map.ofSeq
     let headers =
-        contextIdentities |> Seq.map (fun parent ->
+        Set.union contextIdentities (Set.ofSeq neededModules) |> Seq.map (fun parent ->
             let name =
                 match graph.Nodes[parent].Kind with
                 | SemanticKind.ModuleDef(name, _) -> name
@@ -258,7 +263,7 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
     let bindingUses =
         bodies |> Map.toList |> List.choose (fun (site, node) ->
             match node.Kind with
-            | SemanticKind.VarRef(_, Some binding) ->
+            | SemanticKind.VarRef(referenceName, Some binding) ->
                 match graph.Nodes.TryFind binding, emission with
                 | None, _ ->
                     fail (Some site) [site; binding] "A live variable use references an absent binding."
@@ -272,6 +277,9 @@ let private projectPrepared (budget: ScopeContextBudget) (emission: WitnessEmiss
                         | SemanticKind.PatternBinding name -> Some(name, WitnessBindingClass.Formal)
                         | SemanticKind.Binding(name, mutableCell, _, _) ->
                             Some(name, if mutableCell then WitnessBindingClass.MutableCell else WitnessBindingClass.ImmutableValue)
+                        | SemanticKind.Lambda(_, _, _, name, LambdaContext.LazyThunk)
+                            when facts.Callable.Declarations.ContainsKey binding ->
+                            Some(Option.defaultValue referenceName name, WitnessBindingClass.ImmutableValue)
                         | _ ->
                             fail (Some site) [site; binding] "A live variable use does not name a settled binding or formal declaration."
                             None

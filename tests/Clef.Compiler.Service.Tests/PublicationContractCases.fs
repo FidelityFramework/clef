@@ -39,7 +39,7 @@ module private PublicationFixture =
         result.Graph
 
     let publish (graph: SemanticGraph) =
-        match Publication.publish platform graph with
+        match Publication.publish graph with
         | Ok revision -> revision
         | Error failures -> failwithf "Publication refused: %A" failures
 
@@ -80,6 +80,36 @@ module private PublicationFixture =
         settled, node.Id
 
 type PublicationContractCases() =
+    [<Fact>]
+    member _.``Changed source physical authority requires preparation even when its target name is unchanged``() =
+        let graph = PublicationFixture.check "target-identity" PublicationFixture.programs["scalar"]
+        let source = graph.Platform.Value
+        let other = { source with Dimensions = source.Dimensions.Add("Pointer", 32) }
+        Assert.Equal(source.PlatformId, other.PlatformId)
+        Assert.NotSame(source, other)
+        let changed = { graph with Platform = Some other }
+        match Publication.publish changed with
+        | Error failures ->
+            Assert.Contains(failures, fun failure -> failure.Reason.StartsWith "Source emission admission: The current graph differs from its source witness projection input")
+        | Ok _ -> failwith "Changed source physical authority reused its prior frozen publication."
+        Assert.True(Publication.publish graph |> Result.isOk)
+
+    [<Fact>]
+    member _.``Passive publication retains the exact Baker-frozen leaf tables``() =
+        let graph = PublicationFixture.check "frozen-copy" PublicationFixture.programs["scalar"]
+        let held = graph.Codata.Value.WitnessPublishedRows |> Option.defaultWith (fun () -> failwith "Frozen source rows absent")
+        let revision = PublicationFixture.publish graph
+        Assert.Same(held.Nodes, revision.Nodes)
+        Assert.Same(held.SourceReadings, revision.SourceReadings)
+        Assert.Same(held.Codata, revision.Codata)
+        Assert.Same(held.Emission, revision.Emission)
+        Assert.Same(held.Foreign, revision.Foreign)
+        Assert.Same(held.Demand, revision.Demand)
+        Assert.Same(held.CurrentClaims, revision.CurrentClaims)
+        let withdrawn = { graph with Codata = lazy { graph.Codata.Value with WitnessPublishedRows = None } }
+        Assert.True(Publication.publish withdrawn |> Result.isError)
+        Assert.True((NativeGraph.invalidateWitness graph).Codata.Value.WitnessPublishedRows.IsNone)
+
     [<Theory>]
     [<InlineData("unchanged", "passive")>]
     [<InlineData("unchanged", "publication")>]
@@ -104,7 +134,7 @@ let main _ =
             match Emission.tryRead original with
             | Result.Ok _ -> ()
             | Result.Error reason -> failwithf "Original passive read refused: %s" reason
-            match Publication.publish SequenceProgramFixture.context original with
+            match Publication.publish original with
             | Result.Ok _ -> ()
             | Result.Error failures -> failwithf "Original publication refused: %A" failures
         admitted graph
@@ -123,7 +153,7 @@ let main _ =
         Assert.Same(graph.Edges, changed.Edges)
         Assert.Same(graph.Codata, changed.Codata)
         let passive = Emission.tryRead changed
-        let published = Publication.publish SequenceProgramFixture.context changed
+        let published = Publication.publish changed
         // Validate the retained original after both changed-input reads, before
         // inspecting either outcome. Neither read may consume its authority.
         admitted graph
@@ -189,7 +219,7 @@ let main _ =
     [<Fact>]
     member _.``A graph whose projection was withdrawn is not published`` () =
         let graph = PublicationFixture.check "scalar" PublicationFixture.programs["scalar"]
-        match Publication.publish PublicationFixture.platform (Emission.invalidate graph) with
+        match Publication.publish (Emission.invalidate graph) with
         | Error failures ->
             Assert.Contains(failures, fun failure ->
                 failure.Reason = "Source emission admission: The current graph has no complete source witness projection.")
@@ -199,7 +229,7 @@ let main _ =
     member _.``A graph changed after its projection is not published`` () =
         let graph = PublicationFixture.check "scalar" PublicationFixture.programs["scalar"]
         let changed = { graph with DeclarationRoots = [] }
-        match Publication.publish PublicationFixture.platform changed with
+        match Publication.publish changed with
         | Error failures ->
             Assert.Contains(failures, fun failure ->
                 failure.Reason.StartsWith "Source emission admission: The current graph differs from its source witness projection input")
@@ -219,7 +249,7 @@ let main _ =
             | _, LiteralStorage.NotMaterialized (StoragePremise.Established omissions) ->
                 { graph with LiteralStorage = graph.LiteralStorage.Add(never, LiteralStorage.NotMaterialized (StoragePremise.Pending omissions)) }
             | _, row -> failwithf "The literal that no demanded position reads has the storage row %A" row
-        match Publication.publish IntrinsicWriteFixture.platform changed with
+        match Publication.publish changed with
         | Error failures ->
             Assert.Contains(failures, fun failure ->
                 failure.Reason.StartsWith "Source emission admission: The current graph differs from its source witness projection input")
@@ -266,7 +296,7 @@ let main _ =
         match Emission.admit changed with
         | Ok () -> failwith "Source admitted a stale region contract"
         | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason = "Witness segmentation differs from the current source snapshot.")
-        match Publication.publish PublicationFixture.platform changed with
+        match Publication.publish changed with
         | Ok _ -> failwith "Publication copied stale region roots"
         | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains "current graph differs")
 
@@ -283,7 +313,7 @@ let main _ =
         let sources =
             graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains)
             |> List.groupBy _.Target
-            |> List.map (fun (target, rows) -> target, List.map _.Sources rows) |> Map.ofList
+            |> List.map (fun (target, rows) -> target, List.map (fun (edge: Hyperedge) -> edge.Sources) rows) |> Map.ofList
         Assert.True(dispatch.SourceGroups = sources)
         let query = Discharge.smtLib (List.map snd required)
         Assert.Equal<Result<string, (NodeId * string list) list>>(Ok query, dispatch.Query)
@@ -311,10 +341,10 @@ let main _ =
         match Emission.admit changed with
         | Ok () -> failwith "Source admitted missing or stale dispatch"
         | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason = "Proof dispatch differs from the current source snapshot.")
-        Assert.True(Result.isError (Publication.publish PublicationFixture.platform changed))
+        Assert.True(Result.isError (Publication.publish changed))
         let renewed = PublicationFixture.prepare changed
         Assert.True(Result.isOk (Emission.admit renewed))
-        Assert.True(Result.isOk (Publication.publish PublicationFixture.platform renewed))
+        Assert.True(Result.isOk (Publication.publish renewed))
 
     [<Theory>]
     [<InlineData("class")>]
@@ -347,7 +377,7 @@ let main _ =
         match Emission.admit changed with
         | Ok () -> failwith "Source admitted changed dispatch incidence"
         | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason = "Proof dispatch differs from the current source snapshot.")
-        Assert.True(Result.isError (Publication.publish PublicationFixture.platform changed))
+        Assert.True(Result.isError (Publication.publish changed))
 
     [<Fact>]
     member _.``Changing an obligation body retracts its retained query`` () =
@@ -362,20 +392,24 @@ let main _ =
         | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason = "Proof dispatch differs from the current source snapshot.")
         let renewed = PublicationFixture.prepare changed
         Assert.NotEqual<Result<string, (NodeId * string list) list>>(graph.Codata.Value.ProofDispatch.Value.Query, renewed.Codata.Value.ProofDispatch.Value.Query)
-        Assert.True(Result.isError (Publication.publish PublicationFixture.platform changed))
+        Assert.True(Result.isError (Publication.publish changed))
 
     [<Fact>]
-    member _.``Pending dispatch retains exact missing reasons without a query or new preparation failure`` () =
+    member _.``Pending dispatch retains exact missing reasons and refuses physical source preparation`` () =
         let reasons = ["The complete initialization census is missing."; "The source role is unavailable."]
         let raw, target = PublicationFixture.dispatchGraph (ObligationBody.Pending reasons)
-        let graph = PublicationFixture.prepare raw
-        let dispatch = graph.Codata.Value.ProofDispatch |> Option.get
+        let dispatch = Dispatch.materialize raw |> Result.defaultWith (sprintf "%A" >> failwith)
         Assert.Equal<Result<string, (NodeId * string list) list>>(Error [target, reasons], dispatch.Query)
         Assert.Contains(dispatch.Required, fun (id, info) -> id = target && info.Body = ObligationBody.Pending reasons)
-        Assert.True(Result.isOk (Emission.admit graph))
-        match Publication.publish PublicationFixture.platform graph with
+        match Emission.prepare raw with
+        | Ok _ -> failwith "Physical source preparation accepted unavailable dispatch"
+        | Error failures ->
+            Assert.Contains(failures, fun failure ->
+                failure.Occurrence = Some target &&
+                failure.Reason = "Frozen publication rows: Source proof dispatch is unavailable: " + String.concat "; " reasons)
+        match Publication.publish raw with
         | Ok _ -> failwith "Publication accepted unavailable dispatch"
-        | Error failures -> Assert.Contains(failures, fun failure -> failure.Occurrence = Some target && failure.Reason.Contains "premises are unavailable")
+        | Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains "Source emission admission")
 
     [<Fact>]
     member _.``Malformed rendering fails at the source obligation before publication`` () =
@@ -432,7 +466,7 @@ module private CallableBranchPublicationFixture =
         result.Graph
 
     let publish graph =
-        match Publication.publish platform graph with
+        match Publication.publish graph with
         | Result.Ok revision -> revision
         | Result.Error failures -> failwithf "Publication refused: %A" failures
 
@@ -531,7 +565,7 @@ type CallableBranchPublicationCases() =
         | Result.Error failures ->
             Assert.Contains(failures, fun failure ->
                 failure.Reason = "Callable branch authority is missing or differs from the current whole-revision origin census; Baker branch settlement is required.")
-        match Publication.publish CallableBranchPublicationFixture.platform changed with
+        match Publication.publish changed with
         | Result.Ok _ -> failwith "Publication reconstructed missing source branch authority"
         | Result.Error failures ->
             Assert.Contains(failures, fun failure ->

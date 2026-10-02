@@ -128,7 +128,10 @@ let premise (node: SemanticNode) : BoundarySourcePremise =
         | _ -> []
     let stringMetadata name =
         match node.Metadata.TryFind name with Some (MetadataValue.String value) -> Some value | _ -> None
-    let metadata = node.Metadata |> Map.fold (fun facts name value ->
+    // Anchors reify a claim's consequence on its source participants. The
+    // semantic premise cannot depend on its own consequence annotation; exact
+    // claim bodies and incidence are retained separately by every proof owner.
+    let metadata = node.Metadata.Remove ObligationMetadata.Anchors |> Map.fold (fun facts name value ->
         let fact =
             match value with
             | MetadataValue.String value -> Some (["string"; value], [], [], None)

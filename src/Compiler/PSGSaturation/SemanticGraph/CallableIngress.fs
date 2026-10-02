@@ -44,7 +44,7 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
     let entry = initialization |> Option.map _.EntryLambda
     let incidence = nodes.Values |> Seq.collect Incidence.structuralIncidence |> Seq.toList
     let edgeKey (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
-    let grouped rows =
+    let grouped (rows: Hyperedge list) =
         rows |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge))
         |> List.groupBy fst |> Map.ofList |> Map.map (fun _ values -> values |> List.map snd |> List.distinctBy edgeKey)
     let uses = incidence |> List.filter (fun edge -> edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference) |> grouped
