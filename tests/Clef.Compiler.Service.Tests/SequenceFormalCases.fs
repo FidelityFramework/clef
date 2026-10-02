@@ -2,7 +2,7 @@ namespace Clef.Compiler.Service.Tests
 
 open System
 open System.IO
-open System.Text.Json
+open Fidelity.Data.JSON
 open Xunit
 open Clef.Compiler.NativeService
 open Clef.Compiler.NativeTypedTree.NativeTypes
@@ -29,22 +29,22 @@ module private SequenceFormals =
             DimensionalCases.noErrors result
             Assert.DoesNotContain(result.Graph.Nodes.Values, fun node ->
                 match node.Kind with SemanticKind.Error _ -> true | _ -> false)
-            use document = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "01_psg0.json")))
-            let raw = document.RootElement.GetProperty("nodes").EnumerateArray()
-                      |> Seq.map (fun node -> node.GetProperty("id").GetInt32(), node.Clone()) |> Map.ofSeq
+            let document = ArtifactJson.parse(File.ReadAllText(Path.Combine(directory, "01_psg0.json")))
+            let raw = (document |> ArtifactJson.field "nodes" |> ArtifactJson.items)
+                      |> Seq.map (fun node -> (node |> ArtifactJson.field "id" |> ArtifactJson.integer), node) |> Map.ofSeq
             result, raw
         finally
             PhaseConfig.setConfig previous
             Directory.Delete(directory, true)
 
-    let rawChildren (raw: Map<int, JsonElement>) id =
-        raw[NodeId.value id].GetProperty("children").EnumerateArray() |> Seq.map (fun child -> child.GetInt32()) |> Seq.toList
+    let rawChildren (raw: Map<int, JsonValue>) id =
+        (raw[NodeId.value id] |> ArtifactJson.field "children" |> ArtifactJson.items) |> Seq.map (fun child -> (child |> ArtifactJson.integer)) |> Seq.toList
 
     let owners (result: CheckResult) =
         result.Graph.Nodes.Values |> Seq.filter (fun node ->
             node.IsReachable && match node.Kind with SemanticKind.SeqExpr _ -> true | _ -> false) |> Seq.toList
 
-    let assertFormal (result: CheckResult) (raw: Map<int, JsonElement>) (owner: SemanticNode) =
+    let assertFormal (result: CheckResult) (raw: Map<int, JsonValue>) (owner: SemanticNode) =
         let nodes = result.Graph.Nodes
         match owner.Kind with
         | SemanticKind.SeqExpr (generatorId, ownerCaptures) ->
@@ -67,8 +67,8 @@ module private SequenceFormals =
                 Assert.Equal<int list>([NodeId.value parameterId; NodeId.value body], rawChildren raw generatorId)
                 Assert.Equal<int list>([NodeId.value generatorId], rawChildren raw owner.Id)
                 let originalParameter = raw[NodeId.value parameterId]
-                Assert.Equal(sprintf "PatternBinding \"%s\"" name, originalParameter.GetProperty("kind").GetString())
-                Assert.Equal(NodeId.value generatorId, originalParameter.GetProperty("parent").GetInt32())
+                Assert.Equal(sprintf "PatternBinding \"%s\"" name, (originalParameter |> ArtifactJson.field "kind" |> ArtifactJson.text))
+                Assert.Equal(NodeId.value generatorId, (originalParameter |> ArtifactJson.field "parent" |> ArtifactJson.integer))
                 Assert.Equal(Some generatorId, parameter.Parent)
                 Assert.Equal(Some generatorId, nodes[body].Parent)
                 Assert.Equal(Some owner.Id, generator.Parent)

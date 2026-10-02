@@ -1,6 +1,6 @@
 namespace Clef.Compiler.Service.Tests
 
-open System.Text.Json
+open Fidelity.Data.JSON
 open Xunit
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.Infrastructure
@@ -87,7 +87,7 @@ type PhaseProjectionCases() =
             let graph = PhaseProjectionFixture.graph ()
             let view = PhaseEmitter.selectGraphView (PhaseConfig.getConfig()).GraphMode graph
             let output : PhaseTypes.PhaseOutput = {
-                Summary = PhaseTypes.createSummaryWithReachability PhaseTypes.PhaseId.Final 8 1 1 0L
+                Summary = PhaseTypes.createSummaryWithReachability PhaseTypes.PhaseId.Final 8 1 1 9223372036854775807L
                 View = view.Metadata
                 Nodes = view.Nodes.Values |> Seq.map (fun node ->
                     PhaseEmitter.createNodeOutput (NodeId.value node.Id) "Literal" "unit" node.IsReachable
@@ -97,15 +97,28 @@ type PhaseProjectionCases() =
                       Target = NodeId.value edge.Target; Class = string edge.Class
                       Role = string edge.Role; Ordinal = edge.Ordinal })
                 EntryPoints = [1]; Diagnostics = [] }
-            use json = JsonDocument.Parse(PhaseEmitter.serializePhaseOutput output)
-            Assert.Equal(8, json.RootElement.GetProperty("summary").GetProperty("nodeCount").GetInt32())
-            Assert.Equal(4, json.RootElement.GetProperty("nodes").GetArrayLength())
-            let metadata = json.RootElement.GetProperty("view")
-            Assert.Equal("pruned-with-evidence", metadata.GetProperty("mode").GetString())
-            Assert.Equal(2, metadata.GetProperty("externalNodeIds").GetArrayLength())
-            let missing = metadata.GetProperty("missingNodeIds")
-            Assert.Equal(99, missing[0].GetInt32())
+            let json = ArtifactJson.parse(PhaseEmitter.serializePhaseOutput output)
+            Assert.Equal(8, (json |> ArtifactJson.field "summary" |> ArtifactJson.field "nodeCount" |> ArtifactJson.integer))
+            Assert.Equal(Some 9223372036854775807L, json |> ArtifactJson.field "summary" |> ArtifactJson.field "elapsedMs" |> JsonValue.tryAsInt64)
+            Assert.Equal(4, (json |> ArtifactJson.field "nodes" |> ArtifactJson.count))
+            let metadata = (json |> ArtifactJson.field "view")
+            Assert.Equal("pruned-with-evidence", (metadata |> ArtifactJson.field "mode" |> ArtifactJson.text))
+            Assert.Equal(2, (metadata |> ArtifactJson.field "externalNodeIds" |> ArtifactJson.count))
+            let missing = (metadata |> ArtifactJson.field "missingNodeIds")
+            Assert.Equal(99, (missing |> ArtifactJson.at 0 |> ArtifactJson.integer))
             PhaseConfig.disableEmission ()
             PhaseConfig.enableArtifacts "unused" [5]
             Assert.Equal(PhaseConfig.GraphArtifactMode.Full, (PhaseConfig.getConfig()).GraphMode)
         finally PhaseConfig.setConfig previous
+
+    [<Fact>]
+    member _.``Expression artifacts escape enclosing function names and preserve option cases`` () =
+        let name = "parent\n\"nested\"\\body"
+        let literal = Clef.Compiler.NativeTypedTree.ClefExpr.Literal(NativeLiteral.Unit, Types.unitType)
+        let nested = Clef.Compiler.NativeTypedTree.ClefExpr.Lambda([], literal, Types.unitType, None, Some name)
+        let topLevel = Clef.Compiler.NativeTypedTree.ClefExpr.Lambda([], literal, Types.unitType, None, None)
+        let artifact = PhaseEmitter.serializeExpressionView [nested; topLevel] |> ArtifactJson.parse
+        let expressions = artifact |> ArtifactJson.field "expressions"
+        Assert.Equal(2, artifact |> ArtifactJson.field "entryPointCount" |> ArtifactJson.integer)
+        Assert.Equal(name, expressions |> ArtifactJson.at 0 |> ArtifactJson.field "enclosingFunction" |> ArtifactJson.field "Some" |> ArtifactJson.text)
+        Assert.True(expressions |> ArtifactJson.at 1 |> ArtifactJson.field "enclosingFunction" |> ArtifactJson.field "None" |> ArtifactJson.boolean)

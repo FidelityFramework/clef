@@ -2,7 +2,7 @@ namespace Clef.Compiler.Service.Tests
 
 open System
 open System.IO
-open System.Text.Json
+open Fidelity.Data.JSON
 open Xunit
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.Infrastructure
@@ -40,11 +40,11 @@ type PendingObligationCases() =
         Assert.Throws<InvalidOperationException>(fun () -> PendingDischarge.smtLib [pending] |> ignore) |> ignore
         let id, retained = graph pending.Body
         Assert.Contains(PendingDischarge.ofGraph retained, fun item -> item.Id = pending.Id && item.Body = pending.Body)
-        use ledger = JsonDocument.Parse(PendingDischarge.ledgerJson [ready; pending])
-        let rows = ledger.RootElement.GetProperty("obligations").EnumerateArray() |> Seq.toList
-        Assert.Equal("ready", rows[0].GetProperty("state").GetString())
-        Assert.Equal("pending", rows[1].GetProperty("state").GetString())
-        Assert.Equal(2, rows[1].GetProperty("missingPremises").GetArrayLength())
+        let ledger = ArtifactJson.parse(PendingDischarge.ledgerJson [ready; pending])
+        let rows = (ledger |> ArtifactJson.field "obligations" |> ArtifactJson.items) |> Seq.toList
+        Assert.Equal("ready", (rows[0] |> ArtifactJson.field "state" |> ArtifactJson.text))
+        Assert.Equal("pending", (rows[1] |> ArtifactJson.field "state" |> ArtifactJson.text))
+        Assert.Equal(2, (rows[1] |> ArtifactJson.field "missingPremises" |> ArtifactJson.count))
         // Baker owns the unavailable proof account. The copy-only publisher
         // refuses an unprepared graph without forcing its source computations.
         let dispatch = Clef.Compiler.Baker.Recipes.ProofDispatchRecipes.materialize retained |> Result.defaultWith (sprintf "%A" >> failwith)
@@ -78,8 +78,8 @@ type PendingObligationCases() =
             File.WriteAllText(queryPath, "(assert false)\n(check-sat)\n")
             PendingDischarge.emit pending
             Assert.False(File.Exists queryPath)
-            use unavailable = JsonDocument.Parse(File.ReadAllText unavailablePath)
-            Assert.Equal("pending_order", unavailable.RootElement[0].GetProperty("Anchor").GetString())
+            let unavailable = ArtifactJson.parse(File.ReadAllText unavailablePath)
+            Assert.Equal("pending_order", (unavailable |> ArtifactJson.at 0 |> ArtifactJson.field "Anchor" |> ArtifactJson.text))
             PendingDischarge.emit ready
             Assert.False(File.Exists unavailablePath)
             Assert.Equal(PendingDischarge.smtLib (PendingDischarge.ofGraph ready) + "\n", File.ReadAllText queryPath)

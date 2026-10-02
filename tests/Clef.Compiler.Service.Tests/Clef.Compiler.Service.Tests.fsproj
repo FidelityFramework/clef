@@ -5,6 +5,7 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="ArtifactJson.fs" />
     <Compile Include="DimensionalCases.fs" />
     <Compile Include="NominalIdentityCases.fs" />
     <Compile Include="MixedRecursiveSchemeCases.fs" />

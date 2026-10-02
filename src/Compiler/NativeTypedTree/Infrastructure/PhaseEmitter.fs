@@ -9,6 +9,7 @@ module Clef.Compiler.NativeTypedTree.Infrastructure.PhaseEmitter
 open System
 open System.IO
 open System.Text
+open Fidelity.Data.JSON
 open Clef.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
 open Clef.Compiler.NativeTypedTree.Infrastructure.PhaseTypes
 open Clef.Compiler.NativeTypedTree.NativeTypes
@@ -82,196 +83,98 @@ let selectGraphView mode (graph: SemanticGraph) : GraphView =
         MissingNodeIds = missing |> Set.toList |> List.map NodeId.value } }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// JSON Serialization (minimal, no external dependencies)
+// JSON projection through Fidelity.Data
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Escape a string for JSON
-let private escapeJsonString (s: string) =
-    let sb = StringBuilder()
-    sb.Append('"') |> ignore
-    for c in s do
-        match c with
-        | '"' -> sb.Append("\\\"") |> ignore
-        | '\\' -> sb.Append("\\\\") |> ignore
-        | '\n' -> sb.Append("\\n") |> ignore
-        | '\r' -> sb.Append("\\r") |> ignore
-        | '\t' -> sb.Append("\\t") |> ignore
-        | c when int c < 32 -> sb.Append(sprintf "\\u%04x" (int c)) |> ignore
-        | c -> sb.Append(c) |> ignore
-    sb.Append('"') |> ignore
-    sb.ToString()
+let private number (value: int) = JsonValue.ofInt64 (int64 value)
+let private numbers values = values |> List.map number |> JsonValue.Array
+let private strings values = values |> List.map JsonValue.String |> JsonValue.Array
+let private render pretty value =
+    if pretty then Json.serializePretty value else Json.serialize value
 
-/// Format a value for JSON
-let private _formatJsonValue (_pretty: bool) (_indent: int) (value: obj) : string =
-    match box value with
-    | null -> "null"
-    | :? bool as b -> if b then "true" else "false"
-    | :? int as i -> string i
-    | :? int64 as i -> string i
-    | :? float as f -> string f
-    | :? string as s -> escapeJsonString s
-    | :? DateTime as dt -> escapeJsonString (dt.ToString("O"))
-    | _ -> escapeJsonString (string value)
+/// The diagnostic schema is projected explicitly from compiler-owned values.
+let private summaryValue (summary: PhaseSummary) =
+    JsonValue.Object [
+        "phase", number summary.Phase.Number
+        "phaseName", JsonValue.String summary.Phase.DisplayName
+        "timestamp", JsonValue.String (summary.Timestamp.ToString("O"))
+        "nodeCount", number summary.NodeCount
+        "reachableCount", summary.ReachableCount |> Option.map number |> Option.defaultValue JsonValue.Null
+        "entryPointCount", number summary.EntryPointCount
+        "diagnosticCount", number summary.DiagnosticCount
+        "errorCount", number summary.ErrorCount
+        "elapsedMs", JsonValue.ofInt64 summary.ElapsedMs ]
 
-/// Build JSON object from key-value pairs
-let private buildJsonObject (pretty: bool) (indent: int) (pairs: (string * string) list) : string =
-    let indentStr = if pretty then String.replicate indent "  " else ""
-    let innerIndent = if pretty then String.replicate (indent + 1) "  " else ""
-    let newline = if pretty then "\n" else ""
-    let sep = if pretty then ",\n" else ","
-
-    let content =
-        pairs
-        |> List.map (fun (k, v) -> sprintf "%s%s: %s" innerIndent (escapeJsonString k) v)
-        |> String.concat sep
-
-    sprintf "{%s%s%s%s}" newline content newline indentStr
-
-/// Build JSON array from values
-let private buildJsonArray (pretty: bool) (indent: int) (values: string list) : string =
-    if List.isEmpty values then "[]"
-    else
-        let indentStr = if pretty then String.replicate indent "  " else ""
-        let innerIndent = if pretty then String.replicate (indent + 1) "  " else ""
-        let newline = if pretty then "\n" else ""
-        let sep = if pretty then ",\n" else ","
-
-        let content =
-            values
-            |> List.map (fun v -> sprintf "%s%s" innerIndent v)
-            |> String.concat sep
-
-        sprintf "[%s%s%s%s]" newline content newline indentStr
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Serialization for Phase Types
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Serialize a PhaseSummary to JSON
-let private serializeSummary (pretty: bool) (summary: PhaseSummary) : string =
-    let pairs = [
-        ("phase", string summary.Phase.Number)
-        ("phaseName", escapeJsonString summary.Phase.DisplayName)
-        ("timestamp", escapeJsonString (summary.Timestamp.ToString("O")))
-        ("nodeCount", string summary.NodeCount)
-        ("reachableCount",
-            match summary.ReachableCount with
-            | Some n -> string n
-            | None -> "null")
-        ("entryPointCount", string summary.EntryPointCount)
-        ("diagnosticCount", string summary.DiagnosticCount)
-        ("errorCount", string summary.ErrorCount)
-        ("elapsedMs", string summary.ElapsedMs)
-    ]
-    buildJsonObject pretty 1 pairs
-
-let private serializeSpecialization pretty indent (trace: SpecializationTrace) =
-    let ids values = buildJsonArray false 0 (values |> List.map (NodeId.value >> string))
+let private specializationValue (trace: SpecializationTrace) =
+    let nodeId = NodeId.value >> number
     let snapshot (value: SpecializationNodeSnapshot) =
-        buildJsonObject pretty (indent + 1) ([
-            "kind", escapeJsonString value.Kind
-            "type", escapeJsonString value.Type
-            "children", ids value.Children ] @
-            (value.Parent |> Option.map (fun id -> ["parent", string (NodeId.value id)]) |> Option.defaultValue []))
-    buildJsonObject pretty indent [
-        "meaning", escapeJsonString "applied-specialization-snapshot"
-        "sourceDeclaration", string (NodeId.value trace.SourceDeclaration)
-        "sourceNode", string (NodeId.value trace.SourceNode)
-        "cloneDeclaration", string (NodeId.value trace.CloneDeclaration)
-        "cloneNode", string (NodeId.value trace.CloneNode)
-        "scheme", escapeJsonString trace.Scheme
-        "retiresSource", if trace.RetiresSource then "true" else "false"
-        "parameters", buildJsonArray pretty (indent + 1) (trace.Parameters |> List.map (fun (id, kind) ->
-            buildJsonObject false 0 ["id", string id; "kind", escapeJsonString kind]))
-        "codeArguments", buildJsonArray false 0 (trace.CodeArguments |> List.map escapeJsonString)
-        "requests", buildJsonArray pretty (indent + 1) (trace.Requests |> List.map (fun (id, ty) ->
-            buildJsonObject false 0 ["occurrence", string (NodeId.value id); "type", escapeJsonString ty]))
+        JsonValue.Object ([
+            "kind", JsonValue.String value.Kind
+            "type", JsonValue.String value.Type
+            "children", JsonValue.Array (value.Children |> List.map nodeId) ] @
+            (value.Parent |> Option.map (fun id -> ["parent", nodeId id]) |> Option.defaultValue []))
+    JsonValue.Object [
+        "meaning", JsonValue.String "applied-specialization-snapshot"
+        "sourceDeclaration", nodeId trace.SourceDeclaration
+        "sourceNode", nodeId trace.SourceNode
+        "cloneDeclaration", nodeId trace.CloneDeclaration
+        "cloneNode", nodeId trace.CloneNode
+        "scheme", JsonValue.String trace.Scheme
+        "retiresSource", JsonValue.Bool trace.RetiresSource
+        "parameters", JsonValue.Array (trace.Parameters |> List.map (fun (id, kind) ->
+            JsonValue.Object ["id", number id; "kind", JsonValue.String kind]))
+        "codeArguments", strings trace.CodeArguments
+        "requests", JsonValue.Array (trace.Requests |> List.map (fun (id, ty) ->
+            JsonValue.Object ["occurrence", nodeId id; "type", JsonValue.String ty]))
         "input", snapshot trace.Input
         "output", snapshot trace.Output ]
 
-/// Serialize a PhaseNodeOutput to JSON
-/// Only emits fields with meaningful values - no "null" clutter
-let private serializeNode (pretty: bool) (indent: int) (node: PhaseNodeOutput) : string =
-    // Required fields - always present
-    let requiredPairs = [
-        ("id", string node.Id)
-        ("kind", escapeJsonString node.Kind)
-        ("type", escapeJsonString node.Type)
-        ("isReachable", if node.IsReachable then "true" else "false")
-        ("children", buildJsonArray false 0 (node.Children |> List.map string))
-    ]
-    // Optional fields - only include when present
-    let optionalPairs =
-        [
-            node.Parent |> Option.map (fun p -> ("parent", string p))
-            node.Range |> Option.map (fun r -> ("range", escapeJsonString r))
-            node.SRTPResolution |> Option.map (fun r -> ("srtpResolution", escapeJsonString r))
-            node.Body |> Option.map (fun b -> ("body", escapeJsonString b))
-            node.EmissionStrategy |> Option.map (fun s -> ("emissionStrategy", escapeJsonString s))
-            node.ValueRange |> Option.map (fun r -> ("valueRange", escapeJsonString r))
-            // Elaboration fields (unified - source-based nodes have no elaboration)
-            node.ElaborationKind |> Option.map (fun k -> ("elaborationKind", escapeJsonString k))
-            node.ElaborationFor |> Option.map (fun f -> ("elaborationFor", escapeJsonString f))
-            node.ElaborationId |> Option.map (fun id -> ("elaborationId", string id))
-            node.Specialization |> Option.map (fun trace -> ("specialization", serializeSpecialization pretty (indent + 1) trace))
-        ]
-        |> List.choose id
-    buildJsonObject pretty indent (requiredPairs @ optionalPairs)
+/// Optional fields are absent when the compiler has no corresponding value.
+let private nodeValue (node: PhaseNodeOutput) =
+    let required = [
+        "id", number node.Id
+        "kind", JsonValue.String node.Kind
+        "type", JsonValue.String node.Type
+        "isReachable", JsonValue.Bool node.IsReachable
+        "children", numbers node.Children ]
+    let optional = [
+        node.Parent |> Option.map (fun value -> "parent", number value)
+        node.Range |> Option.map (fun value -> "range", JsonValue.String value)
+        node.SRTPResolution |> Option.map (fun value -> "srtpResolution", JsonValue.String value)
+        node.Body |> Option.map (fun value -> "body", JsonValue.String value)
+        node.EmissionStrategy |> Option.map (fun value -> "emissionStrategy", JsonValue.String value)
+        node.ValueRange |> Option.map (fun value -> "valueRange", JsonValue.String value)
+        node.ElaborationKind |> Option.map (fun value -> "elaborationKind", JsonValue.String value)
+        node.ElaborationFor |> Option.map (fun value -> "elaborationFor", JsonValue.String value)
+        node.ElaborationId |> Option.map (fun value -> "elaborationId", number value)
+        node.Specialization |> Option.map (fun value -> "specialization", specializationValue value) ]
+    JsonValue.Object (required @ List.choose id optional)
 
-/// Serialize a PhaseOutput to JSON
+/// Serialize a PhaseOutput to JSON.
 let serializePhaseOutput (output: PhaseOutput) : string =
-    let config = getConfig()
-    let pretty = config.PrettyPrint
-
-    let summaryJson = serializeSummary pretty output.Summary
-
-    let nodesJson =
-        output.Nodes
-        |> List.map (serializeNode pretty 2)
-        |> buildJsonArray pretty 1
-
-    let entryPointsJson =
-        output.EntryPoints
-        |> List.map string
-        |> buildJsonArray false 0
-
-    let diagnosticsJson =
-        output.Diagnostics
-        |> List.map escapeJsonString
-        |> buildJsonArray pretty 1
-
-    let edgesJson =
-        output.Edges
-        |> List.map (fun e ->
-            buildJsonObject false 0 [
-                ("sources", buildJsonArray false 0 (e.Sources |> List.map string))
-                ("target", string e.Target)
-                ("class", escapeJsonString e.Class)
-                ("role", escapeJsonString e.Role)
-                ("ordinal", string e.Ordinal) ])
-        |> buildJsonArray pretty 1
-
     let view = output.View
-    let viewJson = buildJsonObject pretty 1 [
-        "mode", escapeJsonString view.Mode
-        "sourceNodeCount", string view.SourceNodeCount
-        "sourceEdgeCount", string view.SourceEdgeCount
-        "emittedNodeCount", string view.EmittedNodeCount
-        "emittedEdgeCount", string view.EmittedEdgeCount
-        "retainedUnreachableNodeCount", string view.RetainedUnreachableNodeCount
-        "externalNodeIds", buildJsonArray false 0 (view.ExternalNodeIds |> List.map string)
-        "missingNodeIds", buildJsonArray false 0 (view.MissingNodeIds |> List.map string)
-    ]
-    let pairs = [
-        ("summary", summaryJson)
-        ("view", viewJson)
-        ("nodes", nodesJson)
-        ("edges", edgesJson)
-        ("entryPoints", entryPointsJson)
-        ("diagnostics", diagnosticsJson)
-    ]
-
-    buildJsonObject pretty 0 pairs
+    JsonValue.Object [
+        "summary", summaryValue output.Summary
+        "view", JsonValue.Object [
+            "mode", JsonValue.String view.Mode
+            "sourceNodeCount", number view.SourceNodeCount
+            "sourceEdgeCount", number view.SourceEdgeCount
+            "emittedNodeCount", number view.EmittedNodeCount
+            "emittedEdgeCount", number view.EmittedEdgeCount
+            "retainedUnreachableNodeCount", number view.RetainedUnreachableNodeCount
+            "externalNodeIds", numbers view.ExternalNodeIds
+            "missingNodeIds", numbers view.MissingNodeIds ]
+        "nodes", JsonValue.Array (output.Nodes |> List.map nodeValue)
+        "edges", JsonValue.Array (output.Edges |> List.map (fun edge ->
+            JsonValue.Object [
+                "sources", numbers edge.Sources
+                "target", number edge.Target
+                "class", JsonValue.String edge.Class
+                "role", JsonValue.String edge.Role
+                "ordinal", number edge.Ordinal ]))
+        "entryPoints", numbers output.EntryPoints
+        "diagnostics", strings output.Diagnostics ]
+    |> render (getConfig().PrettyPrint)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Phase Emission API
@@ -379,45 +282,23 @@ let withElaboration (kind: string) (forConstruct: string) (id: int) (node: Phase
 
 /// Serialize a PhaseDiff to JSON
 let serializeDiff (diff: PhaseDiff) : string =
-    let config = getConfig()
-    let pretty = config.PrettyPrint
-
-    let nodesAddedJson = buildJsonArray false 0 (diff.NodesAdded |> List.map string)
-    let nodesRemovedJson = buildJsonArray false 0 (diff.NodesRemoved |> List.map string)
-
-    let typeChangesJson =
-        diff.TypeChanges
-        |> List.map (fun (id, oldT, newT) ->
-            buildJsonObject false 0 [
-                ("id", string id)
-                ("oldType", escapeJsonString oldT)
-                ("newType", escapeJsonString newT)
-            ])
-        |> buildJsonArray pretty 1
-
-    let reachabilityChangesJson =
-        diff.ReachabilityChanges
-        |> List.map (fun (id, wasR, isR) ->
-            buildJsonObject false 0 [
-                ("id", string id)
-                ("wasReachable", if wasR then "true" else "false")
-                ("isReachable", if isR then "true" else "false")
-            ])
-        |> buildJsonArray pretty 1
-
-    let newSRTPJson = buildJsonArray false 0 (diff.NewSRTPResolutions |> List.map string)
-
-    let pairs = [
-        ("fromPhase", string diff.FromPhase.Number)
-        ("toPhase", string diff.ToPhase.Number)
-        ("nodesAdded", nodesAddedJson)
-        ("nodesRemoved", nodesRemovedJson)
-        ("typeChanges", typeChangesJson)
-        ("reachabilityChanges", reachabilityChangesJson)
-        ("newSRTPResolutions", newSRTPJson)
-    ]
-
-    buildJsonObject pretty 0 pairs
+    JsonValue.Object [
+        "fromPhase", number diff.FromPhase.Number
+        "toPhase", number diff.ToPhase.Number
+        "nodesAdded", numbers diff.NodesAdded
+        "nodesRemoved", numbers diff.NodesRemoved
+        "typeChanges", JsonValue.Array (diff.TypeChanges |> List.map (fun (id, oldType, newType) ->
+            JsonValue.Object [
+                "id", number id
+                "oldType", JsonValue.String oldType
+                "newType", JsonValue.String newType ]))
+        "reachabilityChanges", JsonValue.Array (diff.ReachabilityChanges |> List.map (fun (id, wasReachable, isReachable) ->
+            JsonValue.Object [
+                "id", number id
+                "wasReachable", JsonValue.Bool wasReachable
+                "isReachable", JsonValue.Bool isReachable ]))
+        "newSRTPResolutions", numbers diff.NewSRTPResolutions ]
+    |> render (getConfig().PrettyPrint)
 
 /// Write a phase diff to disk
 let emitDiff (diff: PhaseDiff) : unit =
@@ -440,194 +321,114 @@ let emitDiff (diff: PhaseDiff) : unit =
 
 open Clef.Compiler.NativeTypedTree
 
-/// Serialize ClefExpr to JSON
-let rec private serializeExpr (pretty: bool) (indent: int) (expr: ClefExpr) : string =
-    // Note: these indent helpers reserved for future complex nesting
-    let _indentStr = if pretty then String.replicate indent "  " else ""
-    let _innerIndent = if pretty then String.replicate (indent + 1) "  " else ""
-    let _newline = if pretty then "\n" else ""
+let private resolutionValue (resolution: WitnessResolution option) =
+    match resolution with
+    | Some value -> JsonValue.Object [
+        "operator", JsonValue.String value.Operator
+        "resolvedMember", JsonValue.String value.ResolvedMember ]
+    | None -> JsonValue.Null
 
+/// Project the supported expression diagnostics without traversing inference cells.
+let rec private expressionValue (expr: ClefExpr) : JsonValue =
+    let typeName value = JsonValue.String (sprintf "%A" value)
+    let optionalExpression value = value |> Option.map expressionValue |> Option.defaultValue JsonValue.Null
+    let expressions values = values |> List.map expressionValue |> JsonValue.Array
     match expr with
     | ClefExpr.Literal(value, ty) ->
-        let valueStr = sprintf "%A" value |> escapeJsonString
-        let typeStr = sprintf "%A" ty |> escapeJsonString
-        buildJsonObject pretty indent [
-            ("kind", escapeJsonString "Literal")
-            ("value", valueStr)
-            ("type", typeStr)
-        ]
-
-    | ClefExpr.Variable(name, ty, isMutable, defId) ->
-        let defIdStr =
-            match defId with
-            | Some (NodeId id) -> string id
-            | None -> "null"
-        buildJsonObject pretty indent [
-            ("kind", escapeJsonString "Variable")
-            ("name", escapeJsonString name)
-            ("type", sprintf "%A" ty |> escapeJsonString)
-            ("isMutable", if isMutable then "true" else "false")
-            ("definitionId", defIdStr)
-        ]
-
+        JsonValue.Object [
+            "kind", JsonValue.String "Literal"
+            "value", typeName value
+            "type", typeName ty ]
+    | ClefExpr.Variable(name, ty, isMutable, definitionId) ->
+        JsonValue.Object [
+            "kind", JsonValue.String "Variable"
+            "name", JsonValue.String name
+            "type", typeName ty
+            "isMutable", JsonValue.Bool isMutable
+            "definitionId", definitionId |> Option.map (NodeId.value >> number) |> Option.defaultValue JsonValue.Null ]
     | ClefExpr.Application(func, args, returnType, srtp) ->
-        let funcJson = serializeExpr pretty (indent + 1) func
-        let argsJson = args |> List.map (serializeExpr pretty (indent + 2)) |> buildJsonArray pretty (indent + 1)
-        let srtpStr =
-            match srtp with
-            | Some r -> buildJsonObject pretty (indent + 1) [
-                ("operator", escapeJsonString r.Operator)
-                ("resolvedMember", escapeJsonString r.ResolvedMember)
-              ]
-            | None -> "null"
-        buildJsonObject pretty indent [
-            ("kind", escapeJsonString "Application")
-            ("function", funcJson)
-            ("arguments", argsJson)
-            ("returnType", sprintf "%A" returnType |> escapeJsonString)
-            ("srtpResolution", srtpStr)
-        ]
-
+        JsonValue.Object [
+            "kind", JsonValue.String "Application"
+            "function", expressionValue func
+            "arguments", expressions args
+            "returnType", typeName returnType
+            "srtpResolution", resolutionValue srtp ]
     | ClefExpr.Lambda(parameters, body, returnType, srtp, enclosingFunction) ->
-        let paramsJson =
-            parameters
-            |> List.map (fun (name, ty) ->
-                buildJsonObject false 0 [
-                    ("name", escapeJsonString name)
-                    ("type", sprintf "%A" ty |> escapeJsonString)
-                ])
-            |> buildJsonArray pretty (indent + 1)
-        let bodyJson = serializeExpr pretty (indent + 1) body
-        let srtpStr =
-            match srtp with
-            | Some r -> buildJsonObject pretty (indent + 1) [
-                ("operator", escapeJsonString r.Operator)
-                ("resolvedMember", escapeJsonString r.ResolvedMember)
-              ]
-            | None -> "null"
-        let enclosingStr =
+        let enclosing =
             match enclosingFunction with
-            | Some name -> sprintf "{\"Some\": \"%s\"}" (escapeJsonString name)
-            | None -> "{\"None\": true}"
-        buildJsonObject pretty indent [
-            ("kind", escapeJsonString "Lambda")
-            ("parameters", paramsJson)
-            ("body", bodyJson)
-            ("returnType", sprintf "%A" returnType |> escapeJsonString)
-            ("srtpResolution", srtpStr)
-            ("enclosingFunction", enclosingStr)
-        ]
-
+            | Some name -> JsonValue.Object ["Some", JsonValue.String name]
+            | None -> JsonValue.Object ["None", JsonValue.Bool true]
+        JsonValue.Object [
+            "kind", JsonValue.String "Lambda"
+            "parameters", JsonValue.Array (parameters |> List.map (fun (name, ty) ->
+                JsonValue.Object ["name", JsonValue.String name; "type", typeName ty]))
+            "body", expressionValue body
+            "returnType", typeName returnType
+            "srtpResolution", resolutionValue srtp
+            "enclosingFunction", enclosing ]
     | ClefExpr.LetBinding(name, isMutable, value, body, ty) ->
-        let valueJson = serializeExpr pretty (indent + 1) value
-        let bodyJson =
-            match body with
-            | Some b -> serializeExpr pretty (indent + 1) b
-            | None -> "null"
-        buildJsonObject pretty indent [
-            ("kind", escapeJsonString "LetBinding")
-            ("name", escapeJsonString name)
-            ("isMutable", if isMutable then "true" else "false")
-            ("value", valueJson)
-            ("body", bodyJson)
-            ("type", sprintf "%A" ty |> escapeJsonString)
-        ]
-
+        JsonValue.Object [
+            "kind", JsonValue.String "LetBinding"
+            "name", JsonValue.String name
+            "isMutable", JsonValue.Bool isMutable
+            "value", expressionValue value
+            "body", optionalExpression body
+            "type", typeName ty ]
     | ClefExpr.Sequential(exprs, ty) ->
-        let exprsJson = exprs |> List.map (serializeExpr pretty (indent + 1)) |> buildJsonArray pretty (indent + 1)
-        buildJsonObject pretty indent [
-            ("kind", escapeJsonString "Sequential")
-            ("expressions", exprsJson)
-            ("type", sprintf "%A" ty |> escapeJsonString)
-        ]
-
+        JsonValue.Object [
+            "kind", JsonValue.String "Sequential"
+            "expressions", expressions exprs
+            "type", typeName ty ]
     | ClefExpr.IfThenElse(guard, thenBranch, elseBranch, ty) ->
-        let guardJson = serializeExpr pretty (indent + 1) guard
-        let thenJson = serializeExpr pretty (indent + 1) thenBranch
-        let elseJson =
-            match elseBranch with
-            | Some e -> serializeExpr pretty (indent + 1) e
-            | None -> "null"
-        buildJsonObject pretty indent [
-            ("kind", escapeJsonString "IfThenElse")
-            ("guard", guardJson)
-            ("thenBranch", thenJson)
-            ("elseBranch", elseJson)
-            ("type", sprintf "%A" ty |> escapeJsonString)
-        ]
-
+        JsonValue.Object [
+            "kind", JsonValue.String "IfThenElse"
+            "guard", expressionValue guard
+            "thenBranch", expressionValue thenBranch
+            "elseBranch", optionalExpression elseBranch
+            "type", typeName ty ]
     | ClefExpr.PlatformBinding(entryPoint, args, ty) ->
-        let argsJson = args |> List.map (serializeExpr pretty (indent + 1)) |> buildJsonArray pretty (indent + 1)
-        buildJsonObject pretty indent [
-            ("kind", escapeJsonString "PlatformBinding")
-            ("entryPoint", escapeJsonString entryPoint)
-            ("arguments", argsJson)
-            ("type", sprintf "%A" ty |> escapeJsonString)
-        ]
-
-    | ClefExpr.TraitCall(memberName, constrainedTypes, arg, resolution, ty) ->
-        let argJson = serializeExpr pretty (indent + 1) arg
-        let typesJson =
-            constrainedTypes
-            |> List.map (fun t -> sprintf "%A" t |> escapeJsonString)
-            |> buildJsonArray pretty (indent + 1)
-        let resolutionJson =
-            match resolution with
-            | Some r -> buildJsonObject pretty (indent + 1) [
-                ("operator", escapeJsonString r.Operator)
-                ("resolvedMember", escapeJsonString r.ResolvedMember)
-              ]
-            | None -> "null"
-        buildJsonObject pretty indent [
-            ("kind", escapeJsonString "TraitCall")
-            ("memberName", escapeJsonString memberName)
-            ("constrainedTypes", typesJson)
-            ("argument", argJson)
-            ("resolution", resolutionJson)
-            ("type", sprintf "%A" ty |> escapeJsonString)
-        ]
-
+        JsonValue.Object [
+            "kind", JsonValue.String "PlatformBinding"
+            "entryPoint", JsonValue.String entryPoint
+            "arguments", expressions args
+            "type", typeName ty ]
+    | ClefExpr.TraitCall(memberName, constrainedTypes, argument, resolution, ty) ->
+        JsonValue.Object [
+            "kind", JsonValue.String "TraitCall"
+            "memberName", JsonValue.String memberName
+            "constrainedTypes", JsonValue.Array (constrainedTypes |> List.map typeName)
+            "argument", expressionValue argument
+            "resolution", resolutionValue resolution
+            "type", typeName ty ]
     | ClefExpr.ModuleDef(name, members) ->
-        let membersJson = members |> List.map (serializeExpr pretty (indent + 1)) |> buildJsonArray pretty (indent + 1)
-        buildJsonObject pretty indent [
-            ("kind", escapeJsonString "ModuleDef")
-            ("name", escapeJsonString name)
-            ("members", membersJson)
-        ]
-
+        JsonValue.Object [
+            "kind", JsonValue.String "ModuleDef"
+            "name", JsonValue.String name
+            "members", expressions members ]
     | ClefExpr.Error(message, _range) ->
-        buildJsonObject pretty indent [
-            ("kind", escapeJsonString "Error")
-            ("message", escapeJsonString message)
-        ]
-
+        JsonValue.Object ["kind", JsonValue.String "Error"; "message", JsonValue.String message]
     | _ ->
-        // Fallback for other expression types - use compact string
-        let compactStr = ClefExpr.toCompactString expr
-        buildJsonObject pretty indent [
-            ("kind", escapeJsonString compactStr)
-            ("note", escapeJsonString "Full serialization not yet implemented for this expression type")
-        ]
+        JsonValue.Object [
+            "kind", JsonValue.String (ClefExpr.toCompactString expr)
+            "note", JsonValue.String "Full serialization not yet implemented for this expression type" ]
 
-/// Emit ClefExpr views for all entry points
+/// Serialize expression diagnostics using the same schema as emitted artifacts.
+let serializeExpressionView (expressions: ClefExpr list) : string =
+    JsonValue.Object [
+        "version", JsonValue.String "1.0"
+        "description", JsonValue.String "ClefExpr - Expression-centric view of SemanticGraph"
+        "entryPointCount", number expressions.Length
+        "expressions", JsonValue.Array (expressions |> List.map expressionValue) ]
+    |> render (getConfig().PrettyPrint)
+
+/// Emit ClefExpr views for all entry points.
 let emitExpressionView (graph: SemanticGraph) : unit =
     let config = getConfig()
     if not config.EmitIntermediates then ()
     else
         try
             let exprs = ClefExpr.fromDeclarationRoots graph
-            let exprsJson =
-                exprs
-                |> List.map (serializeExpr config.PrettyPrint 1)
-                |> buildJsonArray config.PrettyPrint 0
-
-            let output = buildJsonObject config.PrettyPrint 0 [
-                ("version", escapeJsonString "1.0")
-                ("description", escapeJsonString "ClefExpr - Expression-centric view of SemanticGraph")
-                ("entryPointCount", string (List.length exprs))
-                ("expressions", exprsJson)
-            ]
-
+            let output = serializeExpressionView exprs
             let path = Path.Combine(config.OutputDir, "ccs_expr.json")
             File.WriteAllText(path, output, Encoding.UTF8)
             if PhaseConfig.isVerbose() then

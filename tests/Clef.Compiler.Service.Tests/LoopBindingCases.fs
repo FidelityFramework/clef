@@ -2,7 +2,7 @@ namespace Clef.Compiler.Service.Tests
 
 open System
 open System.IO
-open System.Text.Json
+open Fidelity.Data.JSON
 open System.Text.RegularExpressions
 open Xunit
 open Clef.Compiler.NativeService
@@ -32,19 +32,18 @@ module private LoopBindings =
             DimensionalCases.noErrors result
             Assert.DoesNotContain(result.Graph.Nodes.Values, fun node ->
                 node.IsReachable && match node.Kind with SemanticKind.Error _ -> true | _ -> false)
-            use document = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "01_psg0.json")))
-            let raw = document.RootElement.GetProperty("nodes").EnumerateArray()
-                      |> Seq.map (fun node -> node.GetProperty("id").GetInt32(), node.Clone()) |> Map.ofSeq
+            let document = ArtifactJson.parse(File.ReadAllText(Path.Combine(directory, "01_psg0.json")))
+            let raw = (document |> ArtifactJson.field "nodes" |> ArtifactJson.items)
+                      |> Seq.map (fun node -> (node |> ArtifactJson.field "id" |> ArtifactJson.integer), node) |> Map.ofSeq
             result, raw
         finally
             PhaseConfig.setConfig previous
             Directory.Delete(directory, true)
 
-    let rawKind (raw: Map<int, JsonElement>) id =
-        raw[NodeId.value id].GetProperty("kind").GetString()
-        |> Option.ofObj |> Option.defaultWith (fun () -> failwith "Raw phase omitted the node kind")
-    let rawChildren (raw: Map<int, JsonElement>) id =
-        raw[NodeId.value id].GetProperty("children").EnumerateArray() |> Seq.map (fun child -> child.GetInt32()) |> Seq.toList
+    let rawKind (raw: Map<int, JsonValue>) id =
+        (raw[NodeId.value id] |> ArtifactJson.field "kind" |> ArtifactJson.text)
+    let rawChildren (raw: Map<int, JsonValue>) id =
+        (raw[NodeId.value id] |> ArtifactJson.field "children" |> ArtifactJson.items) |> Seq.map (fun child -> (child |> ArtifactJson.integer)) |> Seq.toList
     let rawDefinition raw id =
         let matched = Regex.Match(rawKind raw id, @"Some\s*\(NodeId\s+(\d+)\)")
         Assert.True(matched.Success, sprintf "Raw reference lost its definition: %s" (rawKind raw id))
@@ -116,9 +115,9 @@ module private LoopBindings =
 
     /// Saturation replaces the read at its original occurrence. Compare every
     /// raw source read, so a dropped or redirected read cannot evade this gate.
-    let iterationReads (result: CheckResult) (raw: Map<int, JsonElement>) =
+    let iterationReads (result: CheckResult) (raw: Map<int, JsonValue>) =
         let reads = raw |> Map.toList |> List.choose (fun (id, node) ->
-            let kind = node.GetProperty("kind").GetString()
+            let kind = (node |> ArtifactJson.field "kind" |> ArtifactJson.text)
             if kind.StartsWith("VarRef (\"index\",") then Some (NodeId id) else None)
         Assert.NotEmpty reads
         reads |> List.map (fun id ->

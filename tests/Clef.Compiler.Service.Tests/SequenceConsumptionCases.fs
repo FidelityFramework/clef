@@ -2,7 +2,7 @@ namespace Clef.Compiler.Service.Tests
 
 open System
 open System.IO
-open System.Text.Json
+open Fidelity.Data.JSON
 open System.Text.RegularExpressions
 open Xunit
 open Clef.Compiler.NativeService
@@ -28,17 +28,17 @@ module private Consumption =
             DimensionalCases.noErrors result
             Assert.DoesNotContain(result.Graph.Nodes.Values, fun node ->
                 node.IsReachable && match node.Kind with SemanticKind.ForEach _ | SemanticKind.Error _ -> true | _ -> false)
-            use document = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "01_psg0.json")))
-            let raw = document.RootElement.GetProperty("nodes").EnumerateArray()
-                      |> Seq.map (fun node -> node.GetProperty("id").GetInt32(), node.Clone()) |> Map.ofSeq
+            let document = ArtifactJson.parse(File.ReadAllText(Path.Combine(directory, "01_psg0.json")))
+            let raw = (document |> ArtifactJson.field "nodes" |> ArtifactJson.items)
+                      |> Seq.map (fun node -> (node |> ArtifactJson.field "id" |> ArtifactJson.integer), node) |> Map.ofSeq
             result.Graph, raw
         finally
             PhaseConfig.setConfig previous
             Directory.Delete(directory, true)
 
-    let rawKind (node: JsonElement) =
-        node.GetProperty("kind").GetString() |> Option.ofObj |> Option.defaultWith (fun () -> failwith "Missing raw node kind")
-    let rawLoops (raw: Map<int, JsonElement>) =
+    let rawKind (node: JsonValue) =
+        (node |> ArtifactJson.field "kind" |> ArtifactJson.text)
+    let rawLoops (raw: Map<int, JsonValue>) =
         raw |> Map.toList |> List.choose (fun (id, node) ->
             let kind = rawKind node
             if kind.StartsWith("ForEach") then
@@ -56,7 +56,7 @@ module private Consumption =
             | _ -> None
         | _ -> None
 
-    let verify (graph: SemanticGraph) (raw: Map<int, JsonElement>) (site, formal, collection, body) =
+    let verify (graph: SemanticGraph) (raw: Map<int, JsonValue>) (site, formal, collection, body) =
         Assert.StartsWith("PatternBinding", rawKind raw[NodeId.value formal])
         let binding = graph.Nodes[formal]
         match binding.Kind with SemanticKind.Binding(_, false, false, _) -> () | kind -> failwithf "Lost immutable iteration binding: %A" kind

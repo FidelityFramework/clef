@@ -569,8 +569,6 @@
     <!-- XParsec - Parser combinators for Baker saturation (Phase 4.0: XParsec migration) -->
     <PackageReference Include="XParsec" Version="0.3.0" />
 
-    <!-- FSharp.Json - Pure F# JSON serializer with no BCL dependencies (diagnostic output) -->
-    <PackageReference Include="FSharp.Json" Version="0.4.1" />
 
   </ItemGroup>
 

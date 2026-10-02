@@ -6,32 +6,15 @@
 /// using the global ordinal artifact naming scheme.
 module Clef.Compiler.Nanopass.Serialization
 
-open System.Text
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.Infrastructure.PhaseConfig
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Nanopass.Recipe
-open FSharp.Json
+open Fidelity.Data.JSON
 
 //=============================================================================
 // JSON SERIALIZATION
 //=============================================================================
-
-let private escapeJson (s: string | null) : string =
-    match Option.ofObj s with
-    | None -> "null"
-    | Some value ->
-        let sb = StringBuilder()
-        for c in value do
-            match c with
-            | '"' -> sb.Append("\\\"") |> ignore
-            | '\\' -> sb.Append("\\\\") |> ignore
-            | '\n' -> sb.Append("\\n") |> ignore
-            | '\r' -> sb.Append("\\r") |> ignore
-            | '\t' -> sb.Append("\\t") |> ignore
-            | c when int c < 32 -> sb.Append(sprintf "\\u%04x" (int c)) |> ignore
-            | c -> sb.Append(c) |> ignore
-        sb.ToString()
 
 let private ensureDirectoryForFilePath (filePath: string) : unit =
     match System.IO.Path.GetDirectoryName(filePath) |> Option.ofObj with
@@ -43,73 +26,48 @@ let private ensureDirectoryForFilePath (filePath: string) : unit =
 // RECIPE SERIALIZATION
 //=============================================================================
 
-/// Serialize a single recipe to JSON
+let private number (value: int) = JsonValue.ofInt64 (int64 value)
+let private nodeId = NodeId.value >> number
+
+/// The recipe artifact carries a finite summary, not inference cells.
+let private recipeValue (recipe: Recipe) =
+    JsonValue.Object [
+        "originalNodeId", nodeId recipe.OriginalNodeId
+        "replacementRootId", nodeId recipe.ReplacementRootId
+        "newNodeIds", JsonValue.Array (recipe.NewNodes |> List.map (fun node -> nodeId node.Id))
+        "newNodeCount", number recipe.NewNodes.Length
+        "newEdges", JsonValue.Array (recipe.NewEdges |> List.map (fun edge ->
+            JsonValue.Object [
+                "sources", JsonValue.Array (edge.Sources |> List.map nodeId)
+                "target", nodeId edge.Target
+                "class", JsonValue.String (sprintf "%A" edge.Class)
+                "role", JsonValue.String (sprintf "%A" edge.Role)
+                "ordinal", number edge.Ordinal ]))
+        "elaborationKind", JsonValue.String recipe.ElaborationKind
+        "elaborationSource", JsonValue.String recipe.ElaborationSource ]
+
+/// Serialize a single recipe to JSON.
 let serializeRecipe (recipe: Recipe) : string =
-    let newNodeIds =
-        recipe.NewNodes
-        |> List.map (fun n -> let (NodeId nid) = n.Id in sprintf "%d" nid)
-        |> String.concat ", "
+    recipeValue recipe |> Json.serializePretty
 
-    let (NodeId origId) = recipe.OriginalNodeId
-    let (NodeId replId) = recipe.ReplacementRootId
-    let newEdges = recipe.NewEdges |> List.map (fun edge ->
-        sprintf """{"sources":[%s],"target":%d,"class":"%s","role":"%s","ordinal":%d}"""
-            (edge.Sources |> List.map (NodeId.value >> string) |> String.concat ",")
-            (NodeId.value edge.Target) (escapeJson (sprintf "%A" edge.Class))
-            (escapeJson (sprintf "%A" edge.Role)) edge.Ordinal) |> String.concat ","
-
-    sprintf """{
-    "originalNodeId": %d,
-    "replacementRootId": %d,
-    "newNodeIds": [%s],
-    "newNodeCount": %d,
-    "newEdges": [%s],
-    "elaborationKind": "%s",
-    "elaborationSource": "%s"
-  }"""
-        origId
-        replId
-        newNodeIds
-        (List.length recipe.NewNodes)
-        newEdges
-        (escapeJson recipe.ElaborationKind)
-        (escapeJson recipe.ElaborationSource)
-
-/// Serialize a RecipeSet to JSON (for intermediate emission)
+/// Serialize a RecipeSet to JSON (for intermediate emission).
 let serializeRecipeSet (recipeSet: RecipeSet) : string =
-    let recipesJson =
-        recipeSet.Recipes
-        |> Map.toSeq |> Seq.map snd
-        |> Seq.map serializeRecipe
-        |> String.concat ",\n  "
-
-    let allNewNodes =
-        recipeSet.Recipes
-        |> Map.toSeq |> Seq.map snd
-        |> Seq.collect (fun r -> r.NewNodes)
-        |> Seq.map (fun n ->
-            let (NodeId nid) = n.Id
-            sprintf """{"id": %d, "kind": "%s"}"""
-                nid
-                (escapeJson (sprintf "%A" n.Kind |> fun s -> if s.Length > 50 then s.Substring(0, 50) + "..." else s)))
-        |> String.concat ",\n    "
-
-    sprintf """{
-  "kind": "%s",
-  "recipeCount": %d,
-  "totalNewNodes": %d,
-  "recipes": [
-  %s
-  ],
-  "newNodes": [
-    %s
-  ]
-}"""
-        (escapeJson recipeSet.Kind)
-        recipeSet.Recipes.Count
-        (RecipeSet.totalNewNodes recipeSet)
-        recipesJson
-        allNewNodes
+    let recipes = recipeSet.Recipes |> Map.toList |> List.map snd
+    let newNodes =
+        recipes
+        |> List.collect (fun recipe -> recipe.NewNodes)
+        |> List.map (fun node ->
+            let kind = sprintf "%A" node.Kind
+            JsonValue.Object [
+                "id", nodeId node.Id
+                "kind", JsonValue.String (if kind.Length > 50 then kind.Substring(0, 50) + "..." else kind) ])
+    JsonValue.Object [
+        "kind", JsonValue.String recipeSet.Kind
+        "recipeCount", number recipeSet.Recipes.Count
+        "totalNewNodes", number (RecipeSet.totalNewNodes recipeSet)
+        "recipes", JsonValue.Array (recipes |> List.map recipeValue)
+        "newNodes", JsonValue.Array newNodes ]
+    |> Json.serializePretty
 
 /// Emit a RecipeSet using the artifact ID system
 /// artifactId should be ArtifactId.IntrinsicRecipes (2) or ArtifactId.SaturationRecipes (4)
@@ -131,7 +89,7 @@ let emitSaturationRecipes (recipeSet: RecipeSet) : unit =
     emitRecipeSetArtifact ArtifactId.SaturationRecipes recipeSet
 
 //=============================================================================
-// DIAGNOSTIC SERIALIZATION (using FSharp.Json)
+// DIAGNOSTIC SERIALIZATION
 //=============================================================================
 
 /// Created recipes refer to graph nodes; serialize their artifact summary rather
@@ -142,12 +100,19 @@ let serializeDiagnostics (diagnostics: RecipeDiagnostic list) : string =
     |> List.map (fun diagnostic ->
         let result =
             match diagnostic.Result with
-            | RecipeCreated recipe -> sprintf "{\"RecipeCreated\":%s}" (serializeRecipe recipe)
-            | other -> Json.serialize other
-        sprintf "{\"NodeId\":%s,\"ElaborationKind\":\"%s\",\"Result\":%s}"
-            (Json.serialize diagnostic.NodeId) (escapeJson diagnostic.ElaborationKind) result)
-    |> String.concat ",\n"
-    |> sprintf "[%s]"
+            | RecipeCreated recipe -> JsonValue.Object ["RecipeCreated", recipeValue recipe]
+            | NotApplicable reason -> JsonValue.Object ["NotApplicable", JsonValue.String reason]
+            | CreationFailed (reason, context) ->
+                JsonValue.Object [
+                    "CreationFailed", JsonValue.Array [
+                        JsonValue.String reason
+                        JsonValue.Object (context |> Map.toList |> List.map (fun (key, value) -> key, JsonValue.String value)) ] ]
+        JsonValue.Object [
+            "NodeId", nodeId diagnostic.NodeId
+            "ElaborationKind", JsonValue.String diagnostic.ElaborationKind
+            "Result", result ])
+    |> JsonValue.Array
+    |> Json.serializePretty
 
 /// Emit intrinsic diagnostics (artifact 02a)
 let emitIntrinsicDiagnostics (diagnostics: RecipeDiagnostic list) : unit =

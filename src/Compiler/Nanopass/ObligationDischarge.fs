@@ -17,7 +17,7 @@
 module Clef.Compiler.Nanopass.ObligationDischarge
 
 open System.IO
-open System.Text.Json
+open Fidelity.Data.JSON
 open Clef.Compiler.NativeTypedTree.DimensionAlgebra
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
@@ -470,34 +470,41 @@ let smtLib (obligations: ObligationInfo list) : string =
 
 /// The ledger: id, kind, logic, statement, source, refs -- the demo and audit
 /// surface, and the anchor list the build-time dispatch is paired against.
-let private readyLedgerJson (obligations: ObligationInfo list) : string =
-    let ledger =
-        {| version = "1.0"
-           description = "Proof obligations: born in the PSG as graph citizens, design-time form"
-           obligations =
-             [ for ob in obligations ->
-                 {| id = ob.Id; kind = ob.Kind; logic = ob.Logic
-                    statement = ob.Statement; source = ob.Source
-                    refs = ob.Refs |} ] |}
-    JsonSerializer.Serialize(ledger, JsonSerializerOptions(WriteIndented = true))
+let private stringArray values = values |> List.map JsonValue.String |> JsonValue.Array
 
 let ledgerJson (obligations: ObligationInfo list) : string =
-    match unavailable obligations with
-    | [] -> readyLedgerJson obligations
-    | _ ->
-        let ledger =
-            {| version = "1.1"
-               description = "Proof obligations: born in the PSG as graph citizens, design-time form"
-               obligations =
-                 [ for ob in obligations do
-                     let state, reasons =
-                         match ob.Body with
-                         | ObligationBody.Pending reasons -> "pending", reasons
-                         | _ -> "ready", []
-                     yield {| id = ob.Id; kind = ob.Kind; logic = ob.Logic
-                              statement = ob.Statement; source = ob.Source; refs = ob.Refs
-                              state = state; missingPremises = reasons |} ] |}
-        JsonSerializer.Serialize(ledger, JsonSerializerOptions(WriteIndented = true))
+    let hasPending = unavailable obligations |> List.isEmpty |> not
+    let rows = obligations |> List.map (fun ob ->
+        let fields = [
+            "id", JsonValue.String ob.Id
+            "kind", JsonValue.String ob.Kind
+            "logic", JsonValue.String ob.Logic
+            "statement", JsonValue.String ob.Statement
+            "source", JsonValue.String ob.Source
+            "refs", stringArray ob.Refs ]
+        let readiness =
+            if not hasPending then []
+            else
+                let state, reasons =
+                    match ob.Body with
+                    | ObligationBody.Pending reasons -> "pending", reasons
+                    | _ -> "ready", []
+                [ "state", JsonValue.String state; "missingPremises", stringArray reasons ]
+        JsonValue.Object (fields @ readiness))
+    JsonValue.Object [
+        "version", JsonValue.String (if hasPending then "1.1" else "1.0")
+        "description", JsonValue.String "Proof obligations: born in the PSG as graph citizens, design-time form"
+        "obligations", JsonValue.Array rows ]
+    |> Json.serializePretty
+
+let private unavailableJson (pending: UnavailableObligation list) =
+    pending
+    |> List.map (fun obligation -> JsonValue.Object [
+        "Anchor", JsonValue.String obligation.Anchor
+        "Source", JsonValue.String obligation.Source
+        "MissingPremises", stringArray obligation.MissingPremises ])
+    |> JsonValue.Array
+    |> Json.serializePretty
 
 //=============================================================================
 // PROJECTION AND EMISSION
@@ -526,5 +533,5 @@ let emit (graph: SemanticGraph) : unit =
                 if isVerbose () then printfn "[CCS] Wrote obligations: 06a_obligations.json, 06b_obligations.smt2 (%d obligations)" obs.Length
             | Error pending ->
                 File.Delete queryPath
-                File.WriteAllText(unavailablePath, JsonSerializer.Serialize(pending, JsonSerializerOptions(WriteIndented = true)))
+                File.WriteAllText(unavailablePath, unavailableJson pending)
                 if isVerbose () then printfn "[CCS] Wrote obligation ledger; query unavailable for %d pending obligations" pending.Length

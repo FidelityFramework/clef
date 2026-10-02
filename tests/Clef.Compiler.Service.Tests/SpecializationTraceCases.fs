@@ -1,6 +1,6 @@
 namespace Clef.Compiler.Service.Tests
 
-open System.Text.Json
+open Fidelity.Data.JSON
 open Xunit
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
@@ -142,20 +142,20 @@ type SpecializationTraceCases() =
         let trace = SpecializationTraceFixture.traces graph |> List.find (fun trace -> trace.SourceNode = code)
         let after, replacement = SpecializationTraceFixture.replace graph trace.CloneNode
         let mode = if pruned then PhaseConfig.GraphArtifactMode.Pruned else PhaseConfig.GraphArtifactMode.Full
-        use json = JsonDocument.Parse(SpecializationTraceFixture.serialize mode after)
-        let nodes = json.RootElement.GetProperty("nodes").EnumerateArray() |> Seq.toList
-        let retired = nodes |> List.find (fun node -> node.GetProperty("id").GetInt32() = NodeId.value trace.CloneNode)
-        Assert.False(retired.GetProperty("isReachable").GetBoolean())
-        let tape = retired.GetProperty("specialization")
-        Assert.Equal(NodeId.value declaration, tape.GetProperty("sourceDeclaration").GetInt32())
-        Assert.Equal(trace.Input.Type, tape.GetProperty("input").GetProperty("type").GetString())
-        Assert.True(tape.GetProperty("retiresSource").GetBoolean())
-        Assert.Equal(trace.Output.Type, tape.GetProperty("output").GetProperty("type").GetString())
-        Assert.Equal(trace.Requests.Length, tape.GetProperty("requests").GetArrayLength())
-        Assert.Equal(2, tape.GetProperty("codeArguments").GetArrayLength())
-        Assert.Contains(json.RootElement.GetProperty("edges").EnumerateArray(), fun row ->
-            row.GetProperty("role").GetString() = "SchemeSpecialization" && row.GetProperty("target").GetInt32() = NodeId.value replacement)
-        Assert.Equal(0, json.RootElement.GetProperty("view").GetProperty("missingNodeIds").GetArrayLength())
+        let json = ArtifactJson.parse(SpecializationTraceFixture.serialize mode after)
+        let nodes = (json |> ArtifactJson.field "nodes" |> ArtifactJson.items) |> Seq.toList
+        let retired = nodes |> List.find (fun node -> (node |> ArtifactJson.field "id" |> ArtifactJson.integer) = NodeId.value trace.CloneNode)
+        Assert.False((retired |> ArtifactJson.field "isReachable" |> ArtifactJson.boolean))
+        let tape = (retired |> ArtifactJson.field "specialization")
+        Assert.Equal(NodeId.value declaration, (tape |> ArtifactJson.field "sourceDeclaration" |> ArtifactJson.integer))
+        Assert.Equal(trace.Input.Type, (tape |> ArtifactJson.field "input" |> ArtifactJson.field "type" |> ArtifactJson.text))
+        Assert.True((tape |> ArtifactJson.field "retiresSource" |> ArtifactJson.boolean))
+        Assert.Equal(trace.Output.Type, (tape |> ArtifactJson.field "output" |> ArtifactJson.field "type" |> ArtifactJson.text))
+        Assert.Equal(trace.Requests.Length, (tape |> ArtifactJson.field "requests" |> ArtifactJson.count))
+        Assert.Equal(2, (tape |> ArtifactJson.field "codeArguments" |> ArtifactJson.count))
+        Assert.Contains((json |> ArtifactJson.field "edges" |> ArtifactJson.items), fun row ->
+            (row |> ArtifactJson.field "role" |> ArtifactJson.text) = "SchemeSpecialization" && (row |> ArtifactJson.field "target" |> ArtifactJson.integer) = NodeId.value replacement)
+        Assert.Equal(0, (json |> ArtifactJson.field "view" |> ArtifactJson.field "missingNodeIds" |> ArtifactJson.count))
 
     [<Fact>]
     member _.``Copied metadata does not manufacture another specialization event``() =

@@ -119,8 +119,8 @@ type FoldInReferenceCases() =
         Assert.Equal(replacementTarget.Id, actual.Target)
         Assert.Equal(3, actual.Ordinal)
         Assert.Empty graph.Edges
-        use json = System.Text.Json.JsonDocument.Parse(Clef.Compiler.Nanopass.Serialization.serializeRecipe sourceRecipe)
-        let serialized = json.RootElement.GetProperty("newEdges").EnumerateArray() |> Seq.exactlyOne
-        Assert.Equal(NodeId.value target.Id, serialized.GetProperty("target").GetInt32())
+        let json = ArtifactJson.parse(Clef.Compiler.Nanopass.Serialization.serializeRecipe sourceRecipe)
+        let serialized = (json |> ArtifactJson.field "newEdges" |> ArtifactJson.items) |> Seq.exactlyOne
+        Assert.Equal(NodeId.value target.Id, (serialized |> ArtifactJson.field "target" |> ArtifactJson.integer))
         Assert.Equal<int list>([NodeId.value source.Id; NodeId.value retained.Id],
-            serialized.GetProperty("sources").EnumerateArray() |> Seq.map (fun value -> value.GetInt32()) |> Seq.toList)
+            (serialized |> ArtifactJson.field "sources" |> ArtifactJson.items) |> Seq.map (fun value -> (value |> ArtifactJson.integer)) |> Seq.toList)

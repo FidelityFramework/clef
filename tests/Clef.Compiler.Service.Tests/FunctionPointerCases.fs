@@ -23,10 +23,19 @@ type FunctionPointerTests() =
             NewNodes = nodes; ElaborationKind = "Baker"; NewEdges = []; ElaborationSource = "native callback\n\"entry\"" }
         let diagnostics : Clef.Compiler.Nanopass.Recipe.RecipeDiagnostic list = [
             { NodeId = nodes.Head.Id; ElaborationKind = "Baker"; Result = Clef.Compiler.Nanopass.Recipe.RecipeCreated recipe }
-            { NodeId = nodes.Head.Id; ElaborationKind = "Baker"; Result = Clef.Compiler.Nanopass.Recipe.NotApplicable "reason" } ]
-        use artifact = System.Text.Json.JsonDocument.Parse(Clef.Compiler.Nanopass.Serialization.serializeDiagnostics diagnostics)
-        Assert.Equal(2, artifact.RootElement.GetArrayLength())
-        Assert.Equal(nodes.Length, artifact.RootElement[0].GetProperty("Result").GetProperty("RecipeCreated").GetProperty("newNodeCount").GetInt32())
+            { NodeId = nodes.Head.Id; ElaborationKind = "Baker"; Result = Clef.Compiler.Nanopass.Recipe.NotApplicable "reason" }
+            { NodeId = nodes.Head.Id; ElaborationKind = "Baker"
+              Result = Clef.Compiler.Nanopass.Recipe.CreationFailed ("missing \"witness\"", Map.ofList ["source", "file\nname"]) } ]
+        let artifact = ArtifactJson.parse(Clef.Compiler.Nanopass.Serialization.serializeDiagnostics diagnostics)
+        Assert.Equal(3, (artifact |> ArtifactJson.count))
+        Assert.Equal(nodes.Length, (artifact |> ArtifactJson.at 0 |> ArtifactJson.field "Result" |> ArtifactJson.field "RecipeCreated" |> ArtifactJson.field "newNodeCount" |> ArtifactJson.integer))
+        Assert.Equal(NodeId.value nodes.Head.Id, artifact |> ArtifactJson.at 0 |> ArtifactJson.field "NodeId" |> ArtifactJson.integer)
+        Assert.Equal(recipe.ElaborationSource, artifact |> ArtifactJson.at 0 |> ArtifactJson.field "Result" |> ArtifactJson.field "RecipeCreated" |> ArtifactJson.field "elaborationSource" |> ArtifactJson.text)
+        Assert.Equal("reason", artifact |> ArtifactJson.at 1 |> ArtifactJson.field "Result" |> ArtifactJson.field "NotApplicable" |> ArtifactJson.text)
+        let failure = artifact |> ArtifactJson.at 2 |> ArtifactJson.field "Result" |> ArtifactJson.field "CreationFailed"
+        Assert.Equal(2, ArtifactJson.count failure)
+        Assert.Equal("missing \"witness\"", failure |> ArtifactJson.at 0 |> ArtifactJson.text)
+        Assert.Equal("file\nname", failure |> ArtifactJson.at 1 |> ArtifactJson.field "source" |> ArtifactJson.text)
 
     [<Fact>]
     member _.``Native address retains its named declaration and full invocation``() =
