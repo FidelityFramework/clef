@@ -89,6 +89,9 @@ let project (graph: SemanticGraph) : Result<StorageWitnessProjection, WitnessPro
             |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList |> Set.add site
         errors.Add(failure (Some site) participants reason)
     let sourceLazies = Lazies.settle graph
+    for site, reason in Clef.Compiler.Nanopass.EnvironmentFactoryResults.validateAccounts graph do reject site reason
+    for site, reason in Clef.Compiler.Nanopass.ClosureEnvironmentSettlement.validateArtifactAccounts graph do reject site reason
+    for site, reason in Clef.Compiler.Nanopass.ProgramInitializationOrder.validateAccounts graph do reject site reason
     if graph.Platform.IsSome then
         for owner in sourceLazies.Instances.Keys do
             if not (codata.LazyLayouts.ContainsKey owner) then
@@ -274,4 +277,6 @@ let project (graph: SemanticGraph) : Result<StorageWitnessProjection, WitnessPro
          DefinitionOnlyThunks = definitionOnlyThunks; LazyPrograms = lazyPrograms
          Sequences = sequences; SequenceCopies = copies; SequencePrograms = sequencePrograms
          Startup = startup; SlotAuthorities = authorities; Requirements = requirements; PatternRequirements = patternRequirements
-         ProgramStorage = inventory; LiteralPoolAnchors = anchors }
+         ProgramStorage = inventory; LiteralPoolAnchors = anchors
+         EnvironmentReservations = codata.EnvironmentReservations; EnvironmentFactoryResults = codata.EnvironmentFactoryResults
+         EnvironmentResidences = codata.EnvironmentResidences; ProgramInitializationOrders = codata.ProgramInitializationOrders }

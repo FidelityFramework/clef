@@ -2719,6 +2719,41 @@ type StartupWitness = {
     Initializers: StartupInitializerWitness list
     ValueBindings: Set<NodeId>
 }
+/// Source-authored artifact correspondence. Ordered role occurrences retain
+/// their complete premises; these records grant no solver or execution verdict.
+type EnvironmentReservationAccount = {
+    Claim: NodeId
+    Allocation: NodeId
+    Binding: NodeId
+    Initializer: NodeId
+    Participants: Participant list
+}
+type EnvironmentFactoryResultAccount = {
+    Call: NodeId
+    Ordinal: int
+    Factory: NodeId
+    Constructor: NodeId
+    Formal: NodeId
+    Allocation: NodeId
+    Destination: NodeId
+}
+type EnvironmentResidenceAccount = {
+    Allocation: NodeId
+    Binding: NodeId
+    Owner: NodeId
+    Implementation: NodeId
+    Formal: NodeId
+    ReservationClaim: NodeId
+    AuthorityInputs: NodeId list
+    BindingPath: NodeId list
+    LayoutClaims: NodeId list
+    DeclarationInputs: NodeId list
+}
+type ProgramInitializationOrderAccount = {
+    Binding: NodeId
+    Claim: NodeId
+    Participants: Participant list
+}
 type StorageWitnessProjection = {
     Lazies: Map<NodeId, LazyWitnessContract>
     LazyOccurrences: Map<NodeId, NodeId>
@@ -2734,6 +2769,10 @@ type StorageWitnessProjection = {
     PatternRequirements: Map<NodeId, NodeId>
     ProgramStorage: ProgramStorageInventory
     LiteralPoolAnchors: string list
+    EnvironmentReservations: Map<NodeId, EnvironmentReservationAccount>
+    EnvironmentFactoryResults: Map<NodeId, EnvironmentFactoryResultAccount>
+    EnvironmentResidences: Map<NodeId, EnvironmentResidenceAccount>
+    ProgramInitializationOrders: Map<NodeId, ProgramInitializationOrderAccount>
 }
 
 module StorageWitnessProjection =
@@ -2743,6 +2782,8 @@ module StorageWitnessProjection =
         Startup = None; SlotAuthorities = Set.empty; Requirements = Map.empty
         PatternRequirements = Map.empty; ProgramStorage = ProgramStorageInventory.empty
         LiteralPoolAnchors = []
+        EnvironmentReservations = Map.empty; EnvironmentFactoryResults = Map.empty
+        EnvironmentResidences = Map.empty; ProgramInitializationOrders = Map.empty
     }
 
 type BoundaryEmissionProjection = {
@@ -3138,6 +3179,10 @@ type Codata = {
     FunctionPointers: Map<NodeId, FunctionPointerPlan>
     Mmio: Map<NodeId, MmioAccessEvidence>
     ProgramStorage: ProgramStorageInventory
+    EnvironmentReservations: Map<NodeId, EnvironmentReservationAccount>
+    EnvironmentFactoryResults: Map<NodeId, EnvironmentFactoryResultAccount>
+    EnvironmentResidences: Map<NodeId, EnvironmentResidenceAccount>
+    ProgramInitializationOrders: Map<NodeId, ProgramInitializationOrderAccount>
 }
 with
     member this.CallableEmission =
@@ -3151,6 +3196,8 @@ with
 
 module Codata =
     let empty : Codata = {
+        EnvironmentReservations = Map.empty; EnvironmentFactoryResults = Map.empty
+        EnvironmentResidences = Map.empty; ProgramInitializationOrders = Map.empty
         Escapes = Map.empty
         Curry = { PartialApplications = Map.empty; SaturatedCalls = Map.empty; PartialAppBindings = Set.empty; AbsorbedLambdas = Set.empty }
         Meets = Map.empty

@@ -255,7 +255,13 @@ let private emissionRows ids valueIds types (value: WitnessEmissionProjection) :
                   LazyPrograms = rows storage.LazyPrograms; Sequences = rows storage.Sequences; SequenceCopies = rows storage.SequenceCopies
                   SequencePrograms = rows storage.SequencePrograms; Startup = startup; SlotAuthorities = values storage.SlotAuthorities
                   Requirements = rows storage.Requirements; PatternRequirements = rows storage.PatternRequirements
-                  ProgramStorage = programStorage ids storage.ProgramStorage; LiteralPoolAnchors = storage.LiteralPoolAnchors }
+                  ProgramStorage = programStorage ids storage.ProgramStorage; LiteralPoolAnchors = storage.LiteralPoolAnchors
+                  // Every proposal for a demanded allocation survives, including
+                  // refused proposals. Premise identities do not demand bodies.
+                  EnvironmentReservations = storage.EnvironmentReservations |> Map.filter (fun _ row -> ids.Contains row.Allocation)
+                  EnvironmentFactoryResults = rows storage.EnvironmentFactoryResults
+                  EnvironmentResidences = rows storage.EnvironmentResidences
+                  ProgramInitializationOrders = rows storage.ProgramInitializationOrders }
       Boundary = { Imports = imports
                    ByScope = boundary.ByScope |> Map.map (fun _ entries -> entries |> List.filter imports.ContainsKey) |> Map.filter (fun _ entries -> not entries.IsEmpty)
                    Calls = rows boundary.Calls; ByteViews = rows boundary.ByteViews; StringExtents = rows boundary.StringExtents

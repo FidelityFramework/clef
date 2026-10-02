@@ -813,6 +813,17 @@ and mapEmissionStrategy (value: S.EmissionStrategy) : Fidelity.PSG.EmissionStrat
     | S.EmissionStrategy.SeparateFunction(a0) -> Fidelity.PSG.EmissionStrategy.SeparateFunction(a0)
     | S.EmissionStrategy.MainPrologue -> Fidelity.PSG.EmissionStrategy.MainPrologue
 
+and mapEnvironmentFactoryResultAccount (value: S.EnvironmentFactoryResultAccount) : Fidelity.PSG.EnvironmentFactoryResultAccount =
+    ({
+        Call = nodeId value.Call
+        Ordinal = value.Ordinal
+        Factory = nodeId value.Factory
+        Constructor = nodeId value.Constructor
+        Formal = nodeId value.Formal
+        Allocation = nodeId value.Allocation
+        Destination = nodeId value.Destination
+    } : Fidelity.PSG.EnvironmentFactoryResultAccount)
+
 and mapEnvironmentLayout (value: S.EnvironmentLayout) : Fidelity.PSG.EnvironmentLayout =
     ({
         Owner = nodeId value.Owner
@@ -823,6 +834,29 @@ and mapEnvironmentLayout (value: S.EnvironmentLayout) : Fidelity.PSG.Environment
         Alignment = value.Alignment
         Obligations = (value.Obligations |> List.map (fun x -> nodeId x))
     } : Fidelity.PSG.EnvironmentLayout)
+
+and mapEnvironmentReservationAccount (value: S.EnvironmentReservationAccount) : Fidelity.PSG.EnvironmentReservationAccount =
+    ({
+        Claim = nodeId value.Claim
+        Allocation = nodeId value.Allocation
+        Binding = nodeId value.Binding
+        Initializer = nodeId value.Initializer
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.EnvironmentReservationAccount)
+
+and mapEnvironmentResidenceAccount (value: S.EnvironmentResidenceAccount) : Fidelity.PSG.EnvironmentResidenceAccount =
+    ({
+        Allocation = nodeId value.Allocation
+        Binding = nodeId value.Binding
+        Owner = nodeId value.Owner
+        Implementation = nodeId value.Implementation
+        Formal = nodeId value.Formal
+        ReservationClaim = nodeId value.ReservationClaim
+        AuthorityInputs = (value.AuthorityInputs |> List.map (fun x -> nodeId x))
+        BindingPath = (value.BindingPath |> List.map (fun x -> nodeId x))
+        LayoutClaims = (value.LayoutClaims |> List.map (fun x -> nodeId x))
+        DeclarationInputs = (value.DeclarationInputs |> List.map (fun x -> nodeId x))
+    } : Fidelity.PSG.EnvironmentResidenceAccount)
 
 and mapEscapeKind (value: S.EscapeKind) : Fidelity.PSG.EscapeKind =
     match value with
@@ -1933,6 +1967,13 @@ and mapPredicateStatus (value: S.PredicateStatus) : Fidelity.PSG.PredicateStatus
     | S.PredicateStatus.Contradicted -> Fidelity.PSG.PredicateStatus.Contradicted
     | S.PredicateStatus.Pending -> Fidelity.PSG.PredicateStatus.Pending
 
+and mapProgramInitializationOrderAccount (value: S.ProgramInitializationOrderAccount) : Fidelity.PSG.ProgramInitializationOrderAccount =
+    ({
+        Binding = nodeId value.Binding
+        Claim = nodeId value.Claim
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.ProgramInitializationOrderAccount)
+
 and mapProgramStorageEntry (value: S.ProgramStorageEntry) : Fidelity.PSG.ProgramStorageEntry =
     ({
         Identity = mapProgramStorageIdentity value.Identity
@@ -2355,6 +2396,10 @@ and mapStorageWitnessProjection (value: S.StorageWitnessProjection) : Fidelity.P
         PatternRequirements = (value.PatternRequirements |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, nodeId v) |> Map.ofSeq)
         ProgramStorage = mapProgramStorageInventory value.ProgramStorage
         LiteralPoolAnchors = value.LiteralPoolAnchors
+        EnvironmentReservations = (value.EnvironmentReservations |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapEnvironmentReservationAccount v) |> Map.ofSeq)
+        EnvironmentFactoryResults = (value.EnvironmentFactoryResults |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapEnvironmentFactoryResultAccount v) |> Map.ofSeq)
+        EnvironmentResidences = (value.EnvironmentResidences |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapEnvironmentResidenceAccount v) |> Map.ofSeq)
+        ProgramInitializationOrders = (value.ProgramInitializationOrders |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapProgramInitializationOrderAccount v) |> Map.ofSeq)
     } : Fidelity.PSG.StorageWitnessProjection)
 
 and mapStringOriginRelation (value: S.StringOriginRelation) : Fidelity.PSG.StringOriginRelation =

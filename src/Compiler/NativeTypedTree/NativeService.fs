@@ -1243,10 +1243,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
          |> not)
     let finalGraph, programStorageDiagnostics = Clef.Compiler.Nanopass.ProgramInitialization.settleValueAuthority sourceAdmitted finalGraph
     let sourceAdmitted = sourceAdmitted && programStorageDiagnostics.IsEmpty
-    let finalGraph, curry =
+    let finalGraph, curry, environmentFactoryResults =
         if sourceAdmitted && finalGraph.Platform.IsSome then
-            Clef.Compiler.Nanopass.EnvironmentFactoryResults.prepare finalGraph curry
-        else finalGraph, curry
+            Clef.Compiler.Nanopass.EnvironmentFactoryResults.prepareWithAccounts finalGraph curry
+        else finalGraph, curry, Map.empty
     let finalGraph, curry =
         if sourceAdmitted && finalGraph.Platform.IsSome then
             Clef.Compiler.Nanopass.LazyFactoryResults.prepare finalGraph curry
@@ -1274,7 +1274,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let finalGraph = Clef.Compiler.Nanopass.OrdinaryDemand.normalize finalGraph
     let finalGraph, premiseDiagnostics = Clef.Compiler.Nanopass.PremiseEstablishment.normalize finalGraph
     let finalGraph, lazies = Clef.Compiler.Nanopass.LazyRuntime.settleWhenSourceAdmitted sourceAdmitted finalGraph
-    let finalGraph, initializationOrderDiagnostics = Clef.Compiler.Nanopass.ProgramInitializationOrder.settle finalGraph
+    let finalGraph, initializationOrderDiagnostics, programInitializationOrders =
+        Clef.Compiler.Nanopass.ProgramInitializationOrder.settleWithAccounts finalGraph
     let finalGraph, bindingDemandDiagnostics = Clef.Compiler.Nanopass.BindingDemand.settle finalGraph
     tracePhase "lazy-settlement"
     let functionPointers, functionPointerDiagnostics = FunctionPointers.settle finalGraph
@@ -1335,6 +1336,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 EnvironmentLayouts = environments.Layouts
                 EnvironmentDestinations = environments.Destinations
                 EnvironmentOrigins = environmentOrigins
+                EnvironmentReservations = environments.ReservationAccounts
+                EnvironmentResidences = environments.ResidenceAccounts
+                EnvironmentFactoryResults = environmentFactoryResults
+                ProgramInitializationOrders = programInitializationOrders
                 LazyLayouts = lazies.Layouts
                 LazyOrigins = lazies.Origins
                 LazyDestinations = lazies.Destinations

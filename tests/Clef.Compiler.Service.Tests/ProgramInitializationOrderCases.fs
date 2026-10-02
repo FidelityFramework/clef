@@ -83,6 +83,62 @@ let main _ = if alias true && second false && later true then 0 else 1
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "ProgramInitializationOrder")>]
 type ProgramInitializationOrderCases() =
     [<Fact>]
+    member _.``Final Codata retains source artifact accounts and canonical alias residence`` () =
+        let graph = InitializationOrderFixture.graph ()
+        let facts = graph.Codata.Value
+        Assert.Equal(3, facts.EnvironmentFactoryResults.Count)
+        Assert.Equal(3, facts.EnvironmentResidences.Count)
+        Assert.Equal(4, facts.ProgramInitializationOrders.Count)
+        let first = InitializationOrderFixture.binding "first" graph
+        let alias = InitializationOrderFixture.binding "alias" graph
+        let firstInstance = InitializationOrderFixture.instance graph first |> Option.get
+        let aliasInstance = InitializationOrderFixture.instance graph alias |> Option.get
+        Assert.Equal(firstInstance.Allocation, aliasInstance.Allocation)
+        let residence = facts.EnvironmentResidences[firstInstance.Allocation.Value]
+        Assert.Equal(first, residence.Binding)
+        Assert.Contains(first, aliasInstance.Participants)
+        let reservation = facts.EnvironmentReservations[residence.ReservationClaim]
+        Assert.Equal(first, reservation.Binding)
+        Assert.Equal(residence.Allocation, reservation.Allocation)
+        Assert.Empty(Clef.Compiler.Nanopass.EnvironmentFactoryResults.validateAccounts graph)
+        Assert.Empty(Clef.Compiler.Nanopass.ClosureEnvironmentSettlement.validateArtifactAccounts graph)
+        Assert.Empty(OrderSettlement.validateAccounts graph)
+
+    [<Theory>]
+    [<InlineData("call")>]
+    [<InlineData("factory")>]
+    [<InlineData("formal")>]
+    [<InlineData("allocation")>]
+    [<InlineData("destination")>]
+    member _.``Held factory result accounts refuse a substituted source identity`` defect =
+        let graph = InitializationOrderFixture.graph ()
+        let facts = graph.Codata.Value
+        let call, account = facts.EnvironmentFactoryResults |> Map.toList |> List.head
+        let foreign = InitializationOrderFixture.binding "alias" graph
+        let replacement =
+            match defect with
+            | "call" -> { account with Call = foreign }
+            | "factory" -> { account with Factory = foreign }
+            | "formal" -> { account with Formal = foreign }
+            | "allocation" -> { account with Allocation = foreign }
+            | "destination" -> { account with Destination = foreign }
+            | _ -> failwith "Unknown source account defect"
+        let changed =
+            { graph with Codata = lazy { facts with EnvironmentFactoryResults = facts.EnvironmentFactoryResults.Add(call, replacement) } }
+        let failures = Clef.Compiler.Nanopass.EnvironmentFactoryResults.validateAccounts changed
+        Assert.Contains(failures, fun (site, _) -> site = call)
+        Assert.Empty(Clef.Compiler.Nanopass.EnvironmentFactoryResults.validateAccounts graph)
+
+    [<Fact>]
+    member _.``Held initialization accounts refuse removed and added alias use premises`` () =
+        let graph = InitializationOrderFixture.graph ()
+        let changed, _, later = InitializationOrderFixture.readLater graph
+        Assert.Empty(OrderSettlement.validateAccounts graph)
+        let first = InitializationOrderFixture.binding "first" graph
+        let invalidated = OrderSettlement.validateAccounts changed |> List.map fst |> Set.ofList
+        Assert.Equal<Set<NodeId>>(Set.ofList [first; later.Binding], invalidated)
+
+    [<Fact>]
     member _.``Distinct allocations and shared aliases retain every required initialization order receipt`` () =
         let graph = InitializationOrderFixture.graph ()
         let plan = OrderProgram.read graph |> Option.get

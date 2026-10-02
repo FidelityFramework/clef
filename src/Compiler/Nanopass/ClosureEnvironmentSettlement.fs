@@ -23,6 +23,8 @@ type Settlement = {
     Layouts: Map<NodeId, EnvironmentLayout>
     Destinations: Map<NodeId, NodeId>
     Residences: Map<NodeId, EscapeKind>
+    ReservationAccounts: Map<NodeId, EnvironmentReservationAccount>
+    ResidenceAccounts: Map<NodeId, EnvironmentResidenceAccount>
     Diagnostics: Diagnostic list
 }
 
@@ -84,8 +86,8 @@ let private reservationPremises (graph: SemanticGraph) (layout: EnvironmentLayou
             | _ -> []))
     body, participants
 
-let private reservationProof (graph: SemanticGraph) layout site binding initializer =
-    let body, participants = reservationPremises graph (Some layout) site binding initializer
+let private reservationClaim (graph: SemanticGraph) layout site binding initializer =
+    let body, participants = reservationPremises graph layout site binding initializer
     let sources = participants |> List.map _.Node
     graph.Edges |> List.choose (fun edge ->
         match edge.Class, edge.Role, graph.Nodes.TryFind edge.Target with
@@ -99,7 +101,10 @@ let private reservationProof (graph: SemanticGraph) layout site binding initiali
         | _ -> None)
     |> function [proof] -> Some proof | _ -> None
 
-let private programBacking graph (layout: EnvironmentLayout) site candidates =
+let private reservationProof graph layout site binding initializer =
+    reservationClaim graph (Some layout) site binding initializer
+
+let private programBackingAccount graph (layout: EnvironmentLayout) site candidates =
     match candidates with
     | [binding, path] ->
         Program.tryValueAuthority graph binding |> Option.bind (fun authority ->
@@ -116,16 +121,25 @@ let private programBacking graph (layout: EnvironmentLayout) site candidates =
             // This host guard admits residence; it is not a solver verdict.
             if not covered then None else
                 reservationProof graph layout site binding authority.Initializer.Initializer |> Option.map (fun obligation ->
+                let account : EnvironmentResidenceAccount =
+                    { Allocation = site; Binding = binding; Owner = layout.Owner; Implementation = layout.Implementation
+                      Formal = layout.Formal; ReservationClaim = obligation; AuthorityInputs = authority.Evidence.Sources
+                      BindingPath = path; LayoutClaims = layout.Obligations
+                      DeclarationInputs = ProgramStorageAuthority.declarationInputs graph space.Node |> Set.toList }
                 let sources =
                     [site; binding; layout.Owner; layout.Implementation; layout.Formal; obligation] @
                     authority.Evidence.Sources @ path @ layout.Obligations @
                     (ProgramStorageAuthority.declarationInputs graph space.Node |> Set.toList) |> List.distinct
                 { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResidence
-                  Sources = sources; Target = layout.Owner; Ordinal = 0 }))
+                  Sources = sources; Target = layout.Owner; Ordinal = 0 }, account))
     | _ -> None
 
+let private programBacking graph layout site candidates =
+    programBackingAccount graph layout site candidates |> Option.map fst
+
 let settlePreparedWhenSourceAdmitted admitted destinations factoryCalls (graph: SemanticGraph) =
-    let empty = { Layouts = Map.empty; Destinations = Map.empty; Residences = Map.empty; Diagnostics = [] }
+    let empty = { Layouts = Map.empty; Destinations = Map.empty; Residences = Map.empty
+                  ReservationAccounts = Map.empty; ResidenceAccounts = Map.empty; Diagnostics = [] }
     if not admitted || graph.Platform.IsNone then graph, empty else
     let residual site related reason =
         { Severity = NativeDiagnosticSeverity.Error; Code = "CCS8403"
@@ -179,27 +193,31 @@ let settlePreparedWhenSourceAdmitted admitted destinations factoryCalls (graph: 
         match graph.Nodes[site].Kind with
         | SemanticKind.EnvironmentCreate(owner, _) | SemanticKind.EnvironmentAllocate owner -> Some owner
         | _ -> None
-    let reservations =
+    let reservationResults =
         proposals |> Map.toList |> List.collect (fun (site, initializers) ->
             let layout = ownerOf site |> Option.bind layouts.TryFind
             initializers |> List.map (fun (binding, initializer) ->
                 let body, participants = reservationPremises graph layout site binding initializer
-                Proof.environmentReservation (reservationName graph site binding initializer) graph.Nodes[site] body participants))
-        |> Enrichment.concat
+                Proof.environmentReservation (reservationName graph site binding initializer) graph.Nodes[site] body binding initializer participants))
+    let reservations = reservationResults |> List.map fst |> Enrichment.concat
+    let reservationAccounts = reservationResults |> List.fold (fun rows (_, account) ->
+        if Map.containsKey account.Claim rows then invalidOp "Environment reservation recipe repeated a current claim identity."
+        Map.add account.Claim account rows) Map.empty
     let graph = ObligationElaboration.foldIn (Enrichment.combine proofs reservations) graph
     let programCandidates = programSites graph
     let programPlacements = proposals |> Map.toList |> List.map (fun (site, _) ->
         let candidates = programCandidates site
         let proof =
             if not (residence.Sites.ContainsKey site) then None else
-            ownerOf site |> Option.bind layouts.TryFind |> Option.bind (fun layout -> programBacking graph layout site candidates)
+            ownerOf site |> Option.bind layouts.TryFind |> Option.bind (fun layout -> programBackingAccount graph layout site candidates)
         site, proof)
     let programErrors = programPlacements |> List.choose (fun (site, proof) ->
         if proof.IsSome then None else
         Some(residual site [] "Program callable storage requires one unrepeated initializer and declared writable space covering the settled environment."))
     let staticSites = programPlacements |> List.choose (fun (site, proof) -> proof |> Option.map (fun _ -> site)) |> Set.ofList
     let residences = residence.Sites |> Map.map (fun site kind -> if staticSites.Contains site then EscapeKind.StaticLifetime else kind)
-    let proofs = { Enrichment.empty with NewEdges = residence.Evidence @ (programPlacements |> List.choose snd) }
+    let residenceAccounts = programPlacements |> List.choose (fun (site, result) -> result |> Option.map (fun (_, account) -> site, account)) |> Map.ofList
+    let proofs = { Enrichment.empty with NewEdges = residence.Evidence @ (programPlacements |> List.choose (snd >> Option.map fst)) }
     let graph = ObligationElaboration.foldIn proofs graph
     let destinations =
       graph.Edges |> List.choose (fun edge ->
@@ -212,6 +230,7 @@ let settlePreparedWhenSourceAdmitted admitted destinations factoryCalls (graph: 
             | _ -> None
         | _ -> None) |> Map.ofList
     graph, { Layouts = layouts; Destinations = destinations; Residences = residences
+             ReservationAccounts = reservationAccounts; ResidenceAccounts = residenceAccounts
              Diagnostics = residenceErrors @ regionErrors @ programErrors @ (placed |> List.choose (function Result.Error diagnostic -> Some diagnostic | _ -> None)) }
 
 let settleWhenSourceAdmitted admitted graph = settlePreparedWhenSourceAdmitted admitted Map.empty Map.empty graph
@@ -259,6 +278,53 @@ let private validLayout (graph: SemanticGraph) (layout: EnvironmentLayout) =
             captures.Length = slots.Length && bytes > 0 && alignment > 0
         | _ -> false
     | _ -> false
+
+/// Re-observe held artifact accounts against their complete source owners.
+/// Proposal membership and absent/new reads are premises, not reader closure.
+let validateArtifactAccounts (graph: SemanticGraph) =
+    let facts = graph.Codata.Value
+    let proposals = ProgramStorageAuthority.environmentProposals graph
+    let layouts = facts.EnvironmentLayouts |> Map.filter (fun owner layout -> owner = layout.Owner && validLayout graph layout)
+    let errors = ResizeArray<NodeId * string>()
+    let expectedClaims = ResizeArray<NodeId>()
+    let ownerOf site =
+        match graph.Nodes.TryFind site with
+        | Some { Kind = SemanticKind.EnvironmentCreate(owner, _) | SemanticKind.EnvironmentAllocate owner } -> Some owner
+        | _ -> None
+    for KeyValue(site, initializers) in proposals do
+        let layout = ownerOf site |> Option.bind layouts.TryFind
+        for binding, initializer in initializers do
+            let _, participants = reservationPremises graph layout site binding initializer
+            match reservationClaim graph layout site binding initializer with
+            | Some claim ->
+                expectedClaims.Add claim
+                let expected : EnvironmentReservationAccount =
+                    { Claim = claim; Allocation = site; Binding = binding; Initializer = initializer; Participants = participants }
+                if facts.EnvironmentReservations.TryFind claim <> Some expected then
+                    errors.Add(site, "Environment reservation account no longer retains its complete current proposal.")
+            | None -> errors.Add(site, "Current environment proposal has no unique exact reservation claim and account.")
+    let claims = Set.ofSeq expectedClaims
+    for KeyValue(claim, account) in facts.EnvironmentReservations do
+        if claim <> account.Claim || not (claims.Contains claim) then
+            errors.Add(account.Allocation, "Environment reservation account refers to a retired or changed source proposal.")
+    let residence = lazy (Residence.analyzeEnvironments graph)
+    let candidates = programSites graph
+    let expectedResidences =
+        proposals |> Map.toList |> List.choose (fun (site, _) ->
+            if not (residence.Value.Sites.ContainsKey site) then None else
+            ownerOf site |> Option.bind layouts.TryFind |> Option.bind (fun layout ->
+                programBackingAccount graph layout site (candidates site) |> Option.map (fun (edge, account) ->
+                    let rows = graph.Edges |> List.filter (fun row ->
+                        row.Class = edge.Class && row.Role = edge.Role && row.Target = edge.Target &&
+                        row.Ordinal = edge.Ordinal && row.Sources = edge.Sources)
+                    if rows.Length <> 1 || facts.Escapes.TryFind site <> Some EscapeKind.StaticLifetime then
+                        errors.Add(site, "Environment residence account lacks its current admitted residence relation.")
+                    site, account))) |> Map.ofList
+    let sites = Set.union (expectedResidences.Keys |> Set.ofSeq) (facts.EnvironmentResidences.Keys |> Set.ofSeq)
+    for site in sites do
+        if expectedResidences.TryFind site <> facts.EnvironmentResidences.TryFind site then
+            errors.Add(site, "Environment residence account no longer matches its current authority, layout, allocation or singleton initializer.")
+    List.ofSeq errors
 
 let private programReadings = System.Runtime.CompilerServices.ConditionalWeakTable<SemanticGraph, Map<NodeId, ProgramInstance>>()
 

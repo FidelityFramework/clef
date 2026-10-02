@@ -12,7 +12,9 @@ module Environments = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironme
 module Incidence = Clef.Compiler.Baker.Ingredients.Closures
 module ExplicitDemand = Clef.Compiler.PSGSaturation.SemanticGraph.ExplicitDemand
 
-let prepare (graph: SemanticGraph) (curry: CurryInfo) =
+/// Accounts leave this recipe explicitly: subsequent representation fold-ins
+/// replace unfinished Codata before NativeService assembles the final facts.
+let prepareWithAccounts (graph: SemanticGraph) (curry: CurryInfo) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let rec finalClosure seen id =
         if Set.contains id seen then None else
@@ -112,6 +114,7 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) =
     let mutable changed = Set.empty
     let mutable edges = []
     let mutable updatedCurry = curry
+    let mutable resultAccounts = Map.empty
     let fresh (source: SemanticNode) kind ty children =
         { source with Id = NodeId.fresh(); Kind = kind; Type = ty; Children = children; Parent = None
                       Metadata = Map.empty; ValueRange = None; IsReachable = true }
@@ -172,12 +175,17 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) =
             edges <- { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentResultCall
                        Sources = [lambda.Id; constructor; formal.Id; allocation.Id; destination.Id]
                        Target = invocation.Id; Ordinal = 0 } :: edges
+            let account : EnvironmentFactoryResultAccount =
+                { Call = invocation.Id; Ordinal = 0; Factory = lambda.Id; Constructor = constructor
+                  Formal = formal.Id; Allocation = allocation.Id; Destination = destination.Id }
+            if resultAccounts.ContainsKey account.Call then invalidOp "Environment factory recipe repeated a current invocation identity."
+            resultAccounts <- resultAccounts.Add(account.Call, account)
             updatedCurry <- { updatedCurry with SaturatedCalls = updatedCurry.SaturatedCalls.Remove(call.Id).Add(invocation.Id, { TargetBindingId = binding.Id; AllArgNodes = arguments }) }
         let emitted = generated |> Seq.map (fun node -> node.Id, node) |> Map.ofSeq |> Map.values |> Seq.toList
         changed <- Set.union changed (emitted |> List.map _.Id |> Set.ofList)
         { OriginalNodeId = binding.Id; NewNodes = emitted; ReplacementRootId = binding.Id
           ElaborationKind = "Baker"; ElaborationSource = "Closure.factoryResult"; NewEdges = [] })
-    if recipes.IsEmpty then graph, curry else
+    if recipes.IsEmpty then graph, curry, resultAccounts else
     let byId = recipes |> List.map (fun recipe -> recipe.OriginalNodeId, recipe) |> Map.ofList
     let folded = FanOut.fanOut "EnvironmentFactoryResults" (fun node -> byId.ContainsKey node.Id)
                     (fun node _ -> RecipeCreated byId[node.Id]) graph
@@ -194,4 +202,50 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) =
     // descriptor-only proofs across this exact source rewrite boundary.
     let demanded = OrdinaryDemand.normalize updated
     let transferred = Clef.Compiler.Baker.Recipes.StringComparisonRecipes.transferLengthAfterFactoryRewrite graph demanded
-    transferred, updatedCurry
+    transferred, updatedCurry, resultAccounts
+
+/// Retained component callers consume the graph/curry pair. Production carries
+/// the explicit accounts above through final source-owned Codata assembly.
+let prepare (graph: SemanticGraph) (curry: CurryInfo) =
+  let prepared, updatedCurry, accounts = prepareWithAccounts graph curry
+  { prepared with Codata = lazy { prepared.Codata.Value with EnvironmentFactoryResults = accounts } }, updatedCurry
+
+/// Re-observe the exact result rewrite under its source owner. A stored account
+/// cannot substitute a same-shaped invocation, formal or allocation.
+let validateAccounts (graph: SemanticGraph) =
+    let held = graph.Codata.Value.EnvironmentFactoryResults
+    let rows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.EnvironmentResultCall)
+    let resolved = lazy (Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph)
+    let valid (account: EnvironmentFactoryResultAccount) =
+        let current = rows |> List.filter (fun edge -> edge.Target = account.Call)
+        let relation =
+            match current with
+            | [{ Class = EdgeClass.Provenance; Sources = sources; Ordinal = ordinal }] ->
+                ordinal = account.Ordinal && sources = [account.Factory; account.Constructor; account.Formal; account.Allocation; account.Destination]
+            | _ -> false
+        let destinationRows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.EnvironmentResultDestination && edge.Target = account.Constructor)
+        match graph.Nodes.TryFind account.Call, graph.Nodes.TryFind account.Factory,
+              graph.Nodes.TryFind account.Constructor, graph.Nodes.TryFind account.Allocation,
+              graph.Nodes.TryFind account.Formal, resolved.Value.Calls.TryFind account.Call with
+        | Some { Kind = SemanticKind.Application(callee, arguments); Children = children; IsReachable = true },
+          Some { Kind = SemanticKind.Lambda(parameters, _, _, _, _); IsReachable = true },
+          Some { Kind = SemanticKind.EnvironmentCreate(owner, _); IsReachable = true },
+          Some { Kind = SemanticKind.EnvironmentAllocate(actual); IsReachable = true },
+          Some { Kind = SemanticKind.PatternBinding _; Type = formalType; IsReachable = true },
+          Some { Targets = [target]; Complete = true; Unknown = false }
+            when relation && account.Ordinal = 0 && owner = actual && children = callee :: arguments &&
+                 formalType = Environments.environmentType && target.Lambda = account.Factory && parameters.Length = arguments.Length ->
+            let positions = parameters |> List.indexed |> List.filter (fun (_, (_, ty, formal)) -> formal = account.Formal && ty = Environments.environmentType)
+            match positions, destinationRows with
+            | [(index, _)], [{ Class = EdgeClass.Provenance; Sources = [factory; actualOwner; formal]; Ordinal = 0 }] ->
+                arguments[index] = account.Destination && factory = account.Factory && actualOwner = owner && formal = account.Formal
+            | _ -> false
+        | _ -> false
+    let errors = ResizeArray<NodeId * string>()
+    for KeyValue(call, account) in held do
+        if call <> account.Call || not (valid account) then
+            errors.Add(call, "Environment factory result account no longer matches its exact current source rewrite.")
+    for row in rows do
+        if not (held.ContainsKey row.Target) then
+            errors.Add(row.Target, "Current environment factory result rewrite has no source-authored account.")
+    List.ofSeq errors

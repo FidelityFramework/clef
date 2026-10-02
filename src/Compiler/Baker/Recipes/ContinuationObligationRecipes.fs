@@ -23,14 +23,16 @@ let layout (enrichId: int) (name: string) (owner: SemanticNode)
 
 /// Born for each proposed program environment before capacity or singleton
 /// acceptance. Keep repeated identities in their distinct roles and groups.
-let environmentReservation name (site: SemanticNode) body (participants: Participant list) : Enrichment =
+let environmentReservation name (site: SemanticNode) body binding initializer (participants: Participant list) =
     let node = obligationNode site (NodeId.value site.Id)
                     { Id = name; Kind = "environment-storage-reservation"; Logic = "QF_LIA"
                       Statement = "The proposed environment's positive extent, rounded to the declared granularity, fits writable space with compatible power-of-two alignment. Missing premises do not establish coverage. Lifetime, initialization order and aggregate capacity are separate contracts."
                       Source = fmtRange site.Range; Refs = []; Body = body }
     let sources = participants |> List.map _.Node
+    let account : EnvironmentReservationAccount =
+        { Claim = node.Id; Allocation = site.Id; Binding = binding; Initializer = initializer; Participants = participants }
     { NewNodes = [node]
       NewEdges = [constrains sources node
                   { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentReservation participants
                     Sources = sources; Target = node.Id; Ordinal = 0 }]
-      Annotated = [] }
+      Annotated = [] }, account

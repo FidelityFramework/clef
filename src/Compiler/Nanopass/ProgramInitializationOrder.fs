@@ -23,7 +23,8 @@ let birth graph =
         { graph with Nodes = enrichment.NewNodes |> List.fold (fun nodes node -> Map.add node.Id node nodes) graph.Nodes
                      Edges = graph.Edges @ enrichment.NewEdges }
 
-let settle graph =
+/// Return the current ordered accounts without forcing unfinished Codata.
+let settleWithAccounts graph =
     let graph = birth graph
     let rows = graph.Edges |> List.choose (fun edge -> bindingOf edge.Role |> Option.map (fun binding -> binding, edge))
     let nodes, edges, diagnostics = rows |> List.fold (fun (nodes, edges, diagnostics) (binding, edge) ->
@@ -43,4 +44,38 @@ let settle graph =
               Range = graph.Nodes[binding].Range; RelatedNodes = binding :: sources
               Reachability = ReachabilityContext.Reachable })
         Map.add next.Id next nodes, edges, diagnostics @ errors) (graph.Nodes, graph.Edges, [])
-    { graph with Nodes = nodes; Edges = edges }, diagnostics
+    let accounts = rows |> List.fold (fun accounts (binding, edge) ->
+        if Map.containsKey binding accounts then invalidOp "Program initialization order repeated a current binding account."
+        let reading = Uses.read graph binding
+        let account : ProgramInitializationOrderAccount =
+            { Binding = binding; Claim = edge.Target; Participants = reading.Participants }
+        Map.add binding account accounts) Map.empty
+    { graph with Nodes = nodes; Edges = edges }, diagnostics, accounts
+
+/// Retained component callers consume the graph/diagnostics pair. Production
+/// carries the explicit accounts through final source-owned Codata assembly.
+let settle graph =
+  let settled, diagnostics, accounts = settleWithAccounts graph
+  { settled with Codata = lazy { settled.Codata.Value with ProgramInitializationOrders = accounts } }, diagnostics
+
+/// Complete read/scope/phase membership is a source premise. Pending claims
+/// remain explicit; they cannot be mapped into a completed public proposition.
+let validateAccounts (graph: SemanticGraph) =
+    let held = graph.Codata.Value.ProgramInitializationOrders
+    let bindings = Uses.bindings graph |> Set.ofList
+    let errors = ResizeArray<NodeId * string>()
+    for binding in Set.union bindings (held.Keys |> Set.ofSeq) do
+        let rows = graph.Edges |> List.filter (fun edge -> bindingOf edge.Role = Some binding)
+        let reading = Uses.read graph binding
+        let agrees =
+            match held.TryFind binding, rows with
+            | Some account, [{ Class = EdgeClass.Provenance; Role = EdgeRole.ProgramInitializationOrder participants; Target = claim; Sources = sources; Ordinal = 0 }]
+                when bindings.Contains binding && account.Binding = binding && account.Claim = claim &&
+                     participants = reading.Participants && account.Participants = participants && sources = List.map _.Node participants ->
+                match graph.Nodes.TryFind claim, graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = claim) with
+                | Some { Kind = SemanticKind.Obligation info }, [{ Class = EdgeClass.Obligation; Sources = actual; Ordinal = 0 }] ->
+                    info = Recipe.info graph.Nodes[binding] reading.Body && actual = sources
+                | _ -> false
+            | _ -> false
+        if not agrees then errors.Add(binding, "Program initialization order account no longer retains its complete current source reading.")
+    List.ofSeq errors
