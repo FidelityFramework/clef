@@ -83,32 +83,28 @@ let checkAddressOf
     : SemanticNode =
 
     let innerNode = checkExpr env builder innerExpr
-
-    // Check if inner expression is already a byref type.
-    // In F#, &byrefExpr means "pass this byref", not "create byref of byref".
-    // This is the idiomatic pattern: let foo (x: byref<T>) = bar &x
-    // where bar also takes byref<T>. We don't create nested byrefs.
-    let innerTy = applySubst innerNode.Type
-    let isAlreadyByref =
-        match innerTy with
-        | NativeType.TByref _ -> true
-        | NativeType.TApp(tc, _) when tc.Name = "byref" || tc.Name = "inref" || tc.Name = "outref" -> true
-        | _ -> false
-
-    let pointerType =
-        if isAlreadyByref then
-            // Already a byref - just pass through, don't create nested byref
-            innerTy
-        elif isByref then
-            NativeType.TByref(innerNode.Type, ByrefKind.InOut)
-        else
-            NativeType.TNativePtr innerNode.Type
-
-    builder.Create(
-        SemanticKind.AddressOf(innerNode.Id, isByref),
-        pointerType,
-        range,
-        children = [innerNode.Id])
+    if not isByref then
+        let message = "Raw addresses are not denotable in Clef. Use a declared CHandle boundary or a bounded borrow instead of &&."
+        let rejected = builder.Create(SemanticKind.Error message, NativeType.TError message, range, children = [innerNode.Id])
+        let rejected = builder.SetMetadata(rejected.Id, "SourceDiagnostic.GlobalInvariant", MetadataValue.Bool true)
+        addDiagnostic { Severity = NativeDiagnosticSeverity.Error
+                        Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+                        Message = message; Range = range; RelatedNodes = [rejected.Id]
+                        Reachability = ReachabilityContext.Unknown } env
+        rejected
+    else
+        // Passing &byref preserves its existing bounded reference type.
+        let innerTy = applySubst innerNode.Type
+        let pointerType =
+            match innerTy with
+            | NativeType.TByref _ -> innerTy
+            | NativeType.TApp(tc, _) when tc.Name = "byref" || tc.Name = "inref" || tc.Name = "outref" -> innerTy
+            | _ -> NativeType.TByref(innerNode.Type, ByrefKind.InOut)
+        builder.Create(
+            SemanticKind.AddressOf(innerNode.Id, true),
+            pointerType,
+            range,
+            children = [innerNode.Id])
 
 //-------------------------------------------------------------------------
 // Upcast: expr :> type

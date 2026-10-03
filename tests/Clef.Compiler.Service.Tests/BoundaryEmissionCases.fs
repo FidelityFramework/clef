@@ -124,6 +124,42 @@ type PlatformDescription = { Id: string; Core: TargetCore option }
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "BoundaryEmission")>]
 type BoundaryEmissionCases() =
+    [<Theory>]
+    [<InlineData("CHandle<unit>")>]
+    [<InlineData("option<CHandle<unit>>")>]
+    member _.``Pointer returns require an admitted nullability ownership and lifetime adapter`` returnType =
+        let body = """
+[<FidelityExtern("c", "acquire")>]
+let acquire () : ReturnedHandle = NativeDefault.zeroed ()
+let acquireDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "acquire"; Parameters = [||]; ReturnType = Pointer 64
+    CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+[<EntryPoint>]
+let main _ = let value = acquire () in if value = value then 0 else 1
+"""
+        let result = BoundaryEmissionFixture.check (Some BoundaryEmissionFixture.platform) (body.Replace("ReturnedHandle", returnType))
+        Assert.DoesNotContain(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8010")
+        let failures = BoundaryEmissionFixture.rejected result.Graph
+        Assert.Contains(failures, fun failure -> failure.Reason.Contains("source-settled adapter beyond the scalar C contract"))
+        Assert.True(BoundaryWitness.admit result.Graph |> Result.isError)
+
+    [<Fact>]
+    member _.``A release declaration cannot acquire an implicit ownership premise``() =
+        let body = """
+[<FidelityExtern("c", "release")>]
+let release (value: CHandle<unit>) : unit = NativeDefault.zeroed ()
+let releaseDescriptor: Expr<FunctionDescriptor> = <@ {
+    CName = "release"; Parameters = [| { Name = "value"; Type = Pointer 64; PassBy = Value } |]
+    ReturnType = Void; CallingConvention = CDecl; OwnershipTransfer = Borrowed } @>
+let callback (value: CHandle<unit>) : unit = release value
+[<EntryPoint>]
+let main _ = let pointer = FnPtr.ofFunction callback in 0
+"""
+        let result = BoundaryEmissionFixture.check (Some BoundaryEmissionFixture.platform) body
+        let failures = BoundaryEmissionFixture.rejected result.Graph
+        Assert.Contains(failures, fun failure -> failure.Reason.Contains("pointer and aggregate values require a source-settled adapter"))
+        Assert.True(BoundaryWitness.admit result.Graph |> Result.isError)
+
     [<Fact>]
     member _.``Quoted boundary descriptor retains declaration evidence without runtime allocation residence``() =
         let graph = BoundaryEmissionFixture.scalar ()

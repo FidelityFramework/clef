@@ -48,6 +48,13 @@ let main _ =
     apply pointer 40 2
 """
         DimensionalCases.noErrors result
+        let nativeCalls = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve result.Graph
+        let native = Assert.Single nativeCalls.NativeCalls.Values
+        Assert.False(native.Unknown)
+        let target = Assert.Single native.Targets
+        Assert.Equal<ValueRange option list>([Some(ValueRange.point 40I); Some(ValueRange.point 2I)],
+            target.Parameters |> List.map (fun (_, _, formal) -> result.Graph.Nodes[formal].ValueRange))
+        Assert.Equal(Some(ValueRange.point 42I), result.Graph.Nodes[target.Body].ValueRange)
         let plans = CallbackCases.plans result.Graph
         let address = plans |> List.choose (function FunctionPointerPlan.Address (symbol, lambda) -> Some (symbol, lambda) | _ -> None)
         Assert.Single(address) |> ignore

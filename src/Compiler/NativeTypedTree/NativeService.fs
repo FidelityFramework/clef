@@ -997,6 +997,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     // Compute source diagnostics before generated activation changes ownership.
     let unusedBindings = unusedBindingDiagnostics ownedSources { graph with Nodes = sourceNodes } (diagnostics @ residual)
+    let boundaryTypeDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryValues.typeDiagnostics graph
 
     // Artifact 01 is PSG₀ after reachability, emitted below. Writing a second
     // pre-reachability graph to the same path formats every library node and
@@ -1034,6 +1035,12 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             let prunedGraph = Clef.Compiler.Nanopass.ProgramInitializationOrder.birth prunedGraph
             emitPhaseIfEnabled PhaseTypes.PhaseId.Reachability prunedGraph diagnostics
             prunedGraph
+
+    // Extern bodies are declarations rather than executable initializers, and
+    // closed callback factories have already been replaced by proved entries.
+    // Reject zero construction in the remaining executable source before any
+    // representation rewrite can retire the source occurrence or its type.
+    let boundaryValueDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.BoundaryValues.diagnostics reachableGraph
 
     //=========================================================================
     // Four-Pass Elaboration Pipeline (January 2026)
@@ -1214,8 +1221,12 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                     yield (node.Range.File, line) })
         |> Set.ofSeq
 
+    let sourceInvariants = sourceNodes.Values |> Seq.choose (fun node ->
+        if node.Metadata.TryFind "SourceDiagnostic.GlobalInvariant" = Some(MetadataValue.Bool true) then Some node.Id else None) |> Set.ofSeq
     let tagReachability (d: Diagnostic) =
-        if d.Range.File = "" then { d with Reachability = ReachabilityContext.Unknown }
+        if d.Code = DiagnosticCodes.CCS8096_ClosedCallbackDeclaration || d.RelatedNodes |> List.exists sourceInvariants.Contains then
+            { d with Reachability = ReachabilityContext.Unknown }
+        elif d.Range.File = "" then { d with Reachability = ReachabilityContext.Unknown }
         else
             let lineRange = d.Range.Start.Line
             if Set.contains (d.Range.File, lineRange) reachableLines then
@@ -1238,7 +1249,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
         (Clef.Compiler.PSGSaturation.SemanticGraph.PlatformResolution.read finalGraph).Findings.IsEmpty
     let sourceAdmitted =
         selectedDeclarationAdmitted &&
-        ((taggedDiagnostics @ programInitializationDiagnostics @ kernelIngressDiagnostics @ bindingDemandDiagnostics @ staticLayoutDiagnostics @ stringByteDiagnostics)
+        ((taggedDiagnostics @ boundaryTypeDiagnostics @ boundaryValueDiagnostics @ programInitializationDiagnostics @ kernelIngressDiagnostics @ bindingDemandDiagnostics @ staticLayoutDiagnostics @ stringByteDiagnostics)
          |> List.exists (fun diagnostic -> Diagnostic.effectiveSeverity diagnostic = NativeDiagnosticSeverity.Error)
          |> not)
     let finalGraph, programStorageDiagnostics = Clef.Compiler.Nanopass.ProgramInitialization.settleValueAuthority sourceAdmitted finalGraph
@@ -1431,7 +1442,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ programInitializationDiagnostics @ initializationOrderDiagnostics @ bindingDemandDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ boundaryTypeDiagnostics @ boundaryValueDiagnostics @ programInitializationDiagnostics @ initializationOrderDiagnostics @ bindingDemandDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 

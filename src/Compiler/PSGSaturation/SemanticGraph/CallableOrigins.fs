@@ -44,6 +44,9 @@ type FirstBoundary = {
 }
 type Resolution = {
     Calls: Map<NodeId, ResolvedCall>
+    /// Native entry invocations retain their own boundary. They are not
+    /// ordinary closure calls or evidence for an ordinary calling convention.
+    NativeCalls: Map<NodeId, ResolvedCall>
     ParameterInputs: Map<NodeId, (NodeId * NodeId) list>
     Lambdas: Map<NodeId, NodeId>
     FirstBoundaries: Map<NodeId, FirstBoundary>
@@ -289,6 +292,17 @@ let private afterArguments count ty =
             | _ -> None
     drop count ty
 
+let private nativeOperation (nodes: Map<NodeId, SemanticNode>) callee =
+    let rec follow seen id =
+        if Set.contains id seen then None else
+        let seen = Set.add id seen
+        match nodes.TryFind id with
+        | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.FnPtr; Operation = operation } } -> Some operation
+        | Some { Kind = SemanticKind.VarRef(_, Some value) | SemanticKind.TypeAnnotation(value, _) } -> follow seen value
+        | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> follow seen value
+        | _ -> None
+    follow Set.empty callee
+
 /// A finite origin analysis over declaration, parameter, result and aggregate
 /// edges. Unknown callable leaves remain explicit origins, preventing a known
 /// candidate from silently standing in for an opaque alternative.
@@ -415,7 +429,11 @@ let private analyze branchSelections (graph: SemanticGraph) =
                     | None -> union (yes :: Option.toList no)
                 | SemanticKind.Match (_, cases) -> union (cases |> List.map (fun arm -> arm.Body))
                 | SemanticKind.CaseElimination (_, arms) -> union (arms |> List.map (fun arm -> arm.Body))
-                | SemanticKind.Application (callee, arguments) -> invoke id Set.empty (read callee) arguments
+                | SemanticKind.Application (callee, arguments) ->
+                    match nativeOperation nodes callee, arguments with
+                    | Some "ofFunction", [handler] -> read handler
+                    | Some "invoke", pointer :: actuals -> invoke id Set.empty (read pointer) actuals
+                    | _ -> invoke id Set.empty (read callee) arguments
                 | SemanticKind.EnvironmentRead(environment, slot) ->
                     environmentOwner Set.empty environment
                     |> Option.bind (fun owner -> captures.TryFind (owner, slot))
@@ -503,6 +521,26 @@ let private analyze branchSelections (graph: SemanticGraph) =
 let private resolveWith branchSelections (graph: SemanticGraph) : Resolution =
     let nodes, shapes, facts, inputs, branches = analyze branchSelections graph
     let read id = facts.TryFind id |> Option.defaultValue Set.empty
+    let nativeCalls =
+        nodes |> Map.toList |> List.choose (fun (id, node) ->
+            match node.Kind with
+            | SemanticKind.Application(callee, pointer :: arguments) when nativeOperation nodes callee = Some "invoke" ->
+                let origins = read pointer
+                let targets =
+                    origins |> Set.toList |> List.choose (fun (lambda, offset) ->
+                        match shapes.TryFind lambda with
+                        | Some (parameters, body) when offset = 0 && parameters.Length = arguments.Length ->
+                            Some { Lambda = lambda; Parameters = parameters; Arguments = arguments; Body = body }
+                        | _ -> None)
+                let complete =
+                    not origins.IsEmpty &&
+                    (origins |> Set.forall (fun (lambda, offset) ->
+                        match shapes.TryFind lambda with
+                        | Some (parameters, _) when offset = 0 -> parameters.Length = arguments.Length
+                        | _ -> false))
+                Some(id, { Targets = targets; Unknown = not complete; Complete = complete })
+            | _ -> None)
+        |> Map.ofList
     let calls = nodes |> Map.toList |> List.choose (fun (id, node) ->
         match node.Kind with
         | SemanticKind.Application(callee, arguments) ->
@@ -547,7 +585,7 @@ let private resolveWith branchSelections (graph: SemanticGraph) : Resolution =
                 Some(id, { Callee = callee; Targets = List.rev targets; UnknownOrigins = unknown })
             | _ -> None)
         |> Map.ofList
-    { Calls = calls; ParameterInputs = inputs; Lambdas = lambdas; FirstBoundaries = boundaries; Branches = branches }
+    { Calls = calls; NativeCalls = nativeCalls; ParameterInputs = inputs; Lambdas = lambdas; FirstBoundaries = boundaries; Branches = branches }
 
 /// Early source analyses retain conservative joins. They do not yet own the
 /// transfer of branch premises through their subsequent rewrites.

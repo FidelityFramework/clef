@@ -1184,7 +1184,7 @@ let addBclError (name: string) (r: range) (env: TypeEnv) : unit =
 /// Resolve a built-in type constructor to its NativeType factory.
 /// These are NTU types with dedicated NativeType constructors (not TApp).
 /// Returns None if not a built-in type constructor.
-let private tryResolveBuiltinTypeConstructor (name: string) (args: NativeType list) : NativeType option =
+let private tryResolveBuiltinTypeConstructor env range (name: string) (args: NativeType list) : NativeType option =
     match name, args with
     // Byref family
     | "byref", [elem] -> Some (NativeType.TByref(elem, ByrefKind.InOut))
@@ -1200,7 +1200,13 @@ let private tryResolveBuiltinTypeConstructor (name: string) (args: NativeType li
     // every Array.* intrinsic; this makes it denotable in a signature.
     | "array", [elem] -> Some (NativeType.TApp(Types.arrayTyCon, [elem]))
     // Native callback signatures use the same constructor as FnPtr intrinsics.
-    | "FnPtr", [signature] -> Some (NativeType.TApp(Types.fnPtrTyCon, [signature]))
+    | "FnPtr", [signature] ->
+        match applySubst signature with
+        | NativeType.TFun _ | NativeType.TVar _ -> Some (NativeType.TApp(Types.fnPtrTyCon, [signature]))
+        | _ ->
+            let message = "FnPtr requires a function signature; its payload cannot be an integer, handle, aggregate or another FnPtr."
+            addNativeError DiagnosticCodes.CCS8096_ClosedCallbackDeclaration range message env
+            Some (NativeType.TError message)
     | "CHandle", [pointee] -> Some (NativeType.TApp(Types.cHandleTyCon, [pointee]))
     | "Mmio8", [] -> Some (NativeType.TApp(Types.mmio8TyCon, []))
     | "Mmio16", [] -> Some (NativeType.TApp(Types.mmio16TyCon, []))
@@ -1773,7 +1779,7 @@ let rec resolveSynType (env: TypeEnv) (synType: SynType) : NativeType =
             | resolved ->
                 let argTys = typeArgs |> List.map (resolveSynType env)
                 // Try built-in type constructor first (nativeptr, byref, list, etc.)
-                match tryResolveBuiltinTypeConstructor name argTys with
+                match tryResolveBuiltinTypeConstructor env r name argTys with
                 | Some ty -> ty
                 | None ->
                     // Fall back to regular type resolution (user-defined generics)

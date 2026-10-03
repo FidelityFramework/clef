@@ -148,6 +148,17 @@ let expand (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
 
     let mutable nodes = graph.Nodes
     let mutable entries = Map.empty<NodeId * NodeId, NodeId * string>
+    let mutable specializedAliases = Set.empty
+    let rec aliases seen id =
+        if Set.contains id seen then Set.empty else
+        let seen = Set.add id seen
+        match SemanticGraph.tryGetNode id graph with
+        | Some { Kind = SemanticKind.VarRef(_, Some target) | SemanticKind.TypeAnnotation(target, _) } -> aliases seen target
+        | Some ({ Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } as binding) ->
+            match graph.Nodes[value].Kind with
+            | SemanticKind.VarRef _ | SemanticKind.TypeAnnotation _ -> Set.add binding.Id (aliases seen value)
+            | _ -> Set.empty
+        | _ -> Set.empty
     for site in graph.Nodes.Values do
         match site.Kind with
         | SemanticKind.Application (callee, [handler]) when reachable.Contains site.Id ->
@@ -155,6 +166,10 @@ let expand (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
             | Some declaration ->
                 match namedModule Set.empty handler with
                 | Some target when sameType target.Type declaration.HandlerType ->
+                    // These immutable aliases hold only a proved module
+                    // function reference. Specialization consumes that source
+                    // argument; no runtime closure environment is constructed.
+                    specializedAliases <- Set.union specializedAliases (aliases Set.empty handler)
                     let key = declaration.Factory.Id, target.Id
                     let entryBinding, entryName =
                         match entries.TryFind key with
@@ -223,6 +238,26 @@ let expand (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
         | _ -> ()
     let expanded =
         { graph with Nodes = nodes; Types = SemanticGraph.mkTypesIndex nodes; ModuleClassifications = SemanticGraph.mkModuleClassifications nodes }
+    let rec retireConsumedAliases (current: SemanticGraph) =
+        let reachable = computeReachable current (current.DeclarationRoots |> List.map fst)
+        let referenced = current.Nodes.Values |> Seq.choose (fun node ->
+            if not (reachable.Contains node.Id) then None else
+            match node.Kind with SemanticKind.VarRef(_, Some target) -> Some target | _ -> None) |> Set.ofSeq
+        let consumed = Set.difference specializedAliases referenced
+        let mutable changed = false
+        let nodes = current.Nodes |> Map.map (fun _ node ->
+            match node.Kind with
+            | SemanticKind.Sequential statements when reachable.Contains node.Id ->
+                let last = List.tryLast statements
+                let retained = statements |> List.filter (fun statement -> Some statement = last || not (consumed.Contains statement))
+                if retained = statements then node else
+                changed <- true
+                markBaker "ClosedCallbackArgument" (NodeId.value node.Id)
+                    { node with Kind = SemanticKind.Sequential retained; Children = retained }
+            | _ -> node)
+        if not changed then current else
+        retireConsumedAliases { current with Nodes = nodes; Types = SemanticGraph.mkTypesIndex nodes; ModuleClassifications = SemanticGraph.mkModuleClassifications nodes }
+    let expanded = retireConsumedAliases expanded
     let remaining = computeReachable expanded (expanded.DeclarationRoots |> List.map fst)
     let factories = declarations |> List.map (fun declaration -> declaration.Factory.Id) |> Set.ofList
     for node in expanded.Nodes.Values do

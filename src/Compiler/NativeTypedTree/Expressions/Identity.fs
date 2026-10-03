@@ -36,6 +36,7 @@ type private IdentifierResolution =
     | UnionCaseNode of string * NativeType * NR.UnionCaseInfo
     | MemberAccessNode of baseBinding: NR.ResolvedBinding * baseName: string * memberPath: string list * resultTypes: NativeType list
     | ErrorNode of string * NativeType
+    | RejectedSourceIntrinsic of string
 
 //-------------------------------------------------------------------------
 // Core Resolution Logic
@@ -110,9 +111,10 @@ let rec private resolveIdentifierCore
             // function-valued fields retain their source binding identity.
             resolveBinding parts fullName env range
         | Some (modl, op) ->
-            match resolveModuleIntrinsic modl op range with
+            match resolveSourceModuleIntrinsic modl op range with
             | Resolved (info, ty) -> IntrinsicNode (info, ty)
             | UnknownOperation msg -> ErrorNode (msg, NativeType.TError msg)
+            | UnavailableSourceOperation msg -> RejectedSourceIntrinsic msg
             | NotAnIntrinsic ->
                 // Not an intrinsic module operation - fall through to binding lookup
                 resolveBinding parts fullName env range
@@ -269,6 +271,14 @@ let resolveIdentifier
                 (fieldNode, ())
             ) (baseNode, ())
         finalNode
+
+    | RejectedSourceIntrinsic message ->
+        let rejected = builder.Create(SemanticKind.Error message, NativeType.TError message, range)
+        let rejected = builder.SetMetadata(rejected.Id, "SourceDiagnostic.GlobalInvariant", MetadataValue.Bool true)
+        addDiagnostic { Severity = NativeDiagnosticSeverity.Error; Code = DiagnosticCodes.CCS8401_UnsupportedConstruct
+                        Message = message; Range = range; RelatedNodes = [rejected.Id]
+                        Reachability = ReachabilityContext.Unknown } env
+        rejected
 
     | ErrorNode (msg, ty) ->
         let fullName = String.concat "." parts

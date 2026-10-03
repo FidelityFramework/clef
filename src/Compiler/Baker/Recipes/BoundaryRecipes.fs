@@ -121,7 +121,7 @@ let private readImport (graph: SemanticGraph) (descriptors: Declarations.Descrip
             "Reference arguments require source-settled boundary adapters; scalar C publication cannot substitute a pointer."
     let parameters =
         descriptor.Parameters |> List.map (fun (formal, declared) -> checked' {
-            let! declared = declared |> needed "A boundary parameter has no admitted integer or boolean declaration."
+            let! declared = declared |> needed "A boundary parameter has no admitted integer or boolean declaration; pointer and aggregate values require a source-settled adapter."
             let! _, parameterFields = Declarations.recordOf graph declared.Node |> needed "A boundary parameter declaration is missing."
             let! passing = field "PassBy" parameterFields |> needed "A scalar boundary parameter must explicitly declare PassBy.Value."
             do! require (Declarations.caseOf graph passing |> Option.exists (fun (_, name, _) -> name = "Value"))

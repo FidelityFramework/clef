@@ -25,6 +25,7 @@ type IntrinsicResolution =
     | Resolved of IntrinsicInfo * NativeType
     | NotAnIntrinsic
     | UnknownOperation of string  // Error message for unknown op in known module
+    | UnavailableSourceOperation of string // Internal address primitive has no Clef source contract
 
 //-------------------------------------------------------------------------
 // Helper to create IntrinsicInfo
@@ -962,6 +963,17 @@ let resolveModuleIntrinsic
     | IntrinsicModule.Convert -> NotAnIntrinsic  // Conversions handled separately (float, int, etc.)
     | IntrinsicModule.Operators -> NotAnIntrinsic  // Operators handled separately
     | IntrinsicModule.Unchecked -> NotAnIntrinsic  // Rejected via BCL check
+
+/// Startup and allocation ingredients may carry an address in the compiler's
+/// private graph construction. Source lookup cannot expose that representation
+/// without a bounded region/access contract owned by CCS.
+let resolveSourceModuleIntrinsic modl op range =
+    match modl, op with
+    | IntrinsicModule.Sys, "stackArgv" ->
+        UnavailableSourceOperation "Sys.stackArgv is an internal startup address primitive; it has no bounded Clef source contract."
+    | IntrinsicModule.Arena, ("fromPointer" | "alloc" | "allocAligned") ->
+        UnavailableSourceOperation $"Arena.{op} exposes an unbounded address; source use requires a settled region, extent and access contract."
+    | _ -> resolveModuleIntrinsic modl op range
 
 //-------------------------------------------------------------------------
 // Operator Intrinsics

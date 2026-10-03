@@ -449,6 +449,7 @@
     <Compile Include="PSGSaturation\SemanticGraph\Escape.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Curry.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\FunctionPointers.fs" />
+    <Compile Include="PSGSaturation\SemanticGraph\BoundaryValues.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Meets.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\PlatformBindings.fs" />
 

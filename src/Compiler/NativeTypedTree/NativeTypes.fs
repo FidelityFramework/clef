@@ -2093,7 +2093,7 @@ module Types =
 
     // FnPtr type constructor (arity 1)
     // Usage: NativeType.TApp(Types.fnPtrTyCon, [funcType])
-    let fnPtrTyCon = mkNTUTypeConRefWithArity "FnPtr" NTUKind.NTUfnptr 1 (TypeLayout.Inline(8, 8))
+    let fnPtrTyCon = mkNTUTypeConRefWithArity "FnPtr" NTUKind.NTUfnptr 1 TypeLayout.PlatformWord
 
     // Opaque foreign handle. NTUptr supplies its target-dependent representation;
     // it does not introduce pointer arithmetic, dereference or integer conversions.

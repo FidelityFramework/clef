@@ -1204,6 +1204,14 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
             | SemanticKind.Application (funcId, args) ->
                 let resolved =
                     match resolveCallee reachableNodes candidates poisons funcId args with
+                    | Some (Callee.Intrinsic { Module = IntrinsicModule.FnPtr; Operation = "invoke" }, _pointer :: actuals) ->
+                        match callableFlow.NativeCalls.TryFind node.Id with
+                        | Some native ->
+                            let targets = native.Targets |> List.map (fun target ->
+                                { LambdaId = target.Lambda; Parameters = target.Parameters; Body = target.Body
+                                  Offset = 0; Escape = "invoked through a native entry" })
+                            Some(Callee.Value(targets, native.Unknown), actuals)
+                        | None -> Some(Callee.Value([], true), actuals)
                     // Direct boundaries retain their formal identity for ABI
                     // reference seeds and their unsupplied-argument frontier.
                     | Some (Callee.Intrinsic _, _) as intrinsic -> intrinsic
