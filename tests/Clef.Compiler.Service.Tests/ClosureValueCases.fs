@@ -117,7 +117,8 @@ let main _ =
     if listener.Marker then 0 else 1
 """
         let result = ClosureValues.check source
-        let declarations = Clef.Compiler.PSGSaturation.SemanticGraph.CallbackDeclarations.read result.Graph
+        let graph = { result.Graph with Platform = Some ClosureValues.context }
+        let declarations = Clef.Compiler.PSGSaturation.SemanticGraph.CallbackDeclarations.read graph
         Assert.Empty declarations.Findings
         let callback = Assert.Single declarations.Callbacks
         Assert.True callback.ReturnsVoid
@@ -126,13 +127,14 @@ let main _ =
         Assert.Equal(32, serial.Bits)
         Assert.Equal(ValueRange.unsignedOf 32, serial.Range)
         Assert.Equal(Some serial.Range, result.Graph.Nodes[serialId].ValueRange)
-        let graph = { result.Graph with Platform = Some ClosureValues.context }
         Assert.Equal(Some 32, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth graph serialId)
         let invalid = ClosureValues.check (source.Replace("ReturnType = Void", "ReturnType = Integer (Signed, 32)"))
-        let invalidDeclarations = Clef.Compiler.PSGSaturation.SemanticGraph.CallbackDeclarations.read invalid.Graph
+        let invalidGraph = { invalid.Graph with Platform = Some ClosureValues.context }
+        let invalidDeclarations = Clef.Compiler.PSGSaturation.SemanticGraph.CallbackDeclarations.read invalidGraph
         Assert.Contains(invalidDeclarations.Findings, fun finding -> finding.Message.Contains("Void result"))
         let wrongPointer = ClosureValues.check (source.Replace("Type = Pointer 64", "Type = Float 64"))
-        Assert.Contains((Clef.Compiler.PSGSaturation.SemanticGraph.CallbackDeclarations.read wrongPointer.Graph).Findings,
+        let wrongPointerGraph = { wrongPointer.Graph with Platform = Some ClosureValues.context }
+        Assert.Contains((Clef.Compiler.PSGSaturation.SemanticGraph.CallbackDeclarations.read wrongPointerGraph).Findings,
                         fun finding -> finding.Message.Contains("matching Pointer"))
         let otherPlatform = { graph with Platform = Some { ClosureValues.context with Dimensions = Map.ofList ["Pointer", 32; "Register", 64] } }
         Assert.Contains((Clef.Compiler.PSGSaturation.SemanticGraph.CallbackDeclarations.read otherPlatform).Findings,
@@ -481,7 +483,7 @@ let main _ =
         Assert.True(index.ValueRange |> Option.exists (fun range -> ValueRange.contains range (ValueRange.point 224I)))
 
     [<Fact>]
-    member _.``A callback with no observed argument flow keeps the declared register width``() =
+    member _.``An unobserved callback interior does not acquire a register width``() =
         let result = ClosureValues.check """
 let keep (callback: int -> int -> int) = 0
 [<EntryPoint>]
@@ -494,7 +496,7 @@ let main _ =
         let saved = ClosureValues.bindingNamed "saved" result
         Assert.Equal(Some ValueRange.Unbounded, saved.ValueRange)
         let graph = { result.Graph with Platform = Some ClosureValues.context }
-        Assert.Equal(Some 64, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth graph saved.Id)
+        Assert.Equal<int option>(None, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth graph saved.Id)
 
     [<Fact>]
     member _.``Immutable binding adapts a uniform callback result before a narrow store``() =
