@@ -72,8 +72,34 @@ let main _ = observe ()
             match EffectDemand.tryRead graph with
             | Result.Error failures -> Assert.NotEmpty failures; failures
             | Result.Ok _ -> failwith "Removing startup authority must invalidate the retained demand support"
-        let untouched, diagnostics = EffectRangeAnalysis.run graph.Platform graph
-        Assert.Same(graph, untouched)
+        let withdrawn, diagnostics = EffectRangeAnalysis.run graph.Platform graph
+        // Error Handling (CCS8415): "The exclusion SHALL be withdrawn when its
+        // supporting activation, use, capture or ownership facts change".
+        // Withdraw stale ranges while preserving every source field and incidence.
+        Assert.Equal(graph.Nodes.Count, withdrawn.Nodes.Count)
+        for KeyValue(id, node) in graph.Nodes do
+            let current = withdrawn.Nodes[id]
+            Assert.True(System.Object.Equals(node.Id, current.Id), "Id changed during range withdrawal")
+            Assert.True(System.Object.Equals(node.Kind, current.Kind), "Kind changed during range withdrawal")
+            Assert.True(System.Object.Equals(node.Range, current.Range), "Range changed during range withdrawal")
+            Assert.True(System.Object.Equals(node.Type, current.Type), "Type changed during range withdrawal")
+            Assert.True(System.Object.Equals(node.SRTPResolution, current.SRTPResolution), "SRTPResolution changed during range withdrawal")
+            Assert.True(System.Object.Equals(node.ArenaAffinity, current.ArenaAffinity), "ArenaAffinity changed during range withdrawal")
+            Assert.True(System.Object.Equals(node.LayoutHint, current.LayoutHint), "LayoutHint changed during range withdrawal")
+            Assert.True(System.Object.Equals(node.Children, current.Children), "Children changed during range withdrawal")
+            Assert.True(System.Object.Equals(node.Parent, current.Parent), "Parent changed during range withdrawal")
+            Assert.True(System.Object.Equals(node.Metadata, current.Metadata), "Metadata changed during range withdrawal")
+            Assert.True(System.Object.Equals(node.IsReachable, current.IsReachable), "IsReachable changed during range withdrawal")
+            Assert.True(System.Object.Equals(node.EmissionStrategy, current.EmissionStrategy), "EmissionStrategy changed during range withdrawal")
+            Assert.True(current.ValueRange.IsNone)
+        Assert.Equal<Hyperedge list>(graph.Edges, withdrawn.Edges)
+        Assert.True(graph.DeclarationRoots = withdrawn.DeclarationRoots)
+        Assert.Same(graph.Types, withdrawn.Types)
+        Assert.Same(graph.Modules, withdrawn.Modules)
+        Assert.Empty(withdrawn.FieldRanges.Value)
+        Assert.Empty(withdrawn.ElementRanges.Value)
+        Assert.Empty(withdrawn.Escaping.Value)
+        Assert.Empty(EffectRangeAnalysis.sourceFacts withdrawn)
         Assert.Equal<Diagnostic list>(EffectDemand.diagnostics graph failures, diagnostics)
         let current = EffectDemandPass.normalize graph
         Assert.True(EffectDemand.tryRead current |> Result.isOk)

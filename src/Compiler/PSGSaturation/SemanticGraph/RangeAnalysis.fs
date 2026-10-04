@@ -1485,7 +1485,11 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                                     | None -> (calls, seeds)
                                 | RangeSources.Seed.Unknown -> (calls, seeds)) (calls, seeds)) (calls, seeds)) (calls, seeds))
             (callableFlow.ParameterInputs |> Map.map (fun _ inputs ->
-                inputs |> List.filter (fun (site, _) -> not (inactiveCalls.Contains site))), Map.empty)
+                inputs |> List.filter (fun (site, _) -> not (inactiveCalls.Contains site)))
+             // No remaining supplier is no observation, not an empty aggregate
+             // alternative. Only the separate inactive-formal proof authorizes
+             // an Empty scalar execution join.
+             |> Map.filter (fun _ inputs -> not inputs.IsEmpty), Map.empty)
     // A parameter an intrinsic hands a value the pass does not model (a sequence or list
     // element): named as such when nothing else supplies it.
     let unknownSupplied =

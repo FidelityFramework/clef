@@ -153,8 +153,34 @@ module private RecordPayloadRangeFixture =
         match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryRead mutated with
         | Result.Error failures ->
             Assert.NotEmpty failures
-            let unchanged, diagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run None mutated
-            Assert.Same(mutated, unchanged)
+            let withdrawn, diagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run None mutated
+            // Error Handling (CCS8415): "The exclusion SHALL be withdrawn when its
+            // supporting activation, use, capture or ownership facts change".
+            // Withdraw stale ranges while preserving every source field and incidence.
+            Assert.Equal(mutated.Nodes.Count, withdrawn.Nodes.Count)
+            for KeyValue(id, node) in mutated.Nodes do
+                let current = withdrawn.Nodes[id]
+                Assert.True(System.Object.Equals(node.Id, current.Id), "Id changed during range withdrawal")
+                Assert.True(System.Object.Equals(node.Kind, current.Kind), "Kind changed during range withdrawal")
+                Assert.True(System.Object.Equals(node.Range, current.Range), "Range changed during range withdrawal")
+                Assert.True(System.Object.Equals(node.Type, current.Type), "Type changed during range withdrawal")
+                Assert.True(System.Object.Equals(node.SRTPResolution, current.SRTPResolution), "SRTPResolution changed during range withdrawal")
+                Assert.True(System.Object.Equals(node.ArenaAffinity, current.ArenaAffinity), "ArenaAffinity changed during range withdrawal")
+                Assert.True(System.Object.Equals(node.LayoutHint, current.LayoutHint), "LayoutHint changed during range withdrawal")
+                Assert.True(System.Object.Equals(node.Children, current.Children), "Children changed during range withdrawal")
+                Assert.True(System.Object.Equals(node.Parent, current.Parent), "Parent changed during range withdrawal")
+                Assert.True(System.Object.Equals(node.Metadata, current.Metadata), "Metadata changed during range withdrawal")
+                Assert.True(System.Object.Equals(node.IsReachable, current.IsReachable), "IsReachable changed during range withdrawal")
+                Assert.True(System.Object.Equals(node.EmissionStrategy, current.EmissionStrategy), "EmissionStrategy changed during range withdrawal")
+                Assert.True(current.ValueRange.IsNone)
+            Assert.Equal<Hyperedge list>(mutated.Edges, withdrawn.Edges)
+            Assert.True(mutated.DeclarationRoots = withdrawn.DeclarationRoots)
+            Assert.Same(mutated.Types, withdrawn.Types)
+            Assert.Same(mutated.Modules, withdrawn.Modules)
+            Assert.Empty(withdrawn.FieldRanges.Value)
+            Assert.Empty(withdrawn.ElementRanges.Value)
+            Assert.Empty(withdrawn.Escaping.Value)
+            Assert.Empty(Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.sourceFacts withdrawn)
             Assert.Equal<Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.Diagnostic list>(
                 Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.diagnostics mutated failures, diagnostics)
             Assert.Empty(Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.sourceFacts mutated)
