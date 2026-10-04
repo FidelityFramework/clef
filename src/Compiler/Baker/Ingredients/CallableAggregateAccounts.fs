@@ -114,12 +114,20 @@ let authorWith (facts: Inputs) (graph: SemanticGraph) (occurrence: NodeId) : Res
                 let claims = participantNodes |> List.choose (fun id ->
                     graph.Nodes.TryFind id |> Option.bind (fun node ->
                         match node.Kind with SemanticKind.Obligation claim -> Some(id, claim) | _ -> None))
+                let symbols =
+                    (carriers |> List.map _.Implementation) @
+                    (participants |> List.choose (fun participant ->
+                        if participant.Role = ParticipantRole.CallableImplementation then Some participant.Node else None))
+                    |> List.distinct
+                    |> List.choose (fun implementation ->
+                        CallableSymbols.nameOf graph implementation |> Option.map (fun name -> implementation, name))
                 match contractFailure |> Option.orElse (declarationFailure) |> Option.orElseWith (fun () -> sources |> List.tryPick (function Error reason -> Some reason | _ -> None)) with
                 | Some reason -> Error reason
                 | None ->
                     Ok { Occurrence = occurrence; Slots = slots; Values = values; Carriers = carriers
                          Contracts = contracts; Flows = flows; Joins = joins; Participants = participants
-                         Sources = sources |> List.choose (function Ok source -> Some source | _ -> None); Claims = claims }))))
+                         Sources = sources |> List.choose (function Ok source -> Some source | _ -> None)
+                         Claims = claims; Symbols = symbols }))))
 
 let author (graph: SemanticGraph) (occurrence: NodeId) =
     let facts = graph.Codata.Value

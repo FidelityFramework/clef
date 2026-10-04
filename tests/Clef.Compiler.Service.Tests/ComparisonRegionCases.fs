@@ -22,6 +22,27 @@ module private ComparisonRegionFixture =
         Assert.True(rows.ContainsKey name, sprintf "Missing independent region %s: %A" name rows.Keys)
         rows[name]
 
+    // These controls isolate the segmentation projector from source admission.
+    // A manually edited contract is not claimed to be a newly settled graph.
+    let ownedContract (region: WitnessRegion) (graph: SemanticGraph) =
+        graph.Codata.Value.CallableContracts.Values
+        |> Seq.filter (fun contract ->
+            contract.Participants |> List.exists (fun participant ->
+                participant.Role = ParticipantRole.CallableImplementation &&
+                participant.Group = contract.Identity && participant.Ordinal = 0 &&
+                Some participant.Node = region.Root))
+        |> Assert.Single
+    let projectContracts (contracts: Map<NodeId, CallableContract>) (graph: SemanticGraph) =
+        let held = graph.Codata.Value
+        let emission = held.WitnessEmission.Value
+        let emission = {emission with Callable = {emission.Callable with Contracts = contracts}}
+        let changed = {graph with Codata = lazy {held with CallableContracts = contracts}}
+        let scope =
+            Clef.Compiler.Baker.Recipes.WitnessScopeRecipes.projectWithEmission emission changed
+            |> Result.defaultWith (sprintf "%A" >> failwith)
+        let segmentation = Clef.Compiler.PSGSaturation.SemanticGraph.WitnessSegmentation.project changed emission scope
+        changed, segmentation
+
 type ComparisonRegionCases() =
     [<Theory>]
     [<InlineData("=")>]
@@ -151,3 +172,75 @@ type ComparisonRegionCases() =
         let result = RealComparisonFixture.check RealComparisonFixture.authority source
         let graph = RegionEmission.prepare result.Graph |> Result.defaultWith (sprintf "%A" >> failwith)
         Assert.False((ComparisonRegionFixture.regions graph).ContainsKey ComparisonRegionFixture.first)
+
+    [<Fact>]
+    member _.``Callable support changes retain scalar fingerprints and current support`` () =
+        let graph = ComparisonRegionFixture.prepare RealComparisonFixture.authority (ComparisonRegionFixture.source "" "<")
+        let before = ComparisonRegionFixture.get ComparisonRegionFixture.first graph
+        let contract = ComparisonRegionFixture.ownedContract before graph
+        let source, premise =
+            contract.SourcePremises |> Map.toSeq |> Seq.find (fun (id, _) ->
+                graph.Nodes.TryFind id |> Option.exists (fun node -> node.Children.IsEmpty))
+        let support = {graph.Nodes[source] with Id = NodeId.fresh(); IsReachable = false}
+        let nextOrdinal =
+            contract.Participants |> List.filter (fun participant -> participant.Role = ParticipantRole.Source)
+            |> List.map _.Ordinal |> List.fold max -1 |> (+) 1
+        let participant : Participant =
+            {Role = ParticipantRole.Source; Group = contract.Identity; Ordinal = nextOrdinal; Node = support.Id}
+        let changedContract =
+            {contract with
+                SourcePremises = contract.SourcePremises.Add(support.Id, {premise with Reachable = false})
+                Participants = contract.Participants @ [participant]}
+        let contracts = graph.Codata.Value.CallableContracts.Add(contract.Identity, changedContract)
+        let changed, segmentation =
+            ComparisonRegionFixture.projectContracts contracts {graph with Nodes = graph.Nodes.Add(support.Id, support)}
+        let current = segmentation.Regions |> Seq.filter (fun row -> row.Identity = before.Identity) |> Assert.Single
+        Assert.Equal(before.Fingerprint, current.Fingerprint)
+        Assert.DoesNotContain(support.Id, before.Supports)
+        Assert.Contains(support.Id, current.Supports)
+        Assert.NotEqual<Map<NodeId, BoundarySourcePremise>>(contract.SourcePremises, changed.Codata.Value.CallableContracts[contract.Identity].SourcePremises)
+        Assert.Equal<Participant list>(changedContract.Participants, changed.Codata.Value.CallableContracts[contract.Identity].Participants)
+        // Local fingerprint erasure never grants publication or proof authority.
+        Assert.True(RegionEmission.admit changed |> Result.isError)
+
+    [<Fact>]
+    member _.``A callable interface only edit changes its scalar fingerprint`` () =
+        let graph = ComparisonRegionFixture.prepare RealComparisonFixture.authority (ComparisonRegionFixture.source "" "<")
+        let before = ComparisonRegionFixture.get ComparisonRegionFixture.first graph
+        let contract = ComparisonRegionFixture.ownedContract before graph
+        Assert.Equal<int option>(None, contract.EnvironmentBytes)
+        let changedContract = {contract with EnvironmentBytes = Some 0}
+        let contracts = graph.Codata.Value.CallableContracts.Add(contract.Identity, changedContract)
+        let changed, segmentation = ComparisonRegionFixture.projectContracts contracts graph
+        Assert.Same(graph.Nodes, changed.Nodes)
+        Assert.Same(graph.Edges, changed.Edges)
+        Assert.Equal<Map<NodeId, BoundarySourcePremise>>(contract.SourcePremises, changedContract.SourcePremises)
+        Assert.Equal<Participant list>(contract.Participants, changedContract.Participants)
+        match segmentation.Regions |> List.tryFind (fun row -> row.Identity = before.Identity) with
+        | Some current -> Assert.NotEqual<string>(before.Fingerprint, current.Fingerprint)
+        | None -> ()
+        Assert.True(RegionEmission.admit changed |> Result.isError)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Native receiving contracts exclude scalar reuse with or without an ordinary contract`` keepOrdinary =
+        let graph = ComparisonRegionFixture.prepare RealComparisonFixture.authority (ComparisonRegionFixture.source "" "<")
+        let before = ComparisonRegionFixture.get ComparisonRegionFixture.first graph
+        let contract = ComparisonRegionFixture.ownedContract before graph
+        let identity = if keepOrdinary then NodeId.fresh() else contract.Identity
+        let participants =
+            contract.Participants |> List.map (fun participant ->
+                {participant with
+                    Group = identity
+                    Node = if participant.Role = ParticipantRole.CallableContract then identity else participant.Node})
+        // The projector's candidate policy must refuse native classification
+        // before it could silently omit any unsupported native interface field.
+        // Source admission separately rejects this deliberately unrenewed row.
+        let native = {contract with Identity = identity; Kind = CallableKind.NativeEntry; Participants = participants}
+        let contracts = graph.Codata.Value.CallableContracts.Add(identity, native)
+        let changed, segmentation = ComparisonRegionFixture.projectContracts contracts graph
+        Assert.DoesNotContain(segmentation.Regions, fun row -> row.Identity = before.Identity)
+        let common = segmentation.Regions |> Seq.filter (fun row -> row.Identity = "common") |> Assert.Single
+        Assert.True(Set.isSubset before.Members common.Members)
+        Assert.True(RegionEmission.admit changed |> Result.isError)

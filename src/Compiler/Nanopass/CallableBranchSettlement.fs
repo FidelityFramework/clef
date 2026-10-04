@@ -13,10 +13,13 @@ module Flows = Clef.Compiler.PSGSaturation.SemanticGraph.CallableFlows
 module Recipe = Clef.Compiler.Baker.Recipes.CallableBranchRecipes
 
 let normalize (graph: SemanticGraph) =
-    let resolution = Origins.resolveCallableBranches graph
+    // Logical branch selection does not erase either executable operand.
+    // Physical families retain the conservative value transport; the recipe
+    // below separately authors the refined logical branch/call authority.
+    let physicalResolution = Origins.resolve graph
     let codata = graph.Codata.Value
     let carriers, carrierResiduals =
-        Carriers.settleWithResolution resolution
+        Carriers.settleWithResolution physicalResolution
             { Layouts = codata.EnvironmentLayouts; Origins = Environments.origins graph
               Known = Environments.knownCallables graph; Contracts = codata.CallableContracts } graph
     let contracts, carriers =
@@ -24,7 +27,7 @@ let normalize (graph: SemanticGraph) =
     // Existing storage/joins are not rewritten after their owning proof pass.
     // CallableEmission independently refuses any refined storage mismatch.
     let flows, flowResiduals =
-        Flows.settleWithResolution resolution
+        Flows.settleWithResolution physicalResolution
             { Carriers = carriers; Joins = codata.CallableJoins; Layouts = codata.EnvironmentLayouts
               SequenceFlows = codata.SequenceFlows; SequenceFamilies = codata.SequenceFamilies } graph
     let graph = Graph.invalidateWitness graph

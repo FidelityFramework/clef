@@ -329,11 +329,16 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
                         let identities = Map.fold (fun identities id name -> Map.add id name identities) identities interfaces
                         let contracts =
                             emission.Callable.Contracts |> Map.filter (fun _ (contract: CallableContract) ->
-                                contract.Kind = CallableKind.OrdinaryFlatClosure &&
                                 (match contract.Participants |> List.filter (fun participant -> participant.Role = ParticipantRole.CallableImplementation) with
                                 | [implementation] when implementation.Group = contract.Identity && implementation.Ordinal = 0 ->
                                     own.Contains implementation.Node
                                 | _ -> false))
+                        // A native receiving convention has no independent
+                        // scalar emission interface yet. Keep the candidate in
+                        // Common instead of silently omitting that contract,
+                        // including when an ordinary contract also names it.
+                        if contracts.Values |> Seq.exists (fun contract -> contract.Kind = CallableKind.NativeEntry) then
+                            invalidOp "Native receiving contracts are not admitted to independent scalar regions."
                         let contractNames = contracts |> Map.map (fun _ contract ->
                             let implementation = contract.Participants |> List.find (fun participant -> participant.Role = ParticipantRole.CallableImplementation)
                             "callable-contract:" + identities[implementation.Node])

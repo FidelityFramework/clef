@@ -10,29 +10,13 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 let private choose chooser values =
     values |> Map.toSeq |> Seq.choose (fun (key, value) -> chooser key value |> Option.map (fun selected -> key, selected)) |> Map.ofSeq
 
-let private bindingName (graph: SemanticGraph) (node: SemanticNode) =
-    match node.Kind with
-    | SemanticKind.Binding(name, _, _, _) ->
-        match node.Parent |> Option.bind graph.Nodes.TryFind with
-        | Some { Kind = SemanticKind.ModuleDef(moduleName, _) } -> Some(CallableSymbolName.ModuleBinding(moduleName, name))
-        | _ when node.Parent.IsSome -> Some(CallableSymbolName.LocalBinding(node.Id, name))
-        | _ -> Some(CallableSymbolName.RootBinding name)
-    | _ -> None
-
 let private declarations (graph: SemanticGraph) =
-    let mutable symbols = graph.Nodes |> choose (fun _ node -> bindingName graph node)
+    let symbols = Clef.Compiler.Baker.Ingredients.CallableSymbols.observe graph
     let mutable declarations = Map.empty
     for node in graph.Nodes.Values do
         match node.Kind with
         | SemanticKind.Lambda(parameters, body, captures, _, context) ->
-            let anonymous =
-                graph.Codata.Value.Closures.ContainsKey node.Id &&
-                ([ClosureMetadata.LambdaExpression; ClosureMetadata.RequiresClosurePair]
-                 |> List.exists (fun key -> node.Metadata.TryFind key = Some(MetadataValue.Bool true)))
-            let name =
-                if anonymous then CallableSymbolName.Anonymous node.Id
-                else node.Parent |> Option.bind symbols.TryFind |> Option.defaultValue (CallableSymbolName.Anonymous node.Id)
-            symbols <- symbols.Add(node.Id, name)
+            let name = symbols[node.Id]
             // Generic lazy templates remain source history. Only their live
             // specializations have the storage authority of executable thunks.
             if context <> LambdaContext.LazyThunk || node.IsReachable then
@@ -76,16 +60,19 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
             if Map.tryFind id current <> Map.tryFind id held then
                 errors.Add({ Occurrence = Some id; Participants = Set.singleton id
                              Reason = $"{name} at {NodeId.value id} is missing or does not match its current source participants." })
-    let resolution = CallableOrigins.resolveCallableBranches graph
+    let logicalResolution = CallableOrigins.resolveCallableBranches graph
+    // A logical selected arm is not an executable-reachability proof. Keep
+    // the actual physical family and forwarded operands independently.
+    let physicalResolution = CallableOrigins.resolve graph
     let origins = ClosureEnvironments.origins graph
     let known = ClosureEnvironments.knownCallables graph
-    let carriers, _ = CallableCarriers.settleWithResolution resolution
+    let carriers, _ = CallableCarriers.settleWithResolution physicalResolution
                         { Layouts = codata.EnvironmentLayouts; Origins = origins; Known = known
                           Contracts = codata.CallableContracts } graph
     errors.AddRange(
         Clef.Compiler.Baker.Ingredients.CallableContracts.validate graph codata.EnvironmentLayouts codata.CallableContracts carriers)
     let storage = MutableCallableStorage.settle carriers codata.EnvironmentLayouts graph
-    let flows, _ = CallableFlows.settleWithResolution resolution
+    let flows, _ = CallableFlows.settleWithResolution physicalResolution
                         { Carriers = carriers; Joins = storage.Joins; Layouts = codata.EnvironmentLayouts
                           SequenceFlows = codata.SequenceFlows; SequenceFamilies = codata.SequenceFamilies } graph
     sameRows "Callable carrier" carriers codata.CallableCarriers
@@ -100,8 +87,8 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
             let participants = carrier.Result :: (carrier.Parameters |> List.map (fun (_, _, id) -> id))
             implementation, participants |> List.filter (CallableInstantiations.allowsSignatureData graph carrier) |> Set.ofList)
         |> Map.ofSeq
-    let ingress = CallableIngress.analyzeWith graph resolution
-    let instance = CallableInstantiations.readerWith graph resolution ingress
+    let ingress = CallableIngress.analyzeWith graph physicalResolution
+    let instance = CallableInstantiations.readerWith graph physicalResolution ingress
     let instances =
         codata.CallableCarriers |> choose (fun occurrence carrier ->
             graph.Nodes.TryFind carrier.Implementation |> Option.bind (fun implementation ->
@@ -121,10 +108,17 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
                 | SemanticKind.Sequential values, children when values = children -> List.tryLast values
                 | SemanticKind.EagerExpr source, [child] when source = child && ExplicitDemand.operand graph destination = Some source -> Some source
                 | _ -> None
-            let actual = source |> Option.filter (fun source ->
+            // The flow owner already records each physical operand. Reading
+            // that direct row preserves both live branch values; neither code
+            // identity nor a logical selected-arm fact invents an edge here.
+            let flowInputs =
+                codata.CallableFlows.TryFind destination
+                |> Option.bind (fun flow -> flow.Dependencies.TryFind destination)
+                |> Option.defaultValue []
+            let actual = (Option.toList source @ flowInputs) |> List.filter (fun source ->
                 shapes.TryFind source = Some(CallableValueShape.Callable source) &&
                 shapes.TryFind destination = Some(CallableValueShape.Callable destination) &&
-                applySubst (CallableCarriers.sourceType graph.Nodes[source]) = applySubst (CallableCarriers.sourceType node)) |> Option.toList |> Set.ofList
+                applySubst (CallableCarriers.sourceType graph.Nodes[source]) = applySubst (CallableCarriers.sourceType node)) |> Set.ofList
             let admitted = Set.union actual (instantiatedTransports.TryFind destination |> Option.defaultValue Set.empty)
             if admitted.IsEmpty then None else Some admitted)
     // An already witnessed occurrence preserves itself. Transparent result
@@ -147,11 +141,11 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
         collect Set.empty [destination]
     let transports =
         callableOccurrences |> Seq.map (fun destination -> destination, transportPath destination) |> Map.ofSeq
-    let callInstance = CallableInstantiations.callReaderWith resolution graph
-    let completedCalls, completedFailures = Curry.completedCalls graph codata.Curry resolution
+    let callInstance = CallableInstantiations.callReaderWith logicalResolution graph
+    let completedCalls, completedFailures = Curry.completedCalls graph codata.Curry logicalResolution
     errors.AddRange completedFailures
     let calls =
-        resolution.Calls |> choose (fun site call ->
+        logicalResolution.Calls |> choose (fun site call ->
             match call.Complete, call.Unknown, call.Targets with
             | true, false, [target] ->
                 let completed = completedCalls.TryFind site

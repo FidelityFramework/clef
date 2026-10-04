@@ -32,7 +32,200 @@ module private CallableAggregateFixture =
         else
             "module StoredCallable\nlet first (value: bool) = value\nlet fallback (value: bool) = false\nlet input () : Result<bool -> bool, bool> = Ok first\n[<EntryPoint>]\nlet main _ = if Result.defaultValue fallback (input ()) true then 0 else 1\n"
 
+    let receivingSource deeper =
+        let declarations = """
+module ReceivingAggregate
+type Holder = { Apply: bool -> bool }
+type Outer = { Run: Holder -> bool }
+let first (value: bool) = value
+let run (holder: Holder) = holder.Apply true
+"""
+        if deeper then declarations + """
+type Final = { Invoke: Outer -> bool }
+let invoke (outer: Outer) = outer.Run { Apply = first }
+[<EntryPoint>]
+let main _ =
+    let final = { Invoke = invoke }
+    if final.Invoke { Run = run } then 0 else 1
+"""
+        else declarations + """
+[<EntryPoint>]
+let main _ =
+    let outer = { Run = run }
+    if outer.Run { Apply = first } then 0 else 1
+"""
+
 type CallableAggregateCases() =
+    [<Fact>]
+    member _.``Logical branch selection preserves both physical callable operands and forwarded transport`` () =
+        // CallableBranchObservation is a logical value fact, not permission to
+        // erase either arm's effects or executable source occurrence.
+        let graph = CallableAggregateFixture.check """
+module ForwardedPhysicalCallable
+let first (value: bool) = value
+let fallback (value: bool) = false
+let input () : Result<bool -> bool, bool> = Ok first
+[<EntryPoint>]
+let main _ =
+    let selected = Result.defaultValue fallback (input ())
+    let forwarded = selected
+    if forwarded true then 0 else 1
+"""
+        let logical = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolveCallableBranches graph
+        let observation =
+            logical.Branches.Values |> Seq.filter (fun row ->
+                match graph.Nodes[row.Choice].Type with NativeType.TFun _ -> true | _ -> false)
+            |> Assert.Single
+        let yes, no = observation.TrueArm, observation.FalseArm
+        Assert.Equal(yes, observation.SelectedArm)
+        Assert.True(graph.Nodes[yes].IsReachable)
+        Assert.True(graph.Nodes[no].IsReachable)
+        let facts = graph.Codata.Value
+        Assert.False(facts.CallableCarriers.ContainsKey observation.Choice)
+        let flow = facts.CallableFlows[observation.Choice]
+        Assert.Equal<Set<NodeId>>(Set.ofList [yes; no], Set.ofList flow.Alternatives)
+        Assert.Equal<NodeId list>([yes; no], flow.Dependencies[observation.Choice])
+        Assert.NotEqual(facts.CallableCarriers[yes].Implementation, facts.CallableCarriers[no].Implementation)
+        let callable =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.CallableEmission.project graph with
+            | Ok projection -> projection
+            | Error failures -> failwithf "Physical callable preparation refused: %A" failures
+        Assert.Equal<Set<NodeId>>(Set.ofList [observation.Choice; yes; no], callable.Transports[observation.Choice])
+        let forwarded =
+            facts.CallableFlows |> Map.toList |> List.filter (fun (site, row) ->
+                site <> observation.Choice && row.Dependencies.ContainsKey observation.Choice)
+        Assert.NotEmpty forwarded
+        for site, row in forwarded do
+            Assert.False(facts.CallableCarriers.ContainsKey site)
+            Assert.Equal<Set<NodeId>>(Set.ofList [yes; no], Set.ofList row.Alternatives)
+            for source in [site; observation.Choice; yes; no] do
+                Assert.Contains(source, callable.Transports[site])
+        let revision =
+            match AggregatePublication.publish graph with
+            | Ok revision -> revision
+            | Error failures -> failwithf "Physical callable publication refused: %A" failures
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let published (NodeId value) = Fidelity.PSG.NodeId value
+        Assert.Equal<Fidelity.PSG.NodeId list>([published yes; published no],
+            revision.Emission.Callable.Flows[published observation.Choice].Dependencies[published observation.Choice])
+        // Change only the unselected implementation's body to its Boolean
+        // formal. The selected logical arm and source signature stay equal;
+        // the old physical dependency account must still become unusable.
+        let fallback = graph.Nodes[facts.CallableCarriers[no].Implementation]
+        let changedFallback =
+            match fallback.Kind with
+            | SemanticKind.Lambda(parameters, oldBody, captures, name, context) ->
+                let _, parameterType, formal = Assert.Single parameters
+                Assert.Equal(graph.Nodes[oldBody].Type, parameterType)
+                Assert.NotEqual(oldBody, formal)
+                { fallback with
+                    Kind = SemanticKind.Lambda(parameters, formal, captures, name, context)
+                    Children = fallback.Children |> List.map (fun child -> if child = oldBody then formal else child) }
+            | other -> failwithf "Expected the unselected lambda, got %A" other
+        let changed = { graph with Nodes = graph.Nodes.Add(fallback.Id, changedFallback) }
+        let changedLogical = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolveCallableBranches changed
+        Assert.Equal(observation.SelectedArm, changedLogical.Branches[observation.Choice].SelectedArm)
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.CallableEmission.project changed |> Result.isError)
+        Assert.True(AggregatePublication.publish changed |> Result.isError)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Receiving aggregate dependencies advance in one forward type frontier fold`` deeper =
+        // Closure Representation §2.4: "Every representation rewrite preserves
+        // or recomputes the support it changes." Holder's placed convention is
+        // needed by Outer, and Outer's by Final; these are receiving edges,
+        // not nested aggregate storage paths.
+        let graph = CallableAggregateFixture.check (CallableAggregateFixture.receivingSource deeper)
+        let facts = graph.Codata.Value
+        Assert.Equal((if deeper then 3 else 2), facts.CallableAggregateSlots.Count)
+        for KeyValue(site, _) in facts.CallableAggregateValues do
+            Assert.True(AggregateAccounts.current graph site |> Result.isOk)
+        match AggregatePublication.publish graph with
+        | Error failures -> failwithf "Receiving aggregate publication refused: %A" failures
+        | Ok revision -> Assert.Empty(Fidelity.PSG.Integrity.callableAggregates revision)
+        let unchanged, _ = Clef.Compiler.Nanopass.CallableAggregateSettlement.normalize graph
+        Assert.Same(graph, unchanged)
+        Assert.Same(facts.CallableAggregateSlots, unchanged.Codata.Value.CallableAggregateSlots)
+        Assert.Same(facts.CallableContracts, unchanged.Codata.Value.CallableContracts)
+        Assert.Same(facts.CallableCarriers, unchanged.Codata.Value.CallableCarriers)
+        Assert.Same(facts.CallableAggregateDependencies, unchanged.Codata.Value.CallableAggregateDependencies)
+        Assert.Same(graph.Edges, unchanged.Edges)
+
+    [<Fact>]
+    member _.``Scoped receiving renewal preserves unchanged families and replaces a changed signature`` () =
+        let graph = CallableAggregateFixture.check (CallableAggregateFixture.receivingSource false)
+        let facts = graph.Codata.Value
+        let carrier = facts.CallableCarriers.Values |> Seq.find (fun carrier ->
+            carrier.Parameters |> List.exists (fun (_, ty, _) ->
+                facts.CallableAggregateSlots.Values |> Seq.exists (fun slot ->
+                    slot.AggregateType = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType ty)))
+        let identity = carrier.Contract |> Result.defaultWith failwith
+        let contract = facts.CallableContracts[identity]
+        let sites = carrier.Parameters |> List.map (fun (_, _, formal) -> formal) |> Set.ofList
+        let renew contracts =
+            Clef.Compiler.Baker.Recipes.CallableContractRecipes.renewForSites graph facts.EnvironmentLayouts
+                sites contracts facts.CallableCarriers
+        let sameContracts, sameCarriers = renew facts.CallableContracts
+        Assert.Same(facts.CallableContracts, sameContracts)
+        Assert.Same(facts.CallableCarriers, sameCarriers)
+        // Hold the old convention while the numeric owner already carries its
+        // changed aggregate representation. This unit control changes only the
+        // receiving signature; numeric proof owners are neither replayed nor
+        // fabricated to trigger renewal.
+        let ordinal, representation = Assert.Single contract.ParameterRepresentations
+        let previousRepresentation = ValueRepresentation.Record([], Some([], 0, 1))
+        Assert.NotEqual<ValueRepresentation>(representation, previousRepresentation)
+        let previous = { contract with ParameterRepresentations = [ordinal, previousRepresentation] }
+        let contracts, carriers = renew (facts.CallableContracts.Add(identity, previous))
+        let nextIdentity = carriers[carrier.Occurrence].Contract |> Result.defaultWith failwith
+        Assert.NotEqual(identity, nextIdentity)
+        Assert.False(contracts.ContainsKey identity)
+        Assert.Equal<(int * ValueRepresentation) list>(contract.ParameterRepresentations, contracts[nextIdentity].ParameterRepresentations)
+        for KeyValue(key, original) in facts.CallableContracts do
+            if key <> identity then Assert.Same(original, contracts[key])
+        for KeyValue(key, original) in facts.CallableCarriers do
+            if original.Implementation <> carrier.Implementation then Assert.Same(original, carriers[key])
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Account renewal refuses missing or extra held occurrence keys`` extra =
+        let graph = CallableAggregateFixture.check (CallableAggregateFixture.source true)
+        let facts = graph.Codata.Value
+        let site, account = facts.CallableAggregateDependencies |> Map.toSeq |> Seq.head
+        let extraSite = graph.Nodes.Keys |> Seq.find (fun key -> not (facts.CallableAggregateValues.ContainsKey key))
+        let accounts =
+            if extra then facts.CallableAggregateDependencies.Add(extraSite, { account with Occurrence = extraSite })
+            else facts.CallableAggregateDependencies.Remove site
+        let codata = { facts with CallableAggregateDependencies = accounts }
+        let changed = { graph with Codata = lazy codata }
+        let refused, failures = Clef.Compiler.Nanopass.CallableAggregateSettlement.renewAccounts changed
+        let expected = if extra then extraSite else site
+        Assert.Contains(failures, fun failure ->
+            failure.Occurrence = expected && failure.Code = "CCS8414" &&
+            failure.Reason.Contains "Every callable aggregate occurrence requires its own current dependency account")
+        Assert.Equal<Map<_, _>>(accounts, refused.Codata.Value.CallableAggregateDependencies)
+
+    [<Fact>]
+    member _.``Cyclic receiving dependencies refuse with a located source residual`` () =
+        let graph = CallableAggregateFixture.check (CallableAggregateFixture.source true)
+        let facts = graph.Codata.Value
+        let slot = Assert.Single facts.CallableAggregateSlots.Values
+        let occurrence, rows = facts.CallableAggregateValues |> Map.toSeq |> Seq.find (fun (_, rows) ->
+            rows |> List.exists (fun row -> row.Slot = slot.Identity && not row.Alternatives.IsEmpty))
+        let alternative = rows |> List.collect _.Alternatives |> List.head
+        let carrier = facts.CallableCarriers[alternative.Carrier]
+        let aggregateType = graph.Nodes[rows.Head.Aggregate].Type
+        let cyclic = { carrier with Parameters = carrier.Parameters |> List.map (fun (name, _, formal) -> name, aggregateType, formal) }
+        let codata = { facts with CallableCarriers = facts.CallableCarriers.Add(carrier.Occurrence, cyclic) }
+        let changed = { graph with Codata = lazy codata }
+        let refused, failures = Clef.Compiler.Nanopass.CallableAggregateSettlement.normalize changed
+        Assert.Contains(failures, fun failure ->
+            failure.Code = "CCS8414" && failure.Reason.Contains "receiving types form a cycle")
+        Assert.DoesNotContain(slot.Identity, refused.Codata.Value.CallableAggregateSlots.Keys)
+        Assert.False(refused.Codata.Value.CallableAggregateDependencies.ContainsKey occurrence)
+
     [<Theory>]
     [<InlineData(true)>]
     [<InlineData(false)>]
@@ -93,6 +286,13 @@ let main _ =
             | Error failures -> failwithf "Publication refused: %A" failures
         let before = publish graph
         Assert.Empty(Fidelity.PSG.Integrity.callableAggregates before)
+        // Same-owner no-op control: the aggregate fold must not remint numeric
+        // claims merely to make a changed-support assertion discriminate.
+        let unchanged, _ = Clef.Compiler.Nanopass.CallableAggregateSettlement.normalize graph
+        Assert.Same(graph, unchanged)
+        Assert.Same(graph.Edges, unchanged.Edges)
+        Assert.Same(graph.Codata.Value.CallableAggregateDependencies, unchanged.Codata.Value.CallableAggregateDependencies)
+        Assert.True(before.Emission.Callable = (publish unchanged).Emission.Callable)
         let site, account =
             graph.Codata.Value.CallableAggregateDependencies |> Map.toSeq
             |> Seq.find (fun (_, account) -> account.Contracts |> List.exists (fun contract ->
@@ -154,6 +354,14 @@ let main _ =
         let publishedSite = let (NodeId value) = site in Fidelity.PSG.NodeId value
         let oldAccount = before.Emission.Callable.AggregateDependencies[publishedSite]
         let nextAccount = after.Emission.Callable.AggregateDependencies[publishedSite]
+        let publishedSupport = let (NodeId value) = support in Fidelity.PSG.NodeId value
+        let premise (account: Fidelity.PSG.CallableAggregateDependencyAccount) =
+            account.Contracts |> List.choose (fun contract -> contract.SourcePremises.TryFind publishedSupport)
+            |> List.distinct |> Assert.Single
+        // This comparison holds the original support identity fixed. New
+        // numeric claim identities alone cannot satisfy it: the retained
+        // declaration/provenance observation itself must have changed.
+        Assert.NotEqual<Fidelity.PSG.BoundarySourcePremise>(premise oldAccount, premise nextAccount)
         Assert.NotEqual<Fidelity.PSG.CallableAggregateDependencyAccount>(oldAccount, nextAccount)
         let oldClaims = oldAccount.Claims |> List.map fst |> Set.ofList
         Assert.NotEmpty oldClaims

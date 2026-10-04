@@ -2506,6 +2506,13 @@ type CallableAggregateSourceIncidence = {
     Anchors: string list
 }
 
+[<RequireQualifiedAccess>]
+type CallableSymbolName =
+    | ModuleBinding of moduleName: string * name: string
+    | LocalBinding of declaration: NodeId * name: string
+    | RootBinding of name: string
+    | Anonymous of implementation: NodeId
+
 type CallableAggregateDependencyAccount = {
     Occurrence: NodeId
     Slots: CallableAggregateSlot list
@@ -2517,6 +2524,7 @@ type CallableAggregateDependencyAccount = {
     Participants: Participant list
     Sources: CallableAggregateSourceIncidence list
     Claims: (NodeId * ObligationInfo) list
+    Symbols: (NodeId * CallableSymbolName) list
 }
 
 /// A write updates the finite alternative discriminator and the actual
@@ -2720,13 +2728,6 @@ type WitnessProjectionFailure = {
     Reason: string
     Participants: Set<NodeId>
 }
-
-[<RequireQualifiedAccess>]
-type CallableSymbolName =
-    | ModuleBinding of moduleName: string * name: string
-    | LocalBinding of declaration: NodeId * name: string
-    | RootBinding of name: string
-    | Anonymous of implementation: NodeId
 
 type CallableEmissionDeclaration = {
     Lookup: NodeId

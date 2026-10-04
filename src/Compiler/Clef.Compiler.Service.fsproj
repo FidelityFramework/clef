@@ -455,6 +455,7 @@
     <Compile Include="Nanopass\RepresentationRanges.fs" />
     <Compile Include="Nanopass\LazyFactoryResults.fs" />
     <Compile Include="Nanopass\NodeProofs.fs" />
+    <Compile Include="Baker\Ingredients\CallableSymbols.fs" />
     <Compile Include="Baker\Ingredients\CallableAggregateAccounts.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Placement.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Roots.fs" />

@@ -30,6 +30,42 @@ type Settlement = {
     Residuals: Residual list
 }
 
+/// Ephemeral work prepared from one current origin reading. It remains inside
+/// the aggregate owner; it is not a retained compiler-pipeline snapshot.
+type WorkGroup = {
+    AggregateType: TypeIdentity
+    Path: CallableAggregatePathStep list
+    Rows: (NodeId * AggregateTypes.Slot * Origins.AggregateResolution) list
+}
+
+let prepareWork (resolution: Origins.Resolution) (graph: SemanticGraph) =
+    resolution.Aggregates |> Map.toList |> List.collect (fun (site, reading) ->
+        match graph.Nodes.TryFind site with
+        | None -> []
+        | Some node ->
+            AggregateTypes.slots graph node.Type |> List.map (fun slot ->
+                (reading.AggregateType, slot.Path), (site, slot, reading)))
+    |> List.groupBy fst
+    |> List.map (fun ((aggregateType, path), rows) ->
+        { AggregateType = aggregateType; Path = path; Rows = List.map snd rows })
+
+/// Only actual stored callable receiving signatures create scheduling edges.
+/// The aggregate occurrence itself is not a receiving dependency.
+let receivingTypes (graph: SemanticGraph) (carriers: Map<NodeId, CallableCarrier>) (work: WorkGroup) =
+    work.Rows |> List.collect (fun (_, _, reading) ->
+        reading.Alternatives |> List.collect (fun alternative ->
+            alternative.Slots |> List.filter (fun slot -> slot.Path = work.Path)
+            |> List.collect _.Values))
+    |> List.distinct
+    |> List.collect (fun value ->
+        match carriers.TryFind value with
+        | None -> []
+        | Some carrier ->
+            (carrier.Parameters |> List.choose (fun (_, ty, formal) ->
+                if carrier.OmittedParameters.Contains formal then None else Some(Identity.ofType ty))) @
+            (graph.Nodes.TryFind carrier.Result |> Option.map (fun node -> Identity.ofType node.Type) |> Option.toList))
+    |> Set.ofList
+
 let private participant (group: NodeId) role ordinal (node: NodeId) : Participant =
     { Node = node; Role = role; Ordinal = ordinal; Group = group }
 
@@ -154,7 +190,7 @@ let private valueRow slot occurrence aggregate operation formationInputs actualV
 /// Resolve direct fields/payloads with one closed formation per component.
 /// Wider families remain residuals until their source selector/adapter/storage
 /// recipes can establish the complete protocol. No old account supplies facts.
-let settle (resolution: Origins.Resolution) (inputs: Inputs) (graph: SemanticGraph) : Settlement =
+let settleWork (groups: WorkGroup list) (inputs: Inputs) (graph: SemanticGraph) : Settlement =
     let residuals = ResizeArray<Residual>()
     let refuse occurrence code reason = residuals.Add { Occurrence = occurrence; Code = code; Reason = reason }
     let mutable slots : Map<NodeId, CallableAggregateSlot> = Map.empty
@@ -170,15 +206,8 @@ let settle (resolution: Origins.Resolution) (inputs: Inputs) (graph: SemanticGra
             conflicts <- conflicts.Add(row.Occurrence, row.Slot)
             values <- values.Add(row.Occurrence, previous |> List.filter (fun old -> old.Slot <> row.Slot))
             refuse row.Occurrence Codes.CCS8414_CallableAggregateEvidence "The aggregate occurrence has conflicting source formations for the same slot."
-    let readings =
-        resolution.Aggregates |> Map.toList |> List.choose (fun (site, reading) ->
-            graph.Nodes.TryFind site |> Option.map (fun node -> site, node.Type, reading))
-    let groups =
-        readings |> List.collect (fun (site, ty, reading) ->
-            AggregateTypes.slots graph ty |> List.map (fun slot -> (reading.AggregateType, slot.Path), (site, slot, reading)))
-        |> List.groupBy fst
-    for (aggregateType, path), rows in groups do
-        let group = rows |> List.map snd
+    for work in groups do
+        let aggregateType, path, group = work.AggregateType, work.Path, work.Rows
         let _, specification, _ = group.Head
         let report code reason = group |> List.iter (fun (site, _, _) -> refuse site code reason)
         if path.Length <> 1 then
@@ -279,13 +308,30 @@ let settle (resolution: Origins.Resolution) (inputs: Inputs) (graph: SemanticGra
         formed)) |> Map.filter (fun _ rows -> not rows.IsEmpty)
     let usedSlots = values.Values |> Seq.collect id |> Seq.map _.Slot |> Set.ofSeq
     slots <- slots |> Map.filter (fun identity _ -> usedSlots.Contains identity)
+    { Slots = slots; Values = values; Dependencies = Map.empty; Residuals = List.ofSeq residuals |> List.distinct }
+
+/// Accounts observe the complete merged tables, never a frontier's partial
+/// view. The full recipe calls this over all rows; the owner supplies only the
+/// affected occurrence set while folding a representation frontier.
+let authorAccounts (sites: Set<NodeId>) (inputs: Inputs) (graph: SemanticGraph) (rows: Settlement) =
     let tables : Accounts.Inputs = {
-        Slots = slots; Values = values; Carriers = inputs.Carriers; Contracts = inputs.Contracts
+        Slots = rows.Slots; Values = rows.Values; Carriers = inputs.Carriers; Contracts = inputs.Contracts
         Flows = inputs.Flows; Joins = inputs.Joins
     }
-    let dependencies =
-        values |> Map.toList |> List.choose (fun (site, _) ->
+    let dependencies, residuals =
+        sites |> Set.fold (fun (dependencies: Map<NodeId, CallableAggregateDependencyAccount>, residuals) site ->
+            if not (rows.Values.ContainsKey site) then dependencies.Remove site, residuals else
             match Accounts.authorWith tables graph site with
-            | Ok account -> Some(site, account)
-            | Error reason -> refuse site Codes.CCS8414_CallableAggregateEvidence reason; None) |> Map.ofList
-    { Slots = slots; Values = values; Dependencies = dependencies; Residuals = List.ofSeq residuals |> List.distinct }
+            | Ok account ->
+                let dependencies =
+                    if dependencies.TryFind site = Some account then dependencies else dependencies.Add(site, account)
+                dependencies, residuals
+            | Error reason ->
+                dependencies.Remove site,
+                { Occurrence = site; Code = Codes.CCS8414_CallableAggregateEvidence; Reason = reason } :: residuals)
+            (rows.Dependencies, rows.Residuals)
+    { rows with Dependencies = dependencies; Residuals = List.distinct residuals }
+
+let settle (resolution: Origins.Resolution) (inputs: Inputs) (graph: SemanticGraph) : Settlement =
+    let rows = settleWork (prepareWork resolution graph) inputs graph
+    authorAccounts (rows.Values |> Map.keys |> Set.ofSeq) inputs graph rows

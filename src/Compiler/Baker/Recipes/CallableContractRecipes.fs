@@ -56,6 +56,9 @@ let renewForSites (graph: SemanticGraph) layouts (sites: Set<NodeId>)
     let retained = contracts |> Map.filter (fun _ contract ->
         contract.Participants |> List.exists (fun participant ->
             participant.Role = ParticipantRole.CallableImplementation && implementations.Contains participant.Node) |> not)
-    let renewed = replacements |> Map.fold (fun table identity contract -> table |> Map.add identity contract) retained
-    let carriers = current |> Map.fold (fun table occurrence carrier -> table |> Map.add occurrence carrier) carriers
-    renewed, carriers
+    let renewed = replacements |> Map.fold (fun table identity contract ->
+        let row = contracts.TryFind identity |> Option.filter ((=) contract) |> Option.defaultValue contract
+        table |> Map.add identity row) retained
+    let nextCarriers = current |> Map.fold (fun table occurrence carrier ->
+        if (table |> Map.tryFind occurrence) = Some carrier then table else table |> Map.add occurrence carrier) carriers
+    (if renewed = contracts then contracts else renewed), nextCarriers

@@ -85,6 +85,11 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
         List.iter flow row.Flows; List.iter join row.Joins; participants row.Participants
         row.Sources |> List.iter (fun source -> add source.Node; addMany source.Children)
         row.Claims |> List.iter (fst >> add)
+        row.Symbols |> List.iter (fun (implementation, name) ->
+            add implementation
+            match name with
+            | CallableSymbolName.LocalBinding(id, _) | CallableSymbolName.Anonymous id -> add id
+            | _ -> ())
     let slots values = values |> List.iter (fun (slot: ContinuationSlot) -> add slot.Source)
     let pairs values = values |> List.iter (fun (left, right) -> add left; add right)
     let family (row: SequenceFamily) =

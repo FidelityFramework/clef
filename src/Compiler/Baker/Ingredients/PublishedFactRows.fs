@@ -339,6 +339,7 @@ and mapCallableAggregateDependencyAccount (value: S.CallableAggregateDependencyA
         Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
         Sources = (value.Sources |> List.map (fun x -> mapCallableAggregateSourceIncidence x))
         Claims = (value.Claims |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapObligationInfo t1))))
+        Symbols = (value.Symbols |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapCallableSymbolName t1))))
     } : Fidelity.PSG.CallableAggregateDependencyAccount)
 
 and mapCallableAggregateEnvironmentPlacement (value: S.CallableAggregateEnvironmentPlacement) : Fidelity.PSG.CallableAggregateEnvironmentPlacement =
