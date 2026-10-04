@@ -33,12 +33,19 @@ settlement are subsequent work.
 - The final shared-cell/guard increment builds. Its eight added cases passed
   focused checks. The three guard cases passed again after indexing provenance
   and clone discovery within each immutable graph reading.
+- The subsequent unfiltered run on exact source head
+  `3795a179f7ac9c6eee2febc72c0344638ecc8259` executed all 2,416 cases:
+  **2,335 passed, 81 failed, zero skipped**. All eight added cases passed;
+  the preceding failure set is unchanged, with no missing cases or new failures.
+  Bozzetto lease `757e2fc31efa42359ef791064c66f698` covered the whole run
+  (21:03:42–21:10:18 EDT, October 3) and was released. Source and runtime
+  input hashes match before and after execution.
 - The original 16a source probe now reports zero held/fresh range mismatches
   (137 at the preceding checkpoint, 448 originally), all 388 frame reads
   admitted and current finite-cell evidence. The indexed probe took 102 seconds.
-- Separate 16a range/settlement diagnostics remain. No native execution or
-  final unfiltered acceptance is claimed for this increment. The trusted
-  baseline was not rerun.
+- Separate 16a range/settlement diagnostics and the 81 clef failures remain.
+  The final increment now has unfiltered regression evidence; Phase B and native
+  execution acceptance remain open. The trusted baseline was not rerun.
 
 Exact commands, leases, source/binary identities, failure sets and consumer
 results are recorded in the
