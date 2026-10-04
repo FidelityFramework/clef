@@ -1998,7 +1998,6 @@ and mapOrdinaryInactivityProjection (value: S.OrdinaryInactivityProjection) : Fi
         Roots = (value.Roots |> Set.map (fun x -> nodeId x))
         Excluded = (value.Excluded |> Set.map (fun x -> nodeId x))
         Calls = (value.Calls |> Set.map (fun x -> nodeId x))
-        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
         Uses = (value.Uses |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> List.map (fun x -> (let (t0, t1, t2, t3, t4) = x in (mapEdgeClass t0, mapEdgeRole t1, t2, (t3 |> List.map (fun x -> nodeId x)), nodeId t4))))) |> Map.ofSeq)
         SourcePremises = (value.SourcePremises |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundarySourcePremise v) |> Map.ofSeq)
     } : Fidelity.PSG.OrdinaryInactivityProjection)

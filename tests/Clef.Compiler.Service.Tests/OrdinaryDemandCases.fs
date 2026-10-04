@@ -775,7 +775,8 @@ let main _ = ignore dormant; 0
                       |> function Ok value -> value | Result.Error error -> failwith error
         Assert.NotEqual<(NodeId * OrdinaryInactivityProjection) list>(held.Inactivity, current.Inactivity)
         Assert.Equal(numeric.ValueRange, changed.Nodes[numeric.Id].ValueRange)
-        Assert.Contains(alias.Id, (current.Inactivity |> List.find (fst >> (=) implementation) |> snd).Participants)
+        let currentProof = current.Inactivity |> List.find (fst >> (=) implementation) |> snd
+        Assert.Contains(alias.Id, currentProof.Uses.Keys)
         Assert.NotEqual<CallableAggregateDependencyAccount>(held, current)
         // The owning reader compares the entire dependency account; changing
         // support cannot be certified by the held account's equal result.

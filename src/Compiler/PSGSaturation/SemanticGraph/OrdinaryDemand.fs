@@ -400,7 +400,6 @@ let private inactivityProjection (graph: SemanticGraph) (reading: Reading) : Map
         let support =
             [inactive.Implementation; evidence.Entry.Value; inactive.Body] @ inactive.Parameters @
             (evidence.Roots |> List.map fst) @ Set.toList inactive.Excluded @ Set.toList inactive.Calls @
-            Set.toList evidence.Participants @
             (uses |> Map.toList |> List.collect (fun (source, edges) ->
                 source :: (edges |> List.collect (fun (_, _, _, sources, target) -> target :: sources))))
             |> Set.ofList
@@ -411,7 +410,6 @@ let private inactivityProjection (graph: SemanticGraph) (reading: Reading) : Map
           Roots = evidence.Roots |> List.map fst |> Set.ofList
           Excluded = inactive.Excluded
           Calls = inactive.Calls
-          Participants = evidence.Participants
           Uses = uses
           SourcePremises =
             support |> Set.toList |> List.choose (fun id ->

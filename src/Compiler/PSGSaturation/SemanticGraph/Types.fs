@@ -2528,7 +2528,8 @@ type OrdinaryInactivityProjection = {
     Roots: Set<NodeId>
     Excluded: Set<NodeId>
     Calls: Set<NodeId>
-    Participants: Set<NodeId>
+    /// The complete participant inventory is the map's keys, including entries
+    /// with no uses. Every recorded use retains its class, role and ordinal.
     Uses: Map<NodeId, (EdgeClass * EdgeRole * int * NodeId list * NodeId) list>
     SourcePremises: Map<NodeId, BoundarySourcePremise>
 }
