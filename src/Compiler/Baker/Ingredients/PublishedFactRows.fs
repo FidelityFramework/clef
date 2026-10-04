@@ -493,14 +493,25 @@ and mapCallableContract (value: S.CallableContract) : Fidelity.PSG.CallableContr
     ({
         Identity = nodeId value.Identity
         Kind = mapCallableKind value.Kind
+        Convention = mapCallableConvention value.Convention
         ParameterTypes = (value.ParameterTypes |> List.map (fun x -> mapTypeIdentity x))
         OmittedParameters = value.OmittedParameters
         ParameterRepresentations = (value.ParameterRepresentations |> List.map (fun x -> (let (t0, t1) = x in (t0, mapValueRepresentation t1))))
         ResultType = mapTypeIdentity value.ResultType
         ResultRepresentation = mapValueRepresentation value.ResultRepresentation
         EnvironmentBytes = value.EnvironmentBytes
+        SourcePremises = (value.SourcePremises |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundarySourcePremise v) |> Map.ofSeq)
         Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
     } : Fidelity.PSG.CallableContract)
+
+and mapCallableConvention (value: S.CallableConvention) : Fidelity.PSG.CallableConvention =
+    match value with
+    | S.CallableConvention.Ordinary -> Fidelity.PSG.CallableConvention.Ordinary
+    | S.CallableConvention.CompilerOwnedPortable(a0) -> Fidelity.PSG.CallableConvention.CompilerOwnedPortable(mapCompilerOwnedCallableConvention a0)
+
+and mapCallableConversion (value: S.CallableConversion) : Fidelity.PSG.CallableConversion =
+    match value with
+    | S.CallableConversion.Identity(a0) -> Fidelity.PSG.CallableConversion.Identity(mapValueRepresentation a0)
 
 and mapCallableEmissionCall (value: S.CallableEmissionCall) : Fidelity.PSG.CallableEmissionCall =
     ({
@@ -688,6 +699,14 @@ and mapClosurePrefix (value: S.ClosurePrefix) : Fidelity.PSG.ClosurePrefix =
     | S.ClosurePrefix.RegularClosure -> Fidelity.PSG.ClosurePrefix.RegularClosure
     | S.ClosurePrefix.LazyThunk(a0, a1) -> Fidelity.PSG.ClosurePrefix.LazyThunk(mapSettledSlot a0, a1)
     | S.ClosurePrefix.SeqGenerator -> Fidelity.PSG.ClosurePrefix.SeqGenerator
+
+and mapCompilerOwnedCallableConvention (value: S.CompilerOwnedCallableConvention) : Fidelity.PSG.CompilerOwnedCallableConvention =
+    ({
+        Target = mapBoundaryPlatformPremise value.Target
+        ParameterConversions = (value.ParameterConversions |> List.map (fun x -> (let (t0, t1) = x in (t0, mapCallableConversion t1))))
+        ResultConversion = mapCallableConversion value.ResultConversion
+        CodeLifetime = mapProgramImageCodeLifetime value.CodeLifetime
+    } : Fidelity.PSG.CompilerOwnedCallableConvention)
 
 and mapConstructorIdentity (value: N.ConstructorIdentity) : Fidelity.PSG.ConstructorIdentity =
     ({
@@ -2136,6 +2155,13 @@ and mapPredicateStatus (value: S.PredicateStatus) : Fidelity.PSG.PredicateStatus
     | S.PredicateStatus.Established -> Fidelity.PSG.PredicateStatus.Established
     | S.PredicateStatus.Contradicted -> Fidelity.PSG.PredicateStatus.Contradicted
     | S.PredicateStatus.Pending -> Fidelity.PSG.PredicateStatus.Pending
+
+and mapProgramImageCodeLifetime (value: S.ProgramImageCodeLifetime) : Fidelity.PSG.ProgramImageCodeLifetime =
+    ({
+        Module = nodeId value.Module
+        Binding = nodeId value.Binding
+        Implementation = nodeId value.Implementation
+    } : Fidelity.PSG.ProgramImageCodeLifetime)
 
 and mapProgramInitializationOrderAccount (value: S.ProgramInitializationOrderAccount) : Fidelity.PSG.ProgramInitializationOrderAccount =
     ({

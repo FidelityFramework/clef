@@ -51,6 +51,27 @@ let main _ = if first 1 + second 2 = 13 then 0 else 1
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "CallableEmission")>]
 type CallableEmissionCases() =
+    [<Theory>]
+    [<InlineData("Closure.LambdaExpression")>]
+    [<InlineData("Closure.RequiresClosurePair")>]
+    member _.``Closed expression markers cannot substitute for physical environment incidence`` marker =
+        let graph, implementation, _, formal, _, _, _ = CallableEmissionFixture.componentGraph ()
+        let node = graph.Nodes[implementation]
+        let marked = { graph with Nodes = graph.Nodes.Add(implementation, { node with Metadata = node.Metadata.Add(marker, MetadataValue.Bool true) }) }
+        let inputs: EmittedCarriers.Inputs = { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty; Contracts = Map.empty }
+        let carriers, _ = EmittedCarriers.settle inputs marked
+        let carrier = carriers[implementation]
+        Assert.Equal(implementation, carrier.Occurrence)
+        Assert.Equal(implementation, carrier.Formation)
+        Assert.Equal(CallableKind.OrdinaryFlatClosure, carrier.Kind)
+        Assert.True(carrier.Environment.IsNone)
+        Assert.True(carrier.EnvironmentValue.IsNone)
+        let materialized =
+            { marked with Edges = { Class = EdgeClass.Provenance; Role = EdgeRole.EnvironmentFormal
+                                    Sources = [implementation; implementation]; Target = formal; Ordinal = 0 } :: marked.Edges }
+        let refused, _ = EmittedCarriers.settle inputs materialized
+        Assert.False(refused.ContainsKey implementation)
+
     [<Fact>]
     member _.``Immutable formal read aliases retain their complete source path`` () =
         let source = """

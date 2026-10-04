@@ -762,7 +762,15 @@ let private aggregateResolutions (graph: SemanticGraph) (nodes: Map<NodeId, Sema
             List.fold visit (Map.add id direct rows) direct
         List.fold visit Map.empty roots
     nodes |> Map.toList |> List.choose (fun (id, node) ->
-        let slots = callableSlots node.Type
+        let slots =
+            match node.Kind with
+            // Spatial declaration shells consume their source-owned plans.
+            // Their descriptor records are not runtime aggregate values
+            // (Reachability.hardwareDesignReferences; WitnessLiveRows.valueFacts).
+            // Ordinary references still receive their own origin reading.
+            | SemanticKind.Binding(_, _, _, Some DeclRoot.HardwareModule)
+            | SemanticKind.Binding(_, _, _, Some DeclRoot.KernelModule) -> []
+            | _ -> callableSlots node.Type
         if slots.IsEmpty then None else
         match shape node.Type with
         | None -> None

@@ -14,7 +14,7 @@ module Graph = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph
 
 let renewAggregateStorage (graph: SemanticGraph) =
     let affected = graph.Codata.Value.CallableAggregateSlots.Values |> Seq.map _.AggregateType |> Set.ofSeq
-    if affected.IsEmpty then Ok graph else
+    if affected.IsEmpty then Ok(graph, Set.empty) else
     // The old account is still in the graph. Validate it while its layout is
     // current, before the owning component step changes any representation.
     Publication.project graph |> Result.bind (fun _ ->
@@ -61,6 +61,6 @@ let renewAggregateStorage (graph: SemanticGraph) =
                     { placed with Edges = edges }
                     |> Graph.invalidateWitness
                 // The ordinary numeric reader remains the acceptance rule.
-                Publication.project updated |> Result.map (fun _ -> updated)
+                Publication.project updated |> Result.map (fun _ -> updated, occurrenceChanges)
         | _ -> Error [{ Occurrence = None; Participants = Set.empty
                         Reason = "Aggregate representation renewal requires one current numeric account." }])

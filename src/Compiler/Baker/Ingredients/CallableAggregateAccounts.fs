@@ -79,6 +79,9 @@ let authorWith (facts: Inputs) (graph: SemanticGraph) (occurrence: NodeId) : Res
                 (slots |> List.choose (fun slot -> Result.toOption slot.Contract)) @
                 (carriers |> List.choose (fun carrier -> Result.toOption carrier.Contract)) |> List.distinct
             collect facts.Contracts.TryFind "contract" contractIds |> Result.bind (fun (contracts: CallableContract list) ->
+                let contractFailure = contracts |> List.tryPick (fun contract ->
+                    if Clef.Compiler.Baker.Ingredients.CallableContracts.sourcePremisesCurrent graph contract then None
+                    else Some "Callable aggregate contract source premises changed before commitment.")
                 let declarationFailure = slots |> List.tryPick (fun slot ->
                     declarationsCurrent graph values slot |> function Error reason -> Some reason | Ok () -> None)
                 let declarationIdentities = slots |> List.collect _.DeclarationFacts |> List.map (fun (fact: CallableAggregateDeclarationFact) -> fact.Identity) |> Set.ofList
@@ -91,8 +94,9 @@ let authorWith (facts: Inputs) (graph: SemanticGraph) (occurrence: NodeId) : Res
                     (carriers |> List.collect _.Lifetime) @
                     (contracts |> List.collect _.Participants)
                 let participantNodes = participants |> List.map _.Node |> List.distinct
+                let premiseIdentities = contracts |> List.collect (fun contract -> Map.keys contract.SourcePremises |> Seq.toList) |> Set.ofList
                 let sources : Result<CallableAggregateSourceIncidence, string> list = participantNodes |> List.choose (fun id ->
-                    graph.Nodes.TryFind id
+                    (if premiseIdentities.Contains id then None else graph.Nodes.TryFind id)
                     |> Option.filter (fun node ->
                         match node.Kind with
                         | SemanticKind.Obligation _ -> false
@@ -110,7 +114,7 @@ let authorWith (facts: Inputs) (graph: SemanticGraph) (occurrence: NodeId) : Res
                 let claims = participantNodes |> List.choose (fun id ->
                     graph.Nodes.TryFind id |> Option.bind (fun node ->
                         match node.Kind with SemanticKind.Obligation claim -> Some(id, claim) | _ -> None))
-                match declarationFailure |> Option.orElseWith (fun () -> sources |> List.tryPick (function Error reason -> Some reason | _ -> None)) with
+                match contractFailure |> Option.orElse (declarationFailure) |> Option.orElseWith (fun () -> sources |> List.tryPick (function Error reason -> Some reason | _ -> None)) with
                 | Some reason -> Error reason
                 | None ->
                     Ok { Occurrence = occurrence; Slots = slots; Values = values; Carriers = carriers

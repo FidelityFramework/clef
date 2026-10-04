@@ -28,13 +28,8 @@ let normalize (graph: SemanticGraph) =
             { Carriers = carriers; Joins = codata.CallableJoins; Layouts = codata.EnvironmentLayouts
               SequenceFlows = codata.SequenceFlows; SequenceFamilies = codata.SequenceFamilies } graph
     let graph = Graph.invalidateWitness graph
-    let refreshedStorage = codata.MutableCallableStorage |> Map.map (fun _ storage ->
-        let alternatives = storage.AlternativeCarriers |> List.map (fun carrier ->
-            carriers.TryFind carrier.Occurrence |> Option.defaultValue carrier)
-        { storage with AlternativeCarriers = alternatives })
     let mutableStorage =
-        if refreshedStorage = codata.MutableCallableStorage then codata.MutableCallableStorage
-        else refreshedStorage
+        Clef.Compiler.Baker.Ingredients.CallableContracts.refreshStorage carriers codata.MutableCallableStorage
     let codata =
         { graph.Codata.Value with
             CallableContracts = contracts; CallableCarriers = carriers; CallableFlows = flows

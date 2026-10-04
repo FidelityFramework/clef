@@ -30,7 +30,25 @@ let normalize (graph: SemanticGraph) =
         { graph with Codata = lazy codata }
         |> Graph.invalidateWitness
     match Representation.renewAggregateStorage authored with
-    | Ok settled -> settled, rows.Residuals
+    | Ok(settled, representationChanges) ->
+        // This representation rewrite owns the callable conventions it
+        // disturbs. Apply one scoped source fold to the changed signature
+        // sites, without rerunning range/origin/branch analysis or witness
+        // preparation. Unaffected families preserve their rows and identities.
+        let facts = settled.Codata.Value
+        let contracts, carriers =
+            Clef.Compiler.Baker.Recipes.CallableContractRecipes.renewForSites
+                settled facts.EnvironmentLayouts representationChanges facts.CallableContracts facts.CallableCarriers
+        let storage = Clef.Compiler.Baker.Ingredients.CallableContracts.refreshStorage carriers facts.MutableCallableStorage
+        let codata =
+            { facts with
+                CallableContracts = contracts
+                CallableCarriers = carriers
+                MutableCallableStorage = storage }
+        let renewed =
+            { settled with Codata = lazy codata }
+            |> Graph.invalidateWitness
+        renewed, rows.Residuals
     | Error failures ->
         let residuals = failures |> List.choose (fun failure ->
             failure.Occurrence |> Option.orElseWith (fun () -> rows.Values |> Map.keys |> Seq.tryHead)

@@ -11,12 +11,26 @@ module private BoundaryValuesFixture =
         match parseAndCheck ("module BoundaryValues\n" + source) "boundary-values.clef" with
         | Success result | CheckFailure result -> result
         | ParseFailure errors -> failwithf "Boundary value source did not parse: %A" errors
-    let context pointerBits : PlatformContext =
-        { PlatformId = "native-entry-layout"; Dimensions = Map.ofList ["Pointer", pointerBits; "Register", 64]
-          Representations = Map.empty; EndpointReturns = Map.empty; PlatformLibraryPath = None
-          PlatformDescription = None; PlatformArchitecture = None; PlatformOS = None; PlatformSourcePaths = Set.empty
-          Predicates = Map.empty; FreestandingStartup = None; SubstrateKind = None; RuntimeModel = None
-          AvailableMemorySpaces = []; DefaultMemorySpace = None; ClockFrequencyMhz = None; NsPerWeightUnit = None }
+    let nativeGraph pointerBits =
+        let source = """module BoundaryValues
+type Listener = { Entry: FnPtr<bool -> bool> }
+let callback (enabled: bool) : bool = enabled
+[<EntryPoint>]
+let main _ =
+    let listener = { Entry = FnPtr.ofFunction callback }
+    if FnPtr.invoke listener.Entry true then 0 else 1
+"""
+        SourcePlatformFixture.check pointerBits "boundary-values.clef" source
+
+    let publish graph =
+        match Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph with
+        | Result.Ok revision -> revision
+        | Result.Error failures -> failwithf "Native component publication refused: %A" failures
+
+    let nativeContract (graph: SemanticGraph) =
+        graph.Codata.Value.CallableContracts.Values
+        |> Seq.filter (fun contract -> contract.Kind = CallableKind.NativeEntry)
+        |> Assert.Single
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "BoundaryValues")>]
 type BoundaryValueCases() =
@@ -110,22 +124,126 @@ let main _ =
     [<InlineData(32)>]
     [<InlineData(64)>]
     member _.``Native entry records use the declared platform pointer width`` pointerBits =
-        let result = BoundaryValuesFixture.check """
-type Listener = { Entry: FnPtr<bool -> bool> }
-let callback (enabled: bool) : bool = enabled
-[<EntryPoint>]
-let main _ =
-    let listener = { Entry = FnPtr.ofFunction callback }
-    if FnPtr.invoke listener.Entry true then 0 else 1
-"""
-        DimensionalCases.noErrors result
-        let context = BoundaryValuesFixture.context pointerBits
-        let graph = Clef.Compiler.PSGSaturation.SemanticGraph.Placement.settle (Some context) { result.Graph with Platform = Some context }
+        let graph = BoundaryValuesFixture.nativeGraph pointerBits
         let layout = graph.Layouts.Value.Values |> Seq.choose (function
             | SettledLayout.Record([field], Some bytes, Some alignment) when field.Name = "Entry" -> Some(field, bytes, alignment)
             | _ -> None) |> Assert.Single
         let field, bytes, alignment = layout
-        Assert.Equal(pointerBits / 8, bytes)
-        Assert.Equal(pointerBits / 8, alignment)
-        Assert.Equal(Some(pointerBits / 8), field.Size)
+        // FFI §3.6.1 items 1/2: "A single-entry family needs no code storage"
+        // and each inhabited slot retains its receiving contract and lifetime.
+        // Closure Representation §2.4 keeps native entries distinct and
+        // explicitly without an ordinary closure environment.
+        Assert.Equal(0, bytes)
+        Assert.Equal(1, alignment)
+        Assert.Equal(Some 0, field.Size)
+        Assert.Equal(SettledSlot.InlineBytes(0, 1), field.Slot)
+        let contract = BoundaryValuesFixture.nativeContract graph
+        let convention =
+            match contract.Convention with
+            | CallableConvention.CompilerOwnedPortable convention -> convention
+            | other -> failwithf "Expected compiler-owned portable convention: %A" other
+        Assert.True(contract.EnvironmentBytes.IsNone)
+        Assert.Empty contract.OmittedParameters
+        Assert.Equal(Clef.Compiler.Baker.Ingredients.Boundaries.platformPremise graph.Platform, Some convention.Target)
+        let lifetime = convention.CodeLifetime
+        let expectedLifetime = [lifetime.Module; lifetime.Binding; lifetime.Implementation]
+        let carriers = graph.Codata.Value.CallableCarriers.Values |> Seq.filter (fun carrier -> carrier.Kind = CallableKind.NativeEntry)
+        Assert.NotEmpty carriers
+        for carrier in carriers do
+            Assert.Equal(Ok contract.Identity, carrier.Contract)
+            Assert.True(carrier.Environment.IsNone)
+            Assert.True(carrier.EnvironmentValue.IsNone)
+            Assert.Equal<NodeId list>(expectedLifetime, carrier.Lifetime |> List.sortBy _.Ordinal |> List.map _.Node)
+            Assert.All(carrier.Lifetime, fun participant ->
+                Assert.Equal(ParticipantRole.CallableLifetime, participant.Role)
+                Assert.Equal(contract.Identity, participant.Group))
+        let revision = BoundaryValuesFixture.publish graph
+        Assert.Empty(Fidelity.PSG.Integrity.callableAggregates revision)
+        Assert.NotEmpty revision.Emission.Callable.AggregateDependencies
+        // Standalone boundary carrier layout remains a separate assertion.
         Assert.Equal(TypeLayout.PlatformWord, layoutOf (NativeType.TApp(Types.fnPtrTyCon, [NativeType.TFun(Types.boolType, Types.boolType)])))
+
+    [<Fact>]
+    member _.``A native component without code residence is refused by its owning recipe`` () =
+        let graph = BoundaryValuesFixture.nativeGraph 64
+        let facts = graph.Codata.Value
+        let carriers = facts.CallableCarriers |> Map.map (fun _ carrier ->
+            if carrier.Kind = CallableKind.NativeEntry then { carrier with Lifetime = [] } else carrier)
+        let settled =
+            Clef.Compiler.Baker.Recipes.CallableAggregateRecipes.settle
+                (Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolveCallableBranches graph)
+                { Carriers = carriers; Contracts = facts.CallableContracts
+                  Flows = facts.CallableFlows; Joins = facts.CallableJoins
+                  PreviousSlots = facts.CallableAggregateSlots } graph
+        Assert.Contains(settled.Residuals, fun failure -> failure.Code = "CCS8101")
+        Assert.Empty settled.Values
+
+    [<Fact>]
+    member _.``A nonempty forged native lifetime cannot authorize an aggregate component`` () =
+        let graph = BoundaryValuesFixture.nativeGraph 64
+        let facts = graph.Codata.Value
+        let unrelated = graph.Nodes.Values |> Seq.find (fun node ->
+            match node.Kind with SemanticKind.TypeDef _ -> true | _ -> false)
+        let carriers = facts.CallableCarriers |> Map.map (fun _ carrier ->
+            if carrier.Kind <> CallableKind.NativeEntry then carrier else
+            Assert.NotEmpty carrier.Lifetime
+            let lifetime = carrier.Lifetime |> List.map (fun participant -> { participant with Node = unrelated.Id })
+            { carrier with Lifetime = lifetime })
+        let settled =
+            Clef.Compiler.Baker.Recipes.CallableAggregateRecipes.settle
+                (Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolveCallableBranches graph)
+                { Carriers = carriers; Contracts = facts.CallableContracts
+                  Flows = facts.CallableFlows; Joins = facts.CallableJoins
+                  PreviousSlots = facts.CallableAggregateSlots } graph
+        Assert.Contains(settled.Residuals, fun failure -> failure.Code = "CCS8101")
+        Assert.Empty settled.Values
+        let codata = { facts with CallableCarriers = carriers }
+        let forged = { graph with Codata = lazy codata }
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare forged |> Result.isError)
+        Assert.True(Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish forged |> Result.isError)
+
+    [<Fact>]
+    member _.``An extern-tagged binding cannot acquire compiler-owned code residence`` () =
+        let graph = BoundaryValuesFixture.nativeGraph 64
+        let contract = BoundaryValuesFixture.nativeContract graph
+        let lifetime =
+            match contract.Convention with
+            | CallableConvention.CompilerOwnedPortable convention -> convention.CodeLifetime
+            | other -> failwithf "Expected compiler-owned convention: %A" other
+        let binding = graph.Nodes[lifetime.Binding]
+        let externBinding =
+            { binding with Metadata = binding.Metadata.Add("FidelityExtern.Library", MetadataValue.String "foreign-library") }
+        let changed = { graph with Nodes = graph.Nodes.Add(binding.Id, externBinding) }
+        Assert.True(Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries.tryImplementation graph lifetime.Implementation |> Option.isSome)
+        Assert.True(Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries.tryImplementation changed lifetime.Implementation |> Option.isNone)
+        Assert.True(Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish changed |> Result.isError)
+
+    [<Theory>]
+    [<InlineData(true)>]
+    [<InlineData(false)>]
+    member _.``Same identity native residence corruption withdraws the earlier account`` changeParent =
+        let graph = BoundaryValuesFixture.nativeGraph 64
+        let before = BoundaryValuesFixture.publish graph
+        let contract = BoundaryValuesFixture.nativeContract graph
+        let lifetime =
+            match contract.Convention with
+            | CallableConvention.CompilerOwnedPortable convention -> convention.CodeLifetime
+            | other -> failwithf "Expected compiler-owned convention: %A" other
+        let changed =
+            if changeParent then
+                let binding = graph.Nodes[lifetime.Binding]
+                { graph with Nodes = graph.Nodes.Add(binding.Id, { binding with Parent = None }) }
+            else
+                let moduleNode = graph.Nodes[lifetime.Module]
+                let kind =
+                    match moduleNode.Kind with
+                    | SemanticKind.ModuleDef(name, members) -> SemanticKind.ModuleDef(name, members |> List.filter ((<>) lifetime.Binding))
+                    | other -> failwithf "Expected program module: %A" other
+                { graph with Nodes = graph.Nodes.Add(moduleNode.Id, { moduleNode with Kind = kind }) }
+        Assert.NotEmpty before.Emission.Callable.AggregateDependencies
+        let sites = graph.Codata.Value.CallableAggregateDependencies.Keys |> Seq.toList
+        Assert.NotEmpty sites
+        for site in sites do
+            Assert.True(Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current changed site |> Result.isError)
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.prepare changed |> Result.isError)
+        Assert.True(Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish changed |> Result.isError)

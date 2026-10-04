@@ -32,7 +32,7 @@ let settleWithAccounts graph =
         let obligation = graph.Nodes[edge.Target]
         let next = { obligation with Kind = SemanticKind.Obligation(Recipe.info graph.Nodes[binding] reading.Body) }
         let sources = reading.Participants |> List.map (fun (participant: Participant) -> participant.Node)
-        let edges = edges |> List.map (fun current ->
+        let edges = edges |> List.map (fun (current: Hyperedge) ->
             if current.Target <> edge.Target then current else
             match current.Role with
             | EdgeRole.ProgramInitializationOrder _ -> { current with Role = EdgeRole.ProgramInitializationOrder reading.Participants; Sources = sources }

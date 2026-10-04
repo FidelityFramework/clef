@@ -8,6 +8,7 @@ module Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+module Entries = Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries
 
 type Inputs = {
     Layouts: Map<NodeId, EnvironmentLayout>
@@ -156,7 +157,7 @@ let settleWithResolution (resolution: CallableOrigins.Resolution) (inputs: Input
     let refuse occurrence reason =
         residuals <- { Occurrence = occurrence; Reason = reason } :: residuals
         None
-    let project (node: SemanticNode) implementation environment =
+    let project (node: SemanticNode) implementation environment (native: Entries.Formation option) =
         match graph.Nodes.TryFind implementation with
         | Some ({ Kind = SemanticKind.Lambda(parameters, body, [], _, context)
                   Type = physicalType; IsReachable = true } as implementationNode)
@@ -221,9 +222,15 @@ let settleWithResolution (resolution: CallableOrigins.Resolution) (inputs: Input
                         match implementationNode.Metadata.TryFind ClosureMetadata.SourceSignature with
                         | Some (MetadataValue.Type ty) -> ty
                         | _ -> logical
-                    applySubst logical = applySubst declared &&
-                    (applySubst (sourceType node) = applySubst declared ||
-                     instance implementation declared node.Id |> Option.isSome)
+                    let sourceAgrees =
+                        match native with
+                        | None ->
+                            applySubst (sourceType node) = applySubst declared ||
+                            instance implementation declared node.Id |> Option.isSome
+                        | Some _ ->
+                            hidden.IsEmpty &&
+                            (Entries.payload (sourceType node) |> Option.exists (fun signature -> applySubst signature = applySubst declared))
+                    applySubst logical = applySubst declared && sourceAgrees
                 | _ -> false
             if not formalsAgree then refuse node.Id "Callable formals do not match their unique typed graph declarations."
             elif not resultAgrees then refuse node.Id "Callable physical signature does not agree with its declared parameters and actual body result."
@@ -232,8 +239,11 @@ let settleWithResolution (resolution: CallableOrigins.Resolution) (inputs: Input
             elif not publicTypeAgrees then refuse node.Id "Callable public signature disagrees after removing only its proved hidden formals."
             else
                 let formation =
-                    CallableIngress.tryValueIdentity ingress node.Id
-                    |> Option.map _.Source |> Option.defaultValue node.Id
+                    match native with
+                    | Some native -> native.Formation
+                    | None ->
+                        CallableIngress.tryValueIdentity ingress node.Id
+                        |> Option.map _.Source |> Option.defaultValue node.Id
                 let environmentValue =
                     environment |> Option.map (fun _ ->
                         match graph.Nodes.TryFind formation with
@@ -244,7 +254,7 @@ let settleWithResolution (resolution: CallableOrigins.Resolution) (inputs: Input
                         | _ -> formation)
                 let carrier =
                     { Occurrence = node.Id; SourceType = sourceType node; Implementation = implementation
-                      Kind = CallableKind.OrdinaryFlatClosure
+                      Kind = if native.IsSome then CallableKind.NativeEntry else CallableKind.OrdinaryFlatClosure
                       Formation = formation; EnvironmentValue = environmentValue
                       Contract = Error "Callable receiving convention awaits source settlement."
                       // Layout/code identity supplies no retained lifetime.
@@ -253,7 +263,7 @@ let settleWithResolution (resolution: CallableOrigins.Resolution) (inputs: Input
                       Lifetime = []
                       Parameters = parameters
                       ParameterShapes = parameters |> List.map (fun (_, _, id) -> valueShape graph graph.Nodes[id])
-                      OmittedParameters = OrdinaryDemand.parameters graph implementation
+                      OmittedParameters = if native.IsSome then Set.empty else OrdinaryDemand.parameters graph implementation
                       Result = body; ResultShape = valueShape graph graph.Nodes[body]
                       Environment = environment |> Option.map (fun known ->
                           { Owner = known.EnvironmentOwner; Formal = inputs.Layouts[known.EnvironmentOwner].Formal }) }
@@ -263,12 +273,12 @@ let settleWithResolution (resolution: CallableOrigins.Resolution) (inputs: Input
         match applySubst node.Type with
         | NativeType.TFun _ when node.IsReachable && CallableIngress.allowsOccurrence ingress node.Id ->
             match inputs.Known.TryFind node.Id with
-            | Some known -> project node known.Implementation (Some known)
+            | Some known -> project node known.Implementation (Some known) None
             | None ->
                 match lambdas.TryFind node.Id with
                 | Some implementation ->
                     match graph.Nodes.TryFind implementation with
-                    | Some ({ Kind = SemanticKind.Lambda(_, _, [], _, context) } as code)
+                    | Some { Kind = SemanticKind.Lambda(_, _, [], _, context) }
                         when context = LambdaContext.RegularClosure ||
                              (context = LambdaContext.LazyThunk && lazyThunks.Contains implementation) ->
                         // Materialized implementations themselves are code
@@ -276,13 +286,17 @@ let settleWithResolution (resolution: CallableOrigins.Resolution) (inputs: Input
                         // they are not captureless source callable values.
                         let materialized = graph.Edges |> List.exists (fun edge ->
                             edge.Role = EdgeRole.EnvironmentFormal && List.tryLast edge.Sources = Some implementation)
-                        let unsettledExpression =
-                            [ClosureMetadata.LambdaExpression; ClosureMetadata.RequiresClosurePair]
-                            |> List.exists (fun key -> code.Metadata.TryFind key = Some (MetadataValue.Bool true))
-                        if materialized || (unsettledExpression && not (lazyThunks.Contains implementation)) then None
-                        else project node implementation None
+                        // Source expression markers also survive on Baker's
+                        // capture-free eta expansions. They do not establish
+                        // an environment. The current physical lambda, exact
+                        // formals and ingress below own that decision.
+                        if materialized then None
+                        else project node implementation None None
                     | _ -> None
                 | None -> None
+        | ty when node.IsReachable && (Entries.payload ty |> Option.isSome) ->
+            Entries.tryFormation graph node.Id |> Option.bind (fun formation ->
+                project node formation.Entry.Lifetime.Implementation None (Some formation))
         | _ -> None) |> Map.ofList
     carriers, List.rev residuals
 

@@ -5,6 +5,7 @@
 /// before range, control and representation saturation.
 module Clef.Compiler.Nanopass.BranchOccurrences
 
+open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.Nanopass.Recipe
 
@@ -26,7 +27,7 @@ let private incidence (graph: SemanticGraph) =
 
 /// Every enclosing execution path must establish the separation. Two unrelated
 /// conditionals do not become mutually exclusive merely by sharing a body ID.
-let private exclusive activations parents left right =
+let private exclusive activations (parents: Map<NodeId, Hyperedge list>) (left: Hyperedge) (right: Hyperedge) =
     let rec paths seen node =
         if Set.contains node activations then [Map.empty]
         elif Set.contains node seen then [] else
@@ -37,7 +38,7 @@ let private exclusive activations parents left right =
             edges |> List.collect (fun edge ->
                 paths seen edge.Target |> List.map (fun path ->
                     if isBranch edge then Map.add edge.Target (edge.Role, edge.Ordinal) path else path))
-    let through edge =
+    let through (edge: Hyperedge) =
         paths Set.empty edge.Target
         |> List.map (Map.add edge.Target (edge.Role, edge.Ordinal))
     let leftPaths, rightPaths = through left, through right

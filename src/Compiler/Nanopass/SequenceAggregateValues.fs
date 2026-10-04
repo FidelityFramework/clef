@@ -120,7 +120,7 @@ type Prepared = {
     Unresolved: (NodeId * NodeId) list
 }
 
-let prepare (graph: SemanticGraph) admitted certificates =
+let prepare (graph: SemanticGraph) admitted (certificates: Hyperedge list) =
     let candidates = admitted |> Set.toList |> List.choose (fun id ->
         Values.scalarOption graph graph.Nodes[id].Type |> Option.map (fun layout -> id, layout))
     let freshReads, freshCertificates = SequenceCurrentAdmission.certify graph
@@ -132,7 +132,7 @@ let prepare (graph: SemanticGraph) admitted certificates =
     let mutable unresolved = []
     for id, (inner, bytes, alignment) in candidates do
         let source = graph.Nodes[id]
-        let certificateRows edges =
+        let certificateRows (edges: Hyperedge list) =
             edges |> List.filter (fun edge -> edge.Target = id)
             |> List.map (fun edge -> edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target)
         let certificateValid = freshReads.Contains id && certificateRows certificates = certificateRows freshCertificates

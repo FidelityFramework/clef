@@ -2309,16 +2309,40 @@ type CallableEnvironment = { Owner: NodeId; Formal: NodeId }
 [<RequireQualifiedAccess>]
 type CallableKind = OrdinaryFlatClosure | NativeEntry
 
+type ProgramImageCodeLifetime = {
+    Module: NodeId
+    Binding: NodeId
+    Implementation: NodeId
+}
+
+[<RequireQualifiedAccess>]
+type CallableConversion = Identity of ValueRepresentation
+
+type CompilerOwnedCallableConvention = {
+    Target: BoundaryPlatformPremise
+    ParameterConversions: (int * CallableConversion) list
+    ResultConversion: CallableConversion
+    CodeLifetime: ProgramImageCodeLifetime
+}
+
+[<RequireQualifiedAccess>]
+type CallableConvention =
+    | Ordinary
+    | CompilerOwnedPortable of CompilerOwnedCallableConvention
+
 /// Source-settled receiving convention, independent of a particular implementation.
 type CallableContract = {
     Identity: NodeId
     Kind: CallableKind
+    Convention: CallableConvention
     ParameterTypes: TypeIdentity list
     OmittedParameters: int list
     ParameterRepresentations: (int * ValueRepresentation) list
     ResultType: TypeIdentity
     ResultRepresentation: ValueRepresentation
     EnvironmentBytes: int option
+    /// Exact source-owned proof facts, never additional executable occurrences.
+    SourcePremises: Map<NodeId, BoundarySourcePremise>
     Participants: Participant list
 }
 

@@ -250,7 +250,9 @@ let callableComponent (graph: SemanticGraph) (aggregateType: TypeIdentity) (path
             let contract = slot.Contract |> Result.toOption |> Option.bind facts.CallableContracts.TryFind
             match contract with
             | None -> pending "receiving contract remains pending (CCS8413)."
-            | Some contract when contract.Kind = CallableKind.NativeEntry -> pending "native entry component realization remains pending (CCS8410)."
+            | Some contract when contract.Kind = CallableKind.NativeEntry &&
+                                 not (Clef.Compiler.Baker.Ingredients.CallableContracts.sourcePremisesCurrent graph contract) ->
+                pending "native component code residence or portable convention is no longer current (CCS8414)."
             | Some contract ->
                 let physical (row: CallableAggregateValue) =
                     if row.Bytes < 0 || row.Alignment <= 0 || (row.Alignment &&& (row.Alignment - 1)) <> 0 then

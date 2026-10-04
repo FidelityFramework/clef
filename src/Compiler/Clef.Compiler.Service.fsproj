@@ -361,6 +361,7 @@
     <Compile Include="Baker\Recipes\StringBorrowRecipes.fs" />
     <Compile Include="Baker\Ingredients\MemoryValues.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\StaticStringLayout.fs" />
+    <Compile Include="Baker\Ingredients\CompilerOwnedEntries.fs" />
     <Compile Include="Baker\Ingredients\CallableContracts.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableCarriers.fs" />
     <Compile Include="Baker\Recipes\CallableContractRecipes.fs" />

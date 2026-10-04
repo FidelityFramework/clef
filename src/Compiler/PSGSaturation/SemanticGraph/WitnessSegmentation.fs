@@ -350,7 +350,9 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
                         // unchanged. External non-proof roles still refuse the
                         // candidate through the ordinary identity encoder.
                         let contractInterface = contracts |> Map.map (fun _ contract ->
-                            { contract with Participants = contract.Participants |> List.filter (fun participant -> participant.Role <> ParticipantRole.Source) })
+                            { contract with
+                                SourcePremises = Map.empty
+                                Participants = contract.Participants |> List.filter (fun participant -> participant.Role <> ParticipantRole.Source) })
                         let contractSupports = contracts.Values |> Seq.collect (fun contract ->
                             contract.Participants |> Seq.map (fun (participant: Participant) -> participant.Node) |> Seq.filter graph.Nodes.ContainsKey) |> Set.ofSeq
                         let supports = Set.union supports contractSupports

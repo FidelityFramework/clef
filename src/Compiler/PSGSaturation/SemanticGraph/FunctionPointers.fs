@@ -6,6 +6,7 @@ open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+module Entries = Clef.Compiler.Baker.Ingredients.CompilerOwnedEntries
 
 let rec private resolved = function
     | NativeType.TVar tv ->
@@ -40,23 +41,30 @@ let settle (graph: SemanticGraph) : Map<NodeId, FunctionPointerPlan> * Diagnosti
                 | Some { Kind = SemanticKind.Intrinsic info } when info.Module = IntrinsicModule.FnPtr ->
                     match info.Operation, args with
                     | "ofFunction", [value] ->
-                        match node value with
-                        | Some { Kind = SemanticKind.VarRef (_, Some bindingId) } ->
-                            match node bindingId with
-                            | Some { Kind = SemanticKind.Binding (name, _, _, _); Children = [body]; Parent = Some parent } ->
-                                match node parent, node body with
-                                | Some { Kind = SemanticKind.ModuleDef (moduleName, _) },
-                                  Some ({ Kind = SemanticKind.Lambda (_, _, [], _, _) } as lambda) when lambda.Id = body ->
-                                    let symbol =
-                                        match CallbackDeclarations.forLambda graph lambda.Id with
-                                        | Some callback when callback.ReturnsVoid -> nativeEntrySymbol lambda.Id
-                                        | _ -> moduleName + "." + name
-                                    plans <- Map.add site.Id (FunctionPointerPlan.Address (symbol, lambda.Id)) plans
-                                | Some { Kind = SemanticKind.ModuleDef _ }, Some { Kind = SemanticKind.Lambda (_, _, [], _, _) } ->
-                                    error site "FnPtr.ofFunction currently requires a module function declared with parameters; whole-function expression annotations are not supported by native declaration emission."
-                                | _ -> error site "FnPtr.ofFunction requires a named module function without captured state; pass the environment explicitly."
-                            | _ -> error site "FnPtr.ofFunction requires a named module function."
-                        | _ -> error site "FnPtr.ofFunction requires a resolved named function; a closure cannot be converted to a native callback."
+                        match Entries.tryFormation graph site.Id with
+                        | Some formation ->
+                            let implementation = formation.Entry.Lifetime.Implementation
+                            let symbol =
+                                match CallbackDeclarations.forLambda graph implementation with
+                                | Some callback when callback.ReturnsVoid -> nativeEntrySymbol implementation
+                                | _ -> formation.Entry.Symbol
+                            plans <- Map.add site.Id (FunctionPointerPlan.Address(symbol, implementation)) plans
+                        | None ->
+                            // Preserve the located surface diagnostics. The
+                            // shared ingredient alone authorizes an entry.
+                            match node value with
+                            | Some { Kind = SemanticKind.VarRef(_, Some binding) } ->
+                                match node binding with
+                                | Some { Kind = SemanticKind.Binding _; Children = [body]; Parent = Some parent } ->
+                                    match node parent, node body with
+                                    | Some { Kind = SemanticKind.ModuleDef _ }, Some { Kind = SemanticKind.Lambda(_, _, [], _, _); Id = implementation }
+                                        when implementation <> body ->
+                                        error site "FnPtr.ofFunction currently requires a module function declared with parameters; whole-function expression annotations are not supported by native declaration emission."
+                                    | Some { Kind = SemanticKind.ModuleDef _ }, Some { Kind = SemanticKind.Lambda(_, _, [], _, _) } ->
+                                        error site "FnPtr.ofFunction requires an immutable module binding with current module membership."
+                                    | _ -> error site "FnPtr.ofFunction requires a named module function without captured state; pass the environment explicitly."
+                                | _ -> error site "FnPtr.ofFunction requires a named module function."
+                            | _ -> error site "FnPtr.ofFunction requires a resolved named function; a closure cannot be converted to a native callback."
                     | "invoke", pointer :: arguments ->
                         match node pointer |> Option.map (fun p -> resolved p.Type) with
                         | Some (NativeType.TApp (tc, [functionType])) when tc.NTUKind = Some NTUKind.NTUfnptr ->

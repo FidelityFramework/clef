@@ -62,6 +62,9 @@ let private closedCarrier (graph: SemanticGraph) (inputs: Inputs) (slot: Aggrega
                 refuse Codes.CCS8412_CallableAggregatePairing "The carrier drops or crosses its actual environment occurrence."
             | Some _ when (carrier.Environment.IsSome || carrier.Kind = CallableKind.NativeEntry) && carrier.Lifetime.IsEmpty ->
                 refuse Codes.CCS8101_LifetimeError "The stored environment or native entry has no source-owned lifetime evidence."
+            | Some contract when carrier.Kind = CallableKind.NativeEntry &&
+                                 not (Clef.Compiler.Baker.Ingredients.CallableContracts.lifetimeCurrent contract carrier) ->
+                refuse Codes.CCS8101_LifetimeError "The native entry's retained lifetime differs from its exact program-image declaration evidence."
             | Some _ when carrier.Environment.IsSome ->
                 refuse Codes.CCS8410_CallableAggregateDataPlacement "This callable component still requires source-owned environment placement; a code word or guessed environment descriptor cannot replace it."
             | Some _ -> Ok carrier

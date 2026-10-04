@@ -9,43 +9,53 @@ module Contract = Clef.Compiler.Baker.Ingredients.CallableContracts
 
 let settle (graph: SemanticGraph) (layouts: Map<NodeId, EnvironmentLayout>)
            (previous: Map<NodeId, CallableContract>) (carriers: Map<NodeId, CallableCarrier>) =
+    // The source owner is checked once for this forward fold. No consumer can
+    // mint support from a stale domain or a convenient signature alone.
+    let domain = Contract.currentNumericOwner graph
     let contracts =
         carriers.Values
-        |> Seq.groupBy _.Implementation
-        |> Seq.choose (fun (implementation, occurrences) ->
+        |> Seq.groupBy (fun carrier -> carrier.Kind, carrier.Implementation)
+        |> Seq.choose (fun (_, occurrences) ->
             let carriers = List.ofSeq occurrences
             let signatures = carriers |> List.map (Contract.signature graph layouts) |> List.distinct
-            match signatures with
-            | [Some signature] ->
+            match signatures, domain with
+            | [Some signature], Some owner ->
                 let first = carriers.Head
                 let identity = Contract.tryIdentity graph layouts previous first |> Option.defaultWith NodeId.fresh
-                let participant role ordinal node = { Node = node; Role = role; Ordinal = ordinal; Group = identity }
-                let sites = first.Result :: (first.Parameters |> List.map (fun (_, _, formal) -> formal)) |> Set.ofList
-                let representationPremises =
-                    graph.Edges |> List.collect (fun edge ->
-                        match edge.Role with
-                        | EdgeRole.NumericDomain domain ->
-                            domain.Values |> List.filter (fun value -> sites.Contains value.Site)
-                            |> List.collect (fun value -> Set.toList value.Participants @ value.Obligations)
-                        | _ -> []) |> List.distinct
+                let representationPremises, sourcePremises = Contract.conventionEvidence graph signature.Convention owner first
                 Some(identity, {
-                    Identity = identity; Kind = CallableKind.OrdinaryFlatClosure
+                    Identity = identity; Kind = signature.Kind
+                    Convention = signature.Convention
                     ParameterTypes = signature.Parameters; ResultType = signature.Result
                     EnvironmentBytes = signature.EnvironmentBytes; OmittedParameters = signature.Omitted
                     ParameterRepresentations = signature.ParameterRepresentations
                     ResultRepresentation = signature.ResultRepresentation
-                    Participants =
-                        [ yield participant ParticipantRole.CallableContract 0 identity
-                          yield participant ParticipantRole.CallableImplementation 0 implementation
-                          yield participant ParticipantRole.CalleeBody 0 first.Result
-                          for ordinal, (_, _, formal) in List.indexed first.Parameters do
-                              yield participant ParticipantRole.CalleeParameter ordinal formal
-                          for ordinal, premise in List.indexed representationPremises do
-                              yield participant ParticipantRole.Source ordinal premise ]
+                    SourcePremises = sourcePremises
+                    Participants = Contract.conventionParticipants signature.Convention identity first representationPremises
                 })
             // A polymorphic implementation with incompatible actual conventions
             // needs source specialization. Choosing its first instance is not a
-            // receiving-family proof. Native entries never enter this recipe.
+            // receiving-family proof. Native entries require the explicit
+            // compiler-owned portable convention supplied by the ingredient.
             | _ -> None)
         |> Map.ofSeq
     contracts, carriers |> Map.map (fun _ carrier -> Contract.assign graph layouts contracts carrier)
+
+/// An aggregate placement step reports the exact occurrence representations it
+/// changed. Renew only callable families whose parameter/result sites intersect
+/// that delta; all other contract and carrier rows retain their current values.
+let renewForSites (graph: SemanticGraph) layouts (sites: Set<NodeId>)
+                  (contracts: Map<NodeId, CallableContract>) (carriers: Map<NodeId, CallableCarrier>) =
+    let implementations =
+        carriers.Values |> Seq.filter (fun carrier ->
+            sites.Contains carrier.Result || (carrier.Parameters |> List.exists (fun (_, _, formal) -> sites.Contains formal)))
+        |> Seq.map _.Implementation |> Set.ofSeq
+    if implementations.IsEmpty then contracts, carriers else
+    let affected = carriers |> Map.filter (fun _ carrier -> implementations.Contains carrier.Implementation)
+    let replacements, current = settle graph layouts contracts affected
+    let retained = contracts |> Map.filter (fun _ contract ->
+        contract.Participants |> List.exists (fun participant ->
+            participant.Role = ParticipantRole.CallableImplementation && implementations.Contains participant.Node) |> not)
+    let renewed = replacements |> Map.fold (fun table identity contract -> table |> Map.add identity contract) retained
+    let carriers = current |> Map.fold (fun table occurrence carrier -> table |> Map.add occurrence carrier) carriers
+    renewed, carriers

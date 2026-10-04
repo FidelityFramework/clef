@@ -186,27 +186,28 @@ let main _ =
     [<InlineData(32)>]
     [<InlineData(64)>]
     member _.``Aggregate function fields retain the entire settled view descriptor``(pointerBits: int) =
-        let result = ClosureValues.check """
+        let graph = SourcePlatformFixture.check pointerBits "closure-values.clef" """
+module ClosureValues
 type Holder = { Work: int -> int -> int; Tail: bool }
 [<EntryPoint>]
 let main _ =
     let holder = { Work = (fun a b -> a + b); Tail = true }
     if holder.Tail then holder.Work 1 2 else 0
 """
-        let context = { ClosureValues.context with Dimensions = Map.ofList ["Pointer", pointerBits; "Register", 64] }
-        let graph = Clef.Compiler.PSGSaturation.SemanticGraph.Placement.settle (Some context) result.Graph
         let layout = graph.Layouts.Value |> Map.toSeq |> Seq.pick (fun (identity, layout) ->
             match identity with
             | TypeIdentity.Application(constructor, _) when constructor.Declaration.Name = "Holder" -> Some layout
             | _ -> None)
         match layout with
         | SettledLayout.Record ([work; tail], Some size, Some alignment) ->
-            let descriptorBytes = 5 * (pointerBits / 8)
-            Assert.Equal(SettledSlot.Pointer 5, work.Slot)
-            Assert.Equal(Some descriptorBytes, work.Size)
-            Assert.Equal(Some descriptorBytes, tail.Offset)
-            Assert.True(size >= descriptorBytes + 1)
-            Assert.Equal(pointerBits / 8, alignment)
+            // Closure Representation §2.4: "A slot without an environment
+            // and with one alternative occupies no component storage."
+            Assert.Equal(SettledSlot.InlineBytes(0, 1), work.Slot)
+            Assert.Equal(Some 0, work.Size)
+            Assert.Equal(Some 0, tail.Offset)
+            Assert.Equal(Some 1, tail.Size)
+            Assert.Equal(1, size)
+            Assert.Equal(1, alignment)
         | other -> failwithf "Expected a fully placed function/boolean record, got %A" other
 
     [<Fact>]
