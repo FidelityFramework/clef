@@ -225,7 +225,7 @@ let validate (graph: SemanticGraph) (expected: MutableCallableStorage) =
     let codata = graph.Codata.Value
     let currentCarriers, _ = CallableCarriers.settle
                                 { Layouts = codata.EnvironmentLayouts; Origins = ClosureEnvironments.origins graph
-                                  Known = ClosureEnvironments.knownCallables graph } graph
+                                  Known = ClosureEnvironments.knownCallables graph; Contracts = codata.CallableContracts } graph
     let actual = settle currentCarriers codata.EnvironmentLayouts graph
     actual.Storage.TryFind expected.Binding = Some expected
 

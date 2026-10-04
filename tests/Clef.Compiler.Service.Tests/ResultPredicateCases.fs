@@ -148,7 +148,7 @@ let main _ = ignore first; ignore second; ignore explicit; ignore third; 0
         for name in ["first"; "second"; "explicit"; "third"] do
             DimensionalCases.same Types.boolType (DimensionalCases.bindingType name result)
         let bound =
-            let rec withoutAnnotation node =
+            let rec withoutAnnotation (node: SemanticNode) =
                 match node.Kind with
                 | SemanticKind.TypeAnnotation (value, _) -> withoutAnnotation result.Graph.Nodes[value]
                 | _ -> node

@@ -563,7 +563,7 @@ let private residualDiagnostics (builder: NodeBuilder) (reported: Diagnostic lis
 /// - Have [<HardwareModule>] attribute (DeclRoot.HardwareModule)
 let private findDeclarationRoots (allNodes: Map<NodeId, SemanticNode>) (topLevelNodes: SemanticNode list) : (NodeId * DeclRoot) list =
     // Helper to get DeclRoot for a binding node
-    let getBindingDeclRoot node =
+    let getBindingDeclRoot (node: SemanticNode option) =
         match node with
         | Some memberNode ->
             match memberNode.Kind with
@@ -1296,7 +1296,8 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
     let callableCarriers, callableCarrierResiduals =
         if sourceAdmitted && finalGraph.Platform.IsSome then
             Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.settle
-                { Layouts = environments.Layouts; Origins = environmentOrigins; Known = knownCallables } finalGraph
+                { Layouts = environments.Layouts; Origins = environmentOrigins; Known = knownCallables
+                  Contracts = finalGraph.Codata.Value.CallableContracts } finalGraph
         else Map.empty, []
     let carrierDiagnostics (graph: SemanticGraph) (residuals: Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.Residual list) =
         residuals |> List.map (fun pending ->
@@ -1356,6 +1357,10 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 LazyDestinations = lazies.Destinations
                 KnownCallables = knownCallables
                 CallableCarriers = callableCarriers
+                CallableContracts = settled.Codata.Value.CallableContracts
+                CallableAggregateSlots = settled.Codata.Value.CallableAggregateSlots
+                CallableAggregateValues = settled.Codata.Value.CallableAggregateValues
+                CallableAggregateDependencies = settled.Codata.Value.CallableAggregateDependencies
                 CallableJoins = mutableCallables.Joins
                 CallableFlows = callableFlows
                 CallableBranches = CallableBranchAuthority.empty
@@ -1384,20 +1389,12 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
                 Mmio = mmio
                 ProgramStorage = ProgramStorageInventory.empty } }
 
-    let programInventory = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramStorage.settle finalGraph
-    tracePhase "program-storage"
-    let finalGraph =
-        let facts = finalGraph.Codata.Value
-        { finalGraph with Codata = lazy { facts with ProgramStorage = programInventory } }
-
     // Boundary calls need the settled range/meet domain, and must contribute
     // their joint obligations before ledger emission and passive publication.
     let finalGraph = Clef.Compiler.Nanopass.NumericSettlement.normalize finalGraph
-    let finalGraph = Clef.Compiler.Nanopass.MemorySettlement.normalize finalGraph
-    let finalGraph = Clef.Compiler.Nanopass.SpatialSettlement.normalize finalGraph
-    let finalGraph = Clef.Compiler.Nanopass.BoundarySettlement.normalize finalGraph
-    // Final source rewrites have completed. Baker writes the branch inventory;
-    // witness preparation validates it and publication only copies it.
+    // Representation rewriting is complete. Receiving conventions now read
+    // actual scalar representations. Aggregate storage is settled before the
+    // memory/spatial/boundary owners consume its extent.
     let finalGraph, callableCarrierDiagnostics, callableFlowDiagnostics =
         if not sourceAdmitted || finalGraph.Platform.IsNone then
             finalGraph, callableCarrierDiagnostics, callableFlowDiagnostics
@@ -1405,6 +1402,21 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             let refined, carrierResiduals, flowResiduals =
                 Clef.Compiler.Nanopass.CallableBranchSettlement.normalize finalGraph
             refined, carrierDiagnostics refined carrierResiduals, flowDiagnostics refined flowResiduals
+    let finalGraph, aggregateResiduals =
+        if not sourceAdmitted || finalGraph.Platform.IsNone then finalGraph, []
+        else Clef.Compiler.Nanopass.CallableAggregateSettlement.normalize finalGraph
+    // Inventory consumes the aggregate owner's final physical extents.
+    let programInventory = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramStorage.settle finalGraph
+    tracePhase "program-storage"
+    let finalGraph =
+        let facts = finalGraph.Codata.Value
+        { finalGraph with Codata = lazy { facts with ProgramStorage = programInventory } }
+    let finalGraph = Clef.Compiler.Nanopass.MemorySettlement.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.SpatialSettlement.normalize finalGraph
+    let finalGraph = Clef.Compiler.Nanopass.BoundarySettlement.normalize finalGraph
+    let finalGraph, aggregateAccountResiduals =
+        if not sourceAdmitted || finalGraph.Platform.IsNone then finalGraph, []
+        else Clef.Compiler.Nanopass.CallableAggregateSettlement.renewAccounts finalGraph
     let storagePremiseDiagnostics = Clef.Compiler.PSGSaturation.SemanticGraph.StaticStringLayout.premiseGuard finalGraph
     ObligationDischarge.emit finalGraph
     tracePhase "obligations"
@@ -1424,6 +1436,21 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
             | Result.Error failures ->
                 finalGraph, Clef.Compiler.PSGSaturation.SemanticGraph.WitnessEmission.diagnostics finalGraph failures
 
+    let aggregateDiagnostics =
+        let demanded =
+            finalGraph.Codata.Value.WitnessLiveScope
+            |> Option.map (fun scope -> scope.Occurrences |> Map.keys |> Set.ofSeq)
+        let deferred =
+            Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.projectValidated finalGraph
+            |> Result.toOption |> Option.map _.DeferredOnly |> Option.defaultValue Set.empty
+        aggregateResiduals @ aggregateAccountResiduals |> List.distinct |> List.choose (fun pending ->
+            finalGraph.Nodes.TryFind pending.Occurrence |> Option.bind (fun node ->
+                let required = demanded |> Option.map (Set.contains node.Id) |> Option.defaultValue node.IsReachable
+                if not required || deferred.Contains node.Id then None else
+                Some { Severity = NativeDiagnosticSeverity.Error; Code = pending.Code
+                       Message = pending.Reason; Range = node.Range; RelatedNodes = [node.Id]
+                       Reachability = ReachabilityContext.Reachable }))
+
     let declarationDiagnostics = PlatformDeclaration.check platformContext finalGraph
     tracePhase "witness-publication"
     let quotationErrors = quotationDiagnostics finalGraph
@@ -1442,7 +1469,7 @@ let private buildResult (builder: NodeBuilder) (topLevelNodes: SemanticNode list
 
     {
         Graph = finalGraph
-        Diagnostics = taggedDiagnostics @ boundaryTypeDiagnostics @ boundaryValueDiagnostics @ programInitializationDiagnostics @ initializationOrderDiagnostics @ bindingDemandDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
+        Diagnostics = taggedDiagnostics @ boundaryTypeDiagnostics @ boundaryValueDiagnostics @ programInitializationDiagnostics @ initializationOrderDiagnostics @ bindingDemandDiagnostics @ kernelIngressDiagnostics @ programStorageDiagnostics @ environments.Diagnostics @ sequences.Diagnostics @ premiseDiagnostics @ lazies.Diagnostics @ callableCarrierDiagnostics @ callableFlowDiagnostics @ aggregateDiagnostics @ witnessEmissionDiagnostics @ storagePremiseDiagnostics @ rangeDiagnostics @ stringByteDiagnostics @ staticLayoutDiagnostics @ realLiteralDiagnostics @ declarationDiagnostics @ quotationErrors @ depthDiagnostics @ unusedBindings @ functionPointerDiagnostics @ mmioDiagnostics @ closedCallbackDiagnostics @ (sequenceOwnershipDiagnostics @ delegatedOwnershipDiagnostics |> List.distinct)
         PlatformContext = platformContext
     }
 

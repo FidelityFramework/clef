@@ -41,6 +41,14 @@ type ComparisonRegionCases() =
             // Current proof support is deliberately conservative. Retention of
             // witness output never reuses the previous revision's proof receipt.
             Assert.True(Set.isSubset (after.Nodes.Keys |> Set.ofSeq) current.Supports)
+            let contracts = after.Codata.Value.CallableContracts.Values |> Seq.filter (fun contract ->
+                contract.Participants |> List.exists (fun participant ->
+                    participant.Role = ParticipantRole.CallableImplementation && Some participant.Node = current.Root)) |> Seq.toList
+            Assert.NotEmpty contracts
+            for contract in contracts do
+                Assert.False(current.Members.Contains contract.Identity)
+                for participant in contract.Participants do
+                    if after.Nodes.ContainsKey participant.Node then Assert.Contains(participant.Node, current.Supports)
             let operations = after.Codata.Value.WitnessEmission.Value.Numeric.Operations.Values |> Seq.filter (fun row -> current.Members.Contains row.Site)
             let operation = Assert.Single operations
             Assert.Contains(operation.Declaration.Value, current.Supports)

@@ -24,9 +24,10 @@ let private programStorage ids (value: ProgramStorageInventory) =
       Reservations = selected spaces value.Reservations
       Unresolved = value.Unresolved |> Map.filter (fun key _ -> ids |> Set.contains (storageIdentity key)) }
 
-/// Only typed executable/fact references advance this closure. Participants,
-/// obligation support inventories and owner-wide membership/absence accounts
-/// remain complete fields in their selected rows; they never select more rows.
+/// Only typed executable/fact references advance this closure. Aggregate
+/// participants also select their explicit fact rows, including slot/contract
+/// identities that are not executable nodes. Owner-wide support inventories
+/// remain complete fields in their selected rows; they do not authorize bodies.
 let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjection) (scope: WitnessLiveScopePlan) =
     let mutable ids =
         scope.Occurrences.Keys |> Set.ofSeq
@@ -35,14 +36,55 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
     let add id = ids <- ids.Add id
     let addMany values = ids <- Set.union ids (Set.ofSeq values)
     let addOptional value = Option.iter add value
+    let participants values = values |> List.iter (fun (value: Participant) -> add value.Node; add value.Group)
+    let rec representation = function
+        | ValueRepresentation.CallableComponent(slot, data) -> add slot; representation data
+        | ValueRepresentation.Buffer(_, element) -> representation element
+        | ValueRepresentation.Record(fields, _) -> fields |> List.iter (snd >> representation)
+        | ValueRepresentation.Union(cases, _) -> cases |> List.iter (snd >> List.iter representation)
+        | ValueRepresentation.Scalar _ | ValueRepresentation.Tag _ -> ()
     let shape = function
         | CallableValueShape.Data id | CallableValueShape.Callable id
         | CallableValueShape.Sequence id | CallableValueShape.Lazy id -> add id
     let parameters values = values |> List.iter (fun (_, _, id) -> add id)
     let carrier (row: CallableCarrier) =
+        add row.Formation; addOptional row.EnvironmentValue
+        match row.Contract with Ok identity -> add identity | Error _ -> ()
+        participants row.Lifetime
         add row.Implementation; parameters row.Parameters; add row.Result
         List.iter shape row.ParameterShapes; shape row.ResultShape
         row.Environment |> Option.iter (fun value -> add value.Owner; add value.Formal)
+    let contract (row: CallableContract) =
+        add row.Identity; participants row.Participants
+        row.ParameterRepresentations |> List.iter (snd >> representation)
+        representation row.ResultRepresentation
+    let aggregateSlot (row: CallableAggregateSlot) =
+        add row.Identity; addOptional row.Declaration; participants row.Participants
+        match row.Contract with Ok identity -> add identity | Error _ -> ()
+    let aggregateValue (row: CallableAggregateValue) =
+        add row.Occurrence; add row.Aggregate; add row.Slot; addMany row.FormationInputs
+        addOptional row.Value; addOptional row.Frontier; participants row.Participants
+        row.Selector |> Option.iter (fun selector -> addOptional selector.Storage)
+        row.Alternatives |> List.iter (fun alternative ->
+            add alternative.Carrier; add alternative.Formation; add alternative.Contract
+            addOptional alternative.EnvironmentValue; addOptional alternative.Adapter
+            alternative.EnvironmentPlacement |> Option.iter (fun placement ->
+                add placement.Value; add placement.Owner; addOptional placement.Adaptation))
+        row.Tag |> Option.iter (fun tag ->
+            add tag.Constructor; addOptional tag.TagRead; addOptional tag.Payload; participants tag.Participants)
+    let flow (row: CallableFlow) =
+        add row.Occurrence; addMany row.Alternatives
+        row.Dependencies |> Map.iter (fun key values -> add key; addMany values)
+        row.Calls |> List.iter (fun call -> add call.Call; add call.Implementation; addMany call.Parameters; addMany call.Arguments; add call.Result)
+    let join (row: CallableJoin) =
+        add row.Occurrence; add row.Storage; add row.Read; addMany row.Alternatives
+    let aggregateAccount (row: CallableAggregateDependencyAccount) =
+        add row.Occurrence
+        List.iter aggregateSlot row.Slots; List.iter aggregateValue row.Values
+        List.iter carrier row.Carriers; List.iter contract row.Contracts
+        List.iter flow row.Flows; List.iter join row.Joins; participants row.Participants
+        row.Sources |> List.iter (fun source -> add source.Node; addMany source.Children)
+        row.Claims |> List.iter (fst >> add)
     let slots values = values |> List.iter (fun (slot: ContinuationSlot) -> add slot.Source)
     let pairs values = values |> List.iter (fun (left, right) -> add left; add right)
     let family (row: SequenceFamily) =
@@ -57,11 +99,12 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
         selected before emission.Ordinary.Parameters |> Map.iter (fun _ row -> addMany row)
         selected before emission.Ordinary.Calls |> Map.iter (fun _ row -> add row.Implementation; addMany row.Actuals)
         selected before emission.Callable.Carriers |> Map.iter (fun _ row -> carrier row)
-        selected before emission.Callable.Joins |> Map.iter (fun _ row -> add row.Storage; add row.Read; addMany row.Alternatives)
-        selected before emission.Callable.Flows |> Map.iter (fun _ row ->
-            addMany row.Alternatives
-            row.Dependencies |> Map.iter (fun key values -> add key; addMany values)
-            row.Calls |> List.iter (fun call -> add call.Call; add call.Implementation; addMany call.Parameters; addMany call.Arguments; add call.Result))
+        selected before emission.Callable.Contracts |> Map.iter (fun _ row -> contract row)
+        selected before emission.Callable.AggregateSlots |> Map.iter (fun _ row -> aggregateSlot row)
+        selected before emission.Callable.AggregateValues |> Map.iter (fun _ rows -> List.iter aggregateValue rows)
+        selected before emission.Callable.AggregateDependencies |> Map.iter (fun _ row -> aggregateAccount row)
+        selected before emission.Callable.Joins |> Map.iter (fun _ row -> join row)
+        selected before emission.Callable.Flows |> Map.iter (fun _ row -> flow row)
         selected before emission.Callable.MutableStorage |> Map.iter (fun _ row ->
             add row.Binding
             let write (value: MutableCallableWrite) = add value.Site; add value.Destination; add value.Value
@@ -112,6 +155,8 @@ let private closeFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
         selected before emission.Boundary.IntrinsicWrites |> Map.iter (fun _ row -> add row.Import; add row.Callee; add row.Fd; add row.Buffer; add row.Count)
         selected before emission.Numeric.Operations |> Map.iter (fun _ row -> add row.Callee; row.Operands |> List.iter (fun value -> add value.Actual))
         selected before emission.Numeric.IndexTransports |> Map.iter (fun _ row -> add row.Operand)
+        selected before emission.Numeric.OccurrenceRepresentations |> Map.iter (fun _ row ->
+            match row with Ok value -> representation value | Error _ -> ())
         selected before facts.EnvironmentLayouts |> Map.iter (fun _ row -> add row.Owner; add row.Implementation; add row.Formal; slots row.Slots)
         selected before facts.KnownCallables |> Map.iter (fun _ row -> add row.Implementation; add row.EnvironmentOwner)
         selected before facts.ContinuationFrames |> Map.iter (fun _ row ->
@@ -155,11 +200,22 @@ let private valueFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
     let slots source = source |> List.iter (fun (slot: ContinuationSlot) -> add slot.Source)
     let carrier (row: CallableCarrier) =
         parameters row.Parameters; add row.Result
+        Option.iter add row.EnvironmentValue
         List.iter shape row.ParameterShapes; shape row.ResultShape
         row.Environment |> Option.iter (fun environment -> add environment.Formal)
+    let aggregateValue (row: CallableAggregateValue) =
+        add row.Aggregate; addMany row.FormationInputs; Option.iter add row.Value
+        row.Selector |> Option.iter (fun selector -> Option.iter add selector.Storage)
+        row.Alternatives |> List.iter (fun alternative ->
+            Option.iter add alternative.EnvironmentValue
+            alternative.EnvironmentPlacement |> Option.iter (fun placement -> add placement.Value))
+        row.Tag |> Option.iter (fun tag -> Option.iter add tag.TagRead; Option.iter add tag.Payload)
     selected ids emission.Ordinary.Parameters |> Map.iter (fun _ formals -> addMany formals)
     selected ids emission.Ordinary.Calls |> Map.iter (fun _ call -> addMany call.Actuals)
     selected ids emission.Callable.Carriers |> Map.iter (fun _ row -> carrier row)
+    selected ids emission.Callable.AggregateValues |> Map.iter (fun _ rows -> List.iter aggregateValue rows)
+    selected ids emission.Callable.AggregateDependencies |> Map.iter (fun _ account ->
+        List.iter aggregateValue account.Values; List.iter carrier account.Carriers)
     selected ids emission.Callable.SignatureData |> Map.iter (fun _ data -> addMany data)
     selected ids emission.Callable.Declarations |> Map.iter (fun _ row ->
         parameters row.Parameters; add row.Result
@@ -201,7 +257,7 @@ let private valueFacts (graph: SemanticGraph) (emission: WitnessEmissionProjecti
     references ()
     values
 
-let private closeTypes (graph: SemanticGraph) ids (emission: WitnessEmissionProjection) =
+let private closeTypes (graph: SemanticGraph) ids valueIds (emission: WitnessEmissionProjection) =
     let rec visit seen identity =
         if seen |> Set.contains identity then seen else
         let seen = Set.add identity seen
@@ -217,10 +273,18 @@ let private closeTypes (graph: SemanticGraph) ids (emission: WitnessEmissionProj
             | _ -> []
         List.fold visit seen children
     let identities =
-        selected ids graph.Nodes |> Map.toSeq |> Seq.map (fun (_, node) -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type)
-        |> Seq.append (selected ids emission.Numeric.SourceTypes |> Map.values)
-        |> Seq.append (selected ids emission.Numeric.Values |> Map.values |> Seq.map _.SourceType)
-        |> Seq.append (selected ids emission.Boundary.Imports |> Map.values |> Seq.collect (fun row -> row.SourceTypes.Values))
+        selected valueIds graph.Nodes |> Map.toSeq |> Seq.map (fun (_, node) -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType node.Type)
+        |> Seq.append (selected valueIds emission.Numeric.SourceTypes |> Map.values)
+        |> Seq.append (selected valueIds emission.Numeric.Values |> Map.values |> Seq.map _.SourceType)
+        |> Seq.append (selected valueIds emission.Boundary.Imports |> Map.values |> Seq.collect (fun row -> row.SourceTypes.Values))
+        |> Seq.append (selected ids emission.Callable.Contracts |> Map.values |> Seq.collect (fun row -> row.ResultType :: row.ParameterTypes))
+        |> Seq.append (selected ids emission.Callable.AggregateSlots |> Map.values |> Seq.collect (fun row -> [row.AggregateType; row.SourceType]))
+        |> Seq.append (selected ids emission.Callable.AggregateDependencies |> Map.values |> Seq.collect (fun account ->
+            seq {
+                for row in account.Contracts do yield row.ResultType; yield! row.ParameterTypes
+                for row in account.Slots do yield row.AggregateType; yield row.SourceType
+                for row in account.Sources do yield row.Type
+            }))
     Seq.fold visit Set.empty identities
 
 let private emissionRows ids valueIds types (value: WitnessEmissionProjection) : WitnessEmissionProjection =
@@ -238,7 +302,10 @@ let private emissionRows ids valueIds types (value: WitnessEmissionProjection) :
     { Ordinary = { Parameters = rows value.Ordinary.Parameters; Calls = rows value.Ordinary.Calls; DeferredOnly = values value.Ordinary.DeferredOnly }
       Callable = {
         Branches = branches ids callables.Branches
+        Contracts = rows callables.Contracts
         Carriers = rows callables.Carriers; Joins = rows callables.Joins; Flows = rows callables.Flows
+        AggregateSlots = rows callables.AggregateSlots; AggregateValues = rows callables.AggregateValues
+        AggregateDependencies = rows callables.AggregateDependencies
         MutableStorage = rows callables.MutableStorage; ValueShapes = valueRows callables.ValueShapes
         SignatureData = rows callables.SignatureData; Calls = rows callables.Calls; Transports = rows callables.Transports
         Declarations = rows callables.Declarations; Symbols = rows callables.Symbols
@@ -286,7 +353,7 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (scope:
     let ids = closeFacts graph emission scope
     let valueIds = valueFacts graph emission scope ids
     let ids = Set.union ids valueIds
-    let types = closeTypes graph valueIds emission
+    let types = closeTypes graph ids valueIds emission
     let selectedEmission = emissionRows ids valueIds types emission
     let rows table = selected ids table
     let values entries = selectedSet ids entries
@@ -317,7 +384,10 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (scope:
         EnvironmentOrigins = rows facts.EnvironmentOrigins; LazyLayouts = rows facts.LazyLayouts
         LazyOrigins = rows facts.LazyOrigins; LazyDestinations = rows facts.LazyDestinations
         KnownCallables = rows facts.KnownCallables; CallableCarriers = rows facts.CallableCarriers
+        CallableContracts = rows facts.CallableContracts
         CallableJoins = rows facts.CallableJoins; CallableFlows = rows facts.CallableFlows
+        CallableAggregateSlots = rows facts.CallableAggregateSlots; CallableAggregateValues = rows facts.CallableAggregateValues
+        CallableAggregateDependencies = rows facts.CallableAggregateDependencies
         CallableBranches = selectedEmission.Callable.Branches; MutableCallableStorage = rows facts.MutableCallableStorage
         ContinuationFrames = rows facts.ContinuationFrames; SequenceOrigins = rows facts.SequenceOrigins
         SequenceFlows = rows facts.SequenceFlows; SequenceFamilies = rows facts.SequenceFamilies

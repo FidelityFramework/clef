@@ -71,9 +71,16 @@ module private PublicationFixture =
                          Edges = graph.Edges @ [row 2 (List.map _.Id subjects); row 7 [subjects.Head.Id]] }
         // Adding the fixture node changes the complete source census. Renew
         // its owning domains before testing the separate dispatch contract.
-        let settled =
+        // Numeric renewal replaces proof identities, so the callable owner must
+        // renew its contract participants before the downstream domains run.
+        let callable, carrierResiduals, flowResiduals =
             changed
             |> Clef.Compiler.Nanopass.NumericSettlement.normalize
+            |> Clef.Compiler.Nanopass.CallableBranchSettlement.normalize
+        Assert.Empty(carrierResiduals)
+        Assert.Empty(flowResiduals)
+        let settled =
+            callable
             |> Clef.Compiler.Nanopass.MemorySettlement.normalize
             |> Clef.Compiler.Nanopass.SpatialSettlement.normalize
             |> Clef.Compiler.Nanopass.BoundarySettlement.normalize

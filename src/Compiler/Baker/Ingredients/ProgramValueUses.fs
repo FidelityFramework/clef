@@ -187,7 +187,7 @@ let current (graph: SemanticGraph) binding =
         | _ -> false)
     |> function
        | [{ Class = EdgeClass.Provenance; Role = EdgeRole.ProgramInitializationOrder participants; Sources = sources; Target = target; Ordinal = 0 }]
-            when participants = expected.Participants && sources = List.map _.Node participants ->
+            when participants = expected.Participants && sources = List.map (fun (participant: Participant) -> participant.Node) participants ->
            match graph.Nodes.TryFind target, graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = target) with
            | Some { Kind = SemanticKind.Obligation info }, [{ Class = EdgeClass.Obligation; Sources = actual; Ordinal = 0 }] ->
                info.Body = expected.Body && actual = sources && info.Id = sprintf "program_binding_%d_initialization_order" (NodeId.value binding)

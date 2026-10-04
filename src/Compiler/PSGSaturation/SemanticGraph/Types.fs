@@ -668,6 +668,9 @@ type ValueRepresentation =
     | Scalar of SettledSlot
     | Buffer of count: int option * element: ValueRepresentation
     | Record of fields: (string * ValueRepresentation) list * placement: (int list * int * int) option
+    /// The slot row owns selector/environment data placement. Code is not data.
+    | CallableComponent of slot: NodeId * data: ValueRepresentation
+    | Union of cases: (string * ValueRepresentation list) list * placement: (int * int * int) option
     | Tag of cases: int
 
 type ScalarCarrier = {
@@ -759,6 +762,12 @@ type ParticipantRole =
     | EnvironmentOwner | EnvironmentImplementation | EnvironmentFormal
     | EnvironmentConstructor | EnvironmentFactory | EnvironmentCall | EnvironmentDestination
     | EnvironmentLayoutProof | EnvironmentSpace | EnvironmentDeclarationInput | EnvironmentAuthorityInput
+    /// Callable aggregate incidence, with exact source ordinals and grouping.
+    | CallableContract | CallableCarrier | CallableFormation | CallableImplementation
+    | CallableEnvironment | CallableLifetime | CallableAdapter
+    | AggregateSlot | AggregateDeclaration | AggregateConstruction
+    | AggregateValue | AggregateSource | AggregateInput | AggregateWrite | AggregateReadFrontier
+    | AggregateSelector | AggregateConstructor | AggregateTag | AggregatePayload
     | Site | Source | ExtentSource | RepresentationDeclaration | Path | Formal
     | ReachingCall | ReachingActual | OmittedCall | OmittedCallActual | OmissionSite | OmittedActual
     | Callee | CalleeBody | CalleeArgument | CalleeParameter | Ingress | Origin | Construction
@@ -2296,6 +2305,23 @@ type KnownCallable = { Implementation: NodeId; EnvironmentOwner: NodeId }
 /// in EnvironmentLayouts; this relation identifies its actual leading formal.
 type CallableEnvironment = { Owner: NodeId; Formal: NodeId }
 
+/// Ordinary closure storage and native code lifetime remain distinct contracts.
+[<RequireQualifiedAccess>]
+type CallableKind = OrdinaryFlatClosure | NativeEntry
+
+/// Source-settled receiving convention, independent of a particular implementation.
+type CallableContract = {
+    Identity: NodeId
+    Kind: CallableKind
+    ParameterTypes: TypeIdentity list
+    OmittedParameters: int list
+    ParameterRepresentations: (int * ValueRepresentation) list
+    ResultType: TypeIdentity
+    ResultRepresentation: ValueRepresentation
+    EnvironmentBytes: int option
+    Participants: Participant list
+}
+
 /// A physical boundary retains each value participant. Callable components
 /// refer to that occurrence's settled carrier, so code/environment expansion
 /// cannot be guessed from the source type or a different formation's layout.
@@ -2308,6 +2334,11 @@ type CallableValueShape = Data of NodeId | Callable of NodeId | Sequence of Node
 /// None denotes code alone, never an invented empty environment.
 type CallableCarrier = {
     Occurrence: NodeId
+    Kind: CallableKind
+    Formation: NodeId
+    EnvironmentValue: NodeId option
+    Contract: Result<NodeId, string>
+    Lifetime: Participant list
     SourceType: NativeType
     Implementation: NodeId
     Parameters: (string * NativeType * NodeId) list
@@ -2349,6 +2380,119 @@ type CallableFlow = {
     Alternatives: NodeId list
     Dependencies: Map<NodeId, NodeId list>
     Calls: CallableFlowCall list
+}
+
+/// Resolved declaration identity and ordinal at each nested aggregate step.
+[<RequireQualifiedAccess>]
+type CallableAggregatePathStep =
+    | RecordField of ordinal: int
+    | UnionPayload of caseOrdinal: int * payloadOrdinal: int
+
+[<RequireQualifiedAccess>]
+type CallableAggregateDeclarationDefinition =
+    | RecordDef of fields: (string * TypeIdentity) list
+    | UnionDef of cases: (string * (string option * TypeIdentity) list) list
+
+/// Immutable declaration evidence: no retained checker substitution cells.
+type CallableAggregateDeclarationFact = {
+    Identity: NodeId
+    DeclaredType: TypeIdentity
+    Definition: CallableAggregateDeclarationDefinition
+}
+
+type CallableAggregateSlot = {
+    Identity: NodeId
+    AggregateType: TypeIdentity
+    Declaration: NodeId option
+    DeclarationFacts: CallableAggregateDeclarationFact list
+    Path: CallableAggregatePathStep list
+    SourceType: TypeIdentity
+    Contract: Result<NodeId, string>
+    Participants: Participant list
+}
+
+/// Logical selector bounds and source-settled physical placement are distinct.
+type CallableAggregateSelector = {
+    Lower: int
+    UpperExclusive: int
+    Storage: NodeId option
+    Slot: SettledSlot option
+    ByteOffset: int option
+}
+
+[<RequireQualifiedAccess>]
+type CallableAggregateEnvironmentSource = EnvironmentValue | CallableEnvironmentView
+
+type CallableAggregateEnvironmentPlacement = {
+    Source: CallableAggregateEnvironmentSource
+    Value: NodeId
+    Owner: NodeId
+    ViewBytes: int
+    ByteOffset: int
+    StorageBytes: int
+    Alignment: int
+    Adaptation: NodeId option
+}
+
+type CallableAggregateAlternative = {
+    Ordinal: int
+    Carrier: NodeId
+    Formation: NodeId
+    EnvironmentValue: NodeId option
+    Contract: NodeId
+    Adapter: NodeId option
+    EnvironmentPlacement: CallableAggregateEnvironmentPlacement option
+}
+
+type CallableAggregateTag = {
+    Constructor: NodeId
+    TagRead: NodeId option
+    CaseOrdinal: int
+    PayloadOrdinal: int option
+    Payload: NodeId option
+    Participants: Participant list
+}
+
+[<RequireQualifiedAccess>]
+type CallableAggregateOperation = Construct | Project | Assign | Snapshot
+
+type CallableAggregateValue = {
+    Occurrence: NodeId
+    Aggregate: NodeId
+    Slot: NodeId
+    Alternatives: CallableAggregateAlternative list
+    Selector: CallableAggregateSelector option
+    FormationInputs: NodeId list
+    Value: NodeId option
+    SelectedAlternative: int option
+    Operation: CallableAggregateOperation
+    Frontier: NodeId option
+    Tag: CallableAggregateTag option
+    Bytes: int
+    Alignment: int
+    Participants: Participant list
+}
+
+/// Current source incidence consumed by the aggregate account, not a retained graph.
+type CallableAggregateSourceIncidence = {
+    Node: NodeId
+    Kind: SemanticKind
+    Type: TypeIdentity
+    Children: NodeId list
+    Anchors: string list
+}
+
+type CallableAggregateDependencyAccount = {
+    Occurrence: NodeId
+    Slots: CallableAggregateSlot list
+    Values: CallableAggregateValue list
+    Carriers: CallableCarrier list
+    Contracts: CallableContract list
+    Flows: CallableFlow list
+    Joins: CallableJoin list
+    Participants: Participant list
+    Sources: CallableAggregateSourceIncidence list
+    Claims: (NodeId * ObligationInfo) list
 }
 
 /// A write updates the finite alternative discriminator and the actual
@@ -2654,10 +2798,14 @@ module CallableBranchAuthority =
 /// contract, and the immutable leaf emission model additionally freezes types.
 type CallableEmissionProjection = {
     Branches: CallableBranchAuthority
+    Contracts: Map<NodeId, CallableContract>
     Carriers: Map<NodeId, CallableCarrier>
     Joins: Map<NodeId, CallableJoin>
     Flows: Map<NodeId, CallableFlow>
     MutableStorage: Map<NodeId, MutableCallableStorage>
+    AggregateSlots: Map<NodeId, CallableAggregateSlot>
+    AggregateValues: Map<NodeId, CallableAggregateValue list>
+    AggregateDependencies: Map<NodeId, CallableAggregateDependencyAccount>
     ValueShapes: Map<NodeId, CallableValueShape>
     SignatureData: Map<NodeId, Set<NodeId>>
     Calls: Map<NodeId, CallableEmissionCall>
@@ -2690,7 +2838,8 @@ type CallableEmissionProjection = {
 module CallableEmissionProjection =
     let empty = {
         Branches = CallableBranchAuthority.empty
-        Carriers = Map.empty; Joins = Map.empty; Flows = Map.empty; MutableStorage = Map.empty
+        Contracts = Map.empty; Carriers = Map.empty; Joins = Map.empty; Flows = Map.empty; MutableStorage = Map.empty
+        AggregateSlots = Map.empty; AggregateValues = Map.empty; AggregateDependencies = Map.empty
         ValueShapes = Map.empty; SignatureData = Map.empty; Calls = Map.empty; Transports = Map.empty
         Declarations = Map.empty; Symbols = Map.empty; IntrinsicAliases = Set.empty
         DirectCallees = Map.empty; ForeignCalls = Set.empty; MutableRetentions = Set.empty
@@ -3076,9 +3225,13 @@ type WitnessLiveCodata = {
     LazyOrigins: Map<NodeId, NodeId>
     LazyDestinations: Map<NodeId, NodeId>
     KnownCallables: Map<NodeId, KnownCallable>
+    CallableContracts: Map<NodeId, CallableContract>
     CallableCarriers: Map<NodeId, CallableCarrier>
     CallableJoins: Map<NodeId, CallableJoin>
     CallableFlows: Map<NodeId, CallableFlow>
+    CallableAggregateSlots: Map<NodeId, CallableAggregateSlot>
+    CallableAggregateValues: Map<NodeId, CallableAggregateValue list>
+    CallableAggregateDependencies: Map<NodeId, CallableAggregateDependencyAccount>
     CallableBranches: CallableBranchAuthority
     MutableCallableStorage: Map<NodeId, MutableCallableStorage>
     ContinuationFrames: Map<NodeId, ContinuationFrame>
@@ -3154,9 +3307,13 @@ type Codata = {
     LazyOrigins: Map<NodeId, NodeId>
     LazyDestinations: Map<NodeId, NodeId>
     KnownCallables: Map<NodeId, KnownCallable>
+    CallableContracts: Map<NodeId, CallableContract>
     CallableCarriers: Map<NodeId, CallableCarrier>
     CallableJoins: Map<NodeId, CallableJoin>
     CallableFlows: Map<NodeId, CallableFlow>
+    CallableAggregateSlots: Map<NodeId, CallableAggregateSlot>
+    CallableAggregateValues: Map<NodeId, CallableAggregateValue list>
+    CallableAggregateDependencies: Map<NodeId, CallableAggregateDependencyAccount>
     CallableBranches: CallableBranchAuthority
     MutableCallableStorage: Map<NodeId, MutableCallableStorage>
     OrdinaryDemand: OrdinaryDemandProjection
@@ -3220,9 +3377,13 @@ module Codata =
         LazyOrigins = Map.empty
         LazyDestinations = Map.empty
         KnownCallables = Map.empty
+        CallableContracts = Map.empty
         CallableCarriers = Map.empty
         CallableJoins = Map.empty
         CallableFlows = Map.empty
+        CallableAggregateSlots = Map.empty
+        CallableAggregateValues = Map.empty
+        CallableAggregateDependencies = Map.empty
         CallableBranches = CallableBranchAuthority.empty
         MutableCallableStorage = Map.empty
         OrdinaryDemand = OrdinaryDemandProjection.empty

@@ -331,11 +331,13 @@
     <Compile Include="Baker\Ingredients\Memoization.fs" />
     <Compile Include="Baker\Ingredients\ProgramInitialization.fs" />
     <Compile Include="Baker\Ingredients\AggregateCopies.fs" />
+    <Compile Include="Baker\Ingredients\CallableAggregateTypes.fs" />
     <!-- Baker Recipes - HOF decomposition templates (PRD-13a) -->
     <Compile Include="Baker\Recipes\Decomposition.fs" />
     <Compile Include="Baker\Recipes\ProgramInitializationSelection.fs" />
     <Compile Include="Baker\Recipes\ProgramInitializationRecipes.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableOrigins.fs" />
+    <Compile Include="Baker\Ingredients\CallableAggregateProjections.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\DirectCaptures.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\ClosureEnvironments.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\SchemeInstances.fs" />
@@ -359,7 +361,9 @@
     <Compile Include="Baker\Recipes\StringBorrowRecipes.fs" />
     <Compile Include="Baker\Ingredients\MemoryValues.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\StaticStringLayout.fs" />
+    <Compile Include="Baker\Ingredients\CallableContracts.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\CallableCarriers.fs" />
+    <Compile Include="Baker\Recipes\CallableContractRecipes.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\MutableCallableStorage.fs" />
     <Compile Include="Baker\Recipes\ClosureRecipes.fs" />
     <Compile Include="Baker\Recipes\ClosureEnvironmentRecipes.fs" />
@@ -450,6 +454,7 @@
     <Compile Include="Nanopass\RepresentationRanges.fs" />
     <Compile Include="Nanopass\LazyFactoryResults.fs" />
     <Compile Include="Nanopass\NodeProofs.fs" />
+    <Compile Include="Baker\Ingredients\CallableAggregateAccounts.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Placement.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Roots.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\Escape.fs" />
@@ -478,6 +483,9 @@
     <Compile Include="Baker\Recipes\NumericCarrierRecipes.fs" />
     <Compile Include="Nanopass\NumericSettlement.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\NumericPublication.fs" />
+    <Compile Include="Baker\Recipes\NumericRepresentationRecipes.fs" />
+    <Compile Include="Baker\Recipes\CallableAggregateRecipes.fs" />
+    <Compile Include="Nanopass\CallableAggregateSettlement.fs" />
     <Compile Include="Baker\Recipes\MemoryExtentRecipes.fs" />
     <Compile Include="Baker\Recipes\MemoryAccessRecipes.fs" />
     <Compile Include="Nanopass\PremiseEstablishment.fs" />

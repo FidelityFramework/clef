@@ -47,6 +47,10 @@ let private settleCore (resolution: CallableOrigins.Resolution) (inputs: Inputs)
             | SemanticKind.IfThenElse(_, yes, no), _ -> noCall (yes :: Option.toList no)
             | SemanticKind.Match(_, cases), _ -> noCall (cases |> List.map _.Body)
             | SemanticKind.CaseElimination(_, cases), _ -> noCall (cases |> List.map _.Body)
+            | (SemanticKind.FieldGet _ | SemanticKind.TupleGet _ | SemanticKind.DUEliminate _), _ ->
+                Clef.Compiler.Baker.Ingredients.CallableAggregateProjections.read resolution id
+                |> Option.map (fun reading -> noCall reading.Inputs)
+                |> Option.defaultValue opaque
             | SemanticKind.PatternBinding _, _ ->
                 let supplied = resolution.ParameterInputs.TryFind id |> Option.defaultValue []
                 let selected = supplied |> List.map (fun (call, actual) ->
@@ -204,7 +208,7 @@ let validate (graph: SemanticGraph) (expected: CallableFlow) =
         let codata = graph.Codata.Value
         let carriers, _ = CallableCarriers.settle
                             { Layouts = codata.EnvironmentLayouts; Origins = ClosureEnvironments.origins graph
-                              Known = ClosureEnvironments.knownCallables graph } graph
+                              Known = ClosureEnvironments.knownCallables graph; Contracts = codata.CallableContracts } graph
         let joins = MutableCallableStorage.settle carriers codata.EnvironmentLayouts graph
         settle { Carriers = carriers; Joins = joins.Joins; Layouts = codata.EnvironmentLayouts
                  SequenceFlows = codata.SequenceFlows; SequenceFamilies = codata.SequenceFamilies } graph |> fst)

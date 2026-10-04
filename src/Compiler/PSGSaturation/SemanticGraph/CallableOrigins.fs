@@ -9,6 +9,8 @@ open System.Collections.Generic
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
+module AggregateTypes = Clef.Compiler.Baker.Ingredients.CallableAggregateTypes
+module Identity = Clef.Compiler.NativeTypedTree.TypeIdentities
 
 /// One stage of an application whose complete argument list crosses a returned
 /// function boundary. The arity is established from every possible callee.
@@ -42,6 +44,28 @@ type FirstBoundary = {
     Targets: FirstBoundaryTarget list
     UnknownOrigins: Set<NodeId>
 }
+/// Source values occupying a resolved callable path. Absence belongs to the
+/// actual union constructor; it is distinct from an opaque supplier.
+type AggregateSlotOrigins = {
+    Path: CallableAggregatePathStep list
+    Values: NodeId list
+    UnknownOrigins: Set<NodeId>
+    Absent: bool
+}
+type AggregateAlternative = {
+    Construction: NodeId
+    Slots: AggregateSlotOrigins list
+}
+type AggregateResolution = {
+    AggregateType: TypeIdentity
+    Alternatives: AggregateAlternative list
+    UnknownOrigins: Set<NodeId>
+    AbsentOrigins: Set<NodeId>
+    /// Direct typed reads of this actual aggregate occurrence.
+    Projections: (NodeId * CallableAggregatePathStep list) list
+    /// Actual ordered transport operands, including calls and field writers.
+    Dependencies: Map<NodeId, NodeId list>
+}
 type Resolution = {
     Calls: Map<NodeId, ResolvedCall>
     /// Native entry invocations retain their own boundary. They are not
@@ -53,6 +77,7 @@ type Resolution = {
     /// Final source observations; completeness is scoped by the owning Baker
     /// whole-revision authority, not by this map's direct participant IDs.
     Branches: Map<NodeId, CallableBranchObservation>
+    Aggregates: Map<NodeId, AggregateResolution>
 }
 
 type private Origin = NodeId * int
@@ -386,6 +411,7 @@ let private analyze branchSelections (graph: SemanticGraph) =
             | Some { Kind = SemanticKind.Sequential values } -> List.tryLast values |> Option.bind (environmentOwner seen)
             | _ -> None
     let inputs = Dictionary<NodeId, Set<NodeId * NodeId>>()
+    let transportInputs = Dictionary<NodeId, NodeId list>()
     let supply call parameter argument =
         let old = match inputs.TryGetValue parameter with true, values -> values | _ -> Set.empty
         inputs[parameter] <- Set.add (call, argument) old
@@ -463,9 +489,14 @@ let private analyze branchSelections (graph: SemanticGraph) =
                     | Some "invoke", pointer :: actuals -> invoke id Set.empty (read pointer) actuals
                     | _ -> invoke id Set.empty (read callee) arguments
                 | SemanticKind.EnvironmentRead(environment, slot) ->
-                    environmentOwner Set.empty environment
-                    |> Option.bind (fun owner -> captures.TryFind (owner, slot))
-                    |> Option.map union |> Option.defaultValue Set.empty
+                    match environmentOwner Set.empty environment with
+                    | Some owner ->
+                        match captures.TryFind (owner, slot) with
+                        | Some values ->
+                            transportInputs[id] <- [environment; slot; owner] @ values
+                            union values
+                        | None -> Set.empty
+                    | None -> Set.empty
                 | SemanticKind.ClosureValue(implementation, _) ->
                     // The pair closes over its explicitly declared environment
                     // formal. Rewritten direct calls still supply that formal.
@@ -473,7 +504,9 @@ let private analyze branchSelections (graph: SemanticGraph) =
                         if edge.Class = EdgeClass.Provenance && edge.Role = EdgeRole.EnvironmentFormal
                            && edge.Sources = [id; implementation] then Some edge.Target else None)
                     match shapes.TryFind implementation, formal with
-                    | Some ((_, _, first) :: _, _), Some actual when first = actual -> Set.singleton(implementation, 1)
+                    | Some ((_, _, first) :: _, _), Some actual when first = actual ->
+                        transportInputs[id] <- node.Children @ [actual]
+                        Set.singleton(implementation, 1)
                     | _ -> Set.empty
                 | SemanticKind.Set (target, value) ->
                     match nodes.TryFind target with
@@ -543,13 +576,222 @@ let private analyze branchSelections (graph: SemanticGraph) =
             match decideGuard read guard with OneArm observation -> Some(id, observation) | _ -> None)
         |> Map.ofList
     nodes, shapes, (facts |> Seq.map (fun pair -> pair.Key, pair.Value) |> Map.ofSeq),
-        (inputs |> Seq.map (fun pair -> pair.Key, Set.toList pair.Value) |> Map.ofSeq), branches
+        (inputs |> Seq.map (fun pair -> pair.Key, Set.toList pair.Value) |> Map.ofSeq), branches, agrees,
+        (transportInputs |> Seq.map (fun pair -> pair.Key, pair.Value) |> Map.ofSeq)
+
+type private AggregateConstruction =
+    | RecordConstruction of (string * NativeType * NodeId option) list * NodeId option
+    | UnionConstruction of caseOrdinal: int * (NativeType * NodeId) list
+
+/// Project aggregate facts from the completed origin reading. This traverses
+/// finite slot paths and the already recorded transport graph; it does not run
+/// another origin propagation, choose a contract or establish residence.
+let private aggregateResolutions (graph: SemanticGraph) (nodes: Map<NodeId, SemanticNode>)
+        (facts: Map<NodeId, Set<Origin>>) (inputs: Map<NodeId, (NodeId * NodeId) list>)
+        (calls: Map<NodeId, ResolvedCall>) (agrees: SemanticNode -> bool)
+        (transportInputs: Map<NodeId, NodeId list>) =
+    let read id = facts.TryFind id |> Option.defaultValue Set.empty
+    let hasType expected id = nodes.TryFind id |> Option.exists (fun node -> sameType expected node.Type)
+    let item ordinal values = if ordinal < 0 then None else List.tryItem ordinal values
+    let shapeCache = Dictionary<TypeIdentity, AggregateTypes.Shape option>()
+    let slotsCache = Dictionary<TypeIdentity, AggregateTypes.Slot list>()
+    let shape ty =
+        let identity = Identity.ofType ty
+        match shapeCache.TryGetValue identity with
+        | true, value -> value
+        | _ -> let value = AggregateTypes.shape graph ty in shapeCache[identity] <- value; value
+    let callableSlots ty =
+        let identity = Identity.ofType ty
+        match slotsCache.TryGetValue identity with
+        | true, value -> value
+        | _ -> let value = AggregateTypes.slots graph ty in slotsCache[identity] <- value; value
+    let construction expected id =
+        match nodes.TryFind id, shape expected with
+        | Some node, Some shape when sameType node.Type expected && agrees node ->
+            match node.Kind, shape with
+            | SemanticKind.RecordExpr(members, copy), AggregateTypes.Shape.Record(_, fields) ->
+                let names = members |> List.map fst
+                let valid =
+                    names.Length = (List.distinct names).Length &&
+                    fields.Length = (fields |> List.map fst |> List.distinct |> List.length) &&
+                    (members |> List.forall (fun (name, value) ->
+                        fields |> List.tryFind (fun (field, _) -> field = name)
+                        |> Option.exists (fun (_, ty) -> hasType ty value))) &&
+                    (copy |> Option.forall (hasType expected)) &&
+                    (copy.IsSome || (fields |> List.forall (fun (name, _) -> List.contains name names)))
+                if not valid then None else
+                fields |> List.map (fun (name, ty) -> name, ty, members |> List.tryPick (fun (field, value) -> if field = name then Some value else None))
+                |> fun fields -> Some(RecordConstruction(fields, copy))
+            | SemanticKind.TupleExpr values, AggregateTypes.Shape.Record(_, fields)
+                when fields.Length = values.Length &&
+                     (List.zip fields values |> List.forall (fun ((_, ty), value) -> hasType ty value)) ->
+                Some(RecordConstruction(List.map2 (fun (name, ty) value -> name, ty, Some value) fields values, None))
+            | (SemanticKind.UnionCase(name, tag, payload) | SemanticKind.DUConstruct(name, tag, payload, _)),
+              AggregateTypes.Shape.Union(_, cases) ->
+                cases |> item tag |> Option.bind (fun (caseName, fields) ->
+                    if name <> caseName then None else
+                    let values =
+                        match fields, payload with
+                        | [], None -> Some []
+                        | [_, ty], Some value when hasType ty value -> Some [ty, value]
+                        | fields, Some tuple when fields.Length > 1 ->
+                            match nodes.TryFind tuple with
+                            | Some ({ Kind = SemanticKind.TupleExpr values } as node)
+                                when agrees node && fields.Length = values.Length &&
+                                     (match applySubst node.Type with
+                                      | NativeType.TTuple(elements, _) when elements.Length = fields.Length ->
+                                          List.forall2 (fun ty (_, fieldType) -> sameType ty fieldType) elements fields
+                                      | _ -> false) &&
+                                     (List.zip fields values |> List.forall (fun ((_, ty), value) -> hasType ty value)) ->
+                                Some(List.map2 (fun (_, ty) value -> ty, value) fields values)
+                            | _ -> None
+                        | _ -> None
+                    values |> Option.map (fun values -> UnionConstruction(tag, values)))
+            | _ -> None
+        | _ -> None
+    // Preserve write sites and actual operands, not just the callable origins
+    // accumulated in analyze's field family. A write-only owner still supplies
+    // evidence. Selecting a particular mutable snapshot remains separate work.
+    let writers =
+        nodes |> Map.toList |> List.collect (fun (site, node) ->
+            match node.Kind with
+            | SemanticKind.FieldSet(subject, name, value) ->
+                read subject |> Set.toList |> List.choose (fun (origin, offset) ->
+                    if offset = 0 then Some((origin, name), (site, subject, value)) else None)
+            | _ -> [])
+        |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows)
+    let assigned origin name = writers.TryFind (origin, name) |> Option.defaultValue []
+    let empty path = { Path = path; Values = []; UnknownOrigins = Set.empty; Absent = false }
+    let unknown path id = { empty path with UnknownOrigins = Set.singleton id }
+    let merge (left: AggregateSlotOrigins) (right: AggregateSlotOrigins) =
+        { left with Values = List.distinct (left.Values @ right.Values)
+                    UnknownOrigins = Set.union left.UnknownOrigins right.UnknownOrigins
+                    Absent = left.Absent || right.Absent }
+    let rec follow seen expected id path =
+        if Set.contains (id, path) seen then unknown path id else
+        let seen = Set.add (id, path) seen
+        match path with
+        | [] -> if hasType expected id then { empty path with Values = [id] } else unknown path id
+        | _ ->
+            let origins = read id
+            if origins.IsEmpty then unknown path id else
+            origins |> Set.fold (fun found (origin, offset) ->
+                let next =
+                    if isEmptyOrigin (origin, offset) then { empty path with Absent = true }
+                    elif offset <> 0 then unknown path origin
+                    else fromConstruction seen expected origin path
+                merge found next) (empty path)
+    and fromConstruction seen expected origin path =
+        match path, construction expected origin with
+        | CallableAggregatePathStep.RecordField ordinal :: rest, Some(RecordConstruction(fields, copy)) ->
+            match fields |> item ordinal with
+            | None -> unknown path origin
+            | Some(name, fieldType, initial) ->
+                let initial =
+                    match initial, copy with
+                    | Some value, _ -> follow seen fieldType value rest
+                    | None, Some source -> follow seen expected source path
+                    | _ -> unknown path origin
+                assigned origin name |> List.fold (fun found (site, subject, value) ->
+                    let next =
+                        if hasType expected subject && (nodes.TryFind site |> Option.exists agrees) then
+                            follow seen fieldType value rest
+                        else unknown path site
+                    merge found next) initial
+        | CallableAggregatePathStep.UnionPayload(caseOrdinal, payloadOrdinal) :: rest,
+          Some(UnionConstruction(actualCase, values)) ->
+            if actualCase <> caseOrdinal then { empty path with Absent = true }
+            else values |> item payloadOrdinal
+                 |> Option.map (fun (ty, value) -> follow seen ty value rest)
+                 |> Option.defaultValue (unknown path origin)
+        | _ -> unknown path origin
+    let projections =
+        nodes |> Map.toList |> List.choose (fun (site, node) ->
+            let record subject ordinal =
+                nodes.TryFind subject |> Option.bind (fun source ->
+                    match shape source.Type with
+                    | Some(AggregateTypes.Shape.Record(_, fields)) ->
+                        fields |> item ordinal |> Option.bind (fun (_, ty) ->
+                            if sameType ty node.Type then Some(subject, (site, [CallableAggregatePathStep.RecordField ordinal])) else None)
+                    | _ -> None)
+            if not (agrees node) then None else
+            match node.Kind with
+            | SemanticKind.FieldGet(subject, name) ->
+                nodes.TryFind subject |> Option.bind (fun source ->
+                    match shape source.Type with
+                    | Some(AggregateTypes.Shape.Record(_, fields)) ->
+                        fields |> List.tryFindIndex (fun (field, _) -> field = name) |> Option.bind (record subject)
+                    | _ -> None)
+            | SemanticKind.TupleGet(subject, ordinal) -> record subject ordinal
+            | SemanticKind.DUEliminate(subject, caseOrdinal, name, payloadType) ->
+                nodes.TryFind subject |> Option.bind (fun source ->
+                    match shape source.Type with
+                    | Some(AggregateTypes.Shape.Union(_, cases)) ->
+                        cases |> item caseOrdinal |> Option.bind (function
+                            | caseName, [_, ty] when caseName = name && sameType ty payloadType && sameType ty node.Type ->
+                                Some(subject, (site, [CallableAggregatePathStep.UnionPayload(caseOrdinal, 0)]))
+                            | _ -> None)
+                    | _ -> None)
+            | _ -> None)
+        |> List.groupBy fst |> Map.ofList |> Map.map (fun _ rows -> List.map snd rows)
+    let rawDependencies id =
+        match nodes.TryFind id with
+        | None -> []
+        | Some node ->
+            let direct =
+                match node.Kind with
+                | SemanticKind.VarRef(_, Some source) -> [source]
+                | SemanticKind.Lambda(parameters, _, _, _, _) -> parameters |> List.map (fun (_, _, formal) -> formal)
+                | SemanticKind.PatternBinding _ -> inputs.TryFind id |> Option.defaultValue [] |> List.collect (fun (call, actual) -> [call; actual])
+                | SemanticKind.Application(callee, arguments) ->
+                    [callee] @ arguments @
+                    (calls.TryFind id |> Option.toList |> List.collect (fun call ->
+                        call.Targets |> List.collect (fun target ->
+                            [target.Lambda] @ (target.Parameters |> List.map (fun (_, _, formal) -> formal)) @ [target.Body])))
+                | _ -> transportInputs.TryFind id |> Option.defaultValue node.Children
+            let writes =
+                match shape node.Type with
+                | Some(AggregateTypes.Shape.Record(_, fields)) ->
+                    fields |> List.collect (fun (name, _) -> assigned id name |> List.collect (fun (site, subject, value) -> [site; subject; value]))
+                | _ -> []
+            direct @ writes
+    let dependencies roots =
+        let rec visit rows id =
+            if Map.containsKey id rows then rows else
+            let direct = rawDependencies id
+            List.fold visit (Map.add id direct rows) direct
+        List.fold visit Map.empty roots
+    nodes |> Map.toList |> List.choose (fun (id, node) ->
+        let slots = callableSlots node.Type
+        if slots.IsEmpty then None else
+        match shape node.Type with
+        | None -> None
+        | Some _ ->
+            let origins = read id
+            let alternatives, unknowns, absent =
+                origins |> Set.fold (fun (alternatives, unknowns, absent) (origin, offset) ->
+                    if isEmptyOrigin (origin, offset) then alternatives, unknowns, Set.add origin absent
+                    elif offset <> 0 || (construction node.Type origin).IsNone then
+                        alternatives, Set.add origin unknowns, absent
+                    else
+                        let selected = slots |> List.map (fun slot ->
+                            let result = fromConstruction Set.empty node.Type origin slot.Path
+                            { result with Path = slot.Path })
+                        { Construction = origin; Slots = selected } :: alternatives, unknowns, absent)
+                    ([], Set.empty, Set.empty)
+            let unknowns = if origins.IsEmpty then Set.singleton id else unknowns
+            let reads = projections.TryFind id |> Option.defaultValue []
+            let alternatives = List.rev alternatives
+            let roots = id :: (reads |> List.map fst) @ (alternatives |> List.map _.Construction)
+            Some(id, { AggregateType = Identity.ofType node.Type; Alternatives = alternatives
+                       UnknownOrigins = unknowns; AbsentOrigins = absent; Projections = reads
+                       Dependencies = dependencies roots })) |> Map.ofList
 
 /// Share actual value-flow evidence with range and sequence analyses. Opaque
 /// alternatives remain visible even when a known implementation also reaches
 /// the call. This does not establish environment residence or native admission.
 let private resolveWith branchSelections (graph: SemanticGraph) : Resolution =
-    let nodes, shapes, facts, inputs, branches = analyze branchSelections graph
+    let nodes, shapes, facts, inputs, branches, agrees, transportInputs = analyze branchSelections graph
     let read id = facts.TryFind id |> Option.defaultValue Set.empty |> presentOrigins
     let provedEmpty id = facts.TryFind id |> Option.exists (fun origins -> not origins.IsEmpty && Set.forall isEmptyOrigin origins)
     let nativeCalls =
@@ -616,7 +858,8 @@ let private resolveWith branchSelections (graph: SemanticGraph) : Resolution =
                 Some(id, { Callee = callee; Targets = List.rev targets; UnknownOrigins = unknown })
             | _ -> None)
         |> Map.ofList
-    { Calls = calls; NativeCalls = nativeCalls; ParameterInputs = inputs; Lambdas = lambdas; FirstBoundaries = boundaries; Branches = branches }
+    { Calls = calls; NativeCalls = nativeCalls; ParameterInputs = inputs; Lambdas = lambdas; FirstBoundaries = boundaries; Branches = branches
+      Aggregates = aggregateResolutions graph nodes facts inputs calls agrees transportInputs }
 
 /// Early source analyses retain conservative joins. They do not yet own the
 /// transfer of branch premises through their subsequent rewrites.
@@ -630,7 +873,7 @@ let resolveCalls graph = (resolve graph).Calls
 let knownLambdas graph = (resolve graph).Lambdas
 
 let applicationStages (graph: SemanticGraph) : Map<NodeId, Stage list> =
-    let nodes, shapes, facts, _, _ = analyze false graph
+    let nodes, shapes, facts, _, _, _, _ = analyze false graph
     let read id = facts.TryFind id |> Option.defaultValue Set.empty |> presentOrigins
 
     let boundary origins =

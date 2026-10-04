@@ -304,6 +304,130 @@ and mapByrefKind (value: N.ByrefKind) : Fidelity.PSG.ByrefKind =
     | N.ByrefKind.Out -> Fidelity.PSG.ByrefKind.Out
     | N.ByrefKind.InOut -> Fidelity.PSG.ByrefKind.InOut
 
+and mapCallableAggregateAlternative (value: S.CallableAggregateAlternative) : Fidelity.PSG.CallableAggregateAlternative =
+    ({
+        Ordinal = value.Ordinal
+        Carrier = nodeId value.Carrier
+        Formation = nodeId value.Formation
+        EnvironmentValue = (value.EnvironmentValue |> Option.map (fun x -> nodeId x))
+        Contract = nodeId value.Contract
+        Adapter = (value.Adapter |> Option.map (fun x -> nodeId x))
+        EnvironmentPlacement = (value.EnvironmentPlacement |> Option.map (fun x -> mapCallableAggregateEnvironmentPlacement x))
+    } : Fidelity.PSG.CallableAggregateAlternative)
+
+and mapCallableAggregateDeclarationDefinition (value: S.CallableAggregateDeclarationDefinition) : Fidelity.PSG.CallableAggregateDeclarationDefinition =
+    match value with
+    | S.CallableAggregateDeclarationDefinition.RecordDef(a0) -> Fidelity.PSG.CallableAggregateDeclarationDefinition.RecordDef((a0 |> List.map (fun x -> (let (t0, t1) = x in (t0, mapTypeIdentity t1)))))
+    | S.CallableAggregateDeclarationDefinition.UnionDef(a0) -> Fidelity.PSG.CallableAggregateDeclarationDefinition.UnionDef((a0 |> List.map (fun x -> (let (t0, t1) = x in (t0, (t1 |> List.map (fun x -> (let (t0, t1) = x in (t0, mapTypeIdentity t1)))))))))
+
+and mapCallableAggregateDeclarationFact (value: S.CallableAggregateDeclarationFact) : Fidelity.PSG.CallableAggregateDeclarationFact =
+    ({
+        Identity = nodeId value.Identity
+        DeclaredType = mapTypeIdentity value.DeclaredType
+        Definition = mapCallableAggregateDeclarationDefinition value.Definition
+    } : Fidelity.PSG.CallableAggregateDeclarationFact)
+
+and mapCallableAggregateDependencyAccount (value: S.CallableAggregateDependencyAccount) : Fidelity.PSG.CallableAggregateDependencyAccount =
+    ({
+        Occurrence = nodeId value.Occurrence
+        Slots = (value.Slots |> List.map (fun x -> mapCallableAggregateSlot x))
+        Values = (value.Values |> List.map (fun x -> mapCallableAggregateValue x))
+        Carriers = (value.Carriers |> List.map (fun x -> mapCallableCarrier x))
+        Contracts = (value.Contracts |> List.map (fun x -> mapCallableContract x))
+        Flows = (value.Flows |> List.map (fun x -> mapCallableFlow x))
+        Joins = (value.Joins |> List.map (fun x -> mapCallableJoin x))
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+        Sources = (value.Sources |> List.map (fun x -> mapCallableAggregateSourceIncidence x))
+        Claims = (value.Claims |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapObligationInfo t1))))
+    } : Fidelity.PSG.CallableAggregateDependencyAccount)
+
+and mapCallableAggregateEnvironmentPlacement (value: S.CallableAggregateEnvironmentPlacement) : Fidelity.PSG.CallableAggregateEnvironmentPlacement =
+    ({
+        Source = mapCallableAggregateEnvironmentSource value.Source
+        Value = nodeId value.Value
+        Owner = nodeId value.Owner
+        ViewBytes = value.ViewBytes
+        ByteOffset = value.ByteOffset
+        StorageBytes = value.StorageBytes
+        Alignment = value.Alignment
+        Adaptation = (value.Adaptation |> Option.map (fun x -> nodeId x))
+    } : Fidelity.PSG.CallableAggregateEnvironmentPlacement)
+
+and mapCallableAggregateEnvironmentSource (value: S.CallableAggregateEnvironmentSource) : Fidelity.PSG.CallableAggregateEnvironmentSource =
+    match value with
+    | S.CallableAggregateEnvironmentSource.EnvironmentValue -> Fidelity.PSG.CallableAggregateEnvironmentSource.EnvironmentValue
+    | S.CallableAggregateEnvironmentSource.CallableEnvironmentView -> Fidelity.PSG.CallableAggregateEnvironmentSource.CallableEnvironmentView
+
+and mapCallableAggregateOperation (value: S.CallableAggregateOperation) : Fidelity.PSG.CallableAggregateOperation =
+    match value with
+    | S.CallableAggregateOperation.Construct -> Fidelity.PSG.CallableAggregateOperation.Construct
+    | S.CallableAggregateOperation.Project -> Fidelity.PSG.CallableAggregateOperation.Project
+    | S.CallableAggregateOperation.Assign -> Fidelity.PSG.CallableAggregateOperation.Assign
+    | S.CallableAggregateOperation.Snapshot -> Fidelity.PSG.CallableAggregateOperation.Snapshot
+
+and mapCallableAggregatePathStep (value: S.CallableAggregatePathStep) : Fidelity.PSG.CallableAggregatePathStep =
+    match value with
+    | S.CallableAggregatePathStep.RecordField(a0) -> Fidelity.PSG.CallableAggregatePathStep.RecordField(a0)
+    | S.CallableAggregatePathStep.UnionPayload(a0, a1) -> Fidelity.PSG.CallableAggregatePathStep.UnionPayload(a0, a1)
+
+and mapCallableAggregateSelector (value: S.CallableAggregateSelector) : Fidelity.PSG.CallableAggregateSelector =
+    ({
+        Lower = value.Lower
+        UpperExclusive = value.UpperExclusive
+        Storage = (value.Storage |> Option.map (fun x -> nodeId x))
+        Slot = (value.Slot |> Option.map (fun x -> mapSettledSlot x))
+        ByteOffset = value.ByteOffset
+    } : Fidelity.PSG.CallableAggregateSelector)
+
+and mapCallableAggregateSlot (value: S.CallableAggregateSlot) : Fidelity.PSG.CallableAggregateSlot =
+    ({
+        Identity = nodeId value.Identity
+        AggregateType = mapTypeIdentity value.AggregateType
+        Declaration = (value.Declaration |> Option.map (fun x -> nodeId x))
+        DeclarationFacts = (value.DeclarationFacts |> List.map (fun x -> mapCallableAggregateDeclarationFact x))
+        Path = (value.Path |> List.map (fun x -> mapCallableAggregatePathStep x))
+        SourceType = mapTypeIdentity value.SourceType
+        Contract = (match value.Contract with Ok x -> Ok (nodeId x) | Error x -> Error (x))
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.CallableAggregateSlot)
+
+and mapCallableAggregateSourceIncidence (value: S.CallableAggregateSourceIncidence) : Fidelity.PSG.CallableAggregateSourceIncidence =
+    ({
+        Node = nodeId value.Node
+        Kind = mapSemanticKind value.Kind
+        Type = mapTypeIdentity value.Type
+        Children = (value.Children |> List.map (fun x -> nodeId x))
+        Anchors = value.Anchors
+    } : Fidelity.PSG.CallableAggregateSourceIncidence)
+
+and mapCallableAggregateTag (value: S.CallableAggregateTag) : Fidelity.PSG.CallableAggregateTag =
+    ({
+        Constructor = nodeId value.Constructor
+        TagRead = (value.TagRead |> Option.map (fun x -> nodeId x))
+        CaseOrdinal = value.CaseOrdinal
+        PayloadOrdinal = value.PayloadOrdinal
+        Payload = (value.Payload |> Option.map (fun x -> nodeId x))
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.CallableAggregateTag)
+
+and mapCallableAggregateValue (value: S.CallableAggregateValue) : Fidelity.PSG.CallableAggregateValue =
+    ({
+        Occurrence = nodeId value.Occurrence
+        Aggregate = nodeId value.Aggregate
+        Slot = nodeId value.Slot
+        Alternatives = (value.Alternatives |> List.map (fun x -> mapCallableAggregateAlternative x))
+        Selector = (value.Selector |> Option.map (fun x -> mapCallableAggregateSelector x))
+        FormationInputs = (value.FormationInputs |> List.map (fun x -> nodeId x))
+        Value = (value.Value |> Option.map (fun x -> nodeId x))
+        SelectedAlternative = value.SelectedAlternative
+        Operation = mapCallableAggregateOperation value.Operation
+        Frontier = (value.Frontier |> Option.map (fun x -> nodeId x))
+        Tag = (value.Tag |> Option.map (fun x -> mapCallableAggregateTag x))
+        Bytes = value.Bytes
+        Alignment = value.Alignment
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.CallableAggregateValue)
+
 and mapCallableBranchAlternative (value: S.CallableBranchAlternative) : Fidelity.PSG.CallableBranchAlternative =
     ({
         Constructor = nodeId value.Constructor
@@ -350,6 +474,11 @@ and mapCallableBranchScope (value: S.CallableBranchScope) : Fidelity.PSG.Callabl
 and mapCallableCarrier (value: S.CallableCarrier) : Fidelity.PSG.CallableCarrier =
     ({
         Occurrence = nodeId value.Occurrence
+        Kind = mapCallableKind value.Kind
+        Formation = nodeId value.Formation
+        EnvironmentValue = (value.EnvironmentValue |> Option.map (fun x -> nodeId x))
+        Contract = (match value.Contract with Ok x -> Ok (nodeId x) | Error x -> Error (x))
+        Lifetime = (value.Lifetime |> List.map (fun x -> mapParticipant x))
         SourceType = freeze value.SourceType
         Implementation = nodeId value.Implementation
         Parameters = (value.Parameters |> List.map (fun x -> (let (t0, t1, t2) = x in (t0, freeze t1, nodeId t2))))
@@ -359,6 +488,19 @@ and mapCallableCarrier (value: S.CallableCarrier) : Fidelity.PSG.CallableCarrier
         ResultShape = mapCallableValueShape value.ResultShape
         Environment = (value.Environment |> Option.map (fun x -> mapCallableEnvironment x))
     } : Fidelity.PSG.CallableCarrier)
+
+and mapCallableContract (value: S.CallableContract) : Fidelity.PSG.CallableContract =
+    ({
+        Identity = nodeId value.Identity
+        Kind = mapCallableKind value.Kind
+        ParameterTypes = (value.ParameterTypes |> List.map (fun x -> mapTypeIdentity x))
+        OmittedParameters = value.OmittedParameters
+        ParameterRepresentations = (value.ParameterRepresentations |> List.map (fun x -> (let (t0, t1) = x in (t0, mapValueRepresentation t1))))
+        ResultType = mapTypeIdentity value.ResultType
+        ResultRepresentation = mapValueRepresentation value.ResultRepresentation
+        EnvironmentBytes = value.EnvironmentBytes
+        Participants = (value.Participants |> List.map (fun x -> mapParticipant x))
+    } : Fidelity.PSG.CallableContract)
 
 and mapCallableEmissionCall (value: S.CallableEmissionCall) : Fidelity.PSG.CallableEmissionCall =
     ({
@@ -387,10 +529,14 @@ and mapCallableEmissionDeclaration (value: S.CallableEmissionDeclaration) : Fide
 and mapCallableEmissionProjection (value: S.CallableEmissionProjection) : Fidelity.PSG.CallableEmissionProjection =
     ({
         Branches = mapCallableBranchAuthority value.Branches
+        Contracts = (value.Contracts |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapCallableContract v) |> Map.ofSeq)
         Carriers = (value.Carriers |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapCallableCarrier v) |> Map.ofSeq)
         Joins = (value.Joins |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapCallableJoin v) |> Map.ofSeq)
         Flows = (value.Flows |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapCallableFlow v) |> Map.ofSeq)
         MutableStorage = (value.MutableStorage |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapMutableCallableStorage v) |> Map.ofSeq)
+        AggregateSlots = (value.AggregateSlots |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapCallableAggregateSlot v) |> Map.ofSeq)
+        AggregateValues = (value.AggregateValues |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> List.map (fun x -> mapCallableAggregateValue x))) |> Map.ofSeq)
+        AggregateDependencies = (value.AggregateDependencies |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapCallableAggregateDependencyAccount v) |> Map.ofSeq)
         ValueShapes = (value.ValueShapes |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapCallableValueShape v) |> Map.ofSeq)
         SignatureData = (value.SignatureData |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> Set.map (fun x -> nodeId x))) |> Map.ofSeq)
         Calls = (value.Calls |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapCallableEmissionCall v) |> Map.ofSeq)
@@ -448,6 +594,11 @@ and mapCallableJoin (value: S.CallableJoin) : Fidelity.PSG.CallableJoin =
         Read = nodeId value.Read
         Alternatives = (value.Alternatives |> List.map (fun x -> nodeId x))
     } : Fidelity.PSG.CallableJoin)
+
+and mapCallableKind (value: S.CallableKind) : Fidelity.PSG.CallableKind =
+    match value with
+    | S.CallableKind.OrdinaryFlatClosure -> Fidelity.PSG.CallableKind.OrdinaryFlatClosure
+    | S.CallableKind.NativeEntry -> Fidelity.PSG.CallableKind.NativeEntry
 
 and mapCallableProgramInstance (value: S.CallableProgramInstance) : Fidelity.PSG.CallableProgramInstance =
     ({
@@ -1878,6 +2029,25 @@ and mapParticipantRole (value: S.ParticipantRole) : Fidelity.PSG.ParticipantRole
     | S.ParticipantRole.EnvironmentSpace -> Fidelity.PSG.ParticipantRole.EnvironmentSpace
     | S.ParticipantRole.EnvironmentDeclarationInput -> Fidelity.PSG.ParticipantRole.EnvironmentDeclarationInput
     | S.ParticipantRole.EnvironmentAuthorityInput -> Fidelity.PSG.ParticipantRole.EnvironmentAuthorityInput
+    | S.ParticipantRole.CallableContract -> Fidelity.PSG.ParticipantRole.CallableContract
+    | S.ParticipantRole.CallableCarrier -> Fidelity.PSG.ParticipantRole.CallableCarrier
+    | S.ParticipantRole.CallableFormation -> Fidelity.PSG.ParticipantRole.CallableFormation
+    | S.ParticipantRole.CallableImplementation -> Fidelity.PSG.ParticipantRole.CallableImplementation
+    | S.ParticipantRole.CallableEnvironment -> Fidelity.PSG.ParticipantRole.CallableEnvironment
+    | S.ParticipantRole.CallableLifetime -> Fidelity.PSG.ParticipantRole.CallableLifetime
+    | S.ParticipantRole.CallableAdapter -> Fidelity.PSG.ParticipantRole.CallableAdapter
+    | S.ParticipantRole.AggregateSlot -> Fidelity.PSG.ParticipantRole.AggregateSlot
+    | S.ParticipantRole.AggregateDeclaration -> Fidelity.PSG.ParticipantRole.AggregateDeclaration
+    | S.ParticipantRole.AggregateConstruction -> Fidelity.PSG.ParticipantRole.AggregateConstruction
+    | S.ParticipantRole.AggregateValue -> Fidelity.PSG.ParticipantRole.AggregateValue
+    | S.ParticipantRole.AggregateSource -> Fidelity.PSG.ParticipantRole.AggregateSource
+    | S.ParticipantRole.AggregateInput -> Fidelity.PSG.ParticipantRole.AggregateInput
+    | S.ParticipantRole.AggregateWrite -> Fidelity.PSG.ParticipantRole.AggregateWrite
+    | S.ParticipantRole.AggregateReadFrontier -> Fidelity.PSG.ParticipantRole.AggregateReadFrontier
+    | S.ParticipantRole.AggregateSelector -> Fidelity.PSG.ParticipantRole.AggregateSelector
+    | S.ParticipantRole.AggregateConstructor -> Fidelity.PSG.ParticipantRole.AggregateConstructor
+    | S.ParticipantRole.AggregateTag -> Fidelity.PSG.ParticipantRole.AggregateTag
+    | S.ParticipantRole.AggregatePayload -> Fidelity.PSG.ParticipantRole.AggregatePayload
     | S.ParticipantRole.Site -> Fidelity.PSG.ParticipantRole.Site
     | S.ParticipantRole.Source -> Fidelity.PSG.ParticipantRole.Source
     | S.ParticipantRole.ExtentSource -> Fidelity.PSG.ParticipantRole.ExtentSource
@@ -2491,6 +2661,8 @@ and mapValueRepresentation (value: S.ValueRepresentation) : Fidelity.PSG.ValueRe
     | S.ValueRepresentation.Scalar(a0) -> Fidelity.PSG.ValueRepresentation.Scalar(mapSettledSlot a0)
     | S.ValueRepresentation.Buffer(a0, a1) -> Fidelity.PSG.ValueRepresentation.Buffer(a0, mapValueRepresentation a1)
     | S.ValueRepresentation.Record(a0, a1) -> Fidelity.PSG.ValueRepresentation.Record((a0 |> List.map (fun x -> (let (t0, t1) = x in (t0, mapValueRepresentation t1)))), a1)
+    | S.ValueRepresentation.CallableComponent(a0, a1) -> Fidelity.PSG.ValueRepresentation.CallableComponent(nodeId a0, mapValueRepresentation a1)
+    | S.ValueRepresentation.Union(a0, a1) -> Fidelity.PSG.ValueRepresentation.Union((a0 |> List.map (fun x -> (let (t0, t1) = x in (t0, (t1 |> List.map (fun x -> mapValueRepresentation x)))))), a1)
     | S.ValueRepresentation.Tag(a0) -> Fidelity.PSG.ValueRepresentation.Tag(a0)
 
 and mapWidthDimension (value: N.WidthDimension) : Fidelity.PSG.WidthDimension =

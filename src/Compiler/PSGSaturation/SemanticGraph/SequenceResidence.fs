@@ -108,7 +108,7 @@ let private analyzeCore allowGenerators environmentSites (graph: SemanticGraph) 
         | Some { Kind = SemanticKind.VarRef(_, Some source) | SemanticKind.TypeAnnotation(source, _) } -> intrinsic seen source
         | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> intrinsic seen value
         | _ -> None
-    let getEnumerator node =
+    let getEnumerator (node: SemanticNode) =
         match node.Kind with
         | SemanticKind.Application(callee, [input]) ->
             match intrinsic Set.empty callee with

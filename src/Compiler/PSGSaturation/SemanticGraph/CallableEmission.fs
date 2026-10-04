@@ -79,7 +79,9 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
     let resolution = CallableOrigins.resolveCallableBranches graph
     let origins = ClosureEnvironments.origins graph
     let known = ClosureEnvironments.knownCallables graph
-    let carriers, _ = CallableCarriers.settleWithResolution resolution { Layouts = codata.EnvironmentLayouts; Origins = origins; Known = known } graph
+    let carriers, _ = CallableCarriers.settleWithResolution resolution
+                        { Layouts = codata.EnvironmentLayouts; Origins = origins; Known = known
+                          Contracts = codata.CallableContracts } graph
     let storage = MutableCallableStorage.settle carriers codata.EnvironmentLayouts graph
     let flows, _ = CallableFlows.settleWithResolution resolution
                         { Carriers = carriers; Joins = storage.Joins; Layouts = codata.EnvironmentLayouts
@@ -359,6 +361,9 @@ let projectWithDemand (graph: SemanticGraph) (ordinary: OrdinaryDemandProjection
     Result.Ok {
         Branches = codata.CallableBranches
         Carriers = codata.CallableCarriers; Joins = codata.CallableJoins; Flows = codata.CallableFlows
+        Contracts = codata.CallableContracts
+        AggregateSlots = codata.CallableAggregateSlots; AggregateValues = codata.CallableAggregateValues
+        AggregateDependencies = codata.CallableAggregateDependencies
         MutableStorage = codata.MutableCallableStorage; ValueShapes = shapes; SignatureData = signatureData
         Calls = calls; Transports = transports; Declarations = declarations; Symbols = symbols
         IntrinsicAliases = intrinsicAliases; ProgramInstances = programInstances

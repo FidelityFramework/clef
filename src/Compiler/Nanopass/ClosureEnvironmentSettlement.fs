@@ -339,7 +339,8 @@ let programInstance (graph: SemanticGraph) binding : ProgramInstance option =
         let candidates = programSites graph
         let layouts = codata.EnvironmentLayouts |> Map.filter (fun owner layout -> owner = layout.Owner && validLayout graph layout)
         let carriers, _ = Carriers.settle
-                                { Layouts = layouts; Origins = Environments.origins graph; Known = Environments.knownCallables graph } graph
+                                { Layouts = layouts; Origins = Environments.origins graph; Known = Environments.knownCallables graph
+                                  Contracts = graph.Codata.Value.CallableContracts } graph
         let carrier id =
             match carriers.TryFind id, codata.CallableCarriers.TryFind id with
             | Some current, Some held when current = held -> Some current

@@ -14,12 +14,13 @@ let info (binding: SemanticNode) body : ObligationInfo =
 
 let birth (graph: SemanticGraph) binding =
     let participants = Uses.scope graph binding
+    let sources = participants |> List.map (fun (participant: Participant) -> participant.Node)
     let node = obligationNode graph.Nodes[binding] (NodeId.value binding)
                    (info graph.Nodes[binding] (ObligationBody.Pending ["Current complete callable-slot read scopes have not been established."]))
     { NewNodes = [node]
-      NewEdges = [constrains (List.map _.Node participants) node
+      NewEdges = [constrains sources node
                   { Class = EdgeClass.Provenance; Role = EdgeRole.ProgramInitializationOrder participants
-                    Sources = List.map _.Node participants; Target = node.Id; Ordinal = 0 }
+                    Sources = sources; Target = node.Id; Ordinal = 0 }
                   { Class = EdgeClass.Provenance; Role = EdgeRole.ProgramInitializationOrderHistory participants
-                    Sources = List.map _.Node participants; Target = node.Id; Ordinal = 0 }]
+                    Sources = sources; Target = node.Id; Ordinal = 0 }]
       Annotated = [] }

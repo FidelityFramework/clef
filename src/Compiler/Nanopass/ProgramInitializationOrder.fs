@@ -31,7 +31,7 @@ let settleWithAccounts graph =
         let reading = Uses.read graph binding
         let obligation = graph.Nodes[edge.Target]
         let next = { obligation with Kind = SemanticKind.Obligation(Recipe.info graph.Nodes[binding] reading.Body) }
-        let sources = List.map _.Node reading.Participants
+        let sources = reading.Participants |> List.map (fun (participant: Participant) -> participant.Node)
         let edges = edges |> List.map (fun current ->
             if current.Target <> edge.Target then current else
             match current.Role with
@@ -71,7 +71,8 @@ let validateAccounts (graph: SemanticGraph) =
             match held.TryFind binding, rows with
             | Some account, [{ Class = EdgeClass.Provenance; Role = EdgeRole.ProgramInitializationOrder participants; Target = claim; Sources = sources; Ordinal = 0 }]
                 when bindings.Contains binding && account.Binding = binding && account.Claim = claim &&
-                     participants = reading.Participants && account.Participants = participants && sources = List.map _.Node participants ->
+                     participants = reading.Participants && account.Participants = participants &&
+                     sources = List.map (fun (participant: Participant) -> participant.Node) participants ->
                 match graph.Nodes.TryFind claim, graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = claim) with
                 | Some { Kind = SemanticKind.Obligation info }, [{ Class = EdgeClass.Obligation; Sources = actual; Ordinal = 0 }] ->
                     info = Recipe.info graph.Nodes[binding] reading.Body && actual = sources

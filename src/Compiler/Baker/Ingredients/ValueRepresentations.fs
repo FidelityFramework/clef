@@ -9,6 +9,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph
 
 module Identity = Clef.Compiler.NativeTypedTree.TypeIdentities
+module CallableTypes = Clef.Compiler.Baker.Ingredients.CallableAggregateTypes
 
 let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
            (elements: Map<NodeId, SettledSlot>) (elementTypes: Map<TypeIdentity, SettledSlot>)
@@ -20,22 +21,37 @@ let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
     let pointerBytes = graph.Platform |> Option.bind (fun p -> PlatformContext.tryWidth p "Pointer" |> Result.toOption)
                        |> Option.bind (fun bits -> if bits > 0 && bits % 8 = 0 then Some(bits / 8) else None)
     let mutable types = Map.empty<TypeIdentity, Result<ValueRepresentation, string>>
-    let rec represent visiting ty =
+    let rec represent (visiting: Set<TypeIdentity>) (ty: NativeType) = representAt visiting (Identity.ofType ty) [] ty
+    and representAt (visiting: Set<TypeIdentity>) (aggregateIdentity: TypeIdentity) (path: CallableAggregatePathStep list) (ty: NativeType) =
         let key = Identity.ofType ty
-        match types.TryFind key with
+        match (if path.IsEmpty then types.TryFind key else None) with
         | Some found -> found
         | None when Set.contains key visiting -> Error "Recursive inline type has no finite settled value representation."
         | None ->
             let next = Set.add key visiting
             let recurse = represent next
+            let componentValue (step: CallableAggregatePathStep) (fieldType: NativeType) =
+                let fieldPath = path @ [step]
+                match CallableTypes.callableKind fieldType with
+                | Some _ ->
+                    Placement.callableComponent graph aggregateIdentity fieldPath
+                    |> Result.bind (fun placement ->
+                        match graph.Codata.Value.CallableAggregateSlots.TryFind placement.Identity with
+                        | Some slot when slot.SourceType = Identity.ofType fieldType ->
+                            Ok(ValueRepresentation.CallableComponent(placement.Identity, placement.Data))
+                        | _ -> Error "Callable component declaration path has a different instantiated source type (CCS8414).")
+                | None ->
+                    match CallableTypes.shape graph fieldType with
+                    | Some _ -> representAt next aggregateIdentity fieldPath fieldType
+                    | None -> recurse fieldType
             let record (fields: (string * NativeType) list) =
                 match graph.Layouts.Value.TryFind key with
                 | Some(SettledLayout.Record(placed, size, alignment)) when List.map fst fields = List.map (fun (field: SettledField) -> field.Name) placed ->
-                    let representations = List.zip fields placed |> List.map (fun ((name, ty), (field: SettledField)) ->
+                    let representations = List.zip fields placed |> List.mapi (fun ordinal ((name, ty), (field: SettledField)) ->
                         let represented =
                             match field.Slot with
                             | SettledSlot.Integer _ | SettledSlot.Bool | SettledSlot.Char | SettledSlot.Real _ | SettledSlot.Unit -> scalar field.Slot
-                            | _ -> recurse ty
+                            | _ -> componentValue (CallableAggregatePathStep.RecordField ordinal) ty
                         represented |> Result.map (fun value -> name, value))
                     match representations |> List.tryPick (function Error e -> Some e | _ -> None) with
                     | Some reason -> Error reason
@@ -51,10 +67,29 @@ let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
                 | None -> Error "Record has no source-settled layout."
             let union () =
                 match graph.Layouts.Value.TryFind key with
-                | Some(SettledLayout.Union(cases, _, Some size, Some alignment)) when size > 0 && alignment > 0 ->
+                | Some(SettledLayout.Union(cases, payloadOffset, Some size, Some alignment)) when size > 0 && alignment > 0 ->
                     if fabric && (cases |> List.forall (snd >> Option.isNone)) then Ok(ValueRepresentation.Tag cases.Length)
                     elif fabric then Error "A payload union requires an admitted fabric representation."
-                    else bytes size
+                    else
+                        let hasComponents =
+                            graph.Codata.Value.CallableAggregateSlots.Values |> Seq.exists (fun slot ->
+                                slot.AggregateType = aggregateIdentity && List.length slot.Path >= List.length path &&
+                                List.take (List.length path) slot.Path = path)
+                        if not hasComponents then bytes size
+                        else
+                            match CallableTypes.shape graph ty, payloadOffset with
+                            | Some(CallableTypes.Shape.Union(_, sourceCases)), Some offset
+                                when List.map fst sourceCases = List.map fst cases ->
+                                let payloads = sourceCases |> List.mapi (fun caseOrdinal (name, fields) ->
+                                    let fields = fields |> List.mapi (fun payloadOrdinal (_, fieldType) ->
+                                        componentValue (CallableAggregatePathStep.UnionPayload(caseOrdinal, payloadOrdinal)) fieldType)
+                                    name, fields)
+                                match payloads |> List.collect snd |> List.tryPick (function Error reason -> Some reason | _ -> None) with
+                                | Some reason -> Error reason
+                                | None ->
+                                    let represented = payloads |> List.map (fun (name, fields) -> name, fields |> List.choose (function Ok field -> Some field | _ -> None))
+                                    Ok(ValueRepresentation.Union(represented, Some(offset, size, alignment)))
+                            | _ -> Error "Callable union components lack their exact declared cases and payload placement (CCS8414)."
                 | _ -> Error "Union has no complete source-settled representation."
             let nominal (tc: TypeConRef) args =
                 match tc.NTUKind with
@@ -63,8 +98,9 @@ let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
                 | Some NTUKind.NTUchar -> scalar SettledSlot.Char
                 | Some(NTUKind.NTUint(NTUWidth.Resolved WidthDimension.Pointer))
                 | Some(NTUKind.NTUuint(NTUWidth.Resolved WidthDimension.Pointer))
-                | Some(NTUKind.NTUsize | NTUKind.NTUdiff | NTUKind.NTUptr | NTUKind.NTUfnptr)
+                | Some(NTUKind.NTUsize | NTUKind.NTUdiff | NTUKind.NTUptr)
                 | Some(NTUKind.NTUlist | NTUKind.NTUmap | NTUKind.NTUset) -> scalar(SettledSlot.Pointer 1)
+                | Some NTUKind.NTUfnptr -> Error "Native callable values require their source-settled entry and callable components (CCS8410)."
                 | Some(NTUKind.NTUint _ | NTUKind.NTUuint _ as kind) ->
                     declared.TryFind kind |> Option.map scalar
                     |> Option.defaultValue (Error "An integer representation requires its exact settled value occurrence.")
@@ -126,7 +162,7 @@ let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
                 | NativeType.TVar _ -> Error "Type variable remains unresolved at source publication."
                 | NativeType.TMeasure _ -> Error "A physical dimension is not a runtime value."
                 | NativeType.TError reason -> Error reason
-            types <- types.Add(key, result)
+            if path.IsEmpty then types <- types.Add(key, result)
             result
     let scalarValues = carriers |> List.map (fun carrier -> carrier.Site, carrier) |> Map.ofList
     let codata = graph.Codata.Value
@@ -135,9 +171,10 @@ let settle (graph: SemanticGraph) (carriers: ScalarCarrier list)
         // Close every encountered native type under the source owner even when
         // its particular value has a more precise occurrence representation.
         let general = represent Set.empty node.Type
-        match scalarValues.TryFind id with
-        | Some carrier -> scalar carrier.Slot
-        | None ->
+        match CallableTypes.callableKind node.Type, scalarValues.TryFind id with
+        | Some _, _ -> general
+        | None, Some carrier -> scalar carrier.Slot
+        | None, None ->
             match codata.LazyOrigins.TryFind id, codata.EnvironmentOrigins.TryFind id, codata.SequenceOrigins.TryFind id with
             | Some _, _, _ when (match applySubst node.Type with NativeType.TLazy _ -> true | _ -> false) -> general
             | Some owner, _, _ ->

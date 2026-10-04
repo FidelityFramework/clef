@@ -115,6 +115,7 @@
     <Compile Include="IntrinsicWriteCases.fs" />
     <Compile Include="NumericPublicationCases.fs" />
     <Compile Include="PublicationContractCases.fs" />
+    <Compile Include="CallableAggregateCases.fs" />
     <Compile Include="LazyCallablePublicationCases.fs" />
     <Compile Include="PendingObligationCases.fs" />
     <Compile Include="NumericOperationCases.fs" />

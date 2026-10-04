@@ -111,6 +111,20 @@ module DiagnosticCodes =
     // Code generation (CCS8400-CCS8499)
     let CCS8400_CodeGenError = "CCS8400"
     let CCS8401_UnsupportedConstruct = "CCS8401"
+    // Callable aggregate protocol (error-handling.md; closure-representation.md §2.4).
+    // Code is never aggregate data; settled selectors and environments remain data.
+    let CCS8410_CallableAggregateDataPlacement = "CCS8410"
+    // The finite family's logical selector domain must be exactly its alternatives.
+    let CCS8411_CallableAggregateSelector = "CCS8411"
+    // Selected code and environment must belong to the same actual formation.
+    let CCS8412_CallableAggregatePairing = "CCS8412"
+    // One receiving contract identity, or an established adaptation to it, per slot.
+    let CCS8413_CallableAggregateContract = "CCS8413"
+    // Required formation, tag, selection or dependency evidence is absent, ambiguous or stale.
+    let CCS8414_CallableAggregateEvidence = "CCS8414"
+    // Only when commitment relies on an unproved exclusion; absent inactivity or
+    // unused-binding evidence normally preserves demand and is not itself an error.
+    let CCS8415_OrdinaryDemandExclusionEvidence = "CCS8415"
     // An own-project source function has no incoming reference in an executable.
     let CCS8500_UnusedBinding = "CCS8500"
     // Record field label resolution (CCS8701-CCS8705, inference-name-resolution.md)

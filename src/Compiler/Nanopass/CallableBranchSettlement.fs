@@ -18,7 +18,9 @@ let normalize (graph: SemanticGraph) =
     let carriers, carrierResiduals =
         Carriers.settleWithResolution resolution
             { Layouts = codata.EnvironmentLayouts; Origins = Environments.origins graph
-              Known = Environments.knownCallables graph } graph
+              Known = Environments.knownCallables graph; Contracts = codata.CallableContracts } graph
+    let contracts, carriers =
+        Clef.Compiler.Baker.Recipes.CallableContractRecipes.settle graph codata.EnvironmentLayouts codata.CallableContracts carriers
     // Existing storage/joins are not rewritten after their owning proof pass.
     // CallableEmission independently refuses any refined storage mismatch.
     let flows, flowResiduals =
@@ -26,9 +28,19 @@ let normalize (graph: SemanticGraph) =
             { Carriers = carriers; Joins = codata.CallableJoins; Layouts = codata.EnvironmentLayouts
               SequenceFlows = codata.SequenceFlows; SequenceFamilies = codata.SequenceFamilies } graph
     let graph = Graph.invalidateWitness graph
+    let refreshedStorage = codata.MutableCallableStorage |> Map.map (fun _ storage ->
+        let alternatives = storage.AlternativeCarriers |> List.map (fun carrier ->
+            carriers.TryFind carrier.Occurrence |> Option.defaultValue carrier)
+        { storage with AlternativeCarriers = alternatives })
+    let mutableStorage =
+        if refreshedStorage = codata.MutableCallableStorage then codata.MutableCallableStorage
+        else refreshedStorage
     let codata =
         { graph.Codata.Value with
-            CallableCarriers = carriers; CallableFlows = flows }
+            CallableContracts = contracts; CallableCarriers = carriers; CallableFlows = flows
+            // Contract settlement changes no storage protocol. Preserve every
+            // write/read/frontier and update only the referenced carrier rows.
+            MutableCallableStorage = mutableStorage }
     let graph = { graph with Codata = lazy codata }
     let authority = Recipe.settle graph
     { graph with Codata = lazy { codata with CallableBranches = authority } }, carrierResiduals, flowResiduals

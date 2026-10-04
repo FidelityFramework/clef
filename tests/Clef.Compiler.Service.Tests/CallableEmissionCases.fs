@@ -43,7 +43,7 @@ let main _ = if first 1 + second 2 = 13 then 0 else 1
         // A single Parent cannot describe the deliberately shared formal.
         builder.SetParent(used.Id, first.Id)
         let raw = builder.Build []
-        let inputs: EmittedCarriers.Inputs = { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty }
+        let inputs: EmittedCarriers.Inputs = { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty; Contracts = Map.empty }
         let carriers, residuals = EmittedCarriers.settle inputs raw
         Assert.Empty residuals
         let graph = { raw with Codata = lazy { raw.Codata.Value with CallableCarriers = carriers } }
@@ -122,6 +122,12 @@ let main _ = if choose true then 0 else 1
         let first, second = calls[0], calls[1]
         Assert.Equal(first.Implementation, second.Implementation)
         Assert.Equal(first.Environment, second.Environment)
+        Assert.Equal(first.Occurrence, first.Formation)
+        Assert.Equal(second.Occurrence, second.Formation)
+        Assert.NotEqual(first.Formation, second.Formation)
+        Assert.Equal(Some first.Occurrence, first.EnvironmentValue)
+        Assert.Equal(Some second.Occurrence, second.EnvironmentValue)
+        Assert.NotEqual(first.EnvironmentValue, second.EnvironmentValue)
         Assert.DoesNotContain(first.Occurrence, projection.Transports[second.Occurrence])
         Assert.DoesNotContain(second.Occurrence, projection.Transports[first.Occurrence])
 
@@ -136,11 +142,18 @@ let main _ = if choose true then 0 else 1
         let inputs: EmittedCarriers.Inputs =
             { Layouts = graph.Codata.Value.EnvironmentLayouts
               Origins = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.origins graph
-              Known = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.knownCallables graph }
+              Known = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments.knownCallables graph
+              Contracts = graph.Codata.Value.CallableContracts }
         let carriers, _ = EmittedCarriers.settle inputs graph
         let graph = { graph with Codata = lazy { graph.Codata.Value with CallableCarriers = carriers } }
         let projection = CallableEmissionFixture.project graph
         Assert.Contains(closure.Id, projection.Transports[outer.Id])
+        let original = projection.Carriers[closure.Id]
+        for alias in [inner.Id; outer.Id] do
+            let preserved = projection.Carriers[alias]
+            Assert.Equal(original.Formation, preserved.Formation)
+            Assert.Equal(original.EnvironmentValue, preserved.EnvironmentValue)
+            Assert.Equal(original.Contract, preserved.Contract)
         Assert.Contains(inner.Id, projection.Supports[outer.Id])
         Assert.Contains(closure.Id, projection.Supports[outer.Id])
         let changed = { graph with Nodes = graph.Nodes.Add(outer.Id, { outer with Children = [] }) }

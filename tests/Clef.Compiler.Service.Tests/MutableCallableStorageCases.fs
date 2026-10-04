@@ -50,7 +50,7 @@ module private MutableCallableFixture =
                                        NativeType.TFun(Types.unitType, ty), dummyRange)
         let opaque = builder.Create(SemanticKind.PatternBinding "unknown", ty, dummyRange)
         let raw = builder.Build []
-        let carriers, _ = MutableCarriers.settle { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty } raw
+        let carriers, _ = MutableCarriers.settle { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty; Contracts = Map.empty } raw
         let settled = MutableStorage.settle carriers Map.empty raw
         let codata =
             { raw.Codata.Value with

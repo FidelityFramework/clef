@@ -13,6 +13,7 @@ type Inputs = {
     Layouts: Map<NodeId, EnvironmentLayout>
     Origins: Map<NodeId, NodeId>
     Known: Map<NodeId, KnownCallable>
+    Contracts: Map<NodeId, CallableContract>
 }
 
 type Residual = { Occurrence: NodeId; Reason: string }
@@ -230,14 +231,33 @@ let settleWithResolution (resolution: CallableOrigins.Resolution) (inputs: Input
             elif directCaptures.IsNone then refuse node.Id "Callable direct-capture formals lack valid immutable source and typed parameter provenance."
             elif not publicTypeAgrees then refuse node.Id "Callable public signature disagrees after removing only its proved hidden formals."
             else
-                Some(node.Id,
+                let formation =
+                    CallableIngress.tryValueIdentity ingress node.Id
+                    |> Option.map _.Source |> Option.defaultValue node.Id
+                let environmentValue =
+                    environment |> Option.map (fun _ ->
+                        match graph.Nodes.TryFind formation with
+                        | Some { Kind = SemanticKind.ClosureValue(_, value) } -> value
+                        // A checked alias preserves the actual environment at
+                        // its value frontier. Separate factory calls and read
+                        // snapshots cannot collapse to a shared layout owner.
+                        | _ -> formation)
+                let carrier =
                     { Occurrence = node.Id; SourceType = sourceType node; Implementation = implementation
+                      Kind = CallableKind.OrdinaryFlatClosure
+                      Formation = formation; EnvironmentValue = environmentValue
+                      Contract = Error "Callable receiving convention awaits source settlement."
+                      // Layout/code identity supplies no retained lifetime.
+                      // The aggregate owner must carry the actual residence
+                      // premises before admitting a retained environment.
+                      Lifetime = []
                       Parameters = parameters
                       ParameterShapes = parameters |> List.map (fun (_, _, id) -> valueShape graph graph.Nodes[id])
                       OmittedParameters = OrdinaryDemand.parameters graph implementation
                       Result = body; ResultShape = valueShape graph graph.Nodes[body]
                       Environment = environment |> Option.map (fun known ->
-                          { Owner = known.EnvironmentOwner; Formal = inputs.Layouts[known.EnvironmentOwner].Formal }) })
+                          { Owner = known.EnvironmentOwner; Formal = inputs.Layouts[known.EnvironmentOwner].Formal }) }
+                Some(node.Id, Clef.Compiler.Baker.Ingredients.CallableContracts.assign graph inputs.Layouts inputs.Contracts carrier)
         | _ -> refuse node.Id "Callable implementation lacks a reachable capture-free physical lambda boundary."
     let carriers = graph.Nodes |> Map.toList |> List.choose (fun (_, node) ->
         match applySubst node.Type with

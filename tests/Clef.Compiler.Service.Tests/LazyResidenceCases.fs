@@ -574,7 +574,7 @@ let main _ =
 """
         let owner, contract = LazySource.instances graph |> Map.toList |> Assert.Single
         let inputs : Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.Inputs =
-            { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty }
+            { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty; Contracts = Map.empty }
         let carriers, residuals = Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.settle inputs graph
         Assert.DoesNotContain(residuals, fun pending -> pending.Occurrence = contract.Thunk)
         let code = carriers[contract.Thunk]

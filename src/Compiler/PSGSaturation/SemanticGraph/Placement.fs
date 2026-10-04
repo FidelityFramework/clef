@@ -30,6 +30,8 @@ open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.NativeTypedTree.Expressions.Intrinsics
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+module CallableTypes = Clef.Compiler.Baker.Ingredients.CallableAggregateTypes
+module CallableAccounts = Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts
 
 /// The words of the CPU leg's pointer-sized realisations (`SettledSlot.Pointer`): an address and
 /// a view of a buffer (a memref descriptor: two addresses, an
@@ -144,7 +146,8 @@ let private slotOfKind (p: Placer) (range: ValueRange) (kind: NTUKind) : Settled
     | NTUKind.NTUint (NTUWidth.Fixed _) | NTUKind.NTUuint (NTUWidth.Fixed _) -> carrierSlot p kind
     | NTUKind.NTUint (NTUWidth.Resolved WidthDimension.Pointer)
     | NTUKind.NTUuint (NTUWidth.Resolved WidthDimension.Pointer)
-    | NTUKind.NTUsize | NTUKind.NTUdiff | NTUKind.NTUptr | NTUKind.NTUfnptr -> SettledSlot.Pointer HandleWords
+    | NTUKind.NTUsize | NTUKind.NTUdiff | NTUKind.NTUptr -> SettledSlot.Pointer HandleWords
+    | NTUKind.NTUfnptr -> SettledSlot.Opaque "A native callable requires its source-settled component and entry contract (CCS8410)."
     | NTUKind.NTUfloat (NTUWidth.Fixed bits) | NTUKind.NTUposit (NTUWidth.Fixed bits, _) -> SettledSlot.Real bits
     | NTUKind.NTUfloat (NTUWidth.Resolved dim) | NTUKind.NTUposit (NTUWidth.Resolved dim, _) ->
         match p.Context |> Option.bind (fun ctx -> PlatformContext.tryWidth ctx (WidthDimension.name dim) |> Result.toOption) with
@@ -164,11 +167,7 @@ let rec private slotOf (p: Placer) (range: ValueRange) (ty: NativeType) : Settle
     match ty with
     | NativeType.TVar _ -> SettledSlot.Opaque (sprintf "the unresolved type variable %s" (formatType ty))
     | NativeType.TForall (_, body) -> slotOf p range body
-    // A function value is currently carried as a rank-one view of its code/env
-    // pair. Aggregate stores retain that view, not the two words it points at.
-    // Settling only the pointee size would let the descriptor overwrite the
-    // following field or the end of the aggregate allocation.
-    | NativeType.TFun _ -> SettledSlot.Pointer ViewWords
+    | NativeType.TFun _ -> SettledSlot.Opaque "A callable aggregate field requires its source-settled component protocol (CCS8410)."
     | NativeType.TTuple _ | NativeType.TAnon _ | NativeType.TUnion _
     | NativeType.TLazy _ | NativeType.TSeq _ | NativeType.TSeqEnumerator _ -> SettledSlot.Pointer ViewWords
     | NativeType.TNativePtr _ | NativeType.TByref _ | NativeType.TList _ | NativeType.TMap _ | NativeType.TSet _ -> SettledSlot.Pointer HandleWords
@@ -211,6 +210,113 @@ let extentOfSlot (graph: SemanticGraph) (slot: SettledSlot) =
     let pointerBytes = graph.Platform |> Option.bind (fun context -> PlatformContext.pointerSize context |> Result.toOption)
     extentOf { Boundaries = Map.empty; Graph = graph; Context = graph.Platform
                PointerBytes = pointerBytes; TupleRanges = Map.empty } slot
+
+/// Physical data for one declared callable component. The complete aggregate
+/// layout remains the containing record/union's responsibility. Offsets and
+/// extents in a callable row are relative to this component, never code bytes.
+type CallableComponentPlacement = {
+    Identity: NodeId
+    Data: ValueRepresentation
+    Bytes: int
+    Alignment: int
+}
+
+let callableComponent (graph: SemanticGraph) (aggregateType: TypeIdentity) (path: CallableAggregatePathStep list) : Result<CallableComponentPlacement, string> =
+    let facts = graph.Codata.Value
+    let slots = facts.CallableAggregateSlots.Values |> Seq.filter (fun slot -> slot.AggregateType = aggregateType && slot.Path = path) |> Seq.toList
+    match slots with
+    | [slot] ->
+        let rows = facts.CallableAggregateValues.Values |> Seq.collect id |> Seq.filter (fun row -> row.Slot = slot.Identity) |> Seq.toList
+        let pending reason = Error($"Callable component {NodeId.value slot.Identity}: {reason}")
+        let absent (row: CallableAggregateValue) =
+            row.Alternatives.IsEmpty && row.Selector.IsNone && row.Value.IsNone && row.SelectedAlternative.IsNone &&
+            (match path, row.Tag with
+             | CallableAggregatePathStep.UnionPayload(expectedCase, _) :: _, Some tag -> tag.CaseOrdinal <> expectedCase
+             | _ -> false)
+        let present = rows |> List.filter (fun row -> not row.Alternatives.IsEmpty)
+        let stale =
+            rows |> List.map _.Occurrence |> List.distinct
+            |> List.tryPick (fun occurrence ->
+                match CallableAccounts.current graph occurrence with Error reason -> Some reason | Ok _ -> None)
+        if rows.IsEmpty then pending "no current formation or proved absence row (CCS8414)."
+        elif stale.IsSome then pending stale.Value
+        elif rows |> List.exists (fun row -> row.Alternatives.IsEmpty && not (absent row)) then
+            pending "a missing alternative has no source constructor authority (CCS8414)."
+        elif present.IsEmpty then
+            if rows |> List.forall (fun row -> row.Bytes = 0 && row.Alignment = 1) then
+                Ok { Identity = slot.Identity; Data = ValueRepresentation.Record([], Some([], 0, 1)); Bytes = 0; Alignment = 1 }
+            else pending "an absent callable component has nonempty storage (CCS8410)."
+        else
+            let contract = slot.Contract |> Result.toOption |> Option.bind facts.CallableContracts.TryFind
+            match contract with
+            | None -> pending "receiving contract remains pending (CCS8413)."
+            | Some contract when contract.Kind = CallableKind.NativeEntry -> pending "native entry component realization remains pending (CCS8410)."
+            | Some contract ->
+                let physical (row: CallableAggregateValue) =
+                    if row.Bytes < 0 || row.Alignment <= 0 || (row.Alignment &&& (row.Alignment - 1)) <> 0 then
+                        Error "invalid component extent or alignment (CCS8410)."
+                    elif (row.Alternatives |> List.map _.Ordinal) <> [0 .. row.Alternatives.Length - 1] then
+                        Error "alternatives do not cover the exact selector domain (CCS8411)."
+                    elif row.Alternatives |> List.exists (fun alternative -> alternative.Contract <> contract.Identity) then
+                        Error "an alternative changed the receiving contract (CCS8413)."
+                    else
+                        let selector =
+                            match row.Selector with
+                            | Some selector when selector.Lower = 0 && selector.UpperExclusive = row.Alternatives.Length ->
+                                match selector.Storage, selector.Slot, selector.ByteOffset with
+                                | None, None, None when row.Alternatives.Length = 1 -> Ok []
+                                | Some _, Some(SettledSlot.Integer _ as scalar), Some offset ->
+                                    match extentOfSlot graph scalar with
+                                    | Some(bytes, alignment) -> Ok [offset, bytes, alignment, ValueRepresentation.Scalar scalar]
+                                    | None -> Error "selector has no admitted declared extent (CCS8411)."
+                                | _ -> Error "selector placement is incomplete (CCS8411)."
+                            | _ -> Error "selector domain does not match its alternatives (CCS8411)."
+                        let environments =
+                            row.Alternatives |> List.map (fun alternative ->
+                                match alternative.EnvironmentValue, alternative.EnvironmentPlacement, contract.EnvironmentBytes with
+                                | None, None, None -> Ok []
+                                | Some actual, Some placement, Some extent
+                                    when placement.Value = actual && placement.ViewBytes = extent && placement.ViewBytes >= 0 &&
+                                         placement.Adaptation.IsNone &&
+                                         extentOfSlot graph (SettledSlot.Pointer ViewWords) = Some(placement.StorageBytes, placement.Alignment) ->
+                                    Ok [placement.ByteOffset, placement.StorageBytes, placement.Alignment,
+                                        ValueRepresentation.Buffer(Some placement.ViewBytes, ValueRepresentation.Scalar(SettledSlot.Integer(8, None)))]
+                                | _ -> Error "environment placement lacks its exact admitted view (CCS8412).")
+                        match selector :: environments |> List.tryPick (function Error reason -> Some reason | _ -> None) with
+                        | Some reason -> Error reason
+                        | None ->
+                            // Equal physical views may be shared by mutually exclusive
+                            // alternatives. Their individual incidence stays in the rows.
+                            let pieces = selector :: environments |> List.choose (function Ok pieces -> Some pieces | _ -> None)
+                                         |> List.concat |> List.distinct |> List.sortBy (fun (offset, _, _, _) -> offset)
+                            let bounded = pieces |> List.forall (fun (offset, bytes, alignment, _) ->
+                                offset >= 0 && bytes >= 0 && alignment > 0 && offset % alignment = 0 &&
+                                bigint offset + bigint bytes <= bigint row.Bytes && row.Alignment % alignment = 0)
+                            let separated = pieces |> List.pairwise |> List.forall (fun ((offset, bytes, _, _), (next, _, _, _)) -> bigint offset + bigint bytes <= bigint next)
+                            if not bounded || not separated then Error "component data fields overlap or exceed their authored extent (CCS8410)."
+                            else
+                                let fields = pieces |> List.mapi (fun ordinal (_, _, _, representation) -> $"component{ordinal}", representation)
+                                let offsets = pieces |> List.map (fun (offset, _, _, _) -> offset)
+                                Ok(ValueRepresentation.Record(fields, Some(offsets, row.Bytes, row.Alignment)), row.Bytes, row.Alignment)
+                let placements = present |> List.map physical
+                match placements |> List.tryPick (function Error reason -> Some reason | _ -> None) with
+                | Some reason -> pending reason
+                | None ->
+                    match placements |> List.choose (function Ok placement -> Some placement | _ -> None) |> List.distinct with
+                    | [data, bytes, alignment] -> Ok { Identity = slot.Identity; Data = data; Bytes = bytes; Alignment = alignment }
+                    | _ -> pending "formation/read rows disagree on physical component placement (CCS8414)."
+    | [] -> Error "Callable component has no exact aggregate type and declaration-ordinal slot (CCS8410)."
+    | _ -> Error "Callable component repeats an aggregate type and declaration-ordinal slot (CCS8414)."
+
+let private componentSlot (p: Placer) key path range ty =
+    match CallableTypes.callableKind ty with
+    | Some _ ->
+        match callableComponent p.Graph key path with
+        | Ok componentData when p.Graph.Codata.Value.CallableAggregateSlots[componentData.Identity].SourceType = keyOf ty ->
+            SettledSlot.InlineBytes(componentData.Bytes, componentData.Alignment)
+        | Ok _ -> SettledSlot.Opaque "Callable component slot has a different instantiated source type (CCS8414)."
+        | Error reason -> SettledSlot.Opaque reason
+    | None -> slotOf p range ty
 
 let private alignUp (offset: int) (align: int) : int =
     if align <= 1 then offset else ((offset + align - 1) / align) * align
@@ -268,35 +374,37 @@ let private tupleRange (p: Placer) (key: TypeIdentity) (index: int) : ValueRange
 /// (a view), none for a case without a payload. A union payload of the bare integer kind has no
 /// settled range in this changeset (a DU payload is unobservable, CS-10 owed): its slot is the
 /// opaque stop `integerSlot` names, never a word supplied in the range's place.
-let private payloadSlot (p: Placer) (fields: (string option * NativeType) list) : SettledSlot option =
+let private payloadSlot (p: Placer) key caseOrdinal (fields: (string option * NativeType) list) : SettledSlot option =
     match fields with
     | [] -> None
-    | [ (_, ty) ] -> Some (slotOf p ValueRange.Unbounded ty)
+    | [ (_, ty) ] -> Some (componentSlot p key [CallableAggregatePathStep.UnionPayload(caseOrdinal, 0)] ValueRange.Unbounded ty)
+    | fields when fields |> List.exists (snd >> CallableTypes.callableKind >> Option.isSome) ->
+        Some(SettledSlot.Opaque "A multi-field callable union payload requires its settled component tuple placement (CCS8410).")
     | _ -> Some (SettledSlot.Pointer ViewWords)
 
 let private place (p: Placer) (a: Aggregate) : SettledLayout =
     match a with
-    | Aggregate.Record (_, name, fields) ->
+    | Aggregate.Record (key, name, fields) ->
         // Each instance has its own field types and layout. The existing constructor-keyed
         // range is a conservative join over every numeric write; keeping it does not change
         // dimensions or carriers, and cannot select a narrower representation for an instance.
         let declared = Map.tryFind name p.Boundaries
-        tile p (fields |> List.map (fun (field, ty) ->
+        tile p (fields |> List.mapi (fun ordinal (field, ty) ->
             let physical = declared |> Option.bind (fun d -> d.PhysicalFields |> List.tryFind (fun f -> f.Name = field && f.Count = 1))
             let slot =
                 match physical, Types.tryGetNTUKind ty with
                 | Some { Repr = "f32" }, Some (NTUKind.NTUfloat _) -> SettledSlot.Real 32
                 | Some { Repr = "f64" }, Some (NTUKind.NTUfloat _) -> SettledSlot.Real 64
-                | _ -> slotOf p (fieldRange p name field) ty
+                | _ -> componentSlot p key [CallableAggregatePathStep.RecordField ordinal] (fieldRange p name field) ty
             field, slot))
     | Aggregate.Tuple (key, elements) ->
-        tile p (elements |> List.mapi (fun i ty -> sprintf "Item%d" (i + 1), slotOf p (tupleRange p key i) ty))
-    | Aggregate.Union (_, cases) ->
-        union p (cases |> List.map (fun (caseName, fields) -> caseName, payloadSlot p fields))
-    | Aggregate.Option (_, inner) ->
-        union p [ ("None", None); ("Some", payloadSlot p [ (None, inner) ]) ]
-    | Aggregate.Result (_, ok, err) ->
-        union p [ ("Ok", payloadSlot p [ (None, ok) ]); ("Error", payloadSlot p [ (None, err) ]) ]
+        tile p (elements |> List.mapi (fun i ty -> sprintf "Item%d" (i + 1), componentSlot p key [CallableAggregatePathStep.RecordField i] (tupleRange p key i) ty))
+    | Aggregate.Union (key, cases) ->
+        union p (cases |> List.mapi (fun ordinal (caseName, fields) -> caseName, payloadSlot p key ordinal fields))
+    | Aggregate.Option (key, inner) ->
+        union p [ ("None", None); ("Some", payloadSlot p key 1 [ (None, inner) ]) ]
+    | Aggregate.Result (key, ok, err) ->
+        union p [ ("Ok", payloadSlot p key 0 [ (None, ok) ]); ("Error", payloadSlot p key 1 [ (None, err) ]) ]
 
 //-------------------------------------------------------------------------
 // Entry

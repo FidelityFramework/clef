@@ -29,14 +29,14 @@ module private DirectCapture =
         let binding = binding name result
         result.Graph.Nodes[binding.Children.Head]
 
-    let shape node =
+    let shape (node: SemanticNode) =
         match node.Kind with
         | SemanticKind.Lambda (parameters, body, captures, _, _) -> parameters, body, captures
         | other -> failwithf "Expected Lambda, got %A" other
 
     /// Read source formals and captures through the resident environment
     /// relation, while checking the additional physical formal separately.
-    let sourceShape (result: CheckResult) node =
+    let sourceShape (result: CheckResult) (node: SemanticNode) =
         match node.Kind with
         | SemanticKind.ClosureValue (implementation, environment) ->
             let code = result.Graph.Nodes[implementation]
@@ -423,7 +423,7 @@ let main _ =
 type DirectCaptureCarrierTests() =
     let settle graph =
         Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers.settle
-            { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty }
+            { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty; Contracts = Map.empty }
             { graph with Codata = lazy (failwith "Carrier settlement must not force final Codata") }
 
     let source = """

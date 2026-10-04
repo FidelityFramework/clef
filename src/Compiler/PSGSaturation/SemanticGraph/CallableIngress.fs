@@ -48,6 +48,7 @@ type Reading = private {
     Access: NodeId -> Access option
     StorageAccess: NodeId -> StorageAccess option
     SlotAccess: NodeId -> NodeId -> StorageAccess option
+    ValueIdentity: NodeId -> Access option
     Correspondence: NodeId -> NodeId -> Set<NodeId> option
     ClosedImplementation: NodeId -> Evidence option
 }
@@ -298,6 +299,9 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                 | Some instance, _, _ -> Some instance.Declaration
                 | _, SemanticKind.Binding(_, false, _, _), [value]
                 | _, SemanticKind.VarRef(_, Some value), _ | _, SemanticKind.TypeAnnotation(value, _), _ -> Some value
+                | _, SemanticKind.EagerExpr value, [child]
+                    when value = child && ExplicitDemand.operand graph id = Some value -> Some value
+                | _, SemanticKind.Sequential values, children when values = children -> List.tryLast values
                 | _ -> None
             match next with
             | None -> Some(id, Set.singleton id)
@@ -702,6 +706,11 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
             | Some { Kind = SemanticKind.Match(_, cases) } -> all (cases |> List.map _.Body)
             | Some { Kind = SemanticKind.CaseElimination(_, cases) } -> all (cases |> List.map _.Body)
             | Some { Kind = SemanticKind.EnvironmentRead(environment, slot) } -> capturedValue environment slot |> Option.bind (fun value -> all [value])
+            | Some { Kind = SemanticKind.FieldGet _ | SemanticKind.TupleGet _ | SemanticKind.DUEliminate _ } ->
+                Clef.Compiler.Baker.Ingredients.CallableAggregateProjections.read resolution id
+                |> Option.bind (fun reading ->
+                    all reading.Inputs |> Option.map (fun (proof, leaves) ->
+                        { proof with Participants = Set.union proof.Participants reading.Participants }, leaves))
             | Some { Kind = SemanticKind.FrameRead _ } ->
                 continuationSource Set.empty id |> Option.bind (fun (source, participants) ->
                     occurrence true seen source |> Option.map (fun (proof, leaves) ->
@@ -763,6 +772,9 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
     { Evidence = evidence; RetainedEvidence = retained; Access = access
       StorageAccess = fun id -> storageAccess id |> Option.map fst
       SlotAccess = slotAccess
+      ValueIdentity = fun id ->
+          originalIdentity Set.empty id |> Option.map (fun (source, participants) ->
+              { Source = source; Participants = participants })
       ClosedImplementation = closedImplementation
       Correspondence = fun source current -> corresponds Set.empty Set.empty source current }
 
@@ -801,6 +813,10 @@ let closedFormalInputs (graph: SemanticGraph) (resolution: CallableOrigins.Resol
 /// they remain absent from executable occurrence admission.
 let tryRetainedEvidence reading occurrence = reading.RetainedEvidence.TryFind occurrence
 let tryAccess reading occurrence = reading.Access occurrence
+/// Immutable aliases preserve one actual formation frontier. Calls, formals,
+/// captured reads and frame reads remain distinct value instances; this never
+/// follows a call result into its shared code/environment template.
+let tryValueIdentity reading occurrence = reading.ValueIdentity occurrence
 /// Complete current scalar storage inputs, without asserting callable identity.
 let tryStorageAccess reading occurrence = reading.StorageAccess occurrence
 /// Current control slot inputs under the checked cut/resume and storage census.

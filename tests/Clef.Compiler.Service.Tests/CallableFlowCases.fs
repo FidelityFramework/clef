@@ -58,7 +58,7 @@ module private CallableFlowFixture =
         Assert.True((Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read raw).IsSome)
         // This raw fixture owns the upstream stages normally run by checking.
         let raw = demand raw
-        let carriers, errors = FlowCarriers.settle { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty } raw
+        let carriers, errors = FlowCarriers.settle { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty; Contracts = Map.empty } raw
         Assert.Empty errors
         let inputs: Flows.Inputs =
             { Carriers = carriers; Joins = Map.empty; Layouts = Map.empty
@@ -95,7 +95,7 @@ type CallableFlowCases() =
         let evidence = Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress.tryEvidence ingress formal |> Option.get
         Assert.Contains(markerId, evidence.Participants)
         Assert.Contains(evidence.Calls, fun row -> row.Site = callId && List.head row.Arguments = markerId)
-        let carriers, errors = FlowCarriers.settle { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty } graph
+        let carriers, errors = FlowCarriers.settle { Layouts = Map.empty; Origins = Map.empty; Known = Map.empty; Contracts = Map.empty } graph
         Assert.Empty errors
         let inputs: Flows.Inputs =
             { Carriers = carriers; Joins = Map.empty; Layouts = Map.empty; SequenceFlows = Map.empty; SequenceFamilies = Map.empty }

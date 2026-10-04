@@ -229,6 +229,21 @@ let private nodeInput (node: SemanticNode) =
 
 let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveScope: WitnessLiveScopePlan) : WitnessSegmentation =
     let codata = { graph.Codata.Value with WitnessEmission = None; WitnessSegmentation = None; WitnessLiveScope = None; WitnessPreparedRows = None; WitnessLiveRows = None; WitnessPublishedRows = None; ProofDispatch = None }
+    // Relation identities are not executable citizens. Admit only the two
+    // authored relation tables, with exact filing and source/codata agreement;
+    // every other unknown NodeId remains an error in the structural encoder.
+    if emission.Callable.Contracts <> codata.CallableContracts ||
+       emission.Callable.AggregateSlots <> codata.CallableAggregateSlots then
+        invalidOp "Callable relation tables disagree with their current source codata."
+    let relationIdentities =
+        let add label (key: NodeId) (identity: NodeId) (names: Map<NodeId, string>) =
+            if key <> identity || graph.Nodes.ContainsKey key || Map.containsKey key names then
+                invalidOp "A callable relation identity is misfiled or collides with another source identity."
+            Map.add key (label + string (NodeId.value key)) names
+        let contracts = emission.Callable.Contracts |> Map.fold (fun names key (row: CallableContract) ->
+            add "callable-contract:" key row.Identity names) Map.empty
+        emission.Callable.AggregateSlots |> Map.fold (fun names key (row: CallableAggregateSlot) ->
+            add "callable-aggregate-slot:" key row.Identity names) contracts
     // Evidence supports remain current graph citizens and are discharged anew
     // for every revision. The witness key compares the settled interface those
     // proofs justify, rather than carrying a previous revision's proof receipt.
@@ -312,6 +327,33 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
                         if interfaces.Keys |> Seq.exists identities.ContainsKey then
                             invalidOp "Numeric declaration is not external to its scalar region."
                         let identities = Map.fold (fun identities id name -> Map.add id name identities) identities interfaces
+                        let contracts =
+                            emission.Callable.Contracts |> Map.filter (fun _ (contract: CallableContract) ->
+                                contract.Kind = CallableKind.OrdinaryFlatClosure &&
+                                (match contract.Participants |> List.filter (fun participant -> participant.Role = ParticipantRole.CallableImplementation) with
+                                | [implementation] when implementation.Group = contract.Identity && implementation.Ordinal = 0 ->
+                                    own.Contains implementation.Node
+                                | _ -> false))
+                        let contractNames = contracts |> Map.map (fun _ contract ->
+                            let implementation = contract.Participants |> List.find (fun participant -> participant.Role = ParticipantRole.CallableImplementation)
+                            "callable-contract:" + identities[implementation.Node])
+                        if (contractNames.Values |> Set.ofSeq |> Set.count) <> contractNames.Count then
+                            invalidOp "A scalar interface has ambiguous receiving contract identities."
+                        let identities = Map.fold (fun names id name ->
+                            if Map.containsKey id names then invalidOp "A callable contract collides with its scalar interface."
+                            Map.add id name names) identities contractNames
+                        // As with scalar carriers and operationInput above,
+                        // only the reusable code fingerprint separates proof
+                        // support from the settled receiving interface. Full
+                        // signature/physical maps and local roles stay encoded;
+                        // complete public rows and current proof discharge are
+                        // unchanged. External non-proof roles still refuse the
+                        // candidate through the ordinary identity encoder.
+                        let contractInterface = contracts |> Map.map (fun _ contract ->
+                            { contract with Participants = contract.Participants |> List.filter (fun participant -> participant.Role <> ParticipantRole.Source) })
+                        let contractSupports = contracts.Values |> Seq.collect (fun contract ->
+                            contract.Participants |> Seq.map (fun (participant: Participant) -> participant.Node) |> Seq.filter graph.Nodes.ContainsKey) |> Set.ofSeq
+                        let supports = Set.union supports contractSupports
                         // Numeric selection reads the source declaration family,
                         // including absence/uniqueness. Fresh whole-graph proof
                         // remains mandatory; retain its complete current support.
@@ -320,7 +362,10 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
                             Set.union supports (graph.Nodes.Keys |> Set.ofSeq)
                         let encode = encoder identities
                         let ownTypes = own |> Set.map (fun id -> Clef.Compiler.NativeTypedTree.TypeIdentities.ofType graph.Nodes[id].Type)
-                        let scope value = scoped own ownTypes encode value
+                        let ownFacts = Set.union own (contractNames.Keys |> Set.ofSeq)
+                        let scope value = scoped ownFacts ownTypes encode value
+                        let witnessInputs = { witnessInputs with Callable = { witnessInputs.Callable with Contracts = contractInterface } }
+                        let localCodata = { localCodata with CallableContracts = contractInterface }
                         let inputs =
                             [ (if comparisons.IsEmpty then "scalar-v1" else "scalar-comparison-v1"); moduleName; name
                               ordered |> List.map (fun id -> encode (nodeInput graph.Nodes[id])) |> String.concat "|"
@@ -349,7 +394,10 @@ let project (graph: SemanticGraph) (emission: WitnessEmissionProjection) (liveSc
     let regions = candidates |> List.groupBy _.Identity |> List.choose (fun (_, group) -> if group.Length = 1 then Some group.Head else None)
     let owned = regions |> List.fold (fun all region -> Set.union all region.Members) Set.empty
     let all = graph.Nodes |> Map.toSeq |> Seq.map fst |> Set.ofSeq
-    let complete = encoder (all |> Set.toSeq |> Seq.map (fun (NodeId id as node) -> node, string id) |> Map.ofSeq)
+    let complete =
+        all |> Set.toSeq |> Seq.map (fun (NodeId id as node) -> node, string id) |> Map.ofSeq
+        |> fun identities -> Map.fold (fun names id name -> Map.add id name names) identities relationIdentities
+        |> encoder
     let current label value =
         try complete value
         with :? InvalidOperationException as error -> invalidOp ("Common witness input " + label + ": " + error.Message)
