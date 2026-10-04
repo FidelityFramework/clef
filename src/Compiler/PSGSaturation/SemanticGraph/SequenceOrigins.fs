@@ -23,8 +23,37 @@ let settle (graph: SemanticGraph) (_curry: CurryInfo) =
     // callable is a separate invocation; its arguments are not flattened into
     // the first call. Opaque alternatives remain visible beside known targets.
     let calls = CallableOrigins.resolve graph
+    // A realized sequence/iterator read inherits only its complete current
+    // storage inputs. Retained slot names and propagated origin annotations
+    // are not authority for the value physically held in that slot.
+    let continuationIngress = lazy (CallableIngress.analyzeWith graph calls)
     let parameterInputs =
         calls.ParameterInputs |> Map.map (fun _ inputs -> inputs |> List.map snd |> List.distinct)
+    // The computed and cached arms return the same thunk result only under
+    // the current formation and store-before-publication protocol. This is
+    // source-origin correspondence, not equality of runtime instances or
+    // evidence that the deferred body has already executed.
+    let lazySources, capturedLazySource =
+        if graph.Edges |> List.exists (fun edge -> edge.Role = EdgeRole.LazyInstance) then
+            let settled = LazyValues.settle graph
+            let sources =
+                if not settled.Residuals.IsEmpty then Map.empty
+                else
+                    settled.Forces.Values |> Seq.collect (fun force ->
+                        match settled.Instances.TryFind force.Formation, nodes.TryFind force.CachedRead with
+                        | Some instance, Some { Kind = SemanticKind.LazyRead(environment, _); Children = [actual] }
+                            when environment = actual ->
+                            [force.Site, instance.ThunkBody; force.Conditional, instance.ThunkBody
+                             force.CachedRead, instance.ThunkBody]
+                        | _ -> [])
+                    |> Seq.groupBy fst
+                    |> Seq.choose (fun (site, rows) ->
+                        match rows |> Seq.map snd |> Seq.distinct |> Seq.toList with
+                        | [body] -> Some(site, body)
+                        | _ -> None)
+                    |> Map.ofSeq
+            sources, LazyValues.tryCapturedSourceReference graph
+        else Map.empty, (fun _ -> None)
     let environmentInputs =
         graph.Edges |> List.choose (fun edge ->
             match edge.Class, edge.Role, edge.Sources, nodes.TryFind edge.Target with
@@ -66,20 +95,33 @@ let settle (graph: SemanticGraph) (_curry: CurryInfo) =
         let next = tracked |> Map.map (fun id node ->
             let unknown () = Set.singleton (Origin.Unknown id)
             let produced =
-                match node.Kind with
-                | SemanticKind.SeqExpr _ -> Set.singleton (Origin.Known id)
-                | SemanticKind.ContinuationAllocate owner -> Set.singleton (Origin.Known owner)
-                | SemanticKind.Binding _ -> union node.Children
-                | SemanticKind.VarRef (_, Some declaration) -> read declaration
-                | SemanticKind.PatternBinding _ ->
+                match lazySources.TryFind id, node.Kind with
+                | Some body, _ -> read body
+                | None, SemanticKind.SeqExpr _ -> Set.singleton (Origin.Known id)
+                | None, SemanticKind.ContinuationAllocate owner -> Set.singleton (Origin.Known owner)
+                | None, SemanticKind.Binding _ -> union node.Children
+                | None, SemanticKind.VarRef (_, Some declaration) -> read declaration
+                | None, SemanticKind.PatternBinding _ ->
                     match parameterInputs.TryFind id with Some arguments -> union arguments | None -> unknown ()
-                | SemanticKind.EnvironmentRead(environment, slot) ->
+                | None, SemanticKind.EnvironmentRead(environment, slot) ->
                     environmentInput environment slot |> Option.map read |> Option.defaultWith unknown
-                | SemanticKind.TypeAnnotation (value, _) -> read value
-                | SemanticKind.EagerExpr value when ExplicitDemand.operand graph id = Some value -> read value
-                | SemanticKind.Sequential values -> values |> List.tryLast |> Option.map read |> Option.defaultWith unknown
-                | SemanticKind.IfThenElse (_, yes, Some no) -> union [yes; no]
-                | SemanticKind.Application (callee, [argument]) ->
+                | None, SemanticKind.FrameRead _ ->
+                    match CallableIngress.tryStorageAccess continuationIngress.Value id with
+                    | Some access when not access.Inputs.IsEmpty &&
+                                       (access.Inputs |> List.forall (fun (_, value) ->
+                                           nodes.TryFind value |> Option.exists (fun value -> sequenceType value.Type))) ->
+                        access.Inputs |> List.map snd |> union
+                    | _ -> unknown ()
+                | None, SemanticKind.LazyRead _ ->
+                    capturedLazySource id |> Option.bind (fun declaration ->
+                        match nodes.TryFind declaration with
+                        | Some { Kind = SemanticKind.Binding(_, false, _, _) | SemanticKind.PatternBinding _ } -> Some(read declaration)
+                        | _ -> None) |> Option.defaultWith unknown
+                | None, SemanticKind.TypeAnnotation (value, _) -> read value
+                | None, SemanticKind.EagerExpr value when ExplicitDemand.operand graph id = Some value -> read value
+                | None, SemanticKind.Sequential values -> values |> List.tryLast |> Option.map read |> Option.defaultWith unknown
+                | None, SemanticKind.IfThenElse (_, yes, Some no) -> union [yes; no]
+                | None, SemanticKind.Application (callee, [argument]) ->
                     match nodes.TryFind callee with
                     | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Seq; Operation = "getEnumerator" } } -> read argument
                     | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "current" } } ->
@@ -90,7 +132,7 @@ let settle (graph: SemanticGraph) (_curry: CurryInfo) =
                                 | Origin.Unknown site -> Set.singleton (Origin.Unknown site)
                             Set.union values current) Set.empty
                     | _ -> callResult id
-                | SemanticKind.Application _ -> callResult id
+                | None, SemanticKind.Application _ -> callResult id
                 | _ -> unknown ()
             let assigned = mutations.TryFind id |> Option.map union |> Option.defaultValue Set.empty
             Set.union (read id) (Set.union produced assigned))

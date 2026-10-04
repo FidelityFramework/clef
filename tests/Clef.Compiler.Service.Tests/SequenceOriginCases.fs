@@ -230,3 +230,79 @@ let main _ = ignore inspect; 0
         else
             Assert.False(unique.ContainsKey read.Id)
             Assert.Equal<Set<SequenceOrigins.Origin>>(Set.singleton (SequenceOrigins.Origin.Unknown read.Id), facts[read.Id])
+
+    // Width Inference §2.2 preserves deferred source facts and the already
+    // computed memoized result. This does not establish sequence residence.
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Lazy sequence results preserve the actual constructor through both force arms and aliases`` captured =
+        let delayed = if captured then "input" else "seq { yield true }"
+        let graph = SequenceOriginFixture.check $"""
+[<EntryPoint>]
+let main _ =
+    let input = seq {{ yield false }}
+    let delayed = lazy ({delayed})
+    let alias = delayed
+    let first = Lazy.force alias
+    let second = Lazy.force delayed
+    ignore first
+    ignore second
+    0
+"""
+        let settled = Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues.settle graph
+        Assert.Empty settled.Residuals
+        Assert.Equal(2, settled.Forces.Count)
+        let contract = settled.Instances.Values |> Assert.Single
+        let unique, facts = SequenceOriginFixture.origins graph
+        let owner = unique[contract.ThunkBody]
+        if captured then Assert.Equal(unique[(SequenceOriginFixture.binding "input" graph).Id], owner)
+        for name in ["first"; "second"] do
+            let observed = SequenceOriginFixture.binding name graph
+            Assert.Equal(owner, unique[observed.Id])
+            Assert.Equal<Set<SequenceOrigins.Origin>>(Set.singleton (SequenceOrigins.Origin.Known owner), facts[observed.Id])
+        for force in settled.Forces.Values do
+            for site in [force.Site; force.Conditional; force.CachedRead] do
+                Assert.Equal(owner, unique[site])
+                Assert.Equal<Set<SequenceOrigins.Origin>>(Set.singleton (SequenceOrigins.Origin.Known owner), facts[site])
+
+    [<Fact>]
+    member _.``Changed lazy instance cache or publication cannot retain a unique sequence origin``() =
+        let graph = SequenceOriginFixture.check """
+[<EntryPoint>]
+let main _ =
+    let delayed = lazy (seq { yield true })
+    let observed = Lazy.force delayed
+    ignore observed
+    0
+"""
+        let settled = Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues.settle graph
+        Assert.Empty settled.Residuals
+        let force = settled.Forces.Values |> Assert.Single
+        let contract = settled.Instances[force.Formation]
+        let observed = SequenceOriginFixture.binding "observed" graph
+        let unique, _ = SequenceOriginFixture.origins graph
+        let owner = unique[observed.Id]
+        let cached = graph.Nodes[force.CachedRead]
+        let publication = graph.Nodes[force.Publication]
+        let invalidPublication =
+            match publication.Kind with
+            | SemanticKind.LazyWrite(environment, _, value) ->
+                { publication with Kind = SemanticKind.LazyWrite(environment, contract.Cached, value) }
+            | _ -> failwith "Expected computed-bit publication"
+        let unguardedId = NodeId.fresh()
+        let unguarded = { cached with Id = unguardedId; Parent = None }
+        let mutations =
+            [ { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.LazyInstance) }
+              { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.LazyMemoization) }
+              { graph with Nodes = graph.Nodes.Add(cached.Id, { cached with Children = [] }) }
+              { graph with Nodes = graph.Nodes.Add(publication.Id, invalidPublication) }
+              { graph with Nodes = graph.Nodes.Add(unguarded.Id, unguarded) } ]
+        for changed in mutations do
+            let current, facts = SequenceOriginFixture.origins changed
+            Assert.False(current.ContainsKey observed.Id)
+            Assert.Contains(facts[observed.Id], fun origin ->
+                match origin with SequenceOrigins.Origin.Unknown _ -> true | _ -> false)
+            let flow = (SequenceOrigins.settleFlows changed changed.Codata.Value.Curry)[observed.Id]
+            Assert.NotEmpty flow.Unknown
+        Assert.Equal(owner, (SequenceOriginFixture.origins graph |> fst)[observed.Id])

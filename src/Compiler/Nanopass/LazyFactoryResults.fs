@@ -164,4 +164,4 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) =
                                     not (changed.Contains edge.Target &&
                                         (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference || edge.Class = EdgeClass.Evaluation))))
                                         @ edges @ (changed |> Set.toList |> List.collect (fun id -> Incidence.structuralIncidence folded.Nodes[id])) }
-    updated, updatedCurry
+    RepresentationRanges.preserve graph updated, updatedCurry

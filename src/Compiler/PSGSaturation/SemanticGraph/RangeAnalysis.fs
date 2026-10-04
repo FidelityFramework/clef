@@ -144,7 +144,7 @@ type private Program = {
     FiniteCells: Map<NodeId, FiniteCellRanges.Bound>
     /// Complete owner-local payload incidence for a certified current read.
     /// Missing/unknown origin alternatives deliberately have no entry.
-    SequenceElements: Map<NodeId, NodeId * NodeId list>
+    SequenceElements: Map<NodeId, NodeId * (NodeId * NodeId) list>
     /// Graph-carried deferred body effects, validated against complete origins.
     SequencePullBodies: Map<NodeId, NodeId * NodeId list>
     SequenceInitializations: Set<NodeId>
@@ -152,6 +152,14 @@ type private Program = {
     /// Original captured declaration -> mode and exact formation initializer reads.
     /// Shared cells retain source storage identity; immutable slots retain snapshots.
     EnvironmentCaptures: Map<NodeId, bool * (NodeId * NodeId) list>
+    /// Current writes (or an immutable formation initializer) for a frame read.
+    /// Entries exist only after complete source/storage correspondence validation.
+    ContinuationInputs: Map<NodeId, ValueRange * (NodeId * NodeId) list>
+    /// Checked shared captures read the logical mutable cell, across all owners.
+    ContinuationCells: Map<NodeId, NodeId>
+    /// Actual frame writers admitted by the same complete storage census.
+    /// Mutable source slots retain their logical cell effect across the rewrite.
+    ContinuationWrites: Map<NodeId, NodeId>
     /// Exact cache declaration/read -> the validated instance's thunk result.
     /// This is an enclosure across dynamic instances, never instance equality.
     LazyResults: Map<NodeId, NodeId>
@@ -183,6 +191,8 @@ type private Program = {
     /// of the `if` itself), which is what makes a refinement representable when a node is shared
     /// between the guard and a branch.
     Refinements: Map<NodeId, Map<NodeId, Refinement list>>
+    /// Exact reads reached with a guard through the checked continuation machine.
+    ContinuationRefinements: Map<NodeId, Refinement list>
     /// A record type name -> its reachable constructions: the construction node and its (field, value) list.
     Constructions: Map<NominalTypeIdentity, (NodeId * (string * NodeId) list) list>
     /// A record type name -> the fields its definition declares at an integer type.
@@ -281,7 +291,8 @@ let rec private lambdaShape (nodes: Map<NodeId, SemanticNode>) (id: NodeId) : ((
         | None -> Some (parameters, body)
     | _ -> None
 
-/// The Lambda a function binding holds, if any (through a type annotation of the value).
+/// The Lambda an immutable function binding holds, if any. Mutable callable
+/// storage is resolved through the complete current origin family instead.
 let private lambdaOf (reachable: Map<NodeId, SemanticNode>) (bindingId: NodeId) : (NodeId * (string * NativeType * NodeId) list * NodeId) option =
     let rec ofValue (id: NodeId) (depth: int) =
         if depth > 4 then None
@@ -291,7 +302,7 @@ let private lambdaOf (reachable: Map<NodeId, SemanticNode>) (bindingId: NodeId) 
             | Some { Kind = SemanticKind.TypeAnnotation (inner, _) } -> ofValue inner (depth + 1)
             | _ -> None
     match Map.tryFind bindingId reachable with
-    | Some ({ Kind = SemanticKind.Binding _ } as binding) ->
+    | Some ({ Kind = SemanticKind.Binding (_, false, _, _) } as binding) ->
         binding.Children |> List.tryPick (fun childId -> ofValue childId 0)
     | _ -> None
 
@@ -489,6 +500,7 @@ let private readDefinition (program: Program) (id: NodeId) =
     | Some { Kind = SemanticKind.EnvironmentRead(_, slot) } when program.EnvironmentCaptures.ContainsKey slot -> Some slot
     | Some { Kind = SemanticKind.LazyRead _ } ->
         program.LazyCaptures.TryFind id |> Option.map (fun (slot, _, _, _) -> slot)
+    | Some { Kind = SemanticKind.FrameRead _ } -> program.ContinuationCells.TryFind id
     | _ -> None
 
 let private isLiteralBool (program: Program) (id: NodeId) (value: bool) : bool =
@@ -580,6 +592,16 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
                 | Some(slot, true, _, _) -> { noWrites with Definitions = Set.singleton slot }
                 | _ when program.LazyPrivateWrites.Contains node.Id -> noWrites
                 | _ -> unknownWrites
+            joinWrites (union effects node.Children) (joinWrites (read effects value) store)
+        | SemanticKind.FrameWrite(_, _, value) ->
+            let store =
+                match program.ContinuationWrites.TryFind node.Id with
+                | Some slot ->
+                    match program.Graph.Nodes.TryFind slot with
+                    | Some { Kind = SemanticKind.Binding(_, true, _, _) } -> { noWrites with Definitions = Set.singleton slot }
+                    | Some _ -> noWrites
+                    | None -> unknownWrites
+                | None -> unknownWrites
             joinWrites (union effects node.Children) (joinWrites (read effects value) store)
         | SemanticKind.Set (target, value) ->
             let store =
@@ -916,7 +938,18 @@ let private refine (r: ValueRange) (relation: Relation) (k: ValueRange) : ValueR
             | ValueRange.Endpoint.Finite l -> ValueRange.meet r (ValueRange.Above l)
             | _ -> r
         | Relation.Eq -> ValueRange.meet r (ValueRange.ofEndpoints klo khi)
-        | Relation.Ne -> r
+        | Relation.Ne ->
+            // An interval can exclude a singleton only at an established
+            // endpoint. An arbitrary inequality proves neither sign nor a
+            // finite bound, and a non-singleton comparison excludes no value.
+            match klo, khi, ValueRange.endpoints r with
+            | ValueRange.Endpoint.Finite value, ValueRange.Endpoint.Finite same,
+              Some(ValueRange.Endpoint.Finite lower, _) when value = same && value = lower ->
+                ValueRange.meet r (ValueRange.Above(value + bigint.One))
+            | ValueRange.Endpoint.Finite value, ValueRange.Endpoint.Finite same,
+              Some(_, ValueRange.Endpoint.Finite upper) when value = same && value = upper ->
+                ValueRange.meet r (ValueRange.Below(value - bigint.One))
+            | _ -> r
 
 //-------------------------------------------------------------------------
 // Reading the program
@@ -950,8 +983,20 @@ let private yieldsWithin (nodes: Map<NodeId, SemanticNode>) (rootId: NodeId) : N
 /// Consume finite Baker evidence, retaining its exact successful-pull dependency.
 /// Completeness against owner delimiters prevents a missing payload edge from
 /// silently narrowing the join. Unknown alternatives have no finite entry.
-let private sequenceElements (graph: SemanticGraph) =
+let private sequenceElements (ingress: Lazy<CallableIngress.Reading>)
+                             (currentCorrespondence: Lazy<Clef.Compiler.Baker.Ingredients.SequenceCurrentCorrespondence.Evidence list>)
+                             (graph: SemanticGraph) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
+    let lifted = currentCorrespondence.Value |> List.groupBy _.Source |> Map.ofList
+    let consumers = lazy (Clef.Compiler.Baker.Recipes.SequenceCurrentRecipes.structuralConsumers graph)
+    let protocols = System.Collections.Generic.Dictionary<NodeId, ContinuationCurrentInputs.Protocol option>()
+    let protocol owner =
+        match protocols.TryGetValue owner with
+        | true, value -> value
+        | _ ->
+            let value = ContinuationCurrentInputs.forOwner graph owner
+            protocols.Add(owner, value)
+            value
     let edges = graph.Edges |> List.filter (fun edge -> edge.Class = EdgeClass.Suspension)
     let byTarget = edges |> List.groupBy _.Target
     byTarget |> List.choose (fun (target, facts) ->
@@ -960,10 +1005,13 @@ let private sequenceElements (graph: SemanticGraph) =
         let payloads = sources EdgeRole.SequenceElementPayload
         let admissions = sources EdgeRole.SequenceElementAdmission
         let certified = sources EdgeRole.IteratorCurrentAdmitted
-        let completeAdmission =
+        let directAdmission =
             match admissions with
-            | [[enumerator; _; _] as dependency] ->
-                List.contains dependency certified && (dependency |> List.forall nodes.ContainsKey)
+            | [[enumerator; _; loop] as dependency] ->
+                certified = [dependency] && (dependency |> List.forall nodes.ContainsKey)
+                && (nodes.TryFind loop
+                    |> Option.bind (Clef.Compiler.Baker.Recipes.SequenceCurrentRecipes.forLoop graph consumers.Value)
+                    |> Option.exists (fun actual -> actual.Target = target && actual.Sources = dependency))
                 && (match nodes.TryFind target with
                     | Some { Kind = SemanticKind.Application (_, [iterator]) } ->
                         match nodes.TryFind iterator with
@@ -971,33 +1019,56 @@ let private sequenceElements (graph: SemanticGraph) =
                         | _ -> false
                     | _ -> false)
             | _ -> false
+        let representations = lifted.TryFind target |> Option.defaultValue []
         let ownerPairs = owners |> List.choose (function [iterator; owner] -> Some (iterator, owner) | _ -> None)
         let supplied = payloads |> List.choose (function [owner; payload] -> Some (owner, payload) | _ -> None) |> Set.ofList
         let expected = ownerPairs |> List.map (fun (_, owner) ->
             match nodes.TryFind owner with
             | Some { Kind = SemanticKind.SeqExpr (generator, _) } ->
-                let delimiters = edges |> List.filter (fun edge -> edge.Role = EdgeRole.Delimiter && edge.Sources = [owner; generator])
-                let values = delimiters |> List.choose (fun edge ->
-                    match nodes.TryFind edge.Target with
-                    | Some { Kind = SemanticKind.Yield value } when nodes.ContainsKey value -> Some (owner, value)
-                    | _ -> None)
-                if values.Length = delimiters.Length then Some values else None
+                match protocol owner with
+                | Some protocol ->
+                    // The source cuts delimit the complete element set. Their
+                    // actual machine writers provide its current scalar facts.
+                    protocol.CurrentSlot |> Option.bind (CallableIngress.trySlotAccess ingress.Value owner)
+                    |> Option.bind (fun storage ->
+                        let inputs = protocol.Cuts |> List.map (fun cut -> cut.Writer, cut.Value)
+                        if storage.InitialState.IsSome || Set.ofList inputs <> Set.ofList storage.Inputs then None
+                        else Some(protocol.Cuts |> List.map (fun cut -> (owner, cut.Payload), (cut.Writer, cut.Value))))
+                | None ->
+                    let delimiters = edges |> List.filter (fun edge -> edge.Role = EdgeRole.Delimiter && edge.Sources = [owner; generator])
+                    let livePayloads =
+                        nodes.TryFind generator |> Option.map (fun node -> yieldsWithin nodes node.Id |> Set.ofList)
+                        |> Option.defaultValue Set.empty
+                    let values = delimiters |> List.choose (fun edge ->
+                        match nodes.TryFind edge.Target with
+                        | Some { Kind = SemanticKind.Yield value } when nodes.ContainsKey value && livePayloads.Contains value ->
+                            Some ((owner, value), (edge.Target, value))
+                        | _ -> None)
+                    if values.Length = delimiters.Length then Some values else None
             | _ -> None)
         let iterators = ownerPairs |> List.map fst |> List.distinct
-        if not completeAdmission || not (List.isEmpty (sources EdgeRole.SequenceElementUnknown))
+        if (not directAdmission && representations.IsEmpty) || not (List.isEmpty (sources EdgeRole.SequenceElementUnknown))
            || List.isEmpty owners || ownerPairs.Length <> owners.Length
+           || (Set.ofList ownerPairs).Count <> ownerPairs.Length
            || supplied.Count <> payloads.Length || (expected |> List.exists Option.isNone) then None
         else
-            let expected = expected |> List.collect Option.get |> Set.ofList
+            let expected = expected |> List.collect Option.get
             match iterators with
-            | [iterator] when expected = supplied -> Some (target, (iterator, supplied |> Set.toList |> List.map snd |> List.distinct))
+            | [iterator] when Set.ofList (List.map fst expected) = supplied ->
+                let inputs = expected |> List.map snd |> List.distinct
+                let direct = if directAdmission then [target, (iterator, inputs)] else []
+                Some (direct @ (representations |> List.map (fun value -> value.Current, (value.Iterator, inputs))))
             | _ -> None)
+    |> List.concat
+    |> List.groupBy fst
+    |> List.choose (fun (_, values) -> match values with [value] -> Some value | _ -> None)
     |> Map.ofList
 
 /// Read only complete effect incidence. Origin validation prevents a deleted
 /// alternative from turning a partial body list into a closed write summary.
-/// The solver still reads the retained body IDs, never a post-range override.
-let private sequenceEffectSources (graph: SemanticGraph) =
+/// The solver reads the currently realized bodies named by that incidence.
+let private sequenceEffectSources (currentCorrespondence: Lazy<Clef.Compiler.Baker.Ingredients.SequenceCurrentCorrespondence.Evidence list>)
+                                  (graph: SemanticGraph) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let _, origins = SequenceOrigins.settle graph graph.Codata.Value.Curry
     let edges = graph.Edges |> List.filter (fun edge -> edge.Class = EdgeClass.Suspension)
@@ -1045,6 +1116,7 @@ let private sequenceEffectSources (graph: SemanticGraph) =
                 |> Option.bind (fun actual ->
                     if actual.Target = certificate.Target && actual.Sources = certificate.Sources then Some actual.Target else None)
             | _ -> None) |> Set.ofList
+    let currentReads = currentCorrespondence.Value |> List.fold (fun sites proof -> Set.add proof.Current sites) currentReads
     pullBodies, initializations, currentReads
 
 /// Formation incidence retains capture mode independently of subsequent source
@@ -1118,6 +1190,86 @@ let private lazyRangeSources (graph: SemanticGraph) =
                 settled.Forces.Values |> Seq.collect (fun force -> [force.ResultStore; force.Publication]) |> Set.ofSeq
             results, captures, privateWrites
 
+let private continuationSources (ingress: Lazy<CallableIngress.Reading>) (unaccountedCells: Set<NodeId>) (graph: SemanticGraph) =
+    let reads = graph.Nodes.Values |> Seq.filter (fun node ->
+        node.IsReachable &&
+        match node.Kind with SemanticKind.FrameRead _ -> true | _ -> false) |> Seq.toList
+    let accesses = reads |> List.choose (fun node ->
+        match CallableIngress.tryStorageAccess ingress.Value node.Id with
+        | Some access ->
+            // The shared storage protocol validates the exact writer census,
+            // types and every raw storage use. Scalar ranges join the current
+            // values; callable identity adds its own correspondence judgment.
+            // Neither transfer imports retained scalar range annotations.
+            if access.Inputs |> List.forall (fun (_, value) ->
+                graph.Nodes.TryFind value |> Option.exists _.IsReachable) then
+                Some(node, access)
+            else None
+        | _ -> None)
+    // Current is consumed through the iterator protocol, so its slot need not
+    // have an explicit FrameRead citizen. Validate its writers through the
+    // same slot census before classifying those stores as private effects.
+    let cutOwners =
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Class, edge.Role, edge.Sources with
+            | EdgeClass.Suspension, EdgeRole.SuspensionCut _, [owner; _; _] -> Some(edge.Target, owner)
+            | _ -> None)
+        |> List.groupBy fst
+        |> Map.ofList
+    let currentAccesses =
+        graph.Edges |> List.choose (fun edge ->
+            match edge.Class, edge.Role, edge.Sources, graph.Nodes.TryFind edge.Target with
+            | EdgeClass.Provenance, EdgeRole.ContinuationValue, [source], Some { Kind = SemanticKind.FrameWrite(_, slot, _); IsReachable = true } ->
+                match cutOwners.TryFind source with
+                | Some [_, owner] -> Some(owner, slot)
+                | _ -> None
+            | _ -> None)
+        |> List.distinct
+        |> List.choose (fun (owner, slot) -> CallableIngress.trySlotAccess ingress.Value owner slot)
+    // A second owner may write a shared cell without reading it. Its stores
+    // must participate before any owner may read the logical cell enclosure.
+    let sharedAccesses =
+        graph.Nodes.Values |> Seq.collect (fun node ->
+            match node.Kind with
+            | SemanticKind.SeqExpr(_, captured) when node.IsReachable ->
+                captured |> List.choose (fun capture ->
+                    if capture.IsMutable then
+                        capture.SourceNodeId |> Option.bind (CallableIngress.trySlotAccess ingress.Value node.Id)
+                    else None)
+            | _ -> []) |> Seq.toList
+    let allAccesses = (accesses |> List.map snd) @ currentAccesses @ sharedAccesses
+    let sharedCells =
+        allAccesses |> List.choose (fun access -> access.SharedCell |> Option.map (fun cell -> cell, access.Inputs))
+        |> List.groupBy fst
+        |> List.choose (fun (cell, owners) ->
+            let admitted = owners |> List.collect snd |> Set.ofList
+            let actual = graph.Nodes.Values |> Seq.choose (fun node ->
+                match node.Kind with
+                | SemanticKind.FrameWrite(_, slot, value) when node.IsReachable && slot = cell -> Some(node.Id, value)
+                | _ -> None) |> Set.ofSeq
+            if admitted = actual && not (unaccountedCells.Contains cell) then Some cell else None)
+        |> Set.ofList
+    let admittedAccess (access: CallableIngress.StorageAccess) =
+        access.SharedCell |> Option.forall (fun cell -> Set.contains cell sharedCells)
+    let ranges = accesses |> List.choose (fun (node, access) ->
+        if not (isRanged node) || access.SharedCell.IsSome then None else
+        let initial = access.InitialState |> Option.map (snd >> ValueRange.point) |> Option.defaultValue ValueRange.Empty
+        Some(node.Id, (initial, access.Inputs))) |> Map.ofList
+    let cells = accesses |> List.choose (fun (node, access) ->
+        if not (isRanged node) || not (admittedAccess access) then None else
+        access.SharedCell |> Option.map (fun cell -> node.Id, cell)) |> Map.ofList
+    let writes =
+        allAccesses |> List.filter admittedAccess |> List.collect (fun access ->
+            access.Inputs |> List.choose (fun (writer, value) ->
+                match graph.Nodes.TryFind writer with
+                | Some { Kind = SemanticKind.FrameWrite(_, slot, actual) } when actual = value && slot = access.Source -> Some(writer, slot)
+                | _ -> None))
+        |> List.groupBy fst
+        |> List.choose (fun (writer, inputs) ->
+            match inputs |> List.map snd |> List.distinct with [slot] -> Some(writer, slot) | _ -> None)
+        |> Map.ofList
+    ranges, cells, writes
+
 let private readProgram (context: PlatformContext option) (graph: SemanticGraph) : Program =
     let reachableNodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let ordered = reachableNodes |> Map.toList |> List.map snd
@@ -1126,8 +1278,28 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     let parents = parentIndex reachableNodes
     let candidates = escapingOf reachableNodes ordered parents
     let poisons = poisoningOf reachableNodes ordered
-    let sequencePulls, sequenceInitializations, sequenceCurrentReads = sequenceEffectSources graph
+    let continuationIngress = lazy (CallableIngress.analyze graph)
+    let currentCorrespondence = lazy (
+        if graph.Edges |> List.exists (fun edge -> edge.Role = EdgeRole.IteratorCurrentAdmitted && edge.Sources.Length > 3) then
+            Clef.Compiler.Baker.Ingredients.SequenceCurrentCorrespondence.read graph continuationIngress.Value
+        else [])
+    let sequencePulls, sequenceInitializations, sequenceCurrentReads = sequenceEffectSources currentCorrespondence graph
     let lazyResults, lazyCaptures, lazyPrivateWrites = lazyRangeSources graph
+    let environmentCaptures = environmentCaptureSources graph
+    // The shared cell may also be written by a closure or a lazy body. Every
+    // such store must enter the existing checked assignment census before a
+    // sequence read can use that cell's fresh enclosure.
+    let unaccountedCells =
+        ordered |> List.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.EnvironmentWrite(_, slot, _)
+                when not (environmentCaptures.TryFind slot |> Option.exists fst) -> Some slot
+            | SemanticKind.LazyWrite(_, slot, _) ->
+                match lazyCaptures.TryFind node.Id with
+                | Some(source, true, _, _) when source = slot -> None
+                | _ -> Some slot
+            | _ -> None) |> Set.ofList
+    let continuationInputs, continuationCells, continuationWrites = continuationSources continuationIngress unaccountedCells graph
     let baseProgram = {
         Graph = graph
         Context = context
@@ -1144,11 +1316,14 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         LoopLinear = Map.empty
         LazyEffects = Map.empty
         FiniteCells = Map.empty
-        SequenceElements = sequenceElements graph
+        SequenceElements = sequenceElements continuationIngress currentCorrespondence graph
         SequencePullBodies = sequencePulls
         SequenceInitializations = sequenceInitializations
         SequenceCurrentReads = sequenceCurrentReads
-        EnvironmentCaptures = environmentCaptureSources graph
+        EnvironmentCaptures = environmentCaptures
+        ContinuationInputs = continuationInputs
+        ContinuationCells = continuationCells
+        ContinuationWrites = continuationWrites
         LazyResults = lazyResults
         LazyCaptures = lazyCaptures
         LazyPrivateWrites = lazyPrivateWrites
@@ -1160,6 +1335,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         RootParameters = Map.empty
         Assignments = Map.empty
         Refinements = Map.empty
+        ContinuationRefinements = Map.empty
         Constructions = Map.empty
         IntegerFields = Map.empty
         InputSeeds = Map.empty
@@ -1316,6 +1492,14 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                 | Some(slot, true, _, _) ->
                     let existing = Map.tryFind slot acc |> Option.defaultValue []
                     Map.add slot (value :: existing) acc
+                | _ -> acc
+            | SemanticKind.FrameWrite(_, slot, value) ->
+                // A represented store still updates its logical mutable cell.
+                // Only the complete storage census may establish that identity.
+                match baseProgram.ContinuationWrites.TryFind node.Id, graph.Nodes.TryFind slot with
+                | Some source, Some { Kind = SemanticKind.Binding(_, true, _, _) } when source = slot ->
+                    let existing = Map.tryFind source acc |> Option.defaultValue []
+                    Map.add source (value :: existing) acc
                 | _ -> acc
             | _ -> acc) Map.empty
     let constructions =
@@ -1609,7 +1793,22 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                         SequenceAccumulationTargets = sequences |> List.collect (fun item -> [item.Cell, item; item.Update, item]) |> Map.ofList
                         LoopAccumulations = loops.Accumulations |> List.collect (fun item -> [item.Cell, item; item.Update, item]) |> Map.ofList
                         LoopLinear = loops.Linear |> List.collect (fun item -> item.Targets |> List.map (fun (id, index) -> id, (item, index))) |> Map.ofList }
-    { program with Refinements = refinementsOf program }
+    let continuationRefinements =
+        Clef.Compiler.Baker.Recipes.ContinuationGuardRecipes.forGraph program.Graph (fun id ->
+            match program.Effects.TryFind id with
+            | Some effect -> effect.Definitions, effect.Unknown
+            | None -> Set.empty, true)
+        |> List.collect (fun proof ->
+            atoms program 0 proof.Guard proof.Polarity
+            |> List.choose (fun (compared, refinement) ->
+                match compared with
+                | Compared.Node operand when operand = proof.Operand -> Some(proof.Read, refinement)
+                | Compared.Definition cell when cell = proof.Cell -> Some(proof.Read, refinement)
+                | _ -> None))
+        |> List.groupBy fst
+        |> List.map (fun (read, rows) -> read, rows |> List.map snd |> List.distinct)
+        |> Map.ofList
+    { program with Refinements = refinementsOf program; ContinuationRefinements = continuationRefinements }
 
 //-------------------------------------------------------------------------
 // The transfer function
@@ -1897,7 +2096,7 @@ let private applicationRange (program: Program) (state: State) (node: SemanticNo
     | Some (Callee.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "current" }, [iterator]) ->
         match program.SequenceElements.TryFind node.Id with
         | Some (actual, payloads) when actual = iterator ->
-            payloads |> List.fold (fun range payload -> ValueRange.join range (current state payload)) ValueRange.Empty
+            payloads |> List.fold (fun range (writer, payload) -> ValueRange.join range (read program state writer payload)) ValueRange.Empty
         | _ -> fallback
     | Some (Callee.Intrinsic info, args) ->
         let arguments =
@@ -1974,6 +2173,16 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
                     let valueRange = if program.Reachable.ContainsKey value then read program state formation value else fallback
                     ValueRange.join range valueRange) ValueRange.Empty |> Some
             | _ -> Some fallback
+        | SemanticKind.FrameRead _ ->
+            let value =
+                match program.ContinuationCells.TryFind node.Id, program.ContinuationInputs.TryFind node.Id with
+                | Some cell, _ -> get cell
+                | None, Some(initial, inputs) ->
+                    inputs |> List.fold (fun range (writer, value) ->
+                        ValueRange.join range (read program state writer value)) initial
+                | None, None -> fallback
+            let refinements = program.ContinuationRefinements.TryFind node.Id |> Option.defaultValue []
+            Some (refineBy state refinements value)
         | SemanticKind.LazyRead _ ->
             match program.LazyCaptures.TryFind node.Id with
             | Some(slot, true, _, _) when program.Reachable.ContainsKey slot -> Some (get slot)

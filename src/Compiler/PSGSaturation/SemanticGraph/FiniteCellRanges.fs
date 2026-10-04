@@ -11,6 +11,7 @@ open Clef.Compiler.NativeTypedTree.DimensionAlgebra
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Incidence = Clef.Compiler.Baker.Ingredients.Closures
 module Certificates = Clef.Compiler.Baker.Recipes.LoopRangeRecipes
+module Borrows = Clef.Compiler.Baker.Ingredients.SourceStorageBorrows
 
 type Write = { Store: NodeId; Value: NodeId; MaximumActivations: bigint; Scale: bigint; Offset: bigint }
 type Bound = {
@@ -279,9 +280,7 @@ let recognize (graph: SemanticGraph) : Bound list =
                 let dangerous = nodes.Values |> Seq.exists (fun useNode ->
                     match useNode.Kind with
                     | SemanticKind.VarRef(_, Some source) when source = cell -> not (same cell useNode.Id)
-                    | SemanticKind.AddressOf(value, _) -> readCell cell value
-                    | SemanticKind.CellAddress source -> source = cell
-                    | _ -> false)
+                    | _ -> Borrows.takesAddress (readCell cell) ((=) cell) useNode)
                 let invalidUses =
                     uses.TryFind cell |> Option.defaultValue [] |> List.exists (fun edge -> not (valid edge.Target)) ||
                     (graph.Edges |> List.exists (fun edge ->
@@ -356,13 +355,12 @@ let settle (bounds: Bound list) (graph: SemanticGraph) =
 /// Re-establish the complete current finite-cell certificate/row inventory in
 /// Baker before another owner may retain held ranges. This invokes source
 /// recognition, so publication must not call it.
-let evidenceCurrent (graph: SemanticGraph) =
+let private evidenceMatches (bounds: Bound list) (graph: SemanticGraph) =
     let obligations =
         graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
             match node.Kind with
             | SemanticKind.Obligation info when info.Kind = "finite-cell-effects" -> Some(id, info)
             | _ -> None)
-    let bounds = recognize graph
     let sameRows expected actual =
         let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
         (expected |> List.map key |> List.sort) = (actual |> List.map key |> List.sort)
@@ -384,3 +382,49 @@ let evidenceCurrent (graph: SemanticGraph) =
                   Sources = Set.toList bound.Participants; Target = id }
             sameRows [expected] (graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = id))
         | _ -> false))
+
+let evidenceCurrent (graph: SemanticGraph) = evidenceMatches (recognize graph) graph
+
+type RepresentationChange = {
+    Bound: Bound
+    PreviousParticipants: Set<NodeId>
+    Obligation: NodeId
+}
+
+let private representationInventory (graph: SemanticGraph) =
+    let proofs = graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
+        match node.Kind with
+        | SemanticKind.Obligation info when info.Kind = "finite-cell-effects" -> Some(id, info)
+        | _ -> None)
+    let ids = proofs |> List.map fst |> Set.ofList
+    let rows =
+        graph.Edges |> List.filter (fun edge ->
+            edge.Role = EdgeRole.FiniteCellRange ||
+            (edge.Role = EdgeRole.Constrains && ids.Contains edge.Target))
+        |> List.map (fun edge -> edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target)
+        |> List.sort
+    proofs, rows
+
+/// Recognize current transitions without held ranges. A new dependency set
+/// earns renewal only with the original inventory intact and the same complete
+/// writer/activation certificate. The owning nanopass performs any settlement.
+let tryRepresentationRenewal (before: SemanticGraph) (graph: SemanticGraph) =
+    let previousBounds = recognize before
+    let inventory = representationInventory before
+    if previousBounds.IsEmpty || not (evidenceMatches previousBounds before) ||
+       inventory <> representationInventory graph then None
+    else
+        let current = recognize graph
+        let recurrence (bound: Bound) = bound.Cell, bound.Writes, bound.Certificate
+        if (previousBounds |> List.map recurrence) <> (current |> List.map recurrence) then None
+        else
+            let proofs, _ = inventory
+            let previous = previousBounds |> List.map (fun bound -> bound.Cell, bound) |> Map.ofList
+            let changed = current |> List.choose (fun bound ->
+                let old = previous[bound.Cell]
+                if old.Participants = bound.Participants then None
+                else
+                    let name = sprintf "finite_cell_%d" (NodeId.value bound.Cell)
+                    let obligation = proofs |> List.find (fun (_, info) -> info.Id = name) |> fst
+                    Some { Bound = bound; PreviousParticipants = old.Participants; Obligation = obligation })
+            if changed.IsEmpty then None else Some changed

@@ -7,6 +7,7 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
 module FiniteCells = Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges
 module CellRanges = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis
+module RepresentationRanges = Clef.Compiler.Nanopass.RepresentationRanges
 
 module private FiniteCellFixture =
     let private parse source =
@@ -63,6 +64,127 @@ let main _ =
     let analyze graph = CellRanges.run graph.Platform graph |> fst
     let obligations (graph: SemanticGraph) = graph.Nodes.Values |> Seq.filter (fun node ->
         match node.Kind with SemanticKind.Obligation info -> info.Kind = "finite-cell-effects" | _ -> false) |> Seq.toList
+
+    // Introduce a representation-preserving, independently typed transport of
+    // the initializer. Its new dependency invalidates the old inventory,
+    // while its current source meaning earns exactly the original recurrence.
+    let annotateInitializer (graph: SemanticGraph) =
+        let binding = cell graph
+        let initializer = graph.Nodes[Assert.Single binding.Children]
+        let annotation =
+            { initializer with Id = NodeId.fresh(); Parent = Some binding.Id
+                               Kind = SemanticKind.TypeAnnotation(initializer.Id, initializer.Type)
+                               Children = [initializer.Id]; Metadata = Map.empty; ValueRange = None }
+        let binding = { binding with Children = [annotation.Id] }
+        let edges =
+            graph.Edges |> List.filter (fun edge ->
+                edge.Target <> binding.Id ||
+                (edge.Class <> EdgeClass.Structural && edge.Class <> EdgeClass.Reference))
+            |> List.map (fun edge ->
+                // Carry the exact initializer correspondence through the same
+                // typed transport, preserving startup order and authority.
+                match edge.Role, edge.Sources with
+                | EdgeRole.ProgramInitializer, [owner; cell; value; entry]
+                    when cell = binding.Id && value = initializer.Id ->
+                    { edge with Sources = [owner; cell; annotation.Id; entry] }
+                | EdgeRole.ProgramValueIntent, [entry; spine; value]
+                    when edge.Target = binding.Id && value = initializer.Id ->
+                    { edge with Sources = [entry; spine; annotation.Id] }
+                | _ -> edge)
+        { graph with Nodes = graph.Nodes.Add(annotation.Id, annotation).Add(binding.Id, binding)
+                     Edges = edges @ (Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence binding) @
+                             (Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence annotation) }, annotation.Id
+
+module internal FiniteCellRepresentationFixture =
+    let annotateInitializer graph = FiniteCellFixture.annotateInitializer graph
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "FiniteCellRanges")>]
+type FiniteCellRepresentationCases() =
+    [<Fact>]
+    member _.``Representation renewal earns new participants from current source without held ranges`` () =
+        let original = FiniteCellFixture.check FiniteCellFixture.source
+        Assert.True(FiniteCells.evidenceCurrent original)
+        let previous = FiniteCellFixture.proof original
+        let changed, annotation = FiniteCellFixture.annotateInitializer original
+        let current = FiniteCellFixture.proof changed
+        Assert.Equal(previous.Cell, current.Cell)
+        Assert.Equal<FiniteCells.Write list>(previous.Writes, current.Writes)
+        Assert.Equal(previous.Certificate, current.Certificate)
+        Assert.DoesNotContain(annotation, previous.Participants)
+        Assert.Contains(annotation, current.Participants)
+        Assert.False(FiniteCells.evidenceCurrent changed)
+        // Remove all cached arithmetic annotations: only current source
+        // recognition may earn the replacement proof and its dependency rows.
+        let unannotated = { changed with Nodes = changed.Nodes |> Map.map (fun _ node -> { node with ValueRange = None }) }
+        let renewed = RepresentationRanges.preserve original unannotated
+        Assert.True(FiniteCells.evidenceCurrent renewed)
+        Assert.All(renewed.Nodes.Values, fun node -> Assert.True(node.ValueRange.IsNone))
+        let proof = FiniteCellFixture.obligations renewed |> Assert.Single
+        let originalProof = FiniteCellFixture.obligations unannotated |> Assert.Single
+        Assert.Same(originalProof, proof)
+        let constraintRow = renewed.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.Constrains && edge.Target = proof.Id) |> Assert.Single
+        Assert.Equal<Set<NodeId>>(current.Participants, Set.ofList constraintRow.Sources)
+        Assert.All(renewed.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.FiniteCellRange), fun edge ->
+            Assert.Equal<Set<NodeId>>(current.Participants, Set.ofList edge.Sources))
+        Assert.Same(renewed, RepresentationRanges.preserve renewed renewed)
+        Assert.True(FiniteCells.evidenceCurrent original)
+
+    [<Fact>]
+    member _.``Representation renewal cannot repair an invalid starting certificate`` () =
+        let original = FiniteCellFixture.check FiniteCellFixture.source
+        let proof = FiniteCellFixture.obligations original |> Assert.Single
+        let stale =
+            { original with
+                Edges = original.Edges |> List.filter (fun edge ->
+                    edge.Role <> EdgeRole.Constrains || edge.Target <> proof.Id) }
+        let changed, _ = FiniteCellFixture.annotateInitializer stale
+        Assert.False(FiniteCells.evidenceCurrent stale)
+        Assert.Same(changed, RepresentationRanges.preserve stale changed)
+        Assert.False(FiniteCells.evidenceCurrent changed)
+
+    [<Fact>]
+    member _.``Representation renewal refuses changed recurrence meaning`` () =
+        let original = FiniteCellFixture.check FiniteCellFixture.source
+        let initializer = original.Nodes[Assert.Single((FiniteCellFixture.cell original).Children)]
+        let literal =
+            match initializer.Kind with
+            | SemanticKind.Literal(NativeLiteral.Int(_, width)) -> NativeLiteral.Int(1L, width)
+            | kind -> failwithf "Missing literal initializer: %A" kind
+        let replacement = { initializer with Kind = SemanticKind.Literal literal }
+        let changed = { original with Nodes = original.Nodes.Add(initializer.Id, replacement) }
+        let fresh = FiniteCellFixture.proof changed
+        Assert.NotEqual((FiniteCellFixture.proof original).Certificate, fresh.Certificate)
+        Assert.Same(changed, RepresentationRanges.preserve original changed)
+        Assert.False(FiniteCells.evidenceCurrent changed)
+
+    [<Fact>]
+    member _.``Representation renewal refuses an additional activation of the same store`` () =
+        let original = FiniteCellFixture.check """
+[<EntryPoint>]
+let main _ =
+    let mutable state = 0
+    state <- state + 1
+    state <- state + 2
+    state
+"""
+        let previous = FiniteCellFixture.proof original
+        let store = previous.Writes.Head.Store
+        let parent = original.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.Sequential values -> List.contains store values | _ -> false) |> Assert.Single
+        let values = match parent.Kind with SemanticKind.Sequential values -> values | _ -> failwith "Missing store activation sequence"
+        let repeated = values |> List.collect (fun value -> if value = store then [value; value] else [value])
+        let parent = { parent with Kind = SemanticKind.Sequential repeated; Children = repeated }
+        let edges = original.Edges |> List.filter (fun edge ->
+            edge.Target <> parent.Id || (edge.Class <> EdgeClass.Structural && edge.Class <> EdgeClass.Reference))
+        let changed =
+            { original with
+                Nodes = original.Nodes.Add(parent.Id, parent)
+                Edges = edges @ Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence parent }
+        let fresh = FiniteCellFixture.proof changed
+        Assert.NotEqual<FiniteCells.Write list>(previous.Writes, fresh.Writes)
+        Assert.NotEqual(previous.Certificate, fresh.Certificate)
+        Assert.Same(changed, RepresentationRanges.preserve original changed)
+        Assert.False(FiniteCells.evidenceCurrent changed)
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "FiniteCellRanges")>]
 type FiniteCellRangeCases() =

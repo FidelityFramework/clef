@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 /// Re-fire only the finite-sequence accumulation projection. Stale proofs and
-/// anchors are retired before recognition, including loss of any source premise.
+/// anchors are retired in the owning fold, including loss of any source premise.
 module Clef.Compiler.Nanopass.SequenceAccumulations
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
@@ -9,22 +9,20 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Recipes = Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes
 
 let recognize inputs (graph: SemanticGraph) =
+    // Recognition reads the current graph-owned representation correspondence
+    // before its old projection is retired. The recipe derives fresh bounds;
+    // it never treats held proof bodies or range annotations as source facts.
+    let recognized = Recipes.recognize graph inputs
     let old = graph.Nodes |> Map.filter (fun _ node -> Recipes.hasProof node)
     let ids = old |> Map.keys |> Set.ofSeq
-    let names = old.Values |> Seq.choose (fun node ->
-        match node.Kind with SemanticKind.Obligation info -> Some info.Id | _ -> None) |> Set.ofSeq
-    let nodes = graph.Nodes |> Map.filter (fun id _ -> not (ids.Contains id)) |> Map.map (fun _ node ->
-        match node.Metadata.TryFind ObligationMetadata.Anchors with
-        | Some(MetadataValue.StringList anchors) ->
-            { node with Metadata = node.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList(anchors |> List.filter (names.Contains >> not))) }
-        | _ -> node)
+    let graph = Clef.Compiler.Baker.Recipes.ObligationRecipes.retireAnchors ids graph
+    let nodes = graph.Nodes |> Map.filter (fun id _ -> not (ids.Contains id))
     let edges = graph.Edges |> List.filter (fun edge ->
         not (ids.Contains edge.Target) && not (edge.Sources |> List.exists ids.Contains) &&
         not (Recipes.isRelation edge))
     // A new source recognition must earn a new representation handoff. Old
     // range annotations or the prior numeric domain cannot renew this receipt.
     let graph = { graph with Nodes = nodes; Edges = edges; SequenceRangeProvenance = None }
-    let recognized = Recipes.recognize graph inputs
     { graph with Edges = graph.Edges @ Recipes.relations recognized }, recognized
 
 let saturate range items (graph: SemanticGraph) =

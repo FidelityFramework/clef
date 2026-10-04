@@ -33,6 +33,38 @@ module private CallEffectRanges =
 
 [<Trait("Category", "NTU"); Trait("Subcategory", "CallEffectRanges")>]
 type CallEffectRangeCases() =
+    [<Theory>]
+    [<InlineData(0, 1, 10)>]
+    [<InlineData(10, 0, 9)>]
+    [<InlineData(5, 0, 10)>]
+    member _.``Inequality removes only an established interval endpoint`` (excluded: int, lower: int, upper: int) =
+        let graph = CallEffectRanges.check $"""
+let observe flag =
+    let value = if flag then 0 else 10
+    if value <> {excluded} then
+        let retained = value
+        retained
+    else 0
+[<EntryPoint>]
+let main _ = observe true + observe false
+"""
+        CallEffectRanges.range "retained" (bigint lower) (bigint upper) graph
+
+    [<Fact>]
+    member _.``Inequality against a non-singleton value cannot remove either endpoint`` () =
+        let graph = CallEffectRanges.check """
+let observe flag =
+    let value = if flag then 0 else 10
+    let excluded = if flag then 0 else 10
+    if value <> excluded then
+        let retained = value
+        retained
+    else 0
+[<EntryPoint>]
+let main _ = observe true + observe false
+"""
+        CallEffectRanges.range "retained" 0I 10I graph
+
     // These range fixtures request lexical cell observations explicitly: an ordinary
     // binding first observes at demand and cannot stand for a pre-write snapshot.
     [<Theory>]

@@ -1094,6 +1094,55 @@ type ProgramInstanceDemandCases() =
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "FiniteCellAuthority")>]
 type FiniteCellAuthorityCases() =
+    [<Fact>]
+    member _.``Identical numeric results with changed finite support require new downstream proofs`` () =
+        let source = """module FiniteSupportRenewal
+let mutable state = 0
+let record digit = state <- state + digit
+[<EntryPoint>]
+let main _ =
+    record 1
+    record 2
+    state
+"""
+        let graph = LazyResidenceFixture.programWith (Some source)
+        let finite = Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.recognize graph |> Assert.Single
+        let project source =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project source with
+            | Result.Ok projection -> projection
+            | Result.Error failures -> failwithf "Missing numeric projection: %A" failures
+        let domain (source: SemanticGraph) =
+            source.Edges |> List.choose (fun edge ->
+                match edge.Role with EdgeRole.NumericDomain domain -> Some domain | _ -> None) |> Assert.Single
+        let previous = project graph
+        let originalDomain = domain graph
+        let changed, annotation = FiniteCellRepresentationFixture.annotateInitializer graph
+        let initializer = graph.Nodes[Assert.Single (graph.Nodes[finite.Cell].Children)]
+        let transported = { changed.Nodes[annotation] with ValueRange = initializer.ValueRange }
+        let changed = { changed with Nodes = changed.Nodes.Add(annotation, transported) }
+        Assert.False(Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.evidenceCurrent changed)
+        let preserved = Clef.Compiler.Nanopass.RepresentationRanges.preserve graph changed
+        Assert.True(Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.evidenceCurrent preserved)
+        for KeyValue(id, node) in graph.Nodes do Assert.Equal(node.ValueRange, preserved.Nodes[id].ValueRange)
+        let finiteProof = Assert.Single originalDomain.FiniteCellObligations |> fst
+        Assert.Same(graph.Nodes[finiteProof], preserved.Nodes[finiteProof])
+        Assert.Contains(preserved.Edges, fun edge ->
+            edge.Role = EdgeRole.Constrains && edge.Target = finiteProof && List.contains annotation edge.Sources)
+        // A matching numeric answer does not make the prior proof dependencies
+        // current. The passive projection must refuse before its owner renews.
+        match Clef.Compiler.PSGSaturation.SemanticGraph.NumericPublication.project preserved with
+        | Result.Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains("finite-cell relation premises changed"))
+        | Result.Ok _ -> failwith "The old numeric proof survived a change of finite support."
+        let renewed = Clef.Compiler.Nanopass.NumericSettlement.normalize preserved
+        let current = project renewed
+        Assert.Equal(previous.Values[finite.Cell].Slot, current.Values[finite.Cell].Slot)
+        Assert.Equal(graph.Nodes[finite.Cell].ValueRange, renewed.Nodes[finite.Cell].ValueRange)
+        Assert.NotEqual(originalDomain.FiniteCellRelations, (domain renewed).FiniteCellRelations)
+        Assert.Contains((domain renewed).FiniteCellRelations |> Option.get, fun relation -> List.contains annotation relation.Sources)
+        Assert.NotEmpty(previous.Values[finite.Cell].Obligations)
+        for obligation in previous.Values[finite.Cell].Obligations do
+            Assert.False(renewed.Nodes.ContainsKey obligation, "Changed support requires new downstream numeric proof citizens.")
+
     [<Theory>]
     [<InlineData(false, "startup")>]
     [<InlineData(false, "reference")>]
@@ -1133,6 +1182,7 @@ let main _ =
                 { graph with Edges = row :: graph.Edges }
         Assert.Same(graph.Nodes, changed.Nodes)
         Assert.Empty(Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.recognize changed)
+        Assert.Same(changed, Clef.Compiler.Nanopass.RepresentationRanges.preserve graph changed)
         // Query the old numeric domain directly: no range pass or normalization
         // may refresh the authority before this refusal.
         match project changed with
@@ -1182,6 +1232,7 @@ let main _ =
                     if edge.Role = EdgeRole.Constrains && edge.Target = proof.Id then { edge with Ordinal = edge.Ordinal + 1 } else edge)
                 { graph with Edges = edges }
         for KeyValue(id, node) in graph.Nodes do Assert.Equal(node.ValueRange, changed.Nodes[id].ValueRange)
+        Assert.Same(changed, Clef.Compiler.Nanopass.RepresentationRanges.preserve graph changed)
         match project changed with
         | Result.Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains("finite-cell relation premises changed"))
         | Result.Ok _ -> failwith "An altered finite certificate crossed numeric publication."
@@ -1248,6 +1299,7 @@ let main _ =
         // required proof inventory is absent. Held range annotations cannot replace it.
         Assert.Single(Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.recognize changed) |> ignore
         Assert.False(Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges.evidenceCurrent changed)
+        Assert.Same(changed, Clef.Compiler.Nanopass.RepresentationRanges.preserve graph changed)
         match project changed with
         | Result.Error failures -> Assert.Contains(failures, fun failure -> failure.Reason.Contains("finite-cell relation premises changed"))
         | Result.Ok _ -> failwith "Deleting finite source evidence crossed numeric publication."

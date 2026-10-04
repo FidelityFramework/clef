@@ -17,6 +17,9 @@ module Closures = Clef.Compiler.Baker.Ingredients.Closures
 module Origins = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceOrigins
 module ExplicitDemand = Clef.Compiler.PSGSaturation.SemanticGraph.ExplicitDemand
 module Loop = Clef.Compiler.Baker.Recipes.LoopRangeRecipes
+module Numeric = Clef.Compiler.Baker.Ingredients.NumericValues
+module Continuations = Clef.Compiler.PSGSaturation.SemanticGraph.ContinuationCurrentInputs
+module Ingress = Clef.Compiler.PSGSaturation.SemanticGraph.CallableIngress
 
 type PullComposition = {
     ModelLabel: int
@@ -135,18 +138,54 @@ let private structural (graph: SemanticGraph) (node: SemanticNode) =
         resident.Length = (Set.ofList resident).Count && List.forall canonical.Contains resident
     | _ -> false
 
-let private sourceControlOnly graph producer =
-    let expected = Evaluation.forOwner graph producer
+let private evaluationRoot (graph: SemanticGraph) owner generator =
+    graph.Edges |> List.filter (fun edge ->
+        edge.Class = EdgeClass.Evaluation && edge.Role = EdgeRole.EvaluationRoot &&
+        List.tryHead edge.Sources = Some owner)
+    |> function
+        | [{ Ordinal = 0; Sources = [actualOwner; actualGenerator]; Target = body }]
+            when actualOwner = owner && actualGenerator = generator -> Some body
+        | _ -> None
+
+let private machineSupport (graph: SemanticGraph) (control: Control.Control) =
+    match Continuations.forOwner graph control.Owner with
+    | Some machine when machine.Generator = control.Generator ->
+        let sourceCuts =
+            control.Steps.Values |> Seq.choose (fun step ->
+                match step.Instruction with
+                | Control.Instruction.Suspend(payload, state) -> Some(step.Origin, payload, state)
+                | _ -> None) |> Seq.toList |> List.sort
+        let currentCuts = machine.Cuts |> List.map (fun cut -> cut.Yield, cut.Payload, cut.State) |> List.sort
+        if sourceCuts = currentCuts then Some machine.Participants else None
+    | _ -> None
+
+let private sourceControlOnly (graph: SemanticGraph) represented producer =
     let actual = graph.Edges |> List.filter (fun edge -> edge.Class = EdgeClass.Evaluation && List.tryHead edge.Sources = Some producer.Id)
-    if List.sort (List.map edgeKey expected.NewEdges) <> List.sort (List.map edgeKey actual) then None
-    else
-        match Control.forOwner graph producer with
-        | Error _ -> None
-        | Ok control ->
-            let sites = actual |> List.collect (fun edge -> edge.Target :: List.skip 1 edge.Sources) |> Set.ofList |> Set.remove control.Generator |> Set.remove producer.Id
-            if sites |> Set.forall (fun id -> graph.Nodes.TryFind id |> Option.exists (fun node -> node.IsReachable && structural graph node)) then
-                Some(control, sites)
+    match Control.forOwner graph producer with
+    | Error _ -> None
+    | Ok control ->
+        let source = Evaluation.forOwner graph producer
+        let correspondence =
+            if List.sort (List.map edgeKey source.NewEdges) = List.sort (List.map edgeKey actual) then
+                Some(false, Set.empty)
+            elif represented then
+                match evaluationRoot graph producer.Id control.Generator, machineSupport graph control with
+                | Some body, Some support ->
+                    let retained = Evaluation.forRetainedRoot graph producer.Id control.Generator body
+                    if List.sort (List.map edgeKey retained.NewEdges) = List.sort (List.map edgeKey actual) then
+                        Some(true, support)
+                    else None
+                | _ -> None
             else None
+        correspondence |> Option.bind (fun (retained, support) ->
+            let sites = actual |> List.collect (fun edge -> edge.Target :: List.skip 1 edge.Sources) |> Set.ofList |> Set.remove control.Generator |> Set.remove producer.Id
+            if sites |> Set.forall (fun id -> graph.Nodes.TryFind id |> Option.exists (fun node -> (node.IsReachable || retained) && structural graph node)) then
+                Some(control, sites, support)
+            else None)
+
+/// Independently checked source evaluation and its realized continuation cuts.
+/// This transports identities and control only; it imports no numeric receipt.
+let currentSourceControl graph producer = sourceControlOnly graph true producer
 
 /// Product states are proof labels, not source nodes or runtime unrolling. A
 /// successful pull from the exact inner iterator consumes one admitted unit;
@@ -187,8 +226,13 @@ let private productPulls (control: Control.Control) guard loop maximum =
         | None -> None
     | _ -> None
 
-let private sourceControl (graph: SemanticGraph) producer =
-    let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
+let private sourceControl (graph: SemanticGraph) represented (ingress: Lazy<Ingress.Reading>) producer =
+    let retained =
+        if represented then
+            graph.Edges |> List.filter (fun edge -> edge.Class = EdgeClass.Evaluation && List.tryHead edge.Sources = Some producer.Id)
+            |> List.collect (fun edge -> edge.Target :: List.skip 1 edge.Sources) |> Set.ofList
+        else Set.empty
+    let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable || retained.Contains node.Id)
     let node id = nodes.TryFind id
     let valid id = node id |> Option.exists (structural graph)
     let same left right =
@@ -231,40 +275,58 @@ let private sourceControl (graph: SemanticGraph) producer =
                     | _ -> None
                 next |> Option.bind (inputOrigin (Set.add id path)) |> Option.map (fun (source, rest) -> source, id :: rest)
             | _ -> None
-    match sourceControlOnly graph producer with
+    match sourceControlOnly graph represented producer with
     | None -> None
-    | Some(control, sites) ->
+    | Some(control, sites, machine) ->
         match finitePulls control with
-        | Some bound -> Some(control, bound, sites, [], None)
+        | Some bound -> Some(control, bound, Set.union sites machine, [], None)
         | None ->
-            let consumers = Current.structuralConsumers graph
+            let consumers = Current.structuralConsumersIncluding graph retained
             let solely value owner = consumers.TryFind value = Some [owner]
-            let captured enumerator =
+            let storage enumerator =
+                let access occurrence =
+                    if not (machine.Contains occurrence) then None
+                    else
+                        Ingress.tryStorageAccess ingress.Value occurrence
+                        |> Option.filter (fun proof -> proof.Source = enumerator)
+                let writes = lazy (
+                    nodes.Values |> Seq.choose (fun value ->
+                        match value.Kind with
+                        | SemanticKind.FrameRead(_, slot) when slot = enumerator -> access value.Id
+                        | _ -> None)
+                    |> Seq.collect _.Inputs |> Set.ofSeq)
+                access, writes
+            let captured enumerator (access: NodeId -> Ingress.StorageAccess option) (writes: Lazy<Set<NodeId * NodeId>>) =
                 let ty = nodes[enumerator].Type |> applySubst
                 nodes.Values |> Seq.exists (fun value ->
                     match value.Kind with
                     | SemanticKind.Lambda(_, _, captures, _, _) | SemanticKind.SeqExpr(_, captures) | SemanticKind.LazyExpr(_, captures) ->
                         captures |> List.exists (fun capture -> capture.SourceNodeId = Some enumerator || (capture.SourceNodeId.IsNone && applySubst capture.Type = ty))
+                    | SemanticKind.FrameRead(_, slot) -> slot = enumerator && (access value.Id).IsNone
+                    | SemanticKind.FrameWrite(_, slot, written) ->
+                        slot = enumerator && not (machine.Contains value.Id && writes.Value.Contains(value.Id, written))
                     | SemanticKind.EnvironmentRead(_, slot) | SemanticKind.EnvironmentBorrow(_, slot) | SemanticKind.EnvironmentWrite(_, slot, _)
-                    | SemanticKind.FrameRead(_, slot) | SemanticKind.FrameBorrow(_, slot) | SemanticKind.FrameWrite(_, slot, _) | SemanticKind.CellAddress slot -> slot = enumerator
+                    | SemanticKind.FrameBorrow(_, slot) -> slot = enumerator
+                    | SemanticKind.CellAddress slot -> slot = enumerator
                     | SemanticKind.AddressOf(value, _) -> reference value = Some enumerator
                     | _ -> false)
             let shape =
-                match node control.Generator with
-                | Some { Kind = SemanticKind.Lambda(_, body, _, _, LambdaContext.SeqGenerator) } ->
+                match evaluationRoot graph producer.Id control.Generator with
+                | Some body ->
                     match actions Set.empty body with
                     | Some [enumerator; loop] when solely enumerator body && solely loop body -> Some(body, enumerator, loop)
                     | _ -> None
                 | _ -> None
             match shape with
             | Some(body, enumerator, loop) ->
+                let access, writes = storage enumerator
                 match node enumerator, node loop with
                 | Some { Kind = SemanticKind.Binding(_, false, false, _); Children = [acquisition] },
                   Some ({ Kind = SemanticKind.WhileLoop(guard, _) } as loopNode)
-                    when valid enumerator && valid loop && solely acquisition enumerator && not (captured enumerator) ->
+                    when valid enumerator && valid loop && solely acquisition enumerator && not (captured enumerator access writes) ->
                     match operation IntrinsicModule.Seq "getEnumerator" acquisition,
                           operation IntrinsicModule.SeqEnumerator "moveNext" guard,
-                          Current.forLoop graph consumers loopNode with
+                          Current.forSupportedLoop graph consumers retained loopNode with
                     | Some input, Some guardReference, Some admitted when admitted.Sources = [enumerator; guard; loop] && solely guardReference guard ->
                         match operation IntrinsicModule.SeqEnumerator "current" admitted.Target, inputOrigin Set.empty input with
                         | Some currentReference, Some(inner, originPath) when inner.Id <> producer.Id && solely currentReference admitted.Target ->
@@ -276,19 +338,32 @@ let private sourceControl (graph: SemanticGraph) producer =
                             let canonical = incidence |> List.filter relevant |> List.map edgeKey |> Set.ofList
                             let recorded = graph.Edges |> List.filter relevant |> List.map edgeKey
                             let uses = incidence |> List.filter (fun edge -> edge.Sources |> List.contains enumerator)
+                            // Slot incidence is a use of the same source
+                            // declaration, not an additional source reference.
+                            // Admit only the actual access proved by the shared
+                            // complete storage census, never scope membership.
+                            let checkedSlotUse (edge: Hyperedge) =
+                                match edge.Class, edge.Role, edge.Ordinal, edge.Sources, node edge.Target with
+                                | EdgeClass.Provenance, EdgeRole.FrameSlot, 0, [source], Some { Kind = SemanticKind.FrameRead(_, slot) }
+                                    when source = enumerator && slot = enumerator -> (access edge.Target).IsSome
+                                | EdgeClass.Provenance, EdgeRole.FrameSlot, 0, [source], Some { Kind = SemanticKind.FrameWrite(_, slot, value) }
+                                    when source = enumerator && slot = enumerator ->
+                                        machine.Contains edge.Target && writes.Value.Contains(edge.Target, value)
+                                | _ -> false
                             let usesValid = uses |> List.forall (fun edge ->
                                 (edge.Role = EdgeRole.Definition && List.contains edge.Target references) ||
-                                (Hyperedge.isStructural edge && edge.Target = body))
+                                (Hyperedge.isStructural edge && edge.Target = body) || checkedSlotUse edge)
                             if Set.ofList references <> Set.ofList [guardReference; currentReference] ||
                                reference guardReference <> Some enumerator || reference currentReference <> Some enumerator ||
                                recorded.Length <> (Set.ofList recorded).Count || not (List.forall canonical.Contains recorded) || not usesValid then None
                             else
-                                match sourceControlOnly graph inner with
-                                | Some(innerControl, innerSites) ->
+                                match sourceControlOnly graph represented inner with
+                                | Some(innerControl, innerSites, innerMachine) ->
                                     match finitePulls innerControl with
                                     | Some innerBound ->
                                         productPulls control guard loop innerBound.MaximumPulls |> Option.map (fun (bound, correspondence) ->
-                                            let supports = Set.union sites innerSites |> Set.union (Set.ofList (body :: inner.Id :: innerControl.Generator :: originPath))
+                                            let supports = Set.union sites innerSites |> Set.union machine |> Set.union innerMachine
+                                                           |> Set.union (Set.ofList (body :: inner.Id :: innerControl.Generator :: originPath))
                                             let composition = correspondence |> List.map (fun (product, label, remaining) ->
                                                 { ModelLabel = product; SourceLabel = label; RemainingPulls = remaining; Origin = control.Steps[label].Origin
                                                   InnerProducer = inner.Id; Enumerator = enumerator; Acquisition = acquisition; Guard = guard; Loop = loop })
@@ -301,6 +376,11 @@ let private sourceControl (graph: SemanticGraph) producer =
             | _ -> None
 
 let recognize (graph: SemanticGraph) (inputs: Loop.Inputs) : Accumulation list =
+    // A receipt admits only the unchanged source-to-machine correspondence.
+    // Pull counts and additive bounds are independently derived below from
+    // typed source/evaluation/control and checked current machine inputs.
+    let represented = graph.SequenceRangeProvenance |> Option.exists (Numeric.sequenceRangeCurrent graph)
+    let ingress = lazy (Ingress.analyze graph)
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let node id = nodes.TryFind id
     let same left right =
@@ -401,7 +481,7 @@ let recognize (graph: SemanticGraph) (inputs: Loop.Inputs) : Accumulation list =
                             match origin with
                             | Some producer when references = Set.ofList [guardReference; currentArgument] && not (captured.Contains enumerator) && not (unknownCapture enumerator) &&
                                                  recordedUsesAgree (Set.ofList [enumerator; guardReference; currentArgument]) && (uses |> List.forall permitted) ->
-                                match sourceControl graph producer with
+                                match sourceControl graph represented ingress producer with
                                 // Empty-consumer elimination owns the zero-pull
                                 // case; an unobservable current is no delta fact.
                                 | Some(control, pulls, producerSites, composition, innerPulls) when pulls.MaximumPulls > 0I ->
@@ -581,7 +661,9 @@ let handoff (graph: SemanticGraph) (controls: Map<NodeId, Control.Control>) (fre
             let fail reason = graph, (item.Current, reason) :: failures
             match controls.TryFind item.Producer, graph.Nodes.TryFind item.Producer with
             | Some control, Some owner when control.Generator = item.Generator ->
-                match sourceControl graph owner with
+                // Handoff precedes machine generation: only the live source
+                // control is eligible to authorize that representation change.
+                match sourceControl graph false (lazy (Ingress.analyze graph)) owner with
                 | Some(actual, current, participants, _, _) when actual = control && current.MaximumPulls <= pair.Pulls.MaximumPulls ->
                     let model = { current with MaximumPulls = pair.Pulls.MaximumPulls }
                     let proof = { pair.PullProof with Kind = SemanticKind.Obligation { pair.PullInfo with Body = ObligationBody.FiniteSequencePull model } }

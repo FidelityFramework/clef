@@ -467,5 +467,5 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                 @ extraEdges
                 @ (changed |> Set.toList |> List.filter (fun id -> not (retired.Contains id))
                    |> List.collect (fun id -> Incidence.structuralIncidence folded.Nodes[id])) }
-    { Graph = updated; Curry = updatedCurry; Destinations = destinations; AllocationOrigins = allocationOrigins
+    { Graph = RepresentationRanges.preserve graph updated; Curry = updatedCurry; Destinations = destinations; AllocationOrigins = allocationOrigins
       FactoryCalls = factoryCalls; Unresolved = List.rev unresolved }

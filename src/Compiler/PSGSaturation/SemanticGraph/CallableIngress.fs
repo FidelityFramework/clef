@@ -9,6 +9,8 @@ open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open System.Collections.Generic
 module Incidence = Clef.Compiler.Baker.Ingredients.Closures
+module ControlInputs = Clef.Compiler.PSGSaturation.SemanticGraph.ContinuationCurrentInputs
+module Borrows = Clef.Compiler.Baker.Ingredients.SourceStorageBorrows
 
 type Call = { Site: NodeId; Implementation: NodeId; Parameters: NodeId list; Arguments: NodeId list }
 type Evidence = {
@@ -29,10 +31,23 @@ type FormalInputs = {
     Participants: Set<NodeId>
 }
 type Access = { Source: NodeId; Participants: Set<NodeId> }
+type StorageAccess = {
+    Source: NodeId
+    /// Exact current writes, or the immutable initializer at its formation.
+    Inputs: (NodeId * NodeId) list
+    /// A mutable capture preserves the logical cell, not its formation value.
+    /// Readers must account for every current store to this shared cell.
+    SharedCell: NodeId option
+    /// State zero at the checked initial resume, independently of later writes.
+    InitialState: (NodeId * bigint) option
+    Participants: Set<NodeId>
+}
 type Reading = private {
     Evidence: Map<NodeId, Evidence>
     RetainedEvidence: Map<NodeId, Evidence>
     Access: NodeId -> Access option
+    StorageAccess: NodeId -> StorageAccess option
+    SlotAccess: NodeId -> NodeId -> StorageAccess option
     Correspondence: NodeId -> NodeId -> Set<NodeId> option
     ClosedImplementation: NodeId -> Evidence option
 }
@@ -290,12 +305,244 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                               (graph.Nodes.TryFind value |> Option.exists (fun child -> applySubst child.Type = applySubst node.Type)) ->
                 originalIdentity (Set.add id seen) value |> Option.map (fun (source, participants) -> source, Set.add id participants)
             | _ -> None
+    // One complete storage census serves read occurrences and the synthetic
+    // control slots. A row enumerating writers is checked against these uses.
+    let storageCensuses = Dictionary<NodeId * NodeId * NodeId * NodeId, (Set<NodeId> * Set<NodeId * NodeId>) option>()
+    let storageCensus generator formal root slot =
+        let key = generator, formal, root, slot
+        match storageCensuses.TryGetValue key with
+        | true, value -> value
+        | _ ->
+            let validated =
+                match nodes.TryFind root with
+                | None -> None
+                | Some storage ->
+                    // Reject opaque users and borrowed access to this slot even
+                    // when no additional direct FrameWrite is visible.
+                    let rec visit seen pending writers =
+                        match pending with
+                        | [] -> Some(seen, writers)
+                        | current :: rest when Set.contains current seen -> visit seen rest writers
+                        | current :: rest ->
+                            let seen = Set.add current seen
+                            let step found (edge: Hyperedge) =
+                                found |> Option.bind (fun (aliases, writers) ->
+                                    let declared = getUses current |> List.exists (fun expected -> edgeKey expected = edgeKey edge)
+                                    match nodes.TryFind edge.Target with
+                                    | Some target when declared ->
+                                        let sameType = applySubst target.Type = applySubst storage.Type
+                                        let here = activation target.Id = Some generator
+                                        match target.Kind, edge.Class, edge.Role with
+                                        | SemanticKind.VarRef(_, Some actual), EdgeClass.Reference, EdgeRole.Definition
+                                            when actual = current && sameType && here -> Some(target.Id :: aliases, writers)
+                                        | SemanticKind.Binding(_, false, _, None), EdgeClass.Structural, _
+                                            when target.Children = [current] && sameType && here -> Some(target.Id :: aliases, writers)
+                                        | SemanticKind.TypeAnnotation(actual, _), EdgeClass.Structural, _
+                                            when actual = current && sameType && here -> Some(target.Id :: aliases, writers)
+                                        | SemanticKind.EagerExpr actual, EdgeClass.Structural, EdgeRole.Subject
+                                            when actual = current && sameType && here && ExplicitDemand.operand graph target.Id = Some current ->
+                                            Some(target.Id :: aliases, writers)
+                                        | SemanticKind.Lambda(parameters, _, _, _, _), EdgeClass.Structural, EdgeRole.Parameter
+                                            when target.Id = generator && current = formal && parameters |> List.exists (fun (_, _, parameter) -> parameter = current) -> Some(aliases, writers)
+                                        | SemanticKind.Sequential values, EdgeClass.Structural, _
+                                            when here && List.contains current values && List.tryLast values <> Some current -> Some(aliases, writers)
+                                        | SemanticKind.FrameRead(actual, _), EdgeClass.Structural, EdgeRole.Subject
+                                            when actual = current && here -> Some(aliases, writers)
+                                        | SemanticKind.FrameBorrow(actual, other), EdgeClass.Structural, EdgeRole.Subject
+                                            when actual = current && other <> slot && here -> Some(aliases, writers)
+                                        | SemanticKind.FrameWrite(actual, written, value), EdgeClass.Structural, EdgeRole.Subject
+                                            when actual = current && here && applySubst target.Type = Types.unitType ->
+                                            Some(aliases, if written = slot then Set.add (target.Id, value) writers else writers)
+                                        | _ -> None
+                                    | _ -> None)
+                            observedUses current |> List.fold step (Some(rest, writers))
+                            |> Option.bind (fun (next, writes) -> visit seen next writes)
+                    visit Set.empty [root] Set.empty
+            storageCensuses.Add(key, validated)
+            validated
+    let controlProtocols = Dictionary<NodeId, ControlInputs.Protocol option>()
+    let controlProtocol owner =
+        match controlProtocols.TryGetValue owner with
+        | true, value -> value
+        | _ ->
+            let value = ControlInputs.forOwner graph owner
+            controlProtocols.Add(owner, value)
+            value
+    let sequenceInitializers = Dictionary<NodeId, (NodeId * NodeId) list option>()
+    let captureInitializers (sequence: SemanticNode) =
+        match sequenceInitializers.TryGetValue sequence.Id with
+        | true, value -> value
+        | _ ->
+            let value = ClosureEnvironments.sequenceInitializers graph sequence
+            sequenceInitializers.Add(sequence.Id, value)
+            value
+    let logicalCellBorrows = Dictionary<NodeId, Set<NodeId> option>()
+    let logicalCellBorrowClosed cell =
+        match logicalCellBorrows.TryGetValue cell with
+        | true, value -> value
+        | _ ->
+            let rec aliases seen pending =
+                match pending with
+                | [] -> Some seen
+                | current :: rest when Set.contains current seen -> aliases seen rest
+                | current :: rest ->
+                    observedUses current |> List.fold (fun found edge ->
+                        found |> Option.bind (fun pending ->
+                            let declared = getUses current |> List.exists (fun expected -> edgeKey expected = edgeKey edge)
+                            match nodes.TryFind edge.Target with
+                            | Some target when declared ->
+                                let sameType = applySubst target.Type = applySubst nodes[cell].Type
+                                match target.Kind, target.Children with
+                                | SemanticKind.VarRef(_, Some actual), _
+                                | SemanticKind.TypeAnnotation(actual, _), _ when actual = current && sameType -> Some(target.Id :: pending)
+                                | SemanticKind.Binding(_, false, _, _), [actual] when actual = current && sameType -> Some(target.Id :: pending)
+                                | SemanticKind.EagerExpr actual, _ when actual = current && sameType &&
+                                    ExplicitDemand.operand graph target.Id = Some current -> Some(target.Id :: pending)
+                                | SemanticKind.VarRef(_, Some actual), _
+                                | SemanticKind.TypeAnnotation(actual, _), _
+                                | SemanticKind.EagerExpr actual, _ when actual = current -> None
+                                | SemanticKind.Binding(_, false, _, _), [actual] when actual = current -> None
+                                | _ when Borrows.takesAddress ((=) current) ((=) current) target -> None
+                                | _ -> Some pending
+                            | _ -> None)) (Some rest)
+                    |> Option.bind (aliases (Set.add current seen))
+            let validated = aliases Set.empty [cell] |> Option.bind (fun sourceAliases ->
+                let dangerous = nodes.Values |> Seq.exists (Borrows.takesAddress sourceAliases.Contains sourceAliases.Contains)
+                if dangerous then None else
+                let borrows = nodes.Values |> Seq.choose (fun node ->
+                    Borrows.trySlot node |> Option.bind (fun (slot, kind) ->
+                        if sourceAliases.Contains slot then Some(node, kind) else None)) |> Seq.toList
+                borrows |> List.fold (fun proof (borrow, kind) ->
+                    proof |> Option.bind (fun participants ->
+                        match kind with
+                        | Borrows.SlotBorrow.Frame | Borrows.SlotBorrow.Lazy -> None
+                        | Borrows.SlotBorrow.Environment ->
+                            // Only the existing complete sequence-formation
+                            // contract can consume this writable borrow. Any
+                            // ordinary/raw use would expose an additional writer.
+                            let typed = applySubst borrow.Type = NativeType.TByref(applySubst nodes[cell].Type, ByrefKind.InOut)
+                            if not typed || not (observedUses borrow.Id).IsEmpty ||
+                               (captureUses.TryFind borrow.Id |> Option.exists (not << List.isEmpty)) then None else
+                            let consumers = graph.Edges |> List.filter (fun edge ->
+                                match edge.Role, edge.Sources with
+                                | EdgeRole.SequenceCaptureInitializer true, [slot; value] -> slot = cell && value = borrow.Id
+                                | _ -> false)
+                            if consumers.IsEmpty then None else
+                            consumers |> List.fold (fun found edge ->
+                                found |> Option.bind (fun support ->
+                                    match nodes.TryFind edge.Target with
+                                    | Some ({ Kind = SemanticKind.SeqExpr(_, captures) } as sequence)
+                                        when captures |> List.exists (fun capture -> capture.IsMutable && capture.SourceNodeId = Some cell) ->
+                                        captureInitializers sequence |> Option.bind (fun values ->
+                                            if values |> List.filter (fun (slot, _) -> slot = cell) <> [cell, borrow.Id] then None else
+                                            Some(support |> Set.add edge.Target |> Set.add borrow.Id))
+                                    | _ -> None)) (Some participants))) (Some sourceAliases))
+            logicalCellBorrows.Add(cell, validated)
+            validated
+    // The scalar cell's identity is separate from immutable capture values and
+    // from callable identity. Its constructor must preserve this exact mutable
+    // binding, directly or through the checked environment-borrow contract.
+    let sharedCapture owner slot =
+        match nodes.TryFind owner, nodes.TryFind slot with
+        | Some ({ Kind = SemanticKind.SeqExpr(generator, captures); Type = NativeType.TSeq element } as sequence),
+          Some ({ Kind = SemanticKind.Binding(_, true, _, _); Children = [initializer] } as source)
+            when Types.isIntegerType (applySubst source.Type) ->
+            match nodes.TryFind generator, graph.Nodes.TryFind initializer with
+            | Some { Kind = SemanticKind.Lambda([_, environmentType, formal], _, [], _, LambdaContext.SeqGenerator) },
+              Some initial when applySubst initial.Type = applySubst source.Type &&
+                                applySubst environmentType = NativeType.TSeqEnumerator(applySubst element) ->
+                match nodes.TryFind formal,
+                      captures |> List.filter (fun capture -> capture.SourceNodeId = Some slot),
+                      captureInitializers sequence with
+                | Some { Kind = SemanticKind.PatternBinding _; Type = formalType }, [capture], Some values
+                    when capture.IsMutable && applySubst capture.Type = applySubst source.Type &&
+                         applySubst formalType = applySubst environmentType &&
+                         values.Length = captures.Length &&
+                         (captures |> List.choose _.SourceNodeId |> Set.ofList).Count = captures.Length &&
+                         (values |> List.map fst |> Set.ofList).Count = values.Length ->
+                    match values |> List.filter (fun (source, _) -> source = slot) with
+                    | [_, value] ->
+                        let identity =
+                            if value = slot then Some Set.empty else
+                            match graph.Nodes.TryFind value with
+                            | Some { Kind = SemanticKind.EnvironmentBorrow(environment, actual); Type = borrowType }
+                                when actual = slot && applySubst borrowType = NativeType.TByref(applySubst source.Type, ByrefKind.InOut) ->
+                                // sequenceInitializers already checks the exact
+                                // closure formal and mutable capture incidence.
+                                Some(Set.ofList [value; environment])
+                            | _ -> None
+                        identity |> Option.bind (fun borrowed ->
+                          logicalCellBorrowClosed slot |> Option.map (fun cellSupport ->
+                            let formation = graph.Edges |> List.filter (fun edge ->
+                                edge.Target = owner &&
+                                (match edge.Role with
+                                 | EdgeRole.SequenceCaptureFormation | EdgeRole.SequenceCaptureInitializer _ -> true
+                                 | _ -> false))
+                            let formationNodes = formation |> List.collect (fun edge -> edge.Target :: edge.Sources)
+                            let environments = formation |> List.collect (fun edge ->
+                                match edge.Role, edge.Sources with
+                                | EdgeRole.SequenceCaptureFormation, closure :: _ ->
+                                    match graph.Nodes.TryFind closure with
+                                    | Some { Kind = SemanticKind.ClosureValue(_, environment) } ->
+                                        match graph.Nodes.TryFind environment with
+                                        | Some { Kind = SemanticKind.EnvironmentCreate(_, initializers) } ->
+                                            environment :: (initializers |> List.collect (fun (source, value) -> [source; value]))
+                                        | _ -> [environment]
+                                    | _ -> []
+                                | _ -> [])
+                            let participants = Set.unionMany [cellSupport; borrowed; Set.ofList (
+                                [owner; generator; formal; slot; initializer; value] @ formationNodes @ environments @
+                                (values |> List.collect (fun (source, value) -> [source; value])))]
+                            generator, formal, participants))
+                    | _ -> None
+                | _ -> None
+            | _ -> None
+        | _ -> None
+    let slotAccesses = Dictionary<NodeId * NodeId, StorageAccess option>()
+    let slotAccess owner slot =
+        let key = owner, slot
+        match slotAccesses.TryGetValue key with
+        | true, value -> value
+        | _ ->
+            let validated =
+                match controlProtocol owner, graph.Nodes.TryFind slot with
+                | Some protocol, Some source when slot = protocol.StateSlot || Some slot = protocol.CurrentSlot ->
+                    match storageCensus protocol.Generator protocol.Formal protocol.Formal slot with
+                    | Some(aliases, actual) ->
+                        let inputs =
+                            if slot = protocol.StateSlot then protocol.StateWrites
+                            else protocol.Cuts |> List.map (fun cut -> cut.Writer, cut.Value)
+                        let typed = inputs |> List.forall (fun (_, value) ->
+                            nodes.TryFind value |> Option.exists (fun node -> applySubst node.Type = applySubst source.Type))
+                        if not typed || inputs.Length <> (Set.ofList inputs).Count ||
+                           (inputs |> List.map fst |> Set.ofList).Count <> inputs.Length || Set.ofList inputs <> actual then None else
+                        let initial = Set.unionMany [aliases; protocol.Participants; Set.ofList [owner; slot; protocol.Generator; protocol.Formal]]
+                        let participants =
+                            inputs |> List.fold (fun participants (writer, value) ->
+                                participants |> Set.add writer |> Set.add value) initial
+                        Some { Source = slot; Inputs = inputs; SharedCell = None
+                               InitialState = if slot = protocol.StateSlot then Some(protocol.InitialEntry, 0I) else None
+                               Participants = participants }
+                    | None -> None
+                | _ ->
+                    sharedCapture owner slot |> Option.bind (fun (generator, formal, formation) ->
+                        storageCensus generator formal formal slot |> Option.bind (fun (aliases, writers) ->
+                            let inputs = Set.toList writers
+                            let typed = inputs |> List.forall (fun (_, value) ->
+                                nodes.TryFind value |> Option.exists (fun node -> applySubst node.Type = applySubst nodes[slot].Type))
+                            if not typed then None else
+                            let participants = inputs |> List.fold (fun participants (writer, value) ->
+                                participants |> Set.add writer |> Set.add value) (Set.union aliases formation)
+                            Some { Source = slot; Inputs = inputs; SharedCell = Some slot
+                                   InitialState = None; Participants = participants }))
+            slotAccesses.Add(key, validated)
+            validated
     // A retained source name is insufficient after continuation realization:
     // validate all actual writes and every raw storage use in this graph
-    // revision. No final placement/codata is needed for this source identity.
-    let rec continuationSource pending id =
-        if Set.contains id pending then None else
-        let pending = Set.add id pending
+    // revision. Storage range inputs and callable identity share this census,
+    // while callable identity additionally checks each writer's correspondence.
+    // No final placement/codata is needed for either reading.
+    let continuationStorage id =
         match nodes.TryFind id, continuationRows.TryFind id, originalRows.TryFind id with
         | Some { Kind = SemanticKind.FrameRead(frame, slot); Type = valueType },
           Some [{ Class = EdgeClass.Provenance; Ordinal = 0; Sources = owner :: generator :: root :: source :: declaredWriters }],
@@ -326,64 +573,29 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                     | [] -> Some []
                     | writer :: value :: rest -> writerPairs rest |> Option.map (fun pairs -> (writer, value) :: pairs)
                     | _ -> None
-                // Following every use of the exact root also rejects aliases
-                // passed to unknown code, cell assignments and borrowed access
-                // to this callable slot. Such uses could invalidate its writer
-                // census even when no new direct FrameWrite is visible.
-                let rec storageUses seen pendingUses writers =
-                    match pendingUses with
-                    | [] -> Some(seen, writers)
-                    | current :: rest when Set.contains current seen -> storageUses seen rest writers
-                    | current :: rest ->
-                        let seen = Set.add current seen
-                        let step found (edge: Hyperedge) =
-                            found |> Option.bind (fun (aliases, writers) ->
-                                let declared = getUses current |> List.exists (fun expected -> edgeKey expected = edgeKey edge)
-                                match nodes.TryFind edge.Target with
-                                | Some target when declared ->
-                                    let sameType = applySubst target.Type = applySubst storage.Type
-                                    let here = activation target.Id = Some generator
-                                    match target.Kind, edge.Class, edge.Role with
-                                    | SemanticKind.VarRef(_, Some actual), EdgeClass.Reference, EdgeRole.Definition
-                                        when actual = current && sameType && here -> Some(target.Id :: aliases, writers)
-                                    | SemanticKind.Binding(_, false, _, None), EdgeClass.Structural, _
-                                        when target.Children = [current] && sameType && here -> Some(target.Id :: aliases, writers)
-                                    | SemanticKind.TypeAnnotation(actual, _), EdgeClass.Structural, _
-                                        when actual = current && sameType && here -> Some(target.Id :: aliases, writers)
-                                    | SemanticKind.EagerExpr actual, EdgeClass.Structural, EdgeRole.Subject
-                                        when actual = current && sameType && here && ExplicitDemand.operand graph target.Id = Some current ->
-                                        Some(target.Id :: aliases, writers)
-                                    | SemanticKind.Lambda(parameters, _, _, _, _), EdgeClass.Structural, EdgeRole.Parameter
-                                        when target.Id = generator && current = formal && parameters |> List.exists (fun (_, _, parameter) -> parameter = current) -> Some(aliases, writers)
-                                    | SemanticKind.Sequential values, EdgeClass.Structural, _
-                                        when here && List.contains current values && List.tryLast values <> Some current -> Some(aliases, writers)
-                                    | SemanticKind.FrameRead(actual, _), EdgeClass.Structural, EdgeRole.Subject
-                                        when actual = current && here -> Some(aliases, writers)
-                                    | SemanticKind.FrameBorrow(actual, other), EdgeClass.Structural, EdgeRole.Subject
-                                        when actual = current && other <> slot && here -> Some(aliases, writers)
-                                    | SemanticKind.FrameWrite(actual, written, value), EdgeClass.Structural, EdgeRole.Subject
-                                        when actual = current && here && applySubst target.Type = Types.unitType ->
-                                        Some(aliases, if written = slot then Set.add (target.Id, value) writers else writers)
-                                    | _ -> None
-                                | _ -> None)
-                        observedUses current |> List.fold step (Some(rest, writers))
-                        |> Option.bind (fun (next, writes) -> storageUses seen next writes)
-                let storageUses = storageUses Set.empty [root] Set.empty
+                let storageUses = storageCensus generator formal root slot
+                let control = if root = formal then slotAccess owner slot else None
                 let selected =
                     match storage.Kind with
                     | SemanticKind.PatternBinding _ when root = formal && applySubst storage.Type = applySubst environmentType ->
                         match captured |> List.filter (fun capture -> capture.SourceNodeId = Some slot) with
                         | [capture] when not capture.IsMutable && applySubst capture.Type = applySubst valueType ->
-                            ClosureEnvironments.sequenceInitializers graph sequence |> Option.bind (fun initializers ->
+                            captureInitializers sequence |> Option.bind (fun initializers ->
                                 match initializers |> List.filter (fun (source, _) -> source = slot) with
                                 | [_, value] when graph.Nodes.TryFind value |> Option.exists (fun value -> applySubst value.Type = applySubst valueType) -> Some(value, true)
                                 | _ -> None)
+                        | [capture] when capture.IsMutable && applySubst capture.Type = applySubst valueType ->
+                            control |> Option.bind (fun proof ->
+                                if proof.SharedCell = Some slot then Some(slot, false) else None)
                         | [] ->
-                            graph.Edges |> List.tryPick (fun edge ->
-                                match edge.Class, edge.Role, edge.Sources with
-                                | EdgeClass.Suspension, EdgeRole.SuspensionLiveAcross, actualOwner :: actualGenerator :: _
-                                    when edge.Target = slot && actualOwner = owner && actualGenerator = generator -> Some(slot, false)
-                                | _ -> None)
+                            match control with
+                            | Some _ -> Some(slot, false)
+                            | None ->
+                                graph.Edges |> List.tryPick (fun edge ->
+                                    match edge.Class, edge.Role, edge.Sources with
+                                    | EdgeClass.Suspension, EdgeRole.SuspensionLiveAcross, actualOwner :: actualGenerator :: _
+                                        when edge.Target = slot && actualOwner = owner && actualGenerator = generator -> Some(slot, false)
+                                    | _ -> None)
                         | _ -> None
                     | SemanticKind.ContinuationStorage actualOwner when actualOwner = owner && activation root = Some generator
                                                                  && applySubst storage.Type = Types.mkArrayType Types.uint8Type -> Some(slot, false)
@@ -393,19 +605,43 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                     when Set.count (Set.ofList declared) = declared.Length
                          && (declared |> List.map fst |> Set.ofList |> Set.count) = declared.Length
                          && Set.ofList declared = actual
-                         && (if immutableCapture then actual.IsEmpty else not actual.IsEmpty) ->
-                    let proofs =
-                        actual |> Set.toList |> List.map (fun (writer, value) ->
-                            match nodes.TryFind value with
-                            | Some node when applySubst node.Type = applySubst valueType ->
-                                corresponds pending Set.empty selected value |> Option.map (Set.add writer)
-                            | _ -> None)
-                    if proofs |> List.exists Option.isNone then None else
-                    let participants = proofs |> List.choose (fun value -> value) |> List.fold Set.union aliases
-                    Some(selected, Set.union participants (Set.ofList [owner; generator; formal; slot; selected]))
+                         && (if immutableCapture then actual.IsEmpty else control.IsSome || not actual.IsEmpty) ->
+                    let writes = Set.toList actual
+                    let typed = writes |> List.forall (fun (_, value) ->
+                        nodes.TryFind value |> Option.exists (fun node -> applySubst node.Type = applySubst valueType))
+                    if not typed then None else
+                    let inputs = if immutableCapture then [owner, selected] else writes
+                    let initial = Set.union aliases (Set.ofList [id; owner; generator; formal; root; slot; selected])
+                    let initial = control |> Option.map (fun proof -> Set.union proof.Participants initial) |> Option.defaultValue initial
+                    let participants =
+                        writes |> List.fold (fun participants (writer, value) ->
+                            participants |> Set.add writer |> Set.add value) initial
+                    Some(({ Source = selected; Inputs = inputs; SharedCell = control |> Option.bind _.SharedCell
+                            InitialState = control |> Option.bind _.InitialState
+                            Participants = participants }: StorageAccess), immutableCapture)
                 | _ -> None
             | _ -> None
         | _ -> None
+    let storageAccesses = Dictionary<NodeId, (StorageAccess * bool) option>()
+    let storageAccess id =
+        match storageAccesses.TryGetValue id with
+        | true, value -> value
+        | _ ->
+            let value = continuationStorage id
+            storageAccesses.Add(id, value)
+            value
+    let rec continuationSource pending id =
+        if Set.contains id pending then None else
+        let pending = Set.add id pending
+        storageAccess id |> Option.bind (fun (storage, immutableCapture) ->
+            if storage.SharedCell.IsSome then None else
+            let proofs =
+                if immutableCapture then [] else
+                storage.Inputs |> List.map (fun (writer, value) ->
+                    corresponds pending Set.empty storage.Source value |> Option.map (Set.add writer))
+            if proofs |> List.exists Option.isNone then None else
+            let participants = proofs |> List.choose (fun proof -> proof) |> List.fold Set.union storage.Participants
+            Some(storage.Source, participants))
     and corresponds pending seen expected actual =
         if Set.contains (expected, actual) seen then None else
         let seen = Set.add (expected, actual) seen
@@ -525,6 +761,8 @@ let analyzeWith (graph: SemanticGraph) (resolution: CallableOrigins.Resolution) 
                          Calls = required |> Set.toList |> List.collect (fun code -> candidates[code].Calls) |> List.distinct
                          Uses = participants |> Set.toList |> List.map (fun id -> id, observedUses id) |> Map.ofList })
     { Evidence = evidence; RetainedEvidence = retained; Access = access
+      StorageAccess = fun id -> storageAccess id |> Option.map fst
+      SlotAccess = slotAccess
       ClosedImplementation = closedImplementation
       Correspondence = fun source current -> corresponds Set.empty Set.empty source current }
 
@@ -563,5 +801,9 @@ let closedFormalInputs (graph: SemanticGraph) (resolution: CallableOrigins.Resol
 /// they remain absent from executable occurrence admission.
 let tryRetainedEvidence reading occurrence = reading.RetainedEvidence.TryFind occurrence
 let tryAccess reading occurrence = reading.Access occurrence
+/// Complete current scalar storage inputs, without asserting callable identity.
+let tryStorageAccess reading occurrence = reading.StorageAccess occurrence
+/// Current control slot inputs under the checked cut/resume and storage census.
+let trySlotAccess reading owner slot = reading.SlotAccess owner slot
 let tryCorrespondence reading source current = reading.Correspondence source current
 let allowsOccurrence reading occurrence = reading.Evidence.ContainsKey occurrence

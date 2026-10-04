@@ -39,7 +39,7 @@ let private sequenceSnapshot (participants: Set<NodeId>) enumerators (graph: Sem
     let finite = sequenceRangeObligations graph |> List.map fst |> Set.ofList
     let obligations = graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
         match node.Kind with
-        | SemanticKind.Obligation info when finite.Contains id || participants.Contains id -> Some(id, info)
+        | SemanticKind.Obligation info when finite.Contains id || participants.Contains id || info.Kind = "continuation-state-range" -> Some(id, info)
         | _ -> None)
     let proofIds = obligations |> List.map fst |> Set.ofList
     let sourceNode node =
@@ -63,6 +63,10 @@ let private sequenceSnapshot (participants: Set<NodeId>) enumerators (graph: Sem
          (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference || edge.Class = EdgeClass.Evaluation ||
           match edge.Role with
           | EdgeRole.EnvironmentFormal | EdgeRole.EnvironmentCapture _ | EdgeRole.IteratorCurrentAdmitted
+          | EdgeRole.SequenceCaptureFormation | EdgeRole.SequenceCaptureInitializer _
+          | EdgeRole.ContinuationValue | EdgeRole.ContinuationSlotAccess
+          | EdgeRole.Delimiter | EdgeRole.SuspensionCut _ | EdgeRole.SuspensionResume _
+          | EdgeRole.SuspensionResumeAction _ | EdgeRole.SuspensionCompleted | EdgeRole.SuspensionLiveAcross
           | EdgeRole.SequenceElementAdmission | EdgeRole.SequenceElementOwner
           | EdgeRole.SequenceElementPayload | EdgeRole.SequenceElementUnknown
           | EdgeRole.SequencePullBody | EdgeRole.SequenceInitialize | EdgeRole.SequenceEffectUnknown -> true
@@ -74,7 +78,11 @@ let private sequenceSnapshot (participants: Set<NodeId>) enumerators (graph: Sem
             | EdgeRole.EvaluationOperand access -> Ok(SequenceRangeRelationKind.EvaluationOperand access)
             | EdgeRole.EvaluationFlow(before, after, transfer) -> Ok(SequenceRangeRelationKind.EvaluationFlow(before, after, transfer))
             | EdgeRole.EnvironmentCapture mutable' -> Ok(SequenceRangeRelationKind.EnvironmentCapture mutable')
+            | EdgeRole.SequenceCaptureInitializer mutable' -> Ok(SequenceRangeRelationKind.SequenceCaptureInitializer mutable')
             | EdgeRole.ContinuationCase tag -> Ok(SequenceRangeRelationKind.ContinuationCase tag)
+            | EdgeRole.SuspensionCut state -> Ok(SequenceRangeRelationKind.SuspensionCut state)
+            | EdgeRole.SuspensionResume state -> Ok(SequenceRangeRelationKind.SuspensionResume state)
+            | EdgeRole.SuspensionResumeAction state -> Ok(SequenceRangeRelationKind.SuspensionResumeAction state)
             | role ->
                 let case, fields = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(role, typeof<EdgeRole>)
                 if fields.Length = 0 then Ok(SequenceRangeRelationKind.Named case.Name)
@@ -138,10 +146,25 @@ let finiteCellObligations (graph: SemanticGraph) =
 /// ordering, duplicate rows and typed payloads; participant IDs alone omit
 /// contradictory incidence and the absence of additional uses.
 /// Scope is the whole current source graph. The additional snapshot is active
-/// only while finite-cell range or certificate evidence is resident.
+/// while finite-cell evidence or a generated integer frame read is resident.
+/// Frame reads depend on the same current storage/write census even when their
+/// finite range comes from arithmetic rather than an activation certificate.
 let finiteCellRelations (graph: SemanticGraph) : Result<FiniteCellSourceRelation list option, string> =
     let obligations = finiteCellObligations graph |> List.map fst |> Set.ofList
-    let active = not obligations.IsEmpty || (graph.Edges |> List.exists (fun edge -> edge.Role = EdgeRole.FiniteCellRange))
+    let supportObligations =
+        graph.Nodes |> Map.fold (fun found id node ->
+            match node.Kind with
+            | SemanticKind.Obligation info when info.Kind = "continuation-state-range" -> Set.add id found
+            | _ -> found) obligations
+    let frameReads = graph.Nodes.Values |> Seq.exists (fun node ->
+        node.IsReachable &&
+        (match node.Kind with SemanticKind.FrameRead _ -> true | _ -> false) &&
+        (Types.tryGetNTUKind node.Type |> Option.exists Clef.Compiler.NativeTypedTree.NativeTypes.NTUKind.isInteger))
+    let liftedCurrent = graph.Edges |> List.exists (fun edge ->
+        edge.Role = EdgeRole.IteratorCurrentAdmitted && edge.Sources.Length > 3 &&
+        (graph.Nodes.TryFind edge.Target |> Option.exists (fun node ->
+            node.IsReachable && (Types.tryGetNTUKind node.Type |> Option.exists Clef.Compiler.NativeTypedTree.NativeTypes.NTUKind.isInteger))))
+    let active = frameReads || liftedCurrent || not obligations.IsEmpty || (graph.Edges |> List.exists (fun edge -> edge.Role = EdgeRole.FiniteCellRange))
     if not active then Ok None else
     let sourceTarget (edge: Hyperedge) =
         graph.Nodes.TryFind edge.Target |> Option.forall (fun node ->
@@ -149,18 +172,31 @@ let finiteCellRelations (graph: SemanticGraph) : Result<FiniteCellSourceRelation
                  node.Metadata.ContainsKey "Baker.SpatialPublicationOwned"))
     let selected (edge: Hyperedge) =
         sourceTarget edge &&
-        (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference ||
+        (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference || edge.Class = EdgeClass.Evaluation ||
          match edge.Role with
          | EdgeRole.ProgramInitialization | EdgeRole.ProgramEntryCall | EdgeRole.ProgramInitializer
          | EdgeRole.ProgramValueIntent | EdgeRole.EnvironmentFormal | EdgeRole.EnvironmentCapture _
+         | EdgeRole.SequenceCaptureFormation | EdgeRole.SequenceCaptureInitializer _
+         | EdgeRole.ContinuationValue | EdgeRole.ContinuationSlotAccess
+         | EdgeRole.Delimiter | EdgeRole.SuspensionCut _ | EdgeRole.SuspensionResume _
+         | EdgeRole.SuspensionResumeAction _ | EdgeRole.SuspensionCompleted | EdgeRole.SuspensionLiveAcross
+         | EdgeRole.IteratorCurrentAdmitted | EdgeRole.SequenceElementAdmission | EdgeRole.SequenceElementOwner
+         | EdgeRole.SequenceElementPayload | EdgeRole.SequenceElementUnknown
+         | EdgeRole.SequencePullBody | EdgeRole.SequenceInitialize | EdgeRole.SequenceEffectUnknown
          | EdgeRole.FiniteCellRange -> true
-         | EdgeRole.Constrains -> obligations.Contains edge.Target
+         | EdgeRole.Constrains -> supportObligations.Contains edge.Target
          | _ -> false)
     graph.Edges |> List.filter selected |> List.fold (fun state (edge: Hyperedge) ->
         let kind =
             match edge.Role with
             | EdgeRole.ContinuationCase tag -> Ok(FiniteCellRelationKind.ContinuationCase tag)
             | EdgeRole.EnvironmentCapture mutable' -> Ok(FiniteCellRelationKind.EnvironmentCapture mutable')
+            | EdgeRole.SequenceCaptureInitializer mutable' -> Ok(FiniteCellRelationKind.SequenceCaptureInitializer mutable')
+            | EdgeRole.EvaluationOperand access -> Ok(FiniteCellRelationKind.EvaluationOperand access)
+            | EdgeRole.EvaluationFlow(before, after, transfer) -> Ok(FiniteCellRelationKind.EvaluationFlow(before, after, transfer))
+            | EdgeRole.SuspensionCut state -> Ok(FiniteCellRelationKind.SuspensionCut state)
+            | EdgeRole.SuspensionResume state -> Ok(FiniteCellRelationKind.SuspensionResume state)
+            | EdgeRole.SuspensionResumeAction state -> Ok(FiniteCellRelationKind.SuspensionResumeAction state)
             | role ->
                 let case, fields = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(role, typeof<EdgeRole>)
                 if fields.Length = 0 then Ok(FiniteCellRelationKind.Named case.Name)

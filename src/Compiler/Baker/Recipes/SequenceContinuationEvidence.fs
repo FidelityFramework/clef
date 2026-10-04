@@ -204,6 +204,43 @@ let forMachine (graph: SemanticGraph) (control: Control.Control)
                 match machine.CaseBodies.TryFind step.Label with
                 | Some body -> match writesIn body with [_, value] -> literal value = Some(bigint state) | _ -> false
                 | None -> false)
+    let scalarCurrent =
+        match graph.Nodes.TryFind frame.Current |> Option.bind (fun node -> Types.tryGetNTUKind node.Type) with
+        | Some (NTUKind.NTUint _ | NTUKind.NTUuint _ | NTUKind.NTUbool | NTUKind.NTUchar) -> true
+        | _ -> false
+    let rec persistentEnvironment seen id =
+        if Set.contains id seen then false
+        elif id = frame.Formal then true
+        else
+            let seen = Set.add id seen
+            match nodes.TryFind id with
+            | Some { Kind = SemanticKind.VarRef(_, Some value) | SemanticKind.TypeAnnotation(value, _) } -> persistentEnvironment seen value
+            | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> persistentEnvironment seen value
+            | _ -> false
+    let currentCuts = cuts |> List.map (fun (step, payload, _) ->
+        match machine.CaseBodies.TryFind step.Label with
+        | Some action ->
+            match nodes.TryFind action with
+            | Some { Kind = SemanticKind.Sequential [writer; _; _] } ->
+                match nodes.TryFind writer, nodes.TryFind payload with
+                | Some { Kind = SemanticKind.FrameWrite(environment, slot, value) }, Some source
+                    when slot = frame.Current && persistentEnvironment Set.empty environment &&
+                         (nodes.TryFind value |> Option.exists (fun actual -> actual.Type = source.Type)) ->
+                    let originals = machine.ValueSources |> List.filter (fun (target, _) -> target = value)
+                    if value = payload || originals = [value, payload] then Some(writer, value, step.Origin)
+                    else None
+                | _ -> None
+            | _ -> None
+        | _ -> None)
+    let currentWrites =
+        generated.Values |> Seq.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.FrameWrite(_, slot, value) when slot = frame.Current -> Some(node.Id, value)
+            | _ -> None) |> Set.ofSeq
+    let currentWritesValid =
+        List.forall Option.isSome currentCuts &&
+        (currentCuts |> List.choose id |> List.map (fun (writer, value, _) -> writer, value) |> Set.ofList) = currentWrites &&
+        currentWrites.Count = currentCuts.Length
     if not ownerValid || frame.Owner <> control.Owner || frame.Generator <> control.Generator then
         fail control.Owner "Continuation evidence requires the exact source owner and generator."
     elif not (graph.Nodes.ContainsKey frame.State && graph.Nodes.ContainsKey frame.Current && exists machine.CompletedBody) then
@@ -225,6 +262,8 @@ let forMachine (graph: SemanticGraph) (control: Control.Control)
          || entryDispatch.Length <> 1 || actionDispatch.Length <> 1 then
         fail control.Owner "Generated continuation entries do not match their settled dispatch actions."
     elif not stateWritesValid then fail control.Owner "Generated continuation state writes do not match suspension and completion."
+    elif scalarCurrent && not currentWritesValid then
+        fail control.Owner "Generated scalar current writes lack complete source-cut and payload correspondence."
     elif not pcValid then fail control.Owner "Generated program counter lacks its exact finite control range or admitted writes."
     else
         let owner = sourceOwner.Value
@@ -266,4 +305,9 @@ let forMachine (graph: SemanticGraph) (control: Control.Control)
                 :: (writes |> List.map (fun (site, value) ->
                     numeric (literal value).Value [owner.Id; control.Generator; frame.State; site; value] site))
                 |> Enrichment.concat
-            Ok { obligations with NewEdges = initial :: initialAction :: completed :: relations @ obligations.NewEdges }
+            let currentOrigins =
+                if not scalarCurrent then []
+                else currentCuts |> List.choose id |> List.map (fun (writer, _, sourceYield) ->
+                    { Class = EdgeClass.Provenance; Role = EdgeRole.ContinuationValue; Ordinal = 0
+                      Sources = [sourceYield]; Target = writer })
+            Ok { obligations with NewEdges = initial :: initialAction :: completed :: relations @ currentOrigins @ obligations.NewEdges }

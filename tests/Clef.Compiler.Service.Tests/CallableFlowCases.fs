@@ -711,3 +711,128 @@ type CallableBranchAuthorityCases() =
         CallableBranchAuthorityFixture.refused changed
         Assert.Equal<CallableBranchAuthority>(authority, changed.Codata.Value.CallableBranches)
         Assert.Equal<CallableBranchAuthority>(authority, CallableBranchAuthorityFixture.current graph)
+
+module private CallableAbsentPayloadFixture =
+    type Model = {
+        Graph: SemanticGraph
+        Call: NodeId
+        First: NodeId
+        Fallback: NodeId
+        Constructor: NodeId
+        Projection: NodeId
+        Reference: NodeId
+        Opaque: NodeId
+        ActiveName: string
+        ActiveTag: int
+    }
+
+    let create union mode =
+        let builder = NodeBuilder()
+        let callable = NativeType.TFun(Types.boolType, Types.boolType)
+        let functionValue name =
+            let parameter = builder.Create(SemanticKind.PatternBinding name, Types.boolType, dummyRange)
+            let read = builder.Create(SemanticKind.VarRef(name, Some parameter.Id), Types.boolType, dummyRange)
+            builder.Create(SemanticKind.Lambda([name, Types.boolType, parameter.Id], read.Id,
+                                              [], None, LambdaContext.RegularClosure), callable, dummyRange)
+        let first, fallback = functionValue "first", functionValue "fallback"
+        let error = builder.Create(SemanticKind.Literal(NativeLiteral.Bool false), Types.boolType, dummyRange)
+        let carrier, absentName, absentTag, absentPayload, activeName, activeTag =
+            if union = "option" then
+                NativeType.TApp(Types.optionTyCon, [callable]), "None", 0, None, "Some", 1
+            else
+                NativeType.TApp(Clef.Compiler.NativeTypedTree.Expressions.Types.resultTycon, [callable; Types.boolType]),
+                "Error", 1, Some error.Id, "Ok", 0
+        let absent = builder.Create(SemanticKind.DUConstruct(absentName, absentTag, absentPayload, None), carrier, dummyRange)
+        let active = builder.Create(SemanticKind.DUConstruct(activeName, activeTag, Some first.Id, None), carrier, dummyRange)
+        let opaque = builder.Create(SemanticKind.PatternBinding "opaque", carrier, dummyRange)
+        let condition = builder.Create(SemanticKind.PatternBinding "condition", Types.boolType, dummyRange)
+        let input =
+            match mode with
+            | "mixed" -> builder.Create(SemanticKind.IfThenElse(condition.Id, absent.Id, Some active.Id), carrier, dummyRange)
+            | "opaque" -> builder.Create(SemanticKind.IfThenElse(condition.Id, absent.Id, Some opaque.Id), carrier, dummyRange)
+            | _ -> absent
+        let inputBinding = builder.Create(SemanticKind.Binding("input", false, false, None), carrier, dummyRange, children = [input.Id])
+        let reference = builder.Create(SemanticKind.VarRef("input", Some inputBinding.Id), carrier, dummyRange)
+        let projection = builder.Create(SemanticKind.DUEliminate(reference.Id, activeTag, activeName, callable), callable, dummyRange)
+        let alias = builder.Create(SemanticKind.Binding("projected", false, false, None), callable, dummyRange, children = [projection.Id])
+        let aliasRead = builder.Create(SemanticKind.VarRef("projected", Some alias.Id), callable, dummyRange)
+        let choice = builder.Create(SemanticKind.IfThenElse(condition.Id, aliasRead.Id, Some fallback.Id), callable, dummyRange)
+        let argument = builder.Create(SemanticKind.Literal(NativeLiteral.Bool true), Types.boolType, dummyRange)
+        let call = builder.Create(SemanticKind.Application(choice.Id, [argument.Id]), Types.boolType, dummyRange)
+        { Graph = builder.Build []; Call = call.Id; First = first.Id; Fallback = fallback.Id
+          Constructor = absent.Id; Projection = projection.Id; Reference = reference.Id; Opaque = opaque.Id
+          ActiveName = activeName; ActiveTag = activeTag }
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "CallableFlow")>]
+type CallableAbsentPayloadCases() =
+    // Width Inference §6 distinguishes unreachable computations from missing
+    // observations. NTU Types §3.2 joins the actual call-site alternatives.
+    [<Theory>]
+    [<InlineData("option")>]
+    [<InlineData("result")>]
+    member _.``A proved absent callable payload stays empty through aliases without obscuring its fallback`` union =
+        let model = CallableAbsentPayloadFixture.create union "absent"
+        for resolve in [FlowOrigins.resolve; FlowOrigins.resolveCallableBranches] do
+            let current = resolve model.Graph
+            CallableResultOriginFixture.complete [model.Fallback] current.Calls[model.Call]
+            Assert.Empty current.FirstBoundaries[model.Call].UnknownOrigins
+        // Rechecking the same identifiers after a legitimate case edit must
+        // discover the new payload, rather than retain the earlier emptiness.
+        let constructor = model.Graph.Nodes[model.Constructor]
+        let changed =
+            { constructor with Kind = SemanticKind.DUConstruct(model.ActiveName, model.ActiveTag, Some model.First, None)
+                               Children = [model.First] }
+        let graph =
+            { model.Graph with Nodes = model.Graph.Nodes.Add(changed.Id, changed)
+                               Edges = model.Graph.Edges |> List.filter (fun edge -> edge.Target <> changed.Id) }
+        CallableResultOriginFixture.complete [model.First; model.Fallback] (FlowOrigins.resolve graph).Calls[model.Call]
+        CallableResultOriginFixture.complete [model.Fallback] (FlowOrigins.resolve model.Graph).Calls[model.Call]
+
+    [<Theory>]
+    [<InlineData("option", "mixed")>]
+    [<InlineData("result", "mixed")>]
+    [<InlineData("option", "opaque")>]
+    [<InlineData("result", "opaque")>]
+    member _.``Empty alternatives never suppress actual payloads or opaque alternatives`` (union, mode) =
+        let model = CallableAbsentPayloadFixture.create union mode
+        let current = FlowOrigins.resolve model.Graph
+        if mode = "mixed" then
+            CallableResultOriginFixture.complete [model.First; model.Fallback] current.Calls[model.Call]
+            Assert.Empty current.FirstBoundaries[model.Call].UnknownOrigins
+        else
+            Assert.True current.Calls[model.Call].Unknown
+            Assert.False current.Calls[model.Call].Complete
+            Assert.Equal<Set<NodeId>>(Set.singleton model.Fallback, CallableResultOriginFixture.targets current.Calls[model.Call])
+            Assert.NotEmpty current.FirstBoundaries[model.Call].UnknownOrigins
+
+    [<Theory>]
+    [<InlineData("option")>]
+    [<InlineData("result")>]
+    member _.``Malformed constructor projection or alias cannot mint absent payload evidence`` union =
+        let model = CallableAbsentPayloadFixture.create union "absent"
+        CallableResultOriginFixture.complete [model.Fallback] (FlowOrigins.resolve model.Graph).Calls[model.Call]
+        let constructor, projection, reference = model.Graph.Nodes[model.Constructor], model.Graph.Nodes[model.Projection], model.Graph.Nodes[model.Reference]
+        let malformedConstructor =
+            match constructor.Kind with
+            | SemanticKind.DUConstruct(_, tag, payload, fields) ->
+                { constructor with Kind = SemanticKind.DUConstruct("wrong-case", tag, payload, fields) }
+            | _ -> failwith "Expected native constructor"
+        let malformedPayload =
+            match constructor.Kind with
+            | SemanticKind.DUConstruct(name, tag, _, fields) ->
+                { constructor with Kind = SemanticKind.DUConstruct(name, tag, Some model.First, fields); Children = [model.First] }
+            | _ -> failwith "Expected native constructor"
+        let malformedProjection =
+            { projection with Kind = SemanticKind.DUEliminate(model.Reference, model.ActiveTag, "wrong-case", projection.Type) }
+        let mutations =
+            [ malformedConstructor; malformedPayload; malformedProjection
+              { projection with Children = [] }
+              { projection with Type = NativeType.TFun(Types.unitType, Types.boolType) }
+              { reference with Kind = SemanticKind.VarRef("opaque", Some model.Opaque) }
+              { constructor with IsReachable = false } ]
+        for changed in mutations do
+            let graph = { model.Graph with Nodes = model.Graph.Nodes.Add(changed.Id, changed) }
+            let current = FlowOrigins.resolve graph
+            Assert.True(current.Calls[model.Call].Unknown, sprintf "Incorrect empty proof after %A" changed.Kind)
+            Assert.False current.Calls[model.Call].Complete
+            Assert.NotEmpty current.FirstBoundaries[model.Call].UnknownOrigins

@@ -12,9 +12,9 @@ open Clef.Compiler.Baker.Ingredients.Closures
 
 /// Keep occurrences, including repeated slots in one container. A good guarded
 /// occurrence cannot authorize another structural demand for the same read.
-let structuralConsumers (graph: SemanticGraph) =
+let structuralConsumersIncluding (graph: SemanticGraph) (support: Set<NodeId>) =
     graph.Nodes.Values
-    |> Seq.filter _.IsReachable
+    |> Seq.filter (fun node -> node.IsReachable || support.Contains node.Id)
     |> Seq.collect structuralIncidence
     |> Seq.filter Hyperedge.isStructural
     |> Seq.collect (fun edge -> edge.Sources |> Seq.map (fun source -> source, edge.Target))
@@ -22,8 +22,13 @@ let structuralConsumers (graph: SemanticGraph) =
     |> Seq.map (fun (source, incidence) -> source, incidence |> Seq.map snd |> Seq.toList)
     |> Map.ofSeq
 
-let forLoop (graph: SemanticGraph) (consumers: Map<NodeId, NodeId list>) (loop: SemanticNode) : Hyperedge option =
-    let resident id = graph.Nodes.TryFind id |> Option.filter _.IsReachable
+let structuralConsumers (graph: SemanticGraph) = structuralConsumersIncluding graph Set.empty
+
+/// Retained source occurrences can support a checked representation reader.
+/// The caller owns source-to-machine correspondence; this recipe still checks
+/// every guard, type and structural occurrence in the source iterate protocol.
+let forSupportedLoop (graph: SemanticGraph) (consumers: Map<NodeId, NodeId list>) (support: Set<NodeId>) (loop: SemanticNode) : Hyperedge option =
+    let resident id = graph.Nodes.TryFind id |> Option.filter (fun node -> node.IsReachable || support.Contains node.Id)
     let solelyWithin source container = consumers.TryFind source = Some [container]
     let reference id =
         resident id |> Option.bind (fun node ->
@@ -54,7 +59,7 @@ let forLoop (graph: SemanticGraph) (consumers: Map<NodeId, NodeId list>) (loop: 
                 | _ -> None
             | _ -> None
     match loop.Kind with
-    | SemanticKind.WhileLoop(guard, body) when loop.IsReachable && solelyWithin guard loop.Id ->
+    | SemanticKind.WhileLoop(guard, body) when (loop.IsReachable || support.Contains loop.Id) && solelyWithin guard loop.Id ->
         match successfulPull guard, resident body with
         | Some(guardArgument, guardType), Some { Kind = SemanticKind.Sequential [currentBindingId; currentRefId; action] }
             when guardType = Types.boolType && (resident action).IsSome ->
@@ -82,3 +87,6 @@ let forLoop (graph: SemanticGraph) (consumers: Map<NodeId, NodeId list>) (loop: 
             | _ -> None
         | _ -> None
     | _ -> None
+
+let forLoop (graph: SemanticGraph) (consumers: Map<NodeId, NodeId list>) (loop: SemanticNode) : Hyperedge option =
+    forSupportedLoop graph consumers Set.empty loop

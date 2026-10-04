@@ -57,6 +57,14 @@ type Resolution = {
 
 type private Origin = NodeId * int
 
+// Negative offsets distinguish an opaque producer (-1) from a payload that
+// the current typed constructor proves absent (-2). Empty alternatives flow
+// internally so aliases cannot reseed them as unknown. They never supply a
+// callable target, arity, environment, or published branch witness.
+let private emptyOrigin id : Origin = id, -2
+let private isEmptyOrigin (_, offset) = offset = -2
+let private presentOrigins origins = origins |> Set.filter (isEmptyOrigin >> not)
+
 type private GuardDecision =
     | AwaitOrigins
     | BothArms
@@ -79,6 +87,19 @@ let private resultPayloads ty =
                      Clef.Compiler.NativeTypedTree.Expressions.Types.resultTycon -> Some ["Ok", ok; "Error", error]
     | _ -> None
 
+/// Case identity comes from the exact native declarations, not a matching
+/// name or discriminant. Unsupported unions retain conservative origins.
+let private casePayloads ty =
+    match resultPayloads ty with
+    | Some cases -> Some(cases |> List.map (fun (name, payload) -> name, Some payload))
+    | None ->
+        match applySubst ty with
+        | NativeType.TApp(constructor, [payload])
+            when Clef.Compiler.NativeTypedTree.TypeIdentities.constructor constructor =
+                     Clef.Compiler.NativeTypedTree.TypeIdentities.constructor Types.optionTyCon ->
+            Some ["None", None; "Some", Some payload]
+        | _ -> None
+
 let private branchReaders (graph: SemanticGraph) (nodes: Map<NodeId, SemanticNode>) =
     let sourceEdge (edge: Hyperedge) = edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference
     let edgeKey (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
@@ -100,20 +121,24 @@ let private branchReaders (graph: SemanticGraph) (nodes: Map<NodeId, SemanticNod
         (expected |> List.collect _.Sources |> List.forall nodes.ContainsKey) &&
         actual.Length = (List.distinct actual).Length &&
         List.forall (fun row -> expected |> List.exists (fun edge -> edgeKey edge = row)) actual
-    let resultAlternative unionType (origin, offset) =
-        match resultPayloads unionType, nodes.TryFind origin with
+    let caseAlternative unionType (origin, offset) =
+        match casePayloads unionType, nodes.TryFind origin with
         | Some cases, Some node when offset = 0 && sameType node.Type unionType && agrees node ->
             let value =
                 match node.Kind with
-                | SemanticKind.DUConstruct(name, tag, Some payload, None)
-                | SemanticKind.UnionCase(name, tag, Some payload) -> Some(name, tag, payload)
+                | SemanticKind.DUConstruct(name, tag, payload, None)
+                | SemanticKind.UnionCase(name, tag, payload) -> Some(name, tag, payload)
                 | _ -> None
             value |> Option.bind (fun (name, tag, payload) ->
                 let declared = if tag >= 0 && tag < cases.Length then List.tryItem tag cases else None
-                match declared, nodes.TryFind payload with
-                | Some(expectedName, expectedType), Some actual
-                    when name = expectedName && sameType actual.Type expectedType ->
-                    Some { Constructor = origin; Tag = tag; Payloads = [payload] }
+                match declared, payload with
+                | Some(expectedName, None), None when name = expectedName ->
+                    Some { Constructor = origin; Tag = tag; Payloads = [] }
+                | Some(expectedName, Some expectedType), Some payload when name = expectedName ->
+                    nodes.TryFind payload |> Option.bind (fun actual ->
+                        if sameType actual.Type expectedType then
+                            Some { Constructor = origin; Tag = tag; Payloads = [payload] }
+                        else None)
                 | _ -> None)
         | _ -> None
     let readGuard (choice: SemanticNode) =
@@ -188,7 +213,7 @@ let private branchReaders (graph: SemanticGraph) (nodes: Map<NodeId, SemanticNod
                     | Some guard when sameType guard.Type Types.boolType && agrees guard -> combine [follow yes; follow no]
                     | _ -> MalformedTransport
                 | SemanticKind.DUConstruct _ | SemanticKind.UnionCase _ ->
-                    if (resultAlternative expected (id, 0)).IsSome then ValidTransport else MalformedTransport
+                    if (caseAlternative expected (id, 0)).IsSome then ValidTransport else MalformedTransport
                 | SemanticKind.Lambda(parameters, body, [], _, _) ->
                     match nodes.TryFind body with
                     | Some body ->
@@ -232,7 +257,7 @@ let private branchReaders (graph: SemanticGraph) (nodes: Map<NodeId, SemanticNod
         let origins: Set<Origin> = read guard.Subject
         if origins.IsEmpty then AwaitOrigins
         else
-            let alternatives = origins |> Set.toList |> List.map (resultAlternative unionType)
+            let alternatives = origins |> Set.toList |> List.map (caseAlternative unionType)
             if List.exists Option.isNone alternatives then BothArms
             else
                 let alternatives = List.choose id alternatives
@@ -266,7 +291,7 @@ let private branchReaders (graph: SemanticGraph) (nodes: Map<NodeId, SemanticNod
                             SelectedArm = selectedArm
                             Alternatives = alternatives; Participants = participants }
                 | _ -> BothArms
-    guards, decide, resultAlternative, agrees
+    guards, decide, caseAlternative, agrees
 
 let private isFunctionValue (node: SemanticNode) =
     [ClosureMetadata.LambdaExpression; ClosureMetadata.RequiresClosurePair]
@@ -308,9 +333,10 @@ let private nativeOperation (nodes: Map<NodeId, SemanticNode>) callee =
 /// candidate from silently standing in for an opaque alternative.
 let private analyze branchSelections (graph: SemanticGraph) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
-    let guards, decideGuard, resultAlternative, agrees =
-        if branchSelections then branchReaders graph nodes
-        else Map.empty, (fun _ _ -> BothArms), (fun _ _ -> None), (fun _ -> false)
+    let sourceGuards, sourceDecision, caseAlternative, agrees = branchReaders graph nodes
+    let guards, decideGuard =
+        if branchSelections then sourceGuards, sourceDecision
+        else Map.empty, (fun _ _ -> BothArms)
     let facts = Dictionary<NodeId, Set<Origin>>()
     let fields = Dictionary<NodeId * string, Set<Origin>>()
     let read id = match facts.TryGetValue id with true, values -> values | _ -> Set.empty
@@ -377,7 +403,8 @@ let private analyze branchSelections (graph: SemanticGraph) =
     let rec invoke call seen (origins: Set<Origin>) (arguments: NodeId list) =
         origins |> Set.fold (fun results (id, offset) ->
             let key = id, offset, arguments.Length
-            if Set.contains key seen then results
+            if isEmptyOrigin (id, offset) then Set.add (id, offset) results
+            elif Set.contains key seen then results
             else
                 match shapes.TryFind id with
                 | Some (parameters, body) when offset >= 0 ->
@@ -401,7 +428,8 @@ let private analyze branchSelections (graph: SemanticGraph) =
         if not changed then
             // A callable or aggregate with no resident producing edge is
             // opaque. Its projections must remain in later joins beside any
-            // known candidate; an absent origin is not an absent alternative.
+            // known candidate. Proved-empty alternatives carry their marker
+            // through this pass instead of becoming opaque producing edges.
             seedUnknown <- false
             for KeyValue(id, node) in nodes do
                 match applySubst node.Type with
@@ -456,20 +484,20 @@ let private analyze branchSelections (graph: SemanticGraph) =
                 | SemanticKind.DUEliminate (value, tag, name, payloadType) ->
                     read value |> Set.fold (fun values ((origin, _) as alternative) ->
                         let payload =
-                            let resultCases =
-                                if branchSelections then nodes.TryFind value |> Option.bind (fun source -> resultPayloads source.Type)
-                                else None
-                            match resultCases with
-                            | Some cases ->
+                            let cases = nodes.TryFind value |> Option.bind (fun source -> casePayloads source.Type)
+                            match isEmptyOrigin alternative, cases with
+                            | true, _ -> Set.singleton alternative
+                            | false, Some cases ->
                                 let declared = if tag >= 0 && tag < cases.Length then List.tryItem tag cases else None
-                                match declared, resultAlternative nodes[value].Type alternative with
-                                | Some(caseName, caseType), Some constructor
+                                match declared, caseAlternative nodes[value].Type alternative with
+                                | Some(caseName, Some caseType), Some constructor
                                     when agrees node && name = caseName && sameType payloadType caseType && sameType node.Type caseType ->
-                                    if constructor.Tag = tag then union constructor.Payloads else Set.empty
+                                    if constructor.Tag = tag then union constructor.Payloads
+                                    else Set.singleton (emptyOrigin id)
                                 // An invalid constructor does not disappear just
                                 // because its advertised tag differs from this arm.
                                 | _ -> Set.singleton (origin, -1)
-                            | None ->
+                            | false, None ->
                                 match nodes.TryFind origin with
                                 | Some { Kind = SemanticKind.DUConstruct (_, actual, payload, _) }
                                 | Some { Kind = SemanticKind.UnionCase (_, actual, payload) } ->
@@ -478,23 +506,25 @@ let private analyze branchSelections (graph: SemanticGraph) =
                                 | _ -> Set.singleton (origin, -1)
                         Set.union values payload) Set.empty
                 | SemanticKind.TupleGet (value, index) ->
-                    read value |> Set.fold (fun values (origin, _) ->
+                    read value |> Set.fold (fun values ((origin, _) as alternative) ->
                         let element =
-                            match nodes.TryFind origin with
-                            | Some { Kind = SemanticKind.TupleExpr elements } ->
+                            match isEmptyOrigin alternative, nodes.TryFind origin with
+                            | true, _ -> Set.singleton alternative
+                            | false, Some { Kind = SemanticKind.TupleExpr elements } ->
                                 elements |> List.tryItem index |> Option.map read |> Option.defaultValue Set.empty
                             | _ -> Set.singleton (origin, -1)
                         Set.union values element) Set.empty
                 | SemanticKind.FieldGet (value, name) ->
-                    read value |> Set.fold (fun values (origin, _) ->
+                    read value |> Set.fold (fun values ((origin, _) as alternative) ->
                         let initial =
-                            match nodes.TryFind origin with
-                            | Some { Kind = SemanticKind.RecordExpr (members, _) } -> members |> List.tryPick (fun (field, value) -> if field = name then Some (read value) else None) |> Option.defaultValue (Set.singleton (origin, -1))
+                            match isEmptyOrigin alternative, nodes.TryFind origin with
+                            | true, _ -> Set.singleton alternative
+                            | false, Some { Kind = SemanticKind.RecordExpr (members, _) } -> members |> List.tryPick (fun (field, value) -> if field = name then Some (read value) else None) |> Option.defaultValue (Set.singleton (origin, -1))
                             | _ -> Set.singleton (origin, -1)
                         let assigned = match fields.TryGetValue ((origin, name)) with true, values -> values | _ -> Set.empty
                         Set.union values (Set.union initial assigned)) Set.empty
                 | SemanticKind.FieldSet (value, name, assigned) ->
-                    for origin, _ in read value do
+                    for origin, _ in presentOrigins (read value) do
                         let old = match fields.TryGetValue ((origin, name)) with true, values -> values | _ -> Set.empty
                         let combined = Set.union old (read assigned)
                         if old <> combined then
@@ -520,7 +550,8 @@ let private analyze branchSelections (graph: SemanticGraph) =
 /// the call. This does not establish environment residence or native admission.
 let private resolveWith branchSelections (graph: SemanticGraph) : Resolution =
     let nodes, shapes, facts, inputs, branches = analyze branchSelections graph
-    let read id = facts.TryFind id |> Option.defaultValue Set.empty
+    let read id = facts.TryFind id |> Option.defaultValue Set.empty |> presentOrigins
+    let provedEmpty id = facts.TryFind id |> Option.exists (fun origins -> not origins.IsEmpty && Set.forall isEmptyOrigin origins)
     let nativeCalls =
         nodes |> Map.toList |> List.choose (fun (id, node) ->
             match node.Kind with
@@ -538,7 +569,7 @@ let private resolveWith branchSelections (graph: SemanticGraph) : Resolution =
                         match shapes.TryFind lambda with
                         | Some (parameters, _) when offset = 0 -> parameters.Length = arguments.Length
                         | _ -> false))
-                Some(id, { Targets = targets; Unknown = not complete; Complete = complete })
+                Some(id, { Targets = targets; Unknown = not complete && not (provedEmpty pointer); Complete = complete })
             | _ -> None)
         |> Map.ofList
     let calls = nodes |> Map.toList |> List.choose (fun (id, node) ->
@@ -551,7 +582,7 @@ let private resolveWith branchSelections (graph: SemanticGraph) : Resolution =
                     Some { Lambda = lambda; Parameters = parameters |> List.skip (min offset parameters.Length)
                            Arguments = arguments; Body = body }
                 | _ -> None)
-            let unknown = origins.IsEmpty || (origins |> Set.exists (fun (lambda, offset) ->
+            let unknown = (origins.IsEmpty && not (provedEmpty callee)) || (origins |> Set.exists (fun (lambda, offset) ->
                 match shapes.TryFind lambda with
                 | Some (parameters, _) when offset >= 0 -> arguments.Length > max 1 parameters.Length - offset
                 | _ -> true))
@@ -562,7 +593,7 @@ let private resolveWith branchSelections (graph: SemanticGraph) : Resolution =
             Some(id, { Targets = targets; Unknown = unknown; Complete = complete })
         | _ -> None) |> Map.ofList
     let lambdas = facts |> Map.toList |> List.choose (fun (id, origins) ->
-        match Set.toList origins with
+        match origins |> presentOrigins |> Set.toList with
         | [lambda, 0] when shapes.ContainsKey lambda -> Some(id, lambda)
         | _ -> None) |> Map.ofList
     let boundaries =
@@ -581,7 +612,7 @@ let private resolveWith branchSelections (graph: SemanticGraph) : Resolution =
                                   Remaining = max 1 parameters.Length - offset }
                             target :: targets, unknown
                         | _ -> targets, Set.add lambda unknown) ([], Set.empty)
-                let unknown = if origins.IsEmpty then Set.singleton callee else unknown
+                let unknown = if origins.IsEmpty && not (provedEmpty callee) then Set.singleton callee else unknown
                 Some(id, { Callee = callee; Targets = List.rev targets; UnknownOrigins = unknown })
             | _ -> None)
         |> Map.ofList
@@ -600,7 +631,7 @@ let knownLambdas graph = (resolve graph).Lambdas
 
 let applicationStages (graph: SemanticGraph) : Map<NodeId, Stage list> =
     let nodes, shapes, facts, _, _ = analyze false graph
-    let read id = facts.TryFind id |> Option.defaultValue Set.empty
+    let read id = facts.TryFind id |> Option.defaultValue Set.empty |> presentOrigins
 
     let boundary origins =
         if Set.isEmpty origins then None

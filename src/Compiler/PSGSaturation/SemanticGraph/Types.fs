@@ -961,6 +961,12 @@ type FiniteCellRelationKind =
     | Named of string
     | ContinuationCase of int
     | EnvironmentCapture of bool
+    | SequenceCaptureInitializer of bool
+    | EvaluationOperand of EvaluationAccess
+    | EvaluationFlow of EvaluationPort * EvaluationPort * EvaluationTransfer
+    | SuspensionCut of int
+    | SuspensionResume of int
+    | SuspensionResumeAction of int
 
 type FiniteCellSourceRelation = {
     Class: EdgeClass
@@ -975,6 +981,10 @@ type SequenceRangeRelationKind =
     | Named of string
     | ContinuationCase of int
     | EnvironmentCapture of bool
+    | SequenceCaptureInitializer of bool
+    | SuspensionCut of int
+    | SuspensionResume of int
+    | SuspensionResumeAction of int
     | Composition of sourceLabel: int * remainingPulls: bigint
     | EvaluationOperand of EvaluationAccess
     | EvaluationFlow of EvaluationPort * EvaluationPort * EvaluationTransfer

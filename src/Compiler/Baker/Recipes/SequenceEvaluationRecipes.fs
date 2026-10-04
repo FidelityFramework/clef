@@ -12,8 +12,7 @@ open Clef.Compiler.Baker.Ingredients.Obligations
 open Clef.Compiler.Baker.Ingredients.Suspensions
 module E = Clef.Compiler.Baker.Ingredients.Evaluation
 
-let private local (graph: SemanticGraph) owner generator (node: SemanticNode) =
-    let resident id = graph.Nodes.TryFind id |> Option.exists _.IsReachable
+let private local (graph: SemanticGraph) resident owner generator (node: SemanticNode) =
     let pending reason related =
         [E.pending owner node.Id reason (related |> List.filter (fun id -> graph.Nodes.ContainsKey id))], []
     let values ids = ids |> List.mapi (fun slot id -> slot, id)
@@ -100,7 +99,7 @@ let private local (graph: SemanticGraph) owner generator (node: SemanticNode) =
         | _ -> pending EvaluationResidual.InvalidShape [payload]
     | SemanticKind.Set (target, value) ->
         match graph.Nodes.TryFind target with
-        | Some { Kind = SemanticKind.VarRef _; IsReachable = true } ->
+        | Some { Kind = SemanticKind.VarRef _ } when resident target ->
             withOperands [target; value] (fun _ ->
                 [E.operand owner node.Id 0 EvaluationAccess.Storage target
                  E.operand owner node.Id 1 EvaluationAccess.Value value]
@@ -143,20 +142,31 @@ let private local (graph: SemanticGraph) owner generator (node: SemanticNode) =
     | SemanticKind.ContinuationAllocate _ | SemanticKind.AggregateStorage _ -> eager []
     | SemanticKind.DUInitialize (destination, _, _, payload) -> eager (destination :: Option.toList payload)
 
+let private forRoot (graph: SemanticGraph) resident owner generator body =
+    let rec visit seen edges = function
+        | [] -> List.rev edges |> List.concat
+        | id :: rest when Set.contains id seen -> visit seen edges rest
+        | id :: rest ->
+            let facts, dependencies = local graph resident owner generator graph.Nodes[id]
+            visit (Set.add id seen) (facts :: edges) (dependencies @ rest)
+    if resident body then
+        { Enrichment.empty with NewEdges = E.root owner generator body :: visit Set.empty [] [body] }
+    else
+        { Enrichment.empty with NewEdges = [E.pending owner owner EvaluationResidual.MissingOperand [body]] }
+
+/// Read retained typed source contracts through their explicit evaluation root.
+/// Representation owners must separately establish current source-to-machine
+/// correspondence; off-spine source support is not executable reachability.
+let forRetainedRoot (graph: SemanticGraph) owner generator body : Enrichment =
+    forRoot graph graph.Nodes.ContainsKey owner generator body
+
 let forOwner (graph: SemanticGraph) (owner: SemanticNode) : Enrichment =
     match owner.Kind with
     | SemanticKind.SeqExpr (generator, _) ->
         match graph.Nodes.TryFind generator with
         | Some { Kind = SemanticKind.Lambda (_, body, _, _, LambdaContext.SeqGenerator); IsReachable = true }
             when graph.Nodes.TryFind body |> Option.exists _.IsReachable ->
-            let rec visit seen edges = function
-                | [] -> List.rev edges |> List.concat
-                | id :: rest when Set.contains id seen -> visit seen edges rest
-                | id :: rest ->
-                    let facts, dependencies = local graph owner.Id generator graph.Nodes[id]
-                    visit (Set.add id seen) (facts :: edges) (dependencies @ rest)
-            { Enrichment.empty with
-                NewEdges = E.root owner.Id generator body :: visit Set.empty [] [body] }
+            forRoot graph (fun id -> graph.Nodes.TryFind id |> Option.exists _.IsReachable) owner.Id generator body
         | _ ->
             { Enrichment.empty with
                 NewEdges = [E.pending owner.Id owner.Id EvaluationResidual.InvalidShape

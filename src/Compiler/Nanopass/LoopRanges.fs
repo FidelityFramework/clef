@@ -10,19 +10,17 @@ open Clef.Compiler.Baker.Ingredients.Obligations
 module Recipes = Clef.Compiler.Baker.Recipes.LoopRangeRecipes
 
 let private isOurs = function
-    | SemanticKind.Obligation { Body = ObligationBody.FiniteLoopTrip _ | ObligationBody.AdditiveLoopInvariant _ } -> true
-    | SemanticKind.Obligation { Body = ObligationBody.FiniteLinearRecurrence _; Kind = "finite-linear-recurrence" } -> true
+    // Sequence accumulations share the additive proposition, but own their
+    // claims independently. A proposition's shape is not its recipe owner.
+    | SemanticKind.Obligation { Kind = "finite-loop-trip" | "additive-loop-invariant" | "finite-linear-recurrence" } -> true
     | _ -> false
 
 let recognize inputs (graph: SemanticGraph) =
     let old = graph.Nodes |> Map.filter (fun _ node -> isOurs node.Kind)
     let ids = old |> Map.keys |> Set.ofSeq
-    let anchors = old.Values |> Seq.choose (fun node -> match node.Kind with SemanticKind.Obligation info -> Some info.Id | _ -> None) |> Set.ofSeq
+    let graph = Clef.Compiler.Baker.Recipes.ObligationRecipes.retireAnchors ids graph
     let graph = { graph with
-                    Nodes = graph.Nodes |> Map.filter (fun id _ -> not (ids.Contains id)) |> Map.map (fun _ node ->
-                        match node.Metadata.TryFind ObligationMetadata.Anchors with
-                        | Some(MetadataValue.StringList names) -> { node with Metadata = node.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList(names |> List.filter (fun name -> not (anchors.Contains name)))) }
-                        | _ -> node)
+                    Nodes = graph.Nodes |> Map.filter (fun id _ -> not (ids.Contains id))
                     Edges = graph.Edges |> List.filter (fun edge -> not (ids.Contains edge.Target) && not (edge.Sources |> List.exists ids.Contains)) }
     let recognition = Recipes.recognize graph inputs
     Recipes.foldRelations recognition graph, recognition

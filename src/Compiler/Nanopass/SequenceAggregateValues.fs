@@ -182,4 +182,4 @@ let prepare (graph: SemanticGraph) admitted certificates =
         else FoldIn.foldIn (FanOut.fanOut "SequenceAggregateValues" (fun node -> recipes.ContainsKey node.Id) (fun node _ -> recipes[node.Id]) graph) graph
     let rewritten = { rewritten with Layouts = graph.Layouts; FieldRanges = graph.FieldRanges; ElementRanges = graph.ElementRanges; StaticStringPool = graph.StaticStringPool; LiteralStorage = graph.LiteralStorage }
     let rewritten = ObligationElaboration.foldIn proofs rewritten
-    { Graph = rewritten; Reads = reads; Certificates = certificates; Residences = residences; Unresolved = List.rev unresolved }
+    { Graph = RepresentationRanges.preserve graph rewritten; Reads = reads; Certificates = certificates; Residences = residences; Unresolved = List.rev unresolved }

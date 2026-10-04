@@ -181,6 +181,7 @@ let rec private emptyConsumers (graph: SemanticGraph) origins =
         { rewritten with FieldRanges = graph.FieldRanges; ElementRanges = graph.ElementRanges
                          Layouts = graph.Layouts; StaticStringPool = graph.StaticStringPool; LiteralStorage = graph.LiteralStorage }
         |> Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable
+        |> RepresentationRanges.preserve graph
         |> SequenceEvaluation.normalize
         |> fun rewritten -> emptyConsumers rewritten origins
 
@@ -360,6 +361,13 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
         let rewritten =
             if List.isEmpty machines then rewritten
             else Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable rewritten
+        // Pulls now enter the realized generator body. Refresh this owner's
+        // source effect projection through the checked current storage inputs
+        // before preserving and recording the finite representation receipt.
+        let rewritten = if List.isEmpty machines then rewritten else SequenceEffects.normalize rewritten
+        // The machine recipe owns this source-to-frame change, including its
+        // finite-cell support. Fold it before other owners consume the result.
+        let rewritten = RepresentationRanges.preserve graph rewritten
         let flows = Origins.describe rewritten propagatedFacts
         let frames = plans |> List.map (fun (_, frame, _, _) -> frame.Owner, frame) |> Map.ofList
         let families, familyEvidence, familyResiduals = Families.settle rewritten familyPlan frames flows

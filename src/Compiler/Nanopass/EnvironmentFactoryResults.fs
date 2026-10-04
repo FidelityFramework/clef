@@ -202,7 +202,7 @@ let prepareWithAccounts (graph: SemanticGraph) (curry: CurryInfo) =
     // descriptor-only proofs across this exact source rewrite boundary.
     let demanded = OrdinaryDemand.normalize updated
     let transferred = Clef.Compiler.Baker.Recipes.StringComparisonRecipes.transferLengthAfterFactoryRewrite graph demanded
-    transferred, updatedCurry, resultAccounts
+    RepresentationRanges.preserve graph transferred, updatedCurry, resultAccounts
 
 /// Retained component callers consume the graph/curry pair. Production carries
 /// the explicit accounts above through final source-owned Codata assembly.
