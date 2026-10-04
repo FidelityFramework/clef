@@ -182,6 +182,11 @@ type private Program = {
     EscapingLambdas: Map<NodeId, string>
     /// Every Lambda parameter node.
     Parameters: Set<NodeId>
+    /// Empty execution joins certified by the current ordinary-demand census.
+    /// These formals keep their source type and signature position.
+    InactiveFormals: Set<NodeId>
+    /// Body occurrences excluded from execution by that same demand proof.
+    InactiveOccurrences: Set<NodeId>
     /// A Lambda parameter node -> its lambda's declaration root, for a root's parameters.
     RootParameters: Map<NodeId, DeclRoot>
     /// A mutable binding -> every value assigned to it.
@@ -577,6 +582,7 @@ let private effectsOf (program: Program) : Map<NodeId, WriteEffect> =
                     joinWrites acc effect) initial
     let transfer effects (node: SemanticNode) =
         match node.Kind with
+        | _ when program.InactiveOccurrences.Contains node.Id -> noWrites
         | SemanticKind.Lambda _ | SemanticKind.LazyExpr _ | SemanticKind.LazyValue _ | SemanticKind.SeqExpr _
         | SemanticKind.VarRef _ | SemanticKind.Quote _ -> noWrites
         | SemanticKind.EnvironmentRead _ | SemanticKind.EnvironmentBorrow _ -> union effects node.Children
@@ -1273,8 +1279,17 @@ let private continuationSources (ingress: Lazy<CallableIngress.Reading>) (unacco
 let private readProgram (context: PlatformContext option) (graph: SemanticGraph) : Program =
     let reachableNodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let ordered = reachableNodes |> Map.toList |> List.map snd
-    let demand = OrdinaryDemand.read graph
-    let deferred = Set.union (OrdinaryDemand.deferredOnly graph) (demand.Formals.Keys |> Set.ofSeq)
+    let omittedFormals =
+        OrdinaryDemand.tryRead graph
+        |> Result.map (fun reading -> reading.Formals.Keys |> Set.ofSeq)
+        |> Result.defaultValue Set.empty
+    let inactivity = OrdinaryDemand.tryInactivity graph |> Result.toOption
+    let inactiveFormals = inactivity |> Option.map _.Formals |> Option.defaultValue Set.empty
+    let inactiveOccurrences = inactivity |> Option.map _.Excluded |> Option.defaultValue Set.empty
+    let inactiveCalls = inactivity |> Option.map _.Calls |> Option.defaultValue Set.empty
+    let deferred =
+        Set.unionMany [OrdinaryDemand.tryDeferredOnly graph |> Result.defaultValue Set.empty; omittedFormals
+                       inactiveFormals; inactiveOccurrences]
     let parents = parentIndex reachableNodes
     let candidates = escapingOf reachableNodes ordered parents
     let poisons = poisoningOf reachableNodes ordered
@@ -1332,6 +1347,8 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         Escaping = Map.empty
         EscapingLambdas = Map.empty
         Parameters = Set.empty
+        InactiveFormals = inactiveFormals
+        InactiveOccurrences = inactiveOccurrences
         RootParameters = Map.empty
         Assignments = Map.empty
         Refinements = Map.empty
@@ -1375,6 +1392,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     let callableFlow = CallableOrigins.resolve graph
     let callees =
         ordered
+        |> List.filter (fun node -> not (inactiveCalls.Contains node.Id))
         |> List.fold (fun acc node ->
             match node.Kind with
             | SemanticKind.Application (funcId, args) ->
@@ -1388,17 +1406,31 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                                   Offset = 0; Escape = "invoked through a native entry" })
                             Some(Callee.Value(targets, native.Unknown), actuals)
                         | None -> Some(Callee.Value([], true), actuals)
-                    // Direct boundaries retain their formal identity for ABI
-                    // reference seeds and their unsupplied-argument frontier.
                     | Some (Callee.Intrinsic _, _) as intrinsic -> intrinsic
-                    | Some (Callee.Direct _, _) as direct -> direct
+                    // Keep direct formal identity for ABI seeds and partial
+                    // frontiers only at this occurrence's callable boundary.
+                    // Flattening syntax can cross an already completed call
+                    // into the function its body returns; its outer parameters
+                    // and body do not describe the later invocation.
+                    | Some (Callee.Direct (parameters, body), actuals) as direct
+                        when (match callableFlow.Calls.TryFind node.Id with
+                              | Some actual when actual.Complete ->
+                                  not actual.Unknown && not actual.Targets.IsEmpty && (actual.Targets |> List.forall (fun target ->
+                                      target.Parameters = parameters && target.Body = body && target.Arguments = actuals))
+                              | _ -> true) -> direct
                     | fallback ->
                         match callableFlow.Calls.TryFind node.Id with
                         | Some actual when actual.Unknown || not actual.Targets.IsEmpty ->
                             let targets = actual.Targets |> List.map (fun target ->
                                 { LambdaId = target.Lambda; Parameters = target.Parameters; Body = target.Body
                                   Offset = 0; Escape = escapeOf reachableNodes parents target.Lambda })
-                            Some(Callee.Value(targets, actual.Unknown), args)
+                            match actual.Targets |> List.map _.Arguments |> List.distinct with
+                            | [actuals] -> Some(Callee.Value(targets, actual.Unknown), actuals)
+                            | [] -> Some(Callee.Value(targets, actual.Unknown), args)
+                            // This transfer joins bodies with a shared actual
+                            // vector. Distinct bound actuals require their own
+                            // correspondence; never zip one arm's inputs to another.
+                            | _ -> Some(Callee.Value([], true), args)
                         | _ -> fallback
                 match resolved with
                 | Some resolved -> Map.add node.Id resolved acc
@@ -1451,7 +1483,9 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
                                     match List.tryItem nIndex args with
                                     | Some nId -> (calls, supply paramId callId nId seeds)
                                     | None -> (calls, seeds)
-                                | RangeSources.Seed.Unknown -> (calls, seeds)) (calls, seeds)) (calls, seeds)) (calls, seeds)) (callableFlow.ParameterInputs, Map.empty)
+                                | RangeSources.Seed.Unknown -> (calls, seeds)) (calls, seeds)) (calls, seeds)) (calls, seeds))
+            (callableFlow.ParameterInputs |> Map.map (fun _ inputs ->
+                inputs |> List.filter (fun (site, _) -> not (inactiveCalls.Contains site))), Map.empty)
     // A parameter an intrinsic hands a value the pass does not model (a sequence or list
     // element): named as such when nothing else supplies it.
     let unknownSupplied =
@@ -1476,6 +1510,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     let escaping = unknownSupplied |> Map.fold (fun acc id why -> Map.add id why acc) escaping
     let assignments =
         ordered
+        |> List.filter (fun node -> not (inactiveOccurrences.Contains node.Id))
         |> List.fold (fun acc node ->
             match node.Kind with
             | SemanticKind.Set (targetId, valueId) ->
@@ -2196,7 +2231,8 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
             // seen call reaches) has no observable range here
             let supplied = Map.tryFind node.Id program.CallArguments |> Option.defaultValue []
             let seeded = Map.tryFind node.Id program.IndexSeeds |> Option.defaultValue []
-            if List.isEmpty supplied && List.isEmpty seeded then Some fallback
+            if program.InactiveFormals.Contains node.Id then Some ValueRange.Empty
+            elif List.isEmpty supplied && List.isEmpty seeded then Some fallback
             else
                 let fromCalls = supplied |> List.fold (fun acc (callId, a) -> ValueRange.join acc (read program state callId a)) ValueRange.Empty
                 Some (seeded |> List.fold (fun acc (callId, nId) -> ValueRange.join acc (indexBelow (read program state callId nId))) fromCalls)
@@ -2974,10 +3010,17 @@ let sequenceAccumulationFacts (graph: SemanticGraph) : SequenceAccumulation.Accu
 
 /// The commitment sites are the values the settled demand projection retains.
 /// A demand relation that disagrees with the current use proof is reported
-/// (CCS8403) and no range is settled over it.
+/// (CCS8403/CCS8415). Withdraw this owner's earlier ranges; no new range is
+/// settled over rejected demand, and a former Empty is not current authority.
 let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
     match OrdinaryDemand.tryRead graph with
-    | Result.Error failures -> graph, OrdinaryDemand.diagnostics graph failures
+    | Result.Error failures ->
+        let nodes = graph.Nodes |> Map.map (fun _ node ->
+            if node.ValueRange.IsSome then { node with ValueRange = None } else node)
+        let withdrawn =
+            { graph with Nodes = nodes; FieldRanges = lazy Map.empty
+                         ElementRanges = lazy Map.empty; Escaping = lazy Map.empty }
+        withdrawn, OrdinaryDemand.diagnostics graph failures
     | Result.Ok _ -> runValidated context graph
 
 //-------------------------------------------------------------------------
@@ -3124,16 +3167,16 @@ let selectedRepresentation (graph: SemanticGraph) (nodeId: NodeId) : NumericRepr
 /// The width a range of the bare kind selects on the graph's platform: on fabric, which declares
 /// no core, the exact width of the range (§3, `ValueRange.width`); on a core, the bits of the
 /// selected representation, or of the widest declared one for a range no representation covers
-/// (CCS8012 named it). None for an unobservable range on a core: no width is fabricated for it
+/// (CCS8012 named it). None for Empty or an unobservable range on any substrate: no width is fabricated for it
 /// (C3, width-inference.md §6). None where the graph carries no platform context: no target
 /// selects a width, and no substrate's rule is borrowed in its place.
 let selectedWidthOf (graph: SemanticGraph) (range: ValueRange) : int option =
+    // Empty is an execution-join fact, not a one-bit physical carrier. The
+    // inhabited, observable-range prerequisite applies on fabric and cores.
+    if range = ValueRange.Empty || not (ValueRange.isObservable range) then None else
     match graph.Platform with
     | Some ctx when selectsFromDeclared ctx ->
-        match ValueRange.isObservable range, (selectRange ctx range).Representation with
-        | false, _ -> None
-        | true, Some r -> Some r.Bits
-        | true, None -> None
+        (selectRange ctx range).Representation |> Option.map _.Bits
     | Some _ -> ValueRange.width range
     | None -> None
 
@@ -3177,6 +3220,11 @@ let declaredWidthOfKind (graph: SemanticGraph) (kind: NTUKind) : int option =
 /// Baker's held-carrier rule for each integer node; None is a source stop (a node with
 /// no range, an unobservable range, or no platform context).
 let heldWidth (graph: SemanticGraph) (nodeId: NodeId) : int option =
+    // A declaration can retain its signature width while its proved-inactive
+    // occurrence has no held value. Do not reintroduce storage for that join.
+    match SemanticGraph.tryGetNode nodeId graph with
+    | Some { ValueRange = Some ValueRange.Empty } -> None
+    | _ ->
     match selectedWidth graph nodeId with
     | Some bits -> Some bits
     | None ->

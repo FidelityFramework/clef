@@ -1734,6 +1734,9 @@ type EdgeRole =
     /// Exact invocation/formal/actual correspondence for an omitted physical
     /// operand. Direct explicit eager demand remains independently required.
     | OrdinaryUnusedActual
+    /// An ordinary implementation's complete current use family proves no
+    /// entry activation. This excludes execution, never physical arguments.
+    | OrdinaryInactiveImplementation
     /// Complete local mutable-read/immutable-alias family at its dominating demand.
     | OrdinaryBindingDemand of BindingDemandEvidence
     /// A recognized ordinary snapshot whose complete demand schedule is unresolved.
@@ -2486,6 +2489,8 @@ type CallableAggregateValue = {
     Slot: NodeId
     Alternatives: CallableAggregateAlternative list
     Selector: CallableAggregateSelector option
+    /// Inherited record component: ordered copy/immutable transport path to
+    /// its supplying constructor, followed by the actual stored callable.
     FormationInputs: NodeId list
     Value: NodeId option
     SelectedAlternative: int option
@@ -2513,6 +2518,21 @@ type CallableSymbolName =
     | RootBinding of name: string
     | Anonymous of implementation: NodeId
 
+/// Complete source-owned zero-activation premise. Physical callable transport
+/// remains governed by its receiving contract; these rows exclude execution only.
+type OrdinaryInactivityProjection = {
+    Implementation: NodeId
+    Entry: NodeId
+    Body: NodeId
+    Parameters: NodeId list
+    Roots: Set<NodeId>
+    Excluded: Set<NodeId>
+    Calls: Set<NodeId>
+    Participants: Set<NodeId>
+    Uses: Map<NodeId, (EdgeClass * EdgeRole * int * NodeId list * NodeId) list>
+    SourcePremises: Map<NodeId, BoundarySourcePremise>
+}
+
 type CallableAggregateDependencyAccount = {
     Occurrence: NodeId
     Slots: CallableAggregateSlot list
@@ -2525,6 +2545,7 @@ type CallableAggregateDependencyAccount = {
     Sources: CallableAggregateSourceIncidence list
     Claims: (NodeId * ObligationInfo) list
     Symbols: (NodeId * CallableSymbolName) list
+    Inactivity: (NodeId * OrdinaryInactivityProjection) list
 }
 
 /// A write updates the finite alternative discriminator and the actual
@@ -2878,10 +2899,11 @@ type OrdinaryDemandProjection = {
     Parameters: Map<NodeId, Set<NodeId>>
     Calls: Map<NodeId, OrdinaryCallProjection>
     DeferredOnly: Set<NodeId>
+    Inactivity: Map<NodeId, OrdinaryInactivityProjection>
 }
 
 module OrdinaryDemandProjection =
-    let empty = { Parameters = Map.empty; Calls = Map.empty; DeferredOnly = Set.empty }
+    let empty = { Parameters = Map.empty; Calls = Map.empty; DeferredOnly = Set.empty; Inactivity = Map.empty }
 
 /// Source-validated storage contracts. These are completed values, never lazy
 /// analyses or readers over a graph. Witnesses preserve the actual operands

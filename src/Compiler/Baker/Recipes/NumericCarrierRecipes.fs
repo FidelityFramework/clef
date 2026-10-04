@@ -72,10 +72,17 @@ let elaborateWithRangeReview (inheritedFiniteReview: bool) (inheritedSequenceRev
                              (inheritedSequenceAuthority: SequenceRangeAuthority option) (graph: SemanticGraph) =
     let enrichId = Elaboration.freshId ()
     let anchor = Boundary.anchor enrichId graph |> fun node -> { node with Metadata = node.Metadata.Remove "Baker.BoundaryOwned" } |> Numeric.markOwned
-    let demand = OrdinaryDemand.project graph
+    let deferred = OrdinaryDemand.tryDeferredOnly graph |> Result.defaultValue Set.empty
+    let inactive =
+        match OrdinaryDemand.tryInactivity graph with
+        | Ok proof -> Set.union proof.Formals proof.Excluded
+        // The demand owner reports rejected evidence. It grants no exception
+        // to numeric commitment while that evidence is invalid or absent.
+        | Error _ -> Set.empty
     let declarations = declarationOnly graph
     let required = graph.Nodes |> Map.fold (fun ids id node ->
-        if node.IsReachable && not (demand.DeferredOnly.Contains id) && not (declarations.Contains id) && scalarKind node.Type then Set.add id ids else ids) Set.empty
+        if node.IsReachable && not (deferred.Contains id) && not (inactive.Contains id) &&
+           not (declarations.Contains id) && scalarKind node.Type then Set.add id ids else ids) Set.empty
     let sourceReading = PlatformResolution.read graph
     let sourceCore = sourceReading.Platform |> Option.bind _.Core
     let finiteRelations = Numeric.finiteCellRelations graph
@@ -182,7 +189,7 @@ let elaborateWithRangeReview (inheritedFiniteReview: bool) (inheritedSequenceRev
         graph.Nodes.Values |> Seq.choose (fun node ->
             match node.Kind with
             | SemanticKind.ContinuationDispatch(operand, _, _)
-                when node.IsReachable && not(demand.DeferredOnly.Contains node.Id) && not(declarations.Contains node.Id) ->
+                when node.IsReachable && not(deferred.Contains node.Id) && not(inactive.Contains node.Id) && not(declarations.Contains node.Id) ->
                 Some(node, operand)
             | _ -> None) |> Seq.toList
     let pointer = sourceCore |> Option.bind (fun core ->

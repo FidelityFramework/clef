@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-/// Source-owned absence of ordinary formal demand. Logical formals, actuals
-/// and their source types remain resident; only a proved physical projection
-/// omits transport. This is not a general strictness or memoization analysis.
+/// Source-owned ordinary demand. Physical omissions retain logical arguments;
+/// separate complete inactivity premises exclude execution without erasing
+/// a callable's transport or residence. This is not general memoization.
 module Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
 
 open Clef.Compiler.NativeTypedTree.NativeTypes
@@ -26,12 +26,33 @@ type Call = {
     Eager: Set<int>
     Participants: Set<NodeId>
 }
-type Reading = { Formals: Map<NodeId, Formal>; Calls: Map<NodeId, Call> }
+type InactiveImplementation = {
+    Implementation: NodeId
+    Body: NodeId
+    Parameters: NodeId list
+    Excluded: Set<NodeId>
+    Calls: Set<NodeId>
+    Family: CallableIngress.Family
+}
+type Reading = {
+    Formals: Map<NodeId, Formal>
+    Calls: Map<NodeId, Call>
+    Inactivity: Map<NodeId, InactiveImplementation>
+}
+/// Execution joins are separate from the physical argument omissions above.
+type InactivityReading = {
+    Implementations: Map<NodeId, InactiveImplementation>
+    Formals: Set<NodeId>
+    Excluded: Set<NodeId>
+    Calls: Set<NodeId>
+}
 
 let private key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
-let private owned edge = edge.Role = EdgeRole.OrdinaryUnusedFormal || edge.Role = EdgeRole.OrdinaryUnusedActual
+let private owned edge =
+    edge.Role = EdgeRole.OrdinaryUnusedFormal || edge.Role = EdgeRole.OrdinaryUnusedActual ||
+    edge.Role = EdgeRole.OrdinaryInactiveImplementation
 
-let analyze (graph: SemanticGraph) =
+let analyze (graph: SemanticGraph) : Reading =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     // An external declaration's placeholder is not the foreign function's
     // implementation. Its lack of formal reads proves no argument unused:
@@ -183,10 +204,48 @@ let analyze (graph: SemanticGraph) =
         formals.Values |> Seq.map _.Implementation |> Set.ofSeq |> Set.filter (fun implementation ->
             let sites = resolution.Calls |> Map.toList |> List.filter (fun (_, call) -> call.Targets |> List.exists (fun target -> target.Lambda = implementation))
             not sites.IsEmpty && sites |> List.forall (fun (site, _) -> calls.ContainsKey site))
+    let inactivity =
+        nodes.Values |> Seq.choose (fun code ->
+            match code.Kind, CallableIngress.tryFamily ingress code.Id with
+            | SemanticKind.Lambda(parameters, body, _, _, LambdaContext.RegularClosure), Some family
+                when not (family.Activated.Contains code.Id) && family.Evidence.Entry.IsSome &&
+                     family.Evidence.UsedLazyForces.IsEmpty &&
+                     not (externalImplementations.Contains code.Id) && valid code.Id && valid body ->
+                let parametersAgree =
+                    parameters |> List.forall (fun (_, ty, formal) ->
+                        match nodes.TryFind formal with
+                        | Some { Kind = SemanticKind.PatternBinding _; Type = actual } ->
+                            // A current callable boundary can already include
+                            // this formal before Curry absorbs its inner
+                            // lambda. Its suppliers still own the execution
+                            // join; lexical ownership alone cannot empty it.
+                            let suppliersInactive =
+                                resolution.ParameterInputs.TryFind formal |> Option.defaultValue []
+                                |> List.forall (fun (site, _) ->
+                                    match CallableIngress.tryExecutionOwner ingress site with
+                                    | Some owner -> family.Evidence.Implementations.Contains owner && not (family.Activated.Contains owner)
+                                    | None -> false)
+                            valid formal && applySubst actual = applySubst ty &&
+                            CallableIngress.tryExecutionOwner ingress formal = Some code.Id && suppliersInactive
+                        | _ -> false)
+                if not parametersAgree then None else
+                // The same structural ownership reader that assigns callers
+                // identifies the body's occurrences. Shared/ambiguous owners
+                // remain demanded; the callable formation itself is retained.
+                let excluded = nodes.Keys |> Seq.filter (fun id ->
+                    id <> code.Id && CallableIngress.tryExecutionOwner ingress id = Some code.Id) |> Set.ofSeq
+                let calls = excluded |> Set.filter (fun id ->
+                    match nodes[id].Kind with SemanticKind.Application _ -> true | _ -> false)
+                Some(code.Id,
+                    { Implementation = code.Id; Body = body
+                      Parameters = parameters |> List.map (fun (_, _, id) -> id)
+                      Excluded = excluded; Calls = calls; Family = family })
+            | _ -> None) |> Map.ofSeq
     { Formals = formals |> Map.filter (fun _ proof -> admitted.Contains proof.Implementation)
-      Calls = calls |> Map.filter (fun _ proof -> admitted.Contains proof.Implementation) }
+      Calls = calls |> Map.filter (fun _ proof -> admitted.Contains proof.Implementation)
+      Inactivity = inactivity }
 
-let edges reading =
+let edges (reading: Reading) =
     [ for proof in reading.Formals.Values do
           yield { Class = EdgeClass.Demand; Role = EdgeRole.OrdinaryUnusedFormal; Target = proof.Formal; Ordinal = proof.Ordinal
                   Sources = proof.Implementation :: (proof.Participants.Remove proof.Implementation |> Set.toList) }
@@ -194,13 +253,27 @@ let edges reading =
           for ordinal in call.Omitted do
               yield { Class = EdgeClass.Demand; Role = EdgeRole.OrdinaryUnusedActual; Target = call.Site; Ordinal = ordinal
                       Sources = [call.Implementation; call.Parameters[ordinal]; call.Actuals[ordinal]; call.Callee]
-                                @ (call.Participants |> Set.toList) } ]
+                                @ (call.Participants |> Set.toList) }
+      for inactive in reading.Inactivity.Values do
+          yield { Class = EdgeClass.Demand; Role = EdgeRole.OrdinaryInactiveImplementation
+                  Target = inactive.Implementation; Ordinal = inactive.Parameters.Length
+                  Sources = [inactive.Family.Evidence.Entry.Value; inactive.Body]
+                            @ inactive.Parameters
+                            @ Set.toList inactive.Family.Evidence.Participants
+                            @ Set.toList inactive.Excluded
+                            @ Set.toList inactive.Calls } ]
 
 /// Recompute against the immutable graph and require its exact current joint
 /// rows. An old codata/edge projection supplies no independent authority, and
 /// an absent or extra relation is a located failure, never an empty admission.
 let private validate graph : Result<Reading, WitnessProjectionFailure list> =
-    let fresh = analyze graph
+    let derived = analyze graph
+    // No claimed inactivity is no exclusion. A held claim is checked against
+    // the complete current family, including new callers and negative uses.
+    let claimed =
+        graph.Edges |> List.choose (fun edge ->
+            if edge.Role = EdgeRole.OrdinaryInactiveImplementation then Some edge.Target else None) |> Set.ofList
+    let fresh = { derived with Inactivity = derived.Inactivity |> Map.filter (fun implementation _ -> claimed.Contains implementation) }
     let expected = edges fresh
     let actual = graph.Edges |> List.filter owned
     if (expected |> List.map key |> List.sort) = (actual |> List.map key |> List.sort) then Ok fresh
@@ -210,9 +283,15 @@ let private validate graph : Result<Reading, WitnessProjectionFailure list> =
             let expectedAt = expected |> List.filter (fun edge -> edge.Target = target)
             let actualAt = actual |> List.filter (fun edge -> edge.Target = target)
             if (expectedAt |> List.map key |> List.sort) = (actualAt |> List.map key |> List.sort) then None
-            else Some {
+            else
+              let reason =
+                  if expectedAt @ actualAt |> List.exists (fun edge -> edge.Role = EdgeRole.OrdinaryInactiveImplementation) then
+                      sprintf "PSG settlement (OrdinaryDemand inactivity) did not settle the demand relations for node %d: the published rows do not match the current complete use proof." (NodeId.value target)
+                  else
+                      sprintf "PSG settlement (OrdinaryDemand) did not settle the ordinary-demand relations for node %d: the published OrdinaryUnusedFormal/OrdinaryUnusedActual rows do not match the current complete use proof." (NodeId.value target)
+              Some {
                 Occurrence = Some target
-                Reason = sprintf "PSG settlement (OrdinaryDemand) did not settle the ordinary-demand relations for node %d: the published OrdinaryUnusedFormal/OrdinaryUnusedActual rows do not match the current complete use proof." (NodeId.value target)
+                Reason = reason
                 Participants = (expectedAt @ actualAt) |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList })
         |> Error
 
@@ -222,11 +301,21 @@ let private cache = System.Runtime.CompilerServices.ConditionalWeakTable<Semanti
 /// The validated reading, or the located failures of the current graph.
 let tryRead graph = (cache.GetValue(graph, fun graph -> { Result = validate graph })).Result
 
+/// Validate once for the immutable graph. Consumers must retain all demand
+/// on Error; the owning diagnostic path reports the corrupted claimed proof.
+let tryInactivity graph : Result<InactivityReading, WitnessProjectionFailure list> =
+    tryRead graph |> Result.map (fun reading ->
+        { Implementations = reading.Inactivity
+          Formals = reading.Inactivity.Values |> Seq.collect _.Parameters |> Set.ofSeq
+          Excluded = reading.Inactivity.Values |> Seq.map _.Excluded |> Set.unionMany
+          Calls = reading.Inactivity.Values |> Seq.map _.Calls |> Set.unionMany })
+
 /// The same failures as CCS8403 diagnostics, for a source stage that owns a diagnostic list.
 let diagnostics (graph: SemanticGraph) (failures: WitnessProjectionFailure list) : Reports.Diagnostic list =
     failures |> List.map (fun failure ->
         let site = failure.Occurrence |> Option.bind graph.Nodes.TryFind
-        ({ Severity = Reports.NativeDiagnosticSeverity.Error; Code = "CCS8403"; Message = failure.Reason
+        let code = if failure.Reason.StartsWith "PSG settlement (OrdinaryDemand inactivity)" then "CCS8415" else "CCS8403"
+        ({ Severity = Reports.NativeDiagnosticSeverity.Error; Code = code; Message = failure.Reason
            Range = site |> Option.map _.Range |> Option.defaultValue { File = ""; Start = { Line = 0; Column = 0 }; End = { Line = 0; Column = 0 } }
            RelatedNodes = Option.toList failure.Occurrence @ (failure.Participants |> Set.toList)
            Reachability = Reports.ReachabilityContext.Reachable } : Reports.Diagnostic))
@@ -304,6 +393,38 @@ let deferrals graph = deferralsFrom graph (read graph)
 /// that owns a diagnostic list.
 let tryDeferrals graph = tryRead graph |> Result.map (deferralsFrom graph)
 
+let private inactivityProjection (graph: SemanticGraph) (reading: Reading) : Map<NodeId, OrdinaryInactivityProjection> =
+    reading.Inactivity |> Map.map (fun _ inactive ->
+        let evidence = inactive.Family.Evidence
+        let uses = evidence.Uses |> Map.map (fun _ uses -> uses |> List.map key |> List.sort)
+        let support =
+            [inactive.Implementation; evidence.Entry.Value; inactive.Body] @ inactive.Parameters @
+            (evidence.Roots |> List.map fst) @ Set.toList inactive.Excluded @ Set.toList inactive.Calls @
+            Set.toList evidence.Participants @
+            (uses |> Map.toList |> List.collect (fun (source, edges) ->
+                source :: (edges |> List.collect (fun (_, _, _, sources, target) -> target :: sources))))
+            |> Set.ofList
+        { Implementation = inactive.Implementation
+          Entry = evidence.Entry.Value
+          Body = inactive.Body
+          Parameters = inactive.Parameters
+          Roots = evidence.Roots |> List.map fst |> Set.ofList
+          Excluded = inactive.Excluded
+          Calls = inactive.Calls
+          Participants = evidence.Participants
+          Uses = uses
+          SourcePremises =
+            support |> Set.toList |> List.choose (fun id ->
+                graph.Nodes.TryFind id |> Option.map (fun node ->
+                    id, Clef.Compiler.Baker.Ingredients.Boundaries.premise node)) |> Map.ofList })
+
+/// Reuse the current demand proof when another source recipe consumes an
+/// exclusion. No claim means no dependency on an unrelated omission recipe.
+let tryInactivityProjection graph =
+    if graph.Edges |> List.exists (fun edge -> edge.Role = EdgeRole.OrdinaryInactiveImplementation) then
+        tryRead graph |> Result.map (inactivityProjection graph)
+    else Ok Map.empty
+
 let private projectionFrom graph (reading: Reading) : OrdinaryDemandProjection =
     { Parameters =
         reading.Formals.Values
@@ -314,7 +435,8 @@ let private projectionFrom graph (reading: Reading) : OrdinaryDemandProjection =
         reading.Calls |> Map.map (fun _ call ->
             ({ Implementation = call.Implementation; Actuals = call.Actuals
                Omitted = call.Omitted; Eager = call.Eager }: OrdinaryCallProjection))
-      DeferredOnly = deferredFrom graph reading }
+      DeferredOnly = deferredFrom graph reading
+      Inactivity = inactivityProjection graph reading }
 
 /// Final source projection. Analysis and the complete use census belong to CCS;
 /// consumers receive only these settled transport and occurrence decisions.

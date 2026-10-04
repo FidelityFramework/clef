@@ -5,6 +5,7 @@ open Clef.Compiler.NativeService
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+module DefaultWithEnvironments = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironments
 
 module private OptionDefaultWith =
     let option payload = NativeType.TApp(Types.optionTyCon, [payload])
@@ -384,12 +385,29 @@ let main _ = if observed = 3<m/s> && trace = 123 then 0 else 1
             OptionDefaultWith.assertSelection result fallback input choice
             DimensionalCases.same payload result.Graph.Nodes[choice].Type
         | kind -> failwithf "Thunk selection consumed a returned function argument: %A" kind
+        let environments = DefaultWithEnvironments.callEnvironments result.Graph
         for callName, calleeName, argumentType in ["withDistance", "chosen", metre; "observed", "withDistance", second] do
             let call = OptionDefaultWith.value callName result
             match call.Kind with
-            | SemanticKind.Application (callee, [argument]) ->
+            | SemanticKind.Application (callee, arguments) ->
+                // closure-representation §6.1: "the environment as the first
+                // argument, followed by the explicit arguments". Remove only
+                // the current witnessed environment, retaining both source calls.
+                let source, arguments =
+                    match environments.TryFind call.Id with
+                    | Some(ordinal, environment) ->
+                        Assert.Equal(environment, arguments[ordinal])
+                        let source =
+                            match result.Graph.Nodes[environment].Kind with
+                            | SemanticKind.EnvironmentReference source -> source
+                            | kind -> failwithf "A stored stage lost its actual environment source: %A" kind
+                        let carrier = DefaultWithEnvironments.tryKnown result.Graph source |> Option.get
+                        Assert.Equal(Some carrier.Implementation, DefaultWithEnvironments.tryImplementation result.Graph callee)
+                        source, arguments |> List.indexed |> List.choose (fun (index, argument) -> if index = ordinal then None else Some argument)
+                    | None -> callee, arguments
+                let argument = Assert.Single arguments
                 DimensionalCases.same argumentType result.Graph.Nodes[argument].Type
-                match result.Graph.Nodes[callee].Kind with
+                match result.Graph.Nodes[source].Kind with
                 | SemanticKind.VarRef (_, Some definition) ->
                     Assert.Equal((OptionDefaultWith.binding calleeName result).Id, definition)
                 | kind -> failwithf "A stored stage lost its producing binding: %A" kind

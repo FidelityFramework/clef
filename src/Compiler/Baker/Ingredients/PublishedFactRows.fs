@@ -340,6 +340,7 @@ and mapCallableAggregateDependencyAccount (value: S.CallableAggregateDependencyA
         Sources = (value.Sources |> List.map (fun x -> mapCallableAggregateSourceIncidence x))
         Claims = (value.Claims |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapObligationInfo t1))))
         Symbols = (value.Symbols |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapCallableSymbolName t1))))
+        Inactivity = (value.Inactivity |> List.map (fun x -> (let (t0, t1) = x in (nodeId t0, mapOrdinaryInactivityProjection t1))))
     } : Fidelity.PSG.CallableAggregateDependencyAccount)
 
 and mapCallableAggregateEnvironmentPlacement (value: S.CallableAggregateEnvironmentPlacement) : Fidelity.PSG.CallableAggregateEnvironmentPlacement =
@@ -973,6 +974,7 @@ and mapEdgeRole (value: S.EdgeRole) : Fidelity.PSG.EdgeRole =
     | S.EdgeRole.LazyEffectRange -> Fidelity.PSG.EdgeRole.LazyEffectRange
     | S.EdgeRole.OrdinaryUnusedFormal -> Fidelity.PSG.EdgeRole.OrdinaryUnusedFormal
     | S.EdgeRole.OrdinaryUnusedActual -> Fidelity.PSG.EdgeRole.OrdinaryUnusedActual
+    | S.EdgeRole.OrdinaryInactiveImplementation -> Fidelity.PSG.EdgeRole.OrdinaryInactiveImplementation
     | S.EdgeRole.OrdinaryBindingDemand(a0) -> Fidelity.PSG.EdgeRole.OrdinaryBindingDemand(mapBindingDemandEvidence a0)
     | S.EdgeRole.OrdinaryBindingDemandPending(a0, a1) -> Fidelity.PSG.EdgeRole.OrdinaryBindingDemandPending(a0, mapBindingDemandEvidence a1)
     | S.EdgeRole.OrdinaryBindingDemandHistory(a0) -> Fidelity.PSG.EdgeRole.OrdinaryBindingDemandHistory(mapBindingDemandEvidence a0)
@@ -1984,7 +1986,22 @@ and mapOrdinaryDemandProjection (value: S.OrdinaryDemandProjection) : Fidelity.P
         Parameters = (value.Parameters |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> Set.map (fun x -> nodeId x))) |> Map.ofSeq)
         Calls = (value.Calls |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapOrdinaryCallProjection v) |> Map.ofSeq)
         DeferredOnly = (value.DeferredOnly |> Set.map (fun x -> nodeId x))
+        Inactivity = (value.Inactivity |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapOrdinaryInactivityProjection v) |> Map.ofSeq)
     } : Fidelity.PSG.OrdinaryDemandProjection)
+
+and mapOrdinaryInactivityProjection (value: S.OrdinaryInactivityProjection) : Fidelity.PSG.OrdinaryInactivityProjection =
+    ({
+        Implementation = nodeId value.Implementation
+        Entry = nodeId value.Entry
+        Body = nodeId value.Body
+        Parameters = (value.Parameters |> List.map (fun x -> nodeId x))
+        Roots = (value.Roots |> Set.map (fun x -> nodeId x))
+        Excluded = (value.Excluded |> Set.map (fun x -> nodeId x))
+        Calls = (value.Calls |> Set.map (fun x -> nodeId x))
+        Participants = (value.Participants |> Set.map (fun x -> nodeId x))
+        Uses = (value.Uses |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, (v |> List.map (fun x -> (let (t0, t1, t2, t3, t4) = x in (mapEdgeClass t0, mapEdgeRole t1, t2, (t3 |> List.map (fun x -> nodeId x)), nodeId t4))))) |> Map.ofSeq)
+        SourcePremises = (value.SourcePremises |> Map.toSeq |> Seq.map (fun (k, v) -> nodeId k, mapBoundarySourcePremise v) |> Map.ofSeq)
+    } : Fidelity.PSG.OrdinaryInactivityProjection)
 
 and mapOrdinaryOmission (value: S.OrdinaryOmission) : Fidelity.PSG.OrdinaryOmission =
     ({

@@ -187,6 +187,49 @@ let private valueRow slot occurrence aggregate operation formationInputs actualV
               yield participant occurrence ParticipantRole.CallableContract alternative.Ordinal alternative.Contract
           yield! support ] }
 
+// Closure Representation §2.4: copies retain the actual stored formation.
+// Follow only the existing origin reading's explicit edges. This finite path
+// is authored once here; neither publication nor the reader finds an origin.
+let private formationInputs (graph: SemanticGraph) (reading: Origins.AggregateResolution)
+                            (specification: AggregateTypes.Slot) construction actual =
+    let direct = Ok(Option.toList actual)
+    match specification.Path, graph.Nodes.TryFind construction, actual with
+    | [CallableAggregatePathStep.RecordField ordinal], Some constructor, Some value ->
+        match constructor.Kind, AggregateTypes.shape graph constructor.Type with
+        | SemanticKind.RecordExpr(fields, Some copy), Some(AggregateTypes.Shape.Record(_, declared)) ->
+            match List.tryItem ordinal declared with
+            | Some(name, _) when fields |> List.forall (fst >> (<>) name) ->
+                let rec follow seen path site =
+                    if Set.contains site seen || site = construction then
+                        Error "The inherited callable copy path repeats a source occurrence."
+                    else
+                        match graph.Nodes.TryFind site with
+                        | Some node when Identity.ofType node.Type = reading.AggregateType ->
+                            let path = path @ [site]
+                            let next =
+                                match node.Kind, node.Children with
+                                | SemanticKind.VarRef(_, Some source), [] -> Some source
+                                | SemanticKind.Binding(_, false, _, _), [source] -> Some source
+                                | SemanticKind.TypeAnnotation(source, ty), [child]
+                                    when source = child && Identity.ofType ty = reading.AggregateType -> Some source
+                                | SemanticKind.Sequential sources, children when sources = children -> List.tryLast sources
+                                | SemanticKind.EagerExpr source, [child] when source = child -> Some source
+                                | SemanticKind.RecordExpr(members, Some source), _
+                                    when members |> List.forall (fst >> (<>) name) -> Some source
+                                | _ -> None
+                            match node.Kind, next with
+                            | SemanticKind.RecordExpr(members, _), None when
+                                (members |> List.filter (fst >> (=) name)) = [name, value] -> Ok(path @ [value])
+                            | _, Some source when
+                                reading.Dependencies.TryFind site |> Option.exists (List.contains source) ->
+                                follow (Set.add site seen) path source
+                            | _ -> Error "The inherited callable copy lacks an exact immutable path to its supplying constructor."
+                        | _ -> Error "The inherited callable copy path changes its instantiated aggregate type."
+                follow Set.empty [] copy
+            | _ -> direct
+        | _ -> direct
+    | _ -> direct
+
 /// Resolve direct fields/payloads with one closed formation per component.
 /// Wider families remain residuals until their source selector/adapter/storage
 /// recipes can establish the complete protocol. No old account supplies facts.
@@ -282,9 +325,11 @@ let settleWork (groups: WorkGroup list) (inputs: Inputs) (graph: SemanticGraph) 
                                 | Error(code, reason) -> refuse site code reason
                                 | Ok(actual, carrier, tag) ->
                                     if site = formation.Construction then
-                                        let inputs = Option.toList actual
-                                        addValue (valueRow identity site site CallableAggregateOperation.Construct inputs actual
-                                                      (actual |> Option.map (fun _ -> 0)) tag carrier support)
+                                        match formationInputs graph reading specification site actual with
+                                        | Error reason -> refuse site Codes.CCS8414_CallableAggregateEvidence reason
+                                        | Ok inputs ->
+                                            addValue (valueRow identity site site CallableAggregateOperation.Construct inputs actual
+                                                          (actual |> Option.map (fun _ -> 0)) tag carrier support)
                                     for projection, projectedPath in reading.Projections do
                                         if projectedPath = path then
                                             if actual.IsNone then
@@ -297,6 +342,18 @@ let settleWork (groups: WorkGroup list) (inputs: Inputs) (graph: SemanticGraph) 
                         | _ -> refuse site Codes.CCS8414_CallableAggregateEvidence "Several constructors reach this aggregate occurrence; a single tag record cannot express the required source selection."
                 if values |> Map.exists (fun _ rows -> rows |> List.exists (fun row -> row.Slot = identity)) then
                     slots <- slots.Add(identity, slot)
+    // A copy cannot outlive admission of the constructor that supplied its
+    // component. All groups are installed before this structural check.
+    values <- values |> Map.map (fun site rows -> rows |> List.filter (fun row ->
+        if row.Operation <> CallableAggregateOperation.Construct || row.FormationInputs.Length < 2 then true else
+        let source = row.FormationInputs |> List.rev |> List.tail |> List.head
+        let formed = values.TryFind source |> Option.exists (List.exists (fun formation ->
+            formation.Slot = row.Slot && formation.Operation = CallableAggregateOperation.Construct &&
+            formation.Value = row.Value && formation.Alternatives = row.Alternatives &&
+            formation.Selector = row.Selector && formation.SelectedAlternative = row.SelectedAlternative &&
+            formation.Tag = row.Tag && formation.Bytes = row.Bytes && formation.Alignment = row.Alignment))
+        if not formed then refuse site Codes.CCS8414_CallableAggregateEvidence "The inherited callable copy has no matching admitted supplying constructor row."
+        formed)) |> Map.filter (fun _ rows -> not rows.IsEmpty)
     // A projection must retain its admitted formation row, including the
     // constructor's dependencies. It cannot bypass a refused source write.
     values <- values |> Map.map (fun site rows -> rows |> List.filter (fun row ->

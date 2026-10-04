@@ -633,3 +633,247 @@ let main _ =
             Assert.NotEmpty pending
             Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8403" && diagnostic.Message.Contains("OrdinaryBindingDemand"))
         | ParseFailure errors -> failwithf "The negative source fixture did not parse: %A" errors
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``An ordinary body has an empty execution join only under a current inactive family`` invoked =
+        let useText = if invoked then "work 7 9" else "keep work"
+        let graph = OrdinaryDemandFixture.check ("""
+let keep (callback: int -> int -> int) = 0
+[<EntryPoint>]
+let main _ =
+    let work = fun lo hi -> let saved = lo in saved + hi
+    """ + useText + "\n")
+        let saved = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.Binding("saved", _, _, _) -> true | _ -> false) |> Assert.Single
+        let inactive = DemandProjection.tryInactivity graph |> function Ok value -> value | Result.Error errors -> failwithf "%A" errors
+        if invoked then
+            Assert.DoesNotContain(saved.Id, inactive.Excluded)
+            Assert.NotEqual<ValueRange option>(Some ValueRange.Empty, saved.ValueRange)
+        else
+            // Width Inference §6 distinguishes a proved unreachable computation
+            // from a missing observation; a zero-activation input join is Empty.
+            Assert.Contains(saved.Id, inactive.Excluded)
+            Assert.Equal<ValueRange option>(Some ValueRange.Empty, saved.ValueRange)
+            let proof = inactive.Implementations.Values |> Seq.filter (fun proof -> proof.Excluded.Contains saved.Id) |> Assert.Single
+            Assert.All(proof.Parameters, fun formal ->
+                Assert.Contains(formal, inactive.Formals)
+                Assert.Equal<ValueRange option>(Some ValueRange.Empty, graph.Nodes[formal].ValueRange))
+            match graph.Nodes[proof.Implementation].Kind with
+            | SemanticKind.Lambda(parameters, _, _, _, _) ->
+                Assert.Equal<NodeId list>(proof.Parameters, parameters |> List.map (fun (_, _, id) -> id))
+                let expected = kindEdges proof.Implementation graph.Nodes[proof.Implementation].Kind
+                               |> List.filter Hyperedge.isStructural |> List.map OrdinaryDemandFixture.key |> List.sort
+                let actual = graph.Edges |> List.filter (fun edge ->
+                    edge.Target = proof.Implementation && edge.Class = EdgeClass.Structural &&
+                    (edge.Role = EdgeRole.Parameter || edge.Role = EdgeRole.Body))
+                             |> List.map OrdinaryDemandFixture.key |> List.sort
+                Assert.Equal<_ list>(expected, actual)
+            | _ -> failwith "The inactive source implementation disappeared"
+
+    [<Theory>]
+    [<InlineData("row")>]
+    [<InlineData("lambda-body")>]
+    [<InlineData("ignore-lookalike")>]
+    [<InlineData("unknown-use")>]
+    [<InlineData("export")>]
+    [<InlineData("foreign")>]
+    member _.``A changed claimed inactivity proof is a located CCS8415 and cannot be consumed`` defect =
+        let graph = OrdinaryDemandFixture.check """
+let dormant (value: int) = value + 1
+[<EntryPoint>]
+let main _ = ignore dormant; 0
+"""
+        let proof = (DemandProjection.read graph).Inactivity.Values |> Seq.filter (fun proof ->
+            graph.Nodes[proof.Body].Range.Start.Line > 0 &&
+            (proof.Parameters |> List.exists (fun formal -> match graph.Nodes[formal].Kind with SemanticKind.PatternBinding "value" -> true | _ -> false))) |> Assert.Single
+        let changed =
+            match defect with
+            | "row" ->
+                let edges =
+                    graph.Edges |> List.map (fun edge ->
+                        if edge.Role = EdgeRole.OrdinaryInactiveImplementation && edge.Target = proof.Implementation
+                        then { edge with Ordinal = edge.Ordinal + 1 } else edge)
+                { graph with Edges = edges }
+            | "lambda-body" ->
+                let stale = { Class = EdgeClass.Structural; Role = EdgeRole.Body
+                              Sources = [proof.Parameters.Head]; Target = proof.Implementation; Ordinal = 0 }
+                let edges = stale :: (graph.Edges |> List.filter (fun edge ->
+                    not (edge.Target = proof.Implementation && edge.Class = EdgeClass.Structural && edge.Role = EdgeRole.Body)))
+                { graph with Edges = edges }
+            | "ignore-lookalike" ->
+                let callee = graph.Nodes.Values |> Seq.filter (fun node ->
+                    match node.Kind with SemanticKind.Intrinsic intrinsic -> intrinsic.Operation = "ignore" | _ -> false) |> Assert.Single
+                let lookalike = { callee with Kind = SemanticKind.VarRef("ignore", None) }
+                { graph with Nodes = graph.Nodes.Add(callee.Id, lookalike) }
+            | "export" -> { graph with DeclarationRoots = (proof.Implementation, DeclRoot.EntryPoint) :: graph.DeclarationRoots }
+            | "foreign" ->
+                let code = graph.Nodes[proof.Implementation]
+                let code = { code with Metadata = code.Metadata.Add("FidelityExtern.Library", MetadataValue.String "foreign").Add("FidelityExtern.Symbol", MetadataValue.String "dormant") }
+                { graph with Nodes = graph.Nodes.Add(code.Id, code) }
+            | _ ->
+                let unknown = { Class = EdgeClass.Reference; Role = EdgeRole.Resides
+                                Sources = [proof.Implementation]; Target = proof.Body; Ordinal = 0 }
+                { graph with Edges = unknown :: graph.Edges }
+        let failures = DemandProjection.tryInactivity changed |> function Result.Error failures -> failures | Ok _ -> failwith "A stale exclusion was consumed"
+        Assert.Contains(DemandProjection.diagnostics changed failures, fun diagnostic ->
+            diagnostic.Code = "CCS8415" && diagnostic.Range = graph.Nodes[proof.Implementation].Range)
+        let conservative, _ = DemandRanges.run changed.Platform changed
+        Assert.All(proof.Parameters, fun formal ->
+            Assert.NotEqual<ValueRange option>(Some ValueRange.Empty, conservative.Nodes[formal].ValueRange))
+        let renewed = DemandRecipe.normalize changed
+        if defect = "row" then
+            Assert.True(Result.isOk(DemandProjection.tryInactivity renewed))
+        else
+            let inactive = DemandProjection.tryInactivity renewed |> function Ok proof -> proof | Result.Error errors -> failwithf "%A" errors
+            Assert.DoesNotContain(proof.Implementation, inactive.Implementations.Keys)
+
+    [<Fact>]
+    member _.``An absent inactive implementation row retains its ordinary demand`` () =
+        let graph = OrdinaryDemandFixture.check """
+let dormant (value: int) = value + 1
+[<EntryPoint>]
+let main _ = ignore dormant; 0
+"""
+        let proof = (DemandProjection.read graph).Inactivity.Values |> Seq.find (fun proof ->
+            proof.Parameters |> List.exists (fun formal -> match graph.Nodes[formal].Kind with SemanticKind.PatternBinding "value" -> true | _ -> false))
+        let edges = graph.Edges |> List.filter (fun edge ->
+            edge.Role <> EdgeRole.OrdinaryInactiveImplementation || edge.Target <> proof.Implementation)
+        let missing = { graph with Edges = edges }
+        let current = DemandProjection.tryInactivity missing |> function Ok proof -> proof | Result.Error errors -> failwithf "%A" errors
+        Assert.DoesNotContain(proof.Implementation, current.Implementations.Keys)
+        Assert.All(proof.Parameters, fun formal -> Assert.DoesNotContain(formal, current.Formals))
+
+    [<Fact>]
+    member _.``A changed inactive use account cannot reuse an aggregate proof with the same numeric result`` () =
+        let source = String.concat "\n"
+                         [ "module OrdinaryDemand"; "type Holder = { Apply: bool -> bool }"
+                           "let first value = not value"; "[<EntryPoint>]"; "let main _ ="
+                           "    let holder = { Apply = first }"; "    ignore holder"; "    0" ]
+        let graph = LazyResidenceFixture.programWith (Some source)
+        let facts = graph.Codata.Value
+        let accounts = facts.CallableAggregateDependencies.Values |> Seq.filter (fun account -> not account.Inactivity.IsEmpty) |> Seq.toList
+        Assert.NotEmpty accounts
+        let held = accounts.Head
+        let numeric = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && node.Range.File = "lazy-program.clef" &&
+            match node.Kind with SemanticKind.Literal(NativeLiteral.Int(0L, _)) -> true | _ -> false) |> Assert.Single
+        Assert.Equal<ValueRange option>(Some(ValueRange.Bounded(0I, 0I)), numeric.ValueRange)
+        let implementation, _ = held.Inactivity.Head
+        let code = graph.Nodes[implementation]
+        let alias = { code with Id = NodeId.fresh(); Kind = SemanticKind.VarRef("anotherReference", Some implementation); Children = []; Parent = None }
+        let changed =
+            { graph with
+                Nodes = graph.Nodes.Add(alias.Id, alias)
+                Edges = kindEdges alias.Id alias.Kind @ graph.Edges }
+            |> DemandRecipe.normalize
+        let input : Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.Inputs =
+            { Slots = facts.CallableAggregateSlots
+              Values = facts.CallableAggregateValues; Carriers = facts.CallableCarriers
+              Contracts = facts.CallableContracts; Flows = facts.CallableFlows; Joins = facts.CallableJoins }
+        let current = Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.authorWith input changed held.Occurrence
+                      |> function Ok value -> value | Result.Error error -> failwith error
+        Assert.NotEqual<(NodeId * OrdinaryInactivityProjection) list>(held.Inactivity, current.Inactivity)
+        Assert.Equal(numeric.ValueRange, changed.Nodes[numeric.Id].ValueRange)
+        Assert.Contains(alias.Id, (current.Inactivity |> List.find (fst >> (=) implementation) |> snd).Participants)
+        Assert.NotEqual<CallableAggregateDependencyAccount>(held, current)
+        // The owning reader compares the entire dependency account; changing
+        // support cannot be certified by the held account's equal result.
+        Assert.True(Result.isError(Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current changed held.Occurrence))
+        // Isolate this dependency: every other published field is current.
+        // A refusal here cannot be credited to a stale slot/carrier/source row.
+        let heldInactivity = { current with Inactivity = held.Inactivity }
+        let isolatedCodata =
+            { changed.Codata.Value with
+                CallableAggregateDependencies = changed.Codata.Value.CallableAggregateDependencies.Add(held.Occurrence, heldInactivity) }
+        let isolated = { changed with Codata = lazy isolatedCodata }
+        Assert.Equal<CallableAggregateDependencyAccount>(current, { heldInactivity with Inactivity = current.Inactivity })
+        Assert.True(Result.isError(Clef.Compiler.Baker.Ingredients.CallableAggregateAccounts.current isolated held.Occurrence))
+
+    [<Theory>]
+    [<InlineData("entry")>]
+    [<InlineData("formal")>]
+    [<InlineData("formal-order")>]
+    [<InlineData("body-formal")>]
+    [<InlineData("live-body")>]
+    [<InlineData("premise")>]
+    [<InlineData("foreign")>]
+    member _.``Published inactivity retains exact ordinary source evidence without demanding dormant bodies`` defect =
+        // Publication requires the existing source-declared target and image
+        // residence fixture, beyond the target-free checker used above.
+        let source =
+            String.concat "\n"
+                [ "module OrdinaryDemand"; "type Holder = { Apply: bool -> bool -> bool; Flag: bool }"
+                  "let dormant (left: bool) (right: bool) = left && right"; "[<EntryPoint>]"
+                  "let main _ ="; "    let holder = { Apply = dormant; Flag = true }"
+                  "    if holder.Flag then 0 else 1" ]
+        let graph = LazyResidenceFixture.programWith (Some source)
+        let revision =
+            Clef.Compiler.PSGSaturation.Publication.RevisionPublication.publish graph
+            |> Result.defaultWith (fun failures -> failwithf "%A" failures)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        if defect = "entry" then
+            let limits : Fidelity.PSG.Binary.Limits =
+                { MaxBytes = 4 * 1024 * 1024; MaxCollectionLength = 10000; MaxDepth = 128
+                  MaxStringBytes = 1024 * 1024; MaxBigIntegerBytes = 4096; MaxValues = 1000000 }
+            let bytes = Fidelity.PSG.Binary.encode limits revision
+                        |> Result.defaultWith (fun error -> failwithf "%A" error)
+            let decoded = Fidelity.PSG.Binary.decode limits bytes
+                          |> Result.defaultWith (fun error -> failwithf "%A" error)
+            Assert.Empty(Fidelity.PSG.Integrity.check decoded)
+            Assert.Equal<Map<Fidelity.PSG.NodeId, Fidelity.PSG.OrdinaryInactivityProjection>>(revision.Emission.Ordinary.Inactivity, decoded.Emission.Ordinary.Inactivity)
+            Assert.Equal<Map<Fidelity.PSG.NodeId, Fidelity.PSG.CallableAggregateDependencyAccount>>(revision.Emission.Callable.AggregateDependencies, decoded.Emission.Callable.AggregateDependencies)
+        let key, proof = revision.Emission.Ordinary.Inactivity |> Map.toList
+                         |> List.find (fun (_, proof) -> proof.Parameters.Length = 2 && revision.Nodes.ContainsKey proof.Implementation)
+        let changedProof =
+            match defect with
+            | "entry" -> { proof with Entry = proof.Implementation }
+            | "formal" -> { proof with Parameters = [proof.Parameters.Head; proof.Parameters.Head] }
+            | "formal-order" -> { proof with Parameters = List.rev proof.Parameters }
+            | "body-formal" -> { proof with Body = proof.Parameters.Head }
+            | "premise" -> { proof with SourcePremises = proof.SourcePremises.Remove proof.Body }
+            | "foreign" ->
+                let source = proof.SourcePremises[proof.Implementation]
+                { proof with SourcePremises = proof.SourcePremises.Add(proof.Implementation, { source with HasExtern = true }) }
+            | _ -> proof
+        let ordinary = { revision.Emission.Ordinary with Inactivity = revision.Emission.Ordinary.Inactivity.Add(key, changedProof) }
+        let changed = { revision with Emission = { revision.Emission with Ordinary = ordinary } }
+        let changed =
+            if defect <> "live-body" then changed
+            else
+                let node = revision.Nodes[proof.Implementation]
+                let kind =
+                    match node.Kind with
+                    | Fidelity.PSG.SemanticKind.Lambda(parameters, _, captures, owner, context) ->
+                        Fidelity.PSG.SemanticKind.Lambda(parameters, proof.Parameters.Head, captures, owner, context)
+                    | _ -> failwith "Expected live inactive implementation"
+                { changed with Nodes = changed.Nodes.Add(node.Id, { node with Kind = kind }) }
+        Assert.Contains(Fidelity.PSG.Integrity.check changed, fun violation -> violation.Part = "Emission.Ordinary.Inactivity")
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Only a current inactive body excludes its writes from an executed observation`` invoked =
+        let activation = if invoked then "dormant ()" else "ignore dormant"
+        let source =
+            String.concat "\n"
+                [ "[<EntryPoint>]"; "let main _ ="; "    let mutable shared = 1"
+                  "    let dormant () = shared <- 9"; "    " + activation
+                  "    let observed = eager shared"; "    observed" ]
+        let graph = OrdinaryDemandFixture.check source
+        let observed = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.Binding("observed", _, _, _) -> true | _ -> false) |> Assert.Single
+        let write = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable &&
+            match node.Kind with
+            | SemanticKind.Set(_, value) | SemanticKind.EnvironmentWrite(_, _, value) ->
+                match graph.Nodes[value].Kind with SemanticKind.Literal(NativeLiteral.Int(9L, _)) -> true | _ -> false
+            | _ -> false) |> Assert.Single
+        let inactive = DemandProjection.tryInactivity graph |> function Ok proof -> proof | Result.Error errors -> failwithf "%A" errors
+        if invoked then
+            Assert.DoesNotContain(write.Id, inactive.Excluded)
+            Assert.True(observed.ValueRange |> Option.exists (fun range -> ValueRange.contains range (ValueRange.point 9I)),
+                        sprintf "The executed write vanished from %A" observed.ValueRange)
+        else
+            Assert.Contains(write.Id, inactive.Excluded)
+            Assert.Equal<ValueRange option>(Some(ValueRange.point 1I), observed.ValueRange)

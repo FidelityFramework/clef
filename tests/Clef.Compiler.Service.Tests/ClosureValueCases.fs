@@ -495,9 +495,27 @@ let main _ =
     keep work
 """
         let saved = ClosureValues.bindingNamed "saved" result
-        Assert.Equal(Some ValueRange.Unbounded, saved.ValueRange)
+        // Width Inference §6: "A missing observation, an unreachable
+        // computation, an inconsistent constraint, and a known range with no
+        // covering representation are distinct states." This join is empty
+        // because the current complete use census proves inactivity.
+        let inactive =
+            Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryInactivity result.Graph
+            |> Result.defaultWith (fun failures -> failwithf "%A" failures)
+        let proof = inactive.Implementations.Values |> Seq.filter (fun proof -> proof.Excluded.Contains saved.Id) |> Assert.Single
+        Assert.All(proof.Parameters, fun formal ->
+            Assert.Contains(formal, inactive.Formals)
+            Assert.Equal(Some ValueRange.Empty, result.Graph.Nodes[formal].ValueRange))
+        Assert.Equal(Some ValueRange.Empty, saved.ValueRange)
         let graph = { result.Graph with Platform = Some ClosureValues.context }
+        Assert.Equal<int option>(None, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedWidthOf graph ValueRange.Empty)
         Assert.Equal<int option>(None, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth graph saved.Id)
+        // The receiving signature retains its declared register convention;
+        // a proved-inactive occurrence still has no physical held value.
+        let core = { result.Graph with Platform = Some SourcePlatformFixture.platform }
+        let formal = proof.Parameters.Head
+        Assert.Equal<int option>(Some 64, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.selectedWidth core formal)
+        Assert.Equal<int option>(None, Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.heldWidth core formal)
 
     [<Fact>]
     member _.``Immutable binding adapts a uniform callback result before a narrow store``() =

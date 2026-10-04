@@ -464,3 +464,96 @@ type LocalFiniteCellRangeCases() =
         let changed = LocalFiniteCellFixture.replace graph { scope with Kind = SemanticKind.Sequential reordered; Children = reordered }
         Assert.True((Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read changed).IsSome)
         LocalFiniteCellFixture.refused changed
+    [<Theory>]
+    [<InlineData(1)>]
+    [<InlineData(2)>]
+    member _.``Captured affine stores retain the logical cell and count every ordinary invocation`` (count: int) =
+        let calls = String.replicate count "    bump ()\n"
+        let graph = FiniteCellFixture.check (
+            "[<EntryPoint>]\nlet main _ =\n    let mutable state = 0\n    let bump () = state <- state + 1\n" + calls + "    state\n")
+        let proof = FiniteCellFixture.proof graph
+        let writer = Assert.Single proof.Writes
+        Assert.Equal(bigint count, writer.MaximumActivations)
+        Assert.Equal(bigint count, proof.Certificate.MaximumIterations)
+        Assert.Equal<bigint list>([bigint count; 1I], proof.Certificate.Upper)
+        match graph.Nodes[writer.Store].Kind with
+        | SemanticKind.EnvironmentWrite(_, cell, value) ->
+            Assert.Equal(proof.Cell, cell)
+            Assert.Equal(writer.Value, value)
+        | actual -> failwithf "Expected the original writer after environment realization: %A" actual
+        Assert.True(FiniteCells.evidenceCurrent graph)
+        let original = FiniteCellFixture.obligations graph |> Assert.Single
+        let renewed = FiniteCellFixture.analyze graph
+        Assert.Equal(original.Id, (FiniteCellFixture.obligations renewed |> Assert.Single).Id)
+
+    [<Theory>]
+    [<InlineData("mode")>]
+    [<InlineData("cell")>]
+    [<InlineData("formal")>]
+    [<InlineData("order")>]
+    member _.``Captured finite proof refuses changed cell formation formal or initialization order`` defect =
+        let graph = FiniteCellFixture.check """
+[<EntryPoint>]
+let main _ =
+    let mutable state = 0
+    let bump () = state <- state + 1
+    bump ()
+    state
+"""
+        let proof = FiniteCellFixture.proof graph
+        Assert.True(FiniteCells.evidenceCurrent graph)
+        let cell = graph.Nodes[proof.Cell]
+        let changed =
+            match defect with
+            | "mode" ->
+                let edges =
+                    graph.Edges |> List.map (fun edge ->
+                        match edge.Role, edge.Sources with
+                        | EdgeRole.EnvironmentCapture true, [_; slot; _] when slot = cell.Id ->
+                            { edge with Role = EdgeRole.EnvironmentCapture false }
+                        | _ -> edge)
+                { graph with Edges = edges }
+            | "cell" ->
+                let edges =
+                    graph.Edges |> List.map (fun edge ->
+                        match edge.Role, edge.Sources with
+                        | EdgeRole.EnvironmentCapture true, [owner; slot; _] when slot = cell.Id ->
+                            { edge with Sources = [owner; slot; Assert.Single cell.Children] }
+                        | _ -> edge)
+                { graph with Edges = edges }
+            | "formal" ->
+                { graph with Edges = graph.Edges |> List.filter (fun edge -> edge.Role <> EdgeRole.EnvironmentFormal) }
+            | _ ->
+                let sequence = graph.Nodes.Values |> Seq.find (fun node ->
+                    match node.Kind with SemanticKind.Sequential values -> List.contains cell.Id values | _ -> false)
+                let values = match sequence.Kind with SemanticKind.Sequential values -> values | _ -> []
+                let reordered = List.filter ((<>) cell.Id) values @ [cell.Id]
+                let sequence = { sequence with Kind = SemanticKind.Sequential reordered; Children = reordered }
+                let edges = graph.Edges |> List.filter (fun edge ->
+                    edge.Target <> sequence.Id || (edge.Class <> EdgeClass.Structural && edge.Class <> EdgeClass.Reference))
+                { graph with Nodes = graph.Nodes.Add(sequence.Id, sequence)
+                             Edges = edges @ Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence sequence }
+        Assert.Empty(FiniteCells.recognize changed)
+        Assert.False(FiniteCells.evidenceCurrent changed)
+        Assert.Empty(FiniteCellFixture.obligations (FiniteCells.settle [] changed))
+
+    [<Theory>]
+    [<InlineData("loop")>]
+    [<InlineData("recursive")>]
+    [<InlineData("callback")>]
+    member _.``Captured cells refuse unbounded recursive or unknown callback activations`` defect =
+        let declaration, invocation =
+            match defect with
+            | "recursive" -> "let rec bump () = state <- state + 1; bump ()", "bump ()"
+            | "callback" -> "let bump () = state <- state + 1", "Seq.iter bump (seq { yield () })"
+            | _ -> "let bump () = state <- state + 1", "while true do bump ()"
+        let source =
+            "module CapturedFiniteRefusal\n[<EntryPoint>]\nlet main _ =\n    let mutable state = 0\n    " +
+            declaration + "\n    " + invocation + "\n    state\n"
+        let result =
+            match parseAndCheck source "captured-finite-refusal.clef" with
+            | Success result | CheckFailure result -> result
+            | ParseFailure errors -> failwithf "%A" errors
+        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8011")
+        Assert.Empty(FiniteCells.recognize result.Graph)
+        Assert.Empty(FiniteCellFixture.obligations result.Graph)

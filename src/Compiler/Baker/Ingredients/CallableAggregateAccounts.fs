@@ -8,6 +8,7 @@ open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Identity = Clef.Compiler.NativeTypedTree.TypeIdentities
 module AggregateTypes = Clef.Compiler.Baker.Ingredients.CallableAggregateTypes
+module Demand = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand
 
 type Inputs = {
     Slots: Map<NodeId, CallableAggregateSlot>
@@ -93,6 +94,13 @@ let authorWith (facts: Inputs) (graph: SemanticGraph) (occurrence: NodeId) : Res
                     (values |> List.collect (fun value -> value.Participants @ (value.Tag |> Option.map _.Participants |> Option.defaultValue []))) @
                     (carriers |> List.collect _.Lifetime) @
                     (contracts |> List.collect _.Participants)
+                let directNodes = participants |> List.map _.Node |> Set.ofList
+                let inactivityResult = Demand.tryInactivityProjection graph
+                let inactivity =
+                    inactivityResult |> Result.toOption |> Option.defaultValue Map.empty
+                    |> Map.toList |> List.filter (fun (implementation, proof) ->
+                        (carriers |> List.exists (fun carrier -> carrier.Implementation = implementation)) ||
+                        not (Set.intersect directNodes proof.Excluded).IsEmpty)
                 let participantNodes = participants |> List.map _.Node |> List.distinct
                 let premiseIdentities = contracts |> List.collect (fun contract -> Map.keys contract.SourcePremises |> Seq.toList) |> Set.ofList
                 let sources : Result<CallableAggregateSourceIncidence, string> list = participantNodes |> List.choose (fun id ->
@@ -121,13 +129,17 @@ let authorWith (facts: Inputs) (graph: SemanticGraph) (occurrence: NodeId) : Res
                     |> List.distinct
                     |> List.choose (fun implementation ->
                         CallableSymbols.nameOf graph implementation |> Option.map (fun name -> implementation, name))
-                match contractFailure |> Option.orElse (declarationFailure) |> Option.orElseWith (fun () -> sources |> List.tryPick (function Error reason -> Some reason | _ -> None)) with
+                let inactivityFailure =
+                    match inactivityResult with
+                    | Error failures -> Some(failures |> List.map _.Reason |> String.concat " ")
+                    | Ok _ -> None
+                match contractFailure |> Option.orElse (declarationFailure) |> Option.orElse inactivityFailure |> Option.orElseWith (fun () -> sources |> List.tryPick (function Error reason -> Some reason | _ -> None)) with
                 | Some reason -> Error reason
                 | None ->
                     Ok { Occurrence = occurrence; Slots = slots; Values = values; Carriers = carriers
                          Contracts = contracts; Flows = flows; Joins = joins; Participants = participants
                          Sources = sources |> List.choose (function Ok source -> Some source | _ -> None)
-                         Claims = claims; Symbols = symbols }))))
+                         Claims = claims; Symbols = symbols; Inactivity = inactivity }))))
 
 let author (graph: SemanticGraph) (occurrence: NodeId) =
     let facts = graph.Codata.Value

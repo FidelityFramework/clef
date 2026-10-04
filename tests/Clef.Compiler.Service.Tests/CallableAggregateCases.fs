@@ -7,7 +7,7 @@ module AggregateAccounts = Clef.Compiler.Baker.Ingredients.CallableAggregateAcco
 module AggregatePublication = Clef.Compiler.PSGSaturation.Publication.RevisionPublication
 
 module private CallableAggregateFixture =
-    let check body =
+    let checkResult body =
         let tag : NumericRepresentation =
             { Name = "int8"; Capability = "native"; Family = "int"; Bits = 8
               MinMagnitude = "-128"; MaxMagnitude = "127"; Boundary = "wrap" }
@@ -23,6 +23,10 @@ module private CallableAggregateFixture =
             | Clef.Compiler.NativeService.ParseError errors -> failwithf "%A" errors
         let result = Clef.Compiler.NativeService.checkParsedInputsWithPlatform
                         [parse authority "write-authority.clef"; parse body "callable-aggregate.clef"] (Some platform)
+        result
+
+    let check body =
+        let result = checkResult body
         DimensionalCases.noErrors result
         result.Graph
 
@@ -56,6 +60,70 @@ let main _ =
 """
 
 type CallableAggregateCases() =
+    [<Theory>]
+    [<InlineData(0)>]
+    [<InlineData(1)>]
+    [<InlineData(2)>]
+    [<InlineData(4)>]
+    member _.``Tuple and copied callable components publish their exact source operands`` shape =
+        // Closure Representation §2.4 covers every construction and copy;
+        // these source programs are checked, published, then publicly read.
+        let tuplePrefix = "module StoredTuple\nlet first (value: bool) = value\n[<EntryPoint>]\nlet main _ =\n"
+        let recordPrefix = "module CopyUpdate\ntype Holder = { Apply: bool -> bool; Count: int }\nlet first (value: bool) = value\n[<EntryPoint>]\nlet main _ =\n    let h = { Apply = first; Count = 0 }\n"
+        let source =
+            match shape with
+            | 0 -> tuplePrefix + "    let pair = (first, true)\n    if (fst pair) (snd pair) then 0 else 1\n"
+            | 1 -> tuplePrefix + "    let (f, b) = (first, true)\n    if f b then 0 else 1\n"
+            | 2 -> recordPrefix + "    let g = { h with Count = 1 }\n    if g.Apply true then 0 else 1\n"
+            | _ -> recordPrefix + "    let alias = h\n    let g = { alias with Count = 1 }\n    let again = g\n    let last = { again with Count = 2 }\n    if last.Apply true then 0 else 1\n"
+        let graph = CallableAggregateFixture.check source
+        let revision = AggregatePublication.publish graph |> Result.defaultWith (fun failures -> failwithf "%A" failures)
+        Assert.Empty(Fidelity.PSG.Integrity.check revision)
+        let constructions = graph.Codata.Value.CallableAggregateValues.Values |> Seq.collect id
+                            |> Seq.filter (fun row -> row.Operation = CallableAggregateOperation.Construct) |> Seq.toList
+        Assert.NotEmpty constructions
+        if shape = 2 || shape = 4 then
+            let copies = constructions |> List.filter (fun row -> row.FormationInputs.Length > 1)
+            Assert.Equal((if shape = 4 then 2 else 1), copies.Length)
+            for copy in copies do
+                let source = copy.FormationInputs |> List.rev |> List.tail |> List.head
+                let account = graph.Codata.Value.CallableAggregateDependencies[copy.Occurrence]
+                Assert.Contains(account.Values, fun row -> row.Occurrence = source && row.Slot = copy.Slot)
+                Assert.Equal(copy.Value, List.tryLast copy.FormationInputs)
+            // Equal selected code cannot keep a copy receipt current after an
+            // immutable alias edge changes. No numeric or range owner is run.
+            let copy = copies.Head
+            let input = copy.FormationInputs.Head
+            let node = graph.Nodes[input]
+            let changed = {graph with Nodes = graph.Nodes.Add(input, {node with Kind = SemanticKind.VarRef("changed", Some input)})}
+            match AggregateAccounts.current changed copy.Occurrence with
+            | Ok _ -> failwith "A changed copy path retained its earlier account."
+            | Error reason -> Assert.Equal("Callable aggregate source support changed after its dependency account was authored (CCS8414).", reason)
+            Assert.True(AggregatePublication.publish changed |> Result.isError)
+        elif shape < 2 then
+            let row = Assert.Single constructions
+            let constructor = graph.Nodes[row.Occurrence]
+            let fields = match constructor.Kind with SemanticKind.TupleExpr fields -> fields | other -> failwithf "%A" other
+            let changed = {graph with Nodes = graph.Nodes.Add(constructor.Id, {constructor with Kind = SemanticKind.TupleExpr(List.rev fields)})}
+            match AggregateAccounts.current changed row.Occurrence with
+            | Ok _ -> failwith "A changed tuple operand retained its earlier account."
+            | Error reason -> Assert.Equal("Callable aggregate source support changed after its dependency account was authored (CCS8414).", reason)
+            Assert.True(AggregatePublication.publish changed |> Result.isError)
+
+    [<Fact>]
+    member _.``Replacing a callable field with a projected formation refuses its unauthored selector`` () =
+        // Closure Representation §2.4: "Unsupported families or storage forms
+        // SHALL be diagnosed at commitment, never repaired through function/data
+        // casts." This replacement creates a second formation in the slot;
+        // inheriting the original field (the four cases above) does not.
+        let result = CallableAggregateFixture.checkResult "module CopyUpdate\ntype Holder = { Apply: bool -> bool; Count: int }\nlet first (value: bool) = value\n[<EntryPoint>]\nlet main _ =\n    let h = { Apply = first; Count = 0 }\n    let g = { h with Apply = h.Apply; Count = 1 }\n    if g.Apply true then 0 else 1\n"
+        let errors = result.Diagnostics |> List.filter (fun diagnostic ->
+            diagnostic.Severity = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.NativeDiagnosticSeverity.Error)
+        Assert.NotEmpty errors
+        Assert.All(errors, fun diagnostic ->
+            Assert.Equal("CCS8411", diagnostic.Code)
+            Assert.Equal("The callable component has multiple source formations and no authored finite selector or adaptation.", diagnostic.Message))
+
     [<Fact>]
     member _.``Logical branch selection preserves both physical callable operands and forwarded transport`` () =
         // CallableBranchObservation is a logical value fact, not permission to

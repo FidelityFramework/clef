@@ -74,6 +74,7 @@ let recognize (graph: SemanticGraph) : Bound list =
         | SemanticKind.LazyWrite(_, slot, _) -> Seq.singleton slot
         | _ -> Seq.empty) |> Set.ofSeq
     let calls = CallableOrigins.resolve graph
+    let ingress = CallableIngress.analyzeWith graph calls
     let complete site implementation =
         calls.Calls.TryFind site |> Option.filter (fun call ->
             valid site && call.Complete && not call.Unknown && not call.Targets.IsEmpty &&
@@ -87,35 +88,16 @@ let recognize (graph: SemanticGraph) : Bound list =
         match closedCache.TryGetValue implementation with
         | true, result -> result
         | _ ->
-            let rec follow seen source =
-                if Set.contains source seen || not (valid source) || captures.Contains source ||
-                   (graph.DeclarationRoots |> List.exists (fun (root, _) -> root = source)) then None else
-                let seen = Set.add source seen
-                uses.TryFind source |> Option.defaultValue [] |> List.fold (fun accumulated edge ->
-                    let next =
-                        if not (valid edge.Target) then None else
-                        match nodes[edge.Target].Kind, edge.Class, edge.Role with
-                        | SemanticKind.ModuleDef(_, members), EdgeClass.Reference, EdgeRole.Member
-                            when List.tryItem edge.Ordinal members = Some source -> Some([], Set.singleton edge.Target)
-                        | SemanticKind.Binding(_, false, false, None), EdgeClass.Structural, _
-                            when nodes[edge.Target].Children = [source] && same source edge.Target -> follow seen edge.Target
-                        | SemanticKind.VarRef(_, Some actual), EdgeClass.Reference, EdgeRole.Definition
-                            when actual = source && same source edge.Target -> follow seen edge.Target
-                        | SemanticKind.TypeAnnotation(actual, declared), EdgeClass.Structural, _
-                            when actual = source && same source edge.Target && applySubst declared = applySubst nodes[source].Type -> follow seen edge.Target
-                        | SemanticKind.EagerExpr actual, EdgeClass.Structural, _
-                            when actual = source && ExplicitDemand.operand graph edge.Target = Some source -> follow seen edge.Target
-                        | SemanticKind.Application(callee, _), EdgeClass.Structural, EdgeRole.Callee when callee = source ->
-                            complete edge.Target implementation |> Option.map (fun call ->
-                                let participants = call.Targets |> List.collect (fun target ->
-                                    target.Lambda :: target.Body :: target.Arguments @ (target.Parameters |> List.map (fun (_, _, id) -> id)))
-                                [edge.Target], Set.ofList (source :: edge.Target :: participants))
-                        | _ -> None
-                    match accumulated, next with
-                    | Some(sites, dependencies), Some(more, required) -> Some(sites @ more, Set.union dependencies required)
-                    | _ -> None) (Some([], Set.singleton source))
-            let result = follow Set.empty implementation |> Option.bind (fun (sites, dependencies) ->
-                if sites.IsEmpty then None else Some(List.distinct sites, dependencies))
+            // The ingress owner supplies the complete incoming-use census.
+            // This owner still proves finite execution; closure membership is
+            // neither an invocation count nor an excuse to ignore recursion.
+            let result = CallableIngress.tryFamily ingress implementation |> Option.bind (fun family ->
+                let sites =
+                    family.Evidence.Calls |> List.filter (fun call -> call.Implementation = implementation)
+                    |> List.map _.Site |> List.distinct
+                if not (family.Activated.Contains implementation) || sites.IsEmpty ||
+                   (sites |> List.exists (fun site -> complete site implementation |> Option.isNone)) then None
+                else Some(sites, family.Evidence.Participants))
             closedCache[implementation] <- result
             result
     let startupParticipants = graph.Edges |> List.filter (fun edge ->
@@ -155,6 +137,87 @@ let recognize (graph: SemanticGraph) : Bound list =
             | _ ->
                 let incoming = parents id
                 if incoming.IsEmpty then None else sum (incoming |> List.map _.Target)
+    let environmentOrigins = lazy (ClosureEnvironments.origins graph)
+    let environmentCalls = lazy (ClosureEnvironments.callEnvironments graph)
+    let captureCache = System.Collections.Generic.Dictionary<NodeId * NodeId, (NodeId * Set<NodeId>) option>()
+    let capture cell owner =
+        let key = cell, owner
+        match captureCache.TryGetValue key with
+        | true, result -> result
+        | _ ->
+            let result =
+                match nodes.TryFind owner with
+                | Some { Kind = SemanticKind.Lambda(_, _, captures, _, LambdaContext.RegularClosure) } when valid owner ->
+                    match captures |> List.filter (fun capture -> capture.SourceNodeId = Some cell) with
+                    | [capture] when capture.IsMutable && applySubst capture.Type = applySubst nodes[cell].Type ->
+                        closedCalls owner |> Option.map (fun (_, required) -> owner, Set.add cell required)
+                    | _ -> None
+                | Some { Kind = SemanticKind.ClosureValue(implementation, environment) }
+                    when valid owner && valid implementation && valid environment ->
+                    match ClosureEnvironments.capturedInitializers graph owner with
+                    | Some initializers when (initializers |> List.filter (fun (slot, _, _) -> slot = cell)) = [cell, cell, true] ->
+                        let formals = graph.Edges |> List.filter (fun edge ->
+                            edge.Role = EdgeRole.EnvironmentFormal && edge.Sources = [owner; implementation])
+                        match formals, closedCalls implementation with
+                        | [formal], Some(sites, required) when valid formal.Target &&
+                            environmentOrigins.Value.TryFind formal.Target = Some owner &&
+                            (sites |> List.forall (fun site ->
+                                environmentCalls.Value.TryFind site |> Option.exists (fun (_, actual) ->
+                                    environmentOrigins.Value.TryFind actual = Some owner))) ->
+                            let formation = initializers |> List.collect (fun (slot, value, _) -> [slot; value])
+                            Some(implementation, Set.union required (Set.ofList (owner :: implementation :: environment :: formal.Target :: formation)))
+                        | _ -> None
+                    | _ -> None
+                | _ -> None
+            captureCache[key] <- result
+            result
+    // Environment identity comes from the closure owner. Here the finite
+    // writer proof additionally requires the actual access to be in that code
+    // body, through its exact formal. Arbitrary environment aliases and writable
+    // borrows remain outside this bounded ordinary-activation rule.
+    let environmentAccess cell (node: SemanticNode) =
+        let environment =
+            match node.Kind with
+            | SemanticKind.EnvironmentRead(environment, slot)
+            | SemanticKind.EnvironmentWrite(environment, slot, _) when slot = cell -> Some environment
+            | _ -> None
+        environment |> Option.bind (fun environment ->
+            if not (valid node.Id && valid environment) then None else
+            let formal =
+                match nodes[environment].Kind with
+                | SemanticKind.VarRef(_, Some formal) | SemanticKind.EnvironmentReference formal -> Some formal
+                | _ -> None
+            match formal, environmentOrigins.Value.TryFind environment with
+            | Some formal, Some owner when valid formal &&
+                applySubst nodes[environment].Type = ClosureEnvironments.environmentType ->
+                capture cell owner |> Option.bind (fun (implementation, required) ->
+                    let rows = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.EnvironmentFormal && edge.Target = formal)
+                    match rows with
+                    | [{ Class = EdgeClass.Provenance; Sources = [actualOwner; actualImplementation] }]
+                        when actualOwner = owner && actualImplementation = implementation &&
+                             CallableIngress.tryExecutionOwner ingress node.Id = Some implementation ->
+                        Some(owner, Set.union required (Set.ofList [node.Id; environment; formal]))
+                    | _ -> None)
+            | _ -> None)
+    let captureSupport cell =
+        nodes.Values |> Seq.fold (fun accumulated node ->
+            let next =
+                match node.Kind with
+                | SemanticKind.Lambda(_, _, captures, _, _) | SemanticKind.SeqExpr(_, captures)
+                | SemanticKind.LazyExpr(_, captures) when captures |> List.exists (fun capture -> capture.SourceNodeId = Some cell) ->
+                    capture cell node.Id |> Option.map snd
+                | SemanticKind.EnvironmentCreate(owner, initializers) when initializers |> List.exists (fun (slot, value) -> slot = cell || value = cell) ->
+                    capture cell owner |> Option.map snd
+                | SemanticKind.EnvironmentRead(_, slot) | SemanticKind.EnvironmentWrite(_, slot, _) when slot = cell ->
+                    environmentAccess cell node |> Option.map snd
+                | SemanticKind.EnvironmentBorrow(_, slot) | SemanticKind.FrameRead(_, slot)
+                | SemanticKind.FrameBorrow(_, slot) | SemanticKind.FrameWrite(_, slot, _)
+                | SemanticKind.LazyRead(_, slot) | SemanticKind.LazyBorrow(_, slot)
+                | SemanticKind.LazyWrite(_, slot, _) when slot = cell -> None
+                | _ -> Some Set.empty
+            match accumulated, next with
+            | Some prior, Some required -> Some(Set.union prior required)
+            | _ -> None) (Some Set.empty)
     let formalOwners =
         nodes.Values |> Seq.collect (fun node ->
             match node.Kind with
@@ -204,7 +267,12 @@ let recognize (graph: SemanticGraph) : Bound list =
                 Some(info.Operation, callee, left, right)
             | _ -> None
         | _ -> None
-    let readCell cell id = same cell id && (match nodes[id].Kind with SemanticKind.VarRef(_, Some source) -> source = cell | _ -> false)
+    let readCell cell id =
+        same cell id &&
+        (match nodes[id].Kind with
+         | SemanticKind.VarRef(_, Some source) -> source = cell
+         | SemanticKind.EnvironmentRead _ -> environmentAccess cell nodes[id] |> Option.isSome
+         | _ -> false)
     let rec affine cell seen id =
         if Set.contains id seen || not (same cell id) then None else
         let seen = Set.add id seen
@@ -231,7 +299,8 @@ let recognize (graph: SemanticGraph) : Bound list =
             | _ -> None
     // A local declaration must initialize before every use in its one lexical
     // sequence. Inspect all actual containment paths, not the advisory Parent
-    // field. This admits no captured storage or invocation through a closure.
+    // field. A captured body's access is ordered by its exact formation, never
+    // by the rewritten implementation's declaration or advisory parent.
     let localInitialization cell =
         match parents cell with
         | [declaration] when valid declaration.Target ->
@@ -252,7 +321,14 @@ let recognize (graph: SemanticGraph) : Bound list =
                                    List.tryItem edge.Ordinal values = Some id then Some(Set.ofList [id; edge.Target]) else None
                             else
                                 match nodes[edge.Target].Kind with
-                                | SemanticKind.Lambda _ | SemanticKind.SeqExpr _ | SemanticKind.LazyExpr _ -> None
+                                | SemanticKind.Lambda _ ->
+                                    let formations = nodes.Values |> Seq.choose (fun node ->
+                                        capture cell node.Id |> Option.bind (fun (implementation, _) ->
+                                            if implementation = edge.Target then Some node.Id else None)) |> Seq.toList
+                                    match formations with
+                                    | [formation] -> after seen formation |> Option.map (Set.add id)
+                                    | _ -> None
+                                | SemanticKind.SeqExpr _ | SemanticKind.LazyExpr _ -> None
                                 | _ -> after seen edge.Target |> Option.map (Set.add id)
                         match state, next with
                         | Some prior, Some required -> Some(Set.union prior required)
@@ -263,6 +339,9 @@ let recognize (graph: SemanticGraph) : Bound list =
                         match nodes.TryFind edge.Target, edge.Class, edge.Role with
                         | Some { Kind = SemanticKind.VarRef(_, Some source) }, EdgeClass.Reference, EdgeRole.Definition
                             when source = cell && same cell edge.Target -> after Set.empty edge.Target
+                        | Some { Kind = SemanticKind.EnvironmentCreate(owner, _) }, EdgeClass.Reference, _ ->
+                            capture cell owner |> Option.bind (fun (_, required) ->
+                                after Set.empty owner |> Option.map (Set.union required))
                         | _ -> None
                     match state, next with
                     | Some prior, Some required -> Some(Set.union prior required)
@@ -271,12 +350,13 @@ let recognize (graph: SemanticGraph) : Bound list =
         | _ -> None
     nodes.Keys |> Seq.toList |> List.choose (fun cell ->
         match nodes.TryFind cell with
-        | Some node when valid cell && Types.isIntegerType node.Type && not (captures.Contains cell) ->
+        | Some node when valid cell && Types.isIntegerType node.Type ->
             match node.Kind, node.Children with
             | SemanticKind.Binding(_, true, false, None), [initializer] ->
                 let initialization =
                     if startup.ValueBindings.Contains cell then Some startupParticipants
                     else localInitialization cell
+                let captureParticipants = captureSupport cell
                 let dangerous = nodes.Values |> Seq.exists (fun useNode ->
                     match useNode.Kind with
                     | SemanticKind.VarRef(_, Some source) when source = cell -> not (same cell useNode.Id)
@@ -289,8 +369,9 @@ let recognize (graph: SemanticGraph) : Bound list =
                 let writes = nodes.Values |> Seq.choose (fun store ->
                     match store.Kind with
                     | SemanticKind.Set(target, value) when readCell cell target -> Some(store.Id, target, value)
+                    | SemanticKind.EnvironmentWrite(environment, slot, value) when slot = cell -> Some(store.Id, environment, value)
                     | _ -> None) |> Seq.toList
-                if initialization.IsNone || dangerous || invalidUses || writes.IsEmpty then None else
+                if initialization.IsNone || captureParticipants.IsNone || dangerous || invalidUses || writes.IsEmpty then None else
                 match constant Set.empty (applySubst node.Type) initializer with
                 | None -> None
                 | Some(seed, initialDependencies) ->
@@ -312,7 +393,7 @@ let recognize (graph: SemanticGraph) : Bound list =
                     | Error _ -> None
                     | Ok(certificate, _) ->
                         Some { Cell = cell; Writes = writes; Certificate = certificate
-                               Participants = Set.unionMany (startupParticipants :: initialization.Value :: initialDependencies :: (contributions |> List.map snd)) }
+                               Participants = Set.unionMany (startupParticipants :: initialization.Value :: captureParticipants.Value :: initialDependencies :: (contributions |> List.map snd)) }
             | _ -> None
         | _ -> None)
 

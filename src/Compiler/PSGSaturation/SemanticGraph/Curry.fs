@@ -17,6 +17,9 @@ module Clef.Compiler.PSGSaturation.SemanticGraph.Curry
 open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Core
+open Clef.Compiler.Baker.Ingredients.Obligations
+module Incidence = Clef.Compiler.Baker.Ingredients.Closures
+module Fold = Clef.Compiler.Nanopass.ObligationElaboration
 
 /// Reuse the distinction recorded during elaboration and read by closure placement.
 /// In particular, `fun () -> value` retains its unit formal and is a returned
@@ -37,6 +40,11 @@ let rec private chain (graph: SemanticGraph) (nodeId: NodeId) : (string * Native
 let private flatten (graph: SemanticGraph) : SemanticGraph * Set<NodeId> =
     let mutable nodes = graph.Nodes
     let mutable absorbedSet = Set.empty
+    let mutable rewritten = Set.empty
+    let mutable annotated: Map<NodeId, SemanticNode> = Map.empty
+    let update (node: SemanticNode) =
+        nodes <- Map.add node.Id node nodes
+        annotated <- Map.add node.Id node annotated
     for kvp in graph.Nodes do
         let node = kvp.Value
         if node.IsReachable && not (Set.contains node.Id absorbedSet) then
@@ -50,23 +58,38 @@ let private flatten (graph: SemanticGraph) : SemanticGraph * Set<NodeId> =
                         { node with
                             Kind = SemanticKind.Lambda (allParams, innermost, captures, enclosing, context)
                             Children = (allParams |> List.map (fun (_, _, id) -> id)) @ [ innermost ] }
-                    nodes <- Map.add node.Id flattened nodes
+                    update flattened
+                    rewritten <- Set.add node.Id rewritten
                     for absId in absorbed do
                         match Map.tryFind absId nodes with
                         | Some abs ->
-                            nodes <- Map.add absId { abs with IsReachable = false } nodes
+                            update { abs with IsReachable = false }
                             absorbedSet <- Set.add absId absorbedSet
                         | None -> ()
                     for (_, _, paramId) in innerParams do
                         match Map.tryFind paramId nodes with
-                        | Some p -> nodes <- Map.add paramId { p with Parent = Some node.Id } nodes
+                        | Some p -> update { p with Parent = Some node.Id }
                         | None -> ()
                     match Map.tryFind innermost nodes with
-                    | Some b -> nodes <- Map.add innermost { b with Parent = Some node.Id } nodes
+                    | Some b -> update { b with Parent = Some node.Id }
                     | None -> ()
                 | _ -> ()
             | _ -> ()
-    ({ graph with Nodes = nodes }, absorbedSet)
+    if rewritten.IsEmpty then graph, absorbedSet else
+    // This rewrite owns its changed lambda incidence. Retire only the prior
+    // declared rows of those lambdas; independent references and proof rows
+    // remain available to their existing owners and freshness checks.
+    let key (edge: Hyperedge) = edge.Class, edge.Role, edge.Ordinal, edge.Sources, edge.Target
+    let retired =
+        Set.union rewritten absorbedSet |> Set.toList
+        |> List.collect (fun id -> Incidence.structuralIncidence graph.Nodes[id])
+        |> List.map key |> Set.ofList
+    let prepared = { graph with Edges = graph.Edges |> List.filter (fun edge -> not (retired.Contains(key edge))) }
+    let enrichment =
+        { Enrichment.empty with
+            Annotated = annotated.Values |> Seq.toList
+            NewEdges = rewritten |> Set.toList |> List.collect (fun id -> Incidence.structuralIncidence nodes[id]) }
+    Fold.foldIn enrichment prepared, absorbedSet
 
 /// The reachable Lambda a function binding holds.
 let private lambdaOfBinding (graph: SemanticGraph) (bindingId: NodeId) : NodeId option =

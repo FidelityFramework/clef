@@ -304,7 +304,19 @@ let private emissionRows ids valueIds types (value: WitnessEmissionProjection) :
     let numeric = value.Numeric
     let imports = rows boundary.Imports
     let startup = storage.Startup |> Option.filter (fun row -> ids |> Set.contains row.EntryLambda)
-    { Ordinary = { Parameters = rows value.Ordinary.Parameters; Calls = rows value.Ordinary.Calls; DeferredOnly = values value.Ordinary.DeferredOnly }
+    let inactivityIds =
+        rows callables.AggregateDependencies |> Map.values
+        |> Seq.collect (fun account -> account.Inactivity |> List.map fst)
+        |> Set.ofSeq |> Set.union ids
+    { Ordinary = { Parameters = rows value.Ordinary.Parameters; Calls = rows value.Ordinary.Calls
+                   DeferredOnly = values value.Ordinary.DeferredOnly
+                   // Source premises carry dormant support; retaining this
+                   // consumed proof does not make that support executable.
+                   Inactivity = value.Ordinary.Inactivity |> Map.filter (fun implementation proof ->
+                       inactivityIds.Contains implementation ||
+                       (proof.Parameters |> List.exists ids.Contains) ||
+                       (proof.Excluded |> Set.exists ids.Contains) ||
+                       (proof.Calls |> Set.exists ids.Contains)) }
       Callable = {
         Branches = branches ids callables.Branches
         Contracts = rows callables.Contracts
