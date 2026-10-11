@@ -77,7 +77,16 @@ type SequencePullEffectCases() =
             "let inspect (choose: bool) (input: seq<int>) =\n    let selected = " + input + "\n    Seq.take 3 selected\nlet observed = inspect")
         Assert.Contains(graph.Edges, fun edge -> edge.Role = EdgeRole.SequenceEffectUnknown)
         if mixed then Assert.Contains(graph.Edges, fun edge -> edge.Role = EdgeRole.SequencePullBody)
-        PullEffectFixture.openRange graph
+        // `inspect` is never invoked: its body is an unreachable computation under the complete
+        // use census, so the private counter is excluded and commits nothing (width-inference.md:78,
+        // :80) while the unknown origin stays on the graph as the effect edge above. The fixed entry
+        // cannot invoke `inspect` with an origin the pass does not model, so the invocation-time
+        // property has no active twin here.
+        let inactive =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryInactivity graph with
+            | Ok proof -> proof
+            | Result.Error errors -> failwithf "Expected current inactivity: %A" errors
+        Assert.Contains((PullEffectFixture.remaining graph).Id, inactive.Excluded)
 
     [<Theory>]
     [<InlineData("body")>]

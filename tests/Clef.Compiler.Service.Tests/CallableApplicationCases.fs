@@ -290,7 +290,14 @@ let observed = work 3 4
 let main _ = if observed = 7 then 0 else 1
 """
         let source = template.Replace("AGGREGATE", aggregate).Replace("PROJECTION", projection)
-        let graph = CallableApplication.check source
+        // The program invokes `work`, so the opaque alternative keeps `first` unobservable and the
+        // commitment refuses (width-inference.md:78, :80); both alternatives stay resident below.
+        let result = DimensionalCases.check source
+        let errors = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.CheckResult.errors result
+        Assert.NotEmpty errors
+        Assert.All(errors, fun diagnostic -> Assert.Equal("CCS8011", diagnostic.Code))
+        Assert.Contains(errors, fun diagnostic -> diagnostic.Message.Contains "'first'")
+        let graph = result.Graph
         let opaque = CallableApplication.binding "opaque" graph
         match (CallableApplication.value graph opaque.Id).Kind with
         | SemanticKind.IndexGet _ -> ()
