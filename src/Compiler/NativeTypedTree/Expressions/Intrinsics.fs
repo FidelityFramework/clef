@@ -1360,8 +1360,11 @@ module RangeSources =
         | _, IntrinsicModule.Operators, "op_LeftShift", [ x; n ] -> Result.Fact (ValueRange.shl x n)
         | _, IntrinsicModule.Operators, "op_RightShift", [ x; n ] -> Result.Fact (ValueRange.shr x n)
         | _, IntrinsicModule.Operators, ("not" | "op_BooleanAnd" | "op_BooleanOr"), _ -> Result.Fact ValueRange.boolean
-        // lengths and offsets
-        | _, (IntrinsicModule.Array | IntrinsicModule.String | IntrinsicModule.Seq | IntrinsicModule.List), "length", _ ->
+        // a zeroed default of an integer kind is the value 0: the compiler's own fact about
+        // zero-initialized storage, not an observation of any source
+        | _, IntrinsicModule.NativeDefault, "zeroed", _ -> Result.Fact (ValueRange.point bigint.Zero)
+        // lengths and offsets (a borrowed view's element count is a length like any other)
+        | _, (IntrinsicModule.Array | IntrinsicModule.String | IntrinsicModule.Seq | IntrinsicModule.List | IntrinsicModule.BorrowedView), "length", _ ->
             Result.Fact (lengthRange ctx)
         | _, IntrinsicModule.String, "indexOf", _ ->
             match lengthRange ctx with

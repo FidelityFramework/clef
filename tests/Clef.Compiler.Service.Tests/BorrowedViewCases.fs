@@ -85,8 +85,12 @@ let main _ = withView (fun view -> retain (fun () -> BorrowedView.length view))
 [<EntryPoint>]
 let main _ =
     let view: BorrowedView<Pixel> = NativeDefault.zeroed ()
-    BorrowedView.length view
+    ignore view
+    0
 """
+        // The finding is about the view's origin. Committing its length would add an
+        // unobservable integer on a context declaring no Pointer width (CCS8011), which is
+        // not what this case guards.
         Assert.Contains((ScopedCallbacks.read result.Graph).Findings, fun f -> f.Message.Contains("no source constructor"))
 
     [<Fact>]
@@ -291,7 +295,8 @@ type Holder = { Pixels: BorrowedView<Pixel> }
 [<EntryPoint>]
 let main _ =
     let holder: Holder = NativeDefault.zeroed ()
-    BorrowedView.length holder.Pixels
+    ignore holder.Pixels
+    0
 """
         Assert.Contains((ScopedCallbacks.read result.Graph).Findings, fun f -> f.Message.Contains("no source constructor"))
 
