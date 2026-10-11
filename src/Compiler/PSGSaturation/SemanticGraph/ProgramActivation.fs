@@ -12,8 +12,13 @@ module Environments = Clef.Compiler.PSGSaturation.SemanticGraph.ClosureEnvironme
 module Initialization = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization
 
 type private Call = { Site: NodeId; Callee: NodeId; Caller: NodeId option }
-type private Candidate = { Aliases: NodeId list; Calls: Call list; Supports: NodeId list }
-type Reading = private { Entry: NodeId option; Candidates: Map<NodeId, Candidate>; Ordinary: Set<NodeId>; Deferred: Set<NodeId> }
+/// `Premises` are the scoped parameters, with their declarations, that account
+/// for an argument use: recorded provenance, not an established invocation.
+type private Candidate = { Aliases: NodeId list; Calls: Call list; Supports: NodeId list; Premises: NodeId list }
+/// `Accounted` holds every ordinary implementation whose uses are all accounted for,
+/// applied in source or not; `Candidates` is its subset with complete applications,
+/// the shape coverage walks.
+type Reading = private { Entry: NodeId option; Candidates: Map<NodeId, Candidate>; Accounted: Map<NodeId, Candidate>; Ordinary: Set<NodeId>; Deferred: Set<NodeId> }
 type Coverage = { Dependencies: NodeId list; Evidence: Hyperedge list }
 
 /// Classify every use of each known code value. A missing invocation path,
@@ -21,7 +26,7 @@ type Coverage = { Dependencies: NodeId list; Evidence: Hyperedge list }
 /// a refusal, not permission derived from the function's lexical location.
 let analyze (graph: SemanticGraph) : Reading =
     match Initialization.read graph with
-    | None -> { Entry = None; Candidates = Map.empty; Ordinary = Set.empty; Deferred = Set.empty }
+    | None -> { Entry = None; Candidates = Map.empty; Accounted = Map.empty; Ordinary = Set.empty; Deferred = Set.empty }
     | Some entry ->
         let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
         let incidence = nodes.Values |> Seq.collect Incidence.structuralIncidence |> Seq.toList
@@ -44,6 +49,8 @@ let analyze (graph: SemanticGraph) : Reading =
                         | _ -> walk seen rest found true
             walk Set.empty [id] Set.empty false
         let resolved = CallableOrigins.resolve graph
+        let scoped = lazy (ScopedCallbacks.read graph)
+        let declared = lazy (ScopedDeclarations.read graph)
         let implementation = Environments.tryImplementation graph
         let identity id =
             implementation id
@@ -59,7 +66,32 @@ let analyze (graph: SemanticGraph) : Reading =
                     when not parameters.IsEmpty && nodes.ContainsKey body &&
                          (parameters |> List.forall (fun (_, _, formal) -> nodes.ContainsKey formal)) -> Some(id, parameters.Length)
                 | _ -> None)
-        let candidates =
+        // The formals a complete call supplies at one argument position: a direct declaration's
+        // own formals (a declared boundary's call need not appear among resolved calls: its body
+        // is a native intrinsic), else every resolved target's. Only when each of them is a scoped
+        // parameter is the argument invoked within the callee's own activation.
+        let scopedFormalsAt callee (arguments: NodeId list) ordinal application =
+            let rec declaration seen id =
+                if Set.contains id seen then None else
+                match nodes.TryFind id with
+                | Some { Kind = SemanticKind.Lambda _ } -> Some id
+                | Some { Kind = SemanticKind.VarRef(_, Some other) | SemanticKind.TypeAnnotation(other, _) } -> declaration (Set.add id seen) other
+                | Some { Kind = SemanticKind.Binding(_, false, _, _); Children = [value] } -> declaration (Set.add id seen) value
+                | _ -> None
+            let direct =
+                identity callee |> Option.orElseWith (fun () -> declaration Set.empty callee) |> Option.bind (fun lambda ->
+                    match nodes.TryFind lambda with
+                    | Some { Kind = SemanticKind.Lambda(formals, _, _, _, _) } when arguments.Length = max 1 formals.Length ->
+                        List.tryItem ordinal formals |> Option.map (fun (_, _, formal) -> [formal])
+                    | _ -> None)
+            let viaCalls () =
+                resolved.Calls.TryFind application |> Option.bind (fun call ->
+                    if not call.Complete || call.Targets.IsEmpty then None else
+                    let formals = call.Targets |> List.map (fun target -> List.tryItem ordinal target.Parameters |> Option.map (fun (_, _, formal) -> formal))
+                    if formals |> List.exists Option.isNone then None else Some(List.choose id formals))
+            direct |> Option.orElseWith viaCalls
+            |> Option.filter (fun formals -> not formals.IsEmpty && formals |> List.forall scoped.Value.Parameters.Contains)
+        let accounted =
             ordinary |> List.choose (fun (implementation, arity) ->
                 let aliases = nodes |> Map.toList |> List.choose (fun (id, node) ->
                     match applySubst node.Type with
@@ -112,6 +144,7 @@ let analyze (graph: SemanticGraph) : Reading =
                         match nodes[id].Kind with SemanticKind.Binding(_, _, _, Some _) -> true | _ -> false))
                 let mutable calls = []
                 let mutable supports = []
+                let mutable premises = []
                 for alias in aliases do
                     for edge in uses.TryFind alias |> Option.defaultValue [] do
                         let target = nodes[edge.Target]
@@ -139,6 +172,27 @@ let analyze (graph: SemanticGraph) : Reading =
                                      call.Targets |> List.forall (fun callee -> callee.Lambda = implementation))) &&
                                  (not (closureImplementations.Contains implementation) || environmentCalls.ContainsKey target.Id) ->
                             calls <- { Site = target.Id; Callee = callee; Caller = activation target.Id } :: calls
+                        | SemanticKind.Lambda(parameters, _, _, _, _), _
+                            when parameters |> List.exists (fun (_, _, formal) -> formal = alias) && scoped.Value.Parameters.Contains alias ->
+                            // The alias is a scoped formal that receives this implementation: the
+                            // boundary invokes it only within its own activation (declared, or
+                            // inferred by ScopedCallbacks), and the formal's own uses inside that
+                            // body are aliases walked here. The formal's place in its lambda is
+                            // not a use of the implementation. An unscoped formal stays an
+                            // unaccounted use: residence consumers of coverage must not widen.
+                            ()
+                        | SemanticKind.Application(callee, arguments), EdgeRole.Argument
+                            when (scopedFormalsAt callee arguments edge.Ordinal target.Id).IsSome ->
+                            // A scoped parameter, declared by the boundary or inferred, is invoked
+                            // only within the callee's own activation (Platform Bindings,
+                            // ScopedCallbackDescriptor): the argument runs as part of this call,
+                            // so the call site bounds it. The parameter and its declaration are
+                            // recorded premises of that account, not an established invocation.
+                            let formals = (scopedFormalsAt callee arguments edge.Ordinal target.Id).Value
+                            let declarations = formals |> List.collect (fun formal ->
+                                declared.Value.Participants.TryFind formal |> Option.map Set.toList |> Option.defaultValue [])
+                            calls <- { Site = target.Id; Callee = callee; Caller = activation target.Id } :: calls
+                            premises <- formals @ declarations @ premises
                         | SemanticKind.Application _, EdgeRole.Argument ->
                             match resolved.Calls.TryFind target.Id with
                             | Some call when call.Complete && not call.Targets.IsEmpty &&
@@ -193,13 +247,26 @@ let analyze (graph: SemanticGraph) : Reading =
                         | Some _ -> closed <- false
                         | None when not (graph.Nodes.ContainsKey edge.Target) -> closed <- false
                         | None -> ()
-                if closed && not calls.IsEmpty && (calls |> List.forall (fun call -> call.Caller.IsSome)) then
-                    Some(implementation, { Aliases = aliases; Calls = calls |> List.distinctBy _.Site; Supports = List.distinct supports })
+                if closed && (calls |> List.forall (fun call -> call.Caller.IsSome)) then
+                    Some(implementation, { Aliases = aliases; Calls = calls |> List.distinctBy _.Site; Supports = List.distinct supports; Premises = List.distinct premises })
                 else None)
-            |> Map.ofList
+        let candidates = accounted |> List.filter (fun (_, candidate) -> not candidate.Calls.IsEmpty) |> Map.ofList
         let deferred = nodes |> Map.toList |> List.choose (fun (id, node) ->
             match node.Kind with SemanticKind.Lambda(_, _, _, _, LambdaContext.SeqGenerator) -> Some id | _ -> None) |> Set.ofList
-        { Entry = Some entry.EntryLambda; Candidates = candidates; Ordinary = ordinary |> List.map fst |> Set.ofList; Deferred = deferred }
+        { Entry = Some entry.EntryLambda; Candidates = candidates; Accounted = Map.ofList accounted
+          Ordinary = ordinary |> List.map fst |> Set.ofList; Deferred = deferred }
+
+/// How an ordinary implementation is reached, for a consumer that bounds its phase
+/// when coverage is incomplete: the sites and supports to bound in turn, and the
+/// premises the account relies on (scoped parameters and their declarations), which
+/// the consumer records so an accepted proof names the library facts it rests on.
+/// `Some ([], premises)`: every use is accounted for and none applies it in source,
+/// so it runs only where it is handed on, after its formation. `None`: some use is
+/// unaccounted for.
+let invocations (reading: Reading) (implementation: NodeId) : (NodeId list * NodeId list) option =
+    reading.Accounted.TryFind implementation
+    |> Option.map (fun candidate ->
+        (candidate.Calls |> List.map _.Site) @ candidate.Supports |> List.distinct, candidate.Premises)
 
 /// Every incoming call must lead back to the supplied covering activation or to an
 /// explicit deferred owner that the caller must prove covered. Closed recursive
@@ -220,7 +287,7 @@ let coverage (reading: Reading) covering actual : Coverage option =
                 let callEdges = candidate.Calls |> List.map (fun call ->
                     { Sources = [covering; call.Caller.Value; call.Callee; implementation]
                       Target = call.Site; Class = EdgeClass.Provenance; Role = EdgeRole.ProgramActivationCall; Ordinal = 0 })
-                { Sources = covering :: (candidate.Aliases @ candidate.Supports @ (candidate.Calls |> List.map _.Site)) |> List.distinct
+                { Sources = covering :: (candidate.Aliases @ candidate.Supports @ (candidate.Calls |> List.map _.Site) @ candidate.Premises) |> List.distinct
                   Target = implementation; Class = EdgeClass.Provenance; Role = EdgeRole.ProgramActivationCoverage; Ordinal = 0 } :: callEdges)
             Some { Dependencies = Set.toList dependencies; Evidence = evidence }
         | current :: rest when current = covering -> visit seen rest groups dependencies true

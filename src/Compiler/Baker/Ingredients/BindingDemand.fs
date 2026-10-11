@@ -9,6 +9,13 @@ module Identity = Clef.Compiler.NativeTypedTree.TypeIdentities
 module Incidence = Clef.Compiler.Baker.Ingredients.Closures
 
 type Slot = { Parent: NodeId; Ordinal: int; Statement: NodeId }
+/// One conditional step on the way into an activation: the guard demanded, the
+/// decision statement, the arm taken (0 then, 1 else) and the decision's own scope.
+type ConditionalEntry = { Guard: NodeId; Decision: NodeId; Arm: int; Parent: NodeId }
+/// A linear activation: a lambda body, or the `Sequential` arm of a reached
+/// decision inside one. `Prefix` lists the enclosing activations' statements that
+/// run before the decision; `Entry` the conditional path from the lambda body.
+type Activation = { Owner: NodeId; Body: NodeId; Slots: Slot list; Prefix: NodeId list; Entry: ConditionalEntry list }
 type Schedule = {
     Binding: NodeId
     Family: NodeId list
@@ -79,20 +86,46 @@ let analyze (graph: SemanticGraph) : Schedule list =
                     actual.Length = (List.distinct actual).Length && actual |> List.forall (fun row -> List.contains row expected)
             validity.Add(id, value)
             value
-    let scopes =
-        nodes.Values |> Seq.choose (fun code ->
+    // The selected arm is the demand unit (Expressions, Default Demand and Sharing):
+    // one activation per lambda body and, nested in it, one per `Sequential` arm of a
+    // reached decision. Runtime selection is the arm's activation condition, not a
+    // claim that the guard is statically known.
+    let rec walk seen parent ordinal id =
+        if Set.contains id seen then None else
+        match nodes.TryFind id with
+        | Some { Kind = SemanticKind.Sequential values } when valid id ->
+            let children = values |> List.mapi (fun ordinal child -> walk (Set.add id seen) id ordinal child)
+            if children |> List.exists Option.isNone then None else Some(List.collect Option.get children)
+        | Some _ -> Some [{ Parent = parent; Ordinal = ordinal; Statement = id }]
+        | None -> None
+    let rec armActivations (seen: Set<NodeId>) (activation: Activation) : Activation list =
+        activation.Slots |> List.indexed |> List.collect (fun (index, slot) ->
+            match nodes.TryFind slot.Statement with
+            | Some { Kind = SemanticKind.IfThenElse(condition, thenArm, elseArm) }
+                when valid slot.Statement && not (Set.contains slot.Statement seen) ->
+                let prefix = activation.Prefix @ (activation.Slots |> List.take index |> List.map _.Statement)
+                [ Some(0, thenArm); elseArm |> Option.map (fun arm -> 1, arm) ] |> List.choose id |> List.collect (fun (ordinal, arm) ->
+                    match nodes.TryFind arm with
+                    | Some { Kind = SemanticKind.Sequential _ } when valid arm ->
+                        match walk (Set.add slot.Statement seen) slot.Statement (ordinal + 1) arm with
+                        | Some slots ->
+                            let nested =
+                                { Owner = activation.Owner; Body = arm; Slots = slots; Prefix = prefix
+                                  Entry = activation.Entry @ [ { Guard = condition; Decision = slot.Statement; Arm = ordinal; Parent = activation.Body } ] }
+                            nested :: armActivations (Set.add slot.Statement seen) nested
+                        | None -> []
+                    | _ -> [])
+            | _ -> [])
+    let activations =
+        nodes.Values |> Seq.collect (fun code ->
             match code.Kind with
             | SemanticKind.Lambda(_, body, _, _, _) ->
-                let rec walk seen parent ordinal id =
-                    if Set.contains id seen then None else
-                    match nodes.TryFind id with
-                    | Some { Kind = SemanticKind.Sequential values } when valid id ->
-                        let children = values |> List.mapi (fun ordinal child -> walk (Set.add id seen) id ordinal child)
-                        if children |> List.exists Option.isNone then None else Some(List.collect Option.get children)
-                    | Some _ -> Some [{ Parent = parent; Ordinal = ordinal; Statement = id }]
-                    | None -> None
-                walk Set.empty code.Id 0 body |> Option.map (fun slots -> code.Id, body, slots)
-            | _ -> None) |> Seq.toList
+                match walk Set.empty code.Id 0 body with
+                | Some slots ->
+                    let root = { Owner = code.Id; Body = body; Slots = slots; Prefix = []; Entry = [] }
+                    root :: armActivations Set.empty root
+                | None -> []
+            | _ -> []) |> Seq.toList
     candidates |> List.choose (fun (binding, (initialRead, cell)) ->
         match nodes.TryFind cell with
         | Some { Kind = SemanticKind.Binding(_, true, _, _) } when scalar binding ->
@@ -110,20 +143,46 @@ let analyze (graph: SemanticGraph) : Schedule list =
             add ParticipantRole.DemandBinding binding 0 binding
             add ParticipantRole.DemandCell binding 0 cell
             add ParticipantRole.DemandInitializer binding 0 initialRead
-            let owners = scopes |> List.filter (fun (_, _, slots) -> slots |> List.exists (fun slot -> slot.Statement = binding))
-            let scope, body, slots =
+            let owners = activations |> List.filter (fun activation -> activation.Slots |> List.exists (fun slot -> slot.Statement = binding))
+            let activation =
                 match owners with
-                | [scope, body, slots] -> scope, body, slots
-                | _ -> reject "The snapshot has no unique linear activation scope."; binding, binding, []
+                | [activation] -> activation
+                | _ ->
+                    reject "The snapshot has no unique linear activation scope."
+                    { Owner = binding; Body = binding; Slots = []; Prefix = []; Entry = [] }
+            let scope, body, slots = activation.Owner, activation.Body, activation.Slots
             add ParticipantRole.DemandScope binding 0 scope
             add ParticipantRole.DemandScope binding 1 body
+            // The conditional entry path is part of the proof: each decision, its guard and the
+            // arm taken carry provenance, so a changed guard or arm retracts the schedule.
+            for depth, entry in List.indexed activation.Entry do
+                let armBody = if depth + 1 < activation.Entry.Length then activation.Entry[depth + 1].Parent else body
+                add ParticipantRole.DemandPremise scope (2 + depth) entry.Decision
+                add ParticipantRole.DemandPremise entry.Decision 0 entry.Guard
+                add ParticipantRole.DemandPremise entry.Decision (entry.Arm + 1) armBody
+                if not (valid entry.Decision) then reject "A conditional entry's Kind and attached/recorded incidence disagree."
             let statements = slots |> List.map _.Statement
             let index id = statements |> List.tryFindIndex ((=) id)
             let orderedFamily = statements |> List.filter familySet.Contains
             if orderedFamily.Length <> familySet.Count || orderedFamily |> List.distinct |> List.length <> familySet.Count then
                 reject "Every immutable alias must occur exactly once in the same linear activation."
-            if (index cell |> Option.isNone) || (index binding |> Option.isNone) || index cell >= index binding then
-                reject "The mutable cell must be established earlier in this activation."
+            // The cell is established earlier in this activation or in a dominating prefix of an
+            // enclosing one; entering the arm does not freeze its value.
+            let cellEstablished =
+                match index cell, index binding with
+                | Some cellAt, Some bindingAt -> cellAt < bindingAt
+                | None, Some _ ->
+                    match List.tryFindIndex ((=) cell) activation.Prefix with
+                    | Some at ->
+                        // The dominating prefix is schedule evidence: the cell and every
+                        // statement after it up to the decision, in order, so a cell moved
+                        // past the decision retracts the retained proof instead of keeping it.
+                        activation.Prefix |> List.skip at |> List.iteri (fun ordinal statement ->
+                            add ParticipantRole.DemandPremise cell ordinal statement)
+                        true
+                    | None -> false
+                | _ -> false
+            if not cellEstablished then reject "The mutable cell must be established earlier in this activation."
             for ordinal, slot in List.indexed slots do
                 add ParticipantRole.DemandStatement slot.Parent ordinal slot.Statement
                 add ParticipantRole.DemandPremise scope slot.Ordinal slot.Parent
@@ -178,9 +237,22 @@ let analyze (graph: SemanticGraph) : Schedule list =
                 | SemanticKind.VarRef(_, Some source) when familySet.Contains source -> Some [id]
                 | SemanticKind.EagerExpr value when nodes.ContainsKey value && Identity.ofType nodes[id].Type = Identity.ofType nodes[value].Type ->
                     pureDemand seen value
+                // A branch demands its condition and only then a selected arm (Expressions, Default
+                // Demand and Sharing); `&&`/`||` reach here as a decision whose arms stay conditional.
+                | SemanticKind.IfThenElse(condition, _, _) when nodes.ContainsKey condition -> pureDemand seen condition
                 | SemanticKind.TypeAnnotation(value, declared)
                     when nodes.ContainsKey value && Identity.ofType nodes[id].Type = Identity.ofType declared && Identity.ofType declared = Identity.ofType nodes[value].Type ->
                     pureDemand seen value
+                | SemanticKind.Application(callee, [left; _])
+                    when (match nodes.TryFind callee with
+                          | Some { Kind = SemanticKind.Intrinsic intrinsic } ->
+                              valid callee && intrinsic.Module = IntrinsicModule.Operators &&
+                              List.contains intrinsic.Operation [ "op_BooleanAnd"; "op_BooleanOr" ]
+                          | _ -> false) ->
+                    // `&&` and `||` demand their left operand first and retain the right as a
+                    // shared deferred operand (Expressions, logical operators): only the left
+                    // operand is an unconditional first demand.
+                    pureDemand seen left
                 | SemanticKind.Application(callee, ([left; right] as arguments)) ->
                     match nodes.TryFind callee with
                     | Some { Kind = SemanticKind.Intrinsic intrinsic }
@@ -192,12 +264,17 @@ let analyze (graph: SemanticGraph) : Schedule list =
                         if operands |> List.exists Option.isNone then None else Some(List.collect Option.get operands)
                     | _ -> None
                 | _ -> None
+            let terminal = List.tryLast statements
             let demandAt statement =
                 match nodes[statement].Kind, nodes[statement].Children with
                 | SemanticKind.Binding(_, false, _, _), [value] ->
                     match nodes[value].Kind with SemanticKind.EagerExpr _ -> pureDemand Set.empty value | _ -> None
                 | SemanticKind.IfThenElse(condition, _, _), _ -> pureDemand Set.empty condition
                 | SemanticKind.EagerExpr _, _ -> pureDemand Set.empty statement
+                // A direct terminal reference, or a transparent wrapper of one, is demanded as the
+                // activation's own result: its selection is the only condition.
+                | SemanticKind.VarRef(_, Some source), _ when Some statement = terminal && familySet.Contains source -> Some [ statement ]
+                | SemanticKind.TypeAnnotation _, _ when Some statement = terminal -> pureDemand Set.empty statement
                 | _ -> None
             let demandRows =
                 slots |> List.indexed |> List.choose (fun (ordinal, slot) ->

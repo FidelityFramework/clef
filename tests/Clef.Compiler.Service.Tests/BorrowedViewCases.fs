@@ -80,6 +80,21 @@ let main _ = withView (fun view -> retain (fun () -> BorrowedView.length view))
         Assert.Contains((ScopedCallbacks.read result.Graph).Findings, fun f -> f.Message.Contains("escapes its mapping scope"))
 
     [<Fact>]
+    member _.``A callable stored by a startup initializer after its slot is ordered by its formation phase``() =
+        // The storing closure is formed inside `primed`'s initializer, which runs after `saved`'s
+        // (static initializers run in compilation order), and again inside the entry, which runs
+        // after every initializer. Neither needs the boundary to declare an invocation: the
+        // formation phase bounds the invocation phase from below.
+        let result = BorrowedViewCases.source """
+let mutable saved: unit -> int = fun () -> 0
+let retain callback = saved <- callback; 0
+let primed = retain (fun () -> 1)
+[<EntryPoint>]
+let main _ = withView (fun view -> retain (fun () -> BorrowedView.length view)) + primed
+"""
+        Assert.Contains((ScopedCallbacks.read result.Graph).Findings, fun f -> f.Message.Contains("escapes its mapping scope"))
+
+    [<Fact>]
     member _.``Borrowed view cannot be manufactured with a default value``() =
         let result = BorrowedViewCases.source """
 [<EntryPoint>]
@@ -353,3 +368,50 @@ let main _ = call (fun () -> 0)
             | Success result | CheckFailure result -> result
             | ParseFailure errors -> failwithf "%A" errors
         Assert.Contains((ScopedCallbacks.read result.Graph).Findings, fun f -> f.Message.Contains("well-typed quoted record"))
+
+    [<Fact>]
+    member _.``A callback handed to a boundary that lets it escape leaves its stores unordered``() =
+        // Negative control for the scoped-parameter account: `keep` stores `work`, so the
+        // parameter is neither declared nor inferred scoped (a parameter a body never uses is
+        // inferred scoped, since nothing can invoke or hold it), and nothing accounts for the
+        // callback: the store it reaches stays pending with that specific reason, naming both
+        // the storing callable and the callback. Dropping the scoped-parameter test on the
+        // formal's own edge in ProgramActivation would order it wrongly.
+        let text = BorrowedViewCases.prefix + """
+let mutable saved: unit -> int = fun () -> 0
+let mutable held: (unit -> int) option = None
+let keep (work: unit -> int) : int = held <- Some work; 0
+let retain callback = saved <- callback; 0
+[<EntryPoint>]
+let main _ = keep (fun () -> retain (fun () -> 1))
+"""
+        let result =
+            match parseAndCheck text "borrowed-view.clef" with
+            | Success result | CheckFailure result -> result
+            | ParseFailure errors -> failwithf "Parse failed: %A" errors
+        let pending = result.Diagnostics |> List.filter (fun d -> d.Code = "CCS8403")
+        Assert.NotEmpty pending
+        Assert.All(pending, fun d -> Assert.Contains("Complete ordinary invocation scope is unavailable", d.Message))
+        // Both facts are owed and both are reported: the storing callable's own scope is
+        // incomplete, and the callback through which it is reached is unaccounted for.
+        let reasons = pending |> List.map _.Message |> List.distinct
+        Assert.True(reasons.Length >= 2, sprintf "expected the storing callable and the callback each named: %A" reasons)
+
+    [<Fact>]
+    member _.``A callable that is formed but never applied in source is ordered by its formation``() =
+        // Every use of `later` is accounted for and none applies it: its body can only run after
+        // its formation inside the entry, so the store it reaches is ordered without any claim
+        // about an invocation (Program Structure and Execution, Execution of Static Initializers).
+        let text = BorrowedViewCases.prefix + """
+let mutable saved: unit -> int = fun () -> 0
+[<EntryPoint>]
+let main _ =
+    let later = fun () -> saved <- (fun () -> 1); 0
+    let kept = later
+    0
+"""
+        let result =
+            match parseAndCheck text "borrowed-view.clef" with
+            | Success result | CheckFailure result -> result
+            | ParseFailure errors -> failwithf "Parse failed: %A" errors
+        Assert.Empty(result.Diagnostics |> List.filter (fun d -> d.Code = "CCS8403"))

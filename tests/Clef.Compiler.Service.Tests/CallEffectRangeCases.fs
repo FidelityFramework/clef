@@ -16,6 +16,12 @@ module private CallEffectRanges =
         | CheckFailure result -> failwithf "Source did not reach a checked graph: %A" result.Diagnostics
         | ParseFailure errors -> failwithf "Parse failed: %A" errors
 
+    /// The diagnostics of a source that may not reach a checked graph.
+    let diagnostics source =
+        match parseAndCheck ("module CallEffects\n" + source) "call-effects.clef" with
+        | Success result | CheckFailure result -> result.Diagnostics
+        | ParseFailure errors -> failwithf "Parse failed: %A" errors
+
     let binding name (graph: SemanticGraph) =
         graph.Nodes.Values |> Seq.find (fun node ->
             node.IsReachable &&
@@ -301,11 +307,92 @@ let main _ =
     initialize <- fun _ -> state <- 300; 1
     if state < 10 then
         let values = Array.init 1 initialize
-        let observed = state
-        if observed = 300 && values.[0] = 1 then 0 else 1
+        if values.[0] = 1 then
+            let observed = state
+            if observed = 300 then 0 else 1
+        else 1
     else 2
 """
+        // The write reaches `state` only when `values` is demanded (the reassigned callback runs
+        // inside Array.init); ordinary bindings are deferred, so the guard that demands `values`
+        // precedes the observation and the arm that observes `state` is entered after the write.
         CallEffectRanges.range "observed" 1I 300I graph
+
+    [<Fact>]
+    member _.``A branch-local snapshot observes the writes before its first demand and shares that value afterwards``() =
+        // The snapshot is an ordinary deferred binding: it reads the cell at its first demand, after
+        // the write of 257 and before the write of 300, and the second demand shares that value. The
+        // cell's range at the read joins the writes that precede it (a sound enclosure, not a
+        // strong update), so the proof is that 300 never reaches either demand and both agree.
+        let graph = CallEffectRanges.check """
+[<EntryPoint>]
+let main _ =
+    let mutable current = 1
+    if current < 10 then
+        let snapshot = current
+        current <- 257
+        let first = eager snapshot
+        current <- 300
+        let second = eager snapshot
+        first + second
+    else 2
+"""
+        // The schedule is the ingredient's own proof: the activation's statements in realized order
+        // place the snapshot's read after the write of 257 and before the write of 300, immediately
+        // ahead of its first demand, and both demands share the one binding. (The cell's numeric
+        // range still joins every write in scope, so the range alone cannot separate the two
+        // writes; the statement order can.)
+        let snapshot = CallEffectRanges.binding "snapshot" graph
+        let schedule =
+            Clef.Compiler.Baker.Ingredients.BindingDemand.analyze graph
+            |> List.find (fun schedule -> schedule.Binding = snapshot.Id)
+        Assert.Equal<string option>(None, schedule.Pending)
+        let statements = schedule.Slots |> List.map (fun slot -> slot.Statement)
+        Assert.Equal<NodeId list>(schedule.Desired, statements)
+        let position id = statements |> List.findIndex ((=) id)
+        let writeOf (value: int64) =
+            graph.Nodes.Values |> Seq.find (fun node ->
+                node.IsReachable &&
+                match node.Kind with
+                | SemanticKind.Set (_, written) ->
+                    match graph.Nodes[written].Kind with
+                    | SemanticKind.Literal (NativeLiteral.Int (actual, _)) -> actual = value
+                    | _ -> false
+                | _ -> false)
+        Assert.True(position (writeOf 257L).Id < position snapshot.Id, "the read is scheduled after the write of 257")
+        Assert.True(position snapshot.Id < position (writeOf 300L).Id, "the read is scheduled before the write of 300")
+        Assert.True(position snapshot.Id + 1 = position (CallEffectRanges.binding "first" graph).Id, "the read sits immediately ahead of its first demand")
+        Assert.Empty(Clef.Compiler.Baker.Ingredients.BindingDemand.failures graph)
+        Assert.Equal((CallEffectRanges.binding "first" graph).ValueRange, (CallEffectRanges.binding "second" graph).ValueRange)
+
+    [<Fact>]
+    member _.``A changed conditional entry retracts a branch-local demand schedule``() =
+        // The arm taken is a premise of the schedule: swapping the arms of the decision that
+        // admitted the snapshot must refuse the retained rows before settlement can recreate them.
+        let graph = CallEffectRanges.check """
+[<EntryPoint>]
+let main _ =
+    let mutable current = 1
+    if current < 10 then
+        let snapshot = current
+        current <- 257
+        let first = eager snapshot
+        first
+    else 2
+"""
+        let decision =
+            graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable && node.Range.Start.Line = 6 &&
+                match node.Kind with SemanticKind.IfThenElse(_, _, Some _) -> true | _ -> false) |> Seq.exactlyOne
+        let swapped =
+            match decision.Kind with
+            | SemanticKind.IfThenElse(condition, thenArm, Some elseArm) -> { decision with Kind = SemanticKind.IfThenElse(condition, elseArm, Some thenArm) }
+            | _ -> failwith "not a two-armed decision"
+        let mutated = { graph with Nodes = graph.Nodes |> Map.add decision.Id swapped }
+        let failures = Clef.Compiler.Baker.Ingredients.BindingDemand.failures mutated
+        Assert.NotEmpty failures
+        Assert.Contains(failures, fun failure -> failure.Reason.Contains "OrdinaryBindingDemand")
+        Assert.Empty(Clef.Compiler.Baker.Ingredients.BindingDemand.failures graph)
 
     [<Fact>]
     member _.``An unresolved callable cannot preserve mutable guards``() =
@@ -323,9 +410,101 @@ let main _ =
         2
 """
         CallEffectRanges.range "observed" 1I 9I graph
+        // The probe replaces the callee with an unresolved reference; its definition edge goes
+        // with it so the recorded incidence still describes the mutated node and the settled
+        // demand schedule stays valid for the renewed numeric analysis.
+        let unresolved =
+            graph.Nodes.Values |> Seq.filter (fun node -> match node.Kind with SemanticKind.VarRef ("known", _) -> true | _ -> false)
+            |> Seq.map (fun node -> node.Id) |> Set.ofSeq
         let nodes = graph.Nodes |> Map.map (fun _ node ->
             match node.Kind with
             | SemanticKind.VarRef ("known", _) -> { node with Kind = SemanticKind.VarRef ("unknown", None) }
             | _ -> node)
-        let unknown, _ = RangeAnalysis.run None { graph with Nodes = nodes }
+        let edges = graph.Edges |> List.filter (fun edge -> not (edge.Class = EdgeClass.Reference && unresolved.Contains edge.Target))
+        let unknown, _ = RangeAnalysis.run None { graph with Nodes = nodes; Edges = edges }
         CallEffectRanges.range "observed" 1I 300I unknown
+
+
+    [<Fact>]
+    member _.``The retained branch-local schedule names its decision and guard, so a swapped arm retracts it for that reason``() =
+        // The conditional entry path is recorded on the schedule's edge: a mutation that stops
+        // recording the decision and guard would pass the generic retraction check but fail here.
+        let graph = CallEffectRanges.check """
+[<EntryPoint>]
+let main _ =
+    let mutable current = 1
+    if current < 10 then
+        let snapshot = current
+        current <- 257
+        let first = eager snapshot
+        first
+    else 2
+"""
+        let snapshot = CallEffectRanges.binding "snapshot" graph
+        let decision =
+            graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable && node.Range.Start.Line = 6 &&
+                match node.Kind with SemanticKind.IfThenElse(_, _, Some _) -> true | _ -> false) |> Seq.exactlyOne
+        let guard = match decision.Kind with SemanticKind.IfThenElse(condition, _, _) -> condition | _ -> failwith "unreachable"
+        let retained =
+            graph.Edges |> List.filter (fun edge ->
+                edge.Target = snapshot.Id && (match edge.Role with EdgeRole.OrdinaryBindingDemand _ -> true | _ -> false))
+            |> List.exactlyOne
+        Assert.Contains(decision.Id, retained.Sources)
+        Assert.Contains(guard, retained.Sources)
+        let swapped =
+            match decision.Kind with
+            | SemanticKind.IfThenElse(condition, thenArm, Some elseArm) -> { decision with Kind = SemanticKind.IfThenElse(condition, elseArm, Some thenArm) }
+            | _ -> failwith "not a two-armed decision"
+        let failures = Clef.Compiler.Baker.Ingredients.BindingDemand.failures { graph with Nodes = graph.Nodes |> Map.add decision.Id swapped }
+        let failure = Assert.Single failures
+        Assert.Contains("differs from its complete typed scope/use proof", failure.Reason)
+        Assert.Contains(decision.Id, failure.Participants)
+
+    [<Fact>]
+    member _.``A snapshot demanded only in the right operand of a conjunction stays pending for that reason``() =
+        // `&&` demands its left operand first and keeps the right conditional (Expressions, logical
+        // operators): the read in the right operand is not an unconditional first demand.
+        let pending = CallEffectRanges.diagnostics """
+[<EntryPoint>]
+let main _ =
+    let mutable current = 1
+    let mutable other = 2
+    if current < 10 then
+        let snapshot = current
+        current <- 257
+        if other < 5 && snapshot = 1 then 0 else 1
+    else 2
+"""
+        Assert.Contains(pending, fun d -> d.Code = "CCS8403" && d.Message.Contains "Every use requires one unconditional first-demand path")
+        // The mirror image, demanded in the left operand, is scheduled.
+        let scheduled = CallEffectRanges.check """
+[<EntryPoint>]
+let main _ =
+    let mutable current = 1
+    let mutable other = 2
+    if current < 10 then
+        let snapshot = current
+        current <- 257
+        if snapshot = 1 && other < 5 then 0 else 1
+    else 2
+"""
+        Assert.Empty(Clef.Compiler.Baker.Ingredients.BindingDemand.failures scheduled)
+
+    [<Fact>]
+    member _.``A snapshot referenced from a nested closure in the arm stays pending for that reason``() =
+        // A deferred demand inside a closure is not a first demand of the arm.
+        let pending = CallEffectRanges.diagnostics """
+[<EntryPoint>]
+let main _ =
+    let mutable current = 1
+    if current < 10 then
+        let snapshot = current
+        current <- 257
+        let later = fun () -> snapshot
+        later ()
+    else 2
+"""
+        // The reference from inside the closure is a family use the ingredient does not
+        // schedule: it is neither a first demand of the arm nor a supported contract.
+        Assert.Contains(pending, fun d -> d.Code = "CCS8403" && d.Message.Contains "family use has no supported demand contract")

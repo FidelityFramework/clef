@@ -132,7 +132,64 @@ let read (graph: SemanticGraph) binding : Reading =
                         | [], Some _ when id = plan.EntryCall -> Ok(Set.singleton (plan.Initializers.Length, plan.EntryCall))
                         | [], Some { Kind = SemanticKind.Lambda(_, _, _, _, LambdaContext.RegularClosure) } when id <> plan.EntryLambda ->
                             match Activation.coverage activation.Value plan.EntryLambda id with
-                            | None -> Error [sprintf "Complete ordinary invocation scope is unavailable for node %d." (NodeId.value id)]
+                            | None ->
+                                // No complete invocation scope. Both facts stay owed when the
+                                // bound below fails too: no invocation proves the phase, and the
+                                // bounding sites reach no startup or entry scope either.
+                                let unavailable = sprintf "Complete ordinary invocation scope is unavailable for node %d." (NodeId.value id)
+                                let bounded = function Ok phases -> Ok phases | Error reasons -> Error (unavailable :: reasons)
+                                match Activation.invocations activation.Value id with
+                                | None -> Error [unavailable]
+                                | Some (reached, premises) ->
+                                  // The account's premises (scoped parameters and their declarations)
+                                  // are recorded on the proof, so an accepted order names the library
+                                  // facts it rests on.
+                                  for premise in premises do participants.Add(occurrence id ParticipantRole.InitializationPremise 0 premise)
+                                  match reached with
+                                  | [] ->
+                                    // Every use is accounted for and none applies it in source. A
+                                    // closure exists only from its construction (Closure
+                                    // Representation §4), so an invocation cannot precede the phase
+                                    // of the formation site; that phase bounds the invocation from
+                                    // below, and the ordinal check downstream is exactly "formed
+                                    // after the slot's initializer". Every static initializer
+                                    // precedes the entry (Program Structure and Execution, Execution
+                                    // of Static Initializers), so a closure formed in the entry's
+                                    // reach, or handed to a declared boundary from there, is ordered
+                                    // without any claim about where or whether the boundary invokes it.
+                                    // Settled closure code is lifted beside the module as a binding
+                                    // that is no initializer; its formation sites are the ClosureValue
+                                    // nodes that name the code and the references to that binding.
+                                    // Code left in place is formed where it structurally sits.
+                                    let lifted =
+                                        match nodes.TryFind id with
+                                        | Some { Parent = Some owner } ->
+                                            match nodes.TryFind owner with
+                                            | Some { Kind = SemanticKind.Binding _; Parent = Some container }
+                                                when (match graph.Nodes.TryFind container with Some { Kind = SemanticKind.ModuleDef _ } -> true | _ -> false)
+                                                     && not (plan.Initializers |> List.exists (fun row -> row.Binding = owner)) -> Some owner
+                                            | _ -> None
+                                        | _ -> None
+                                    let formations =
+                                        nodes.Values |> Seq.choose (fun node ->
+                                            match node.Kind with
+                                            | SemanticKind.ClosureValue(code, _) when code = id -> Some node.Id
+                                            | SemanticKind.VarRef(_, Some source) when Some source = lifted -> Some node.Id
+                                            | _ -> None) |> Seq.toList
+                                    match formations, parents.TryFind id with
+                                    | _ :: _, _ ->
+                                        for site in formations do participants.Add(occurrence id ParticipantRole.InitializationParent 0 site)
+                                        combine formations |> bounded
+                                    | [], Some edges when not edges.IsEmpty ->
+                                        for edge in edges do participants.Add(occurrence id ParticipantRole.InitializationParent edge.Ordinal edge.Target)
+                                        edges |> List.map _.Target |> List.distinct |> combine |> bounded
+                                    | [], _ -> Error [unavailable]
+                                  | reached ->
+                                    // Applied in source, but not every application sits in a covered
+                                    // activation: each application site and supporting callable is
+                                    // bounded in turn, an uncovered one by its own formation.
+                                    for site in reached do participants.Add(occurrence id ParticipantRole.InitializationCaller 0 site)
+                                    combine reached |> bounded
                             | Some coverage when not coverage.Dependencies.IsEmpty -> Error [sprintf "Deferred invocation scope for node %d needs a separate order contract." (NodeId.value id)]
                             | Some coverage ->
                                 for edge in coverage.Evidence do
