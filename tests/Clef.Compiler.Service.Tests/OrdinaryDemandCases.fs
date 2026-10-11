@@ -878,3 +878,31 @@ let main _ = ignore dormant; 0
         else
             Assert.Contains(write.Id, inactive.Excluded)
             Assert.Equal<ValueRange option>(Some(ValueRange.point 1I), observed.ValueRange)
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "OrdinaryDemand")>]
+type OrdinaryDemandSupplierCases() =
+  [<Theory>]
+  [<InlineData(false)>]
+  [<InlineData(true)>]
+  member _.``Inactive call suppliers do not narrow an opaque union alternative`` suppliedLiteral =
+    let invocation = if suppliedLiteral then "extract true (IntVal 42)" else "extract true input"
+    let graph = OrdinaryDemandFixture.check (String.concat "\n"
+      [ "type Number = IntVal of int | Other"
+        "let extract (flag: bool) (input: Number) ="
+        "    let selected = if flag then IntVal 7 else input"
+        "    match selected with IntVal x -> x | Other -> 0"
+        "let dormant input = " + invocation
+        "[<EntryPoint>]"
+        "let main _ = ignore dormant; 0" ])
+    let inactive =
+      match DemandProjection.tryInactivity graph with
+      | Ok proof -> proof
+      | Result.Error errors -> failwithf "Expected current inactivity: %A" errors
+    let inactiveCalls = inactive.Implementations.Values |> Seq.collect _.Calls |> Set.ofSeq
+    let resolution = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
+    let emptied = resolution.ParameterInputs |> Map.filter (fun _ suppliers ->
+      not suppliers.IsEmpty && suppliers |> List.forall (fun (site, _) -> inactiveCalls.Contains site))
+    Assert.NotEmpty(emptied |> Map.toList)
+    let payload = graph.Nodes.Values |> Seq.filter (fun node ->
+      node.IsReachable && match node.Kind with SemanticKind.DUEliminate(_, _, "IntVal", _) -> true | _ -> false) |> Assert.Single
+    Assert.Equal<ValueRange option>(Some ValueRange.Unbounded, payload.ValueRange)
