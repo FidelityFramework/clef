@@ -94,6 +94,44 @@ let main _ =
         Assert.Contains((ScopedCallbacks.read result.Graph).Findings, fun f -> f.Message.Contains("no source constructor"))
 
     [<Fact>]
+    member _.``A borrowed view's length is a length bounded by the platform's pointer width``() =
+        // Positive control for `BorrowedViews.numericBoundary`: on a context declaring a Pointer width a
+        // committed view length is the declared extent `[0, 2^(Pointer-1) - 1]`.
+        let views =
+            BorrowedViewCases.prefix.Replace("module BorrowedViewTests\n", "").Replace("BorrowedViewTests.", "SequenceProgram.")
+        let source = SequenceProgramFixture.header + views + "[<EntryPoint>]\nlet main _ = withView (fun view -> if BorrowedView.length view >= 0 then 0 else 1)\n"
+        let input =
+            match parseStringWithDefaults source SequenceProgramFixture.file with
+            | ParseSuccess input -> input
+            | ParseError errors -> failwithf "Parse failed: %A" errors
+        let result = checkParsedInputsWithPlatform [input] (Some SequenceProgramFixture.context)
+        DimensionalCases.noErrors result
+        let length =
+            result.Graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable &&
+                match node.Kind with
+                | SemanticKind.Application(callee, _) ->
+                    match result.Graph.Nodes.TryFind callee with
+                    | Some { Kind = SemanticKind.Intrinsic info } -> info.Module = IntrinsicModule.BorrowedView && info.Operation = "length"
+                    | _ -> false
+                | _ -> false) |> Assert.Single
+        Assert.Equal(Some(ValueRange.Bounded(0I, bigint.Pow(2I, 63) - 1I)), length.ValueRange)
+
+    [<Fact>]
+    member _.``A committed view length is unobservable on a context declaring no pointer width``() =
+        // Negative control: without a platform there is no declared extent and no length range, so a
+        // length the entry commits refuses at the length's own commitment. The view is manufactured
+        // here because a callback handed to the `withView` stub is never invoked and commits nothing.
+        let result =
+            match parseAndCheck (BorrowedViewCases.prefix + "[<EntryPoint>]\nlet main _ =\n    let view: BorrowedView<Pixel> = NativeDefault.zeroed ()\n    BorrowedView.length view\n") "borrowed-view.clef" with
+            | Success result | CheckFailure result -> result
+            | ParseFailure errors -> failwithf "Parse failed: %A" errors
+        let errors = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.CheckResult.errors result
+        Assert.NotEmpty errors
+        Assert.All(errors, fun diagnostic -> Assert.Equal("CCS8011", diagnostic.Code))
+        Assert.Contains(errors, fun diagnostic -> diagnostic.Message.Contains "'length'")
+
+    [<Fact>]
     member _.``Read-only view rejects a store``() =
         let text = BorrowedViewCases.prefix.Replace("Access = \"rw\"", "Access = \"ro\"") + """
 [<EntryPoint>]

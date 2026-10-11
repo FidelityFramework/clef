@@ -1363,8 +1363,9 @@ module RangeSources =
         // a zeroed default of an integer kind is the value 0: the compiler's own fact about
         // zero-initialized storage, not an observation of any source
         | _, IntrinsicModule.NativeDefault, "zeroed", _ -> Result.Fact (ValueRange.point bigint.Zero)
-        // lengths and offsets (a borrowed view's element count is a length like any other)
-        | _, (IntrinsicModule.Array | IntrinsicModule.String | IntrinsicModule.Seq | IntrinsicModule.List | IntrinsicModule.BorrowedView), "length", _ ->
+        // lengths and offsets (a borrowed view's length and stride are declared boundaries owned by
+        // BorrowedViews.numericBoundary, not table rows)
+        | _, (IntrinsicModule.Array | IntrinsicModule.String | IntrinsicModule.Seq | IntrinsicModule.List), "length", _ ->
             Result.Fact (lengthRange ctx)
         | _, IntrinsicModule.String, "indexOf", _ ->
             match lengthRange ctx with
