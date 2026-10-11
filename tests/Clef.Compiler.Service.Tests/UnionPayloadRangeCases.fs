@@ -22,6 +22,16 @@ module private UnionPayloadRangeFixture =
                                 | SemanticKind.Binding(actual, _, _, _) -> actual = name
                                 | _ -> false) |> Assert.Single
 
+    /// Every error is CCS8011; the payload stays unobservable and one refusal is located at the
+    /// binding that names it (the pass reports once per enclosing binding).
+    let refusedAtPayload name bindingName result =
+        let errors = Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics.CheckResult.errors result
+        Assert.Equal(Some ValueRange.Unbounded, (payload name result.Graph).ValueRange)
+        let named = binding bindingName result.Graph
+        Assert.NotEmpty errors
+        Assert.All(errors, fun diagnostic -> Assert.Equal("CCS8011", diagnostic.Code))
+        Assert.Contains(errors, fun diagnostic -> diagnostic.RelatedNodes = [named.Id] && diagnostic.Range = named.Range)
+
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "UnionPayloadRange")>]
 type UnionPayloadRangeCases() =
     [<Fact>]
@@ -83,8 +93,27 @@ let extract (flag: bool) (input: Number) =
 [<EntryPoint>]
 let main _ = ignore extract; 0
 """
+        // `extract` is never invoked: its body is an unreachable computation and `input` a missing
+        // observation, two states that stay distinct (width-inference.md:78). The opaque alternative
+        // keeps the payload unobservable, and CCS8011 attaches only where a reachable integer is
+        // committed (width-inference.md:80), so the inactive body refuses nothing. The active twin
+        // carries the refusal.
         Assert.Equal(Some ValueRange.Unbounded, (UnionPayloadRangeFixture.payload "IntVal" result.Graph).ValueRange)
-        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8011")
+        DimensionalCases.noErrors result
+
+    [<Fact>]
+    member _.``An invoked opaque union alternative refuses the committed payload``() =
+        // Active twin: `main` supplies an alternative whose payload the pass cannot observe. The
+        // payload stays unobservable and CCS8011 attaches at its commitment (width-inference.md:80).
+        let result = DimensionalCases.check """
+type Number = IntVal of int | Other
+let extract (flag: bool) (input: Number) =
+    let selected = if flag then IntVal 7 else input
+    match selected with IntVal x -> x | Other -> 0
+[<EntryPoint>]
+let main argv = extract (argv.Length > 0) (IntVal argv.Length)
+"""
+        UnionPayloadRangeFixture.refusedAtPayload "IntVal" "x" result
 
     [<Fact>]
     member _.``Tuple fields inside a union retain distinct ranges``() =
@@ -139,12 +168,33 @@ let main _ = extract (9000, IntVal 42)
             if recursive then "let rec make flag = if flag then IntVal 7 else make flag\nlet extract flag = match make flag with IntVal x -> x\n"
             else "let extract (flag: bool) (make: unit -> Number) =\n    let selected = if flag then IntVal 7 else make ()\n    match selected with IntVal x -> x\n"
         let result = DimensionalCases.check ("type Number = IntVal of int\n" + producer + "[<EntryPoint>]\nlet main _ = ignore extract; 0\n")
+        // Inactive body: the opaque or recursive alternative keeps the payload unobservable, and no
+        // reachable integer is committed, so there is no refusal (width-inference.md:78, :80).
         Assert.Equal(Some ValueRange.Unbounded, (UnionPayloadRangeFixture.payload "IntVal" result.Graph).ValueRange)
-        Assert.Contains(result.Diagnostics, fun diagnostic -> diagnostic.Code = "CCS8011")
+        DimensionalCases.noErrors result
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Invoked opaque producer and recursive alternatives refuse the committed payload`` recursive =
+        // Active twins of the conservative alternatives: the payload stays unobservable and the
+        // refusal sits at its commitment (width-inference.md:80).
+        let program =
+            if recursive then
+                "let rec make flag = if flag then IntVal 7 else make flag\nlet extract flag = match make flag with IntVal x -> x\n" +
+                "[<EntryPoint>]\nlet main _ = extract true\n"
+            else
+                "let extract (flag: bool) (make: unit -> Number) =\n    let selected = if flag then IntVal 7 else make ()\n    match selected with IntVal x -> x\n" +
+                "[<EntryPoint>]\nlet main argv = extract (argv.Length > 0) (fun () -> IntVal argv.Length)\n"
+        UnionPayloadRangeFixture.refusedAtPayload "IntVal" "x" (DimensionalCases.check ("type Number = IntVal of int\n" + program))
 
 module private RecordPayloadRangeFixture =
     let declarations = "type Number = IntVal of int | Other of int\ntype Holder = { Payload: Number; Marker: int }\n"
     let extract = "let extract (holder: Holder) = match holder.Payload with IntVal value -> value | Other _ -> 0\n"
+    let opaqueExtract =
+        "let extract (flag: bool) (input: Holder) =\n" +
+        "    let holder = if flag then { Payload = IntVal 7; Marker = 0 } else input\n" +
+        "    match holder.Payload with IntVal value -> value | Other _ -> 0\n"
     let direct = declarations + extract + "[<EntryPoint>]\nlet main _ = extract { Payload = IntVal 42; Marker = 0 }\n"
 
     let check source = UnionPayloadRangeFixture.check source
@@ -340,13 +390,22 @@ type RecordPayloadRangeCases() =
 
     [<Fact>]
     member _.``An opaque record alternative remains unbounded beside an immutable construction``() =
-        RecordPayloadRangeFixture.refused
-            (RecordPayloadRangeFixture.declarations +
-             "let extract (flag: bool) (input: Holder) =\n" +
-             "    let holder = if flag then { Payload = IntVal 7; Marker = 0 } else input\n" +
-             "    match holder.Payload with IntVal value -> value | Other _ -> 0\n" +
-             "[<EntryPoint>]\nlet main _ = ignore extract; 0\n")
-        |> ignore
+        // Inactive body: the opaque alternative keeps the payload unobservable and nothing is
+        // committed, so there is no refusal (width-inference.md:78, :80); the active twin refuses.
+        let graph =
+            RecordPayloadRangeFixture.check
+                (RecordPayloadRangeFixture.declarations + RecordPayloadRangeFixture.opaqueExtract +
+                 "[<EntryPoint>]\nlet main _ = ignore extract; 0\n")
+        Assert.Equal(Some ValueRange.Unbounded, (RecordPayloadRangeFixture.payload graph).ValueRange)
+
+    [<Fact>]
+    member _.``An invoked opaque record alternative refuses the committed payload``() =
+        // Active twin: the supplied alternative's payload is unobservable, so the refusal sits at
+        // the payload's commitment (width-inference.md:80).
+        UnionPayloadRangeFixture.refusedAtPayload "IntVal" "value"
+            (DimensionalCases.check
+                (RecordPayloadRangeFixture.declarations + RecordPayloadRangeFixture.opaqueExtract +
+                 "[<EntryPoint>]\nlet main argv = extract (argv.Length > 0) { Payload = IntVal argv.Length; Marker = 0 }\n"))
 
     [<Fact>]
     member _.``A raw field address needs its own immutable borrow authority``() =

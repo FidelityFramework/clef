@@ -637,7 +637,13 @@ let main _ = if sum () = 130 then 0 else 1
     [<Fact>]
     member _.``An unresolved sequence origin supplies no finite pull count``() =
         SequenceAccumulationFixture.raw () |> ignore
-        let graph = SequenceAccumulationFixture.rejected [(6, 16, 21); (8, 17, 30); (11, 20, 23); (7, 4, 4)] """
+        // Keeping the callable as a value leaves its input unsupplied; this is
+        // an unknown-origin test, not a claim that sum was demanded or run. The
+        // body is an unreachable computation and the origin a missing
+        // observation, two distinct states (width-inference.md:78); nothing in
+        // the body is committed, so CCS8011 attaches nowhere (width-inference.md:80)
+        // while the unknown origin stays on the graph. The active twin refuses.
+        let graph = SequenceAccumulationFixture.sourceGraph """
 let sum (input: seq<int>) =
     let mutable total = 0
     for value in input do
@@ -646,11 +652,21 @@ let sum (input: seq<int>) =
 [<EntryPoint>]
 let main _ = ignore sum; 0
 """
-        // Keeping the callable as a value leaves its input unsupplied; this is
-        // an unknown-origin test, not a claim that sum was demanded or run.
         let current = SequenceAccumulationFixture.currentRange ValueRange.Unbounded graph
         Assert.Contains(graph.Edges, fun edge -> edge.Target = current.Target && edge.Role = EdgeRole.SequenceElementUnknown)
         SequenceAccumulationFixture.noCertificate graph
+
+    [<Fact>]
+    member _.``An invoked sequence with an unobservable element refuses every committed cell``() =
+        // Active twin. An origin the pass cannot resolve exists only behind a boundary, so the
+        // entry drives the nearest shape: a resolved origin whose element the pass cannot observe.
+        // The accumulator, its update, the element, the pulled current, the call result and the
+        // entry's result are committed and refused at their own sites (width-inference.md:80).
+        let graph =
+            SequenceAccumulationFixture.rejected [(5, 16, 21); (7, 17, 30); (9, 43, 55); (11, 16, 33); (10, 0, 0); (6, 4, 4)]
+                ("let sum (input: seq<int>) =\n    let mutable total = 0\n    for value in input do\n        total <- total + value\n    total\n" +
+                 "let source (items: string[]) = seq { yield items.Length }\n[<EntryPoint>]\nlet main argv = sum (source argv)\n")
+        SequenceAccumulationFixture.currentRange ValueRange.Unbounded graph |> ignore
 
     [<Theory>]
     [<InlineData("missing-additive-proof")>]

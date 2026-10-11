@@ -204,6 +204,9 @@ let analyze (graph: SemanticGraph) : Reading =
         formals.Values |> Seq.map _.Implementation |> Set.ofSeq |> Set.filter (fun implementation ->
             let sites = resolution.Calls |> Map.toList |> List.filter (fun (_, call) -> call.Targets |> List.exists (fun target -> target.Lambda = implementation))
             not sites.IsEmpty && sites |> List.forall (fun (site, _) -> calls.ContainsKey site))
+    let structuralParents =
+        incidence |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge.Target))
+        |> List.groupBy fst |> List.map (fun (child, rows) -> child, rows |> List.map snd |> List.distinct) |> Map.ofList
     let inactivity =
         nodes.Values |> Seq.choose (fun code ->
             match code.Kind, CallableIngress.tryFamily ingress code.Id with
@@ -232,8 +235,24 @@ let analyze (graph: SemanticGraph) : Reading =
                 // The same structural ownership reader that assigns callers
                 // identifies the body's occurrences. Shared/ambiguous owners
                 // remain demanded; the callable formation itself is retained.
+                // Ownership is followed through nested owners (a sequence
+                // generator or closure formed inside the body): an
+                // implementation that is never entered forms none of them, so
+                // their bodies are the same unreachable computation and commit
+                // no integer of their own (width-inference §78, §80).
+                let rec ownedByImplementation seen id =
+                    match CallableIngress.tryExecutionOwner ingress id with
+                    | Some owner when owner = code.Id -> true
+                    | Some owner when owner = id ->
+                        // A nested lambda owns itself; its own owner is read
+                        // at its unique structural parent.
+                        match structuralParents.TryFind id with
+                        | Some [parent] when not (Set.contains parent seen) -> ownedByImplementation (Set.add id seen) parent
+                        | _ -> false
+                    | Some owner when not (Set.contains owner seen) -> ownedByImplementation (Set.add owner seen) owner
+                    | _ -> false
                 let excluded = nodes.Keys |> Seq.filter (fun id ->
-                    id <> code.Id && CallableIngress.tryExecutionOwner ingress id = Some code.Id) |> Set.ofSeq
+                    id <> code.Id && ownedByImplementation Set.empty id) |> Set.ofSeq
                 let calls = excluded |> Set.filter (fun id ->
                     match nodes[id].Kind with SemanticKind.Application _ -> true | _ -> false)
                 Some(code.Id,

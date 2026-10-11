@@ -10,9 +10,16 @@ module LoopRanges = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis
 module FiniteRecurrences = Clef.Compiler.Baker.Recipes.LoopRangeRecipes
 
 module private LoopRangeFixture =
-    let private parse body =
-        let source = "module LoopRanges\n[<Measure>] type m\n" + body + "\n[<EntryPoint>]\nlet main _ = ignore observed; 0\n"
+    let private parseWith entry body =
+        let source = "module LoopRanges\n[<Measure>] type m\n" + body + "\n[<EntryPoint>]\n" + entry
         parseAndCheck source "loop-ranges.clef"
+
+    // The default entry keeps `observed` as a value nothing pulls.
+    let private parse body = parseWith "let main _ = ignore observed; 0\n" body
+
+    let produce =
+        "let produce (count: int) = seq {\n    let mutable total = 0\n    let mutable i = 1\n    while i <= count do\n" +
+        "        total <- total + i\n        yield total\n        i <- i + 1\n}\n"
 
     let check body =
         match parse body with
@@ -21,8 +28,8 @@ module private LoopRangeFixture =
             result.Graph
         | ParseFailure errors -> failwithf "Expected parsed recurrence: %A" errors
 
-    let rejected expectedSites body =
-        match parse body with
+    let private rejectedOf expectedSites parsed =
+        match parsed with
         | CheckFailure result ->
             let errors = LoopCheckResult.errors result
             Assert.NotEmpty errors
@@ -41,6 +48,10 @@ module private LoopRangeFixture =
             Assert.Equal<(int * int * int) list>(List.sort expectedSites, List.sort sites)
             result.Graph
         | result -> failwithf "Expected the located numeric source refusals: %A" result
+
+    let rejected expectedSites body = rejectedOf expectedSites (parse body)
+    /// The same located refusals for a program whose entry drives the body.
+    let rejectedWith entry expectedSites body = rejectedOf expectedSites (parseWith entry body)
 
     let cell name (graph: SemanticGraph) =
         graph.Nodes.Values |> Seq.filter (fun node ->
@@ -166,12 +177,36 @@ type LoopRangeCases() =
         |> LoopRangeFixture.pending "total" LoopRangeResidual.NonAdditive
 
     [<Fact>]
-    member _.``Unknown trip bounds remain residual without selecting a carrier``() =
-        let graph = LoopRangeFixture.rejected [3, 13, 18; 4, 16, 21; 5, 16, 17; 11, 15, 22] "let produce (count: int) = seq {\n    let mutable total = 0\n    let mutable i = 1\n    while i <= count do\n        total <- total + i\n        yield total\n        i <- i + 1\n}\nlet observed = produce"
+    member _.``An uninvoked unknown trip bound owes neither a proof nor a carrier``() =
+        // `produce` is never invoked: the generator body is an unreachable computation under the
+        // complete use census, so no integer in it is committed, CCS8011 attaches nowhere
+        // (width-inference.md:80) and no trip-bound proof is owed or pending. That state stays
+        // distinct from a missing observation (width-inference.md:78); the active twin carries the
+        // located refusals and the residual.
+        let graph = LoopRangeFixture.check (LoopRangeFixture.produce + "let observed = produce")
+        let total = LoopRangeFixture.cell "total" graph
+        let inactive =
+            match Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.tryInactivity graph with
+            | Ok proof -> proof
+            | Result.Error errors -> failwithf "Expected current inactivity: %A" errors
+        Assert.Contains(total.Id, inactive.Excluded)
+        Assert.DoesNotContain(graph.Edges, fun edge ->
+            edge.Target = total.Id && match edge.Role with EdgeRole.LoopRangePending _ -> true | _ -> false)
+        Assert.DoesNotContain(graph.Nodes.Values, fun node ->
+            match node.Kind with
+            | SemanticKind.Obligation { Body = ObligationBody.AdditiveLoopInvariant _ } ->
+                graph.Edges |> List.exists (fun edge -> edge.Target = node.Id && List.contains total.Id edge.Sources)
+            | _ -> false)
+
+    [<Fact>]
+    member _.``An invoked unknown trip bound refuses every committed cell``() =
+        // Active twin: the entry pulls `produce` with a count the pass cannot observe. The count,
+        // both cells, the unobservable argument and the pulled element are committed and refused
+        // at their own sites (width-inference.md:80); the trip bound stays a residual.
+        let graph =
+            LoopRangeFixture.rejectedWith "let main argv =\n    for value in produce argv.Length do\n        ignore value\n    0\n"
+                [3, 13, 18; 4, 16, 21; 5, 16, 17; 13, 25, 36; 13, 4, 4] (LoopRangeFixture.produce.TrimEnd())
         LoopRangeFixture.pending "total" LoopRangeResidual.MissingBound graph
-        match (LoopRangeFixture.cell "total" graph).ValueRange with
-        | Some range -> Assert.False(ValueRange.isObservable range)
-        | None -> failwith "Missing numeric residual range"
 
     [<Fact>]
     member _.``Range recomputation replaces its own evidence and preserves independent resident obligations``() =
