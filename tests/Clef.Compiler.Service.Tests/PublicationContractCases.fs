@@ -53,8 +53,8 @@ module private PublicationFixture =
     let prepare graph =
         match Emission.prepare graph with Ok prepared -> prepared | Error failures -> failwithf "%A" failures
 
-    // An independent obligation lets dispatch freshness be tested without a
-    // domain-specific reader rejecting the mutation before this source seam.
+    // An independent obligation tests precise dispatch freshness even when
+    // changed incidence also invalidates a domain's retained source census.
     let dispatchGraph body =
         let graph = check "dispatch" programs["scalar"]
         let subjects = graph.Nodes.Values |> Seq.filter _.IsReachable |> Seq.truncate 2 |> Seq.toList
@@ -172,6 +172,45 @@ let main _ =
         | "publication", ("removed" | "replaced"), _, Result.Error failures ->
             Assert.Contains(failures, fun failure -> failure.Reason.StartsWith "Source emission admission: The current graph differs from its source witness projection input")
         | _ -> failwithf "Unexpected %s result after %s receipt: passive=%A; publication=%A" boundary change (passive |> Result.map (fun _ -> "admitted")) (published |> Result.map (fun _ -> "published"))
+
+    [<Theory>]
+    [<InlineData("unchanged")>]
+    [<InlineData("removed")>]
+    [<InlineData("replaced")>]
+    member _.``Cached publication retains the exact invocation range authority root`` change =
+        let graph = PublicationFixture.check "range-authority" PublicationFixture.programs["scalar"]
+        let receipt = graph.RangeContextFacts |> Option.defaultWith (fun () -> failwith "Fixture lacks issued range authority")
+        let admitted original =
+            match Emission.tryRead original with
+            | Ok _ -> ()
+            | Error reason -> failwithf "Original passive read refused: %s" reason
+            PublicationFixture.publish original |> ignore
+        admitted graph
+        let nextReceipt =
+            match change with
+            | "unchanged" -> graph.RangeContextFacts
+            | "removed" -> None
+            | "replaced" ->
+                let replacement = { receipt with Invocations = List.map id receipt.Invocations }
+                Assert.NotSame(receipt, replacement)
+                Assert.Equal<RangeContextFacts>(receipt, replacement)
+                Some replacement
+            | _ -> failwithf "Unknown authority change %s" change
+        let changed = { graph with RangeContextFacts = nextReceipt }
+        Assert.Same(graph.Nodes, changed.Nodes)
+        Assert.Same(graph.Edges, changed.Edges)
+        Assert.Same(graph.Codata, changed.Codata)
+        let passive = Emission.tryRead changed
+        let published = Publication.publish changed
+        admitted graph
+        match change, passive, published with
+        | "unchanged", Ok _, Ok _ -> ()
+        | ("removed" | "replaced"), Error reason, Error failures ->
+            Assert.Equal("The current graph differs from its source witness projection input; source republication is required.", reason)
+            Assert.Contains(failures, fun failure ->
+                failure.Reason = "Source emission admission: The current graph differs from its source witness projection input; source republication is required.")
+        | _ -> failwithf "Unexpected result after %s range receipt: passive=%A; publication=%A"
+                         change (passive |> Result.map (fun _ -> "admitted")) (published |> Result.map (fun _ -> "published"))
 
     [<Fact>]
     member _.``Every semantic graph root has an explicit prepared identity policy``() =
@@ -362,6 +401,7 @@ let main _ =
     member _.``Equal queries and unchanged nodes cannot preserve changed Constrains incidence`` change =
         let raw, target = PublicationFixture.dispatchGraph (ObligationBody.StorageReservation(3, 4))
         let graph = PublicationFixture.prepare raw
+        Assert.True(Result.isOk (Emission.admit graph))
         let mutate (edge: Hyperedge) =
             if edge.Target <> target then edge else
             match change with

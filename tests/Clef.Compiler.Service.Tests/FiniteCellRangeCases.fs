@@ -31,16 +31,48 @@ module private FiniteCellFixture =
                   message "the result of '*'" "record", 3, 28, 3, 38
                   message "main" "main", 6 + shift, 4, 7 + shift, 9
                   message "main …" "__clef_program_entry", 4 + shift, 0, 4 + shift, 0 ]
-            let actual = CheckResult.errors result |> List.map (fun diagnostic ->
+            let diagnostics = CheckResult.errors result
+            let actual = diagnostics |> List.map (fun diagnostic ->
                 Assert.Equal("CCS8011", diagnostic.Code)
                 Assert.Equal("finite-cells.clef", diagnostic.Range.File)
-                let node = result.Graph.Nodes[Assert.Single diagnostic.RelatedNodes]
+                let primary, related =
+                    match diagnostic.RelatedNodes with
+                    | primary :: related -> primary, related
+                    | [] -> failwith "The refusal must retain its primary source endpoint"
+                let baseMessage =
+                    if related.IsEmpty then diagnostic.Message
+                    else
+                        Assert.True(recursive, "Only the recursive fixture admits merged invocation provenance")
+                        let parts = diagnostic.Message.Split([| "; its retained range support includes merged invocation contexts " |], System.StringSplitOptions.None)
+                        Assert.Equal(2, parts.Length)
+                        let facts = result.Graph.RangeContextFacts |> Option.get
+                        Assert.False(System.String.IsNullOrWhiteSpace parts[1])
+                        let rows = facts.Invocations |> List.groupBy _.Context |> List.collect (fun (_, rows) ->
+                            if (rows |> List.map _.Caller |> List.distinct).Length > 1 then rows else [])
+                        Assert.All(related, fun id ->
+                            Assert.True(rows |> List.exists (fun row -> row.Call = id || row.Target = id), "Every added endpoint must belong to a retained merged invocation"))
+                        Assert.True(facts.Reads.ContainsKey(RangeContext.Shared, primary), "The refusal must retain its source range reads")
+                        parts[0]
+                if not recursive then Assert.Single diagnostic.RelatedNodes |> ignore
+                let node = result.Graph.Nodes[primary]
                 Assert.True(node.IsReachable)
                 Assert.True((node.Range = diagnostic.Range), "The refusal must identify its actual source node")
                 Assert.True(node.ValueRange |> Option.exists (ValueRange.isObservable >> not), "The rejected source node must remain nonobservable")
-                diagnostic.Message, diagnostic.Range.Start.Line, diagnostic.Range.Start.Column,
+                baseMessage, diagnostic.Range.Start.Line, diagnostic.Range.Start.Column,
                 diagnostic.Range.End.Line, diagnostic.Range.End.Column)
             Assert.Equal<(string * int * int * int * int) list>(List.sort expected, List.sort actual)
+            if recursive then
+                let facts = result.Graph.RangeContextFacts |> Option.get
+                Assert.True(facts.Invocations |> List.exists (fun row ->
+                    match result.Graph.Nodes[row.Call].Kind with
+                    | SemanticKind.Application(callee, _) ->
+                        match result.Graph.Nodes[callee].Kind with
+                        | SemanticKind.VarRef("repeat", _) ->
+                            diagnostics |> List.exists (fun diagnostic ->
+                                (diagnostic.RelatedNodes.Tail |> List.contains row.Call) &&
+                                (diagnostic.RelatedNodes.Tail |> List.contains row.Target))
+                        | _ -> false
+                    | _ -> false), "The recursive refusal must identify the retained repeat call and its target")
             result.Graph
         | result -> failwithf "Expected the four located finite-cell source refusals: %A" result
 

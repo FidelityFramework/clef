@@ -112,7 +112,10 @@ let internal preparedRootIdentities : (string * (SemanticGraph -> obj | null)) l
       "Escaping", (fun graph -> box graph.Escaping)
       "Codata", (fun graph -> box graph.Codata)
       "Edges", (fun graph -> box graph.Edges)
-      "SequenceRangeProvenance", (fun graph -> box graph.SequenceRangeProvenance) ]
+      "SequenceRangeProvenance", (fun graph -> box graph.SequenceRangeProvenance)
+      // The prepared projection consumed this exact producer receipt. Equal
+      // reissued facts still require source preparation, not passive rebasing.
+      "RangeContextFacts", (fun graph -> box graph.RangeContextFacts) ]
 
 /// This root supplies the retained inputs being compared. tryRead explicitly
 /// requires it; prepare's retained graph intentionally has no self-reference.
@@ -158,55 +161,57 @@ let tryRead (graph: SemanticGraph) =
 /// source fixtures and retained-input owners may use this source operation;
 /// witness consumers never call it to repair a missing admission.
 let admit (graph: SemanticGraph) : Result<unit, WitnessProjectionFailure list> =
-    match project graph with
+    let facts = graph.Codata.Value
+    // Dispatch retains incidence independently of the domain projections. Its
+    // precise refusal must survive a broader domain freshness failure.
+    match ProofDispatch.materialize graph with
     | Error failures -> Error failures
-    | Ok projection ->
-        let facts = graph.Codata.Value
+    | Ok current when facts.ProofDispatch |> Option.exists (fun held -> ProofDispatch.matches held current) |> not ->
+        Error [{ Occurrence = None; Participants = Set.empty
+                 Reason = "Proof dispatch differs from the current source snapshot." }]
+    | Ok dispatch ->
+      match project graph with
+      | Error failures -> Error failures
+      | Ok projection ->
         if facts.OrdinaryDemand <> projection.Ordinary || facts.WitnessEmission <> Some projection then
             Error [{ Occurrence = None; Participants = Set.empty
                      Reason = "Witness projection differs from the current source snapshot." }]
-        else
-            match ProofDispatch.materialize graph with
-            | Error failures -> Error failures
-            | Ok current when facts.ProofDispatch |> Option.exists (fun held -> ProofDispatch.matches held current) |> not ->
-                Error [{ Occurrence = None; Participants = Set.empty
-                         Reason = "Proof dispatch differs from the current source snapshot." }]
-            | Ok _ when
-                (match LiveScopes.projectWithEmission projection graph with
-                 | Ok liveScope -> facts.WitnessSegmentation = Some (WitnessSegmentation.project graph projection liveScope)
-                 | Error _ -> false) |> not ->
-                Error [{ Occurrence = None; Participants = Set.empty
-                         Reason = "Witness segmentation differs from the current source snapshot." }]
-            | Ok _ when
-                (match LiveScopes.projectWithEmission projection graph, facts.WitnessLiveScope with
-                 | Ok current, Some held -> LiveScopes.matches held current
-                 | _ -> false) |> not ->
-                Error [{ Occurrence = None; Participants = Set.empty
-                         Reason = "Live occurrence scope differs from the current source snapshot." }]
-            | Ok _ when
-                (facts.WitnessPreparedRows |> Option.exists (fun held -> PreparedRows.matches held (PreparedRows.project graph))) |> not ->
-                Error [{ Occurrence = None; Participants = Set.empty
-                         Reason = "Baker-prepared foreign, demand and incidence rows differ from the current source snapshot." }]
-            | Ok _ when
-                (match facts.WitnessLiveScope, facts.WitnessPreparedRows, facts.WitnessSegmentation, facts.WitnessLiveRows with
-                 | Some scope, Some prepared, Some segmentation, Some held ->
-                     LiveRows.matches held (LiveRows.project graph projection scope prepared segmentation)
-                 | _ -> false) |> not ->
-                Error [{ Occurrence = None; Participants = Set.empty
-                         Reason = "Baker-selected live fact rows differ from the current source snapshot." }]
-            | Ok _ when not (isMaterialized graph) ->
-                Error [{ Occurrence = None; Participants = Set.empty
-                         Reason = "Witness input contains deferred source computations." }]
-            | Ok dispatch when
-                (match facts.WitnessLiveScope, facts.WitnessLiveRows, facts.WitnessPublishedRows with
-                 | Some scope, Some rows, Some held ->
-                     match PublishedRows.project graph scope rows dispatch with
-                     | Ok current -> PublishedRows.matches held current
-                     | Error _ -> false
-                 | _ -> false) |> not ->
-                Error [{ Occurrence = None; Participants = Set.empty
-                         Reason = "Baker-frozen publication rows differ from the current source snapshot." }]
-            | Ok _ -> Ok ()
+        elif
+            (match LiveScopes.projectWithEmission projection graph with
+             | Ok liveScope -> facts.WitnessSegmentation = Some (WitnessSegmentation.project graph projection liveScope)
+             | Error _ -> false) |> not then
+            Error [{ Occurrence = None; Participants = Set.empty
+                     Reason = "Witness segmentation differs from the current source snapshot." }]
+        elif
+            (match LiveScopes.projectWithEmission projection graph, facts.WitnessLiveScope with
+             | Ok current, Some held -> LiveScopes.matches held current
+             | _ -> false) |> not then
+            Error [{ Occurrence = None; Participants = Set.empty
+                     Reason = "Live occurrence scope differs from the current source snapshot." }]
+        elif
+            (facts.WitnessPreparedRows |> Option.exists (fun held -> PreparedRows.matches held (PreparedRows.project graph))) |> not then
+            Error [{ Occurrence = None; Participants = Set.empty
+                     Reason = "Baker-prepared foreign, demand and incidence rows differ from the current source snapshot." }]
+        elif
+            (match facts.WitnessLiveScope, facts.WitnessPreparedRows, facts.WitnessSegmentation, facts.WitnessLiveRows with
+             | Some scope, Some prepared, Some segmentation, Some held ->
+                 LiveRows.matches held (LiveRows.project graph projection scope prepared segmentation)
+             | _ -> false) |> not then
+            Error [{ Occurrence = None; Participants = Set.empty
+                     Reason = "Baker-selected live fact rows differ from the current source snapshot." }]
+        elif not (isMaterialized graph) then
+            Error [{ Occurrence = None; Participants = Set.empty
+                     Reason = "Witness input contains deferred source computations." }]
+        elif
+            (match facts.WitnessLiveScope, facts.WitnessLiveRows, facts.WitnessPublishedRows with
+             | Some scope, Some rows, Some held ->
+                 match PublishedRows.project graph scope rows dispatch with
+                 | Ok current -> PublishedRows.matches held current
+                 | Error _ -> false
+             | _ -> false) |> not then
+            Error [{ Occurrence = None; Participants = Set.empty
+                     Reason = "Baker-frozen publication rows differ from the current source snapshot." }]
+        else Ok ()
 
 let tryOrdinary graph = tryRead graph |> Result.map _.Ordinary
 let tryCallable graph = tryRead graph |> Result.map _.Callable
