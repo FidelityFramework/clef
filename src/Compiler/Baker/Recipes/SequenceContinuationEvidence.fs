@@ -17,7 +17,7 @@ module ProgramStorage = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitial
 let private edge role sources target : Hyperedge =
     { Class = EdgeClass.Suspension; Role = role; Sources = sources; Target = target; Ordinal = 0 }
 
-let forMachine (graph: SemanticGraph) (control: Control.Control)
+let private forMachineCore (graph: SemanticGraph) (control: Control.Control)
                (frame: ContinuationFrame) (machine: Machine.Machine) : Result<Enrichment, Control.Residual> =
     let fail site reason : Result<Enrichment, Control.Residual> =
         Error { Owner = control.Owner; Site = site; Reason = reason }
@@ -311,3 +311,6 @@ let forMachine (graph: SemanticGraph) (control: Control.Control)
                     { Class = EdgeClass.Provenance; Role = EdgeRole.ContinuationValue; Ordinal = 0
                       Sources = [sourceYield]; Target = writer })
             Ok { obligations with NewEdges = initial :: initialAction :: completed :: relations @ currentOrigins @ obligations.NewEdges }
+
+let forMachine graph control frame machine =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> forMachineCore graph control frame machine)

@@ -1342,11 +1342,12 @@ module RangeSources =
         | Some declared -> if ValueRange.contains declared argument then argument else declared
         | None -> argument
 
-    /// The result range of an intrinsic application (source 1).
-    let intrinsic (ctx: PlatformContext option) (info: IntrinsicInfo) (args: Argument list) : Result =
+    /// Scalar rules admitted for invocation-context transfer. Storage, effects
+    /// and unknown operations retain their shared observations.
+    let contextualIntrinsic (ctx: PlatformContext option) (info: IntrinsicInfo) (args: Argument list) : Result =
         let ranges = args |> List.map (fun a -> a.Range)
         match info.Category, info.Module, info.Operation, ranges with
-        | IntrinsicCategory.Comparison, _, _, _ -> Result.Fact ValueRange.boolean
+        | IntrinsicCategory.Comparison, IntrinsicModule.Operators, _, _ -> Result.Fact ValueRange.boolean
         | _, IntrinsicModule.Operators, "op_Addition", [ x; y ] -> Result.Fact (ValueRange.add x y)
         | _, IntrinsicModule.Operators, "op_Subtraction", [ x; y ] -> Result.Fact (ValueRange.sub x y)
         | _, IntrinsicModule.Operators, "op_Multiply", [ x; y ] -> Result.Fact (ValueRange.mul x y)
@@ -1360,40 +1361,53 @@ module RangeSources =
         | _, IntrinsicModule.Operators, "op_LeftShift", [ x; n ] -> Result.Fact (ValueRange.shl x n)
         | _, IntrinsicModule.Operators, "op_RightShift", [ x; n ] -> Result.Fact (ValueRange.shr x n)
         | _, IntrinsicModule.Operators, ("not" | "op_BooleanAnd" | "op_BooleanOr"), _ -> Result.Fact ValueRange.boolean
-        // a zeroed default of an integer kind is the value 0: the compiler's own fact about
-        // zero-initialized storage, not an observation of any source
-        | _, IntrinsicModule.NativeDefault, "zeroed", _ -> Result.Fact (ValueRange.point bigint.Zero)
-        // lengths and offsets (a borrowed view's length and stride are declared boundaries owned by
-        // BorrowedViews.numericBoundary, not table rows)
-        | _, (IntrinsicModule.Array | IntrinsicModule.String | IntrinsicModule.Seq | IntrinsicModule.List), "length", _ ->
-            Result.Fact (lengthRange ctx)
-        | _, IntrinsicModule.String, "indexOf", _ ->
-            match lengthRange ctx with
-            | ValueRange.Bounded (_, hi) -> Result.Fact (ValueRange.Bounded (bigint.MinusOne, hi))
-            | _ -> Result.Untabled
-        // element reads
-        | _, IntrinsicModule.Array, "get", _ -> Result.ElementOf 0
-        // the platform's read and write: the endpoint's declared return bound over the buffer's length
-        | _, IntrinsicModule.Sys, "write", [ _; _; count ] -> declaredReturn ctx "write" count
-        | _, IntrinsicModule.Sys, "write", _ -> Result.Untabled
-        | _, IntrinsicModule.Sys, ("read" as endpoint), _ ->
-            match args with
-            | [ _; buffer ] -> declaredReturn ctx endpoint (bufferLength ctx buffer)
-            | _ -> declaredReturn ctx endpoint (lengthRange ctx)
-        // conversions between numeric carriers
-        | IntrinsicCategory.Conversion, IntrinsicModule.Convert, op, [ x ] -> Result.Fact (conversion ctx op x)
-        // the library schemes with an image (the CS-9 recipes decompose most of these before the pass)
+        | IntrinsicCategory.Conversion, IntrinsicModule.Convert, op, [ x ]
+            when Types.numericSpellings |> List.exists (fun (_, _, operation, _) -> operation = op) ->
+            Result.Fact (conversion ctx op x)
+        // The library schemes with an image (the CS-9 recipes decompose most of these before the pass).
         | _, IntrinsicModule.Math, "sign", _ -> Result.Fact (ValueRange.Bounded (bigint.MinusOne, bigint.One))
         | _, IntrinsicModule.Math, "abs", [ x ] -> Result.Fact (ValueRange.abs x)
         | _, IntrinsicModule.Math, "min", [ x; y ] -> Result.Fact (ValueRange.minOf x y)
         | _, IntrinsicModule.Math, "max", [ x; y ] -> Result.Fact (ValueRange.maxOf x y)
         | _, IntrinsicModule.Math, "clamp", [ lo; hi; x ] -> Result.Fact (ValueRange.minOf hi (ValueRange.maxOf lo x))
-        // the date components, the ranges their definitions state
-        | _, IntrinsicModule.DateTime, "hour", _ -> Result.Fact (ValueRange.bounded bigint.Zero (bigint 23))
-        | _, IntrinsicModule.DateTime, ("minute" | "second"), _ -> Result.Fact (ValueRange.bounded bigint.Zero (bigint 59))
-        | _, IntrinsicModule.DateTime, "millisecond", _ -> Result.Fact (ValueRange.bounded bigint.Zero (bigint 999))
-        // Math.* and the rounding intrinsics (CS-13), parses of input (CS-12), everything else
         | _ -> Result.Untabled
+
+    /// The result range of an intrinsic application (source 1).
+    let intrinsic (ctx: PlatformContext option) (info: IntrinsicInfo) (args: Argument list) : Result =
+        match info.Category, contextualIntrinsic ctx info args with
+        | IntrinsicCategory.Comparison, _ -> Result.Fact ValueRange.boolean
+        | _, (Result.Fact _ as fact) -> fact
+        | _ ->
+            let ranges = args |> List.map (fun a -> a.Range)
+            match info.Category, info.Module, info.Operation, ranges with
+            // a zeroed default of an integer kind is the value 0: the compiler's own fact about
+            // zero-initialized storage, not an observation of any source
+            | _, IntrinsicModule.NativeDefault, "zeroed", _ -> Result.Fact (ValueRange.point bigint.Zero)
+            // lengths and offsets (a borrowed view's length and stride are declared boundaries owned by
+            // BorrowedViews.numericBoundary, not table rows)
+            | _, (IntrinsicModule.Array | IntrinsicModule.String | IntrinsicModule.Seq | IntrinsicModule.List), "length", _ ->
+                Result.Fact (lengthRange ctx)
+            | _, IntrinsicModule.String, "indexOf", _ ->
+                match lengthRange ctx with
+                | ValueRange.Bounded (_, hi) -> Result.Fact (ValueRange.Bounded (bigint.MinusOne, hi))
+                | _ -> Result.Untabled
+            // element reads
+            | _, IntrinsicModule.Array, "get", _ -> Result.ElementOf 0
+            // the platform's read and write: the endpoint's declared return bound over the buffer's length
+            | _, IntrinsicModule.Sys, "write", [ _; _; count ] -> declaredReturn ctx "write" count
+            | _, IntrinsicModule.Sys, "write", _ -> Result.Untabled
+            | _, IntrinsicModule.Sys, ("read" as endpoint), _ ->
+                match args with
+                | [ _; buffer ] -> declaredReturn ctx endpoint (bufferLength ctx buffer)
+                | _ -> declaredReturn ctx endpoint (lengthRange ctx)
+            // conversions between numeric carriers
+            | IntrinsicCategory.Conversion, IntrinsicModule.Convert, op, [ x ] -> Result.Fact (conversion ctx op x)
+            // the date components, the ranges their definitions state
+            | _, IntrinsicModule.DateTime, "hour", _ -> Result.Fact (ValueRange.bounded bigint.Zero (bigint 23))
+            | _, IntrinsicModule.DateTime, ("minute" | "second"), _ -> Result.Fact (ValueRange.bounded bigint.Zero (bigint 59))
+            | _, IntrinsicModule.DateTime, "millisecond", _ -> Result.Fact (ValueRange.bounded bigint.Zero (bigint 999))
+            // Math.* and the rounding intrinsics (CS-13), parses of input (CS-12), everything else
+            | _ -> Result.Untabled
 
     /// The function-valued arguments an intrinsic calls, by position, with what it supplies to
     /// each parameter of that function (source 3).

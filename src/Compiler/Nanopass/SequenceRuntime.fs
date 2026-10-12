@@ -187,7 +187,7 @@ let rec private emptyConsumers (graph: SemanticGraph) origins =
 
 /// Representation preparation can precede environment residence/placement.
 /// Pending capture requirements remain in the graph for final owning admission.
-let prepareWhenSourceAdmitted sourceAdmitted (graph: SemanticGraph) (curry: CurryInfo) =
+let private prepareWhenSourceAdmittedCore sourceAdmitted (graph: SemanticGraph) (curry: CurryInfo) =
     let realize = sourceAdmitted && graph.Platform.IsSome
     let prepared =
         if realize then SequenceFactoryResults.prepare graph curry
@@ -196,7 +196,10 @@ let prepareWhenSourceAdmitted sourceAdmitted (graph: SemanticGraph) (curry: Curr
     let graph = if prepared.Destinations.IsEmpty then prepared.Graph else SequenceEvaluation.normalize prepared.Graph
     { prepared with Graph = graph }
 
-let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactoryResults.Preparation) =
+let prepareWhenSourceAdmitted sourceAdmitted graph curry =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> prepareWhenSourceAdmittedCore sourceAdmitted graph curry)
+
+let private normalizePreparedWhenSourceAdmittedCore sourceAdmitted (prepared: SequenceFactoryResults.Preparation) =
     let timer = System.Diagnostics.Stopwatch.StartNew()
     let trace name =
         if System.Environment.GetEnvironmentVariable("CLEF_PHASE_TIMING") = "1" then
@@ -402,9 +405,16 @@ let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactor
             Storage = storage; Regions = regions; Initializers = initializers
             CurrentReads = currentReads; Destinations = prepared.Destinations; Curry = curry; Residences = residences; Diagnostics = diagnostics @ residenceDiagnostics @ currentDiagnostics }
 
+let normalizePreparedWhenSourceAdmitted sourceAdmitted (prepared: SequenceFactoryResults.Preparation) =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment prepared.Graph (fun () -> normalizePreparedWhenSourceAdmittedCore sourceAdmitted prepared)
+
+
 /// Standalone graph callers supply an already admitted source graph.
-let normalizeWhenSourceAdmitted sourceAdmitted graph curry =
+let private normalizeWhenSourceAdmittedCore sourceAdmitted graph curry =
     prepareWhenSourceAdmitted sourceAdmitted graph curry
     |> normalizePreparedWhenSourceAdmitted sourceAdmitted
+
+let normalizeWhenSourceAdmitted sourceAdmitted graph curry =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeWhenSourceAdmittedCore sourceAdmitted graph curry)
 
 let normalize graph curry = normalizeWhenSourceAdmitted true graph curry

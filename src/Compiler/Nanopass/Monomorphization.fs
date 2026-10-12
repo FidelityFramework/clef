@@ -598,7 +598,7 @@ let rec private specializeRecursiveComponents (nodes: Map<NodeId, SemanticNode>)
 type Result = { Nodes: Map<NodeId, SemanticNode>; Derivations: Hyperedge list }
 
 /// Run specialization and retain its applied derivations for initial F.
-let runWithEvidence (nodes: Map<NodeId, SemanticNode>) : Result =
+let private runWithEvidenceCore (nodes: Map<NodeId, SemanticNode>) : Result =
     // Preserve the checked binders and their actual implementation ownership.
     // Measures do not split native bodies, but their occurrence substitutions
     // remain source facts; erasing TForall must not erase that authority.
@@ -764,6 +764,10 @@ let runWithEvidence (nodes: Map<NodeId, SemanticNode>) : Result =
                     for id in collectSubtree current bindingId do
                         current <- current.Add(id, { current[id] with IsReachable = false; Metadata = current[id].Metadata.Add(SchemeMetadata.HistoricalOnly, MetadataValue.Bool true) })
     { Nodes = current; Derivations = evidence }
+
+let runWithEvidence nodes =
+  Clef.Compiler.CheckExecution.enrich (NodeId.withReservation (Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.maxNodeIdIn nodes [])) (fun () -> runWithEvidenceCore nodes)
+
 
 /// Compatibility for callers that only need the executable node rewrite.
 let run nodes = (runWithEvidence nodes).Nodes

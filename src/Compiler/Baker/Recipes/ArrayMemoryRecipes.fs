@@ -158,7 +158,7 @@ let private initializedBlock graph allocation output prefix actions block =
 
 /// No operation is admitted from a known subset of construction participants.
 /// Every allocation and copy receipt validates its complete executable recipe.
-let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection) (existing:(NodeId*MemoryWitnessOperation) list)
+let private settleCore (graph:SemanticGraph) (numeric:NumericWitnessProjection) (existing:(NodeId*MemoryWitnessOperation) list)
     : Enrichment * (NodeId*MemoryWitnessOperation) list * MemoryArrayCopyWitness list * Map<NodeId,string> * Set<NodeId> =
     let operations=Map.ofList existing
     let excluded=Memory.excluded graph
@@ -358,3 +358,6 @@ let settle (graph:SemanticGraph) (numeric:NumericWitnessProjection) (existing:(N
             failures<-Map.add node.Id "An array allocation lacks its source construction receipt." failures
         | _ -> ()
     enrichment,List.rev admitted,List.rev copies,failures,required
+
+let settle graph numeric existing =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> settleCore graph numeric existing)

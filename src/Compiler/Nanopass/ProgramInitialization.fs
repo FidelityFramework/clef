@@ -82,11 +82,19 @@ let private normalizeUsing select (orderedRoots: NodeId list) (graph: SemanticGr
     | _ -> graph, []
 
 /// Standalone source checking treats the supplied units as implementations.
-let normalize orderedRoots graph = normalizeUsing Selection.select orderedRoots graph
+let private normalizeCore orderedRoots graph = normalizeUsing Selection.select orderedRoots graph
+
+let normalize orderedRoots graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeCore orderedRoots graph)
+
 
 /// Project checking distinguishes owned implementation files from imported
 /// declaration context. Dependency activation is closed by the selection pass.
-let normalizeOwned ownedFiles orderedRoots graph = normalizeUsing (Selection.selectOwned ownedFiles) orderedRoots graph
+let private normalizeOwnedCore ownedFiles orderedRoots graph = normalizeUsing (Selection.selectOwned ownedFiles) orderedRoots graph
+
+let normalizeOwned ownedFiles orderedRoots graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeOwnedCore ownedFiles orderedRoots graph)
+
 
 /// Dynamic initialization uses the descriptor's writable program space even
 /// for a logically immutable source binding. Role authority does not discharge

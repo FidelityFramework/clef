@@ -11,6 +11,116 @@ let premises (graph: SemanticGraph) =
         if owned node || Boundaries.ownedNode node || node.Metadata.ContainsKey "Baker.MemoryPublicationOwned" || node.Metadata.ContainsKey "Baker.SpatialPublicationOwned" then values
         else Map.add id (Boundaries.premise node) values) Map.empty
 
+/// Capture admission depends on the exact incidence, including malformed and
+/// duplicate rows. Keep its empty census after the last capture is withdrawn.
+let captureRelations (graph: SemanticGraph) =
+  graph.Edges
+  |> List.choose (fun edge ->
+    match edge.Role with
+    | EdgeRole.EnvironmentCapture mutable' -> Some(edge.Class, mutable', edge.Ordinal, edge.Sources, edge.Target)
+    | _ -> None)
+  |> List.sort
+
+/// Range annotations are consequences of the producer's fixed point, not its
+/// source premises. Keep source type contracts and ordered shape references;
+/// Boundaries.premise already excludes derived obligation-anchor annotations.
+let rangeContextPremises (graph: SemanticGraph) =
+    premises graph
+    |> Map.map (fun _ premise -> { premise with Range = None })
+
+let private sourceRelation owner (edge: Hyperedge) : Result<SourceRangeRelation, string> =
+    let kind =
+        match edge.Role with
+        | EdgeRole.SequencePullComposition(label, budget) -> Ok(SourceRangeRelationKind.Composition(label, budget))
+        | EdgeRole.EvaluationOperand access -> Ok(SourceRangeRelationKind.EvaluationOperand access)
+        | EdgeRole.EvaluationFlow(before, after, transfer) -> Ok(SourceRangeRelationKind.EvaluationFlow(before, after, transfer))
+        | EdgeRole.EnvironmentCapture mutable' -> Ok(SourceRangeRelationKind.EnvironmentCapture mutable')
+        | EdgeRole.SequenceCaptureInitializer mutable' -> Ok(SourceRangeRelationKind.SequenceCaptureInitializer mutable')
+        | EdgeRole.ContinuationCase tag -> Ok(SourceRangeRelationKind.ContinuationCase tag)
+        | EdgeRole.SuspensionCut state -> Ok(SourceRangeRelationKind.SuspensionCut state)
+        | EdgeRole.SuspensionResume state -> Ok(SourceRangeRelationKind.SuspensionResume state)
+        | EdgeRole.SuspensionResumeAction state -> Ok(SourceRangeRelationKind.SuspensionResumeAction state)
+        | EdgeRole.EvaluationPending residual -> Ok(SourceRangeRelationKind.EvaluationPending residual)
+        | EdgeRole.EagerDemand frontier -> Ok(SourceRangeRelationKind.EagerDemand frontier)
+        | EdgeRole.LazyCapture mutable' -> Ok(SourceRangeRelationKind.LazyCapture mutable')
+        | EdgeRole.StringExtent extent -> Ok(SourceRangeRelationKind.StringExtent extent)
+        | EdgeRole.StringByteView view -> Ok(SourceRangeRelationKind.StringByteView view)
+        | EdgeRole.StringByteStorage(lo, hi, representation) -> Ok(SourceRangeRelationKind.StringByteStorage(lo, hi, representation))
+        | EdgeRole.StringByteRange(lo, hi) -> Ok(SourceRangeRelationKind.StringByteRange(lo, hi))
+        | EdgeRole.StringUtf8Constant bytes -> Ok(SourceRangeRelationKind.StringUtf8Constant bytes)
+        | EdgeRole.ArrayAllocationConstruction construction -> Ok(SourceRangeRelationKind.ArrayAllocationConstruction construction)
+        | EdgeRole.LoopInduction(ascending, inclusive) -> Ok(SourceRangeRelationKind.LoopInduction(ascending, inclusive))
+        | EdgeRole.LoopRangePending residual -> Ok(SourceRangeRelationKind.LoopRangePending residual)
+        | EdgeRole.OrdinaryBindingDemand evidence -> Ok(SourceRangeRelationKind.OrdinaryBindingDemand evidence)
+        | EdgeRole.OrdinaryBindingDemandPending(reason, evidence) -> Ok(SourceRangeRelationKind.OrdinaryBindingDemandPending(reason, evidence))
+        | EdgeRole.OrdinaryBindingDemandHistory evidence -> Ok(SourceRangeRelationKind.OrdinaryBindingDemandHistory evidence)
+        | EdgeRole.KernelIngress ingress -> Ok(SourceRangeRelationKind.KernelIngress ingress)
+        | role ->
+            let case, fields = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(role, typeof<EdgeRole>)
+            if fields.Length = 0 then Ok(SourceRangeRelationKind.Named case.Name)
+            else Error(owner + " incidence has an unsupported payload: " + case.Name + ".")
+    kind |> Result.map (fun kind ->
+        { Class = edge.Class; Kind = kind; Ordinal = edge.Ordinal; Sources = edge.Sources; Target = edge.Target })
+
+/// Range inputs include callable incidence, validated storage/demand protocols,
+/// and source byte/array facts. Preserve malformed rows, absence, duplicates and
+/// order: environment formal lookup uses first/last matching rows.
+let rangeContextRelations (graph: SemanticGraph) =
+    let publicationOwned id =
+        graph.Nodes.TryFind id |> Option.exists (fun node ->
+            owned node || Boundaries.ownedNode node || node.Metadata.ContainsKey "Baker.MemoryPublicationOwned" ||
+            node.Metadata.ContainsKey "Baker.SpatialPublicationOwned")
+    graph.Edges
+    |> List.filter (fun edge ->
+        let sourceRole =
+            match edge.Role with
+            | EdgeRole.EnvironmentFormal | EdgeRole.EnvironmentCapture _ | EdgeRole.EnvironmentInvocation
+            | EdgeRole.EnvironmentInitializer | EdgeRole.EnvironmentResultDestination | EdgeRole.EnvironmentResultCall
+            | EdgeRole.CaptureOrigin | EdgeRole.CaptureReferenceOrigin | EdgeRole.CallableReferenceOrigin
+            | EdgeRole.LazyInstance | EdgeRole.LazyCapture _ | EdgeRole.LazyMemoization
+            | EdgeRole.LazyResultDestination | EdgeRole.LazyResultCall | EdgeRole.LazyEffectRange
+            | EdgeRole.SequenceCaptureFormation | EdgeRole.SequenceCaptureInitializer _
+            | EdgeRole.ContinuationValue | EdgeRole.ContinuationSlotAccess
+            | EdgeRole.Delimiter | EdgeRole.SuspensionCut _ | EdgeRole.SuspensionResume _
+            | EdgeRole.SuspensionResumeAction _ | EdgeRole.SuspensionCompleted | EdgeRole.SuspensionLiveAcross
+            | EdgeRole.IteratorCurrentAdmitted | EdgeRole.SequenceElementAdmission | EdgeRole.SequenceElementOwner
+            | EdgeRole.SequenceElementPayload | EdgeRole.SequenceElementUnknown | EdgeRole.SequencePullBody
+            | EdgeRole.SequenceInitialize | EdgeRole.SequenceEffectUnknown | EdgeRole.SequenceTemplateCopy
+            | EdgeRole.SequencePullBound | EdgeRole.SequencePullComposition _ | EdgeRole.SequenceAccumulation
+            | EdgeRole.LoopInduction _ | EdgeRole.LoopAccumulation | EdgeRole.LoopLinearRecurrence | EdgeRole.LoopRangePending _
+            | EdgeRole.FiniteCellRange | EdgeRole.ProgramInitialization | EdgeRole.ProgramInitializer
+            | EdgeRole.ProgramEntryCall | EdgeRole.ProgramValueIntent | EdgeRole.ProgramActivationCall | EdgeRole.ProgramActivationCoverage
+            | EdgeRole.OrdinaryUnusedFormal | EdgeRole.OrdinaryUnusedActual | EdgeRole.OrdinaryInactiveImplementation
+            | EdgeRole.OrdinaryBindingDemand _ | EdgeRole.OrdinaryBindingDemandPending _ | EdgeRole.OrdinaryBindingDemandHistory _
+            | EdgeRole.EagerDemand _ | EdgeRole.EagerDemandPending
+            | EdgeRole.KernelIngress _
+            | EdgeRole.StringExtent _ | EdgeRole.StringByteView _ | EdgeRole.StringByteStorage _ | EdgeRole.StringByteRange _
+            | EdgeRole.StringByteRead | EdgeRole.StringByteSnapshot | EdgeRole.StringToBytesSnapshot
+            | EdgeRole.StringAscii | EdgeRole.StringUtf8Constant _ | EdgeRole.ArrayAllocationConstruction _ -> true
+            | _ -> false
+        sourceRole ||
+        (not (publicationOwned edge.Target) &&
+         (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference ||
+          edge.Class = EdgeClass.Evaluation || edge.Class = EdgeClass.Suspension || edge.Class = EdgeClass.Demand)))
+    |> List.fold (fun state edge ->
+        match state, sourceRelation "Invocation-context" edge with
+        | Ok rows, Ok row -> Ok(row :: rows)
+        | Error reason, _ | _, Error reason -> Error reason) (Ok [])
+    |> Result.map List.rev
+
+/// Compare producer evidence without rerunning RangeAnalysis or rebasing an
+/// old invocation solution onto the current source graph.
+let rangeContextCurrent (graph: SemanticGraph) (facts: RangeContextFacts) =
+    let relationsCurrent =
+        match facts.SourceRelations, rangeContextRelations graph with
+        | Ok expected, Ok current -> expected = current
+        | _ -> false
+    facts.Premises = rangeContextPremises graph &&
+    relationsCurrent &&
+    facts.CaptureRelations = captureRelations graph &&
+    facts.Platform = Boundaries.platformPremise graph.Platform &&
+    facts.Roots = graph.DeclarationRoots
+
 let sequenceRangeObligations (graph: SemanticGraph) =
     graph.Nodes |> Map.toList |> List.choose (fun (id, node) ->
         match node.Kind with
@@ -71,26 +181,8 @@ let private sequenceSnapshot (participants: Set<NodeId>) enumerators (graph: Sem
           | EdgeRole.SequenceElementPayload | EdgeRole.SequenceElementUnknown
           | EdgeRole.SequencePullBody | EdgeRole.SequenceInitialize | EdgeRole.SequenceEffectUnknown -> true
           | _ -> false))
-    let relation (edge: Hyperedge) : Result<SequenceRangeSourceRelation, string> =
-        let kind =
-            match edge.Role with
-            | EdgeRole.SequencePullComposition(label, budget) -> Ok(SequenceRangeRelationKind.Composition(label, budget))
-            | EdgeRole.EvaluationOperand access -> Ok(SequenceRangeRelationKind.EvaluationOperand access)
-            | EdgeRole.EvaluationFlow(before, after, transfer) -> Ok(SequenceRangeRelationKind.EvaluationFlow(before, after, transfer))
-            | EdgeRole.EnvironmentCapture mutable' -> Ok(SequenceRangeRelationKind.EnvironmentCapture mutable')
-            | EdgeRole.SequenceCaptureInitializer mutable' -> Ok(SequenceRangeRelationKind.SequenceCaptureInitializer mutable')
-            | EdgeRole.ContinuationCase tag -> Ok(SequenceRangeRelationKind.ContinuationCase tag)
-            | EdgeRole.SuspensionCut state -> Ok(SequenceRangeRelationKind.SuspensionCut state)
-            | EdgeRole.SuspensionResume state -> Ok(SequenceRangeRelationKind.SuspensionResume state)
-            | EdgeRole.SuspensionResumeAction state -> Ok(SequenceRangeRelationKind.SuspensionResumeAction state)
-            | role ->
-                let case, fields = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(role, typeof<EdgeRole>)
-                if fields.Length = 0 then Ok(SequenceRangeRelationKind.Named case.Name)
-                else Error("Finite-sequence incidence has an unsupported payload: " + case.Name + ".")
-        kind |> Result.map (fun kind ->
-            ({ Class = edge.Class; Kind = kind; Ordinal = edge.Ordinal; Sources = edge.Sources; Target = edge.Target } : SequenceRangeSourceRelation))
     graph.Edges |> List.filter selected |> List.fold (fun state edge ->
-        match state, relation edge with
+        match state, sourceRelation "Finite-sequence" edge with
         | Ok rows, Ok row -> Ok(row :: rows)
         | Error reason, _ | _, Error reason -> Error reason) (Ok [])
     |> Result.map (fun rows ->

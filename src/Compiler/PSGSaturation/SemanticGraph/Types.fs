@@ -985,8 +985,46 @@ type FiniteCellSourceRelation = {
     Target: NodeId
 }
 
+type ArrayBoundOperand = { Actual: NodeId; Binding: NodeId; Reference: NodeId }
+type ArrayRangeGuard = {
+    Requirement: NodeId; Predicate: NodeId; Frontier: NodeId; Continuation: NodeId
+    Count: NodeId; Offset: NodeId option; Buffer: NodeId option; Length: NodeId option
+    Zero: NodeId; NonnegativeCount: NodeId; NonnegativeOffset: NodeId option
+    End: NodeId option; Within: NodeId option
+}
+type ArrayInitializationConstruction = {
+    Buffer: NodeId; Index: NodeId; Initial: NodeId; Loop: NodeId; Guard: NodeId
+    Current: NodeId; Write: NodeId; Step: NodeId; Advance: NodeId
+}
+type ArrayAllocationConstruction = {
+    Site: NodeId; Owner: NodeId; Count: ArrayBoundOperand; Default: NodeId option
+    Initialization: ArrayInitializationConstruction option
+    Guard: ArrayRangeGuard; Participants: Set<NodeId>
+}
+
+/// These are source-declared topology/scheduling facts, not backend defaults.
+type KernelTransport = {
+    Declaration: NodeId
+    Representation: NumericRepresentation
+    Range: ValueRange
+}
+
+/// Source-declared external decoding domains, before ordinary range saturation.
+type KernelIngress = {
+    Site: NodeId; Scope: NodeId; Target: NodeId; Core: NodeId
+    ComputeBinding: NodeId; Implementation: NodeId
+    ComputePath: Set<NodeId>
+    Uses: Map<NodeId, BoundaryDeclarationFact>
+    Parameters: (string * NodeId) list; Result: NodeId
+    Inputs: KernelTransport list; Output: KernelTransport
+    Participants: Set<NodeId>
+    Premises: Map<NodeId, BoundaryDeclarationFact>
+    SourceFiles: Map<NodeId, string>
+    Platform: BoundaryPlatformPremise option
+}
+
 [<RequireQualifiedAccess>]
-type SequenceRangeRelationKind =
+type SourceRangeRelationKind =
     | Named of string
     | ContinuationCase of int
     | EnvironmentCapture of bool
@@ -997,10 +1035,25 @@ type SequenceRangeRelationKind =
     | Composition of sourceLabel: int * remainingPulls: bigint
     | EvaluationOperand of EvaluationAccess
     | EvaluationFlow of EvaluationPort * EvaluationPort * EvaluationTransfer
+    | EvaluationPending of EvaluationResidual
+    | EagerDemand of EagerFrontier
+    | LazyCapture of bool
+    | StringExtent of BoundaryStringExtent
+    | StringByteView of BoundaryByteView
+    | StringByteStorage of bigint * bigint * string
+    | StringByteRange of bigint * bigint
+    | StringUtf8Constant of byte list
+    | ArrayAllocationConstruction of ArrayAllocationConstruction
+    | LoopInduction of bool * bool
+    | LoopRangePending of LoopRangeResidual
+    | OrdinaryBindingDemand of BindingDemandEvidence
+    | OrdinaryBindingDemandPending of string * BindingDemandEvidence
+    | OrdinaryBindingDemandHistory of BindingDemandEvidence
+    | KernelIngress of KernelIngress
 
-type SequenceRangeSourceRelation = {
+type SourceRangeRelation = {
     Class: EdgeClass
-    Kind: SequenceRangeRelationKind
+    Kind: SourceRangeRelationKind
     Ordinal: int
     Sources: NodeId list
     Target: NodeId
@@ -1013,16 +1066,49 @@ type SequenceRangeAuthority = internal {
     Participants: Set<NodeId>
     Enumerators: Set<NodeId>
     Premises: Map<NodeId, BoundarySourcePremise>
-    Relations: SequenceRangeSourceRelation list
+    Relations: SourceRangeRelation list
     Obligations: (NodeId * ObligationInfo) list
+}
+
+/// RangeAnalysis owns both the shared enclosure and finite invocation contexts.
+/// The empty invocation is source-root execution, not the shared summary.
+[<RequireQualifiedAccess>]
+type RangeContext =
+    | Shared
+    | Invocation of NodeId list
+
+type RangeInvocationRow = {
+    Context: RangeContext
+    Caller: RangeContext
+    Call: NodeId
+    Target: NodeId
+    Body: NodeId
+    Arguments: (NodeId * NodeId) list
+}
+
+/// Producer-issued fixed-point facts and their joint source support. Numeric
+/// settlement may validate and retain this receipt, never reconstruct it.
+type RangeContextFacts = internal {
+    ContextDepth: int
+    Invocations: RangeInvocationRow list
+    Values: Map<RangeContext * NodeId, ValueRange>
+    Reads: Map<RangeContext * NodeId, Set<RangeContext * NodeId>>
+    Premises: Map<NodeId, BoundarySourcePremise>
+    SourceRelations: Result<SourceRangeRelation list, string>
+    CaptureRelations: (EdgeClass * bool * int * NodeId list * NodeId) list
+    Platform: BoundaryPlatformPremise option
+    Roots: (NodeId * DeclRoot) list
 }
 
 type NumericDomain = {
     RequiresSequenceReview: bool
     SequenceRangeAuthority: SequenceRangeAuthority option
+    RangeContextFacts: RangeContextFacts option
     RequiresFiniteCellReview: bool
     FiniteCellRelations: FiniteCellSourceRelation list option
     FiniteCellObligations: (NodeId * ObligationInfo) list
+    RequiresCaptureReview: bool
+    CaptureRelations: (EdgeClass * bool * int * NodeId list * NodeId) list
     Premises: Map<NodeId, BoundarySourcePremise>
     Platform: BoundaryPlatformPremise option
     Roots: (NodeId * DeclRoot) list
@@ -1103,22 +1189,6 @@ type MemoryArrayAllocationWitness = {
     Site: NodeId; Count: NodeId; CountCarrier: ScalarCarrier; IndexUnsigned: bool
     Element: SettledSlot; ElementBytes: int; Alignment: int; Residence: MemoryResidence
     MinimumCount: bigint; MaximumCount: bigint; Requirement: RequirementWitness; Participants: Set<NodeId>
-}
-type ArrayBoundOperand = { Actual: NodeId; Binding: NodeId; Reference: NodeId }
-type ArrayRangeGuard = {
-    Requirement: NodeId; Predicate: NodeId; Frontier: NodeId; Continuation: NodeId
-    Count: NodeId; Offset: NodeId option; Buffer: NodeId option; Length: NodeId option
-    Zero: NodeId; NonnegativeCount: NodeId; NonnegativeOffset: NodeId option
-    End: NodeId option; Within: NodeId option
-}
-type ArrayInitializationConstruction = {
-    Buffer: NodeId; Index: NodeId; Initial: NodeId; Loop: NodeId; Guard: NodeId
-    Current: NodeId; Write: NodeId; Step: NodeId; Advance: NodeId
-}
-type ArrayAllocationConstruction = {
-    Site: NodeId; Owner: NodeId; Count: ArrayBoundOperand; Default: NodeId option
-    Initialization: ArrayInitializationConstruction option
-    Guard: ArrayRangeGuard; Participants: Set<NodeId>
 }
 type ArrayCopyConstruction = {
     Site: NodeId; Source: ArrayBoundOperand; SourceOffset: ArrayBoundOperand
@@ -1262,27 +1332,6 @@ type KernelScalarStep =
     | Literal of site: NodeId * value: KernelScalarLiteral * carrier: ScalarCarrier
     | Alias of site: NodeId * source: NodeId * carrier: ScalarCarrier * adaptation: Meet option
     | Operation of NumericOperationWitness
-
-/// These are source-declared topology/scheduling facts, not backend defaults.
-type KernelTransport = {
-    Declaration: NodeId
-    Representation: NumericRepresentation
-    Range: ValueRange
-}
-
-/// Source-declared external decoding domains, before ordinary range saturation.
-type KernelIngress = {
-    Site: NodeId; Scope: NodeId; Target: NodeId; Core: NodeId
-    ComputeBinding: NodeId; Implementation: NodeId
-    ComputePath: Set<NodeId>
-    Uses: Map<NodeId, BoundaryDeclarationFact>
-    Parameters: (string * NodeId) list; Result: NodeId
-    Inputs: KernelTransport list; Output: KernelTransport
-    Participants: Set<NodeId>
-    Premises: Map<NodeId, BoundaryDeclarationFact>
-    SourceFiles: Map<NodeId, string>
-    Platform: BoundaryPlatformPremise option
-}
 
 type KernelTargetPlan = {
     Declaration: NodeId; Device: string; Columns: int
@@ -3515,6 +3564,8 @@ type SemanticGraph = {
     WitnessProvenance: WitnessProvenance option
     /// Source-owned finite-sequence proof transfer across continuation rewriting.
     SequenceRangeProvenance: SequenceRangeAuthority option
+    /// RangeAnalysis-issued invocation facts with their exact source premises.
+    RangeContextFacts: RangeContextFacts option
 }
 
 /// The retained source roots have no provenance of their own. Only the source

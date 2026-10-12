@@ -25,7 +25,7 @@ let recognize inputs (graph: SemanticGraph) =
     let graph = { graph with Nodes = nodes; Edges = edges; SequenceRangeProvenance = None }
     { graph with Edges = graph.Edges @ Recipes.relations recognized }, recognized
 
-let saturate range items (graph: SemanticGraph) =
+let private saturateCore range items (graph: SemanticGraph) =
     let enrichment = Recipes.obligations graph range items
     let anchors = enrichment.NewNodes |> List.choose (fun node ->
         match node.Kind with SemanticKind.Obligation info -> Some(node.Id, info.Id) | _ -> None) |> Map.ofList
@@ -44,3 +44,6 @@ let saturate range items (graph: SemanticGraph) =
             nodes.Add(id, { node with Metadata = node.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList(List.distinct (existing @ List.map snd names))) })) graph.Nodes
     { graph with Nodes = enrichment.NewNodes |> List.fold (fun nodes node -> Map.add node.Id node nodes) nodes
                  Edges = graph.Edges @ enrichment.NewEdges }
+
+let saturate range items graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> saturateCore range items graph)

@@ -22,7 +22,7 @@ let rec private elaborate (graph: SemanticGraph) =
         let folded = FoldIn.foldIn (FanOut.fanOut name (fun node -> node.Id = plan.Source.Id) create graph) graph
         elaborate { folded with Edges = result.Edges }
 
-let normalize (graph: SemanticGraph) =
+let private normalizeCore (graph: SemanticGraph) =
     let rewritten = elaborate graph
     // EnvironmentWrite replaces the former Set target with the actual
     // environment and value operands. Retain the old nodes and provenance,
@@ -30,3 +30,6 @@ let normalize (graph: SemanticGraph) =
     // Open library graphs have no executable roots authorizing that cut.
     if obj.ReferenceEquals(graph, rewritten) || rewritten.DeclarationRoots.IsEmpty then rewritten
     else Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable rewritten
+
+let normalize graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeCore graph)

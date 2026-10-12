@@ -12,7 +12,7 @@ module Carriers = Clef.Compiler.PSGSaturation.SemanticGraph.CallableCarriers
 module Flows = Clef.Compiler.PSGSaturation.SemanticGraph.CallableFlows
 module Recipe = Clef.Compiler.Baker.Recipes.CallableBranchRecipes
 
-let normalize (graph: SemanticGraph) =
+let private normalizeCore (graph: SemanticGraph) =
     // Logical branch selection does not erase either executable operand.
     // Physical families retain the conservative value transport; the recipe
     // below separately authors the refined logical branch/call authority.
@@ -42,3 +42,6 @@ let normalize (graph: SemanticGraph) =
     let graph = { graph with Codata = lazy codata }
     let authority = Recipe.settle graph
     { graph with Codata = lazy { codata with CallableBranches = authority } }, carrierResiduals, flowResiduals
+
+let normalize graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeCore graph)

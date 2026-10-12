@@ -13,7 +13,7 @@ let private bindingOf = function
         participants |> List.tryPick (fun p -> if p.Role = ParticipantRole.InitializationBinding && p.Group = p.Node then Some p.Node else None)
     | _ -> None
 
-let birth graph =
+let private birthCore graph =
     let held = graph.Edges |> List.choose (fun edge -> bindingOf edge.Role) |> Set.ofList
     Uses.bindings graph |> List.filter (held.Contains >> not)
     |> List.map (Recipe.birth graph) |> Enrichment.concat
@@ -22,6 +22,10 @@ let birth graph =
         // known before final read participants, which remain explicitly pending.
         { graph with Nodes = enrichment.NewNodes |> List.fold (fun nodes node -> Map.add node.Id node nodes) graph.Nodes
                      Edges = graph.Edges @ enrichment.NewEdges }
+
+let birth graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> birthCore graph)
+
 
 /// Return the current ordered accounts without forcing unfinished Codata.
 let settleWithAccounts graph =

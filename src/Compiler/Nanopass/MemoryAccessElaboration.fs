@@ -22,7 +22,10 @@ let rec private elaborate (graph: SemanticGraph) =
         let folded = FoldIn.foldIn (FanOut.fanOut name (fun node -> node.Id = source.Id) create graph) graph
         elaborate { folded with Edges = expansion.Edges }
 
-let normalize graph =
+let private normalizeCore graph =
     let result = elaborate graph
     if obj.ReferenceEquals(graph, result) || result.DeclarationRoots.IsEmpty then result
     else Clef.Compiler.PSGSaturation.SemanticGraph.Reachability.markUnreachable result
+
+let normalize graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeCore graph)

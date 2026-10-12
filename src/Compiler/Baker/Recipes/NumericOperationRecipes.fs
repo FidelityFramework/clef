@@ -45,7 +45,7 @@ let private integerSlot (graph: SemanticGraph) sourceCore joined minimumBits =
         SettledSlot.Integer(selected.Representation.Bits, Some selected.Representation.Name), Some selected.Representation, Some selected.Node
     | None -> raise (MissingOperation "The required operation has no selected source platform.")
 
-let settle (graph: SemanticGraph) anchor (values: Map<NodeId, ScalarCarrier>) (runtime: Set<NodeId>) =
+let private settleCore (graph: SemanticGraph) anchor (values: Map<NodeId, ScalarCarrier>) (runtime: Set<NodeId>) =
     let reading = PlatformResolution.read graph
     let core = if reading.Findings.IsEmpty then reading.Platform |> Option.bind _.Core else None
     let settleOne (node: SemanticNode) (callee: NodeId, kind: NumericOperationKind, actuals: NodeId list, identities: Set<NodeId>) =
@@ -160,3 +160,6 @@ let settle (graph: SemanticGraph) anchor (values: Map<NodeId, ScalarCarrier>) (r
                 Enrichment.combine enrichment added, operation :: operations, unresolved, required, ownProofs @ proofs
             with MissingOperation reason -> enrichment, operations, Map.add id reason unresolved, required, proofs)
         (Enrichment.empty, [], Map.empty, Set.empty, [])
+
+let settle graph anchor values runtime =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> settleCore graph anchor values runtime)

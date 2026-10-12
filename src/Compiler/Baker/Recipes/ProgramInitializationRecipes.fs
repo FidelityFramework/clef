@@ -16,7 +16,7 @@ module Facts = Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization
 type ExistingStartup = { Nodes: SemanticNode list; Binding: NodeId; Call: NodeId }
 type Expansion = { Nodes: SemanticNode list; Edges: Hyperedge list; EntryBinding: NodeId }
 
-let materialize (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) selected unitActivations (existing: ExistingStartup option) =
+let private materializeCore (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) selected unitActivations (existing: ExistingStartup option) =
     let parameters, sourceBody =
         match graph.Nodes[source.Children.Head].Kind with
         | SemanticKind.Lambda(parameters, body, [], _, LambdaContext.RegularClosure) -> parameters, body
@@ -97,3 +97,6 @@ let materialize (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) sel
         { Nodes = emitted; EntryBinding = entry
           Edges = edge EdgeRole.ProgramInitialization 0 [entry; source.Id; sourceLambda; sourceBody; activation] spine
                   :: edge EdgeRole.ProgramEntryCall 0 [entry; source.Id; sourceLambda; activation] call :: rows @ origins @ units }
+
+let materialize ctx graph source selected unitActivations existing =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> materializeCore ctx graph source selected unitActivations existing)

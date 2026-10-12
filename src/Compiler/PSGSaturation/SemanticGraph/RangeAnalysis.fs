@@ -12,7 +12,7 @@
 /// representation, `selectedWidth`, derived on read from the range and the platform's declaration)
 /// and is never stored beside it (Horizon C3).
 ///
-/// The pass is a least fixed point over an immutable `Map<NodeId, ValueRange>`: a transfer
+/// The pass is a least fixed point over immutable shared and invocation-context cells: a transfer
 /// function per node kind (§1.1 seeding, §1.2 propagation), iterated to a post-fixpoint with a
 /// widening operator whose thresholds are the declared integer representations' boundaries
 /// (numeric-selection.md §9.1; on fabric, which declares none, an endpoint that keeps growing goes
@@ -134,6 +134,8 @@ type private Program = {
     Parents: Map<NodeId, NodeId>
     /// An application node -> what it calls and its whole argument list (curried calls flattened).
     Callees: Map<NodeId, Callee * NodeId list>
+    /// Complete ordinary applications keep each alternative's actual correspondence.
+    Applications: Map<NodeId, CallableOrigins.CallTarget list>
     Effects: Map<NodeId, WriteEffect>
     LoopRecognition: LoopRecipes.Recognition
     LoopAccumulations: Map<NodeId, LoopRecipes.Accumulation>
@@ -1276,6 +1278,24 @@ let private continuationSources (ingress: Lazy<CallableIngress.Reading>) (unacco
         |> Map.ofList
     ranges, cells, writes
 
+/// An occurrence can specialize only suppliers already represented by the
+/// shared formal enclosure. CallableOrigins remains the boundary authority.
+let internal completeApplications
+  (reachable: Map<NodeId, SemanticNode>)
+  (inactiveCalls: Set<NodeId>)
+  (callArguments: Map<NodeId, (NodeId * NodeId) list>)
+  (calls: Map<NodeId, CallableOrigins.ResolvedCall>) =
+  calls
+  |> Map.filter (fun id call ->
+    not (inactiveCalls.Contains id) && reachable.ContainsKey id &&
+    call.Complete && not call.Unknown && not call.Targets.IsEmpty &&
+    (call.Targets |> List.forall (fun target ->
+      target.Parameters.Length = target.Arguments.Length &&
+      List.forall2 (fun (_, _, formal) actual ->
+        callArguments.TryFind formal
+        |> Option.exists (List.contains (id, actual))) target.Parameters target.Arguments)))
+  |> Map.map (fun _ call -> call.Targets)
+
 let private readProgram (context: PlatformContext option) (graph: SemanticGraph) : Program =
     let reachableNodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let ordered = reachableNodes |> Map.toList |> List.map snd
@@ -1323,6 +1343,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         CommitmentSites = reachableNodes.Keys |> Set.ofSeq |> fun sites -> Set.difference sites deferred
         Parents = parents
         Callees = Map.empty
+        Applications = Map.empty
         Effects = Map.empty
         LoopRecognition = { Accumulations = []; Linear = []; Edges = [] }
         SequenceAccumulations = []
@@ -1792,6 +1813,7 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
     let program =
         { baseProgram with
             Callees = callees
+            Applications = completeApplications reachableNodes inactiveCalls callArguments callableFlow.Calls
             CallArguments = callArguments
             IndexSeeds = indexSeeds
             Escaping = escaping
@@ -1847,7 +1869,9 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
         |> List.groupBy fst
         |> List.map (fun (read, rows) -> read, rows |> List.map snd |> List.distinct)
         |> Map.ofList
-    { program with Refinements = refinementsOf program; ContinuationRefinements = continuationRefinements }
+    { program with
+        Refinements = refinementsOf program
+        ContinuationRefinements = continuationRefinements }
 
 //-------------------------------------------------------------------------
 // The transfer function
@@ -1855,34 +1879,54 @@ let private readProgram (context: PlatformContext option) (graph: SemanticGraph)
 
 type private State = Map<NodeId, ValueRange>
 
+type private Reading = NodeId -> ValueRange
+
+/// Retain the source invocation, callback site and generated adapter call.
+/// Longer histories merge in this finite space under the owning fixed point.
+let [<Literal>] private InvocationContextDepth = 3
+
+type private ContextProgram = {
+    Invocations: RangeInvocationRow list
+    Members: Map<RangeContext, Set<NodeId>>
+    Parameters: Map<RangeContext * NodeId, (RangeContext * NodeId * NodeId) list>
+    Calls: Map<RangeContext * NodeId, RangeInvocationRow list>
+    Occurrences: Map<NodeId, RangeContext list>
+    Coordinates: (RangeContext * SemanticNode) list
+}
+
+type private ContextState = {
+    Values: Map<RangeContext * NodeId, ValueRange>
+    Reads: Map<RangeContext * NodeId, Set<RangeContext * NodeId>>
+}
+
 /// The range a node has so far; a node not yet computed contributes nothing (the least element).
 let private current (state: State) (id: NodeId) : ValueRange =
     Map.tryFind id state |> Option.defaultValue ValueRange.Empty
 
 /// The range a bound reads: one node's, or the interval difference or sum of two nodes'.
-let private currentBound (state: State) (bound: Bound) : ValueRange =
+let private currentBound (value: Reading) (bound: Bound) : ValueRange =
     match bound with
-    | Bound.Of id -> current state id
-    | Bound.Diff (a, b) -> ValueRange.sub (current state a) (current state b)
-    | Bound.Sum (a, b) -> ValueRange.add (current state a) (current state b)
+    | Bound.Of id -> value id
+    | Bound.Diff (a, b) -> ValueRange.sub (value a) (value b)
+    | Bound.Sum (a, b) -> ValueRange.add (value a) (value b)
 
 /// A range met with every bound of a use edge.
-let private refineBy (state: State) (refs: Refinement list) (r: ValueRange) : ValueRange =
-    refs |> List.fold (fun acc x -> refine acc x.Relation (currentBound state x.Bound)) r
+let private refineBy (value: Reading) (refs: Refinement list) (r: ValueRange) : ValueRange =
+    refs |> List.fold (fun acc x -> refine acc x.Relation (currentBound value x.Bound)) r
 
 /// What `consumer` reads of `operand`: the operand's range met with the bounds in force on that
 /// use edge (a read inside a guarded branch).
-let private read (program: Program) (state: State) (consumer: NodeId) (operand: NodeId) : ValueRange =
+let private read (program: Program) (value: Reading) (consumer: NodeId) (operand: NodeId) : ValueRange =
     match Map.tryFind consumer program.Refinements |> Option.bind (Map.tryFind operand) with
-    | Some refs -> refineBy state refs (current state operand)
-    | None -> current state operand
+    | Some refs -> refineBy value refs (value operand)
+    | None -> value operand
 
 /// The range of a record field (`FieldRanges` in the making): the declared range where a
 /// descriptor declares one that is observable (the declaration binds, §4.4; a construction whose
 /// value leaves it is witnessed by CCS8012, never merged), else the join of the field over the
 /// type's reachable constructions and the seed a hardware design's pin carries; the empty range
 /// where nothing constructs it and nothing declares it.
-let private fieldRange (program: Program) (state: State) (typeName: NominalTypeIdentity) (field: string) : ValueRange =
+let private fieldRange (program: Program) (value: Reading) (typeName: NominalTypeIdentity) (field: string) : ValueRange =
     let declared =
         Map.tryFind typeName program.InputSeeds
         |> Option.bind (Map.tryFind field)
@@ -1894,7 +1938,7 @@ let private fieldRange (program: Program) (state: State) (typeName: NominalTypeI
         |> List.fold (fun acc (recordId, fields) ->
             fields
             |> List.filter (fun (name, _) -> name = field)
-            |> List.fold (fun acc (_, valueId) -> ValueRange.join acc (read program state recordId valueId)) acc) (declared |> Option.defaultValue ValueRange.Empty)
+            |> List.fold (fun acc (_, valueId) -> ValueRange.join acc (read program value recordId valueId)) acc) (declared |> Option.defaultValue ValueRange.Empty)
 
 /// The interim declared boundary of a width-named carrier (§1.1 last bullet; `RangeSources`
 /// source 2): a source node whose carrier names a declared representation (a parameter nothing
@@ -1932,7 +1976,7 @@ let private isSource (program: Program) (node: SemanticNode) : bool =
 /// CS-12); otherwise the join of every value stored into such an array and its constant seeds, an
 /// array handed to a boundary call recording an unbounded store (`ElementStores`); a type nothing
 /// reachable stores into came from a source the pass did not see, and is unobservable.
-let private elementRange (program: Program) (state: State) (elem: NativeType) : ValueRange =
+let private elementRange (program: Program) (value: Reading) (elem: NativeType) : ValueRange =
     match Types.tryGetNTUKind elem |> Option.bind (RangeSources.declaredRangeOfKind program.Context) with
     | Some declared -> declared
     | None ->
@@ -1943,7 +1987,7 @@ let private elementRange (program: Program) (state: State) (elem: NativeType) : 
         | [], None -> ValueRange.Unbounded
         | _ ->
             stores
-            |> List.fold (fun acc (storer, valueId) -> ValueRange.join acc (read program state storer valueId))
+            |> List.fold (fun acc (storer, valueId) -> ValueRange.join acc (read program value storer valueId))
                          (seed |> Option.defaultValue ValueRange.Empty)
 
 /// `[0, n - 1]` for an index below `n`.
@@ -2032,12 +2076,12 @@ let private immutableRecordField (program: Program) recordId field =
 /// Projection paths compose: extracting a tuple slot from a DU payload first selects the
 /// union payload, then the slot. Tags never stand in for payload values. Opaque alternatives
 /// and recursive aggregate origins remain unbounded rather than disappearing from a join.
-let rec private aggregateElement (program: Program) (state: State) (visited: Set<NodeId>) (exprId: NodeId) (path: AggregateProjection list) : ValueRange =
-    if List.isEmpty path then current state exprId
+let rec private aggregateElement (program: Program) (value: Reading) (visited: Set<NodeId>) (exprId: NodeId) (path: AggregateProjection list) : ValueRange =
+    if List.isEmpty path then value exprId
     elif Set.contains exprId visited then ValueRange.Unbounded
     else
         let visited = Set.add exprId visited
-        let project id path = aggregateElement program state visited id path
+        let project id path = aggregateElement program value visited id path
         let recurse id = project id path
         let joinAll (ids: NodeId list) = ids |> List.fold (fun acc id -> ValueRange.join acc (recurse id)) ValueRange.Empty
         match Map.tryFind exprId program.Reachable with
@@ -2127,15 +2171,15 @@ let rec private aggregateElement (program: Program) (state: State) (visited: Set
             | _ -> ValueRange.Unbounded
 
 /// The range an application computes: the table's fact for an intrinsic (`RangeSources`), the
-/// element range for an element read, a named lambda's body for a call of it, the join of every
-/// candidate's body for a call through a function value; a call the pass cannot resolve, and an
-/// intrinsic result the table does not hold, is unobservable here.
-let private applicationRange (program: Program) (state: State) (node: SemanticNode) (fallback: ValueRange) : ValueRange =
+/// element range for an element read, or every complete target's contextual
+/// body fact. Other established calls retain shared body
+/// enclosures; unresolved calls and untabled intrinsics remain unobservable.
+let private applicationRange (program: Program) (shared: Reading) (value: Reading) (application: NodeId -> ValueRange option) (node: SemanticNode) (fallback: ValueRange) : ValueRange =
     match Map.tryFind node.Id program.Callees with
     | Some (Callee.Intrinsic { Module = IntrinsicModule.SeqEnumerator; Operation = "current" }, [iterator]) ->
         match program.SequenceElements.TryFind node.Id with
         | Some (actual, payloads) when actual = iterator ->
-            payloads |> List.fold (fun range (writer, payload) -> ValueRange.join range (read program state writer payload)) ValueRange.Empty
+            payloads |> List.fold (fun range (writer, payload) -> ValueRange.join range (read program shared writer payload)) ValueRange.Empty
         | _ -> fallback
     | Some (Callee.Intrinsic info, args) ->
         let arguments =
@@ -2143,7 +2187,7 @@ let private applicationRange (program: Program) (state: State) (node: SemanticNo
             |> List.map (fun a ->
                 match Map.tryFind a program.Reachable with
                 | Some an ->
-                    { RangeSources.Argument.Range = (if isRanged an then read program state node.Id a else ValueRange.Unbounded)
+                    { RangeSources.Argument.Range = (if isRanged an then read program value node.Id a else ValueRange.Unbounded)
                       RangeSources.Argument.Type = an.Type
                       RangeSources.Argument.Literal = (match an.Kind with SemanticKind.Literal l -> Some l | _ -> None) }
                 | None -> { RangeSources.Argument.Range = ValueRange.Unbounded; RangeSources.Argument.Type = NativeType.TError "unreachable"; RangeSources.Argument.Literal = None })
@@ -2151,20 +2195,22 @@ let private applicationRange (program: Program) (state: State) (node: SemanticNo
         | RangeSources.Result.Fact r -> r
         | RangeSources.Result.ElementOf i ->
             match List.tryItem i arguments |> Option.bind (fun a -> arrayElementType a.Type) with
-            | Some elem -> elementRange program state elem
+            | Some elem -> elementRange program shared elem
             | None -> fallback
         | RangeSources.Result.Untabled -> fallback
-    | Some (Callee.Direct (_, bodyId), _) -> current state bodyId
+    | _ when program.Applications.ContainsKey node.Id ->
+        application node.Id |> Option.defaultValue fallback
+    | Some (Callee.Direct (_, bodyId), _) -> shared bodyId
     | Some (Callee.Value (candidates, false), _) when not (List.isEmpty candidates) ->
-        candidates |> List.fold (fun acc c -> ValueRange.join acc (current state c.Body)) ValueRange.Empty
+        candidates |> List.fold (fun acc c -> ValueRange.join acc (shared c.Body)) ValueRange.Empty
     | _ -> fallback
 
 /// The transfer function: the range of one node from the ranges of the nodes it reads. `None` for
 /// a node that is not ranged (not an integer, boolean or char), except that a union tag is a point
 /// and a tag read is `[0, cases - 1]`. An integer node's unobservable transfer is met with its
 /// width-named carrier's declared range, where it has one (`boundByCarrier`).
-let private transfer (program: Program) (state: State) (node: SemanticNode) : ValueRange option =
-    let get = read program state node.Id
+let private transfer (program: Program) (shared: Reading) (value: Reading) (application: NodeId -> ValueRange option) (node: SemanticNode) : ValueRange option =
+    let get = read program value node.Id
     let ranged = isRanged node
     // what an integer node with no rule is; a boolean or a char is bounded by its type
     let fallback =
@@ -2188,20 +2234,20 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
                 let value =
                     match source with
                     | Clef.Compiler.Baker.Ingredients.ArrayShapes.Length.Constant value -> ValueRange.point value
-                    | Clef.Compiler.Baker.Ingredients.ArrayShapes.Length.Count count -> current state count
+                    | Clef.Compiler.Baker.Ingredients.ArrayShapes.Length.Count count -> shared count
                 ValueRange.join range value) ValueRange.Empty |> Some
         // a node a binding descriptor declares (an extern's parameter, its result): the declaration binds
         | _ when Map.containsKey node.Id program.BoundarySeeds -> Map.tryFind node.Id program.BoundarySeeds
         | _ when program.LazyResults.ContainsKey node.Id ->
             // Read the thunk's whole result enclosure. A guard on a mutable
             // capture at this later force cannot refine an earlier cached value.
-            Some (current state program.LazyResults[node.Id])
+            Some (shared program.LazyResults[node.Id])
         | SemanticKind.Literal (NativeLiteral.Int (v, _)) -> Some (ValueRange.point (bigint v))
         | SemanticKind.Literal (NativeLiteral.UInt (v, _)) -> Some (ValueRange.point (bigint v))
         | SemanticKind.Literal (NativeLiteral.Bool _) -> Some ValueRange.boolean
         | SemanticKind.Literal (NativeLiteral.Char c) -> Some (ValueRange.point (bigint (int c)))
         | SemanticKind.Literal _ -> Some fallback
-        | SemanticKind.Application _ -> Some (applicationRange program state node fallback)
+        | SemanticKind.Application _ -> Some (applicationRange program shared value application node fallback)
         | SemanticKind.VarRef (_, Some defId) -> Some (get defId)
         | SemanticKind.VarRef (_, None) -> Some fallback
         | SemanticKind.EnvironmentRead(_, slot) ->
@@ -2209,7 +2255,7 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
             | Some (true, _) when program.Reachable.ContainsKey slot -> Some (get slot)
             | Some (false, initializers) ->
                 initializers |> List.fold (fun range (formation, value) ->
-                    let valueRange = if program.Reachable.ContainsKey value then read program state formation value else fallback
+                    let valueRange = if program.Reachable.ContainsKey value then read program shared formation value else fallback
                     ValueRange.join range valueRange) ValueRange.Empty |> Some
             | _ -> Some fallback
         | SemanticKind.FrameRead _ ->
@@ -2218,15 +2264,15 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
                 | Some cell, _ -> get cell
                 | None, Some(initial, inputs) ->
                     inputs |> List.fold (fun range (writer, value) ->
-                        ValueRange.join range (read program state writer value)) initial
+                        ValueRange.join range (read program shared writer value)) initial
                 | None, None -> fallback
             let refinements = program.ContinuationRefinements.TryFind node.Id |> Option.defaultValue []
-            Some (refineBy state refinements value)
+            Some (refineBy shared refinements value)
         | SemanticKind.LazyRead _ ->
             match program.LazyCaptures.TryFind node.Id with
             | Some(slot, true, _, _) when program.Reachable.ContainsKey slot -> Some (get slot)
             | Some(_, false, formation, value) when program.Reachable.ContainsKey value ->
-                Some (read program state formation value)
+                Some (read program shared formation value)
             | _ -> Some fallback
         | SemanticKind.PatternBinding _ when Set.contains node.Id program.Parameters ->
             // a parameter is the join of the arguments at every call that supplies it, directly or
@@ -2238,8 +2284,8 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
             if program.InactiveFormals.Contains node.Id then Some ValueRange.Empty
             elif List.isEmpty supplied && List.isEmpty seeded then Some fallback
             else
-                let fromCalls = supplied |> List.fold (fun acc (callId, a) -> ValueRange.join acc (read program state callId a)) ValueRange.Empty
-                Some (seeded |> List.fold (fun acc (callId, nId) -> ValueRange.join acc (indexBelow (read program state callId nId))) fromCalls)
+                let fromCalls = supplied |> List.fold (fun acc (callId, a) -> ValueRange.join acc (read program shared callId a)) ValueRange.Empty
+                Some (seeded |> List.fold (fun acc (callId, nId) -> ValueRange.join acc (indexBelow (read program shared callId nId))) fromCalls)
         | SemanticKind.PatternBinding _ ->
             match List.tryLast node.Children with
             | Some valueId -> Some (get valueId)
@@ -2265,6 +2311,8 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
             Some (cases |> List.fold (fun acc c -> ValueRange.join acc (get c.Body)) ValueRange.Empty)
         | SemanticKind.CaseElimination (_, arms) ->
             Some (arms |> List.fold (fun acc a -> ValueRange.join acc (get a.Body)) ValueRange.Empty)
+        | SemanticKind.ContinuationDispatch (_, cases, otherwise) ->
+            Some (cases |> List.fold (fun range (_, body) -> ValueRange.join range (get body)) (get otherwise))
         | SemanticKind.TypeAnnotation (inner, _)
         | SemanticKind.EagerExpr inner
         | SemanticKind.Upcast (inner, _)
@@ -2272,37 +2320,37 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
         | SemanticKind.FieldGet (exprId, field) ->
             match Map.tryFind exprId program.Reachable with
             | Some { Type = NativeType.TApp (tycon, _) } when Map.containsKey (NominalTypeIdentity.ofConstructor tycon) program.Constructions || Map.containsKey (NominalTypeIdentity.ofConstructor tycon) program.InputSeeds ->
-                Some (fieldRange program state (NominalTypeIdentity.ofConstructor tycon) field)
+                Some (fieldRange program shared (NominalTypeIdentity.ofConstructor tycon) field)
             // A read of a field of a record type nothing reachable constructs and nothing declares
             // came from a source the pass did not see: unobservable (CCS8011), never a fabricated width.
             // (`Empty` remains right for FieldRanges of a field nothing reads.)
             | _ -> Some fallback
-        | SemanticKind.TupleGet (tupleId, index) -> Some (aggregateElement program state Set.empty tupleId [TupleSlot index])
+        | SemanticKind.TupleGet (tupleId, index) -> Some (aggregateElement program shared Set.empty tupleId [TupleSlot index])
         | SemanticKind.DUEliminate (value, tag, name, _) when isRanged node ->
-            Some (aggregateElement program state Set.empty value [UnionPayload(tag, name)])
+            Some (aggregateElement program shared Set.empty value [UnionPayload(tag, name)])
         | SemanticKind.IndexGet (exprId, _) ->
             match Map.tryFind exprId program.Reachable |> Option.map (fun n -> n.Type) |> Option.bind arrayElementType with
-            | Some elem -> Some (elementRange program state elem)
+            | Some elem -> Some (elementRange program shared elem)
             | None -> Some fallback
         | _ -> Some fallback
     let computed =
         match computed, program.LoopAccumulations.TryFind node.Id with
         | Some range, Some recurrence ->
-            match LoopRecipes.saturate (current state) recurrence with
+            match LoopRecipes.saturate shared recurrence with
             | Result.Ok result -> Some(ValueRange.meet range (ValueRange.Bounded(result.Invariant.Lower, result.Invariant.Upper)))
             | Result.Error _ -> Some range
         | _ -> computed
     let computed =
         match computed, program.SequenceAccumulationTargets.TryFind node.Id with
         | Some range, Some recurrence ->
-            match SequenceAccumulation.saturate (current state) recurrence with
+            match SequenceAccumulation.saturate shared recurrence with
             | Some invariant -> Some(ValueRange.meet range (ValueRange.Bounded(invariant.Lower, invariant.Upper)))
             | None -> Some range
         | _ -> computed
     let computed =
         match computed, program.LoopLinear.TryFind node.Id with
         | Some range, Some(recurrence, index) ->
-            match LoopRecipes.saturateLinear (current state) recurrence with
+            match LoopRecipes.saturateLinear shared recurrence with
             | Result.Ok result ->
                 Some(ValueRange.meet range (ValueRange.Bounded(result.Invariant.Lower[index], result.Invariant.Upper[index])))
             | Result.Error _ -> Some range
@@ -2315,6 +2363,143 @@ let private transfer (program: Program) (state: State) (node: SemanticNode) : Va
         Some(ValueRange.meet range (ValueRange.Bounded(bound.Lower, bound.Upper)))
     | Some r when isIntegerNode node && isSource program node -> Some (boundByCarrier program node r)
     | other -> other
+
+/// Contextual facts admit scalar transfers explicitly. Storage, recurrence and
+/// unfamiliar source kinds remain observations of the shared owning analysis.
+let private contextualNode (program: Program) (node: SemanticNode) =
+    let sharedOwner =
+        program.ArrayLengths.ContainsKey node.Id || program.BoundarySeeds.ContainsKey node.Id ||
+        program.LazyResults.ContainsKey node.Id || program.LoopAccumulations.ContainsKey node.Id ||
+        program.LoopLinear.ContainsKey node.Id || program.SequenceAccumulationTargets.ContainsKey node.Id ||
+        program.FiniteCells.ContainsKey node.Id || program.LazyEffects.ContainsKey node.Id
+    if sharedOwner || not (isRanged node) then false
+    else
+        match node.Kind with
+        | SemanticKind.Literal (NativeLiteral.Int _ | NativeLiteral.UInt _ | NativeLiteral.Bool _ | NativeLiteral.Char _)
+        | SemanticKind.VarRef _ | SemanticKind.PatternBinding _
+        | SemanticKind.Binding (_, false, _, _) | SemanticKind.Sequential _
+        | SemanticKind.IfThenElse _ | SemanticKind.Match _ | SemanticKind.CaseElimination _
+        | SemanticKind.TypeAnnotation _ | SemanticKind.EagerExpr _
+        | SemanticKind.Upcast _ | SemanticKind.Downcast _ -> true
+        | SemanticKind.Application _ when program.Applications.ContainsKey node.Id -> true
+        | SemanticKind.Application _ ->
+            match program.Callees.TryFind node.Id with
+            | Some(Callee.Intrinsic info, arguments) ->
+                let arguments = arguments |> List.map (fun id ->
+                    match program.Reachable.TryFind id with
+                    | Some node ->
+                        { RangeSources.Argument.Range = ValueRange.Unbounded
+                          RangeSources.Argument.Type = node.Type
+                          RangeSources.Argument.Literal = match node.Kind with SemanticKind.Literal literal -> Some literal | _ -> None }
+                    | None ->
+                        { RangeSources.Argument.Range = ValueRange.Unbounded
+                          RangeSources.Argument.Type = NativeType.TError "unreachable"
+                          RangeSources.Argument.Literal = None })
+                match RangeSources.contextualIntrinsic program.Context info arguments with
+                | RangeSources.Result.Fact _ -> true
+                | _ -> false
+            | _ -> false
+        | _ -> false
+
+/// A lexical body supplies occurrence context, never proof of activation or a
+/// dependency region. CallableOrigins supplies invocation rows, and every fact
+/// retains its actual reads. Nested lambda definitions do not activate bodies.
+let private contextProgram (program: Program) =
+    let rec bodyOccurrences seen id =
+        if Set.contains id seen then seen
+        else
+            let seen = Set.add id seen
+            match program.Reachable.TryFind id with
+            | Some { Kind = SemanticKind.Lambda _ } | None -> seen
+            | Some node -> List.fold bodyOccurrences seen node.Children
+    let targets = program.Applications.Values |> Seq.collect id |> Seq.distinctBy _.Lambda |> Seq.toList
+    let fullParameters (target: CallableOrigins.CallTarget) =
+        match program.Reachable.TryFind target.Lambda with
+        | Some { Kind = SemanticKind.Lambda (parameters, _, _, _, _) } -> parameters |> List.map (fun (_, _, id) -> id)
+        | _ -> target.Parameters |> List.map (fun (_, _, id) -> id)
+    let bodies = targets |> List.map (fun target ->
+        target.Lambda, Set.union (bodyOccurrences Set.empty target.Body) (fullParameters target |> Set.ofList)) |> Map.ofList
+    let owned = bodies.Values |> Seq.fold Set.union Set.empty
+    let rootMembers = Set.difference (program.Reachable.Keys |> Set.ofSeq) owned
+    // Intrinsic-owned suppliers and declared ingress remain shared sources.
+    // They do not acquire invented ordinary argument correspondence.
+    let rootMembers = targets |> List.fold (fun members target ->
+        let hasOtherIngress = fullParameters target |> List.exists (fun parameter ->
+            program.RootParameters.ContainsKey parameter || program.IndexSeeds.ContainsKey parameter ||
+            (program.CallArguments.TryFind parameter |> Option.defaultValue []
+             |> List.exists (fun (call, _) -> not (program.Applications.ContainsKey call))))
+        if hasOtherIngress then Set.union members bodies[target.Lambda] else members) rootMembers
+    let root = RangeContext.Invocation []
+    let childContext parent call =
+        let sites = match parent with RangeContext.Invocation sites -> sites | RangeContext.Shared -> []
+        let sites = sites @ [call]
+        RangeContext.Invocation (sites |> List.skip (max 0 (sites.Length - InvocationContextDepth)))
+    let rec discover (members: Map<RangeContext, Set<NodeId>>) (rows: Set<RangeInvocationRow>) pending =
+        match pending with
+        | [] -> members, rows
+        | parent :: rest ->
+            let additions =
+                members[parent]
+                |> Seq.collect (fun call ->
+                    program.Applications.TryFind call |> Option.defaultValue [] |> List.map (fun target ->
+                        { RangeInvocationRow.Context = childContext parent call
+                          Caller = parent; Call = call; Target = target.Lambda; Body = target.Body
+                          Arguments = List.zip (target.Parameters |> List.map (fun (_, _, id) -> id)) target.Arguments }))
+                |> Set.ofSeq |> fun found -> Set.difference found rows
+            let members, changed = additions |> Set.fold (fun (members, changed) row ->
+                let previous = Map.tryFind row.Context members |> Option.defaultValue Set.empty
+                let next = Set.union previous bodies[row.Target]
+                if next = previous then members, changed
+                else Map.add row.Context next members, Set.add row.Context changed) (members, Set.empty)
+            discover members (Set.union rows additions) (rest @ Set.toList changed)
+    let members, rows = discover (Map.ofList [root, rootMembers]) Set.empty [root]
+    let rows = Set.toList rows
+    let parameters =
+        rows |> List.collect (fun row ->
+            row.Arguments |> List.map (fun (formal, actual) -> (row.Context, formal), (row.Caller, row.Call, actual)))
+        |> List.groupBy fst |> List.map (fun (key, inputs) -> key, inputs |> List.map snd |> List.distinct) |> Map.ofList
+    let members = members |> Map.map (fun context nodes -> nodes |> Set.filter (fun id ->
+        contextualNode program program.Reachable[id] &&
+        (not (program.Parameters.Contains id) || parameters.ContainsKey (context, id))))
+    let occurrences = members |> Map.toList |> List.collect (fun (context, nodes) -> nodes |> Set.toList |> List.map (fun id -> id, context))
+                      |> List.groupBy fst |> List.map (fun (id, entries) -> id, entries |> List.map snd) |> Map.ofList
+    let coordinates =
+        (program.Ordered |> List.map (fun node -> RangeContext.Shared, node)) @
+        (members |> Map.toList |> List.collect (fun (context, nodes) ->
+            program.Ordered |> List.choose (fun node -> if nodes.Contains node.Id then Some(context, node) else None)))
+    { Invocations = rows; Members = members; Parameters = parameters
+      Calls = rows |> List.groupBy (fun row -> row.Caller, row.Call) |> Map.ofList
+      Occurrences = occurrences; Coordinates = coordinates }
+
+/// Every transfer reads already-issued state cells. No reader calls transfer;
+/// context cycles therefore have the same convergence owner as shared facts.
+let private evaluate (program: Program) (contexts: ContextProgram) (state: ContextState) context (node: SemanticNode) =
+    let mutable reads = Set.empty
+    let get key =
+        reads <- Set.add key reads
+        state.Values.TryFind key |> Option.defaultValue ValueRange.Empty
+    let shared id = get (RangeContext.Shared, id)
+    let reading context id =
+        if context <> RangeContext.Shared &&
+           (contexts.Members.TryFind context |> Option.exists (Set.contains id)) then get (context, id)
+        else shared id
+    let application context call =
+        contexts.Calls.TryFind (context, call) |> Option.map (fun rows ->
+            rows |> List.fold (fun range row -> ValueRange.join range (reading row.Context row.Body)) ValueRange.Empty)
+    let computed =
+        match context with
+        | RangeContext.Shared when program.Applications.ContainsKey node.Id ->
+            match contexts.Occurrences.TryFind node.Id with
+            | Some occurrences -> Some(occurrences |> List.fold (fun range context -> ValueRange.join range (get (context, node.Id))) ValueRange.Empty)
+            | None -> transfer program shared shared (application context) node
+        | RangeContext.Shared -> transfer program shared shared (application context) node
+        | _ ->
+            match contexts.Parameters.TryFind (context, node.Id) with
+            | Some inputs ->
+                inputs |> List.fold (fun range (caller, call, actual) ->
+                    ValueRange.join range (read program (reading caller) call actual)) ValueRange.Empty |> Some
+            | None -> transfer program shared (reading context) (application context) node
+    computed, reads
 
 //-------------------------------------------------------------------------
 // The fixpoint
@@ -2333,59 +2518,96 @@ let [<Literal>] private AscentLimit = 8192
 
 /// The constants the analysis has settled so far: every point range in the state. They are the
 /// widening's thresholds beside the declared representations (`ValueRange.widen`).
-let private constantsOf (state: State) : bigint list =
-    state
-    |> Map.toSeq
-    |> Seq.choose (fun (_, r) -> match r with ValueRange.Bounded (lo, hi) when lo = hi -> Some lo | _ -> None)
-    |> Seq.distinct
-    |> List.ofSeq
+let private constantsOf (state: ContextState) =
+    state.Values |> Map.toList |> List.choose (fun (key, range) ->
+        match range with ValueRange.Bounded(lo, hi) when lo = hi -> Some(key, lo) | _ -> None)
 
-/// One ascending round in node order: every node's range becomes the join of what it has and its
-/// transfer; past the widening delay, a range that still grows is widened. Returns the new state
-/// and whether anything changed.
-let private ascend (program: Program) (round: int) (state: State) : State * bool =
+/// Shared and contextual cells participate in one ascent, widening and narrowing
+/// policy. Read incidence belongs to the issued state, including widening inputs.
+let private ascend (program: Program) (contexts: ContextProgram) round (state: ContextState) =
     let constants = if round > WideningDelay then constantsOf state else []
-    program.Ordered
-    |> List.fold (fun (state: State, changed) node ->
-        match transfer program state node with
-        | None -> (state, changed)
+    contexts.Coordinates |> List.fold (fun (state: ContextState, changed) (context, node) ->
+        let key = context, node.Id
+        let computed, dependencies = evaluate program contexts state context node
+        match computed with
+        | None -> state, changed
         | Some computed ->
-            match Map.tryFind node.Id state with
-            | None -> (Map.add node.Id computed state, true)   // first sight: recorded, empty or not
-            | Some old ->
-                let grown = ValueRange.join old computed
-                if ValueRange.contains old grown then (state, changed)
-                else
-                    let next = if round > WideningDelay then ValueRange.widen program.Thresholds constants old grown else grown
-                    (Map.add node.Id next state, true)) (state, false)
+            let previous = state.Values.TryFind key
+            let next, dependencies =
+                match previous with
+                | None -> computed, dependencies
+                | Some old ->
+                    let grown = ValueRange.join old computed
+                    if ValueRange.contains old grown then old, dependencies
+                    elif round > WideningDelay then
+                        let next = ValueRange.widen program.Thresholds (constants |> List.map snd |> List.distinct) old grown
+                        next, Set.union dependencies (constants |> List.map fst |> Set.ofList)
+                    else grown, dependencies
+            let dependencies = Set.union dependencies (state.Reads.TryFind key |> Option.defaultValue Set.empty)
+            { Values = state.Values.Add(key, next); Reads = state.Reads.Add(key, dependencies) },
+            changed || previous <> Some next) (state, false)
 
-/// One narrowing round: every node's range becomes its transfer, which from a post-fixpoint can
-/// only tighten (a monotone transfer function applied below a post-fixpoint stays above the least
-/// fixpoint, so the result is sound); a transfer that would grow is not taken.
-let private narrow (program: Program) (state: State) : State * bool =
-    program.Ordered
-    |> List.fold (fun (state: State, changed) node ->
-        match transfer program state node with
-        | None -> (state, changed)
+let private narrow (program: Program) (contexts: ContextProgram) (state: ContextState) =
+    contexts.Coordinates |> List.fold (fun (state: ContextState, changed) (context, node) ->
+        let key = context, node.Id
+        let computed, dependencies = evaluate program contexts state context node
+        match computed with
+        | None -> state, changed
         | Some computed ->
-            let old = current state node.Id
-            if ValueRange.contains computed old || not (ValueRange.contains old computed) then (state, changed)
-            else (Map.add node.Id computed state, true)) (state, false)
+            let old = state.Values.TryFind key |> Option.defaultValue ValueRange.Empty
+            let next = if ValueRange.contains computed old || not (ValueRange.contains old computed) then old else computed
+            let dependencies = Set.union dependencies (state.Reads.TryFind key |> Option.defaultValue Set.empty)
+            { Values = state.Values.Add(key, next); Reads = state.Reads.Add(key, dependencies) }, changed || old <> next) (state, false)
 
-/// The least fixed point with widening, then the bounded narrowing.
-let private fixpoint (program: Program) : State =
-    let rec climb (round: int) (state: State) =
+/// The same finite lattice solver owns every context; recursive call strings
+/// repeat existing cells instead of entering a second evaluator.
+let private fixpoint (program: Program) : State * RangeContextFacts =
+    let contexts = contextProgram program
+    let rec climb round state =
         if round > AscentLimit then
             failwithf "RangeAnalysis: the range fixpoint did not settle in %d rounds; the widening did not terminate the ascent" AscentLimit
         else
-            let (next, changed) = ascend program round state
+            let next, changed = ascend program contexts round state
             if changed then climb (round + 1) next else next
-    let rec descend (round: int) (state: State) =
+    let rec descend round state =
         if round > NarrowingRounds then state
         else
-            let (next, changed) = narrow program state
+            let next, changed = narrow program contexts state
             if changed then descend (round + 1) next else next
-    climb 1 Map.empty |> descend 1
+    let state = climb 1 { Values = Map.empty; Reads = Map.empty } |> descend 1
+    let shared = state.Values |> Map.toList |> List.choose (fun ((context, id), range) ->
+        if context = RangeContext.Shared then Some(id, range) else None) |> Map.ofList
+    shared,
+    { ContextDepth = InvocationContextDepth; Invocations = contexts.Invocations
+      Values = state.Values; Reads = state.Reads; Premises = Map.empty
+      CaptureRelations = []; SourceRelations = Ok []; Platform = None; Roots = [] }
+
+/// Diagnostics follow issued read incidence; they never replay the solver.
+let private contextProvenance (facts: RangeContextFacts) (diagnostics: Diagnostic list) =
+    let merged = facts.Invocations |> List.groupBy _.Context |> List.choose (fun (context, rows) ->
+        let callers = rows |> List.map _.Caller |> List.distinct
+        if callers.Length > 1 then Some context else None) |> Set.ofList
+    let rec dependencies seen pending =
+        match pending with
+        | [] -> seen
+        | key :: rest when Set.contains key seen -> dependencies seen rest
+        | key :: rest ->
+            let next = facts.Reads.TryFind key |> Option.defaultValue Set.empty |> Set.toList
+            dependencies (Set.add key seen) (next @ rest)
+    diagnostics |> List.map (fun diagnostic ->
+        if diagnostic.Code <> DiagnosticCodes.CCS8011_UnobservableRange then diagnostic
+        else
+            let support = diagnostic.RelatedNodes |> List.map (fun id -> RangeContext.Shared, id) |> dependencies Set.empty
+            let contexts = support |> Seq.map fst |> Set.ofSeq |> Set.intersect merged
+            if contexts.IsEmpty then diagnostic
+            else
+                let rows = facts.Invocations |> List.filter (fun row -> contexts.Contains row.Context)
+                let names = contexts |> Set.toList |> List.choose (function
+                    | RangeContext.Invocation sites -> Some("[" + (sites |> List.map (NodeId.value >> string) |> String.concat ", ") + "]")
+                    | RangeContext.Shared -> None) |> String.concat ", "
+                { diagnostic with
+                    Message = diagnostic.Message + "; its retained range support includes merged invocation contexts " + names
+                    RelatedNodes = (diagnostic.RelatedNodes @ (rows |> List.collect (fun row -> [row.Call; row.Target]))) |> List.distinct })
 
 //-------------------------------------------------------------------------
 // Selection (§3.1): the platform's declared set, the range's choice
@@ -2796,7 +3018,7 @@ let private declaredDiagnostics (program: Program) (state: State) : Diagnostic l
     | Some ctx when not program.Fabric ->
         let ranged (values: (NodeId * NodeId) list) =
             values |> List.filter (fun (consumer, _) -> program.CommitmentSites.Contains consumer)
-            |> List.map (fun (consumer, v) -> v, read program state consumer v)
+            |> List.map (fun (consumer, v) -> v, read program (current state) consumer v)
         let leaving (declared: ValueRange) (values: (NodeId * ValueRange) list) =
             values |> List.filter (fun (_, r) -> ValueRange.isObservable r && not (ValueRange.contains declared r))
         let tightening (declared: ValueRange) (bits: int) (values: (NodeId * ValueRange) list) : (ValueRange * NumericRepresentation) option =
@@ -2929,10 +3151,18 @@ let private spelledDiagnostics (program: Program) (state: State) : Diagnostic li
 /// type its per-field ranges, every array element type its element range, and every unobservable
 /// integer is CCS8011, every uncovered one CCS8012. The graph is returned with the annotations
 /// written and the field and element ranges settled.
+let private retainSupport (graph: SemanticGraph) (facts: RangeContextFacts) =
+    { facts with
+        Premises = Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextPremises graph
+        CaptureRelations = Clef.Compiler.Baker.Ingredients.NumericValues.captureRelations graph
+        SourceRelations = Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextRelations graph
+        Platform = Clef.Compiler.Baker.Ingredients.Boundaries.platformPremise graph.Platform
+        Roots = graph.DeclarationRoots }
+
 let private runValidated (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
     let program = readProgram context graph
     let graph = program.Graph
-    let state = fixpoint program
+    let state, contextFacts = fixpoint program
     let nodes =
         graph.Nodes
         |> Map.map (fun id node ->
@@ -2945,12 +3175,12 @@ let private runValidated (context: PlatformContext option) (graph: SemanticGraph
         let declared =
             program.IntegerFields
             |> Map.map (fun typeName fields ->
-                fields |> List.map (fun f -> f, fieldRange program state typeName f) |> Map.ofList)
+                fields |> List.map (fun f -> f, fieldRange program (current state) typeName f) |> Map.ofList)
         let declared =
             program.InputSeeds
             |> Map.fold (fun (acc: Map<NominalTypeIdentity, Map<string, ValueRange>>) typeName seeds ->
                 let existing = Map.tryFind typeName acc |> Option.defaultValue Map.empty
-                Map.add typeName (seeds |> Map.fold (fun m f _ -> Map.add f (fieldRange program state typeName f) m) existing) acc) declared
+                Map.add typeName (seeds |> Map.fold (fun m f _ -> Map.add f (fieldRange program (current state) typeName f) m) existing) acc) declared
         program.Constructions
         |> Map.fold (fun (acc: Map<NominalTypeIdentity, Map<string, ValueRange>>) typeName constructions ->
             let fields = constructions |> List.collect (snd >> List.map fst) |> List.distinct
@@ -2960,7 +3190,7 @@ let private runValidated (context: PlatformContext option) (graph: SemanticGraph
                 |> List.fold (fun (m: Map<string, ValueRange>) f ->
                     if Map.containsKey f m then m
                     else
-                        let r = fieldRange program state typeName f
+                        let r = fieldRange program (current state) typeName f
                         // only a field whose values are ranged nodes has a range; a nested record
                         // or a boolean-only field contributes nothing here
                         let ranged =
@@ -2976,7 +3206,7 @@ let private runValidated (context: PlatformContext option) (graph: SemanticGraph
             |> List.tryPick (fun n -> arrayElementType n.Type |> Option.filter (fun e -> elementKey e = key))
         keys
         |> Set.toList
-        |> List.choose (fun key -> typeOfKey key |> Option.map (fun elem -> key, elementRange program state elem))
+        |> List.choose (fun key -> typeOfKey key |> Option.map (fun elem -> key, elementRange program (current state) elem))
         |> Map.ofList
     let resourceDiagnostics = program.LoopRecognition.Linear |> List.filter (fun recurrence ->
         recurrence.Cells |> List.exists program.CommitmentSites.Contains) |> List.choose (fun recurrence ->
@@ -2990,19 +3220,35 @@ let private runValidated (context: PlatformContext option) (graph: SemanticGraph
                    Reachability = ReachabilityContext.Reachable }
         | _ -> None)
     let diagnostics = unobservableDiagnostics program state @ coverageDiagnostics program state @ boundaryDiagnostics program state @ declaredDiagnostics program state @ spelledDiagnostics program state @ resourceDiagnostics
+                      |> contextProvenance contextFacts
     let graph = { graph with Nodes = nodes; FieldRanges = lazy fieldRanges; ElementRanges = lazy elementRanges; Escaping = lazy program.EscapingLambdas }
     let graph = LazyEffectRanges.settle (program.LazyEffects.Values |> Seq.distinctBy _.Cell |> Seq.toList) graph
     let graph = FiniteCellRanges.settle (program.FiniteCells.Values |> Seq.distinctBy _.Cell |> Seq.toList) graph
     let graph = LoopRanges.saturate (current state) program.LoopRecognition graph
-    (SequenceAccumulations.saturate (current state) program.SequenceAccumulations graph, diagnostics)
+    let graph = SequenceAccumulations.saturate (current state) program.SequenceAccumulations graph
+    { graph with RangeContextFacts = Some(retainSupport graph contextFacts) }, diagnostics
+
+/// Issue the owner's fixed-point facts for this graph revision. A consumer may
+/// request renewal after rewriting passes, but the held annotations, widths,
+/// layouts and obligations remain unchanged and must enclose these fresh facts.
+let issue (graph: SemanticGraph) : Result<RangeContextFacts, string> =
+    match OrdinaryDemand.tryRead graph with
+    | Result.Error _ -> Result.Error "Current ordinary binding demand evidence is required before range issuance."
+    | Result.Ok _ ->
+        let _, facts = readProgram graph.Platform graph |> fixpoint
+        let facts = retainSupport graph facts
+        facts.SourceRelations |> Result.map (fun _ -> facts)
 
 /// Fresh logical source facts for a Baker recipe checking current premises.
 /// This computes the existing range rules without publishing annotations,
 /// selecting carriers or discharging obligations. Invalid demand supplies no facts.
 let sourceFacts (graph: SemanticGraph) : Map<NodeId, ValueRange> =
-    match OrdinaryDemand.tryRead graph with
+    match issue graph with
     | Result.Error _ -> Map.empty
-    | Result.Ok _ -> readProgram graph.Platform graph |> fixpoint
+    | Result.Ok facts ->
+        facts.Values |> Map.toList |> List.choose (function
+            | (RangeContext.Shared, id), range -> Some(id, range)
+            | _ -> None) |> Map.ofList
 
 /// Re-read the complete current source call/effect/origin and consumer census
 /// before a representation rewrite transports a finite-pull proof. This does
@@ -3017,15 +3263,16 @@ let sequenceAccumulationFacts (graph: SemanticGraph) : SequenceAccumulation.Accu
 /// (CCS8403/CCS8415). Withdraw this owner's earlier ranges; no new range is
 /// settled over rejected demand, and a former Empty is not current authority.
 let run (context: PlatformContext option) (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
-    match OrdinaryDemand.tryRead graph with
-    | Result.Error failures ->
-        let nodes = graph.Nodes |> Map.map (fun _ node ->
-            if node.ValueRange.IsSome then { node with ValueRange = None } else node)
-        let withdrawn =
-            { graph with Nodes = nodes; FieldRanges = lazy Map.empty
-                         ElementRanges = lazy Map.empty; Escaping = lazy Map.empty }
-        withdrawn, OrdinaryDemand.diagnostics graph failures
-    | Result.Ok _ -> runValidated context graph
+    SemanticGraph.withEnrichment graph (fun () ->
+        match OrdinaryDemand.tryRead graph with
+        | Result.Error failures ->
+            let nodes = graph.Nodes |> Map.map (fun _ node ->
+                if node.ValueRange.IsSome then { node with ValueRange = None } else node)
+            let withdrawn =
+                { graph with Nodes = nodes; FieldRanges = lazy Map.empty
+                             ElementRanges = lazy Map.empty; Escaping = lazy Map.empty; RangeContextFacts = None }
+            withdrawn, OrdinaryDemand.diagnostics graph failures
+        | Result.Ok _ -> runValidated context graph)
 
 //-------------------------------------------------------------------------
 // Reads for the witnesses (Composer transcribes; it computes no range and no width)

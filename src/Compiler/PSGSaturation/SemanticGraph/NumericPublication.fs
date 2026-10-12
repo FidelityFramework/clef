@@ -18,18 +18,41 @@ let project (graph: SemanticGraph) : Result<NumericWitnessProjection, WitnessPro
             | Some expected, Some current when expected = current -> Numeric.sequenceRangeCurrent graph expected
             | None, None -> not domain.RequiresSequenceReview && not (Numeric.sequenceRangeActive graph)
             | _ -> false
+        let rangeCurrent =
+            match domain.RangeContextFacts, graph.RangeContextFacts with
+            | Some expected, Some current when expected = current -> Numeric.rangeContextCurrent graph expected
+            | _ -> false
         if not sequenceCurrent then
             reject (Some anchor) participants "Finite-sequence relation premises changed or the source-to-machine range authority is absent; source settlement is required."
         elif Numeric.finiteCellRelations graph <> Ok domain.FiniteCellRelations ||
            Numeric.finiteCellObligations graph <> domain.FiniteCellObligations then
             reject (Some anchor) participants "finite-cell relation premises changed; source numeric settlement is required."
-        elif domain.Premises <> Numeric.premises graph || domain.Platform <> Boundary.platformPremise graph.Platform ||
-           domain.Roots <> graph.DeclarationRoots || domain.Escaping <> graph.Escaping.Value || domain.Layouts <> graph.Layouts.Value ||
-           domain.ElementRanges <> graph.ElementRanges.Value || domain.ByteRanges <> Numeric.byteRanges graph ||
-           domain.ByteReadRanges <> Numeric.byteReadRanges graph || domain.ByteViews <> Numeric.byteViews graph || domain.StringExtents <> Numeric.stringExtents graph then
-            reject (Some anchor) participants "Source range, type, occurrence membership, declaration, boundary, or layout premises changed; source numeric settlement is required."
+        elif domain.CaptureRelations <> Numeric.captureRelations graph then
+            reject (Some anchor) participants "Closure capture relation premises changed; source numeric settlement is required."
         elif not domain.Unresolved.IsEmpty then
             Error(domain.Unresolved |> Map.toList |> List.map (fun (site, reason) -> { Occurrence = Some site; Participants = Set.singleton site; Reason = "NumericPublication: " + reason }))
+        elif not rangeCurrent then
+            reject (Some anchor) participants "Invocation-context range premises changed or the producer receipt is absent; source range settlement is required."
+        elif domain.Premises <> Numeric.premises graph then
+            reject (Some anchor) participants "Source node range, type, or occurrence premises changed; source numeric settlement is required."
+        elif domain.Platform <> Boundary.platformPremise graph.Platform then
+            reject (Some anchor) participants "Platform declaration premises changed; source numeric settlement is required."
+        elif domain.Roots <> graph.DeclarationRoots then
+            reject (Some anchor) participants "Declaration root premises changed; source numeric settlement is required."
+        elif domain.Escaping <> graph.Escaping.Value then
+            reject (Some anchor) participants "Escape premises changed; source numeric settlement is required."
+        elif domain.Layouts <> graph.Layouts.Value then
+            reject (Some anchor) participants "Layout premises changed; source numeric settlement is required."
+        elif domain.ElementRanges <> graph.ElementRanges.Value then
+            reject (Some anchor) participants "Element range premises changed; source numeric settlement is required."
+        elif domain.ByteRanges <> Numeric.byteRanges graph then
+            reject (Some anchor) participants "Byte range premises changed; source numeric settlement is required."
+        elif domain.ByteReadRanges <> Numeric.byteReadRanges graph then
+            reject (Some anchor) participants "Byte read range premises changed; source numeric settlement is required."
+        elif domain.ByteViews <> Numeric.byteViews graph then
+            reject (Some anchor) participants "Byte view premises changed; source numeric settlement is required."
+        elif domain.StringExtents <> Numeric.stringExtents graph then
+            reject (Some anchor) participants "String extent premises changed; source numeric settlement is required."
         elif (domain.Values |> List.map _.Site |> List.sort) <> (domain.Required |> Set.toList) then
             reject (Some anchor) participants "A required source scalar carrier is absent or duplicated."
         elif (domain.Operations |> List.map _.Site |> List.sort) <> Set.toList domain.OperationRequired then

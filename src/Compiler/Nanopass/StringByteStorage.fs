@@ -49,7 +49,10 @@ let private settle (graph: SemanticGraph) =
 
 /// Editor/source checking carries logical intent without inventing a target's
 /// encoding storage. A selected native platform must discharge the boundary.
-let normalize (graph: SemanticGraph) =
+let private normalizeCore (graph: SemanticGraph) =
     match graph.Platform with
     | None -> graph, []
     | Some _ -> settle graph
+
+let normalize graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeCore graph)

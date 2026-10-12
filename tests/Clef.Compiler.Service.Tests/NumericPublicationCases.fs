@@ -29,6 +29,8 @@ module private IndexTransportFixture =
         let edges = result.Graph.Edges |> List.filter (fun edge -> not(edge.Target = site.Id && edge.Class = EdgeClass.Structural))
         { result.Graph with Nodes = result.Graph.Nodes.Add(site.Id,changed); Edges = edges @ kindEdges site.Id changed.Kind }
         |> Clef.Compiler.Nanopass.OrdinaryDemand.normalize
+        |> Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run (Some platform)
+        |> fst
         |> Clef.Compiler.Nanopass.NumericSettlement.normalize
 
     let create number =
@@ -36,7 +38,417 @@ module private IndexTransportFixture =
         let facts = NumericPublication.project graph |> Result.defaultWith (sprintf "%A" >> failwith)
         graph, Assert.Single facts.IndexTransports.Values
 
+module private NumericCaptureFixture =
+  let check source =
+    let authority = IntrinsicWriteFixture.authority.Replace("Name = \"octet\"", "Name = \"uint8\"")
+    let result = IntrinsicWriteFixture.checkSource authority source
+    DimensionalCases.noErrors result
+    result.Graph
+
+  let graph = lazy (check """module NumericCaptureAuthority
+let invoke (callback: int -> int) = callback 3
+[<EntryPoint>]
+let main _ =
+    let offset = 7
+    let callback = fun value -> value + offset
+    let answer = invoke callback
+    answer
+""")
+
+  let finiteGraph = lazy (check """module NumericCapturedFiniteAuthority
+[<EntryPoint>]
+let main _ =
+    let mutable state = 0
+    let bump () = state <- state + 1
+    bump ()
+    let answer = state
+    answer
+""")
+
+  let contextSource = """module NumericInvocationAuthority
+let double input = input * 2
+let triple value = value * 3
+[<EntryPoint>]
+let main _ =
+    let first = double 3
+    let second = triple 7
+    first + second
+"""
+
+  let contextGraph = lazy (check contextSource)
+
+  let binding name (graph: SemanticGraph) =
+    graph.Nodes.Values
+    |> Seq.filter (fun node ->
+      node.IsReachable && match node.Kind with SemanticKind.Binding(actual, _, _, _) -> actual = name | _ -> false)
+    |> Assert.Single
+
+  let domain (graph: SemanticGraph) =
+    graph.Edges
+    |> List.choose (fun edge -> match edge.Role with EdgeRole.NumericDomain domain -> Some domain | _ -> None)
+    |> Assert.Single
+
+  let capture (graph: SemanticGraph) =
+    graph.Edges
+    |> List.filter (fun edge -> match edge.Role with EdgeRole.EnvironmentCapture _ -> true | _ -> false)
+    |> Assert.Single
+
+  let admitted graph =
+    NumericPublication.project graph |> Result.defaultWith (sprintf "%A" >> failwith)
+
+  let invocationRefusal (graph: SemanticGraph) =
+    match NumericPublication.project graph with
+    | Error failures -> Assert.Contains(failures, fun failure ->
+        failure.Reason = "NumericPublication: Invocation-context range premises changed or the producer receipt is absent; source range settlement is required.")
+    | Ok _ -> failwith "Changed invocation evidence retained its old numeric publication."
+
+  let heldRangeRefusal (graph: SemanticGraph) =
+    match NumericPublication.project graph with
+    | Error failures -> Assert.Contains(failures, fun failure ->
+        failure.Reason = "NumericPublication: Invocation-context range premises changed or the producer's shared facts no longer fit the held integer range.")
+    | Ok _ -> failwith "Numeric renewal admitted an integer annotation that does not enclose its current source range."
+
 type NumericPublicationCases() =
+    [<Fact>]
+    member _.``Numeric publication retains the range owners invocation facts and read support`` () =
+        let graph = NumericCaptureFixture.contextGraph.Value
+        let facts = graph.RangeContextFacts |> Option.defaultWith (fun () -> failwith "RangeAnalysis did not issue invocation facts.")
+        let domain = NumericCaptureFixture.domain graph
+        Assert.Equal(Some facts, domain.RangeContextFacts)
+        Assert.NotEmpty facts.Invocations
+        Assert.NotEmpty facts.Reads
+        Assert.Equal(Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextRelations graph, facts.SourceRelations)
+        Assert.True(Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextCurrent graph facts)
+        let numeric = NumericCaptureFixture.admitted graph
+        for name, expected in ["first", 6I; "second", 21I] do
+            let binding = NumericCaptureFixture.binding name graph
+            let call = binding.Children |> Assert.Single
+            let rows = facts.Invocations |> List.filter (fun row -> row.Call = call)
+            Assert.NotEmpty rows
+            for row in rows do
+                Assert.NotEqual(RangeContext.Shared, row.Context)
+                Assert.True(facts.Values.ContainsKey(row.Context, row.Body))
+                Assert.NotEmpty row.Arguments
+            Assert.Equal(ValueRange.point expected, facts.Values[RangeContext.Shared, call])
+            Assert.Equal(ValueRange.point expected, numeric.Values[binding.Id].Range)
+
+    [<Theory>]
+    [<InlineData("actual")>]
+    [<InlineData("literal")>]
+    [<InlineData("target")>]
+    member _.``Numeric renewal rejects held annotations that exclude current invocation ranges`` defect =
+        let graph = NumericCaptureFixture.contextGraph.Value
+        NumericCaptureFixture.admitted graph |> ignore
+        let first = graph.Nodes[(NumericCaptureFixture.binding "first" graph).Children |> Assert.Single]
+        let second = graph.Nodes[(NumericCaptureFixture.binding "second" graph).Children |> Assert.Single]
+        let changed =
+            match defect with
+            | "literal" ->
+                match first.Kind with
+                | SemanticKind.Application(_, [actual]) ->
+                    let node = graph.Nodes[actual]
+                    match node.Kind with
+                    | SemanticKind.Literal(NativeLiteral.Int(value, kind)) ->
+                        { graph with Nodes = graph.Nodes.Add(actual, { node with Kind = SemanticKind.Literal(NativeLiteral.Int(value + 1L, kind)) }) }
+                    | _ -> failwith "Expected the checked integer actual."
+                | _ -> failwith "Expected the unary source application."
+            | _ ->
+                match first.Kind, second.Kind with
+                | SemanticKind.Application(callee, arguments), SemanticKind.Application(otherCallee, otherArguments) ->
+                    let kind, replace =
+                        if defect = "actual" then
+                            let actual, other = arguments |> Assert.Single, otherArguments |> Assert.Single
+                            SemanticKind.Application(callee, [other]), (fun id -> if id = actual then other else id)
+                        else
+                            SemanticKind.Application(otherCallee, arguments), (fun id -> if id = callee then otherCallee else id)
+                    let call = { first with Kind = kind; Children = List.map replace first.Children }
+                    let edges = graph.Edges |> List.filter (fun edge -> not(edge.Target = first.Id && edge.Class = EdgeClass.Structural))
+                    { graph with Nodes = graph.Nodes.Add(first.Id, call); Edges = edges @ kindEdges first.Id kind }
+                | _ -> failwith "Expected two source applications with distinct callees and actuals."
+        NumericCaptureFixture.invocationRefusal changed
+        let renewed = changed |> Clef.Compiler.Nanopass.OrdinaryDemand.normalize |> Clef.Compiler.Nanopass.NumericSettlement.normalize
+        let repeated = Clef.Compiler.Nanopass.NumericSettlement.normalize renewed
+        for current in [renewed; repeated] do
+            Assert.True((NumericCaptureFixture.domain current).RangeContextFacts.IsSome)
+            Assert.Equal(current.RangeContextFacts, (NumericCaptureFixture.domain current).RangeContextFacts)
+            Assert.NotEqual(graph.RangeContextFacts, current.RangeContextFacts)
+            Assert.Equal(first.ValueRange, current.Nodes[first.Id].ValueRange)
+            NumericCaptureFixture.heldRangeRefusal current
+        // Only the existing range owner can issue evidence for the changed
+        // source. Numeric settlement then consumes that receipt unchanged.
+        let restored, _ = Clef.Compiler.PSGSaturation.SemanticGraph.RangeAnalysis.run repeated.Platform repeated
+        let settled = Clef.Compiler.Nanopass.NumericSettlement.normalize restored
+        NumericCaptureFixture.admitted settled |> ignore
+        Assert.Equal(restored.RangeContextFacts, (NumericCaptureFixture.domain settled).RangeContextFacts)
+
+    [<Theory>]
+    [<InlineData("withdrawn")>]
+    [<InlineData("replaced")>]
+    member _.``Numeric settlement reissues missing evidence while passive publication refuses its loss`` defect =
+        let graph = NumericCaptureFixture.contextGraph.Value
+        NumericCaptureFixture.admitted graph |> ignore
+        let replacement =
+            if defect = "withdrawn" then None
+            else
+                let foreign = NumericCaptureFixture.graph.Value.RangeContextFacts
+                Assert.True foreign.IsSome
+                Assert.NotEqual(graph.RangeContextFacts, foreign)
+                foreign
+        let changed = { graph with RangeContextFacts = replacement }
+        NumericCaptureFixture.invocationRefusal changed
+        // Settlement may request fresh facts from RangeAnalysis for this same
+        // graph. Publication itself has no such recovery authority.
+        let renewed = Clef.Compiler.Nanopass.NumericSettlement.normalize changed
+        let repeated = Clef.Compiler.Nanopass.NumericSettlement.normalize renewed
+        for current in [renewed; repeated] do
+            NumericCaptureFixture.admitted current |> ignore
+            Assert.True(current.RangeContextFacts.IsSome)
+            Assert.Equal(current.RangeContextFacts, (NumericCaptureFixture.domain current).RangeContextFacts)
+            Assert.True(Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextCurrent current current.RangeContextFacts.Value)
+            NumericCaptureFixture.invocationRefusal { current with RangeContextFacts = replacement }
+
+    [<Fact>]
+    member _.``Numeric publication preserves higher order occurrence precision and shared formal carriers`` () =
+        let graph = NumericCaptureFixture.check """module NumericHigherOrderAuthority
+let twice (callback: int -> int) (start: int) : int = callback (callback start)
+let double (input: int) : int = input * 2
+[<EntryPoint>]
+let main _ =
+    let first = twice double 3
+    let second = twice double 100
+    first + second
+"""
+        let numeric = NumericCaptureFixture.admitted graph
+        let first = NumericCaptureFixture.binding "first" graph
+        let second = NumericCaptureFixture.binding "second" graph
+        Assert.Equal(ValueRange.point 12I, numeric.Values[first.Id].Range)
+        Assert.Equal(ValueRange.point 400I, numeric.Values[second.Id].Range)
+        let width id =
+            match numeric.Values[id].Slot with
+            | SettledSlot.Integer(bits, _) -> bits
+            | slot -> failwithf "Expected a published integer carrier, got %A." slot
+        Assert.True(width first.Id < width second.Id, "Distinct occurrence enclosures must retain their selected carriers.")
+        for name, expected in ["start", ValueRange.Bounded(3I, 100I); "input", ValueRange.Bounded(3I, 200I)] do
+            let formal = graph.Nodes.Values |> Seq.filter (fun node ->
+                node.IsReachable && match node.Kind with SemanticKind.PatternBinding actual -> actual = name | _ -> false) |> Assert.Single
+            Assert.Equal(expected, numeric.Values[formal.Id].Range)
+            Assert.Equal(width first.Id, width formal.Id)
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Numeric renewal preserves retained graph citizens after checking another graph`` changeLiteral =
+        Clef.Compiler.CheckExecution.synchronized (fun () ->
+            let graph = NumericCaptureFixture.check NumericCaptureFixture.contextSource
+            NumericCaptureFixture.admitted graph |> ignore
+            let first = graph.Nodes[(NumericCaptureFixture.binding "first" graph).Children |> Assert.Single]
+            let retained =
+                if not changeLiteral then graph
+                else
+                    match first.Kind with
+                    | SemanticKind.Application(_, [actual]) ->
+                        let node = graph.Nodes[actual]
+                        match node.Kind with
+                        | SemanticKind.Literal(NativeLiteral.Int(value, kind)) ->
+                            { graph with Nodes = graph.Nodes.Add(actual, { node with Kind = SemanticKind.Literal(NativeLiteral.Int(value + 1L, kind)) }) }
+                        | _ -> failwith "Expected the retained graph's literal argument."
+                    | _ -> failwith "Expected the retained graph's unary call."
+            let citizens = retained.Nodes |> Map.filter (fun _ node ->
+                not (Clef.Compiler.Baker.Ingredients.NumericValues.owned node))
+            let smaller = NumericCaptureFixture.check """module NumericOtherCheck
+[<EntryPoint>]
+let main _ = 0
+"""
+            let maximum (graph: SemanticGraph) = graph.Nodes.Keys |> Seq.map NodeId.value |> Seq.max
+            Assert.True(maximum smaller < maximum retained, "The intervening real check must reset allocation below the retained graph's citizens.")
+            let renewed = Clef.Compiler.Nanopass.NumericSettlement.normalize retained
+            let repeated = Clef.Compiler.Nanopass.NumericSettlement.normalize renewed
+            for current in [renewed; repeated] do
+                for KeyValue(id, _) in current.Nodes |> Map.filter (fun id _ -> not (retained.Nodes.ContainsKey id)) do
+                    Assert.True(NodeId.value id > maximum retained, "A renewal must allocate above its input graph before retiring its old proof nodes.")
+                for KeyValue(id, node) in citizens do
+                    Assert.True(current.Nodes.ContainsKey id, sprintf "Renewal removed retained citizen %A." id)
+                    Assert.Equal(node.Kind, current.Nodes[id].Kind)
+                    Assert.Equal(Clef.Compiler.Baker.Ingredients.Boundaries.premise node,
+                                 Clef.Compiler.Baker.Ingredients.Boundaries.premise current.Nodes[id])
+                if changeLiteral then NumericCaptureFixture.heldRangeRefusal current
+                else NumericCaptureFixture.admitted current |> ignore)
+
+    [<Theory>]
+    [<InlineData("key")>]
+    [<InlineData("node")>]
+    [<InlineData("child")>]
+    [<InlineData("parent")>]
+    [<InlineData("source")>]
+    [<InlineData("target")>]
+    member _.``Retained graph allocation reserves every structural identity before enrichment`` position =
+        Clef.Compiler.CheckExecution.synchronized (fun () ->
+            let graph = NumericCaptureFixture.contextGraph.Value
+            let semantic = graph.Nodes.Values |> Seq.head
+            let maximum = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.maxNodeId graph
+            let high = NodeId(maximum + 1000)
+            let changed =
+                match position with
+                | "key" -> { graph with Nodes = graph.Nodes.Remove(semantic.Id).Add(high, semantic) }
+                | "node" -> { graph with Nodes = graph.Nodes.Add(semantic.Id, { semantic with Id = high }) }
+                | "child" -> { graph with Nodes = graph.Nodes.Add(semantic.Id, { semantic with Children = high :: semantic.Children }) }
+                | "parent" -> { graph with Nodes = graph.Nodes.Add(semantic.Id, { semantic with Parent = Some high }) }
+                | "source" | "target" ->
+                    let edge = { Class = EdgeClass.Structural; Role = EdgeRole.Attached; Ordinal = 0
+                                 Sources = [if position = "source" then high else semantic.Id]
+                                 Target = if position = "target" then high else semantic.Id }
+                    { graph with Edges = edge :: graph.Edges }
+                | _ -> failwith "Unknown structural identity position."
+            NodeId.reset ()
+            Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment changed (fun () ->
+                Assert.True(NodeId.value (NodeId.fresh ()) > NodeId.value high,
+                            "Even identities named outside the node map must not be reused.")))
+
+    [<Fact>]
+    member _.``Retained graph allocation preserves active high water through a nested real check`` () =
+        Clef.Compiler.CheckExecution.synchronized (fun () ->
+            let graph = NumericCaptureFixture.check NumericCaptureFixture.contextSource
+            Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () ->
+                let minted = List.init 4 (fun _ -> NodeId.fresh ())
+                let nested = NumericCaptureFixture.check "module NumericNestedCheck\n[<EntryPoint>]\nlet main _ = 0\n"
+                let after = NodeId.fresh () |> NodeId.value
+                Assert.True(after > (minted |> List.map NodeId.value |> List.max),
+                            "A nested reset must preserve identities minted after scope entry.")
+                Assert.True(after > Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.maxNodeId nested,
+                            "The parent must also preserve identities minted by the nested check."))
+            NodeId.reset ()
+            Assert.Equal(NodeId 0, NodeId.fresh ()))
+
+    [<Fact>]
+    member _.``Boundary enrichment preserves retained graph citizens after another real check`` () =
+        Clef.Compiler.CheckExecution.synchronized (fun () ->
+            let graph = NumericCaptureFixture.check NumericCaptureFixture.contextSource
+            let citizens = graph.Nodes |> Map.filter (fun _ node -> not (Clef.Compiler.Baker.Ingredients.Boundaries.ownedNode node))
+            let maximum = Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.maxNodeId graph
+            NumericCaptureFixture.check "module BoundaryOtherCheck\n[<EntryPoint>]\nlet main _ = 0\n" |> ignore
+            let renewed = Clef.Compiler.Nanopass.BoundarySettlement.normalize graph
+            Assert.True(renewed.Nodes |> Map.exists (fun id _ -> NodeId.value id > maximum), "The other enrichment owner must mint a fresh domain anchor.")
+            for KeyValue(id, node) in citizens do
+                Assert.True(renewed.Nodes.ContainsKey id)
+                Assert.Equal(node.Kind, renewed.Nodes[id].Kind)
+                Assert.Equal(Clef.Compiler.Baker.Ingredients.Boundaries.premise node,
+                             Clef.Compiler.Baker.Ingredients.Boundaries.premise renewed.Nodes[id]))
+
+    [<Theory>]
+    [<InlineData("structural-extra")>]
+    [<InlineData("reference-extra")>]
+    [<InlineData("environment-removed")>]
+    [<InlineData("environment-reordered")>]
+    member _.``Numeric publication requires exact ordered invocation source incidence`` (defect: string) =
+        let environment = defect.StartsWith "environment"
+        let graph = if environment then NumericCaptureFixture.graph.Value else NumericCaptureFixture.contextGraph.Value
+        NumericCaptureFixture.admitted graph |> ignore
+        let changed =
+            if environment then
+                let formal = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.EnvironmentFormal) |> Assert.Single
+                let others = graph.Edges |> List.filter (fun edge -> not(obj.ReferenceEquals(edge, formal)))
+                if defect = "environment-removed" then { graph with Edges = others }
+                else
+                    // Even a malformed formal targeting a publication citizen
+                    // remains source input: first/last matching rows affect
+                    // callable admission before numeric publication can run.
+                    let owned = graph.Nodes.Values |> Seq.find Clef.Compiler.Baker.Ingredients.NumericValues.owned
+                    let conflict = { formal with Target = owned.Id }
+                    let first = { graph with Edges = formal :: conflict :: others }
+                    let second = { graph with Edges = conflict :: formal :: others }
+                    Assert.NotEqual(Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextRelations first,
+                                    Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextRelations second)
+                    second
+            else
+                let call = graph.Nodes[(NumericCaptureFixture.binding "first" graph).Children |> Assert.Single]
+                let source = kindEdges call.Id call.Kind |> List.head
+                let extra = { source with Ordinal = source.Ordinal + 1
+                                          Class = if defect = "reference-extra" then EdgeClass.Reference else EdgeClass.Structural }
+                // A negative census must notice a new row even where the
+                // source shape and every old retained row remain unchanged.
+                { graph with Edges = extra :: graph.Edges }
+        Assert.Same(graph.Nodes, changed.Nodes)
+        NumericCaptureFixture.invocationRefusal changed
+        // Renewing may legitimately derive a different enclosure. The stale
+        // incidence claim here is the passive reader's exact receipt check;
+        // the changed-actual controls separately require renewal containment.
+        NumericCaptureFixture.admitted graph |> ignore
+
+    [<Theory>]
+    [<InlineData("removed")>]
+    [<InlineData("class")>]
+    [<InlineData("mutability")>]
+    [<InlineData("ordinal")>]
+    [<InlineData("sources")>]
+    [<InlineData("target")>]
+    [<InlineData("duplicate")>]
+    member _.``Numeric publication requires exact closure capture incidence`` defect =
+        let graph = NumericCaptureFixture.graph.Value
+        let projection = NumericCaptureFixture.admitted graph
+        let answer = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && match node.Kind with SemanticKind.Binding("answer", _, _, _) -> true | _ -> false) |> Assert.Single
+        Assert.Equal(ValueRange.point 10I, projection.Values[answer.Id].Range)
+        let domain = NumericCaptureFixture.domain graph
+        Assert.True domain.RequiresCaptureReview
+        Assert.False domain.RequiresFiniteCellReview
+        Assert.False domain.RequiresSequenceReview
+        let capture = NumericCaptureFixture.capture graph
+        let replacement =
+            match defect with
+            | "removed" -> []
+            | "class" -> [{ capture with Class = EdgeClass.Reference }]
+            | "mutability" -> [{ capture with Role = EdgeRole.EnvironmentCapture true }]
+            | "ordinal" -> [{ capture with Ordinal = capture.Ordinal + 1 }]
+            | "sources" -> [{ capture with Sources = List.rev capture.Sources }]
+            | "target" -> [{ capture with Target = answer.Id }]
+            | "duplicate" -> [capture; capture]
+            | _ -> failwith "Unknown capture mutation."
+        let changed = { graph with Edges = replacement @ (graph.Edges |> List.filter (fun edge -> not (obj.ReferenceEquals(edge, capture)))) }
+        Assert.Same(graph.Nodes, changed.Nodes)
+        // The passive reader sees the retained answer and must refuse its
+        // changed support before any owner has recomputed or normalized it.
+        match NumericPublication.project changed with
+        | Error failures ->
+            Assert.Contains(failures, fun failure ->
+                failure.Reason = "NumericPublication: Closure capture relation premises changed; source numeric settlement is required.")
+        | Ok _ -> failwith "A changed capture retained its old numeric authority."
+        NumericCaptureFixture.admitted graph |> ignore
+
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``Numeric renewal cannot forget wholly withdrawn closure capture evidence`` capturedFiniteCell =
+        let graph = if capturedFiniteCell then NumericCaptureFixture.finiteGraph.Value else NumericCaptureFixture.graph.Value
+        let originalDomain = NumericCaptureFixture.domain graph
+        Assert.True originalDomain.RequiresCaptureReview
+        Assert.Equal(capturedFiniteCell, originalDomain.RequiresFiniteCellReview)
+        NumericCaptureFixture.admitted (Clef.Compiler.Nanopass.NumericSettlement.normalize graph) |> ignore
+        let capture = NumericCaptureFixture.capture graph
+        let changed = { graph with Edges = graph.Edges |> List.filter (fun edge -> not (obj.ReferenceEquals(edge, capture))) }
+        let renewed = Clef.Compiler.Nanopass.NumericSettlement.normalize changed
+        let repeated = Clef.Compiler.Nanopass.NumericSettlement.normalize renewed
+        for current in [renewed; repeated] do
+            let domain = NumericCaptureFixture.domain current
+            Assert.True domain.RequiresCaptureReview
+            Assert.Equal(capturedFiniteCell, domain.RequiresFiniteCellReview)
+            Assert.Empty domain.CaptureRelations
+            for KeyValue(id, node) in graph.Nodes do
+                if not (Clef.Compiler.Baker.Ingredients.NumericValues.owned node) then
+                    Assert.Equal(node.ValueRange, current.Nodes[id].ValueRange)
+            match NumericPublication.project current with
+            | Error failures ->
+                let reason =
+                    if capturedFiniteCell then "NumericPublication: Finite-cell and closure capture relation premises changed or current source facts no longer fit the held integer range."
+                    else "NumericPublication: Closure capture relation premises changed or current source facts no longer fit the held integer range."
+                Assert.Contains(failures, fun failure ->
+                    failure.Reason = reason)
+            | Ok _ -> failwith "Numeric renewal blessed a held range after capture withdrawal."
+        let restored = { repeated with Edges = capture :: repeated.Edges }
+        // Settlement requests current owner facts for the restored census;
+        // unchanged annotations again enclose those restored source ranges.
+        NumericCaptureFixture.admitted (Clef.Compiler.Nanopass.NumericSettlement.normalize restored) |> ignore
+        NumericCaptureFixture.admitted graph |> ignore
+
     [<Fact>]
     member _.``Index transport refuses a held integer outside the selected pointer capacity`` () =
         let graph = IndexTransportFixture.graphFor 32 "4294967296"
@@ -49,6 +461,8 @@ type NumericPublicationCases() =
     [<InlineData("255", true)>]
     member _.``Dispatch index transport retains source sign and actual coverage proof`` number unsigned =
         let graph, transport = IndexTransportFixture.create number
+        let numeric = NumericCaptureFixture.admitted graph
+        Assert.Equal(ValueRange.Bounded(7I, 11I), numeric.Values[transport.Site].Range)
         Assert.Equal(unsigned, transport.Unsigned)
         Assert.Equal(64, transport.PointerBits)
         Assert.Contains(transport.PointerDeclaration, transport.Participants)
@@ -163,6 +577,72 @@ type NumericPublicationCases() =
             Assert.Equal(boundary.StringExtents[call.Count], extent.Extent)
             Assert.True(carrier.Obligations.Length = 1)
         | _ -> failwith "String Length was not published as its source memory extent."
+
+    [<Fact>]
+    member _.``Numeric renewal derives string ranges from source while memory rejects a changed published extent`` () =
+        let graph, boundary = IntrinsicWriteFixture.admitted ()
+        let numeric = NumericCaptureFixture.admitted graph
+        let call = Assert.Single boundary.IntrinsicWrites.Values
+        let extent = boundary.StringExtents[call.Count]
+        Assert.NotEmpty extent.StaticOrigins
+        let changedExtent = { extent with StaticOrigins = extent.StaticOrigins |> Map.map (fun _ length -> length + 100I) }
+        let replace extent (graph: SemanticGraph) =
+            let edges = graph.Edges |> List.map (fun edge ->
+                match edge.Role with
+                | EdgeRole.StringExtent current when current.Site = call.Count -> { edge with Role = EdgeRole.StringExtent extent }
+                | _ -> edge)
+            { graph with Edges = edges }
+        let changed = replace changedExtent graph
+        Assert.Same(graph.Nodes, changed.Nodes)
+        Assert.NotEqual(Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextRelations graph,
+                        Clef.Compiler.Baker.Ingredients.NumericValues.rangeContextRelations changed)
+        Assert.True(Clef.Compiler.Baker.Ingredients.MemoryValues.stringRelations graph <>
+                    Clef.Compiler.Baker.Ingredients.MemoryValues.stringRelations changed)
+        NumericCaptureFixture.invocationRefusal changed
+        let memoryRefusal reason current =
+            match MemoryPublication.project current with
+            | Error failures -> Assert.Contains(failures, fun failure ->
+                failure.Reason = reason)
+            | Ok _ -> failwith "Memory publication admitted a changed string extent."
+        memoryRefusal "MemoryPublication: The exact memory source, guard, meet or declaration premises changed; source settlement is required." changed
+        let renewed = Clef.Compiler.Nanopass.NumericSettlement.normalize changed
+        let repeated = Clef.Compiler.Nanopass.NumericSettlement.normalize renewed
+        for current in [renewed; repeated] do
+            Assert.True(current.RangeContextFacts.IsSome)
+            Assert.Equal(current.RangeContextFacts, (NumericCaptureFixture.domain current).RangeContextFacts)
+            Assert.NotEqual(graph.RangeContextFacts, current.RangeContextFacts)
+            // The published extent row is not the source of logical length.
+            // Fresh range issuance still reads the unchanged string literals.
+            Assert.Equal(graph.RangeContextFacts.Value.Values[RangeContext.Shared, call.Count],
+                         current.RangeContextFacts.Value.Values[RangeContext.Shared, call.Count])
+            let carrier = (NumericCaptureFixture.admitted current).Values[call.Count]
+            Assert.Equal(numeric.Values[call.Count].Range, carrier.Range)
+            Assert.Equal(numeric.Values[call.Count].Slot, carrier.Slot)
+            Assert.True(Clef.Compiler.Baker.Ingredients.MemoryValues.stringRelations graph <>
+                        Clef.Compiler.Baker.Ingredients.MemoryValues.stringRelations current)
+            // Numeric renewal retires the citizens named by the old memory
+            // domain, so that dependent domain must be settled again.
+            Assert.Empty(current.Edges |> List.filter (fun edge -> match edge.Role with EdgeRole.MemoryDomain _ -> true | _ -> false))
+            memoryRefusal "MemoryPublication: Exactly one source MemorySettlement domain is required before witnessing." current
+        repeated |> replace extent |> Clef.Compiler.Nanopass.NumericSettlement.normalize
+        |> NumericCaptureFixture.admitted |> ignore
+
+    [<Fact>]
+    member _.``Numeric renewal refuses a changed source string length outside its held range`` () =
+        let graph, boundary = IntrinsicWriteFixture.admitted ()
+        let call = Assert.Single boundary.IntrinsicWrites.Values
+        let numeric = NumericCaptureFixture.admitted graph
+        let literal = graph.Nodes[IntrinsicWriteFixture.literal graph "hello"]
+        let changedLiteral = { literal with Kind = SemanticKind.Literal(NativeLiteral.String("hello" + String.replicate 100 "x")) }
+        let changed = { graph with Nodes = graph.Nodes.Add(literal.Id, changedLiteral) }
+        NumericCaptureFixture.invocationRefusal changed
+        let renewed = changed |> Clef.Compiler.Nanopass.OrdinaryDemand.normalize |> Clef.Compiler.Nanopass.NumericSettlement.normalize
+        let repeated = Clef.Compiler.Nanopass.NumericSettlement.normalize renewed
+        for current in [renewed; repeated] do
+            let fresh = current.RangeContextFacts.Value.Values[RangeContext.Shared, call.Count]
+            Assert.False(ValueRange.contains numeric.Values[call.Count].Range fresh)
+            Assert.Equal(graph.Nodes[call.Count].ValueRange, current.Nodes[call.Count].ValueRange)
+            NumericCaptureFixture.heldRangeRefusal current
 
     [<Theory>]
     [<InlineData("range")>]

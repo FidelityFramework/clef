@@ -246,7 +246,7 @@ let private settleOne (graph: SemanticGraph) (numeric: NumericWitnessProjection)
         Ok (enrichment, plan)
     with error -> Error ("HardwareModule source settlement: " + error.Message)
 
-let settle (graph: SemanticGraph) (numeric: NumericWitnessProjection) =
+let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection) =
     graph.Nodes.Values |> Seq.fold (fun (enrichment, plans, failures, required) node ->
         match node.Kind with
         | SemanticKind.Binding(_, _, _, Some DeclRoot.HardwareModule) ->
@@ -255,3 +255,6 @@ let settle (graph: SemanticGraph) (numeric: NumericWitnessProjection) =
             | Ok (added, plan) -> Enrichment.combine enrichment added, plan :: plans, failures, required
             | Error reason -> enrichment, plans, Map.add node.Id reason failures, required
         | _ -> enrichment, plans, failures, required) (Enrichment.empty, [], Map.empty, Set.empty)
+
+let settle graph numeric =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> settleCore graph numeric)

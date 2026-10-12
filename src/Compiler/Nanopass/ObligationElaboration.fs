@@ -239,7 +239,7 @@ let private entrySubject (graph: SemanticGraph) =
     |> function [node] -> Some node | _ -> None
 
 /// Project the obligation enrichment from the saturated graph.
-let elaborate (graph: SemanticGraph) : Enrichment =
+let private elaborateCore (graph: SemanticGraph) : Enrichment =
     let platform = resolve graph
     let immutableSpace = platform |> Option.bind immutableProgramSpace
     let authority = platform |> Option.map immutableProgramAuthority |> Option.defaultValue []
@@ -255,6 +255,10 @@ let elaborate (graph: SemanticGraph) : Enrichment =
           dimensionalSites graph |> List.map (Recipes.dimensional enrichId) |> Enrichment.concat
           applicationSites graph |> List.map (Recipes.application enrichId) |> Enrichment.concat
           Enrichment.concat readln ]
+
+let elaborate graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> elaborateCore graph)
+
 
 /// The integer range pass has already settled each literal's enclosure and
 /// selection. This observer consumes those facts and the selected declaration.
@@ -311,7 +315,7 @@ let private elaborateIntegers (graph: SemanticGraph) (core: DeclaredCore option)
 /// This first real-valued slice seeds source singleton ranges and checks the
 /// current concrete literal representation; real-expression selection remains
 /// a separate range-analysis responsibility.
-let elaborateSettled (graph: SemanticGraph) : Enrichment * Diagnostic list =
+let private elaborateSettledCore (graph: SemanticGraph) : Enrichment * Diagnostic list =
     let deferred = DemandProjection.deferredOnly graph
     let core = resolve graph |> Option.bind (fun platform -> platform.Core)
     let enrichId = freshId ()
@@ -377,6 +381,10 @@ let elaborateSettled (graph: SemanticGraph) : Enrichment * Diagnostic list =
             |> Option.defaultValue Enrichment.empty
         | None -> Enrichment.empty
     Enrichment.concat [Enrichment.concat enrichments; integers; layout; mapped], List.concat diagnostics @ integerDiagnostics
+
+let elaborateSettled graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> elaborateSettledCore graph)
+
 
 /// Retract the current owner's old consequence annotations before replacement.
 let retireAnchors = Recipes.retireAnchors

@@ -349,7 +349,7 @@ let private intrinsicWrites enrichId anchor (graph: SemanticGraph) =
 
 /// Late stage: all source ranges and ordinary numeric meets are already fixed.
 /// The complete source domain records negative membership dependencies too.
-let elaborate (graph: SemanticGraph) : Enrichment =
+let private elaborateCore (graph: SemanticGraph) : Enrichment =
     let enrichId = Elaboration.freshId ()
     let anchor = Ingredients.anchor enrichId graph
     let intrinsic = intrinsicWrites enrichId anchor.Id graph
@@ -527,3 +527,6 @@ let elaborate (graph: SemanticGraph) : Enrichment =
         @ (domain.IntrinsicImports |> List.map Bytes.importRow)
         @ (domain.IntrinsicCalls |> List.collect Bytes.callRows)
     Enrichment.combine (Enrichment.combine { NewNodes = [anchor]; Annotated = []; NewEdges = rows } proofs) intrinsic.Enrichment
+
+let elaborate graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> elaborateCore graph)

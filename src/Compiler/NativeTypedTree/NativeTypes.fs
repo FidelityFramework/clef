@@ -91,13 +91,26 @@ type NodeId = NodeId of int
 
 module NodeId =
     let mutable private counter = 0
+    let mutable private reservations = 0
 
     let fresh () =
         let id = counter
         counter <- counter + 1
         NodeId id
 
-    let reset () = counter <- 0
+    /// A reentrant check must not reuse identities already minted by enrichment.
+    let reset () =
+        if reservations = 0 then counter <- 0
+
+    /// Called under CheckExecution's process gate; never lowers the allocator.
+    let reserveAbove maximum =
+        counter <- max counter (maximum + 1)
+
+    let withReservation maximum work =
+        reserveAbove maximum
+        reservations <- reservations + 1
+        try work ()
+        finally reservations <- reservations - 1
 
     let value (NodeId id) = id
 

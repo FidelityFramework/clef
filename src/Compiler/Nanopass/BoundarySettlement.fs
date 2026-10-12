@@ -21,6 +21,9 @@ let elaborate = Recipes.elaborate
 let foldIn (enrichment: Enrichment) graph =
     ObligationElaboration.foldIn enrichment graph
 
-let normalize graph =
+let private normalizeCore graph =
     let graph = graph |> retract |> BoundaryDeclarations.normalize
     foldIn (elaborate graph) graph
+
+let normalize graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeCore graph)

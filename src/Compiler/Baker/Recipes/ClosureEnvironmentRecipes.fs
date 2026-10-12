@@ -107,7 +107,7 @@ let private plain (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion
                   @ (nodes |> List.collect structuralIncidence) @ List.ofSeq referenceOrigins }
     | NoMatch reason -> invalidOp ("Plain callable saturation failed: " + reason)
 
-let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
+let private materializeCore (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
     if plan.Captures.IsEmpty then plain ctx graph plan else
     let source = plan.Source
     let state = SaturationState.create { source.Range with End = source.Range.Start }
@@ -257,3 +257,6 @@ let materialize (ctx: Context) (graph: SemanticGraph) (plan: Plan) : Expansion =
                   @ (nodes |> List.collect structuralIncidence) @ captures @ [signature] @ List.ofSeq formations
                   @ (forwarded |> Map.toList |> List.collect snd) }
     | NoMatch reason -> invalidOp ("Closure environment saturation failed: " + reason)
+
+let materialize ctx graph plan =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> materializeCore ctx graph plan)

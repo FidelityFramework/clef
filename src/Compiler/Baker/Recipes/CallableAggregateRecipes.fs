@@ -233,7 +233,7 @@ let private formationInputs (graph: SemanticGraph) (reading: Origins.AggregateRe
 /// Resolve direct fields/payloads with one closed formation per component.
 /// Wider families remain residuals until their source selector/adapter/storage
 /// recipes can establish the complete protocol. No old account supplies facts.
-let settleWork (groups: WorkGroup list) (inputs: Inputs) (graph: SemanticGraph) : Settlement =
+let private settleWorkCore (groups: WorkGroup list) (inputs: Inputs) (graph: SemanticGraph) : Settlement =
     let residuals = ResizeArray<Residual>()
     let refuse occurrence code reason = residuals.Add { Occurrence = occurrence; Code = code; Reason = reason }
     let mutable slots : Map<NodeId, CallableAggregateSlot> = Map.empty
@@ -367,6 +367,10 @@ let settleWork (groups: WorkGroup list) (inputs: Inputs) (graph: SemanticGraph) 
     slots <- slots |> Map.filter (fun identity _ -> usedSlots.Contains identity)
     { Slots = slots; Values = values; Dependencies = Map.empty; Residuals = List.ofSeq residuals |> List.distinct }
 
+let settleWork groups inputs graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> settleWorkCore groups inputs graph)
+
+
 /// Accounts observe the complete merged tables, never a frontier's partial
 /// view. The full recipe calls this over all rows; the owner supplies only the
 /// affected occurrence set while folding a representation frontier.
@@ -389,6 +393,9 @@ let authorAccounts (sites: Set<NodeId>) (inputs: Inputs) (graph: SemanticGraph) 
             (rows.Dependencies, rows.Residuals)
     { rows with Dependencies = dependencies; Residuals = List.distinct residuals }
 
-let settle (resolution: Origins.Resolution) (inputs: Inputs) (graph: SemanticGraph) : Settlement =
+let private settleCore (resolution: Origins.Resolution) (inputs: Inputs) (graph: SemanticGraph) : Settlement =
     let rows = settleWork (prepareWork resolution graph) inputs graph
     authorAccounts (rows.Values |> Map.keys |> Set.ofSeq) inputs graph rows
+
+let settle resolution inputs graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> settleCore resolution inputs graph)

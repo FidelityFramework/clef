@@ -22,6 +22,11 @@ let synchronized (work: unit -> 'T) : 'T =
     finally
         if entered then Monitor.Exit gate
 
+/// Retained-graph allocation shares checker ownership. The reservation callback
+/// keeps this early gate independent of the later semantic graph types.
+let enrich (reserve: (unit -> 'T) -> 'T) (work: unit -> 'T) : 'T =
+    synchronized (fun () -> reserve work)
+
 /// Configuration belongs to this entire operation, including result projection.
 let run (configuration: PhaseConfig.ArtifactConfig) (work: unit -> 'T) : 'T =
     synchronized (fun () ->

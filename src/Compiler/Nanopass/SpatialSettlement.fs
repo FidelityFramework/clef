@@ -7,7 +7,7 @@ open Clef.Compiler.Baker.Ingredients.Obligations
 module Spatial = Clef.Compiler.Baker.Ingredients.SpatialValues
 module Boundary = Clef.Compiler.Baker.Ingredients.Boundaries
 
-let normalize (graph: SemanticGraph) =
+let private normalizeCore (graph: SemanticGraph) =
     let retired = graph.Nodes |> Map.fold (fun ids id node -> if Spatial.owned node then Set.add id ids else ids) Set.empty
     let graph = ObligationElaboration.retireAnchors retired graph
     let edges = graph.Edges |> List.filter (fun edge ->
@@ -34,3 +34,6 @@ let normalize (graph: SemanticGraph) =
                               NewEdges=Spatial.domainRow anchor.Id domain :: Spatial.domainRewrite anchor.Id domain ::
                                        (hardware |> List.map Spatial.hardwareRow) @ (kernels |> List.map Spatial.kernelRow) }
         ObligationElaboration.foldIn enrichment graph
+
+let normalize graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeCore graph)

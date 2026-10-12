@@ -51,7 +51,7 @@ type private Plan = {
     ResultPath: NodeId list
 }
 
-let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
+let private prepareCore (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let known, _ = Origins.settle graph curry
     let incidence = nodes.Values |> Seq.collect Incidence.structuralIncidence |> Seq.toList
@@ -469,3 +469,6 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) : Preparation =
                    |> List.collect (fun id -> Incidence.structuralIncidence folded.Nodes[id])) }
     { Graph = RepresentationRanges.preserve graph updated; Curry = updatedCurry; Destinations = destinations; AllocationOrigins = allocationOrigins
       FactoryCalls = factoryCalls; Unresolved = List.rev unresolved }
+
+let prepare graph curry =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> prepareCore graph curry)

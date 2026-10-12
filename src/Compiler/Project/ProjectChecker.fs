@@ -192,7 +192,7 @@ module ProjectChecker =
         Types = lazy Map.empty; Platform = None; ModuleClassifications = lazy Map.empty
         FieldRanges = lazy Map.empty; ElementRanges = lazy Map.empty; Layouts = lazy Map.empty
         StaticStringPool = None; LiteralStorage = Map.empty; Escaping = lazy Map.empty
-        Codata = lazy Codata.empty; Edges = []; WitnessProvenance = None; SequenceRangeProvenance = None
+        Codata = lazy Codata.empty; Edges = []; WitnessProvenance = None; SequenceRangeProvenance = None; RangeContextFacts = None
     }
 
     let internal checkPrepared (prepared: PreparedProject) : ProjectCheckResult =

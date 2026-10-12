@@ -214,7 +214,7 @@ let coverageRows (call: BoundaryCall) (coverage: BoundaryCoverage) outcome =
       row (EdgeRole.BoundaryProof outcome) coverage.Ordinal (coverage.Obligation :: sources) call.Site
       { Class = EdgeClass.Provenance; Role = EdgeRole.EnrichedWith; Ordinal = coverage.Ordinal; Sources = sources; Target = coverage.Obligation } ]
 
-let coverage enrichId (graph: SemanticGraph) (call: BoundaryCall) ordinal operand input destination =
+let private coverageCore enrichId (graph: SemanticGraph) (call: BoundaryCall) ordinal operand input destination =
     let initial = { Site = call.Site; Operand = operand; Ordinal = ordinal; Input = input; Destination = destination; Obligation = NodeId 0 }
     match coverageBody initial with
     | None -> Error "A scalar boundary coverage proof requires observable finite source and destination ranges."
@@ -227,8 +227,12 @@ let coverage enrichId (graph: SemanticGraph) (call: BoundaryCall) ordinal operan
         let outcome = coverageOutcome coverage
         Ok ({ NewNodes = [node]; Annotated = []; NewEdges = coverageRows call coverage outcome }, coverage, outcome)
 
+let coverage enrichId graph call ordinal operand input destination =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> coverageCore enrichId graph call ordinal operand input destination)
+
+
 /// A graph citizen records this recipe firing even for an empty domain.
-let anchor enrichId (graph: SemanticGraph) =
+let private anchorCore enrichId (graph: SemanticGraph) =
     let sourceRange = graph.Nodes |> Map.toSeq |> Seq.tryHead |> Option.map (snd >> _.Range)
                       |> Option.defaultValue { File = ""; Start = { Line = 0; Column = 0 }; End = { Line = 0; Column = 0 } }
     { Id = NodeId.fresh (); Kind = SemanticKind.Literal NativeLiteral.Unit; Range = sourceRange
@@ -236,3 +240,6 @@ let anchor enrichId (graph: SemanticGraph) =
       LayoutHint = None; Children = []; Parent = None; Metadata = Map.empty; IsReachable = false
       EmissionStrategy = EmissionStrategy.Inline; ValueRange = None }
     |> markBaker "BoundarySettlement" enrichId |> markOwned
+
+let anchor enrichId graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> anchorCore enrichId graph)

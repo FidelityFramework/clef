@@ -325,7 +325,7 @@ let establishScalarRanges (graph: SemanticGraph) : Hyperedge list * Hyperedge li
 
 /// The immutable string owns a fresh snapshot. This uses the existing copying
 /// Array.sub operation, not a reinterpretation of externally mutable storage.
-let expand (graph: SemanticGraph) (plan: Plan) =
+let private expandCore (graph: SemanticGraph) (plan: Plan) =
     let sourceType = graph.Nodes[plan.Input].Type
     let point = { plan.Site.Range with End = plan.Site.Range.Start }
     let state = SaturationState.create point "String.fromBytes" (Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId()) plan.Site.Id graph.Platform
@@ -371,10 +371,14 @@ let expand (graph: SemanticGraph) (plan: Plan) =
         root, created @ [obligation], storage @ [snapshotEdge; textEdge; constrains participants obligation]
     | NoMatch reason, _ -> failwithf "String byte storage recipe failed: %s" reason
 
+let expand graph plan =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> expandCore graph plan)
+
+
 /// The source exposes ordinary integers, so the fresh destination's element
 /// representation follows every reachable write, including values above 255.
 /// Only the inaccessible input view has the encoding's byte representation.
-let expandToBytes (graph: SemanticGraph) (source: SemanticNode) input =
+let private expandToBytesCore (graph: SemanticGraph) (source: SemanticNode) input =
     let point = { source.Range with End = source.Range.Start }
     let state = SaturationState.create point "String.toBytes" (Clef.Compiler.PSGSaturation.SemanticGraph.Elaboration.freshId()) source.Id graph.Platform
     let intrinsic modl operation args types resultType = saturation {
@@ -413,3 +417,6 @@ let expandToBytes (graph: SemanticGraph) (source: SemanticNode) input =
             let storage = { Class = EdgeClass.Range; Role = EdgeRole.StringByteStorage(0I, 255I, representation.Name); Sources = [source.Id; input; view; declaration]; Target = view; Ordinal = 0 }
             Some(root, created, [edge; storage])
     | NoMatch reason, _ -> failwithf "String array snapshot recipe failed: %s" reason
+
+let expandToBytes graph source input =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> expandToBytesCore graph source input)

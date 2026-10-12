@@ -8,7 +8,7 @@ open Clef.Compiler.Baker.Ingredients.Obligations
 module Memory = Clef.Compiler.Baker.Ingredients.MemoryValues
 module Boundary = Clef.Compiler.Baker.Ingredients.Boundaries
 
-let normalize (graph: SemanticGraph) =
+let private normalizeCore (graph: SemanticGraph) =
     let retired = graph.Nodes |> Map.fold (fun ids id node -> if Memory.owned node then Set.add id ids else ids) Set.empty
     let graph = ObligationElaboration.retireAnchors retired graph
     let edges = graph.Edges |> List.filter (fun edge ->
@@ -43,3 +43,6 @@ let normalize (graph: SemanticGraph) =
                             { NewNodes = [anchor]; Annotated = []
                               NewEdges = Memory.domainRow anchor.Id domain :: Memory.domainRewrite anchor.Id domain :: (domain.Operations |> List.map Memory.operationRow) @ (copies |> List.map Memory.copyRow) }
         ObligationElaboration.foldIn enrichment graph
+
+let normalize graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeCore graph)

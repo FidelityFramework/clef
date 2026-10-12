@@ -58,7 +58,7 @@ let private replaceArm (edge: Hyperedge) body (parent: SemanticNode) =
     let children = kindEdges parent.Id kind |> List.filter Hyperedge.isStructural |> List.collect _.Sources
     { parent with Kind = kind; Children = children }
 
-let rec normalize (graph: SemanticGraph) =
+let rec private normalizeCore (graph: SemanticGraph) =
     let activations = graph.Nodes |> Map.toSeq |> Seq.choose (fun (id, node) ->
         match node.Kind with SemanticKind.Lambda _ -> Some id | _ -> None) |> Set.ofSeq
     let structural = incidence graph
@@ -86,4 +86,7 @@ let rec normalize (graph: SemanticGraph) =
             NewEdges = inherited @ provenance
             ElaborationKind = "Baker"; ElaborationSource = "Branch.occurrence"
         }
-        FoldIn.foldIn (RecipeSet.fromList "Branch.occurrence" [recipe]) graph |> normalize
+        FoldIn.foldIn (RecipeSet.fromList "Branch.occurrence" [recipe]) graph |> normalizeCore
+
+let normalize graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeCore graph)

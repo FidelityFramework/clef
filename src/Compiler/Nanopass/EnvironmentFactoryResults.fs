@@ -14,7 +14,7 @@ module ExplicitDemand = Clef.Compiler.PSGSaturation.SemanticGraph.ExplicitDemand
 
 /// Accounts leave this recipe explicitly: subsequent representation fold-ins
 /// replace unfinished Codata before NativeService assembles the final facts.
-let prepareWithAccounts (graph: SemanticGraph) (curry: CurryInfo) =
+let private prepareWithAccountsCore (graph: SemanticGraph) (curry: CurryInfo) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let rec finalClosure seen id =
         if Set.contains id seen then None else
@@ -203,6 +203,10 @@ let prepareWithAccounts (graph: SemanticGraph) (curry: CurryInfo) =
     let demanded = OrdinaryDemand.normalize updated
     let transferred = Clef.Compiler.Baker.Recipes.StringComparisonRecipes.transferLengthAfterFactoryRewrite graph demanded
     RepresentationRanges.preserve graph transferred, updatedCurry, resultAccounts
+
+let prepareWithAccounts graph curry =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> prepareWithAccountsCore graph curry)
+
 
 /// Retained component callers consume the graph/curry pair. Production carries
 /// the explicit accounts above through final source-owned Codata assembly.

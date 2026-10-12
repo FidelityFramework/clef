@@ -41,7 +41,7 @@ type RecipeCreator = SemanticNode -> SemanticGraph -> RecipeCreationResult
 /// - graph: the input PSG
 ///
 /// Returns: RecipeSet containing all recipes AND diagnostics (artifact 2 or 4)
-let fanOut
+let private fanOutCore
     (kind: string)
     (shouldElaborate: SemanticNode -> bool)
     (createRecipe: RecipeCreator)
@@ -94,3 +94,6 @@ let fanOut
             ReplacementMap = replacementMap
             Diagnostics = diagnostics
         }
+
+let fanOut kind shouldElaborate createRecipe graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> fanOutCore kind shouldElaborate createRecipe graph)

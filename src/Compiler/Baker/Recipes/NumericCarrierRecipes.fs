@@ -68,8 +68,9 @@ let private elementSlot (graph: SemanticGraph) (node: SemanticNode) =
             | _ -> None
     | _ -> None
 
-let elaborateWithRangeReview (inheritedFiniteReview: bool) (inheritedSequenceReview: bool)
-                             (inheritedSequenceAuthority: SequenceRangeAuthority option) (graph: SemanticGraph) =
+let private elaborateWithRangeReviewCore (inheritedFiniteReview: bool) (inheritedCaptureReview: bool) (inheritedSequenceReview: bool)
+                             (inheritedSequenceAuthority: SequenceRangeAuthority option)
+                             (inheritedRangeFacts: RangeContextFacts option) (graph: SemanticGraph) =
     let enrichId = Elaboration.freshId ()
     let anchor = Boundary.anchor enrichId graph |> fun node -> { node with Metadata = node.Metadata.Remove "Baker.BoundaryOwned" } |> Numeric.markOwned
     let deferred = OrdinaryDemand.tryDeferredOnly graph |> Result.defaultValue Set.empty
@@ -92,9 +93,23 @@ let elaborateWithRangeReview (inheritedFiniteReview: bool) (inheritedSequenceRev
         | Ok None -> false
         | _ -> true
     let finiteActive = inheritedFiniteReview || currentFiniteActive
-    // Re-reading logical facts here prevents numeric settlement from blessing
-    // old finite annotations merely by taking a new relation snapshot.
-    let freshFacts = if finiteActive then Some(RangeAnalysis.sourceFacts graph) else None
+    let captureRelations = Numeric.captureRelations graph
+    let captureActive = inheritedCaptureReview || not captureRelations.IsEmpty
+    // Recompute through the owning fixed point on this settled revision. This
+    // issues evidence without rewriting held annotations or selected widths.
+    let issuedRange = RangeAnalysis.issue graph
+    let issuedRangeFacts = issuedRange |> Result.toOption
+    let rangeCurrent = Result.isOk issuedRange
+    // A failed issue retains the previous requirement, never its authority.
+    // NumericSettlement installs only issuedRangeFacts on the graph.
+    let rangeFacts = issuedRangeFacts |> Option.orElse (graph.RangeContextFacts |> Option.orElse inheritedRangeFacts)
+    let freshFacts =
+        match issuedRangeFacts with
+        | Some facts ->
+            facts.Values |> Map.toList |> List.choose (function
+                | (RangeContext.Shared, id), range -> Some(id, range)
+                | _ -> None) |> Map.ofList
+        | None -> Map.empty
     let finiteProofsCurrent = not finiteActive || FiniteCellRanges.evidenceCurrent graph
     let sequenceActive = inheritedSequenceReview || Numeric.sequenceRangeActive graph
     let sequenceAuthority =
@@ -113,11 +128,15 @@ let elaborateWithRangeReview (inheritedFiniteReview: bool) (inheritedSequenceRev
         | Some kind when NTUKind.isInteger kind ->
             match node.ValueRange, RangeAnalysis.heldWidth graph node.Id with
             | Some(ValueRange.Bounded(lo, hi) as range), Some bits when lo <= hi && bits > 0 ->
-                let current = freshFacts |> Option.forall (fun facts ->
-                    match facts.TryFind node.Id with
+                let current = rangeCurrent && (
+                    match freshFacts.TryFind node.Id with
                     | Some(ValueRange.Bounded _ as fresh) -> ValueRange.contains range fresh
                     | _ -> false)
-                if not current then Error "Finite-cell relation premises changed or current source facts no longer fit the held integer range."
+                if not current then
+                    if finiteActive && captureActive then Error "Finite-cell and closure capture relation premises changed or current source facts no longer fit the held integer range."
+                    elif finiteActive then Error "Finite-cell relation premises changed or current source facts no longer fit the held integer range."
+                    elif captureActive then Error "Closure capture relation premises changed or current source facts no longer fit the held integer range."
+                    else Error "Invocation-context range premises changed or the producer's shared facts no longer fit the held integer range."
                 else
                     match RangeAnalysis.selectedRepresentation graph node.Id, sourceCore with
                     | Some representation, Some core when sourceReading.Findings.IsEmpty ->
@@ -233,12 +252,19 @@ let elaborateWithRangeReview (inheritedFiniteReview: bool) (inheritedSequenceRev
     let unresolved =
         if sequenceCurrent then unresolved
         else unresolved.Add(anchor.Id, "Finite-sequence relation premises changed or the source-to-machine range authority is missing; renew the owning source proof and representation handoff.")
+    let unresolved =
+        match issuedRange with
+        | Ok _ -> unresolved
+        | Error reason -> unresolved.Add(anchor.Id, "Invocation-context range issuance failed: " + reason)
     let domain =
         { RequiresSequenceReview = sequenceActive
           SequenceRangeAuthority = sequenceAuthority
+          RangeContextFacts = rangeFacts
           RequiresFiniteCellReview = currentFiniteActive || (inheritedFiniteReview && not unresolved.IsEmpty)
           FiniteCellRelations = finiteRelations |> Result.defaultValue None
           FiniteCellObligations = finiteObligations
+          RequiresCaptureReview = not captureRelations.IsEmpty || (inheritedCaptureReview && not unresolved.IsEmpty)
+          CaptureRelations = captureRelations
           Premises = Numeric.premises graph; Platform = Boundary.platformPremise graph.Platform
           Roots = graph.DeclarationRoots; Escaping = graph.Escaping.Value; Layouts = graph.Layouts.Value
           Required = required; ResultSites = required |> Set.filter (fun id -> resultSite graph.Nodes[id])
@@ -251,12 +277,18 @@ let elaborateWithRangeReview (inheritedFiniteReview: bool) (inheritedSequenceRev
           OperationMeets = operationMeets; OperationProofs = operationProofs
           IndexTransports = List.rev indexTransports; IndexRequired = indexSites |> List.map (fst >> _.Id) |> Set.ofList
           Values = List.rev values; Unresolved = unresolved }
-    Enrichment.combine (Enrichment.combine (Enrichment.combine proofs operationEnrichment) indexEnrichment)
-        { NewNodes = [anchor]; Annotated = []
-          NewEdges = Numeric.domainRow anchor.Id domain :: Numeric.domainRewrite anchor.Id domain :: (domain.Values |> List.map Numeric.carrierRow) }
+    let enrichment =
+        Enrichment.combine (Enrichment.combine (Enrichment.combine proofs operationEnrichment) indexEnrichment)
+            { NewNodes = [anchor]; Annotated = []
+              NewEdges = Numeric.domainRow anchor.Id domain :: Numeric.domainRewrite anchor.Id domain :: (domain.Values |> List.map Numeric.carrierRow) }
+    enrichment, issuedRangeFacts
+
+let elaborateWithRangeReview inheritedFiniteReview inheritedCaptureReview inheritedSequenceReview inheritedSequenceAuthority inheritedRangeFacts graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> elaborateWithRangeReviewCore inheritedFiniteReview inheritedCaptureReview inheritedSequenceReview inheritedSequenceAuthority inheritedRangeFacts graph)
+
 
 /// Initial numeric settlement retains the existing current-source activation rule.
 let elaborateWithFiniteReview inheritedFiniteReview graph =
-    elaborateWithRangeReview inheritedFiniteReview false None graph
+    elaborateWithRangeReview inheritedFiniteReview false false None None graph |> fst
 
-let elaborate graph = elaborateWithRangeReview false false None graph
+let elaborate graph = elaborateWithRangeReview false false false None None graph |> fst

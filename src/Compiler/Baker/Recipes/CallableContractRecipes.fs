@@ -7,7 +7,7 @@ open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module Contract = Clef.Compiler.Baker.Ingredients.CallableContracts
 
-let settle (graph: SemanticGraph) (layouts: Map<NodeId, EnvironmentLayout>)
+let private settleCore (graph: SemanticGraph) (layouts: Map<NodeId, EnvironmentLayout>)
            (previous: Map<NodeId, CallableContract>) (carriers: Map<NodeId, CallableCarrier>) =
     // The source owner is checked once for this forward fold. No consumer can
     // mint support from a stale domain or a convenient signature alone.
@@ -41,10 +41,14 @@ let settle (graph: SemanticGraph) (layouts: Map<NodeId, EnvironmentLayout>)
         |> Map.ofSeq
     contracts, carriers |> Map.map (fun _ carrier -> Contract.assign graph layouts contracts carrier)
 
+let settle graph layouts previous carriers =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> settleCore graph layouts previous carriers)
+
+
 /// An aggregate placement step reports the exact occurrence representations it
 /// changed. Renew only callable families whose parameter/result sites intersect
 /// that delta; all other contract and carrier rows retain their current values.
-let renewForSites (graph: SemanticGraph) layouts (sites: Set<NodeId>)
+let private renewForSitesCore (graph: SemanticGraph) layouts (sites: Set<NodeId>)
                   (contracts: Map<NodeId, CallableContract>) (carriers: Map<NodeId, CallableCarrier>) =
     let implementations =
         carriers.Values |> Seq.filter (fun carrier ->
@@ -62,3 +66,6 @@ let renewForSites (graph: SemanticGraph) layouts (sites: Set<NodeId>)
     let nextCarriers = current |> Map.fold (fun table occurrence carrier ->
         if (table |> Map.tryFind occurrence) = Some carrier then table else table |> Map.add occurrence carrier) carriers
     (if renewed = contracts then contracts else renewed), nextCarriers
+
+let renewForSites graph layouts sites contracts carriers =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> renewForSitesCore graph layouts sites contracts carriers)

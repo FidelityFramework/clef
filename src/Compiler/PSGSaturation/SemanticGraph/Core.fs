@@ -12,6 +12,25 @@ open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 //-------------------------------------------------------------------------
 
 module SemanticGraph =
+    /// Read every structural identity before a transformation retires citizens.
+    let maxNodeIdIn (nodes: Map<NodeId, SemanticNode>) (edges: Hyperedge list) =
+        let includeId maximum id = max maximum (NodeId.value id)
+        let maximum =
+            nodes
+            |> Map.fold (fun maximum key node ->
+                let maximum = includeId (includeId maximum key) node.Id
+                let maximum = List.fold includeId maximum node.Children
+                node.Parent |> Option.fold includeId maximum) -1
+        edges
+        |> List.fold (fun maximum edge ->
+            List.fold includeId (includeId maximum edge.Target) edge.Sources) maximum
+
+    let maxNodeId (graph: SemanticGraph) = maxNodeIdIn graph.Nodes graph.Edges
+
+    /// Protect the complete allocating operation, including reentrant checks.
+    let withEnrichment (graph: SemanticGraph) work =
+        Clef.Compiler.CheckExecution.enrich (NodeId.withReservation (maxNodeId graph)) work
+
     /// Map every type carried by a node, including metadata consumed by lowering.
     /// Updating only node.Type leaves closures, patterns and witnesses unresolved.
     let mapNodeTypes (transform: NativeType -> NativeType) (node: SemanticNode) =
@@ -145,6 +164,7 @@ module SemanticGraph =
         Edges = []
         WitnessProvenance = None
         SequenceRangeProvenance = None
+        RangeContextFacts = None
     }
 
     /// Create an empty semantic graph with platform context
@@ -165,6 +185,7 @@ module SemanticGraph =
         Edges = []
         WitnessProvenance = None
         SequenceRangeProvenance = None
+        RangeContextFacts = None
     }
 
     /// Source graph edits invalidate witness publication while preserving the

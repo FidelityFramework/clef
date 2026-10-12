@@ -30,7 +30,7 @@ type private Declaration = {
 let private sameType left right =
     Clef.Compiler.NativeTypedTree.TypeIdentities.ofType left = Clef.Compiler.NativeTypedTree.TypeIdentities.ofType right
 
-let expand (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
+let private expandCore (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
     let mutable diagnostics = []
     let error (site: SemanticNode) message =
         diagnostics <- {
@@ -266,3 +266,6 @@ let expand (graph: SemanticGraph) : SemanticGraph * Diagnostic list =
             error node "A closed callback factory must be applied directly to a known closed module handler; it cannot escape as a function value."
         | _ -> ()
     expanded, List.rev diagnostics
+
+let expand graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> expandCore graph)

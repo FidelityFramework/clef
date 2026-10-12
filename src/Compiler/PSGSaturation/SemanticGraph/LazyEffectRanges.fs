@@ -289,7 +289,7 @@ let recognize (graph: SemanticGraph) : Bound list =
 
 /// Retain exact joint proof participants and reuse unchanged obligation nodes.
 /// Removed or changed premises retract the old range relation and obligation.
-let settle (bounds: Bound list) (graph: SemanticGraph) =
+let private settleCore (bounds: Bound list) (graph: SemanticGraph) =
     let old = graph.Nodes |> Map.filter (fun _ node ->
         match node.Kind with SemanticKind.Obligation { Body = ObligationBody.FiniteAdditiveEffects _ } -> true | _ -> false)
     let oldIds = old.Keys |> Set.ofSeq
@@ -327,3 +327,6 @@ let settle (bounds: Bound list) (graph: SemanticGraph) =
             let anchors = match node.Metadata.TryFind ObligationMetadata.Anchors with Some(MetadataValue.StringList names) -> names | _ -> []
             nodes <- nodes.Add(target, { node with Metadata = node.Metadata.Add(ObligationMetadata.Anchors, MetadataValue.StringList(name :: anchors)) })
     { graph with Nodes = nodes; Edges = edges }
+
+let settle bounds graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> settleCore bounds graph)

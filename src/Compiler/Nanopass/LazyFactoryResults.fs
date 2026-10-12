@@ -12,7 +12,7 @@ module Lazy = Clef.Compiler.PSGSaturation.SemanticGraph.LazyValues
 module Incidence = Clef.Compiler.Baker.Ingredients.Closures
 module ExplicitDemand = Clef.Compiler.PSGSaturation.SemanticGraph.ExplicitDemand
 
-let prepare (graph: SemanticGraph) (curry: CurryInfo) =
+let private prepareCore (graph: SemanticGraph) (curry: CurryInfo) =
     let present = graph.Nodes.Values |> Seq.exists (fun node ->
         node.IsReachable && match node.Kind with SemanticKind.LazyValue _ -> true | _ -> false)
     if not present then graph, curry else
@@ -165,3 +165,6 @@ let prepare (graph: SemanticGraph) (curry: CurryInfo) =
                                         (edge.Class = EdgeClass.Structural || edge.Class = EdgeClass.Reference || edge.Class = EdgeClass.Evaluation))))
                                         @ edges @ (changed |> Set.toList |> List.collect (fun id -> Incidence.structuralIncidence folded.Nodes[id])) }
     RepresentationRanges.preserve graph updated, updatedCurry
+
+let prepare graph curry =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> prepareCore graph curry)

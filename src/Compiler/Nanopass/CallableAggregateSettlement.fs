@@ -83,7 +83,7 @@ let private mergeFrontier (types: Set<TypeIdentity>) (selected: Recipe.Settlemen
       Dependencies = held.Dependencies |> Map.filter (fun site _ -> values.ContainsKey site)
       Residuals = selected.Residuals } : Recipe.Settlement
 
-let normalize (graph: SemanticGraph) =
+let private normalizeCore (graph: SemanticGraph) =
     let work = Recipe.prepareWork (Origins.resolveCallableBranches graph) graph
     let types =
         Set.union (work |> List.map _.AggregateType |> Set.ofList)
@@ -141,11 +141,15 @@ let normalize (graph: SemanticGraph) =
     residuals.AddRange final.Residuals
     install final settled, residuals |> Seq.distinct |> Seq.toList
 
+let normalize graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> normalizeCore graph)
+
+
 /// Later obligation owners can add proof annotations without changing the
 /// callable formation. Recheck the semantic rows against the current graph
 /// before minting its final dependency account. A changed row is a refusal,
 /// never a repaired witness/publication receipt.
-let renewAccounts (graph: SemanticGraph) =
+let private renewAccountsCore (graph: SemanticGraph) =
     let facts = graph.Codata.Value
     let expected = current graph
     let expectedSites = expected.Values |> Map.keys |> Set.ofSeq
@@ -170,3 +174,6 @@ let renewAccounts (graph: SemanticGraph) =
             { graph with Codata = lazy { facts with CallableAggregateDependencies = expected.Dependencies } }
             |> Graph.invalidateWitness
         refreshed, expected.Residuals
+
+let renewAccounts graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> renewAccountsCore graph)

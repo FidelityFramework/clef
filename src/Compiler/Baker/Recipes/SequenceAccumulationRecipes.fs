@@ -555,7 +555,7 @@ let isRelation (edge: Hyperedge) =
     | EdgeRole.SequencePullBound | EdgeRole.SequenceAccumulation | EdgeRole.SequencePullComposition _ -> true
     | _ -> false
 
-let obligations (graph: SemanticGraph) range (items: Accumulation list) =
+let private obligationsCore (graph: SemanticGraph) range (items: Accumulation list) =
     items |> List.mapi (fun index item ->
         match saturate range item with
         | None -> Enrichment.empty
@@ -574,6 +574,9 @@ let obligations (graph: SemanticGraph) range (items: Accumulation list) =
              make "additive" "sequence-additive-invariant" "The local additive update stays in the enclosure for every admitted successful pull." (ObligationBody.AdditiveLoopInvariant invariant)
              inner] |> Enrichment.concat)
     |> Enrichment.concat
+
+let obligations graph range items =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> obligationsCore graph range items)
 
 type private ProofPair = {
     Item: Accumulation

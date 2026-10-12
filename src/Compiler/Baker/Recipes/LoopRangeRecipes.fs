@@ -549,7 +549,7 @@ let foldRelations (recognition: Recognition) (graph: SemanticGraph) =
             | _ -> true)
     { graph with Edges = retained @ recognition.Edges }
 
-let obligations (graph: SemanticGraph) (settled: Saturated list) : Enrichment =
+let private obligationsCore (graph: SemanticGraph) (settled: Saturated list) : Enrichment =
     settled |> List.mapi (fun index result ->
         let item = result.Accumulation
         let (NodeId loopId), (NodeId cellId) = item.Induction.Loop, item.Cell
@@ -563,7 +563,10 @@ let obligations (graph: SemanticGraph) (settled: Saturated list) : Enrichment =
             (make (sprintf "loop_additive_%d_%d" loopId cellId) "additive-loop-invariant" "The admitted additive update preserves an enclosure at every iteration, including zero iterations and the final store." (ObligationBody.AdditiveLoopInvariant result.Invariant)))
     |> Enrichment.concat
 
-let linearObligations (graph: SemanticGraph) (settled: LinearSaturated list) : Enrichment =
+let obligations graph settled =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> obligationsCore graph settled)
+
+let private linearObligationsCore (graph: SemanticGraph) (settled: LinearSaturated list) : Enrichment =
     settled |> List.mapi (fun index result ->
         let item = result.Recurrence
         let (NodeId loopId), (NodeId cellId) = item.Induction.Loop, item.Cells.Head
@@ -576,3 +579,6 @@ let linearObligations (graph: SemanticGraph) (settled: LinearSaturated list) : E
             (make (sprintf "loop_trip_linear_%d_%d" loopId cellId) "finite-loop-trip" "The actual monotone induction bounds all completed iterations." (ObligationBody.FiniteLoopTrip result.Trip))
             (make (sprintf "loop_linear_%d_%d" loopId cellId) "finite-linear-recurrence" "The nonnegative transition enclosure covers every ordered update through the final iteration, certified by exact matrix powers." (ObligationBody.FiniteLinearRecurrence result.Invariant)))
     |> Enrichment.concat
+
+let linearObligations graph settled =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> linearObligationsCore graph settled)

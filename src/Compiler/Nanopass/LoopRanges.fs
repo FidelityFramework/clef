@@ -25,7 +25,7 @@ let recognize inputs (graph: SemanticGraph) =
     let recognition = Recipes.recognize graph inputs
     Recipes.foldRelations recognition graph, recognition
 
-let saturate range (recognition: Recipes.Recognition) (graph: SemanticGraph) =
+let private saturateCore range (recognition: Recipes.Recognition) (graph: SemanticGraph) =
     let settled, residuals = recognition.Accumulations |> List.fold (fun (settled, residuals) item ->
         match Recipes.saturate range item with
         | Ok result -> result :: settled, residuals
@@ -52,3 +52,6 @@ let saturate range (recognition: Recipes.Recognition) (graph: SemanticGraph) =
     |> SemanticGraph.addNodes annotations
     |> SemanticGraph.addNodes enrichment.NewNodes
     |> SemanticGraph.addEdges (enrichment.NewEdges @ residuals @ linearResiduals)
+
+let saturate range recognition graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> saturateCore range recognition graph)

@@ -399,7 +399,7 @@ let recognize (graph: SemanticGraph) : Bound list =
 
 /// A resident arithmetic certificate remains tied to its source transition,
 /// complete call ingress, startup authority, every writer and activation path.
-let settle (bounds: Bound list) (graph: SemanticGraph) =
+let private settleCore (bounds: Bound list) (graph: SemanticGraph) =
     let owned (node: SemanticNode) =
         match node.Kind with SemanticKind.Obligation info -> info.Kind = "finite-cell-effects" | _ -> false
     let old = graph.Nodes |> Map.filter (fun _ node -> owned node)
@@ -432,6 +432,10 @@ let settle (bounds: Bound list) (graph: SemanticGraph) =
         for target in bound.Cell :: (bound.Writes |> List.map _.Value) do
             edges <- { Class = EdgeClass.Range; Role = EdgeRole.FiniteCellRange; Sources = sources; Target = target; Ordinal = 0 } :: edges
     { graph with Nodes = nodes; Edges = edges }
+
+let settle bounds graph =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> settleCore bounds graph)
+
 
 /// Re-establish the complete current finite-cell certificate/row inventory in
 /// Baker before another owner may retain held ranges. This invokes source

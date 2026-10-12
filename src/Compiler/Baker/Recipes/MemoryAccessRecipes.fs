@@ -101,7 +101,7 @@ let byteRange (graph: SemanticGraph) (guard: Hyperedge) : Hyperedge option =
                 range lo hi ([buffer; index; length; lower; upper; predicate; required; source] @ Set.toList participants))
     | _ -> None
 
-let materialize (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) : Expansion =
+let private materializeCore (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) : Expansion =
     let state = SaturationState.create source.Range ctx.OriginalHOF ctx.ExpansionId source.Id graph.Platform
     let evidence = ResizeArray<Hyperedge>()
     let recipe =
@@ -162,6 +162,9 @@ let materialize (ctx: Context) (graph: SemanticGraph) (source: SemanticNode) : E
         { Structure = mkResultNoShadow nodes root []
           Edges = (graph.Edges |> List.filter (fun edge -> not (replaced.Contains(key edge))))
                   @ (nodes |> List.collect structuralIncidence) @ List.ofSeq evidence }
+
+let materialize ctx graph source =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> materializeCore ctx graph source)
 
 exception private MissingContract of string
 let private needed reason = function Some value -> value | None -> raise (MissingContract reason)
@@ -389,7 +392,7 @@ let private proofHolds = function
 /// Final source settlement follows ranges, complete-write element selection,
 /// storage and canonical meets. It returns explicit failures for unsupported
 /// residence and places rather than asking an emission Pattern to infer them.
-let settle (graph: SemanticGraph) (numeric: NumericWitnessProjection)
+let private settleCore (graph: SemanticGraph) (numeric: NumericWitnessProjection)
     : Enrichment * (NodeId * MemoryWitnessOperation) list * Map<NodeId,string> * Set<NodeId> =
     let mutable enrichment = Enrichment.empty
     let mutable operations = []
@@ -537,3 +540,6 @@ let settle (graph: SemanticGraph) (numeric: NumericWitnessProjection)
                 try operations <- (node.Id, settleNode node) :: operations
                 with MissingContract reason -> unresolved <- Map.add node.Id reason unresolved
     enrichment, List.rev operations, unresolved, required
+
+let settle graph numeric =
+  Clef.Compiler.PSGSaturation.SemanticGraph.Core.SemanticGraph.withEnrichment graph (fun () -> settleCore graph numeric)

@@ -473,6 +473,13 @@ let main _ =
     let plain = twice (fun (value: int) -> value * 2) 3
     captured + plain
 """
+        for name, low, high in ["captured", 22I, 32I; "plain", 12I, 20I] do
+            Assert.Equal(Some(ValueRange.Bounded(low, high)), (EnvironmentFixture.binding name graph).ValueRange)
+        let plainLine = (EnvironmentFixture.binding "plain" graph).Range.Start.Line
+        let multiplyParameter = graph.Nodes.Values |> Seq.filter (fun node ->
+            node.IsReachable && node.Range.Start.Line = plainLine &&
+            match node.Kind with SemanticKind.PatternBinding "value" -> true | _ -> false) |> Assert.Single
+        Assert.Equal(Some(ValueRange.Bounded(3I, 16I)), multiplyParameter.ValueRange)
         let owner = EnvironmentFixture.callable graph
         let environment = match owner.Kind with SemanticKind.ClosureValue(_, environment) -> environment | _ -> failwith "Missing environment"
         let origins = Clef.Compiler.PSGSaturation.SemanticGraph.CallableOrigins.resolve graph
