@@ -95,13 +95,10 @@ let private add origin port instruction successors uses defines state =
 /// monotone fixed point: a loop changes only the sets that depend on its body.
 let private liveness (steps: Map<int, Step>) =
     let rec settle (live: Map<int, Set<NodeId>>) =
-        let next, changed = steps |> Map.fold (fun (next, changed) label step ->
-            // Every transfer reads the round-entry map, including loop successors.
+        let next = steps |> Map.map (fun _ step ->
             let after = step.Successors |> List.fold (fun acc arc -> Set.union acc live[arc.Target]) Set.empty
-            let value = Set.union step.Uses (Set.difference after step.Defines)
-            if value = live[label] then next, changed
-            else Map.add label value next, true) (live, false)
-        if changed then settle next else live
+            Set.union step.Uses (Set.difference after step.Defines))
+        if next = live then live else settle next
     settle (steps |> Map.map (fun _ _ -> Set.empty))
 
 /// Forward must facts meet at every predecessor, including resumption. The
@@ -115,17 +112,14 @@ let private mustFacts (steps: Map<int, Step>) entry initial universe generates k
             step.Successors |> Seq.map (fun arc -> arc.Target, (step.Label, generates step, kills step arc)))
         |> Seq.groupBy fst |> Seq.map (fun (label, incoming) -> label, incoming |> Seq.map snd |> Seq.toList) |> Map.ofSeq
     let rec settle (facts: Map<int, Set<'Fact>>) =
-        let next, changed = steps |> Map.fold (fun (next, changed) label _ ->
-            let value =
-                if label = entry then initial
-                else
-                    predecessors.TryFind label |> Option.defaultValue []
-                    |> List.map (fun (predecessor, generated, killed) ->
-                        Set.difference (Set.union facts[predecessor] generated) killed)
-                    |> function [] -> Set.empty | first :: rest -> List.fold Set.intersect first rest
-            if value = facts[label] then next, changed
-            else Map.add label value next, true) (facts, false)
-        if changed then settle next else facts
+        let next = steps |> Map.map (fun label _ ->
+            if label = entry then initial
+            else
+                predecessors.TryFind label |> Option.defaultValue []
+                |> List.map (fun (predecessor, generated, killed) ->
+                    Set.difference (Set.union facts[predecessor] generated) killed)
+                |> function [] -> Set.empty | first :: rest -> List.fold Set.intersect first rest)
+        if next = facts then facts else settle next
     settle (steps |> Map.map (fun label _ -> if label = entry then initial else universe))
 
 let private iterationScopes (graph: SemanticGraph) owner =
