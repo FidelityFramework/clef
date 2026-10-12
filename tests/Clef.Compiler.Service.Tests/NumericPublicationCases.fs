@@ -564,6 +564,23 @@ let main _ = 0
         Assert.NotEqual(snapshot before, snapshot after)
 
     [<Fact>]
+    member _.``Source premise fallback retains exact case names and ordered references`` () =
+        let graph, _ = IntrinsicWriteFixture.admitted ()
+        let node = graph.Nodes.Values |> Seq.head
+        let other = graph.Nodes.Keys |> Seq.find ((<>) node.Id)
+        for kind, name, references in [
+            SemanticKind.WhileLoop(node.Id, other), "WhileLoop", [node.Id; other]
+            SemanticKind.WhileLoop(other, node.Id), "WhileLoop", [other; node.Id]
+            SemanticKind.PlatformBinding "first", "PlatformBinding", []
+            SemanticKind.PlatformBinding "second", "PlatformBinding", []
+        ] do
+            let premise = Clef.Compiler.Baker.Ingredients.Boundaries.premise { node with Kind = kind; Children = [] }
+            Assert.Equal(name, premise.Shape.Form)
+            Assert.True((references = premise.Shape.References))
+            Assert.Empty premise.Shape.Text
+            Assert.Empty premise.Shape.Numbers
+
+    [<Fact>]
     member _.``String length uses its source held carrier and retained exact extent`` () =
         let graph, boundary = IntrinsicWriteFixture.admitted ()
         let numeric = NumericPublication.project graph |> function Ok value -> value | Error failures -> failwithf "%A" failures

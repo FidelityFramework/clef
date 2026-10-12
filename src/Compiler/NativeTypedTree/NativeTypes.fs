@@ -662,6 +662,38 @@ type NTUKind =
     /// FPGA: dedicated hardware pipeline via CIRCT (PACoGen-style).
     | NTUposit of NTUWidth * es: int
 
+    // Preserve the generated union spelling used in immutable source premises,
+    // without reflecting over the same union metadata for every literal.
+    override kind.ToString() =
+        let integer (value: int) = value.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        let width = function
+            | NTUWidth.Fixed bits -> nameof NTUWidth.Fixed + " " + integer bits
+            | NTUWidth.Resolved dimension -> nameof NTUWidth.Resolved + " " + WidthDimension.name dimension
+        match kind with
+        | NTUKind.NTUint value -> nameof NTUKind.NTUint + " (" + width value + ")"
+        | NTUKind.NTUuint value -> nameof NTUKind.NTUuint + " (" + width value + ")"
+        | NTUKind.NTUfloat value -> nameof NTUKind.NTUfloat + " (" + width value + ")"
+        | NTUKind.NTUposit (value, es) -> nameof NTUKind.NTUposit + " (" + width value + ", " + integer es + ")"
+        | NTUKind.NTUptr -> nameof NTUKind.NTUptr
+        | NTUKind.NTUfnptr -> nameof NTUKind.NTUfnptr
+        | NTUKind.NTUsize -> nameof NTUKind.NTUsize
+        | NTUKind.NTUdiff -> nameof NTUKind.NTUdiff
+        | NTUKind.NTUstring -> nameof NTUKind.NTUstring
+        | NTUKind.NTUbool -> nameof NTUKind.NTUbool
+        | NTUKind.NTUchar -> nameof NTUKind.NTUchar
+        | NTUKind.NTUunit -> nameof NTUKind.NTUunit
+        | NTUKind.NTUdecimal -> nameof NTUKind.NTUdecimal
+        | NTUKind.NTUlazy -> nameof NTUKind.NTUlazy
+        | NTUKind.NTUseq -> nameof NTUKind.NTUseq
+        | NTUKind.NTUarray -> nameof NTUKind.NTUarray
+        | NTUKind.NTUborrowedview -> nameof NTUKind.NTUborrowedview
+        | NTUKind.NTUlist -> nameof NTUKind.NTUlist
+        | NTUKind.NTUmap -> nameof NTUKind.NTUmap
+        | NTUKind.NTUset -> nameof NTUKind.NTUset
+        | NTUKind.NTUuuid -> nameof NTUKind.NTUuuid
+        | NTUKind.NTUdatetime -> nameof NTUKind.NTUdatetime
+        | NTUKind.NTUtimespan -> nameof NTUKind.NTUtimespan
+
 //-------------------------------------------------------------------------
 // NTU Dimensional Qualifiers (Multi-Substrate Compilation)
 //-------------------------------------------------------------------------

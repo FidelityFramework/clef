@@ -52,6 +52,32 @@ let different expected actual =
     | other -> failwithf "Expected dimensional mismatch, got %A" other
 
 let tests = [
+    "native kind strings preserve structural union spelling for every case and width", fun () ->
+        let widths = [
+            for bits in [System.Int32.MinValue; -1; 0; 1; 3; 32; System.Int32.MaxValue] do
+                yield NTUWidth.Fixed bits
+            yield NTUWidth.Resolved WidthDimension.Pointer
+            yield NTUWidth.Resolved WidthDimension.Register
+        ]
+        let cases = Microsoft.FSharp.Reflection.FSharpType.GetUnionCases typeof<NTUKind>
+        for case in cases do
+            let fields = case.GetFields() |> Array.map (fun field -> field.PropertyType) |> Array.toList
+            let arguments =
+                match fields with
+                | [] -> [ [||] ]
+                | [width] when width = typeof<NTUWidth> -> [ for value in widths -> [|box value|] ]
+                | [width; exponent] when width = typeof<NTUWidth> && exponent = typeof<int> ->
+                    [ for value in widths do
+                        for es in [System.Int32.MinValue; -1; 0; 2; System.Int32.MaxValue] do
+                            yield [|box value; box es|] ]
+                | _ -> failwithf "Uncovered native kind shape: %s" case.Name
+            for arguments in arguments do
+                let kind = Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(case, arguments) :?> NTUKind
+                // %A uses the structural union formatter, independently of ToString.
+                let expected = sprintf "%A" kind
+                if kind.ToString() <> expected || string kind <> expected then
+                    failwithf "Native kind spelling changed: expected '%s', got '%s'" expected (kind.ToString())
+
     "unused executable helper warning targets its source name and clears on reference", fun () ->
         let units = "module App.Units\n[<Measure>] type m\n[<Measure>] type s\nlet speed (distance: float<m>) (elapsed: float<s>) = distance / elapsed\nlet speedIntegers (distance: int<m>) (elapsed: int<s>) = distance / elapsed\n"
         let main call = "module App.Main\nopen App.Units\n[<EntryPoint>]\nlet main _ = if " + call + " then 0 else 1\n"

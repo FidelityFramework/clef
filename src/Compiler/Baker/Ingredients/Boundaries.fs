@@ -17,6 +17,14 @@ let platformPremise (platform: PlatformContext option) =
           RuntimeClaim = platform.RuntimeModel; Substrate = platform.SubstrateKind; Dimensions = platform.Dimensions
           Representations = platform.Representations; EndpointReturns = platform.EndpointReturns })
 
+// Union metadata is fixed by this compiled type, independent of graph revisions.
+let private kindName =
+    let readTag = Microsoft.FSharp.Reflection.FSharpValue.PreComputeUnionTagReader(typeof<SemanticKind>)
+    let names =
+        Microsoft.FSharp.Reflection.FSharpType.GetUnionCases(typeof<SemanticKind>)
+        |> Array.map (fun case -> case.Tag, case.Name) |> Map.ofArray
+    fun (kind: SemanticKind) -> names[readTag kind]
+
 /// Closed immutable observations; native types become identities before any
 /// later inference-cell mutation can occur. Only settlement calls readers.
 let premise (node: SemanticNode) : BoundarySourcePremise =
@@ -102,9 +110,7 @@ let premise (node: SemanticNode) : BoundarySourcePremise =
             | TypeDefKind.ClassDef -> "class-definition", [name], []
             | TypeDefKind.StructDef -> "struct-definition", [name], []
             | TypeDefKind.InterfaceDef -> "interface-definition", [name], []
-        | kind ->
-            let case, _ = Microsoft.FSharp.Reflection.FSharpValue.GetUnionFields(kind, typeof<SemanticKind>)
-            case.Name, [], []
+        | kind -> kindName kind, [], []
     let embeddedTypes =
         match node.Kind with
         | SemanticKind.Lambda(formals, _, captures, _, _) -> (formals |> List.map (fun (_, ty, _) -> ty)) @ (captures |> List.map _.Type)
