@@ -767,6 +767,7 @@ and mapDeclRoot (value: S.DeclRoot) : Fidelity.PSG.DeclRoot =
     | S.DeclRoot.EntryPoint -> Fidelity.PSG.DeclRoot.EntryPoint
     | S.DeclRoot.HardwareModule -> Fidelity.PSG.DeclRoot.HardwareModule
     | S.DeclRoot.KernelModule -> Fidelity.PSG.DeclRoot.KernelModule
+    | S.DeclRoot.LibraryExport -> Fidelity.PSG.DeclRoot.LibraryExport
 
 and mapDimension (value: D.Dimension) : Fidelity.PSG.Dimension =
     ({

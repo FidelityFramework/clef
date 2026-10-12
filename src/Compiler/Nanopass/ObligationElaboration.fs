@@ -246,9 +246,12 @@ let private elaborateCore (graph: SemanticGraph) : Enrichment =
     let enrichId = freshId ()
     let literals = reachableLiterals graph
     let readln =
-        match platform |> Option.bind (fun p -> bufferNamed "consoleReadln" p |> Option.map (fun b -> p, b)) with
-        | Some (p, b) -> intrinsicSites graph IntrinsicModule.Sys "readline" |> List.map (fun (site, _) -> Recipes.readln p b enrichId site)
-        | None -> []
+        let declaration = platform |> Option.bind (fun p -> bufferNamed "consoleReadln" p |> Option.map (fun b -> p, b))
+        intrinsicSites graph IntrinsicModule.Sys "readline"
+        |> List.map (fun (site, _) ->
+            match declaration with
+            | Some (p, b) -> Recipes.readln p b enrichId site
+            | None -> Recipes.readlnPending platform enrichId site)
     Enrichment.concat
         [ { Enrichment.empty with NewEdges = literals |> List.choose (fun (_, n) -> Recipes.literalResidence immutableSpace authority n) }
           concatSites graph |> List.map (Recipes.concat enrichId) |> Enrichment.concat

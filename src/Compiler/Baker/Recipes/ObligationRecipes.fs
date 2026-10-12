@@ -254,6 +254,21 @@ let concat (enrichId: int) (name: string, (site: SemanticNode, leftId: NodeId, r
               Body = ObligationBody.ConcatCopyBound (left |> Option.map fst, right |> Option.map fst) }
     { NewNodes = [ node ]; NewEdges = [ constrains [ site.Id; leftId; rightId ] node ]; Annotated = [] }
 
+/// A demanded readln still owes its buffer contract when the declaration is
+/// unavailable. Keep the source occurrence in the existing Pending inventory.
+let readlnPending (platform: DeclaredPlatform option) (enrichId: int) (site: SemanticNode) : Enrichment =
+    let reason, sources =
+        match platform with
+        | Some p -> sprintf "Sys.readline requires buffer 'consoleReadln', which is not declared in platform '%s'." p.Id, [site.Id; p.Node]
+        | None -> "Sys.readline requires buffer 'consoleReadln', but no source platform declaration is available.", [site.Id]
+    let node =
+        obligationNode site enrichId
+            { Id = sprintf "input_bound_%s" (slug "consoleReadln"); Kind = "input-buffer-bound"; Logic = "QF_LIA"
+              Statement = "the input at this Sys.readline occurrence fits its declared consoleReadln buffer"
+              Source = fmtRange site.Range; Refs = ["CWE-120"]
+              Body = ObligationBody.Pending [reason] }
+    { NewNodes = [node]; NewEdges = [constrains sources node]; Annotated = [] }
+
 /// The readln site cross-applied with the `consoleReadln` declaration. The
 /// buffer's capacity obligations -- BAREWire Platform/Obligations.fs's own
 /// vocabulary -- stated by the compiler over the program's actual site; and
@@ -263,10 +278,16 @@ let readln (platform: DeclaredPlatform) (buffer: DeclaredBuffer) (enrichId: int)
     let s = slug buffer.Name
     let cap = buffer.Capacity
     let source = cite platform buffer.Name
-    let spaceText, spaceCap, spaceNode =
+    let spaceNode = space |> Option.map (fun sp -> [sp.Node]) |> Option.defaultValue []
+    let spaceText, fitsBody, fitsSources =
         match space with
-        | Some sp -> sprintf "the capacity %d of its space %s" sp.Capacity sp.Name, sp.Capacity, [ sp.Node ]
-        | None -> sprintf "the capacity of its space %s, which is not declared (taken as 0)" buffer.Space, 0L, []
+        | Some sp ->
+            sprintf "the capacity %d of its space %s" sp.Capacity sp.Name,
+            ObligationBody.CapacityFits (cap, sp.Capacity), [buffer.Node; sp.Node]
+        | None ->
+            sprintf "the capacity of its undeclared space %s" buffer.Space,
+            ObligationBody.Pending [sprintf "The space '%s' required by buffer '%s' is not declared in platform '%s'." buffer.Space buffer.Name platform.Id],
+            [site.Id; buffer.Node; platform.Node] |> List.distinct
     let mk = obligationNode site enrichId
     let positive =
         mk { Id = sprintf "capacity_positive_%s" s; Kind = "buffer-capacity"; Logic = "QF_LIA"
@@ -275,7 +296,7 @@ let readln (platform: DeclaredPlatform) (buffer: DeclaredBuffer) (enrichId: int)
     let fits =
         mk { Id = sprintf "capacity_%s" s; Kind = "buffer-capacity"; Logic = "QF_LIA"
              Statement = sprintf "buffer %s declares capacity %d, at most %s" buffer.Name cap spaceText
-             Source = source; Refs = [ "CWE-131"; "CWE-120" ]; Body = ObligationBody.CapacityFits (cap, spaceCap) }
+             Source = source; Refs = [ "CWE-131"; "CWE-120" ]; Body = fitsBody }
     let bound =
         mk { Id = sprintf "input_bound_%s" s; Kind = "input-buffer-bound"; Logic = "QF_LIA"
              Statement = sprintf "the count handed to the reader of %s is its declared capacity (%d), so the reader writes at most the allocation the same declaration sizes (%d)" buffer.Name cap cap
@@ -290,7 +311,7 @@ let readln (platform: DeclaredPlatform) (buffer: DeclaredBuffer) (enrichId: int)
       NewEdges =
         [ resides buffer.Node site.Id
           constrains (buffer.Node :: spaceNode) positive
-          constrains (buffer.Node :: spaceNode) fits
+          constrains fitsSources fits
           constrains [ site.Id; buffer.Node ] bound ]
         @ (copy |> List.map (constrains [ site.Id; buffer.Node ]))
       Annotated = [ annotateBuffer cap source buffer.TrimDelimiter site ] }

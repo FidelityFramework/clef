@@ -59,6 +59,7 @@ let premise (node: SemanticNode) : BoundarySourcePremise =
                 match root with
                 | None -> "no-declaration-root"
                 | Some DeclRoot.EntryPoint -> "entry-point"
+                | Some DeclRoot.LibraryExport -> "library-export"
                 | Some DeclRoot.HardwareModule -> "hardware-module"
                 | Some DeclRoot.KernelModule -> "kernel-module"
             "binding", [name; rootTag], [if mutable' then 1I else 0I; if recursive' then 1I else 0I]
