@@ -72,7 +72,10 @@ let tests = [
                             yield [|box value; box es|] ]
                 | _ -> failwithf "Uncovered native kind shape: %s" case.Name
             for arguments in arguments do
-                let kind = Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(case, arguments) :?> NTUKind
+                let kind =
+                    match Microsoft.FSharp.Reflection.FSharpValue.MakeUnion(case, arguments) with
+                    | :? NTUKind as kind -> kind
+                    | _ -> failwithf "Native kind reflection did not materialize %s" case.Name
                 // %A uses the structural union formatter, independently of ToString.
                 let expected = sprintf "%A" kind
                 if kind.ToString() <> expected || string kind <> expected then
