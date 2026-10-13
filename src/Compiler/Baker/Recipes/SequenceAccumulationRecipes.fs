@@ -208,6 +208,45 @@ let private sourceControlOnly (graph: SemanticGraph) represented producer =
 /// This transports identities and control only; it imports no numeric receipt.
 let currentSourceControl graph producer = sourceControlOnly graph true producer
 
+type InstructionExecutions = {
+    Producer: NodeId
+    Generator: NodeId
+    MaximumVisits: Map<NodeId, bigint>
+    LocalInitializers: Set<NodeId>
+    Participants: Set<NodeId>
+}
+
+/// Count actual source instructions along complete acyclic traces, retaining
+/// resume edges. Successful-pull bounds never supply an instruction count.
+let private instructionVisits (control: Control.Control) =
+    if not (resumesCurrent control) then None else
+    let pending, totals =
+        Seq.init control.Steps.Count id
+        |> Seq.fold (fun (pending, totals: Map<int, Map<NodeId, bigint>>) _ ->
+            pending |> Map.fold (fun (remaining: Map<int, Control.Step>, totals) label (step: Control.Step) ->
+            if step.Successors |> List.forall (fun arc -> totals.ContainsKey arc.Target) then
+                let suffix = step.Successors |> List.fold (fun counts arc ->
+                    totals[arc.Target] |> Map.fold (fun counts id count ->
+                        Map.add id (max count (Map.tryFind id counts |> Option.defaultValue 0I)) counts) counts) Map.empty
+                let executed =
+                    match step.Instruction with
+                    | Control.Instruction.Evaluate id -> Some id
+                    | Control.Instruction.Copy _ -> Some step.Origin
+                    | _ -> None
+                let counts = executed |> Option.map (fun id ->
+                    suffix.Add(id, 1I + (suffix.TryFind id |> Option.defaultValue 0I))) |> Option.defaultValue suffix
+                remaining, totals.Add(label, counts)
+            else remaining.Add(label, step), totals) (Map.empty, totals)) (control.Steps, Map.empty)
+    if not pending.IsEmpty || not (totals.ContainsKey control.Entry) then None else
+    let visited, _ =
+        Seq.init control.Steps.Count id
+        |> Seq.fold (fun (visited, frontier) _ ->
+            let visited = Set.union visited frontier
+            let next = frontier |> Seq.collect (fun label -> control.Steps[label].Successors |> Seq.map _.Target)
+                       |> Set.ofSeq |> fun labels -> Set.difference labels visited
+            visited, next) (Set.empty, Set.singleton control.Entry)
+    if visited.Count = control.Steps.Count then Some totals[control.Entry] else None
+
 /// Product states are proof labels, not source nodes or runtime unrolling. A
 /// successful pull from the exact inner iterator consumes one admitted unit;
 /// every other control alternative is retained. Keep compilation bounded too.
@@ -555,17 +594,38 @@ let private recognizeCore (graph: SemanticGraph) (inputs: Loop.Inputs option) re
                 | _ -> None, []
             | _ -> None, []
         | _ -> None, []
+    let readRegion owner root support =
+        match actions Set.empty root with
+        | Some items when (items |> List.distinct).Length = items.Length ->
+            items |> List.fold (fun (initialized, found) id ->
+                let pull, accumulations = recognizeLoop owner items initialized id
+                let pull = pull |> Option.map (fun pull -> { pull with Participants = List.distinct (support @ pull.Participants) })
+                let accumulations = accumulations |> List.map (fun item -> { item with Participants = List.distinct (support @ item.Participants) })
+                let initialized = match node id with Some { Kind = SemanticKind.Binding _ } -> Set.add id initialized | _ -> initialized
+                initialized, found @ [pull, accumulations]) (Set.empty, []) |> snd
+        | _ -> []
     let found = nodes.Values |> Seq.collect (fun owner ->
         match owner.Kind with
         | SemanticKind.Lambda(_, body, _, _, context) when context <> LambdaContext.SeqGenerator ->
-            match actions Set.empty body with
-            | Some items when (items |> List.distinct).Length = items.Length ->
-                items |> List.fold (fun (initialized, found) id ->
-                    let next = recognizeLoop owner.Id items initialized id
-                    let initialized = match node id with Some { Kind = SemanticKind.Binding _ } -> Set.add id initialized | _ -> initialized
-                    initialized, found @ [next]) (Set.empty, []) |> snd
-            | _ -> []
+            readRegion owner.Id body []
         | _ -> []) |> Seq.toList
+    // Program initialization owns execution of these exact binding values.
+    // Lexical membership, a retained closure, or an unused local declaration
+    // cannot admit an additional consumer region.
+    let programRegions =
+        Clef.Compiler.PSGSaturation.SemanticGraph.ProgramInitialization.read graph
+        |> Option.map (fun plan ->
+            plan.Initializers |> List.collect (fun item ->
+                match node item.Binding with
+                | Some { Kind = SemanticKind.Binding(_, false, false, None); Children = [value] }
+                    when value = item.Initializer && plan.ValueBindings.Contains item.Binding && valid item.Binding && valid value &&
+                         Ingress.tryExecutionOwner ingress.Value value = Some plan.EntryLambda ->
+                    readRegion plan.EntryLambda value
+                        [plan.EntryBinding; plan.EntryLambda; plan.SourceBinding; plan.SourceLambda; plan.Spine;
+                         plan.EntryCall; item.Module; item.Binding; value]
+                | _ -> []))
+        |> Option.defaultValue []
+    let found = found @ programRegions
     let pulls =
         found
         |> List.choose fst
@@ -593,6 +653,74 @@ let sourcePulls graph = recognizeCore graph None false |> fst
 /// The same source census can validate a retained producer after realization,
 /// but only through its current exact source-to-machine correspondence.
 let currentPulls graph = recognizeCore graph None true |> fst
+
+/// A private iterator instance requires every acquisition and sequence-value
+/// use to remain in the current source census. The captured environment is
+/// retained in support; caller activation is not multiplied into local state.
+let currentInstructionExecutions (graph: SemanticGraph) =
+    let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
+    let pulls = currentPulls graph
+    let _, origins = Origins.resolve graph
+    let ingress = lazy (Ingress.analyze graph)
+    let acquisition (node: SemanticNode) =
+        match node.Kind with
+        | SemanticKind.Application(callee, [input]) ->
+            match nodes.TryFind callee with
+            | Some { Kind = SemanticKind.Intrinsic { Module = IntrinsicModule.Seq; Operation = "getEnumerator" } } -> Some input
+            | _ -> None
+        | _ -> None
+    nodes.Values |> Seq.choose (fun producer ->
+        match producer.Kind, currentSourceControl graph producer with
+        | SemanticKind.SeqExpr _, Some(control, source, machine) ->
+            let incoming = pulls |> List.filter (fun pull -> pull.Producer = producer.Id && pull.Generator = control.Generator)
+            let values = origins |> Map.toList |> List.choose (fun (id, alternatives) ->
+                if alternatives.Contains(Origins.Origin.Known producer.Id) &&
+                   (nodes.TryFind id |> Option.exists (fun node -> applySubst node.Type = applySubst producer.Type)) then Some id else None) |> Set.ofList
+            let acquisitions = nodes.Values |> Seq.choose (fun node ->
+                acquisition node |> Option.bind (fun input ->
+                    origins.TryFind input |> Option.bind (fun alternatives ->
+                        if alternatives.Contains(Origins.Origin.Known producer.Id) then Some(node.Id, alternatives) else None))) |> Seq.toList
+            let admitted = incoming |> List.map _.Acquisition |> Set.ofList
+            let exported id = graph.DeclarationRoots |> List.exists (fun (root, purpose) -> root = id && purpose = DeclRoot.LibraryExport)
+            let closed = not incoming.IsEmpty &&
+                         (acquisitions |> List.forall (fun (_, alternatives) -> alternatives = Set.singleton (Origins.Origin.Known producer.Id))) &&
+                         (admitted |> Set.forall (exported >> not)) &&
+                         Set.ofList (acquisitions |> List.map fst) = admitted
+            let used = nodes.Values |> Seq.collect (fun node -> Closures.structuralIncidence node) |> Seq.filter (fun edge ->
+                edge.Sources |> List.exists values.Contains) |> Seq.toList
+            let permitted (edge: Hyperedge) =
+                match nodes.TryFind edge.Target with
+                | Some { Kind = SemanticKind.VarRef(_, Some source) } -> edge.Role = EdgeRole.Definition && values.Contains source
+                | Some { Kind = SemanticKind.Binding(_, false, false, None); Children = [value] } ->
+                    values.Contains value && values.Contains edge.Target &&
+                    not (graph.DeclarationRoots |> List.exists (fun (root, _) -> root = edge.Target))
+                | Some { Kind = SemanticKind.TypeAnnotation(value, _) } -> values.Contains value && values.Contains edge.Target
+                | Some { Kind = SemanticKind.EagerExpr value } -> values.Contains value && ExplicitDemand.operand graph edge.Target = Some value
+                | Some { Kind = SemanticKind.Sequential children } ->
+                    edge.Role = EdgeRole.Element && (List.tryItem edge.Ordinal children |> Option.exists (fun value ->
+                        values.Contains value && (nodes[value].Kind |> function SemanticKind.Binding _ -> true | _ -> List.tryLast children = Some value)))
+                | Some { Kind = SemanticKind.Lambda(_, body, _, _, LambdaContext.RegularClosure) } ->
+                    edge.Role = EdgeRole.Body && values.Contains body && (Ingress.tryFamily ingress.Value edge.Target).IsSome
+                | Some node -> acquisition node |> Option.exists (fun input -> admitted.Contains node.Id && values.Contains input && edge.Role = EdgeRole.Argument)
+                | _ -> false
+            match instructionVisits control with
+            | Some counts when closed && List.forall permitted used ->
+                let initializers =
+                    control.Steps.Values
+                    |> Seq.choose (fun step ->
+                        match step.Instruction, nodes.TryFind step.Origin with
+                        | Control.Instruction.Evaluate destination, Some { Kind = SemanticKind.Binding(_, true, false, None); Children = [_] }
+                        | Control.Instruction.Copy(destination, _), Some { Kind = SemanticKind.Binding(_, true, false, None); Children = [_] }
+                            when destination = step.Origin -> Some destination
+                        | _ -> None)
+                    |> Set.ofSeq
+                let captures = match nodes.TryFind control.Generator with
+                               | Some { Kind = SemanticKind.Lambda(_, _, captures, _, _) } -> captures |> List.choose _.SourceNodeId
+                               | _ -> []
+                Some { Producer = producer.Id; Generator = control.Generator; MaximumVisits = counts; LocalInitializers = initializers
+                       Participants = Set.unionMany [source; machine; Set.ofList captures; Set.ofList (producer.Id :: control.Generator :: (used |> List.collect (fun edge -> edge.Target :: edge.Sources))); incoming |> List.collect _.Participants |> Set.ofList] }
+            | _ -> None
+        | _ -> None) |> Seq.toList
 
 let recognize graph inputs =
     let represented =

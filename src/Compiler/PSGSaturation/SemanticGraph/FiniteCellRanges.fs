@@ -81,6 +81,22 @@ let recognize (graph: SemanticGraph) : Bound list =
              |> List.map (fun pull -> pull.Loop, pull)
              |> Map.ofList)
 
+    let generatorInstructions = lazy (
+        Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes.currentInstructionExecutions graph
+        |> List.collect (fun proof ->
+            proof.LocalInitializers |> Set.toList |> List.collect (fun cell ->
+                let writes = nodes.Values |> Seq.choose (fun node ->
+                    match node.Kind with
+                    | SemanticKind.Set(target, _) ->
+                        match nodes.TryFind target with
+                        | Some { Kind = SemanticKind.VarRef(_, Some actual) } when actual = cell -> Some node.Id
+                        | _ -> None
+                    | _ -> None) |> Seq.toList
+                (cell :: writes) |> List.choose (fun id ->
+                    proof.MaximumVisits.TryFind id |> Option.map (fun visits -> id, (visits, proof.Participants)))))
+        |> List.groupBy fst |> List.choose (fun (id, claims) ->
+            match claims with [_, evidence] -> Some(id, evidence) | _ -> None) |> Map.ofList)
+
     let complete site implementation =
         calls.Calls.TryFind site |> Option.filter (fun call ->
             valid site && call.Complete && not call.Unknown && not call.Targets.IsEmpty &&
@@ -134,7 +150,7 @@ let recognize (graph: SemanticGraph) : Bound list =
                                     Set.unionMany
                                         [
                                             family.Evidence.Participants
-                                            proof.Family.Evidence.Participants
+                                            OrdinaryDemand.inactivityParticipants proof
                                             proof.Excluded
                                             proof.Calls
                                             Set.ofList (proof.Implementation :: proof.Body :: proof.Parameters)
@@ -207,7 +223,8 @@ let recognize (graph: SemanticGraph) : Bound list =
                         | _ -> None)
                     (Some(0I, Set.singleton id))
 
-        if id = startup.EntryLambda then
+        if generatorInstructions.Value.ContainsKey id then generatorInstructions.Value.TryFind id
+        elif id = startup.EntryLambda then
             if entryUncalled then Some(1I, startupParticipants) else None
         else
             match nodes[id].Kind with
@@ -314,31 +331,6 @@ let recognize (graph: SemanticGraph) : Bound list =
             | [owner] -> Some(formal, owner)
             | _ -> None)
         |> Map.ofSeq
-    let rec constant seen expected id =
-        if Set.contains id seen || not (valid id) || applySubst nodes[id].Type <> expected then None else
-        let seen = Set.add id seen
-        let wrap = Option.map (fun (magnitude, required) -> magnitude, Set.add id required)
-        match nodes[id].Kind with
-        | SemanticKind.Literal(NativeLiteral.Int(value, _)) -> Some(abs (bigint value), Set.singleton id)
-        | SemanticKind.Literal(NativeLiteral.UInt(value, _)) -> Some(bigint value, Set.singleton id)
-        | SemanticKind.VarRef(_, Some source) -> constant seen expected source |> wrap
-        | SemanticKind.Binding(_, false, false, None) when nodes[id].Children.Length = 1 -> constant seen expected nodes[id].Children.Head |> wrap
-        | SemanticKind.TypeAnnotation(source, declared) when applySubst declared = expected -> constant seen expected source |> wrap
-        | SemanticKind.EagerExpr source when ExplicitDemand.operand graph id = Some source -> constant seen expected source |> wrap
-        | SemanticKind.PatternBinding _ ->
-            formalOwners.TryFind id |> Option.bind (fun owner ->
-                closedCalls owner |> Option.bind (fun (sites, dependencies) ->
-                    sites |> List.fold (fun result site ->
-                        let actual = complete site owner |> Option.bind (fun call ->
-                            call.Targets |> List.filter (fun target -> target.Lambda = owner)
-                            |> List.collect (fun (target: CallableOrigins.CallTarget) ->
-                                List.zip target.Parameters target.Arguments
-                                |> List.choose (fun ((_, _, formal), actual) -> if formal = id then Some actual else None))
-                            |> List.distinct |> function [actual] -> Some actual | _ -> None)
-                        match result, actual |> Option.bind (constant seen expected) with
-                        | Some(bound, required), Some(value, more) -> Some(max bound value, Set.union required more)
-                        | _ -> None) (Some(0I, Set.add id dependencies))))
-        | _ -> None
     let operator id =
         if not (valid id) then None else
         match nodes[id].Kind with
@@ -360,30 +352,239 @@ let recognize (graph: SemanticGraph) : Bound list =
          | SemanticKind.VarRef(_, Some source) -> source = cell
          | SemanticKind.EnvironmentRead _ -> environmentAccess cell nodes[id] |> Option.isSome
          | _ -> false)
-    let rec affine cell seen id =
-        if Set.contains id seen || not (same cell id) then None else
-        let seen = Set.add id seen
-        let ty = applySubst nodes[cell].Type
-        if readCell cell id then Some(1I, 0I, Set.ofList [cell; id]) else
-        match constant Set.empty ty id with
-        | Some(value, dependencies) -> Some(0I, value, dependencies)
-        | None ->
-            match operator id with
-            | Some(("op_Addition" | "op_Subtraction"), callee, left, right) ->
-                match affine cell seen left, affine cell seen right with
-                | Some(a, b, p), Some(c, d, q) -> Some(a + c, b + d, Set.unionMany [p; q; Set.ofList [id; callee]])
-                | _ -> None
-            | Some("op_Multiply", callee, left, right) ->
-                let multiply value factor =
-                    match applySubst nodes[factor].Type with
-                    | NativeType.TNum(_, dimension) when dimension = Dimension.one &&
-                        Types.tryGetNTUKind nodes[factor].Type = Types.tryGetNTUKind ty ->
-                        match affine cell seen value, constant Set.empty (applySubst nodes[factor].Type) factor with
-                        | Some(a, b, p), Some(coefficient, q) -> Some(a * coefficient, b * coefficient, Set.unionMany [p; q; Set.ofList [id; callee]])
-                        | _ -> None
-                    | _ -> None
-                multiply left right |> Option.orElseWith (fun () -> multiply right left)
-            | _ -> None
+    // One magnitude interpreter owns constants and affine returns. The finite
+    // worklist substitutes exact source actuals; neither graph rewriting nor
+    // compiler/pass re-entry is involved. Path cycles and recursive calls refuse.
+    let magnitude cell expected (initialSeen: Set<NodeId>) root =
+        if not (valid root) || applySubst nodes[root].Type <> expected then
+            None
+        else
+            let externalImplementations =
+                (Clef.Compiler.Baker.Recipes.BoundaryDeclarations.elaborate graph).NewEdges
+                |> List.choose (fun edge ->
+                    match edge.Role with
+                    | EdgeRole.BoundaryDeclaration declaration -> Some declaration.Implementation
+                    | _ -> None)
+                |> Set.ofList
+            let emptyFacts: Map<NodeId * Map<NodeId, NodeId> * Set<NodeId>, (bigint * bigint * Set<NodeId>) option> =
+                Map.empty
+
+            let emptyEquations
+                : Map<
+                      NodeId * Map<NodeId, NodeId> * Set<NodeId>,
+                      (NodeId * Map<NodeId, NodeId> * Set<NodeId>) list *
+                      ((bigint * bigint * Set<NodeId>) list -> (bigint * bigint * Set<NodeId>) option)
+                   > =
+                Map.empty
+
+            let first = root, Map.empty, Set.empty
+            let initial = [ first, false, Set.empty ], emptyFacts, emptyEquations
+
+            let join support values =
+                Some(
+                    values |> List.map (fun (a, _, _) -> a) |> List.fold max 0I,
+                    values |> List.map (fun (_, b, _) -> b) |> List.fold max 0I,
+                    Set.unionMany (support :: (values |> List.map (fun (_, _, p) -> p)))
+                )
+
+            let step
+                (
+                    pending,
+                    facts: Map<NodeId * Map<NodeId, NodeId> * Set<NodeId>, (bigint * bigint * Set<NodeId>) option>,
+                    equations:
+                        Map<
+                            NodeId * Map<NodeId, NodeId> * Set<NodeId>,
+                            (NodeId * Map<NodeId, NodeId> * Set<NodeId>) list *
+                            ((bigint * bigint * Set<NodeId>) list -> (bigint * bigint * Set<NodeId>) option)
+                         >
+                ) =
+                match pending with
+                | [] -> None
+                | (((id, environment, callPath) as term), ready, (path: Set<NodeId * Map<NodeId, NodeId> * Set<NodeId>>)) :: rest ->
+                    let next =
+                        if facts.ContainsKey term then
+                            rest, facts, equations
+                        else if ready then
+                            let dependencies, combine = equations[term]
+                            let values = dependencies |> List.map (fun dependency -> facts[dependency])
+
+                            let fact =
+                                if values |> List.exists Option.isNone then
+                                    None
+                                else
+                                    combine (List.choose (fun value -> value) values)
+
+                            rest, facts.Add(term, fact), equations
+                        elif initialSeen.Contains id || path.Contains term || not (valid id) then
+                            rest, facts.Add(term, None), equations
+                        else
+                            let support = Set.singleton id
+
+                            let forward source =
+                                if valid source && same id source then
+                                    Some([ source, environment, callPath ], fun values -> join support values)
+                                else
+                                    None
+
+                            let decomposition =
+                                if cell |> Option.exists (fun cell -> readCell cell id) then
+                                    Some([], fun _ -> Some(1I, 0I, Set.ofList [ cell.Value; id ]))
+                                else
+                                    match nodes[id].Kind with
+                                    | SemanticKind.Literal(NativeLiteral.Int(value, _)) ->
+                                        Some([], fun _ -> Some(0I, abs (bigint value), support))
+                                    | SemanticKind.Literal(NativeLiteral.UInt(value, _)) ->
+                                        Some([], fun _ -> Some(0I, bigint value, support))
+                                    | SemanticKind.VarRef(_, Some source) -> forward source
+                                    | SemanticKind.Binding(_, false, false, None) when nodes[id].Children.Length = 1 ->
+                                        forward nodes[id].Children.Head
+                                    | SemanticKind.TypeAnnotation(source, declared) when applySubst declared = applySubst nodes[id].Type ->
+                                        forward source
+                                    | SemanticKind.EagerExpr source when ExplicitDemand.operand graph id = Some source -> forward source
+                                    | SemanticKind.Sequential values when not values.IsEmpty && (values |> List.forall valid) ->
+                                        forward (List.last values)
+                                    | SemanticKind.PatternBinding _ ->
+                                        match environment.TryFind id with
+                                        | Some actual -> forward actual
+                                        | None ->
+                                            formalOwners.TryFind id
+                                            |> Option.bind (fun owner ->
+                                                closedCalls owner
+                                                |> Option.bind (fun (sites, required) ->
+                                                    let actuals =
+                                                        sites
+                                                        |> List.map (fun site ->
+                                                            complete site owner
+                                                            |> Option.bind (fun call ->
+                                                                call.Targets
+                                                                |> List.filter (fun target -> target.Lambda = owner)
+                                                                |> List.collect (fun (target: CallableOrigins.CallTarget) ->
+                                                                    List.zip target.Parameters target.Arguments
+                                                                    |> List.choose (fun ((_, _, formal), actual) ->
+                                                                        if formal = id then Some actual else None))
+                                                                |> List.distinct
+                                                                |> function
+                                                                    | [ actual ] when valid actual && same id actual -> Some actual
+                                                                    | _ -> None))
+
+                                                    if actuals |> List.exists Option.isNone then
+                                                        None
+                                                    else
+                                                        Some(
+                                                            List.choose (fun value -> value) actuals
+                                                            |> List.map (fun actual -> actual, environment, callPath),
+                                                            join (Set.add id required)
+                                                        )))
+                                    | SemanticKind.Application _ ->
+                                        match operator id with
+                                        | Some(("op_Addition" | "op_Subtraction"), callee, left, right) ->
+                                            Some(
+                                                [ left, environment, callPath; right, environment, callPath ],
+                                                function
+                                                | [ a, b, p; c, d, q ] ->
+                                                    Some(a + c, b + d, Set.unionMany [ support; Set.singleton callee; p; q ])
+                                                | _ -> None
+                                            )
+                                        | Some("op_Multiply", callee, left, right) ->
+                                            Some(
+                                                [ left, environment, callPath; right, environment, callPath ],
+                                                function
+                                                | [ a, b, p; c, d, q ] ->
+                                                    let scalar source =
+                                                        match applySubst nodes[source].Type with
+                                                        | NativeType.TNum(_, dimension) ->
+                                                            dimension = Dimension.one
+                                                            && Types.tryGetNTUKind nodes[source].Type =
+                                                                Types.tryGetNTUKind nodes[id].Type
+                                                        | _ -> false
+
+                                                    let required = Set.unionMany [ support; Set.singleton callee; p; q ]
+
+                                                    if c = 0I && scalar right then Some(a * d, b * d, required)
+                                                    elif a = 0I && scalar left then Some(c * b, d * b, required)
+                                                    else None
+                                                | _ -> None
+                                            )
+                                        | _ ->
+                                            calls.Calls.TryFind id
+                                            |> Option.bind (fun call ->
+                                                if not call.Complete || call.Unknown || call.Targets.IsEmpty then
+                                                    None
+                                                else
+                                                    let targets =
+                                                        call.Targets
+                                                        |> List.map (fun target ->
+                                                            match nodes.TryFind target.Lambda with
+                                                            | Some {
+                                                                       Kind = SemanticKind.Lambda(parameters,
+                                                                                                  body,
+                                                                                                  [],
+                                                                                                  _,
+                                                                                                  LambdaContext.RegularClosure)
+                                                                   } when
+                                                                parameters = target.Parameters
+                                                                && parameters.Length = target.Arguments.Length
+                                                                && not (callPath.Contains target.Lambda)
+                                                                && not (externalImplementations.Contains target.Lambda)
+                                                                && valid target.Lambda
+                                                                && valid body
+                                                                && same id body
+                                                                && List.forall2
+                                                                    (fun (_, ty, _) actual ->
+                                                                        valid actual && applySubst ty = applySubst nodes[actual].Type)
+                                                                    parameters
+                                                                    target.Arguments
+                                                                ->
+                                                                let substituted =
+                                                                    List.zip parameters target.Arguments
+                                                                    |> List.fold
+                                                                        (fun found ((_, _, formal), actual) ->
+                                                                            Map.add formal actual found)
+                                                                        environment
+
+                                                                Some(
+                                                                    (body, substituted, Set.add target.Lambda callPath),
+                                                                    Set.ofList (
+                                                                        target.Lambda :: body :: target.Arguments
+                                                                        @ (parameters |> List.map (fun (_, _, formal) -> formal))
+                                                                    )
+                                                                )
+                                                            | _ -> None)
+
+                                                    if targets |> List.exists Option.isNone then
+                                                        None
+                                                    else
+                                                        let targets = List.choose (fun value -> value) targets
+
+                                                        Some(
+                                                            List.map fst targets,
+                                                            join (Set.unionMany (support :: (targets |> List.map snd)))
+                                                        ))
+                                    | _ -> None
+
+                            match decomposition with
+                            | None -> rest, facts.Add(term, None), equations
+                            | Some(dependencies, combine) ->
+                                let nextPending =
+                                    (dependencies
+                                     |> List.map (fun dependency -> dependency, false, Set.add term path))
+                                    @ ((term, true, path) :: rest)
+
+                                nextPending, facts, equations.Add(term, (dependencies, combine))
+
+                    Some(next, next)
+
+            let _, facts, _ =
+                Seq.unfold step initial |> Seq.tryLast |> Option.defaultValue initial
+
+            facts[first]
+
+    let constant seen expected id =
+        magnitude None expected seen id
+        |> Option.bind (fun (scale, value, required) -> if scale = 0I then Some(value, required) else None)
+
+    let affine cell seen id =
+        magnitude (Some cell) (applySubst nodes[cell].Type) seen id
     // A local declaration must initialize before every use in its one lexical
     // sequence. Inspect all actual containment paths, not the advisory Parent
     // field. A captured body's access is ordered by its exact formation, never

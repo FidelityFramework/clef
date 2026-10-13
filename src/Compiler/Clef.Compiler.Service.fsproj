@@ -354,6 +354,7 @@
     <Compile Include="Baker\Recipes\BoundaryDeclarations.fs" />
     <Compile Include="Baker\Recipes\KernelDeclarations.fs" />
     <Compile Include="Baker\Ingredients\BindingDemand.fs" />
+    <Compile Include="Baker\Recipes\SequenceCurrentRecipes.fs" />
     <Compile Include="PSGSaturation\SemanticGraph\OrdinaryDemand.fs" />
     <Compile Include="Baker\Ingredients\FormalDemand.fs" />
     <Compile Include="Baker\Ingredients\Participants.fs" />
@@ -376,7 +377,6 @@
     <Compile Include="Baker\Recipes\ApplicationRecipes.fs" />
     <Compile Include="Baker\Recipes\SeqRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceConsumptionRecipes.fs" />
-    <Compile Include="Baker\Recipes\SequenceCurrentRecipes.fs" />
     <Compile Include="Baker\Ingredients\SequenceCurrentCorrespondence.fs" />
     <Compile Include="Baker\Recipes\SequenceOwnershipRecipes.fs" />
     <Compile Include="Baker\Recipes\SequenceDelegationRecipes.fs" />

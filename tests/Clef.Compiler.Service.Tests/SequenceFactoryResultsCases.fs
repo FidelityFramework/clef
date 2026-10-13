@@ -6,8 +6,23 @@ open Clef.Compiler.NativeTypedTree.UnionFind
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 module FactoryResults = Clef.Compiler.Nanopass.SequenceFactoryResults
 module FactoryResidence = Clef.Compiler.PSGSaturation.SemanticGraph.SequenceResidence
+module FactoryInstructions = Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes
+module FactoryCells = Clef.Compiler.PSGSaturation.SemanticGraph.FiniteCellRanges
 
 module private Factories =
+    let localState = """
+let make (seed: int) = seq {
+    let mutable current = seed
+    yield current
+    current <- current + 1
+    yield current
+}
+[<EntryPoint>]
+let main _ =
+    let values = make 7
+    for value in values do ignore value
+    0
+"""
     let check body =
         let result = DimensionalCases.check body
         DimensionalCases.noErrors result
@@ -46,6 +61,62 @@ module private Factories =
 
 [<Trait("Category", "Compiler.Service"); Trait("Subcategory", "SequenceFactoryResults")>]
 type SequenceFactoryResultsCases() =
+    [<Fact>]
+    member _.``Fresh factory instruction counts keep one store separate from two successful pulls``() =
+        let graph = Factories.check Factories.localState
+        let cell = Factories.binding "current" graph
+        let evidence = FactoryInstructions.currentInstructionExecutions graph |> Assert.Single
+        let pull = FactoryInstructions.currentPulls graph |> Assert.Single
+        Assert.Equal(2I, pull.Pulls.MaximumPulls)
+        let bound = FactoryCells.recognize graph |> List.filter (fun bound -> bound.Cell = cell.Id) |> Assert.Single
+        Assert.Equal<bigint list>([8I; 1I], bound.Certificate.Upper)
+        let write = Assert.Single bound.Writes
+        Assert.Equal(1I, write.MaximumActivations)
+        Assert.Equal(1I, evidence.MaximumVisits[cell.Id])
+        Assert.Contains(pull.Acquisition, evidence.Participants)
+        Assert.Contains(cell.Id, evidence.LocalInitializers)
+        match graph.Nodes[Assert.Single cell.Children].Kind with
+        | SemanticKind.VarRef(_, Some seed) -> Assert.Contains(seed, evidence.Participants)
+        | _ -> failwith "Expected the exact captured factory seed"
+
+    [<Fact>]
+    member _.``Separate fresh factory acquisitions retain per-instance local state bounds``() =
+        let source = Factories.localState.Replace("    0\n", "    let second = make 19\n    for value in second do ignore value\n    0\n")
+        let graph = Factories.check source
+        let cell = Factories.binding "current" graph
+        Assert.Equal(2, FactoryInstructions.currentPulls graph |> List.length)
+        let bound = FactoryCells.recognize graph |> List.filter (fun bound -> bound.Cell = cell.Id) |> Assert.Single
+        Assert.Equal(1I, (Assert.Single bound.Writes).MaximumActivations)
+        Assert.Equal<bigint list>([20I; 1I], bound.Certificate.Upper)
+
+    [<Theory>]
+    [<InlineData("unaccounted acquisition")>]
+    [<InlineData("exported acquisition")>]
+    [<InlineData("extra value use")>]
+    member _.``Factory local execution counts refuse incomplete acquisition and use censuses`` defect =
+        let graph = Factories.check Factories.localState
+        let pull = FactoryInstructions.currentPulls graph |> Assert.Single
+        let acquisition = graph.Nodes[pull.Acquisition]
+        let next = NodeId((graph.Nodes.Keys |> Seq.map NodeId.value |> Seq.max) + 1)
+        let changed =
+            match defect with
+            | "exported acquisition" -> { graph with DeclarationRoots = (pull.Acquisition, DeclRoot.LibraryExport) :: graph.DeclarationRoots }
+            | "extra value use" ->
+                let input = pull.Input
+                let extra = {
+                    acquisition with
+                        Id = next
+                        Kind = SemanticKind.TupleExpr [input]
+                        Type = NativeType.TTuple([graph.Nodes[input].Type], false)
+                        Children = [input]
+                        Parent = None
+                }
+                { graph with Nodes = graph.Nodes.Add(next, extra) }
+            | _ -> { graph with Nodes = graph.Nodes.Add(next, { acquisition with Id = next; Parent = None }) }
+        Assert.Empty(FactoryInstructions.currentInstructionExecutions changed)
+        let cell = Factories.binding "current" graph
+        Assert.DoesNotContain(FactoryCells.recognize changed, fun bound -> bound.Cell = cell.Id)
+
     [<Theory>]
     [<InlineData(true, false)>]
     [<InlineData(false, true)>]

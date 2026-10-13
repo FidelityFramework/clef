@@ -10,12 +10,13 @@ open Clef.Compiler.NativeTypedTree.NativeTypes
 open Clef.Compiler.NativeTypedTree.Infrastructure
 open Clef.Compiler.PSGSaturation.SemanticGraph.Types
 open Clef.Compiler.PSGSaturation.SemanticGraph.Diagnostics
+open Clef.Compiler.PSGSaturation.SemanticGraph
 module SequenceConsumption = Clef.Compiler.Nanopass.SequenceConsumption
 
 module private Consumption =
     let prelude = "module Consumption\n[<Measure>] type m\n[<Measure>] type s\n"
     let check body =
-        let directory = Path.Combine(Path.GetTempPath(), "clef-sequence-consumption-" + Guid.NewGuid().ToString("N"))
+        let directory = Path.Combine(__SOURCE_DIRECTORY__, "../../artifacts/ffi-reconcile-20261013", "clef-sequence-consumption-" + Guid.NewGuid().ToString("N"))
         let previous = PhaseConfig.getConfig ()
         Directory.CreateDirectory directory |> ignore
         try
@@ -120,14 +121,111 @@ type SequenceConsumptionCases() =
         let useValue = if name = "_" then "()" else "ignore item"
         let graph, raw = Consumption.check ("[<EntryPoint>]\nlet main _ =\n    for " + name + " in " + source + " do " + useValue + "\n    0\n")
         let loop = Consumption.rawLoops raw |> Assert.Single
-        let _, formal, _, _, _, _ = Consumption.verify graph raw loop
+        let _, formal, collection, _, _, _ = Consumption.verify graph raw loop
         let references = graph.Nodes.Values |> Seq.choose (fun node ->
             match node.Kind with SemanticKind.VarRef("item", definition) -> Some definition | _ -> None) |> Seq.toList
         if name <> "_" then
             Assert.NotEmpty references
             Assert.All(references, fun definition -> Assert.Equal(Some formal, definition))
+        if source.Contains("fun") then
+            let reading = OrdinaryDemand.read graph
+            let inactive = reading.Inactivity.Values |> Seq.filter (fun proof ->
+                match proof.Premise with OrdinaryDemand.IgnoredPayload _ -> true | _ -> false) |> Assert.Single
+            DimensionalCases.same graph.Nodes[formal].Type graph.Nodes[inactive.Implementation].Type
+            Assert.Single inactive.Parameters |> ignore
+            for retained in [formal; inactive.Implementation; collection] do
+                Assert.False(inactive.Excluded.Contains retained)
+            Assert.False(reading.Formals.ContainsKey inactive.Parameters.Head)
+            Assert.Contains(graph.Edges, fun edge -> edge.Role = EdgeRole.IteratorCurrentAdmitted)
+            Assert.True(graph.Nodes.ContainsKey inactive.Parameters.Head)
+            let projection = OrdinaryDemand.tryInactivityProjection graph |> Result.toOption |> Option.get |> Map.find inactive.Implementation
+            let inspectedCallees =
+                OrdinaryDemand.inactivityParticipants inactive |> Set.toList |> List.choose (fun site ->
+                    match graph.Nodes[site].Kind with
+                    | SemanticKind.Application(callee, _) ->
+                        match graph.Nodes[callee].Kind with
+                        | SemanticKind.Intrinsic info when
+                            (info.Module = IntrinsicModule.Seq && info.Operation = "getEnumerator") ||
+                            (info.Module = IntrinsicModule.SeqEnumerator && (info.Operation = "moveNext" || info.Operation = "current")) ||
+                            (info.Module = IntrinsicModule.Operators && info.Operation = "ignore") -> Some callee
+                        | _ -> None
+                    | _ -> None) |> List.distinct
+            Assert.Equal(4, inspectedCallees.Length)
+            let startup =
+                graph.Edges |> List.filter (fun edge ->
+                    edge.Class = EdgeClass.Provenance &&
+                    (edge.Role = EdgeRole.ProgramInitialization || edge.Role = EdgeRole.ProgramInitializer ||
+                     edge.Role = EdgeRole.ProgramValueIntent || edge.Role = EdgeRole.ProgramEntryCall))
+                |> List.collect (fun edge -> edge.Target :: edge.Sources)
+            for id in (inspectedCallees @ startup |> List.distinct) do
+                Assert.True(projection.SourcePremises.ContainsKey id)
+                Assert.Equal(Clef.Compiler.Baker.Ingredients.Boundaries.premise graph.Nodes[id], projection.SourcePremises[id])
         let repeated = SequenceConsumption.normalize graph
         Assert.Same(graph, repeated)
+
+    [<Theory>]
+    [<InlineData("call")>]
+    [<InlineData("unknown")>]
+    [<InlineData("export")>]
+    [<InlineData("second-current")>]
+    member _.``Ignored sequence callable body proof retracts for a current exposure``(exposure: string) =
+        let graph, raw = Consumption.check """
+[<EntryPoint>]
+let main _ =
+    for item in seq { yield (fun (value: int<m>) -> value) } do ignore item
+    0
+"""
+        let _, snapshot, _, _, _, loop = Consumption.verify graph raw (Consumption.rawLoops raw |> Assert.Single)
+        let proof = (OrdinaryDemand.read graph).Inactivity.Values |> Seq.filter (fun proof ->
+            match proof.Premise with OrdinaryDemand.IgnoredPayload _ -> true | _ -> false) |> Assert.Single
+        let ignored = graph.Nodes.Values |> Seq.find (fun node ->
+            Consumption.call IntrinsicModule.Operators "ignore" graph node.Id |> Option.exists (fun args ->
+                args |> List.exists (fun arg ->
+                    match graph.Nodes[arg].Kind with SemanticKind.VarRef(_, Some binding) -> binding = snapshot | _ -> false)))
+        let callee, read = match ignored.Kind with
+                           | SemanticKind.Application(callee, [read]) -> callee, read
+                           | _ -> failwith "The snapshot lost its exact ignored use."
+        let incidence node = Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node
+        let replace (node: SemanticNode) (graph: SemanticGraph) =
+            { graph with Nodes = graph.Nodes.Add(node.Id, node)
+                         Edges = (graph.Edges |> List.filter (fun edge ->
+                             edge.Target <> node.Id || (edge.Class <> EdgeClass.Structural && edge.Class <> EdgeClass.Reference))) @ incidence node }
+        let changed =
+            match exposure with
+            | "unknown" ->
+                let node = graph.Nodes[callee]
+                match node.Kind with
+                | SemanticKind.Intrinsic info -> replace { node with Kind = SemanticKind.Intrinsic { info with Operation = "unknown"; FullName = "unknown" } } graph
+                | _ -> failwith "The ignored use lost its intrinsic."
+            | "export" ->
+                let node = graph.Nodes[snapshot]
+                let changed = match node.Kind with
+                              | SemanticKind.Binding(name, false, false, None) -> replace { node with Kind = SemanticKind.Binding(name, false, false, Some DeclRoot.LibraryExport) } graph
+                              | _ -> failwith "The snapshot lost its immutable declaration."
+                { changed with DeclarationRoots = (snapshot, DeclRoot.LibraryExport) :: changed.DeclarationRoots }
+            | "second-current" ->
+                let receipt = graph.Edges |> List.find (fun edge ->
+                    edge.Role = EdgeRole.IteratorCurrentAdmitted && List.contains loop edge.Sources)
+                replace { graph.Nodes[snapshot] with Children = [receipt.Target] } graph
+            | "call" ->
+                let next = (graph.Nodes.Keys |> Seq.map NodeId.value |> Seq.max) + 1
+                let argumentId, callId = NodeId next, NodeId (next + 1)
+                let literal = graph.Nodes.Values |> Seq.find (fun node ->
+                    match node.Kind with SemanticKind.Literal _ -> node.ValueRange.IsSome | _ -> false)
+                let argument = { literal with Id = argumentId; Type = graph.Nodes[proof.Parameters.Head].Type
+                                              Parent = Some callId; ValueRange = None }
+                let call = { ignored with Id = callId; Kind = SemanticKind.Application(read, [argumentId])
+                                          Type = graph.Nodes[proof.Body].Type; Children = [read; argumentId]; Parent = Some ignored.Id }
+                let changed = { graph with Nodes = graph.Nodes.Add(argumentId, argument).Add(callId, call)
+                                           Edges = graph.Edges @ incidence argument @ incidence call }
+                replace { ignored with Kind = SemanticKind.Application(callee, [callId]); Children = [callee; callId] } changed
+            | other -> failwithf "Unknown exposure: %s" other
+        Assert.False((OrdinaryDemand.analyze changed).Inactivity.ContainsKey proof.Implementation)
+        match OrdinaryDemand.tryRead changed with
+        | Result.Error failures ->
+            Assert.Contains(failures, fun failure ->
+                failure.Occurrence = Some proof.Implementation && failure.Reason.Contains("OrdinaryDemand inactivity"))
+        | Result.Ok _ -> failwith "A retained inactivity row authorized a newly exposed callable body."
 
     [<Fact>]
     member _.``Nested same-name iteration declarations retain separate exact reference identities``() =

@@ -639,7 +639,7 @@ let main _ =
         let reading = Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.analyze graph
         let proof = reading.Inactivity.Values |> Seq.filter (fun proof -> proof.Excluded.Contains dormant.Store) |> Assert.Single
         Assert.Contains(proof.Implementation, bound.Participants)
-        Assert.True(Set.isSubset proof.Family.Evidence.Participants bound.Participants)
+        Assert.True(Set.isSubset (Clef.Compiler.PSGSaturation.SemanticGraph.OrdinaryDemand.inactivityParticipants proof) bound.Participants)
         let external = { graph with DeclarationRoots = (proof.Implementation, DeclRoot.HardwareModule) :: graph.DeclarationRoots }
         Assert.DoesNotContain(FiniteCells.recognize external, fun bound -> bound.Cell = cell.Id)
         Assert.True(FiniteCells.evidenceCurrent graph)
@@ -801,3 +801,138 @@ let main _ =
 
         Assert.Empty(Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes.currentPulls changed)
         Assert.DoesNotContain(FiniteCells.recognize changed, fun bound -> bound.Cell = cell.Id)
+
+[<Trait("Category", "Compiler.Service"); Trait("Subcategory", "FiniteFoldCallbacks")>]
+type FiniteFoldCallbackCases() =
+    [<Theory>]
+    [<InlineData(false)>]
+    [<InlineData(true)>]
+    member _.``A demanded program binding retains a finite fold state through an exact callable return`` factory =
+        let body =
+            if factory then
+                "let seed () = 0\nlet folder () = fun (state: int) (_: int) -> state + 1\nlet observed = Seq.fold (folder ()) (seed ()) (seq { yield 1; yield 2 })\n"
+            else
+                "let observed = Seq.fold (fun (state: int) (_: int) -> state + 1) 0 (seq { yield 1; yield 2 })\n"
+
+        let graph =
+            FiniteCellFixture.check (body + "[<EntryPoint>]\nlet main _ = if observed = 2 then 0 else 1\n")
+
+        let cell =
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.Binding(name, true, _, _) -> name.StartsWith "__seq_accumulator_"
+                | _ -> false)
+            |> Assert.Single
+
+        let proof =
+            FiniteCells.recognize graph
+            |> List.filter (fun proof -> proof.Cell = cell.Id)
+            |> Assert.Single
+
+        let write = Assert.Single proof.Writes
+        Assert.Equal(2I, write.MaximumActivations)
+        Assert.Equal(1I, write.Scale)
+        Assert.Equal(1I, write.Offset)
+        Assert.Equal<bigint list>([ 2I; 1I ], proof.Certificate.Upper)
+
+        let pull =
+            Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes.sourcePulls graph
+            |> Assert.Single
+
+        Assert.Equal(2I, pull.Pulls.MaximumPulls)
+        Assert.True(Set.isSubset (Set.ofList pull.Participants) proof.Participants)
+        Assert.True(FiniteCells.evidenceCurrent graph)
+
+    [<Fact>]
+    member _.``A nested fold region requires the current program initializer value intent``() =
+        let graph =
+            FiniteCellFixture.check
+                "let observed = Seq.fold (fun (state: int) (_: int) -> state + 1) 0 (seq { yield 1; yield 2 })\n[<EntryPoint>]\nlet main _ = if observed = 2 then 0 else 1\n"
+
+        let observed =
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.Binding("observed", _, _, _) -> true
+                | _ -> false)
+            |> Assert.Single
+
+        Assert.Single(Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes.sourcePulls graph)
+        |> ignore
+
+        let changed =
+            { graph with
+                Edges =
+                    graph.Edges
+                    |> List.filter (fun edge -> edge.Role <> EdgeRole.ProgramValueIntent || edge.Target <> observed.Id)
+            }
+
+        Assert.Empty(Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes.sourcePulls changed)
+
+        Assert.DoesNotContain(
+            FiniteCells.recognize changed,
+            fun proof -> proof.Writes |> List.exists (fun write -> write.MaximumActivations = 2I)
+        )
+
+    [<Fact>]
+    member _.``A dormant binding value does not create a demanded fold execution region``() =
+        let graph =
+            FiniteCellFixture.check
+                "let dormant () =\n    let observed = Seq.fold (fun (state: int) (_: int) -> state + 1) 0 (seq { yield 1; yield 2 })\n    observed\nlet discard (_: unit -> int) = 0\n[<EntryPoint>]\nlet main _ = discard dormant\n"
+
+        Assert.Empty(Clef.Compiler.Baker.Recipes.SequenceAccumulationRecipes.sourcePulls graph)
+
+        Assert.DoesNotContain(
+            FiniteCells.recognize graph,
+            fun proof ->
+                match graph.Nodes[proof.Cell].Kind with
+                | SemanticKind.Binding(name, _, _, _) -> name.StartsWith "__seq_accumulator_"
+                | _ -> false
+        )
+
+    [<Fact>]
+    member _.``An external callable placeholder cannot supply a finite fold affine return``() =
+        let graph =
+            FiniteCellFixture.check
+                "let folder (state: int) (_: int) = state + 1\nlet observed = Seq.fold folder 0 (seq { yield 1; yield 2 })\n[<EntryPoint>]\nlet main _ = if observed = 2 then 0 else 1\n"
+
+        let cell =
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.Binding(name, true, _, _) -> name.StartsWith "__seq_accumulator_"
+                | _ -> false)
+            |> Assert.Single
+
+        Assert.Single(FiniteCells.recognize graph |> List.filter (fun proof -> proof.Cell = cell.Id))
+        |> ignore
+
+        let folder =
+            graph.Nodes.Values
+            |> Seq.filter (fun node ->
+                match node.Kind with
+                | SemanticKind.Binding("folder", false, _, _) -> true
+                | _ -> false)
+            |> Assert.Single
+
+        let foreign =
+            { folder with
+                Metadata = folder.Metadata.Add("FidelityExtern.Symbol", MetadataValue.String "folder")
+            }
+
+        let changed =
+            { graph with
+                Nodes = graph.Nodes.Add(folder.Id, foreign)
+            }
+
+        let declaration =
+            (Clef.Compiler.Baker.Recipes.BoundaryDeclarations.elaborate changed).NewEdges
+            |> List.choose (fun edge ->
+                match edge.Role with
+                | EdgeRole.BoundaryDeclaration declaration when declaration.Binding = folder.Id -> Some declaration
+                | _ -> None)
+            |> Assert.Single
+
+        Assert.NotEmpty declaration.Formals
+        Assert.DoesNotContain(FiniteCells.recognize changed, fun proof -> proof.Cell = cell.Id)

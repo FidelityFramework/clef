@@ -30,7 +30,7 @@ type SourceFamily = {
 /// One current logical cell census, independent of callable ingress and layout.
 /// Retained alternatives preserve formation and shared-cell identity; this
 /// evidence supplies neither activation counts nor a physical calling contract.
-let sourceFamilies (graph: SemanticGraph) =
+let sourceCensuses (graph: SemanticGraph) =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
     let mutable residuals = []
     let reject binding participants reason =
@@ -42,7 +42,6 @@ let sourceFamilies (graph: SemanticGraph) =
         | Some { Kind = SemanticKind.VarRef(_, Some declaration) } -> Some declaration
         | Some { Kind = SemanticKind.TypeAnnotation(inner, _) } -> target (Set.add id seen) inner
         | _ -> None
-    let resolution = lazy (CallableOrigins.resolve graph)
     let families = nodes |> Map.toList |> List.choose (fun (binding, node) ->
         match node.Kind, applySubst node.Type, node.Children with
         | SemanticKind.Binding(_, true, _, _), NativeType.TFun _, [initial] ->
@@ -150,13 +149,11 @@ let sourceFamilies (graph: SemanticGraph) =
                     (actual |> List.exists (fun edge -> expected |> List.exists (fun row -> key edge = key row) |> not)))
             let invalidValues = values |> List.filter (fun value ->
                 nodes.TryFind value |> Option.exists (fun value -> applySubst value.Type = applySubst node.Type) |> not)
-            let unknownValues = values |> List.filter (fun value -> not (resolution.Value.Lambdas.ContainsKey value))
             if not invalidCapture.IsEmpty then reject binding invalidCapture "A mutable callable capture does not preserve the original shared cell and mutable mode."
             elif not invalidAccess.IsEmpty then reject binding invalidAccess "A mutable callable access lacks its exact captured-cell provenance."
             elif not unsupported.IsEmpty then reject binding unsupported "The mutable callable cell has an unaccounted storage or reference use."
             elif not invalidIncidence.IsEmpty then reject binding invalidIncidence "The mutable callable cell has inconsistent current source incidence."
             elif not invalidValues.IsEmpty then reject binding invalidValues "Every mutable callable write must preserve the cell's exact source type."
-            elif not unknownValues.IsEmpty then reject binding unknownValues "Every mutable callable write requires its complete exact alternative; opaque or joined writes need further source dispatch settlement."
             else Some(binding, { Binding = binding; SourceType = node.Type; Initial = initial
                                  Writes = writes; Reads = directReads; Captures = captures; Borrows = borrows
                                  Participants = participants })
@@ -164,6 +161,23 @@ let sourceFamilies (graph: SemanticGraph) =
             reject binding node.Children "Mutable callable storage requires one exact initializer."
         | _ -> None) |> Map.ofList
     families, List.rev residuals
+
+/// Exact alternatives refine the same complete logical cell census. Opaque
+/// writes still refuse source-family and physical admission, while a demand
+/// proof may observe that the cell's initial implementation is never read.
+let sourceFamilies (graph: SemanticGraph) =
+    let censuses, residuals = sourceCensuses graph
+    let resolution = lazy (CallableOrigins.resolve graph)
+    let exact, rejected =
+        censuses |> Map.toList |> List.partition (fun (_, cell) ->
+            cell.Initial :: (cell.Writes |> List.map (fun (_, _, value) -> value))
+            |> List.forall resolution.Value.Lambdas.ContainsKey)
+    let rejected = rejected |> List.map (fun (binding, cell) ->
+        { Binding = binding
+          Participants = cell.Initial :: (cell.Writes |> List.map (fun (_, _, value) -> value))
+                         |> List.filter (resolution.Value.Lambdas.ContainsKey >> not)
+          Reason = "Every mutable callable write requires its complete exact alternative; opaque or joined writes need further source dispatch settlement." })
+    Map.ofList exact, residuals @ rejected
 
 /// Complete exact write boundaries are the first finite family. An opaque
 /// write, an unproved borrow, or a different physical boundary remains owning

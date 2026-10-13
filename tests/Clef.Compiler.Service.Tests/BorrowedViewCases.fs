@@ -281,6 +281,104 @@ let mutable getter: int -> int = fun _ -> 0
 let main _ = withView (fun view -> getter <- BorrowedView.get view; 0)
 """
         Assert.Contains((ScopedCallbacks.read result.Graph).Findings, fun f -> f.Message.Contains("escapes its mapping scope"))
+        let graph = result.Graph
+        let cell = graph.Nodes.Values |> Seq.find (fun node ->
+            match node.Kind with SemanticKind.Binding("getter", true, _, _) -> true | _ -> false)
+        let census, _ = MutableCallableStorage.sourceCensuses graph
+        let sourceCell = census[cell.Id]
+        Assert.Empty sourceCell.Reads
+        let code = match graph.Nodes[sourceCell.Initial].Kind with
+                   | SemanticKind.TypeAnnotation(inner, _) -> inner
+                   | SemanticKind.Lambda _ -> sourceCell.Initial
+                   | other -> failwithf "Unexpected initial formation: %A" other
+        let inactive = (OrdinaryDemand.read graph).Inactivity[code]
+        Assert.Contains(inactive.Parameters, fun formal ->
+            (OrdinaryDemand.tryInactivity graph |> Result.toOption |> Option.get).Formals.Contains formal)
+        let deferred = OrdinaryDemand.tryDeferrals graph |> Result.toOption |> Option.get
+        for retained in [cell.Id; sourceCell.Initial; code] do
+            Assert.False(inactive.Excluded.Contains retained)
+            Assert.False(deferred.ContainsKey retained)
+        let plan = ProgramInitialization.read graph |> Option.get
+        Assert.Contains(plan.Initializers, fun slot -> slot.Binding = cell.Id && slot.Initializer = sourceCell.Initial)
+        Assert.True(plan.ValueBindings.Contains cell.Id)
+        Assert.Contains(graph.Edges, fun edge -> edge.Role = EdgeRole.ProgramValueIntent && edge.Target = cell.Id)
+        let families, residuals = MutableCallableStorage.sourceFamilies graph
+        Assert.False(families.ContainsKey cell.Id)
+        Assert.Contains(residuals, fun residual ->
+            residual.Binding = cell.Id && residual.Reason.Contains("complete exact alternative"))
+
+    [<Theory>]
+    [<InlineData("read")>]
+    [<InlineData("export")>]
+    [<InlineData("unknown")>]
+    member _.``Module callable body inactivity retracts for a current exposure``(exposure: string) =
+        let result = BorrowedViewCases.source """
+let mutable getter: int -> int = fun _ -> 0
+[<EntryPoint>]
+let main _ = withView (fun view -> getter <- BorrowedView.get view; 0)
+"""
+        let graph = result.Graph
+        let census, _ = MutableCallableStorage.sourceCensuses graph
+        let cell = census.Values |> Seq.find (fun cell ->
+            match graph.Nodes[cell.Binding].Kind with SemanticKind.Binding("getter", _, _, _) -> true | _ -> false)
+        let code = match graph.Nodes[cell.Initial].Kind with
+                   | SemanticKind.TypeAnnotation(inner, _) -> inner
+                   | SemanticKind.Lambda _ -> cell.Initial
+                   | other -> failwithf "Unexpected initial formation: %A" other
+        Assert.True((OrdinaryDemand.read graph).Inactivity.ContainsKey code)
+        let changed =
+            match exposure with
+            | "read" ->
+                let site, destination, _ = cell.Writes |> List.head
+                let parent = graph.Nodes.Values |> Seq.find (fun node ->
+                    match node.Kind with SemanticKind.Sequential actions -> List.contains site actions | _ -> false)
+                let readId = NodeId ((graph.Nodes.Keys |> Seq.map NodeId.value |> Seq.max) + 1)
+                let read =
+                    { graph.Nodes[destination] with
+                        Id = readId
+                        Kind = SemanticKind.VarRef("getter", Some cell.Binding)
+                        Type = cell.SourceType
+                        Children = []
+                        Parent = Some parent.Id }
+                let actions = match parent.Kind with
+                              | SemanticKind.Sequential actions -> actions |> List.collect (fun action -> if action = site then [readId; action] else [action])
+                              | _ -> failwith "The write lost its source sequence."
+                let node = { parent with Kind = SemanticKind.Sequential actions; Children = actions }
+                let rows = graph.Edges |> List.filter (fun edge ->
+                    edge.Target <> parent.Id || (edge.Class <> EdgeClass.Structural && edge.Class <> EdgeClass.Reference))
+                { graph with Nodes = graph.Nodes.Add(parent.Id, node).Add(readId, read)
+                             Edges = rows @ Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence node @
+                                     Clef.Compiler.Baker.Ingredients.Closures.structuralIncidence read }
+            | "export" ->
+                let node = graph.Nodes[cell.Binding]
+                { graph with Nodes = graph.Nodes.Add(cell.Binding, { node with Kind = SemanticKind.Binding("getter", true, false, Some DeclRoot.LibraryExport) })
+                             DeclarationRoots = (cell.Binding, DeclRoot.LibraryExport) :: graph.DeclarationRoots }
+            | "unknown" ->
+                { graph with Edges = { Class = EdgeClass.Reference; Role = EdgeRole.Definition; Ordinal = 0
+                                       Sources = [cell.Binding]; Target = code } :: graph.Edges }
+            | other -> failwithf "Unknown exposure: %s" other
+        let fresh = OrdinaryDemand.analyze changed
+        Assert.False(fresh.Inactivity.ContainsKey code)
+        match OrdinaryDemand.tryRead changed with
+        | Error failures ->
+            Assert.Contains(failures, fun failure ->
+                failure.Occurrence = Some code && failure.Reason.Contains("OrdinaryDemand inactivity"))
+        | Ok _ -> failwith "The stale body-inactivity claim survived a current exposure."
+        if exposure = "read" then
+            let current, _ = MutableCallableStorage.sourceCensuses changed
+            Assert.Contains(current[cell.Binding].Reads, fun read -> not (graph.Nodes.ContainsKey read))
+            Assert.Equal<(NodeId * NodeId * NodeId) list>(cell.Writes, current[cell.Binding].Writes)
+        if exposure = "unknown" then
+            let _, residuals = MutableCallableStorage.sourceCensuses changed
+            Assert.Contains(residuals, fun residual ->
+                residual.Binding = cell.Binding && residual.Reason.Contains("unaccounted storage or reference use"))
+        let owned edge =
+            edge.Role = EdgeRole.OrdinaryUnusedFormal || edge.Role = EdgeRole.OrdinaryUnusedActual ||
+            edge.Role = EdgeRole.OrdinaryInactiveImplementation || edge.Role = EdgeRole.OrdinaryUnusedBindingInitializer
+        let renewed = { changed with Edges = (changed.Edges |> List.filter (owned >> not)) @ OrdinaryDemand.edges fresh }
+        match OrdinaryDemand.tryRead renewed with
+        | Ok reading -> Assert.False(reading.Inactivity.ContainsKey code)
+        | Error failures -> failwithf "Renewed owning rows refused: %A" failures
 
     [<Fact>]
     member _.``Fully saturated helper remains a synchronous borrower``() =

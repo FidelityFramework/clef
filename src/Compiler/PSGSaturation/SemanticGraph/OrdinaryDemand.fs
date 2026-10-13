@@ -26,13 +26,23 @@ type Call = {
     Eager: Set<int>
     Participants: Set<NodeId>
 }
+type SourceBodyInactivity = {
+    Entry: NodeId
+    Roots: (NodeId * DeclRoot) list
+    Participants: Set<NodeId>
+    Uses: Map<NodeId, Hyperedge list>
+}
+type InactivityPremise =
+    | ClosedFamily of CallableIngress.Family
+    | UnobservedCell of SourceBodyInactivity
+    | IgnoredPayload of SourceBodyInactivity
 type InactiveImplementation = {
     Implementation: NodeId
     Body: NodeId
     Parameters: NodeId list
     Excluded: Set<NodeId>
     Calls: Set<NodeId>
-    Family: CallableIngress.Family
+    Premise: InactivityPremise
 }
 type UnusedInitializer = {
     Binding: NodeId
@@ -62,6 +72,16 @@ let private owned edge =
     edge.Role = EdgeRole.OrdinaryUnusedFormal || edge.Role = EdgeRole.OrdinaryUnusedActual ||
     edge.Role = EdgeRole.OrdinaryInactiveImplementation ||
     edge.Role = EdgeRole.OrdinaryUnusedBindingInitializer
+
+let private inactivitySupport inactive =
+    match inactive.Premise with
+    | ClosedFamily family ->
+        family.Evidence.Entry.Value, family.Evidence.Roots, family.Evidence.Participants, family.Evidence.Uses
+    | UnobservedCell cell | IgnoredPayload cell -> cell.Entry, cell.Roots, cell.Participants, cell.Uses
+
+let inactivityParticipants inactive =
+    let _, _, participants, _ = inactivitySupport inactive
+    participants
 
 let analyze (graph: SemanticGraph) : Reading =
     let nodes = graph.Nodes |> Map.filter (fun _ node -> node.IsReachable)
@@ -218,6 +238,28 @@ let analyze (graph: SemanticGraph) : Reading =
     let structuralParents =
         incidence |> List.collect (fun edge -> edge.Sources |> List.map (fun source -> source, edge.Target))
         |> List.groupBy fst |> List.map (fun (child, rows) -> child, rows |> List.map snd |> List.distinct) |> Map.ofList
+    let excludedByImplementation implementation =
+        let ownedByImplementation id =
+            // Read the finite owner chain iteratively. A nested lambda owns
+            // itself, so only its unique structural parent supplies the next
+            // owner. Ambiguous parents and revisited owners refuse exclusion.
+            Seq.unfold (function
+                | None -> None
+                | Some(id, seen) ->
+                    match CallableIngress.tryExecutionOwner ingress id with
+                    | Some owner when owner = implementation -> Some(true, None)
+                    | Some owner when owner = id ->
+                        match structuralParents.TryFind id with
+                        | Some [parent] when not (Set.contains parent seen) ->
+                            Some(false, Some(parent, Set.add id seen))
+                        | _ -> Some(false, None)
+                    | Some owner when not (Set.contains owner seen) ->
+                        Some(false, Some(owner, Set.add owner seen))
+                    | _ -> Some(false, None)) (Some(id, Set.empty))
+            |> Seq.tryLast |> Option.defaultValue false
+        let excluded = nodes.Keys |> Seq.filter (fun id ->
+            id <> implementation && ownedByImplementation id) |> Set.ofSeq
+        excluded
     let inactivity =
         nodes.Values |> Seq.choose (fun code ->
             match code.Kind, CallableIngress.tryFamily ingress code.Id with
@@ -251,27 +293,176 @@ let analyze (graph: SemanticGraph) : Reading =
                 // implementation that is never entered forms none of them, so
                 // their bodies are the same unreachable computation and commit
                 // no integer of their own (width-inference §78, §80).
-                let rec ownedByImplementation seen id =
-                    match CallableIngress.tryExecutionOwner ingress id with
-                    | Some owner when owner = code.Id -> true
-                    | Some owner when owner = id ->
-                        // A nested lambda owns itself; its own owner is read
-                        // at its unique structural parent.
-                        match structuralParents.TryFind id with
-                        | Some [parent] when not (Set.contains parent seen) -> ownedByImplementation (Set.add id seen) parent
-                        | _ -> false
-                    | Some owner when not (Set.contains owner seen) -> ownedByImplementation (Set.add owner seen) owner
-                    | _ -> false
-                let excluded = nodes.Keys |> Seq.filter (fun id ->
-                    id <> code.Id && ownedByImplementation Set.empty id) |> Set.ofSeq
+                let excluded = excludedByImplementation code.Id
                 let calls = excluded |> Set.filter (fun id ->
                     match nodes[id].Kind with SemanticKind.Application _ -> true | _ -> false)
                 Some(code.Id,
                     { Implementation = code.Id; Body = body
                       Parameters = parameters |> List.map (fun (_, _, id) -> id)
-                      Excluded = excluded; Calls = calls; Family = family })
+                      Excluded = excluded; Calls = calls; Premise = ClosedFamily family })
             | _ -> None) |> Map.ofSeq
     let roots = graph.DeclarationRoots |> List.map fst |> Set.ofList
+    let startupSupport =
+        graph.Edges |> List.filter (fun edge ->
+            edge.Class = EdgeClass.Provenance &&
+            (edge.Role = EdgeRole.ProgramInitialization || edge.Role = EdgeRole.ProgramInitializer ||
+             edge.Role = EdgeRole.ProgramValueIntent || edge.Role = EdgeRole.ProgramEntryCall))
+        |> List.collect (fun edge -> edge.Target :: edge.Sources) |> Set.ofList
+    // Startup still forms and stores this value. A complete unobserved cell
+    // census proves only that its implementation body is never entered; an
+    // opaque replacing write remains outside physical family admission.
+    let cellInactivity =
+        match ProgramInitialization.read graph with
+        | None -> Map.empty
+        | Some plan ->
+            let cells = MutableCallableStorage.sourceCensuses graph |> fst
+            cells.Values
+            |> Seq.choose (fun cell ->
+                let formation =
+                    match nodes[cell.Initial].Kind with
+                    | SemanticKind.Lambda _ -> Some(cell.Initial, None)
+                    | SemanticKind.TypeAnnotation(inner, _) -> Some(inner, Some cell.Initial)
+                    | _ -> None
+                let slot = plan.Initializers |> List.filter (fun slot -> slot.Binding = cell.Binding && slot.Initializer = cell.Initial)
+                match formation, slot, nodes[cell.Binding].Kind with
+                | Some(codeId, wrapper), [_], SemanticKind.Binding(_, true, false, None)
+                    when cell.Reads.IsEmpty && cell.Captures.IsEmpty && cell.Borrows.IsEmpty &&
+                         plan.ValueBindings.Contains cell.Binding && not (roots.Contains cell.Binding) &&
+                         not (roots.Contains cell.Initial) && not (roots.Contains codeId) &&
+                         not (externalImplementations.Contains codeId) && valid cell.Binding && valid cell.Initial ->
+                    let onlyFormation id target =
+                        (uses.TryFind id |> Option.defaultValue []) |> List.forall (fun edge ->
+                            edge.Class = EdgeClass.Structural && edge.Target = target && edge.Sources = [id])
+                    let formationOnly =
+                        onlyFormation cell.Initial cell.Binding &&
+                        (wrapper |> Option.forall (fun wrapper -> onlyFormation codeId wrapper)) &&
+                        not (rawCapture cell.Initial || rawCapture codeId)
+                    match nodes.TryFind codeId with
+                    | Some { Kind = SemanticKind.Lambda(parameters, body, [], _, LambdaContext.RegularClosure) }
+                        when formationOnly && valid codeId && valid body && not (roots.Contains body) &&
+                             applySubst nodes[codeId].Type = applySubst cell.SourceType &&
+                             applySubst nodes[codeId].Type = applySubst (List.foldBack (fun (_, ty, _) result -> NativeType.TFun(ty, result)) parameters nodes[body].Type) &&
+                             (resolution.Calls.Values |> Seq.forall (fun call -> call.Targets |> List.forall (fun target -> target.Lambda <> codeId))) &&
+                             (parameters |> List.forall (fun (_, ty, formal) ->
+                                 valid formal && not (roots.Contains formal) &&
+                                 (match nodes[formal].Kind with SemanticKind.PatternBinding _ -> true | _ -> false) &&
+                                 applySubst nodes[formal].Type = applySubst ty &&
+                                 CallableIngress.tryExecutionOwner ingress formal = Some codeId &&
+                                 (resolution.ParameterInputs.TryFind formal |> Option.defaultValue [] |> List.isEmpty))) ->
+                        let excluded = excludedByImplementation codeId
+                        let calls = excluded |> Set.filter (fun id -> match nodes[id].Kind with SemanticKind.Application _ -> true | _ -> false)
+                        let participants =
+                            [cell.Participants; excluded; roots; startupSupport
+                             Set.ofList(codeId :: cell.Initial :: body :: (parameters |> List.map (fun (_, _, id) -> id)))] |> Set.unionMany
+                        let useProof = participants |> Set.toList |> List.map (fun id -> id, uses.TryFind id |> Option.defaultValue []) |> Map.ofList
+                        Some(codeId, { Implementation = codeId; Body = body
+                                       Parameters = parameters |> List.map (fun (_, _, id) -> id)
+                                       Excluded = excluded; Calls = calls
+                                       Premise = UnobservedCell { Entry = plan.EntryLambda; Roots = graph.DeclarationRoots
+                                                                  Participants = participants; Uses = useProof } })
+                    | _ -> None
+                | _ -> None)
+            |> Map.ofSeq
+    let inactivity = Map.fold (fun found id proof -> Map.add id proof found) inactivity cellInactivity
+    // A source pull transports a callable value; it does not invoke it. This
+    // sufficient route admits one direct producer and its complete current
+    // snapshot account, with every snapshot read consumed by known ignore.
+    // The existing Current owner renews the exact guard at every read here.
+    let payloadInactivity =
+        match ProgramInitialization.read graph with
+        | None -> Map.empty
+        | Some plan ->
+            let consumers = Clef.Compiler.Baker.Recipes.SequenceCurrentRecipes.structuralConsumers graph
+            let allUses id admit = uses.TryFind id |> Option.defaultValue [] |> List.forall admit
+            let soleFormation id target = allUses id (fun edge ->
+                edge.Class = EdgeClass.Structural && edge.Target = target && edge.Sources = [id])
+            let operation modl operation id =
+                match nodes.TryFind id with
+                | Some { Kind = SemanticKind.Application(callee, [argument]) } when valid id && valid callee ->
+                    match nodes[callee].Kind with
+                    | SemanticKind.Intrinsic info when info.Module = modl && info.Operation = operation -> Some argument
+                    | _ -> None
+                | _ -> None
+            let declarationUse binding (edge: Hyperedge) =
+                edge.Class = EdgeClass.Structural && edge.Sources = [binding] &&
+                (match nodes.TryFind edge.Target with
+                 | Some { Kind = SemanticKind.Sequential actions } -> List.tryLast actions <> Some binding
+                 | _ -> false)
+            nodes.Values |> Seq.choose (fun loop ->
+                match Clef.Compiler.Baker.Recipes.SequenceCurrentRecipes.forLoop graph consumers loop with
+                | Some ({ Sources = [enumerator; guard; _]; Target = current } as receipt)
+                    when graph.Edges |> List.filter (fun edge -> key edge = key receipt) |> List.length = 1 ->
+                    match nodes[enumerator].Children, loop.Kind with
+                    | [acquisition], SemanticKind.WhileLoop(_, loopBody) ->
+                        match operation IntrinsicModule.Seq "getEnumerator" acquisition, nodes[loopBody].Kind,
+                              operation IntrinsicModule.SeqEnumerator "moveNext" guard,
+                              operation IntrinsicModule.SeqEnumerator "current" current with
+                        | Some producer, SemanticKind.Sequential [currentBinding; currentRef; action], Some guardRef, Some enumRef ->
+                            match nodes[producer].Kind, nodes[action].Kind with
+                            | SemanticKind.SeqExpr(generator, []), SemanticKind.Sequential [snapshot; ignored] ->
+                                match nodes[generator].Kind, nodes[snapshot].Kind, nodes[snapshot].Children,
+                                      operation IntrinsicModule.Operators "ignore" ignored with
+                                | SemanticKind.Lambda(_, yielded, [], _, LambdaContext.SeqGenerator),
+                                  SemanticKind.Binding(_, false, false, None), [snapshotValue], Some read
+                                    when snapshotValue = currentRef ->
+                                    match nodes[yielded].Kind, nodes[read].Kind with
+                                    | SemanticKind.Yield codeId, SemanticKind.VarRef(_, Some actualSnapshot) when actualSnapshot = snapshot ->
+                                        let exactUses =
+                                            soleFormation producer acquisition && soleFormation generator producer &&
+                                            soleFormation yielded generator && soleFormation codeId yielded &&
+                                            soleFormation acquisition enumerator &&
+                                            allUses enumerator (fun edge ->
+                                                declarationUse enumerator edge ||
+                                                (edge.Class = EdgeClass.Reference && edge.Role = EdgeRole.Definition &&
+                                                 edge.Sources = [enumerator] && (edge.Target = guardRef || edge.Target = enumRef))) &&
+                                            soleFormation guardRef guard && soleFormation enumRef current &&
+                                            allUses currentRef (fun edge ->
+                                                edge.Class = EdgeClass.Structural && edge.Sources = [currentRef] &&
+                                                (edge.Target = loopBody || edge.Target = snapshot)) &&
+                                            allUses snapshot (fun edge ->
+                                                declarationUse snapshot edge ||
+                                                (edge.Class = EdgeClass.Reference && edge.Role = EdgeRole.Definition &&
+                                                 edge.Sources = [snapshot] && edge.Target = read)) &&
+                                            allUses read (fun edge ->
+                                                edge.Class = EdgeClass.Structural && edge.Role = EdgeRole.Argument &&
+                                                edge.Ordinal = 0 && edge.Sources = [read] && edge.Target = ignored)
+                                        let route = Set.ofList [producer; generator; yielded; codeId; enumerator; acquisition; guard; guardRef;
+                                                                loop.Id; loopBody; current; currentBinding; currentRef; action; snapshot; read; ignored; plan.EntryLambda]
+                                        match nodes[codeId].Kind with
+                                        | SemanticKind.Lambda(parameters, body, [], _, LambdaContext.RegularClosure)
+                                            when exactUses && (route |> Set.forall valid) &&
+                                                 (route |> Set.forall (fun id -> not (roots.Contains id) && not (rawCapture id))) &&
+                                                 not (externalImplementations.Contains codeId) && valid body && not (roots.Contains body) &&
+                                                 applySubst nodes[codeId].Type = applySubst nodes[snapshot].Type &&
+                                                 applySubst nodes[codeId].Type = applySubst (List.foldBack (fun (_, ty, _) result -> NativeType.TFun(ty, result)) parameters nodes[body].Type) &&
+                                                 (resolution.Calls.Values |> Seq.forall (fun call -> call.Targets |> List.forall (fun target -> target.Lambda <> codeId))) &&
+                                                 (parameters |> List.forall (fun (_, ty, formal) ->
+                                                     valid formal && not (roots.Contains formal) &&
+                                                     (match nodes[formal].Kind with SemanticKind.PatternBinding _ -> true | _ -> false) &&
+                                                     applySubst nodes[formal].Type = applySubst ty &&
+                                                     CallableIngress.tryExecutionOwner ingress formal = Some codeId &&
+                                                     (resolution.ParameterInputs.TryFind formal |> Option.defaultValue [] |> List.isEmpty))) ->
+                                            let excluded = excludedByImplementation codeId
+                                            let calls = excluded |> Set.filter (fun id -> match nodes[id].Kind with SemanticKind.Application _ -> true | _ -> false)
+                                            let operationSupport =
+                                                [acquisition; guard; current; ignored]
+                                                |> List.collect (fun id -> kindEdges id nodes[id].Kind |> List.collect _.Sources)
+                                                |> Set.ofList
+                                            let participants = Set.unionMany [route; operationSupport; startupSupport; excluded; roots; Set.ofList (body :: (parameters |> List.map (fun (_, _, id) -> id)))]
+                                            let useProof = participants |> Set.toList |> List.map (fun id -> id, uses.TryFind id |> Option.defaultValue []) |> Map.ofList
+                                            Some(codeId, { Implementation = codeId; Body = body
+                                                           Parameters = parameters |> List.map (fun (_, _, id) -> id)
+                                                           Excluded = excluded; Calls = calls
+                                                           Premise = IgnoredPayload { Entry = plan.EntryLambda; Roots = graph.DeclarationRoots
+                                                                                      Participants = participants; Uses = useProof } })
+                                        | _ -> None
+                                    | _ -> None
+                                | _ -> None
+                            | _ -> None
+                        | _ -> None
+                    | _ -> None
+                | _ -> None) |> Map.ofSeq
+    let inactivity = Map.fold (fun found id proof -> Map.add id proof found) inactivity payloadInactivity
     let initializers =
         nodes.Values |> Seq.choose (fun binding ->
             match binding.Kind, binding.Children, binding.Parent with
@@ -377,11 +568,12 @@ let edges (reading: Reading) =
                       Sources = [call.Implementation; call.Parameters[ordinal]; call.Actuals[ordinal]; call.Callee]
                                 @ (call.Participants |> Set.toList) }
       for inactive in reading.Inactivity.Values do
+          let entry, _, participants, _ = inactivitySupport inactive
           yield { Class = EdgeClass.Demand; Role = EdgeRole.OrdinaryInactiveImplementation
                   Target = inactive.Implementation; Ordinal = inactive.Parameters.Length
-                  Sources = [inactive.Family.Evidence.Entry.Value; inactive.Body]
+                  Sources = [entry; inactive.Body]
                             @ inactive.Parameters
-                            @ Set.toList inactive.Family.Evidence.Participants
+                            @ Set.toList participants
                             @ Set.toList inactive.Excluded
                             @ Set.toList inactive.Calls }
       for initializer in reading.Initializers.Values do
@@ -537,19 +729,19 @@ let tryDeferrals graph = tryRead graph |> Result.map (deferralsFrom graph)
 
 let private inactivityProjection (graph: SemanticGraph) (reading: Reading) : Map<NodeId, OrdinaryInactivityProjection> =
     reading.Inactivity |> Map.map (fun _ inactive ->
-        let evidence = inactive.Family.Evidence
-        let uses = evidence.Uses |> Map.map (fun _ uses -> uses |> List.map key |> List.sort)
+        let entry, roots, participants, currentUses = inactivitySupport inactive
+        let uses = currentUses |> Map.map (fun _ uses -> uses |> List.map key |> List.sort)
         let support =
-            [inactive.Implementation; evidence.Entry.Value; inactive.Body] @ inactive.Parameters @
-            (evidence.Roots |> List.map fst) @ Set.toList inactive.Excluded @ Set.toList inactive.Calls @
+            [inactive.Implementation; entry; inactive.Body] @ inactive.Parameters @
+            (roots |> List.map fst) @ Set.toList participants @ Set.toList inactive.Excluded @ Set.toList inactive.Calls @
             (uses |> Map.toList |> List.collect (fun (source, edges) ->
                 source :: (edges |> List.collect (fun (_, _, _, sources, target) -> target :: sources))))
             |> Set.ofList
         { Implementation = inactive.Implementation
-          Entry = evidence.Entry.Value
+          Entry = entry
           Body = inactive.Body
           Parameters = inactive.Parameters
-          Roots = evidence.Roots |> List.map fst |> Set.ofList
+          Roots = roots |> List.map fst |> Set.ofList
           Excluded = inactive.Excluded
           Calls = inactive.Calls
           Uses = uses
