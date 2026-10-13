@@ -194,6 +194,30 @@ let main _ =
             Assert.Equal(32, returned.Bits)
             Assert.Equal(ValueRange.twosComplement 32, returned.Range))
 
+        let graph = result.Graph
+        let guard = graph.Edges |> List.filter (fun edge -> edge.Role = EdgeRole.MemoryAccessGuard) |> Assert.Single
+        let frontier = graph.Nodes[List.last guard.Sources]
+        let generated = graph.Nodes[guard.Target]
+        let role = "numeric-carrier-coverage"
+        let sourceClaim = Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId role frontier |> Option.get
+        Assert.True(frontier.Id <> generated.Id)
+        Assert.False(generated.Metadata.ContainsKey "Source.ObligationSite")
+        Assert.False(generated.Metadata.ContainsKey "Source.DeclarationIncarnation")
+        Assert.Equal(None, Clef.Compiler.Baker.Ingredients.Obligations.sourceClaimId role generated)
+        let claims = graph.Nodes.Values |> Seq.choose (fun node ->
+            match node.Kind with
+            | SemanticKind.Obligation info when info.Kind = role -> Some info.Id
+            | _ -> None) |> Seq.toList
+        Assert.Contains(sourceClaim, claims)
+        Assert.Contains($"numeric_carrier_{NodeId.value generated.Id}", claims)
+        Assert.Empty(Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness graph)
+
+        let copied = { generated with Metadata = generated.Metadata.Add("Source.ObligationSite", frontier.Metadata["Source.ObligationSite"]) }
+        let corrupt = { graph with Nodes = graph.Nodes.Add(generated.Id, copied) }
+        let failures = Clef.Compiler.Baker.Recipes.NumericCarrierRecipes.completeness corrupt
+        for id in [frontier.Id; generated.Id] do
+            Assert.Contains(failures, fun (site, reason) -> site = id && reason = "Numeric obligation identity collision: " + sourceClaim)
+
     [<Fact>]
     member _.``Reference descriptor cannot be attached to an unbounded scalar address``() =
         let result = ForeignCases.check """
